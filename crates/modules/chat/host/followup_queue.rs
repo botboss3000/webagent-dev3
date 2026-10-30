@@ -141,7 +141,7 @@ pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
         if s.is_empty() {
             continue;
         }
-        // Recycled or deleted chats retain history, but cannot dispatch work.
+        // Archived or deleted chats retain history, but cannot dispatch work.
         // Skip them here so one inactive ledger cannot stall other conversations.
         let Some(session) = app.store.get(&format!("session:{s}")).await? else {
             continue;
@@ -320,7 +320,7 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn inactive_ledgers_cannot_block_other_sessions_or_create_orphan_runs() {
         let (_root, app) = crate::runtime_tests::fixture().await;
-        for sid in ["a_recycled", "b_deleted", "c_active"] {
+        for sid in ["a_archived", "b_deleted", "c_active"] {
             app.store
                 .put(
                     &format!("session:{sid}"),
@@ -336,8 +336,8 @@ mod lifecycle_tests {
         }
         app.store
             .put(
-                "session:a_recycled",
-                &json!({"id":"a_recycled","status":"recycled"}),
+                "session:a_archived",
+                &json!({"id":"a_archived","status":"archived"}),
             )
             .await
             .unwrap();
@@ -354,7 +354,7 @@ mod lifecycle_tests {
             app.store.followup_queue("c_active").await.unwrap()["held"],
             true
         );
-        for sid in ["a_recycled", "b_deleted"] {
+        for sid in ["a_archived", "b_deleted"] {
             assert_eq!(app.store.followup_queue(sid).await.unwrap()["held"], false);
             assert!(app
                 .store

@@ -4,11 +4,11 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 #[tokio::test]
-async fn recycled_and_missing_routes_return_the_same_rejection() {
+async fn archived_and_missing_routes_return_the_same_rejection() {
     let (_root,app)=runtime_tests::fixture().await;
     let sid=uuid();
     app.store.put(&key("session",&sid),&json!({"id":sid,"agent_id":"shared_default"})).await.unwrap();
-    app.store.lifecycle_session(&sid,&store::session::SessionLifecycle {client_request_id:"recycle".into(),expected_revision:0},false).await.unwrap();
+    app.store.lifecycle_session(&sid,&store::session::SessionLifecycle {client_request_id:"archive".into(),expected_revision:0},false).await.unwrap();
     let router=user_api::router().with_state(app.clone()).layer(axum::Extension(app.clone()))
         .layer(axum::Extension(json!({"expires":now()+60})));
     for suffix in ["","/events","/mode","/abilities","/controls"] {
@@ -23,20 +23,20 @@ async fn recycled_and_missing_routes_return_the_same_rejection() {
 }
 
 #[tokio::test]
-async fn result_ready_before_poll_is_withheld_after_recycle_restore() {
+async fn result_ready_before_poll_is_withheld_after_archive_unarchive() {
     let (_root,app)=runtime_tests::fixture().await;
     let sid=uuid();
     app.store.put(&key("session",&sid),&json!({"id":sid})).await.unwrap();
     let result=app.session_operation(&sid,CancellationToken::new(),async {
-        app.store.lifecycle_session(&sid,&store::session::SessionLifecycle {client_request_id:"recycle".into(),expected_revision:0},false).await?;
-        app.store.lifecycle_session(&sid,&store::session::SessionLifecycle {client_request_id:"restore".into(),expected_revision:1},true).await?;
+        app.store.lifecycle_session(&sid,&store::session::SessionLifecycle {client_request_id:"archive".into(),expected_revision:0},false).await?;
+        app.store.lifecycle_session(&sid,&store::session::SessionLifecycle {client_request_id:"unarchive".into(),expected_revision:1},true).await?;
         Ok("late private output")
     }).await;
     assert_eq!(result.unwrap_err().to_string(),"Session not found");
 }
 
 #[tokio::test]
-async fn session_epoch_cancels_work_even_after_immediate_restore() {
+async fn session_epoch_cancels_work_even_after_immediate_unarchive() {
     let (_root,app)=runtime_tests::fixture().await;
     let sid=uuid();
     app.store.put(&key("session",&sid),&json!({"id":sid})).await.unwrap();
@@ -51,8 +51,8 @@ async fn session_epoch_cancels_work_even_after_immediate_restore() {
         }).await
     });
     started_rx.await.unwrap();
-    app.store.lifecycle_session(&sid,&store::session::SessionLifecycle {client_request_id:"recycle".into(),expected_revision:0},false).await.unwrap();
-    app.store.lifecycle_session(&sid,&store::session::SessionLifecycle {client_request_id:"restore".into(),expected_revision:1},true).await.unwrap();
+    app.store.lifecycle_session(&sid,&store::session::SessionLifecycle {client_request_id:"archive".into(),expected_revision:0},false).await.unwrap();
+    app.store.lifecycle_session(&sid,&store::session::SessionLifecycle {client_request_id:"unarchive".into(),expected_revision:1},true).await.unwrap();
     let error=tokio::time::timeout(Duration::from_secs(2),work).await.unwrap().unwrap().unwrap_err();
     assert!(cancel.is_cancelled());
     assert_eq!(error.to_string(),"Session not found");

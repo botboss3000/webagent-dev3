@@ -45,8 +45,8 @@ async fn agent_records_need_the_bound_agent_key() {
 
 #[test]
 fn api_errors_hide_internal_causes() {
-    let recycled = ApiError::from(anyhow::Error::new(webagent_chat::session::RecycledSession));
-    assert_eq!(recycled.0, StatusCode::NOT_FOUND);
+    let archived = ApiError::from(anyhow::Error::new(webagent_chat::session::ArchivedSession));
+    assert_eq!(archived.0, StatusCode::NOT_FOUND);
     let internal = ApiError::from(anyhow::anyhow!("private path"));
     assert_eq!(internal.0, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(!internal.1.contains("private"));

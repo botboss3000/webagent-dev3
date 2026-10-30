@@ -8755,10 +8755,11 @@ async fn session_lifecycle_routes_enforce_auth_csrf_history_and_conflicts() {
     let (_root, app) = fixture().await;
     let sid = conversation(&app).await;
     let uri = format!("/api/v3/sessions/{sid}");
+    let archive = format!("{uri}/archive");
     let cookie = ability_auth(&app).await;
-    let body = json!({"client_request_id":"recycle","expected_revision":0});
+    let body = json!({"client_request_id":"archive","expected_revision":0});
     assert_eq!(
-        ability_request(&app, Method::DELETE, &uri, Some(body.clone()), None, None)
+        ability_request(&app, Method::POST, &archive, Some(body.clone()), None, None)
             .await
             .0,
         StatusCode::UNAUTHORIZED
@@ -8766,8 +8767,8 @@ async fn session_lifecycle_routes_enforce_auth_csrf_history_and_conflicts() {
     assert_eq!(
         ability_request(
             &app,
-            Method::DELETE,
-            &uri,
+            Method::POST,
+            &archive,
             Some(body.clone()),
             Some(&cookie),
             None
@@ -8776,29 +8777,29 @@ async fn session_lifecycle_routes_enforce_auth_csrf_history_and_conflicts() {
         .0,
         StatusCode::FORBIDDEN
     );
-    let (status, recycled) = ability_request(
+    let (status, archived) = ability_request(
         &app,
-        Method::DELETE,
-        &uri,
+        Method::POST,
+        &archive,
         Some(body.clone()),
         Some(&cookie),
         Some("ability-fixture"),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(recycled["session"]["status"], "recycled");
+    assert_eq!(archived["session"]["status"], "archived");
     assert_eq!(
         ability_request(
             &app,
-            Method::DELETE,
-            &uri,
+            Method::POST,
+            &archive,
             Some(body),
             Some(&cookie),
             Some("ability-fixture")
         )
         .await
         .1,
-        recycled
+        archived
     );
     let (_, list) = ability_request(
         &app,
@@ -8813,7 +8814,7 @@ async fn session_lifecycle_routes_enforce_auth_csrf_history_and_conflicts() {
     let (_, list) = ability_request(
         &app,
         Method::GET,
-        "/api/v3/sessions?status=recycled",
+        "/api/v3/sessions?status=archived",
         None,
         Some(&cookie),
         None,
@@ -8853,13 +8854,13 @@ async fn session_lifecycle_routes_enforce_auth_csrf_history_and_conflicts() {
         .0,
         StatusCode::NOT_FOUND
     );
-    let restore = json!({"client_request_id":"restore","expected_revision":1});
+    let unarchive = json!({"client_request_id":"unarchive","expected_revision":1});
     assert_eq!(
         ability_request(
             &app,
             Method::POST,
-            &format!("{uri}/restore"),
-            Some(restore.clone()),
+            &format!("{uri}/unarchive"),
+            Some(unarchive.clone()),
             Some(&cookie),
             None
         )
@@ -8870,8 +8871,8 @@ async fn session_lifecycle_routes_enforce_auth_csrf_history_and_conflicts() {
     let (status, result) = ability_request(
         &app,
         Method::POST,
-        &format!("{uri}/restore"),
-        Some(restore.clone()),
+        &format!("{uri}/unarchive"),
+        Some(unarchive.clone()),
         Some(&cookie),
         Some("ability-fixture"),
     )
@@ -8882,8 +8883,8 @@ async fn session_lifecycle_routes_enforce_auth_csrf_history_and_conflicts() {
         ability_request(
             &app,
             Method::POST,
-            &format!("{uri}/restore"),
-            Some(restore),
+            &format!("{uri}/unarchive"),
+            Some(unarchive),
             Some(&cookie),
             Some("ability-fixture")
         )
@@ -8894,8 +8895,8 @@ async fn session_lifecycle_routes_enforce_auth_csrf_history_and_conflicts() {
     assert_eq!(
         ability_request(
             &app,
-            Method::DELETE,
-            "/api/v3/sessions/missing",
+            Method::POST,
+            "/api/v3/sessions/missing/archive",
             Some(json!({"client_request_id":"missing","expected_revision":0})),
             Some(&cookie),
             Some("ability-fixture")
@@ -8916,16 +8917,14 @@ async fn session_lifecycle_routes_enforce_auth_csrf_history_and_conflicts() {
         )
         .await
         .unwrap();
-    for method in [Method::DELETE, Method::POST] {
-        let path = if method == Method::DELETE {
-            "/api/v3/sessions/foreign-lifecycle"
-        } else {
-            "/api/v3/sessions/foreign-lifecycle/restore"
-        };
+    for path in [
+        "/api/v3/sessions/foreign-lifecycle/archive",
+        "/api/v3/sessions/foreign-lifecycle/unarchive",
+    ] {
         assert_eq!(
             ability_request(
                 &app,
-                method,
+                Method::POST,
                 path,
                 Some(json!({"client_request_id":"foreign","expected_revision":0})),
                 Some(&cookie),
@@ -8946,8 +8945,8 @@ async fn session_lifecycle_routes_enforce_auth_csrf_history_and_conflicts() {
     assert_eq!(
         ability_request(
             &app,
-            Method::DELETE,
-            "/api/v3/sessions/inaccessible-lifecycle",
+            Method::POST,
+            "/api/v3/sessions/inaccessible-lifecycle/archive",
             Some(json!({"client_request_id":"inaccessible","expected_revision":0})),
             Some(&cookie),
             Some("ability-fixture")
@@ -8956,7 +8955,7 @@ async fn session_lifecycle_routes_enforce_auth_csrf_history_and_conflicts() {
         .0,
         StatusCode::NOT_FOUND
     );
-    // Recycling cancels pending approval; permanent removal keeps the session unavailable.
+    // Archiving cancels pending approval; deletion keeps the session unavailable.
     app.store
         .put(
             "run:lifecycle-blocker",
@@ -8967,8 +8966,8 @@ async fn session_lifecycle_routes_enforce_auth_csrf_history_and_conflicts() {
     assert_eq!(
         ability_request(
             &app,
-            Method::DELETE,
-            &uri,
+            Method::POST,
+            &archive,
             Some(json!({"client_request_id":"with-run","expected_revision":2})),
             Some(&cookie),
             Some("ability-fixture")
@@ -8985,13 +8984,13 @@ async fn session_lifecycle_routes_enforce_auth_csrf_history_and_conflicts() {
             .unwrap()["status"],
         "cancelled"
     );
-    let purge = json!({"client_request_id":"purge","expected_revision":3});
+    let delete = json!({"client_request_id":"delete","expected_revision":3});
     assert_eq!(
         ability_request(
             &app,
-            Method::POST,
-            &format!("{uri}/purge"),
-            Some(purge.clone()),
+            Method::DELETE,
+            &uri,
+            Some(delete.clone()),
             Some(&cookie),
             None
         )
@@ -9002,9 +9001,9 @@ async fn session_lifecycle_routes_enforce_auth_csrf_history_and_conflicts() {
     assert_eq!(
         ability_request(
             &app,
-            Method::POST,
-            &format!("{uri}/purge"),
-            Some(purge.clone()),
+            Method::DELETE,
+            &uri,
+            Some(delete.clone()),
             Some(&cookie),
             Some("ability-fixture")
         )
@@ -9015,9 +9014,9 @@ async fn session_lifecycle_routes_enforce_auth_csrf_history_and_conflicts() {
     assert_eq!(
         ability_request(
             &app,
-            Method::POST,
-            &format!("{uri}/purge"),
-            Some(purge),
+            Method::DELETE,
+            &uri,
+            Some(delete),
             Some(&cookie),
             Some("ability-fixture")
         )
@@ -9035,8 +9034,8 @@ async fn session_lifecycle_routes_enforce_auth_csrf_history_and_conflicts() {
         ability_request(
             &app,
             Method::POST,
-            &format!("{uri}/restore"),
-            Some(json!({"client_request_id":"after-purge","expected_revision":0})),
+            &format!("{uri}/unarchive"),
+            Some(json!({"client_request_id":"after-delete","expected_revision":0})),
             Some(&cookie),
             Some("ability-fixture")
         )

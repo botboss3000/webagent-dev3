@@ -16,7 +16,7 @@ fn api_error(error: LaneError) -> ApiError {
         ),
         LaneError::Dispatch(error)
             if error
-                .downcast_ref::<crate::store::session::RecycledSession>()
+                .downcast_ref::<crate::store::session::ArchivedSession>()
                 .is_none() =>
         {
             ApiError(

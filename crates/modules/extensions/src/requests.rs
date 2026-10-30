@@ -91,12 +91,12 @@ pub const OFFERED: [(&str, Kind); 24] = [
         Kind::Route("PATCH", "/sessions/{session_id}"),
     ),
     (
-        "sessions.recycle",
-        Kind::Route("DELETE", "/sessions/{session_id}"),
+        "sessions.archive",
+        Kind::Route("POST", "/sessions/{session_id}/archive"),
     ),
     (
-        "sessions.restore",
-        Kind::Route("POST", "/sessions/{session_id}/restore"),
+        "sessions.unarchive",
+        Kind::Route("POST", "/sessions/{session_id}/unarchive"),
     ),
     ("sessions.watch", Kind::Watch),
     ("ability.settings", Kind::Settings),

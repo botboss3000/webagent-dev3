@@ -81,8 +81,8 @@ pub(crate) async fn modes_config(
 #[derive(serde::Deserialize, Default)]
 #[serde(default)]
 struct RosterQuery {
-    /// The recycling bin: deleted agents the caller manages, instead of the usable roster.
-    deleted: bool,
+    /// Archived agents the caller owns, instead of the usable roster.
+    archived: bool,
 }
 // AGENT-DISCOVERY: list only agents the caller can use or explicitly administer.
 async fn agents(
@@ -101,8 +101,8 @@ async fn agents(
         let mut value = webagent_agents::repository::Repository::new(&view.agent_pool, &id, &view)?
             .summary()
             .await?;
-        if webagent_agents::binned(&value) != query.deleted
-            || (query.deleted && rights["can_manage"] != true)
+        if webagent_agents::archived(&value) != query.archived
+            || (query.archived && rights["owner_id"] != caller.user_id.as_str())
         {
             continue;
         }
@@ -458,10 +458,16 @@ pub(crate) async fn create_agent(
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct BinChange {
+struct ArchiveChange {
     expected_revision: u64,
 }
-async fn set_deleted(app: &App, identity: &Value, id: &str, expected: u64, deleted: bool) -> Api {
+/// What an archive-view or roster action does to an agent.
+enum Change {
+    Remove,
+    Unarchive,
+    Delete,
+}
+async fn change(app: &App, identity: &Value, id: &str, expected: u64, change: Change) -> Api {
     let bridge = super_bridge::Bridge { app, identity };
     let service = webagent_agents::service::Service {
         storage: &app.store,
@@ -469,19 +475,26 @@ async fn set_deleted(app: &App, identity: &Value, id: &str, expected: u64, delet
         effects: &bridge,
         gate: app.gate.as_ref(),
     };
-    service
-        .set_deleted(id, expected, deleted)
-        .await
-        .map(Json)
+    match change {
+        Change::Remove => service.remove(id, expected).await,
+        Change::Unarchive => service.set_archived(id, expected, false).await,
+        Change::Delete => service.delete(id, expected).await,
+    }
+    .map(Json)
         .map_err(|error| {
             let message = error.to_string();
             match message.as_str() {
                 "Agent revision changed" => crate::conflict("Agent changed; reload and try again"),
-                "Agent is already in the recycling bin" | "Agent is not in the recycling bin" => {
-                    crate::conflict(&message)
-                }
-                "The default agent cannot be deleted" | "Invalid agent status" => {
-                    crate::bad(&message)
+                "Agent is already archived"
+                | "Agent is not archived"
+                | "Archive the agent before deleting it" => crate::conflict(&message),
+                "The default agent cannot be archived"
+                | "The default agent cannot be removed"
+                | "The default agent cannot be deleted"
+                | "Invalid agent status" => crate::bad(&message),
+                "Only the agent owner can delete it permanently"
+                | "Only the agent owner can archive it" => {
+                    ApiError(StatusCode::FORBIDDEN, message)
                 }
                 "Agent not found" => ApiError(StatusCode::NOT_FOUND, message),
                 _ if message.ends_with("administration unavailable") => denied(),
@@ -489,29 +502,40 @@ async fn set_deleted(app: &App, identity: &Value, id: &str, expected: u64, delet
             }
         })
 }
-// AGENT-BIN: managers move agents to the recycling bin and back; chat admits only active agents.
+// AGENT-REMOVE: the owner's Remove archives the agent; anyone else's leaves it and its members.
+// Chat admits only active agents.
+async fn remove_agent(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Path(id): Path<String>,
+    Json(body): Json<ArchiveChange>,
+) -> Api {
+    change(&app, &identity, &id, body.expected_revision, Change::Remove).await
+}
+async fn unarchive_agent(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Path(id): Path<String>,
+    Json(body): Json<ArchiveChange>,
+) -> Api {
+    change(&app, &identity, &id, body.expected_revision, Change::Unarchive).await
+}
+// AGENT-DELETE: the owner permanently erases an archived agent, its sessions and its data.
 async fn delete_agent(
     State(app): State<App>,
     Extension(identity): Extension<Value>,
     Path(id): Path<String>,
-    Json(body): Json<BinChange>,
+    Json(body): Json<ArchiveChange>,
 ) -> Api {
-    set_deleted(&app, &identity, &id, body.expected_revision, true).await
-}
-async fn restore_agent(
-    State(app): State<App>,
-    Extension(identity): Extension<Value>,
-    Path(id): Path<String>,
-    Json(body): Json<BinChange>,
-) -> Api {
-    set_deleted(&app, &identity, &id, body.expected_revision, false).await
+    change(&app, &identity, &id, body.expected_revision, Change::Delete).await
 }
 
 pub fn router() -> Router<App> {
     Router::new()
         .route("/agents", get(agents).post(create_agent))
         .route("/agents/{id}", axum::routing::delete(delete_agent))
-        .route("/agents/{id}/restore", post(restore_agent))
+        .route("/agents/{id}/remove", post(remove_agent))
+        .route("/agents/{id}/unarchive", post(unarchive_agent))
         .route("/agents/{id}/identity", get(identity_get).put(identity_put))
 }
 
@@ -600,26 +624,26 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn recycling_bin_api_hides_blocks_and_restores_owned_agents() {
+    async fn archive_api_hides_blocks_unarchives_and_deletes_owned_agents() {
         let (_root, app) = fixture().await;
-        let owner = json!({"_user_id":tenant_user(&app, "bin-owner").await});
+        let owner = json!({"_user_id":tenant_user(&app, "archive-owner").await});
         let Json(created) = create_agent(
             State(app.clone()),
             Extension(owner.clone()),
             Json(NewAgent {
-                client_request_id: "bin-agent".into(),
-                name: "Bin agent".into(),
+                client_request_id: "archive-agent".into(),
+                name: "Archive agent".into(),
                 description: None,
             }),
         )
         .await
         .unwrap();
         let id = created["id"].as_str().unwrap().to_owned();
-        let roster = |deleted: bool| {
+        let roster = |archived: bool| {
             let (app, owner) = (app.clone(), owner.clone());
             async move {
                 let Json(value) =
-                    agents(State(app), Extension(owner), Query(RosterQuery { deleted }))
+                    agents(State(app), Extension(owner), Query(RosterQuery { archived }))
                         .await
                         .unwrap();
                 value["agents"]
@@ -636,27 +660,12 @@ mod tests {
         let revision = status_value(&view, &id).await.unwrap()["revision"]
             .as_u64()
             .unwrap();
-        let outsider = json!({"_user_id":tenant_user(&app, "bin-outsider").await});
         assert_eq!(
-            delete_agent(
-                State(app.clone()),
-                Extension(outsider),
-                Path(id.clone()),
-                Json(BinChange {
-                    expected_revision: revision
-                }),
-            )
-            .await
-            .unwrap_err()
-            .0,
-            StatusCode::FORBIDDEN
-        );
-        assert_eq!(
-            delete_agent(
+            remove_agent(
                 State(app.clone()),
                 Extension(owner.clone()),
                 Path("shared_default".into()),
-                Json(BinChange {
+                Json(ArchiveChange {
                     expected_revision: 1
                 }),
             )
@@ -665,17 +674,70 @@ mod tests {
             .0,
             StatusCode::BAD_REQUEST
         );
-        let Json(deleted) = delete_agent(
+        // Anyone but the owner leaves: off their list and the member list, agent untouched.
+        let leaver_id = tenant_user(&app, "archive-leaver").await;
+        view.access_repository()
+            .manage_agent_member(owner["_user_id"].as_str().unwrap(), &leaver_id, &id, Some("member"), false, 0)
+            .await
+            .unwrap();
+        let leaver = json!({"_user_id":leaver_id});
+        let sees = |identity: Value| {
+            let (app, id) = (app.clone(), id.clone());
+            async move {
+                let Json(value) =
+                    agents(State(app), Extension(identity), Query(RosterQuery::default()))
+                        .await
+                        .unwrap();
+                value["agents"].as_array().unwrap().iter().any(|agent| agent["id"] == id.as_str())
+            }
+        };
+        assert!(sees(leaver.clone()).await);
+        let Json(left) = remove_agent(
+            State(app.clone()),
+            Extension(leaver.clone()),
+            Path(id.clone()),
+            Json(ArchiveChange { expected_revision: revision }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(left["removed"], true);
+        assert!(!sees(leaver).await);
+        assert!(sees(owner.clone()).await, "the owner keeps the agent");
+        // Access granted only by app login stays gone too.
+        let outsider = json!({"_user_id":tenant_user(&app, "archive-outsider").await});
+        if sees(outsider.clone()).await {
+            remove_agent(
+                State(app.clone()),
+                Extension(outsider.clone()),
+                Path(id.clone()),
+                Json(ArchiveChange { expected_revision: revision }),
+            )
+            .await
+            .unwrap();
+            assert!(!sees(outsider).await);
+        }
+        // Membership writes advance the agent revision.
+        let revision = status_value(&view, &id).await.unwrap()["revision"]
+            .as_u64()
+            .unwrap();
+        assert!(app
+            .store
+            .agent_memberships(&id)
+            .await
+            .unwrap()
+            .iter()
+            .all(|member| member["user_id"] != leaver_id.as_str()));
+        let Json(archived) = remove_agent(
             State(app.clone()),
             Extension(owner.clone()),
             Path(id.clone()),
-            Json(BinChange {
+            Json(ArchiveChange {
                 expected_revision: revision,
             }),
         )
         .await
         .unwrap();
-        assert_eq!(deleted["status"], "deleted");
+        assert_eq!(archived["status"], "archived");
         assert!(!roster(false).await.contains(&id));
         assert_eq!(roster(true).await, vec![id.clone()]);
         let owner_id = owner["_user_id"].as_str().unwrap();
@@ -686,11 +748,11 @@ mod tests {
             .unwrap()
             .admitted());
         assert_eq!(
-            restore_agent(
+            unarchive_agent(
                 State(app.clone()),
                 Extension(owner.clone()),
                 Path(id.clone()),
-                Json(BinChange {
+                Json(ArchiveChange {
                     expected_revision: revision
                 }),
             )
@@ -699,19 +761,70 @@ mod tests {
             .0,
             StatusCode::CONFLICT
         );
-        let Json(restored) = restore_agent(
+        let Json(unarchived) = unarchive_agent(
             State(app.clone()),
             Extension(owner.clone()),
             Path(id.clone()),
-            Json(BinChange {
+            Json(ArchiveChange {
                 expected_revision: revision + 1,
             }),
         )
         .await
         .unwrap();
-        assert_eq!(restored["status"], "active");
+        assert_eq!(unarchived["status"], "active");
         assert!(roster(false).await.contains(&id));
         assert!(roster(true).await.is_empty());
+        let remove = |identity: Value, expected_revision: u64| {
+            let (app, id) = (app.clone(), id.clone());
+            async move {
+                delete_agent(
+                    State(app),
+                    Extension(identity),
+                    Path(id),
+                    Json(ArchiveChange { expected_revision }),
+                )
+                .await
+            }
+        };
+        assert_eq!(
+            remove(owner.clone(), revision + 2).await.unwrap_err().0,
+            StatusCode::CONFLICT,
+            "only an archived agent can be deleted"
+        );
+        remove_agent(
+            State(app.clone()),
+            Extension(owner.clone()),
+            Path(id.clone()),
+            Json(ArchiveChange {
+                expected_revision: revision + 2,
+            }),
+        )
+        .await
+        .unwrap();
+        let user = app.store.for_user(owner_id).await.unwrap();
+        let sid = uuid::Uuid::new_v4().to_string();
+        user.put(
+            &format!("session:{sid}"),
+            &json!({"id":sid,"agent_id":id,"status":"archived","metadata_revision":1}),
+        )
+        .await
+        .unwrap();
+        let member = json!({"_user_id":tenant_user(&app, "archive-member").await});
+        assert!(remove(member, revision + 3).await.is_err());
+        let Json(deleted) = remove(owner.clone(), revision + 3).await.unwrap();
+        assert_eq!(deleted["deleted"], true);
+        assert!(roster(true).await.is_empty());
+        assert!(app.store.for_agent(&id).await.is_err());
+        assert!(!app.store.root.join("agent_data").join(&id).exists());
+        assert_eq!(
+            user.get(&format!("session:{sid}")).await.unwrap().unwrap()["status"],
+            "deleted"
+        );
+        assert_eq!(
+            remove(owner.clone(), revision + 3).await.unwrap_err().0,
+            StatusCode::FORBIDDEN,
+            "a deleted agent is no longer administrable"
+        );
     }
     #[tokio::test]
     async fn visibility_preferences_preserve_fixed_protocol_and_revision_fence() {

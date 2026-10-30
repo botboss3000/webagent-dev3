@@ -42,7 +42,7 @@ replayed because provider usage may already have occurred. A user may submit a
 new message after an error. Retrying the same client_message_id returns the
 current review outcome rather than creating another call.
 
-A pending session blocks new submissions and recycling. Ordinary chat is unchanged
+A pending session blocks new submissions and archiving. Ordinary chat is unchanged
 when review is off. Disabling review does not promote previous rejected messages
 or bypass reviews already submitted under an enabled gate.
 

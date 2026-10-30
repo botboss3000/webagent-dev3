@@ -46,8 +46,8 @@ pub const REQUESTS: [&str; 23] = [
     "sessions.create",
     "sessions.read",
     "sessions.update",
-    "sessions.recycle",
-    "sessions.restore",
+    "sessions.archive",
+    "sessions.unarchive",
     "sessions.watch",
     "ability.settings",
 ];
@@ -144,8 +144,8 @@ pub async fn call<H: Host + Sync>(host: &H, call: Call<'_>) -> Result<Value, Str
             body.insert("client_request_id".into(), json!(call.request_id));
             let request = match args.text("action") {
                 Some("update") => "sessions.update",
-                Some("recycle") => "sessions.recycle",
-                Some("restore") => "sessions.restore",
+                Some("archive") => "sessions.archive",
+                Some("unarchive") => "sessions.unarchive",
                 _ => return Err("Unknown session action".into()),
             };
             host.request(request, params, Value::Object(body)).await
@@ -352,13 +352,13 @@ mod tests {
         run(&host, "get_agent", json!({"agent_id":"agent-a"})).unwrap();
         run(&host, "set_agent_tool", json!({"agent_id":"a","ability_id":"b","tool":"c","request":{"mode":"off"}})).unwrap();
         run(&host, "create_agent", json!({"request":{"name":"New"}})).unwrap();
-        run(&host, "manage_user_session", json!({"session_id":SESSION,"action":"recycle","request":{"expected_revision":3}})).unwrap();
+        run(&host, "manage_user_session", json!({"session_id":SESSION,"action":"archive","request":{"expected_revision":3}})).unwrap();
         let seen = host.seen();
         assert!(seen.iter().all(|(name, _, _)| REQUESTS.contains(&name.as_str())));
         assert_eq!(seen[0], ("agents.identity.read".into(), json!({"agent_id":"agent-a"}), json!({})));
         assert_eq!(seen[1].1, json!({"agent_id":"a","ability_id":"b","tool":"c"}));
         assert_eq!(seen[2].2, json!({"name":"New","client_request_id":"req-1"}));
-        assert_eq!(seen[3].0, "sessions.recycle");
+        assert_eq!(seen[3].0, "sessions.archive");
         assert_eq!(seen[3].2, json!({"expected_revision":3,"client_request_id":"req-1"}));
     }
 

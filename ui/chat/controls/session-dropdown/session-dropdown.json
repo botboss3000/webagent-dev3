@@ -2,15 +2,15 @@
   "_instructions": "Presentation only; does not grant permissions or enable unavailable V3 features. Edit this file and publish assets; adopted on page reload. common is deeply merged with desktop/mobile/widget; arrays and scalars replace. chat.json retains only surrounding header placement/sizing. Set menu actions false to hide them; a rename-only menu sets all other menu action flags false.",
   "common": {
     "trigger": {
-      "_instructions": "agent_icon, session_name and status show avatar, title and existing activity/unread counter. row_actions shows the optional More button. delete shows direct recycle.",
+      "_instructions": "agent_icon, session_name and status show avatar, title and existing activity/unread counter. row_actions shows the optional More button. archive shows direct archive.",
       "agent_icon": true,
       "session_name": true,
       "status": true,
       "row_actions": false,
-      "delete": false
+      "archive": false
     },
     "menu": {
-      "_instructions": "default_rows limits visible rows before scrolling (1\u2013100); viewport can show fewer. agent_icons/session_name/status control row contents. row_actions shows optional row More buttons. All action flags control visibility only. always_on_display controls Screen display. restore/purge control recycled-session actions.",
+      "_instructions": "default_rows limits visible rows before scrolling (1\u2013100); viewport can show fewer. agent_icons/session_name/status control row contents. row_actions shows optional row More buttons. All action flags control visibility only. always_on_display controls Screen display. archive archives an active session; unarchive/delete (permanent) control archived-session actions.",
       "default_rows": 8,
       "max_height": "min(66vh, 640px)",
       "agent_icons": true,
@@ -23,20 +23,20 @@
       "open_in_widget": true,
       "refresh": true,
       "start_scratchpad": true,
-      "delete": true,
+      "archive": true,
       "agent_id": true,
       "session_id": true,
       "always_on_display": true,
-      "restore": true,
-      "purge": true
+      "unarchive": true,
+      "delete": true
     },
     "footer": {
-      "_instructions": "enabled hides/shows the entire dropdown footer. Each child independently controls its current footer feature. batch_delete includes checkbox mode and its selected-recycle control.",
+      "_instructions": "enabled hides/shows the entire dropdown footer. Each child independently controls its current footer feature. archived toggles the archived-sessions view. batch_archive includes checkbox mode and its archive-selected control.",
       "enabled": true,
       "search": true,
-      "recycle_bin": true,
+      "archived": true,
       "hidden_sessions": true,
-      "batch_delete": true
+      "batch_archive": true
     },
     "gestures": {
       "_instructions": "Open the same action menu on trigger or session rows. Keyboard ContextMenu or Shift+F10 remains available. Long press cancels on movement, scrolling, pointer cancellation, release or teardown.",

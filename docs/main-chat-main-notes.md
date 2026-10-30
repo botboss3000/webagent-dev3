@@ -130,7 +130,7 @@ does not make note content an execution authorization.
 | modules::package_service | Retain wake generations received during an in-flight reducer; same-second writes are not lost. |
 | modules::tick_package | Bootstrap one fixed review subscription and supply up to 128 ordered changes after its durable cursor. |
 | storage/session::public_session | Expose role and deletion capability independently of the conversation title. |
-| storage/session::lifecycle_session / purge_session | Reject recycle and purge of the permanent Main Chat. |
+| storage/session::lifecycle_session / delete_session | Reject archive and delete of the permanent Main Chat. |
 | storage/session::prepare_session_document | Preserve the immutable role across partial checkpoint and compaction writes. |
 | storage/module_records::module_events | Resolve committed Notes notification versions back to their bounded change metadata. |
 | storage/notifications::stage_notification | Stage the recognized Notes update kind in the caller's transaction. |
@@ -147,7 +147,7 @@ retries. The Notes element owns its private SSE connection, edit revision fences
 lossless untouched fields, proposal controls and teardown. The panel mounts it in
 the measured header extension; embed disables it because embed authority is
 session-scoped. The dropdown and Sessions page guard deletion independently of
-visibility. Backend recycle and purge remain authoritative protections.
+visibility. Backend archive and delete refusals remain authoritative protections.
 
 Automation management recognizes fixed review IDs and note-managed action IDs.
 It retains Pause/Resume/History, hides generic Edit/Run now for managed intent,
@@ -163,8 +163,8 @@ Main Chat remains ordinary. No engine or authorization behavior changed.
 | Owner | Contract |
 | --- | --- |
 | session-dropdown/list.js::label | Synchronizes the selected trigger's Main Chat wavy class versus ordinary pinned-circle class. Clears stale classes on selection changes; existing visibility/deletion guards remain. |
-| session-dropdown/list.js::render | Stable-partitions visible active rows, putting Main Chat first and retaining other supplied ordering and search snippet/session associations. Does not inject nonmatching results or reorder recycled rows. Main Chat's wavy class takes precedence over its pin. |
-| sessions/js/adapter.js::compareSessionsByPinnedOrder | Main Chat, pins, descending last_active_at, then stable ID tie-breaks. Bin-origin rows receive neither role nor pin priority. Inputs are not mutated. |
+| session-dropdown/list.js::render | Stable-partitions visible active rows, putting Main Chat first and retaining other supplied ordering and search snippet/session associations. Does not inject nonmatching results or reorder archived rows. Main Chat's wavy class takes precedence over its pin. |
+| sessions/js/adapter.js::compareSessionsByPinnedOrder | Main Chat, pins, descending last_active_at, then stable ID tie-breaks. Archived-origin rows receive neither role nor pin priority. Inputs are not mutated. |
 | sessions/js/sessions-page.js::_applySort | Sorts a copy using the adapter for default recent order. Explicit column sorts retain Main Chat/pin priority, existing pinned sort_order and column handling within groups. |
 | sessions/js/sessions-page.js::_renderTitleCell | Chooses the wavy Main Chat class or existing pinned halo; retains escaped labels, avatar slots and family disclosure controls. |
 | shared/main-chat-avatar.css | Imported by both dropdown and Sessions styles. The static SVG mask on .session-row-agent-main::after draws a wavy ring at inset -3px, using --warning with yellow fallback. No animation; pointer-events:none keeps actions unobstructed and the avatar slot unchanged. |

@@ -57,7 +57,7 @@ impl Store {
         };
         let mut session = self.unseal(&raw)?;
         if session["status"] != "active" {
-            return Ok(Conflict("Session is recycled"));
+            return Ok(Conflict("Session is archived"));
         }
         let last: i64 =
             sqlx::query_scalar("SELECT COALESCE(MAX(seq),0) FROM chat WHERE session_id=?")
@@ -841,11 +841,11 @@ mod tests {
             true
         );
     }
-    /// Verify source purge removes archived recovery and receipts while preserving independent forked history.
+    /// Verify source delete removes archived recovery and receipts while preserving independent forked history.
     #[tokio::test]
-    async fn purge_removes_undo_archive_and_fork_receipt_without_deleting_child() {
+    async fn delete_removes_undo_archive_and_fork_receipt_without_deleting_child() {
         let (_root, store) = fixture().await;
-        let selected = request(&store, "assistant:r1", "fork-before-purge").await;
+        let selected = request(&store, "assistant:r1", "fork-before-delete").await;
         let child = json!({"id":"child","agent_id":"shared_default","title":"Fork"});
         saved(
             store
@@ -854,7 +854,7 @@ mod tests {
                 .unwrap(),
         );
         store.put("run:r2", &json!({"id":"r2","session_id":"s","status":"completed","input":[{"role":"user","content":"private recovery"}]})).await.unwrap();
-        let selected = request(&store, "user:r2", "undo-before-purge").await;
+        let selected = request(&store, "user:r2", "undo-before-delete").await;
         saved(
             store
                 .conversation_history("s", &selected, None)
@@ -862,23 +862,23 @@ mod tests {
                 .unwrap(),
         );
         let session = store.get("session:s").await.unwrap().unwrap();
-        let recycle = super::super::session::SessionLifecycle {
-            client_request_id: "recycle".into(),
+        let archive = super::super::session::SessionLifecycle {
+            client_request_id: "archive".into(),
             expected_revision: session["metadata_revision"].as_u64().unwrap(),
         };
-        saved(store.lifecycle_session("s", &recycle, false).await.unwrap());
-        let purge = super::super::session::SessionLifecycle {
-            client_request_id: "purge".into(),
-            expected_revision: recycle.expected_revision + 1,
+        saved(store.lifecycle_session("s", &archive, false).await.unwrap());
+        let delete = super::super::session::SessionLifecycle {
+            client_request_id: "delete".into(),
+            expected_revision: archive.expected_revision + 1,
         };
-        saved(store.purge_session("s", &purge).await.unwrap());
+        saved(store.delete_session("s", &delete).await.unwrap());
         assert!(store
-            .get("receipt:session:history:s:undo-before-purge")
+            .get("receipt:session:history:s:undo-before-delete")
             .await
             .unwrap()
             .is_none());
         assert!(store
-            .get("receipt:session:history:s:fork-before-purge")
+            .get("receipt:session:history:s:fork-before-delete")
             .await
             .unwrap()
             .is_none());

@@ -84,6 +84,13 @@ impl webagent_agents::service::Access for Bridge<'_> {
             .map_err(|e| anyhow!(e.1))?;
         Ok(())
     }
+    async fn leave(&self, agent: &str) -> Result<()> {
+        let user = self.identity["_user_id"].as_str().unwrap_or("");
+        self.app.store.leave_agent(user, agent).await?;
+        crate::phase3_api::quiesce_user(self.app, user, Some(agent))
+            .await
+            .map_err(|e| anyhow!(e.1))
+    }
 }
 impl webagent_agents::service::Effects for Bridge<'_> {
     async fn seed_model(&self, owner: &str, agent: &str) -> Result<bool> {
@@ -106,5 +113,46 @@ impl webagent_agents::service::Effects for Bridge<'_> {
         crate::phase3_api::quiesce_agent(self.app, agent)
             .await
             .map_err(|e| anyhow!(e.1))
+    }
+    /// Each step is idempotent, so a failed erase leaves an archived agent that can be retried.
+    async fn erase(&self, agent: &str) -> Result<()> {
+        let store = &self.app.store;
+        for user in store.all_user_ids().await? {
+            let mut caller = self.app.clone();
+            caller.store = store.for_user(&user).await?;
+            for session in caller.store.list("session:").await? {
+                let Some(sid) = session["id"].as_str() else {
+                    continue;
+                };
+                if session["agent_id"] != agent || session["status"] == "deleted" {
+                    continue;
+                }
+                crate::api::quiesce(&caller, sid).await;
+                caller.store.delete_agent_session(sid).await?;
+            }
+        }
+        store.shared_schema().await?;
+        let mut tx = store.app_pool.begin().await?;
+        for table in ["shared_participants", "shared_invitations", "shared_observation_audit"] {
+            sqlx::query(&format!("DELETE FROM {table} WHERE session_id IN (SELECT session_id FROM shared_sessions WHERE agent_id=?)"))
+                .bind(agent)
+                .execute(&mut *tx)
+                .await?;
+        }
+        sqlx::query("DELETE FROM shared_sessions WHERE agent_id=?")
+            .bind(agent)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        // The catalog reads every referenced roster from its agent database, so prune it first.
+        let mut catalog = store.model_catalog().await?;
+        let assignments = catalog.assignments.len();
+        catalog.assignments.retain(|_, assignment| assignment.agent_id != agent);
+        let pruned = catalog.agent_models.remove(agent).is_some();
+        if pruned || assignments != catalog.assignments.len() {
+            let revision = catalog.revision;
+            store.save_model_catalog(&catalog, revision).await?;
+        }
+        store.unregister_agent(agent).await
     }
 }

@@ -181,12 +181,12 @@ export function createChatClient({request, note, issues, clearNoticeFrom = () =>
     },
     /** Applies revision-fenced title or pin metadata changes. */
     patch: (id, body) => request('/sessions/' + encodeURIComponent(id), 'PATCH', body),
-    /** Recycles a session with the caller's metadata revision. */
-    recycle: (id, body) => request('/sessions/' + encodeURIComponent(id), 'DELETE', body),
-    /** Restores a recycled session using its current revision. */
-    restore: (id, body) => request('/sessions/' + encodeURIComponent(id) + '/restore', 'POST', body),
-    /** Permanently removes a recycled session through the same revision fence. */
-    purge: (id, body) => request('/sessions/' + encodeURIComponent(id) + '/purge', 'POST', body),
+    /** Archives a session with the caller's metadata revision. */
+    archive: (id, body) => request('/sessions/' + encodeURIComponent(id) + '/archive', 'POST', body),
+    /** Unarchives an archived session using its current revision. */
+    unarchive: (id, body) => request('/sessions/' + encodeURIComponent(id) + '/unarchive', 'POST', body),
+    /** Permanently deletes an archived session through the same revision fence. */
+    delete: (id, body) => request('/sessions/' + encodeURIComponent(id), 'DELETE', body),
     /** Acknowledges messages through a durable sequence cursor. */
     read: (id, through_seq) => request('/sessions/' + encodeURIComponent(id) + '/read', 'PUT', {through_seq}),
     /** Creates a session from the supplied agent and request identity. */

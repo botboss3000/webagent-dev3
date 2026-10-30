@@ -387,7 +387,7 @@ body.light-mode .chat-header-zone > [data-header-control] {
 .chat-header-carousel-strip > [data-header-control="session_prev"],
 .chat-header-carousel-strip > [data-header-control="session_next"],
 .chat-header-carousel-strip > [data-header-control="refresh"],
-.chat-header-carousel-strip > [data-header-control="delete_session"],
+.chat-header-carousel-strip > [data-header-control="archive_session"],
 .chat-header-carousel-strip > [data-header-control="close"],
 .chat-header-carousel-strip > [data-header-control="attach"],
 .chat-header-carousel-strip > [data-header-control="send"],
@@ -8830,9 +8830,9 @@ body.light-mode .agent-row-item { color: var(--fg-2); }
 /* ── Drag-to-reorder: pinned session rows are grabable across their full width ── */
 .session-row.pinned { cursor: grab; touch-action: none; }
 .session-row.pinned:active { cursor: grabbing; }
-/* Binned rows keep the pin flag (for restore) but are not draggable */
-.session-row.pinned.recycled,
-.session-row.pinned.recycled:active { cursor: default; touch-action: auto; }
+/* Archived rows keep the pin flag (for unarchive) but are not draggable */
+.session-row.pinned.archived,
+.session-row.pinned.archived:active { cursor: default; touch-action: auto; }
 .session-row.dragging,
 .agent-row-item.dragging {
     opacity: 0.9;
@@ -8942,7 +8942,7 @@ body.light-mode .session-manage-row { border-top-color: var(--border); backgroun
 .session-manage-checkbox-toggle:hover { color: var(--fg-1); background: var(--bg-tint); }
 .session-manage-checkbox-toggle[data-state="on"] { color: var(--brand); }
 body.light-mode .session-manage-checkbox-toggle[data-state="on"] { color: var(--brand); }
-/* ── Dropdown search bar + recycle-bin toggle (footer) ── */
+/* ── Dropdown search bar + archived-view toggle (footer) ── */
 /* SEARCH-FIELD-INLINE-ICON — the magnifier is a SIBLING of the input in the
    markup (list.js `_appendManageRow`) and is lifted out of the flex flow here so
    it paints inside the field's left edge rather than in its own column beside
@@ -9036,7 +9036,7 @@ body.light-mode .session-manage-flag-filter[data-state="on"] { color: var(--bran
     flex-shrink: 0;
   }
 .session-manage-search-clear:hover { color: var(--fg-1); background: var(--bg-tint); }
-.session-manage-bin {
+.session-manage-archived {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -9048,11 +9048,11 @@ body.light-mode .session-manage-flag-filter[data-state="on"] { color: var(--bran
     color: var(--fg-3);
     transition: color .15s, background .15s;
   }
-.session-manage-bin:hover { color: var(--fg-1); background: var(--bg-tint); }
-#chat-header .session-manage-bin[data-state="on"] { color: var(--brand); }
-/* Recycled (bin) rows: dimmed, restore-only */
-.session-row.recycled .session-row-title { opacity: .72; }
-.session-row-bin {
+.session-manage-archived:hover { color: var(--fg-1); background: var(--bg-tint); }
+#chat-header .session-manage-archived[data-state="on"] { color: var(--brand); }
+/* Archived rows: dimmed, unarchive or delete only */
+.session-row.archived .session-row-title { opacity: .72; }
+.session-row-archived {
     display: inline-flex;
     align-items: center;
     margin-left: 6px;
@@ -9069,13 +9069,13 @@ body.light-mode .session-manage-flag-filter[data-state="on"] { color: var(--bran
     cursor: pointer;
     transition: color .12s ease, background .12s ease, border-color .12s ease;
   }
-.session-row-bin:hover {
+.session-row-archived:hover {
     color: var(--danger);
     background: var(--danger-mid, rgba(var(--danger-rgb), 0.25));
     border-color: var(--danger);
   }
-.session-row-bin.armed,
-.session-row-bin.armed:hover {
+.session-row-archived.armed,
+.session-row-archived.armed:hover {
     color: var(--accent);
     background: var(--accent-soft);
     border-color: var(--accent);
@@ -9187,7 +9187,7 @@ body.light-mode .agent-row-actions {
 .agent-row-action.danger.warning { color: var(--warning); }
 .session-row-action.danger.warning:hover,
 .agent-row-action.danger.warning:hover { background: rgba(var(--warning-rgb), 0.12); }
-/* SHARED-DELETE-CONTROL — LABELLED danger menu rows ("Delete session"). The
+/* SHARED-DELETE-CONTROL — LABELLED danger menu rows ("Archive session" / "Delete session"). The
    shared control replaces the button's inner HTML with its state icon, which is
    right for the icon-only trash buttons but would leave a labelled menu row
    blank mid-interaction. The two-click affordance must keep saying what the
@@ -9197,7 +9197,9 @@ body.light-mode .agent-row-actions {
 .session-row-actions .session-row-action.danger[data-state="warning"]::after { content: "Click again to delete"; }
 .session-row-actions .session-row-action.danger[data-state="deleting"]::after { content: "Deleting\2026"; }
 .session-row-actions .session-row-action.danger[data-state="undoing"] { color: var(--success); }
-.session-row-actions .session-row-action.danger[data-state="undoing"]::after { content: "Click to restore"; }
+.session-row-actions .session-row-action.danger[data-state="undoing"]::after { content: "Click to unarchive"; }
+.session-row-actions .session-row-action.danger[data-action="archive"][data-state="warning"]::after { content: "Click again to archive"; }
+.session-row-actions .session-row-action.danger[data-action="archive"][data-state="deleting"]::after { content: "Archiving\2026"; }
 /* Shared per-row session panel details.  The chat dropdown and Agents →
    Sessions page both use .session-row-actions, including these copyable IDs. */
 .session-row-actions .session-row-actions-info {

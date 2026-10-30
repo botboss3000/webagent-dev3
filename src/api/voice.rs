@@ -70,7 +70,7 @@ async fn transcribe(app: &App, run: &Value, bytes: &[u8], mime: &str) -> Result<
         app.provider.transcribe(&selection, &tokens, bytes, mime, cancel))
         .await
         .map_err(|error| {
-            if error.downcast_ref::<crate::store::session::RecycledSession>().is_some() {return ApiError::from(error);}
+            if error.downcast_ref::<crate::store::session::ArchivedSession>().is_some() {return ApiError::from(error);}
             ApiError(
                 StatusCode::BAD_GATEWAY,
                 "Recording could not be transcribed by the configured Voice model".into(),
@@ -699,7 +699,7 @@ pub(crate) async fn voice_speech(
         app.provider.speak(&key, &model, &text, cancel))
         .await
         .map_err(|error| {
-            if error.downcast_ref::<crate::store::session::RecycledSession>().is_some() {return ApiError::from(error);}
+            if error.downcast_ref::<crate::store::session::ArchivedSession>().is_some() {return ApiError::from(error);}
             ApiError(
                 StatusCode::BAD_GATEWAY,
                 "Server speech did not complete; browser speech can be used".into(),

@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(restored.main_chat_state().await.unwrap()["notes_version"],2);
         let req=crate::store::session::SessionLifecycle{client_request_id:"delete".into(),expected_revision:0};
         assert!(matches!(restored.lifecycle_session("main",&req,false).await.unwrap(),crate::store::session::SessionPatchOutcome::Conflict(_)));
-        assert!(matches!(restored.purge_session("main",&req).await.unwrap(),crate::store::session::SessionPatchOutcome::Conflict(_)));
+        assert!(matches!(restored.delete_session("main",&req).await.unwrap(),crate::store::session::SessionPatchOutcome::Conflict(_)));
         let a=store.clone();let b=restored.clone();
         let (a,b)=tokio::join!(a.main_chat_change(3,"a","a",vec![],|s|{s["settings"]["notes_name"]=json!("A");Ok(Value::Null)}),b.main_chat_change(3,"b","b",vec![],|s|{s["settings"]["notes_name"]=json!("B");Ok(Value::Null)}));
         assert_ne!(a.is_ok(),b.is_ok());

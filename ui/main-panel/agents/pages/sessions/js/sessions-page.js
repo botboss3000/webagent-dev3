@@ -279,12 +279,12 @@ let _sourceAccessDenied = false;
 let _tickTimer = null;   // 1s interval that re-renders the live time-ago labels
 let _onKsChanged = null; // kill-switch-changed listener while the tab is active
 let _agentContextName = 'Sessions';
-let _viewId = 'sessions';  // 'sessions' | 'recycle-bin' | 'both' (chip switcher)
+let _viewId = 'sessions';  // 'sessions' | 'archived' | 'both' (chip switcher)
 let _selectionPanelMode = 'selected';
-// Successful recycling removes active rows from the current projection. Keep this
-// short-lived action context so Undo/Permanent delete stays available even when
-// those binned rows no longer have DOM checkboxes in the active-only view.
-let _postBinSessionIds = [];
+// Successful archiving removes active rows from the current projection. Keep this
+// short-lived action context so Unarchive/Delete stays available even when
+// those archived rows no longer have DOM checkboxes in the active-only view.
+let _postArchiveSessionIds = [];
 let _activeConfig = null;
 let _searchQuery = '';
 let _searchMode = 'content';  // 'title' | 'content' — persisted in IDB-backed UI state
@@ -439,8 +439,8 @@ function _paintAgentFromSharedSnapshot(agentId) {
 function setSessionsAgentContext() { _agentFilterId=null;_nativeCodexContext=null;_agentContextName='Sessions'; }
 
 // Cross-catalog search cache: while a query is active we lazily fetch the OTHER
-// catalog (sessions ↔ recycle bin) so results surface from both views at once.
-// Rows carry `_origin` ('active' | 'bin') and `_cross` (true = from the other
+// catalog (sessions ↔ archived) so results surface from both views at once.
+// Rows carry `_origin` ('active' | 'archived') and `_cross` (true = from the other
 // catalog — rendered dimmed with an origin badge, excluded from selection).
 let _searchExtra = null;
 let _searchExtraPending = null;
@@ -463,7 +463,7 @@ try {
 } catch (_) {}
 // The old dropdown also offered an Automations view — that is its own main-panel
 // tab now, so migrate any stored value back into the sessions scope.
-if (!['sessions', 'recycle-bin', 'both'].includes(_viewId)) _viewId = 'sessions';
+if (!['sessions', 'archived', 'both'].includes(_viewId)) _viewId = 'sessions';
 _searchMode = _stored.searchMode || 'content';
 const _REFRESH_INTERVAL_MS = 30000;
 // Which parent rows are currently expanded in the tree. Persists across the
@@ -602,16 +602,16 @@ function _applySort(sessions) {
   const defaultRecent = _sortColumn === 'last_active' && !_sortAsc;
   return sessions.slice().sort((a, b) => {
     if (defaultRecent) return compareSessionsByPinnedOrder(a, b);
-    const am = a.main_chat === true && a._origin !== 'bin';
-    const bm = b.main_chat === true && b._origin !== 'bin';
+    const am = a.main_chat === true && a._origin !== 'archived';
+    const bm = b.main_chat === true && b._origin !== 'archived';
     if (am !== bm) return am ? -1 : 1;
     // Main Chats keep their own recent-activity order even under an explicit column sort.
     if (am && bm) return compareSessionsByPinnedOrder(a, b);
-    // An explicit column sort still floats pinned sessions first — but a binned row
-    // loses that pinned ordering status (the pin flag stays set so restore brings it
-    // back): bin rows sort purely by the chosen column.
-    const ap = !!(a.pinned && a._origin !== 'bin');
-    const bp = !!(b.pinned && b._origin !== 'bin');
+    // An explicit column sort still floats pinned sessions first — but an archived row
+    // loses that pinned ordering status (the pin flag stays set so unarchive brings it
+    // back): archived rows sort purely by the chosen column.
+    const ap = !!(a.pinned && a._origin !== 'archived');
+    const bp = !!(b.pinned && b._origin !== 'archived');
     if (ap !== bp) return ap ? -1 : 1;
     if (ap && bp) {
       const ao = Number.isFinite(a.sort_order) ? a.sort_order : Number.MAX_SAFE_INTEGER;
@@ -708,31 +708,31 @@ async function _fetchForConfig(cfg, agentFilterId) {
   const allRows = [];
   for (const src of getDataSources(cfg)) {
     const rows = await _fetchSource(src, agentFilterId);
-    // Stamp which catalog each row belongs to ('active' | 'bin') so the
-    // merged 'both' view can badge binned rows and keep them non-loadable.
-    const origin = src.origin || (src.endpoint.includes('status=recycled') ? 'bin' : 'active');
+    // Stamp which catalog each row belongs to ('active' | 'archived') so the
+    // merged 'both' view can badge archived rows and keep them non-loadable.
+    const origin = src.origin || (src.endpoint.includes('status=archived') ? 'archived' : 'active');
     for (const r of rows) r._origin = origin;
     allRows.push(...rows);
   }
   return _enrichActiveSessionMetadata(allRows);
 }
 
-// ── Cross-catalog search (sessions ↔ recycle bin) ────────────────────
+// ── Cross-catalog search (sessions ↔ archived) ────────────────────
 // The search field matches against the CURRENT catalog by default. When a
 // query is active we also fetch the other catalog (lazily, once, cached) so
-// results surface recycled sessions while in the Sessions view and live
-// sessions while in the Recycling bin view. Only session rows cross over —
+// results surface archived sessions while in the Sessions view and live
+// sessions while in the Archived view. Only session rows cross over —
 // automations stay scoped to their own view. The cache is invalidated on
-// every load/refresh so it tracks restore/delete changes.
+// every load/refresh so it tracks unarchive/delete changes.
 function _invalidateSearchExtra() { _searchExtra = null; _searchExtraPending = null; }
 
 async function _ensureSearchExtra() {
   if (_nativeCodexContext) return [];
-  if (_viewId !== 'sessions' && _viewId !== 'recycle-bin') return [];
+  if (_viewId !== 'sessions' && _viewId !== 'archived') return [];
   if (_searchExtra !== null) return _searchExtra;
   if (_searchExtraPending) return _searchExtraPending;
-  const otherId = _viewId === 'recycle-bin' ? 'sessions' : 'recycle-bin';
-  const origin = _viewId === 'recycle-bin' ? 'active' : 'bin';
+  const otherId = _viewId === 'archived' ? 'sessions' : 'archived';
+  const origin = _viewId === 'archived' ? 'active' : 'archived';
   _searchExtraPending = (async () => {
     try {
       const cfg = await loadViewerConfig(otherId);
@@ -804,7 +804,7 @@ async function _scanMessagesForQuery(q) {
   const generation=++searchGeneration;searchMatches.clear();_setMsgScanning(true);
   const current=()=>!disposed&&generation===searchGeneration&&q===_searchQuery.trim()&&_searchMode!=='title';
   try{
-    for(const status of ['active','recycled']){
+    for(const status of ['active','archived']){
       let continuation;
       do{
         const page=await adapter.search(q,status,continuation);if(!current())return;
@@ -914,15 +914,15 @@ function _renderTable(rows) {
     _updateSortArrows();
   }
   const table = _qs('sessions-table');
-  if (table) table.classList.toggle('bin-view', !_nativeCodexContext && _viewId === 'recycle-bin');
+  if (table) table.classList.toggle('archive-view', !_nativeCodexContext && _viewId === 'archived');
   const q = _searchQuery.trim().toLowerCase();
   let candidates = rows;
   if (q) {
-    // Cross-catalog search: merge the OTHER catalog (sessions ↔ recycle bin)
+    // Cross-catalog search: merge the OTHER catalog (sessions ↔ archived)
     // into the pool so one query matches both. Rows keep an `_origin` tag
-    // ('active' | 'bin'); `_cross` marks rows from the other catalog, which
+    // ('active' | 'archived'); `_cross` marks rows from the other catalog, which
     // render dimmed with an origin badge and are excluded from selection.
-    const viewOrigin = _viewId === 'recycle-bin' ? 'bin' : 'active';
+    const viewOrigin = _viewId === 'archived' ? 'archived' : 'active';
     const pool = [];
     const seen = new Set();
     const keyOf = (r) => (r._rowType === 'session' ? 's:' + (r.session_id || '') : 'a:' + (r.id || ''));
@@ -976,12 +976,12 @@ function _renderTable(rows) {
         if (txt) txt.textContent = 'No flagged sessions';
         if (hint) hint.textContent = 'Show all sessions to see the idle ones';
       } else {
-        if (txt) txt.textContent = _nativeCodexContext ? 'No native Codex sessions' : (_activeAgentFilter() ? 'No sessions for this agent' : (_viewId === 'recycle-bin' ? 'Recycling bin is empty' : (_viewId === 'both' ? 'No sessions yet' : 'No ' + label.toLowerCase() + ' yet')));
-        if (hint) hint.textContent = _nativeCodexContext ? 'New Codex tasks will appear here automatically' : (_activeAgentFilter() ? 'Start a conversation with this agent to see it here' : (_viewId === 'recycle-bin' ? 'Restore recycled sessions to reopen them' : (_viewId === 'both' ? 'Active and recycled sessions will appear here' : 'Nothing to show in ' + label)));
+        if (txt) txt.textContent = _nativeCodexContext ? 'No native Codex sessions' : (_activeAgentFilter() ? 'No sessions for this agent' : (_viewId === 'archived' ? 'No archived sessions' : (_viewId === 'both' ? 'No sessions yet' : 'No ' + label.toLowerCase() + ' yet')));
+        if (hint) hint.textContent = _nativeCodexContext ? 'New Codex tasks will appear here automatically' : (_activeAgentFilter() ? 'Start a conversation with this agent to see it here' : (_viewId === 'archived' ? 'Unarchive a session to reopen it' : (_viewId === 'both' ? 'Active and archived sessions will appear here' : 'Nothing to show in ' + label)));
       }
       empty.style.display = 'flex';
     }
-    _updateTrashButton();return;
+    _updateArchiveButton();return;
   }
   if (empty) empty.style.display = 'none';
   // Remember exactly what was painted so the 30s background refresh can detect a
@@ -989,7 +989,7 @@ function _renderTable(rows) {
   _lastRenderedSignature = _rowsSignature(rows);
   // All views show session rows only (Automations is its own tab). In the
   // merged 'both' view the config fetches BOTH catalogs, so every row already
-  // carries its `_origin` ('active' | 'bin') — sorting mixes them freely.
+  // carries its `_origin` ('active' | 'archived') — sorting mixes them freely.
   let filtered = _applySort(candidates.filter(r => r._rowType === 'session'));
   const byId = new Map(filtered.filter(r => r._rowType === 'session' && !r._cross).map(s => [s.session_id, s]));
   const childrenOf = new Map();
@@ -1048,10 +1048,10 @@ function _renderRow(row, ctx) {
   var sid = isSession ? _esc(row.session_id) : '';
   var rowId = isSession ? sid : (row.id || '');
   var rowCls = isSession ? _sessionRowClass(row, childrenOf, depth) : '';
-  // data-origin stamps which catalog a row lives in ('active' | 'bin') so the
-  // click handler can refuse to load recycled rows even when a cross-catalog
+  // data-origin stamps which catalog a row lives in ('active' | 'archived') so the
+  // click handler can refuse to load archived rows even when a cross-catalog
   // search surfaced them in the Sessions view. Cross rows get a dimmed class.
-  var origin = row._origin || (_viewId === 'recycle-bin' ? 'bin' : 'active');
+  var origin = row._origin || (_viewId === 'archived' ? 'archived' : 'active');
   var cls = (rowCls || '') + (row._cross ? ' sess-cross-row' : '');
   var html = '<tr data-session-id="' + sid + '" data-id="' + _esc(rowId) + '" data-agent-id="' + _esc(row.agent_id || row._agentId || '') + '" data-row-type="' + row._rowType + '" data-origin="' + _esc(origin) + '"' + (cls ? ' class="' + cls.trim() + '"' : '') + '>' + cells + '</tr>';
   // An expanded family renders its members immediately below the parent. The
@@ -1106,7 +1106,7 @@ function _renderCell(row, col, ctx) {
 }
 
 function _renderCheckCell(row, isSession) {
-  // Cross-catalog rows can't be selected — bulk actions (delete/restore) must
+  // Cross-catalog rows can't be selected — bulk actions (archive/unarchive/delete) must
   // stay scoped to the currently viewed catalog.
   if (row._cross || row._nativeCodexCatalog || row.main_chat===true || row.can_delete===false) return '<td class="col-check"></td>';
   const id = isSession ? row.session_id : row.id;
@@ -1203,12 +1203,12 @@ function _renderTitleCell(row, colId, depth, isSession, isAuto, childrenOf) {
   }
   // Origin badge — which catalog a row came from. Cross-catalog search results
   // always carry one, so a match from the other view is unmistakable. In the
-  // merged 'both' view binned rows get the same badge so the combined table
-  // stays legible. The "bin" badge doubles as a two-click restore control
-  // (see _onBinChipClick).
-  if (row._cross || (row._origin === 'bin' && _viewId === 'both')) {
-    if (row._origin === 'bin') {
-      inner += '<span class="sess-origin-badge bin" role="button" tabindex="0" data-session-id="' + _esc(row.session_id) + '" title="In recycling bin — click to restore">bin</span>';
+  // merged 'both' view archived rows get the same badge so the combined table
+  // stays legible. The "archived" badge doubles as a two-click unarchive control
+  // (see _onArchivedChipClick).
+  if (row._cross || (row._origin === 'archived' && _viewId === 'both')) {
+    if (row._origin === 'archived') {
+      inner += '<span class="sess-origin-badge archived" role="button" tabindex="0" data-session-id="' + _esc(row.session_id) + '" title="Archived — click to unarchive">archived</span>';
     } else {
       inner += '<span class="sess-origin-badge" title="This session is active">Active</span>';
     }
@@ -1218,8 +1218,8 @@ function _renderTitleCell(row, colId, depth, isSession, isAuto, childrenOf) {
     inner += '<span class="sess-msg-count-chip" title="' + row._msgMatchCount + ' matching message' + (row._msgMatchCount > 1 ? 's' : '') + '">' + row._msgMatchCount + '</span>';
   }
   // Same per-row control as the chat session dropdown: the ⋯ kebab opens the
-  // session-actions panel, and Delete session lives THERE (with its two-click
-  // confirm) rather than as a second trash button on the row. The kebab remains
+  // session-actions panel, and Archive/Delete session lives THERE (with its two-click
+  // confirm) rather than as a second button on the row. The kebab remains
   // inside the title cell so the table keeps its existing column model.
   if (isSession && !row._cross) {
     const sid = _esc(row.session_id);
@@ -1316,7 +1316,7 @@ function _toggleGroup(sid) {
       }
     });
   }
-  _updateTrashButton();
+  _updateArchiveButton();
 }
 
 // Fill the table body with phantom "shimmer" rows that mirror the real column
@@ -1480,7 +1480,7 @@ async function _loadAndRender(reason = 'foreground') {
   }
   // SESSION-STORAGE-METER: the session store is account-wide, not view- or
   // agent-scoped, so the meter refreshes on every load — cold start, view
-  // switch, the passive 30s pass, and after a delete/restore mutation.
+  // switch, the passive 30s pass, and after an archive/unarchive/delete mutation.
   _refreshStorageUsage();
   // Native Codex catalogs are their own dataset. Every other context reads the
   // single account-wide session catalog and filters it locally, so a selected
@@ -1503,7 +1503,7 @@ async function _loadAndRender(reason = 'foreground') {
   if (loadNativeContext) {
     _setLoadStatus(Array.isArray(cachedRows) ? 'Verifying Codex tasks…' : 'Loading Codex tasks…', true);
   }
-  // The other catalog may have changed (restore/delete/refresh) — drop the
+  // The other catalog may have changed (unarchive/delete/refresh) — drop the
   // cross-catalog search cache and prune the message index so the next query
   // re-fetches what it needs (without nuking the whole cache on auto-refresh).
   _invalidateSearchExtra();
@@ -1551,7 +1551,7 @@ async function _loadAndRender(reason = 'foreground') {
   if (isBackground && signature && signature === _lastRenderedSignature) {
     if (loadNativeContext) _setLoadStatus('Codex tasks verified', false, 1400);
     _updateViewButton();
-    _updateTrashButton();
+    _updateArchiveButton();
     return;
   }
   _renderTable(rows);
@@ -1597,7 +1597,7 @@ async function _loadAndRender(reason = 'foreground') {
     });
   }
   _updateViewButton();
-  _updateTrashButton();
+  _updateArchiveButton();
 }
 
 // ── Row click: switch to that session ──────────────────────────────
@@ -1641,11 +1641,11 @@ function _setRowLoading(tr, on) {
 // `row` (when given) shows a per-row loading animation until the chat resolves.
 async function _switchToSession(sessionId, agentId, { tab = null, title = null, row = null } = {}) {
   if (!sessionId) return;
-  // Recycled sessions aren't loadable — block bin rows, whether the whole bin
-  // view is open or a recycled row surfaced via cross-catalog search. Live
-  // rows found through search while in the bin view ARE loadable.
-  const origin = row && row.dataset ? row.dataset.origin : (_viewId === 'recycle-bin' ? 'bin' : 'active');
-  if (origin === 'bin') return;
+  // Archived sessions aren't loadable — block archived rows, whether the whole
+  // archived view is open or an archived row surfaced via cross-catalog search.
+  // Live rows found through search while in the archived view ARE loadable.
+  const origin = row && row.dataset ? row.dataset.origin : (_viewId === 'archived' ? 'archived' : 'active');
+  if (origin === 'archived') return;
   app.sessionTitle = title || sessionId.slice(0, 12);
 
   _setRowLoading(row, true);
@@ -1679,8 +1679,8 @@ function _onRowClick(e) {
 
 // ── Selection helpers ──────────────────────────────────────────────
 
-// Which catalog(s) the currently checked rows belong to ('active' | 'bin').
-// Drives restore/delete behaviour in the merged 'both' view, where both
+// Which catalog(s) the currently checked rows belong to ('active' | 'archived').
+// Drives archive/unarchive/delete behaviour in the merged 'both' view, where both
 // catalogs can be selected at once.
 function _selectedOrigins() {
   const origins = new Set();
@@ -1688,35 +1688,35 @@ function _selectedOrigins() {
     const tr = cell.closest('tr');
     if (tr && tr.dataset.origin) origins.add(tr.dataset.origin);
   });
-  // A recycle can remove the selected rows from the active projection before
-  // the follow-up panel is rendered. Its durable action context is bin-only.
-  if (origins.size === 0 && _postBinSessionIds.length) origins.add('bin');
+  // An archive can remove the selected rows from the active projection before
+  // the follow-up panel is rendered. Its durable action context is archived-only.
+  if (origins.size === 0 && _postArchiveSessionIds.length) origins.add('archived');
   return origins;
 }
 
 function _selectedSessionCount() {
   const checked = document.querySelectorAll('.sessions-check-cell.checked').length;
-  return checked || _postBinSessionIds.length;
+  return checked || _postArchiveSessionIds.length;
 }
 
-function _clearPostBinContext() {
-  _postBinSessionIds = [];
+function _clearPostArchiveContext() {
+  _postArchiveSessionIds = [];
 }
 
-// Selection / bin toolbar — mirrors agents' _updateBinToolbar (HARMONY-SESSIONS-BIN).
+// Selection / archive toolbar — mirrors the agents archive toolbar (HARMONY-SESSIONS-ARCHIVE).
 function _syncFooterActions() {
-  const trash = _qs('sessions-trash-btn');
+  const archiveBtn = _qs('sessions-archive-btn');
   const n = document.querySelectorAll('.sessions-check-cell.checked').length;
-  const state = trash?.dataset.state || 'trash';
+  const state = archiveBtn?.dataset.state || 'archive';
   const armed = state === 'warning';
   document.querySelectorAll('[data-sessions-footer-action="delete"]').forEach(btn => {
     btn.disabled = n === 0;
     btn.dataset.state = state;
     btn.classList.toggle('warning', armed);
-    btn.title = n === 0 ? 'Select sessions to delete' : (trash?.title || trashTitle());
-    btn.setAttribute('aria-label', armed ? 'Confirm deleting selected sessions' : 'Delete selected sessions');
+    btn.title = n === 0 ? 'Select sessions to archive' : (archiveBtn?.title || archiveTitle());
+    btn.setAttribute('aria-label', armed ? 'Confirm archiving selected sessions' : 'Archive selected sessions');
     const label = btn.querySelector('.sessions-footer-delete-label');
-    if (label) label.textContent = state === 'deleting' ? 'Deleting...' : (armed ? 'Delete?' : 'Delete');
+    if (label) label.textContent = state === 'deleting' ? 'Archiving...' : (armed ? 'Archive?' : 'Archive');
   });
 }
 
@@ -1741,7 +1741,7 @@ function _syncFooterCheckAll() {
 // everything is already checked, so repeated clicks alternate
 // checked → unchecked → checked (never a no-op on a partly-selected list).
 function _toggleAllSelection() {
-  _clearPostBinContext();
+  _clearPostArchiveContext();
   const cells = document.querySelectorAll('.sessions-check-cell');
   const checkTo = document.querySelectorAll('.sessions-check-cell.checked').length < cells.length;
   cells.forEach(c => {
@@ -1750,14 +1750,13 @@ function _toggleAllSelection() {
   });
   const checkAll = _qs('sessions-check-all');
   if (checkAll) checkAll.classList.toggle('checked', checkTo);
-  const trash = _qs('sessions-trash-btn');
-  if (trash) resetDeleteBtn(trash, { size: '16px', title: trashTitle() });
+  _resetArchiveButton();
   _resetUndoButton();
-  _updateTrashButton();
+  _updateArchiveButton();
 }
 
-function _updateTrashButton() {
-  const trash = _qs('sessions-trash-btn');
+function _updateArchiveButton() {
+  const archiveBtn = _qs('sessions-archive-btn');
   const undo = _qs('sessions-undo-btn');
   const clear = _qs('sessions-clear-selection-btn');
   const panel = _qs('sessions-selection-panel');
@@ -1765,28 +1764,28 @@ function _updateTrashButton() {
   _updateViewButton();
   const n = _selectedSessionCount();
   const origins = _selectedOrigins();
-  const binned = n > 0 && origins.size === 1 && origins.has('bin');
-  const mode = binned ? 'binned' : 'selected';
+  const archived = n > 0 && origins.size === 1 && origins.has('archived');
+  const mode = archived ? 'archived' : 'selected';
   if (panel) {
     panel.hidden = n === 0;
     panel.dataset.mode = mode;
   }
-  if (count) count.textContent = binned
-    ? n + ' Session' + (n === 1 ? '' : 's') + ' binned'
+  if (count) count.textContent = archived
+    ? n + ' Session' + (n === 1 ? '' : 's') + ' archived'
     : n + ' session' + (n === 1 ? '' : 's') + ' selected';
   if (_selectionPanelMode !== mode) {
     _selectionPanelMode = mode;
-    if (trash) resetDeleteBtn(trash, { size: '16px', title: binned ? 'Permanently delete selected sessions' : trashTitle() });
-    if (undo) resetDeleteBtn(undo, { size: '16px', title: 'Undo recycling selected sessions', label: 'Undo recycling selected sessions', iconName: 'undo-2' });
+    _resetArchiveButton();
+    _resetUndoButton();
   }
-  if (undo) undo.hidden = !origins.has('bin');
+  if (undo) undo.hidden = !origins.has('archived');
   if (clear) clear.hidden = false;
-  if (trash) {
-    trash.title = binned ? 'Permanent deletion · Pending V3' : 'Recycle selected active sessions';
-    trash.disabled = n === 0 || !origins.has('active') || batchBusy;
-    trash.setAttribute('aria-label', binned
-      ? 'Permanent deletion pending in V3'
-      : 'Recycle selected active sessions');
+  if (archiveBtn) {
+    archiveBtn.disabled = n === 0 || (!archived && !origins.has('active')) || batchBusy;
+    if (archiveBtn.dataset.state === 'archive') {
+      archiveBtn.title = archived ? 'Delete selected sessions permanently' : archiveTitle();
+      archiveBtn.setAttribute('aria-label', archived ? 'Delete selected sessions' : 'Archive selected sessions');
+    }
   }
   host.querySelectorAll('.sessions-check-cell').forEach(cell=>cell.setAttribute('aria-checked',String(cell.classList.contains('checked'))));
   _syncFooterActions();
@@ -1795,20 +1794,19 @@ function _updateTrashButton() {
 
 function _resetUndoButton() {
   const undo = _qs('sessions-undo-btn');
-  if (undo) resetDeleteBtn(undo, { size: '16px', title: 'Undo recycling selected sessions', label: 'Undo recycling selected sessions', iconName: 'undo-2' });
+  if (undo) resetDeleteBtn(undo, { size: '16px', title: 'Unarchive selected sessions', label: 'Unarchive selected sessions', iconName: 'undo-2' });
 }
 
 function _clearSelection() {
-  _clearPostBinContext();
+  _clearPostArchiveContext();
   document.querySelectorAll('.sessions-check-cell.checked').forEach(cell => {
     cell.classList.remove('checked');
     cell.closest('tr')?.classList.remove('selected');
   });
   _qs('sessions-check-all')?.classList.remove('checked');
-  const trash = _qs('sessions-trash-btn');
-  if (trash) resetDeleteBtn(trash, { size: '16px', title: trashTitle(), label: 'Delete selected sessions' });
+  _resetArchiveButton();
   _resetUndoButton();
-  _updateTrashButton();
+  _updateArchiveButton();
 }
 
 function _getSelectedSessionIds() {
@@ -1817,7 +1815,7 @@ function _getSelectedSessionIds() {
     const sid = cell.dataset.sessionId;
     if (sid) ids.push(sid);
   });
-  return ids.length ? ids : [..._postBinSessionIds];
+  return ids.length ? ids : [..._postArchiveSessionIds];
 }
 
 function _selectSessionIds(ids) {
@@ -1828,7 +1826,7 @@ function _selectSessionIds(ids) {
     cell.closest('tr')?.classList.toggle('selected', selected);
   });
   _qs('sessions-check-all')?.classList.remove('checked');
-  _updateTrashButton();
+  _updateArchiveButton();
 }
 
 function _toast(msg) {
@@ -1903,11 +1901,13 @@ function _openSessionRowActions(sid, kebabBtn) {
     `<button type="button" class="session-row-action" data-action="refresh">${icon('refresh-cw', { size: '14px' })} Refresh session</button>` +
     `<div class="session-row-action session-row-read-info" role="status">${icon('clock-3', { size: '14px' })} Read through message ${sess.read_through_seq||0}</div>` +
     `<button type="button" class="session-row-action" data-action="${isRead ? 'mark-unread' : 'mark-read'}">${icon(isRead ? 'mail-open' : 'check-circle', { size: '14px' })} ${isRead ? 'Mark unread' : 'Mark read'}</button>` +
-    `<button type="button" class="session-row-action danger" data-action="delete">${icon('trash-2', { size: '14px' })} Delete session</button>`;
+    (sess._origin === 'archived'
+      ? `<button type="button" class="session-row-action danger" data-action="delete">${icon('trash-2', { size: '14px' })} Delete session</button>`
+      : `<button type="button" class="session-row-action danger" data-action="archive">${icon('archive', { size: '14px' })} Archive session</button>`);
 
-  if(sess.main_chat===true||sess.can_delete===false)popup.querySelector('[data-action="delete"]')?.remove();
+  if(sess.main_chat===true||sess.can_delete===false)popup.querySelector('[data-action="archive"],[data-action="delete"]')?.remove();
   for(const [action,reason] of [['auto-rename','On-demand auto rename · Pending V3'],['mark-unread','Mark unread · Pending V3']]){const button=popup.querySelector(`[data-action="${action}"]`);if(button){button.disabled=true;button.title=reason;button.textContent=reason;}}
-  if(sess._origin==='bin'){for(const action of ['pin','rename','mark-read','delete']){const button=popup.querySelector(`[data-action="${action}"]`);if(button){button.disabled=true;button.title=action==='delete'?'Permanent deletion · Pending V3':'Restore this session first';}}const restore=document.createElement('button');restore.className='session-row-action';restore.textContent='Restore session';restore.onclick=async()=>{if(await _restoreOne(sid)){_closeSessionRowActions();await _loadAndRender('mutation');}};popup.prepend(restore);}
+  if(sess._origin==='archived'){for(const action of ['pin','rename','mark-read']){const button=popup.querySelector(`[data-action="${action}"]`);if(button){button.disabled=true;button.title='Unarchive this session first';}}const unarchive=document.createElement('button');unarchive.className='session-row-action';unarchive.textContent='Unarchive session';unarchive.onclick=async()=>{if(await _unarchiveOne(sid)){_closeSessionRowActions();await _loadAndRender('mutation');}};popup.prepend(unarchive);}
   const info = document.createElement('div');
   info.className = 'session-row-actions-info';
   const addIdRow = (key, label, value) => {
@@ -1963,9 +1963,10 @@ function _openSessionRowActions(sid, kebabBtn) {
           await _setSessionReadState(sid, false);
           _closeSessionRowActions();
           break;
+        case 'archive':
         case 'delete':
           // Retain the page's established two-click safety confirmation.
-          _deleteOneSession(action, sid, tableRow?.dataset.origin || 'active');
+          _archiveOrDeleteOneSession(action, sid, tableRow?.dataset.origin || 'active');
           break;
       }
     } catch (error) {
@@ -1981,13 +1982,12 @@ function _openSessionRowActions(sid, kebabBtn) {
   }, 0);
 }
 
-// Delete the checked sessions. Active-origin rows soft-delete (move to the
-// bin); bin-origin rows permanently delete (with ?permanent=true) — so the
-// merged 'both' view can act on both catalogs in one go.
-async function _deleteOneSession(btn,sid,origin) {
-  if(origin==='bin'||disposed||adapter.rows.get(sid)?.main_chat===true||adapter.rows.get(sid)?.can_delete===false)return;
-  advanceDeleteBtn(btn,{size:'14px',armTitle:'Click again to recycle',onConfirm:async()=>{
-    try{await adapter.mutate(sid,'recycle');_closeSessionRowActions();_toast('Session recycled');await _loadAndRender('mutation');}
+// One row: active-origin rows archive; archived-origin rows delete permanently.
+async function _archiveOrDeleteOneSession(btn,sid,origin) {
+  if(disposed||adapter.rows.get(sid)?.main_chat===true||adapter.rows.get(sid)?.can_delete===false)return;
+  const remove=origin==='archived';
+  advanceDeleteBtn(btn,{size:'14px',iconName:remove?'trash-2':'archive',armTitle:remove?'Click again to permanently delete':'Click again to archive',busyTitle:remove?'Deleting\u2026':'Archiving\u2026',onConfirm:async()=>{
+    try{await adapter.mutate(sid,remove?'delete':'archive');_closeSessionRowActions();_toast(remove?'Session deleted':'Session archived');await _loadAndRender('mutation');}
     catch(error){_toast(error.message);throw error;}
   }});
 }
@@ -1997,45 +1997,49 @@ async function runBatch(ids,action){
   try{for(const sid of ids){if(disposed)break;try{await adapter.mutate(sid,action);success.push(sid);}catch(error){failed.push(sid);errors.push(error.message);}}}
   finally{batchBusy=false;}
   if(disposed)return;
-  _postBinSessionIds=action==='recycle'?success:[];
+  _postArchiveSessionIds=action==='archive'?success:[];
   await _loadAndRender('mutation');
-  _selectSessionIds(failed);resetDeleteBtn(_qs('sessions-trash-btn'),{size:'16px',title:trashTitle()});_resetUndoButton();_updateTrashButton();
-  _toast(`${action==='recycle'?'Recycled':'Restored'} ${success.length} of ${ids.length} sessions`+(failed.length?`; ${failed.length} failed: ${[...new Set(errors)].join('; ')}`:''));
+  _selectSessionIds(failed);_resetArchiveButton();_resetUndoButton();_updateArchiveButton();
+  _toast(`${{archive:'Archived',unarchive:'Unarchived',delete:'Deleted'}[action]} ${success.length} of ${ids.length} sessions`+(failed.length?`; ${failed.length} failed: ${[...new Set(errors)].join('; ')}`:''));
 }
+const _lifecycleTarget=sid=>adapter.rows.get(sid)?.main_chat!==true&&adapter.rows.get(sid)?.can_delete!==false;
+async function _archiveSelectedSessions(){
+  await runBatch(_getSelectedSessionIds().filter(sid=>adapter.rows.get(sid)?._origin==='active'&&_lifecycleTarget(sid)),'archive');
+}
+// Permanent and irreversible: only archived rows are sent; the server refuses any other.
 async function _deleteSelectedSessions(){
-  const ids=_getSelectedSessionIds().filter(sid=>adapter.rows.get(sid)?._origin==='active'&&adapter.rows.get(sid)?.main_chat!==true&&adapter.rows.get(sid)?.can_delete!==false);
-  await runBatch(ids,'recycle');
+  await runBatch(_getSelectedSessionIds().filter(sid=>adapter.rows.get(sid)?._origin==='archived'&&_lifecycleTarget(sid)),'delete');
 }
-async function _restoreOne(sid){try{await adapter.mutate(sid,'restore');return true;}catch(error){_toast(error.message);return false;}}
-async function _restoreSelected(){await runBatch(_getSelectedSessionIds().filter(sid=>adapter.rows.get(sid)?._origin==='bin'),'restore');}
+async function _unarchiveOne(sid){try{await adapter.mutate(sid,'unarchive');return true;}catch(error){_toast(error.message);return false;}}
+async function _unarchiveSelected(){await runBatch(_getSelectedSessionIds().filter(sid=>adapter.rows.get(sid)?._origin==='archived'),'unarchive');}
 
 
-// "bin" chip — two-click restore. First click arms the chip ("Restore?"),
-// second click restores the session. Disarms after 3s if the user doesn't
-// confirm, mirroring the delete button's confirm pattern (HARMONY-SESSIONS-BIN).
-async function _onBinChipClick(chip) {
+// "archived" chip — two-click unarchive. First click arms the chip ("Unarchive?"),
+// second click unarchives the session. Disarms after 3s if the user doesn't
+// confirm, mirroring the archive button's confirm pattern (HARMONY-SESSIONS-ARCHIVE).
+async function _onArchivedChipClick(chip) {
   const sid = chip && chip.dataset.sessionId;
   if (!sid) return;
   if (!chip.classList.contains('armed')) {
     chip.classList.add('armed');
-    chip.textContent = 'Restore?';
-    chip.title = 'Click again to restore this session';
+    chip.textContent = 'Unarchive?';
+    chip.title = 'Click again to unarchive this session';
     clearTimeout(chip._disarmTimer);
     chip._disarmTimer = setTimeout(() => {
       chip.classList.remove('armed');
-      chip.textContent = 'bin';
-      chip.title = 'In recycling bin — click to restore';
+      chip.textContent = 'archived';
+      chip.title = 'Archived — click to unarchive';
     }, 3000);
     return;
   }
-  // Confirmed — restore now.
+  // Confirmed — unarchive now.
   clearTimeout(chip._disarmTimer);
   chip.classList.remove('armed');
-  chip.textContent = 'bin';
-  chip.title = 'In recycling bin — click to restore';
-  if (await _restoreOne(sid)) _toast('Session restored');
+  chip.textContent = 'archived';
+  chip.title = 'Archived — click to unarchive';
+  if (await _unarchiveOne(sid)) _toast('Session unarchived');
   await _loadAndRender('mutation');
-  _updateTrashButton();
+  _updateArchiveButton();
   if (typeof populateSessionSelect === 'function') {
     try { populateSessionSelect(app.currentUserId); } catch (_) {}
   }
@@ -2056,11 +2060,23 @@ async function _onBinChipClick(chip) {
 // SYNC: ui/chat/elements/session-dropdown/controller.js honours the same verb.
 async function _onNeedsInputChipClick() {} // V2 attention actions await a V3 contract.
 
-function trashTitle() { return 'Recycle selected active sessions'; }
+function archiveTitle() { return 'Archive selected active sessions'; }
+// The selection button archives active rows; with only archived rows selected it
+// deletes them permanently. Reset it to the resting state of the current mode.
+function _archiveButtonDeletes() {
+  const origins = _selectedOrigins();
+  return _selectedSessionCount() > 0 && origins.size === 1 && origins.has('archived');
+}
+function _resetArchiveButton() {
+  const btn = _qs('sessions-archive-btn');
+  if (!btn) return;
+  if (_archiveButtonDeletes()) resetDeleteBtn(btn, { size: '16px', iconName: 'trash-2', title: 'Delete selected sessions permanently', label: 'Delete selected sessions' });
+  else resetDeleteBtn(btn, { size: '16px', iconName: 'archive', title: archiveTitle(), label: 'Archive selected sessions' });
+}
 
 async function _switchView(viewId) {
   if (_viewId === viewId) return;
-  _clearPostBinContext();
+  _clearPostArchiveContext();
   const spinner = _qs('sessions-loading-spinner');
   if (spinner) spinner.style.display = 'inline-block';
   _viewId = viewId;
@@ -2072,18 +2088,17 @@ async function _switchView(viewId) {
   if (spinner) spinner.style.display = 'none';
 }
 
-async function _enterBin() { return _switchView('recycle-bin'); }
-async function _exitBin() { return _switchView('sessions'); }
+async function _enterArchive() { return _switchView('archived'); }
+async function _exitArchive() { return _switchView('sessions'); }
 
 function _toggleCheck(cell) {
-  _clearPostBinContext();
+  _clearPostArchiveContext();
   cell.classList.toggle('checked');cell.setAttribute('aria-checked',String(cell.classList.contains('checked')));
   const tr = cell.closest('tr');
   if (tr) tr.classList.toggle('selected', cell.classList.contains('checked'));
-  const trash = _qs('sessions-trash-btn');
-  if (trash) resetDeleteBtn(trash, { size: '16px', title: trashTitle() });
+  _resetArchiveButton();
   _resetUndoButton();
-  _updateTrashButton();
+  _updateArchiveButton();
 }
 
 // ── Bulk subset selection ──────────────────────────────────────────
@@ -2108,7 +2123,7 @@ function _matchKind(s, kind) {
 // all parent groups first so collapsed children are in the DOM and can be
 // selected, then deletion works on the whole family in one click.
 function _selectSubset(kind) {
-  _clearPostBinContext();
+  _clearPostArchiveContext();
   // Clear any current selection (data rows + the header toggle).
   document.querySelectorAll('.sessions-check-cell.checked').forEach(c => {
     c.classList.remove('checked');
@@ -2117,7 +2132,7 @@ function _selectSubset(kind) {
   const checkAll = _qs('sessions-check-all');
   if (checkAll) checkAll.classList.remove('checked');
 
-  if (kind === 'none') { _updateTrashButton(); return; }
+  if (kind === 'none') { _updateArchiveButton(); return; }
 
   // Reveal collapsed children so their checkboxes exist, then re-render.
   for (const s of _sessionsData) {
@@ -2133,10 +2148,9 @@ function _selectSubset(kind) {
       c.closest('tr')?.classList.add('selected');
     }
   });
-  const trash = _qs('sessions-trash-btn');
-  if (trash) resetDeleteBtn(trash, { size: '16px', title: trashTitle() });
+  _resetArchiveButton();
   _resetUndoButton();
-  _updateTrashButton();
+  _updateArchiveButton();
 }
 
 // ── Column resize ──────────────────────────────────────────────────
@@ -2320,7 +2334,7 @@ function _wireDom() {
       refreshBtn.disabled = true;
       try {
         await _loadAndRender();
-        _updateTrashButton();
+        _updateArchiveButton();
       } finally {
         refreshBtn.disabled = false;
         if (ic) ic.classList.remove('lucide-spin');
@@ -2368,11 +2382,11 @@ function _wireDom() {
         _switchToSession(linkBadge.dataset.sessionId, linkBadge.dataset.agentId, { tab });
         return;
       }
-      // "In bin" chip on cross-catalog search rows — two-click restore.
-      const binChip = e.target.closest('.sess-origin-badge.bin');
-      if (binChip) {
+      // "archived" chip on cross-catalog search rows — two-click unarchive.
+      const archivedChip = e.target.closest('.sess-origin-badge.archived');
+      if (archivedChip) {
         e.stopPropagation();
-        _onBinChipClick(binChip);
+        _onArchivedChipClick(archivedChip);
         return;
       }
       // Live time-ago — click to flash the run status to its left for 1s
@@ -2435,32 +2449,36 @@ function _wireDom() {
     _listen(checkAll,'click', () => { _toggleAllSelection(); });
   }
 
-  // Trash / delete button — green recycle (open bin) when nothing is selected;
-  // red trash (two-click confirm) to move selected to the bin, or — when
-  // already in the bin — to permanently delete them. (HARMONY-SESSIONS-BIN)
-  const trash = _qs('sessions-trash-btn');
-  if (trash) {
-    _listen(trash,'click', () => {
+  // Archive button — opens the archived view when nothing is selected; two-click
+  // confirm to archive selected active sessions, or — with only archived sessions
+  // selected — to delete them permanently. (HARMONY-SESSIONS-ARCHIVE)
+  const archiveBtn = _qs('sessions-archive-btn');
+  if (archiveBtn) {
+    _listen(archiveBtn,'click', () => {
       const n = _getSelectedSessionIds().length;
       if (n === 0) {
-        // Nothing selected — in the plain Sessions view this opens the bin;
-        // in the merged 'both' view the bin is already visible, so no-op.
-        if (_viewId === 'sessions') { _switchView('recycle-bin'); return; }
+        // Nothing selected — in the plain Sessions view this opens the archived
+        // view; in the merged 'both' view archived rows are already visible.
+        if (_viewId === 'sessions') { _switchView('archived'); return; }
         return;
       }
-      const origins = _selectedOrigins();
-      const binned = origins.size === 1 && origins.has('bin');
-      let armTitle = 'Click again to recycle selected active sessions';
-      if (!binned && _viewId === 'both' && origins.has('bin')) {
-        armTitle = 'Click again to recycle selected active sessions';
-      }
-      advanceDeleteBtn(trash, {
-        size: '16px', spinSize: '16px',
-        armTitle,
-        armLabel: 'Confirm recycling selected active sessions',
-        busyLabel: 'Recycling selected active sessions',
+      const remove = _archiveButtonDeletes();
+      advanceDeleteBtn(archiveBtn, remove ? {
+        size: '16px', spinSize: '16px', iconName: 'trash-2',
+        armTitle: 'Click again to permanently delete selected sessions',
+        busyTitle: 'Deleting\u2026',
+        armLabel: 'Confirm permanently deleting selected sessions',
+        busyLabel: 'Deleting selected sessions',
         busyText: 'Deleting...',
-        onConfirm: () => _deleteSelectedSessions(trash),
+        onConfirm: () => _deleteSelectedSessions(),
+      } : {
+        size: '16px', spinSize: '16px', iconName: 'archive',
+        armTitle: 'Click again to archive selected active sessions',
+        busyTitle: 'Archiving\u2026',
+        armLabel: 'Confirm archiving selected active sessions',
+        busyLabel: 'Archiving selected active sessions',
+        busyText: 'Archiving...',
+        onConfirm: () => _archiveSelectedSessions(),
       });
       _syncFooterActions();
       setTimeout(_syncFooterActions, 450);
@@ -2529,7 +2547,7 @@ function _wireDom() {
 
   });
 
-  // More popover — refresh plus explicit Active / Recycled / All views.
+  // More popover — refresh plus explicit Active / Archived / All views.
   const moreTrigger = _qs('sessions-more-trigger');
   const morePanel = _qs('sessions-more-panel');
   const searchPanel = _qs('sessions-search-panel');
@@ -2563,8 +2581,8 @@ function _wireDom() {
   }
 
   // Search input — filter sessions by title as the user types. When a query is
-  // active, results also surface from the OTHER catalog (sessions ↔ recycle
-  // bin), fetched lazily so one search covers both views at once. A clear (×)
+  // active, results also surface from the OTHER catalog (sessions ↔
+  // archived), fetched lazily so one search covers both views at once. A clear (×)
   // button on the right empties the field.
   const searchInput = _qs('sessions-search-input');
   const searchClear = _qs('sessions-search-clear');
@@ -2656,15 +2674,15 @@ function _wireDom() {
 
   const undoBtn = _qs('sessions-undo-btn');
   if (undoBtn) {
-    resetDeleteBtn(undoBtn, { size: '16px', title: 'Undo recycling selected sessions', label: 'Undo recycling selected sessions', iconName: 'undo-2' });
+    _resetUndoButton();
     _listen(undoBtn,'click', () => {
       advanceDeleteBtn(undoBtn, {
         size: '16px', spinSize: '16px', iconName: 'undo-2',
-        armTitle: 'Click again to undo recycling',
-        busyTitle: 'Restoring…',
-        armLabel: 'Confirm undoing recycling for selected sessions',
-        busyLabel: 'Restoring selected sessions',
-        onConfirm: () => _restoreSelected(),
+        armTitle: 'Click again to unarchive',
+        busyTitle: 'Unarchiving…',
+        armLabel: 'Confirm unarchiving selected sessions',
+        busyLabel: 'Unarchiving selected sessions',
+        onConfirm: () => _unarchiveSelected(),
       });
     });
   }

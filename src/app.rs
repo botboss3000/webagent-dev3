@@ -697,7 +697,7 @@ impl App {
             .unwrap_or(true))
     }
     /// Deletion is durable across API/loop processes. The epoch also catches a
-    /// recycle/restore occurring between polls; old work can never resume.
+    /// archive/restore occurring between polls; old work can never resume.
     async fn session_operation<T>(
         &self,
         sid: &str,

@@ -74,7 +74,7 @@ async fn provider(
     (server, calls)
 }
 #[tokio::test]
-async fn recycling_cancels_pending_review_without_provider_dispatch() {
+async fn archiving_cancels_pending_review_without_provider_dispatch() {
     let (_root,mut app)=crate::runtime_tests::fixture().await;
     settings(&app,true).await;
     let (server,calls)=provider(&mut app,r#"{"verdict":"acceptable"}"#,false).await;
@@ -83,7 +83,7 @@ async fn recycling_cancels_pending_review_without_provider_dispatch() {
     let id=result["review_id"].as_str().unwrap();
     let metadata=app.store.session_read_summary(&sid).await.unwrap();
     app.store.lifecycle_session(&sid,&crate::store::session::SessionLifecycle {
-        client_request_id:"recycle".into(),expected_revision:metadata["metadata_revision"].as_u64().unwrap()
+        client_request_id:"archive".into(),expected_revision:metadata["metadata_revision"].as_u64().unwrap()
     },false).await.unwrap();
     super::scheduler::process(app.clone(),id.to_owned()).await.unwrap();
     assert!(calls.lock().await.is_empty());

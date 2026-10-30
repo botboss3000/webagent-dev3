@@ -36,7 +36,7 @@ pub type Pending<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub struct SessionAccess {
     /// The session's agent.
     pub agent: String,
-    /// Whether the session is active rather than recycled or closed.
+    /// Whether the session is active rather than archived or closed.
     pub active: bool,
     /// Whether the caller's live membership admits them to the agent.
     pub admitted: bool,

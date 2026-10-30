@@ -17,9 +17,9 @@ export const _isSessionRead = row => !row.is_unread;
 export function positionKebabPopup(popup,button){const r=button.getBoundingClientRect();popup.style.position='fixed';popup.style.zIndex='10000';popup.style.top=Math.max(4,Math.min(r.bottom,innerHeight-popup.offsetHeight-4))+'px';popup.style.left=Math.max(4,Math.min(r.right-popup.offsetWidth,innerWidth-popup.offsetWidth-4))+'px';}
 // Main Chats form one recent-activity group regardless of their pin flags.
 export const compareSessionsByPinnedOrder = (a,b) => {
-  const am=a.main_chat===true&&a._origin!=='bin',bm=b.main_chat===true&&b._origin!=='bin';
+  const am=a.main_chat===true&&a._origin!=='archived',bm=b.main_chat===true&&b._origin!=='archived';
   if(am!==bm)return am?-1:1;
-  if(!am){const ap=!!a.pinned&&a._origin!=='bin',bp=!!b.pinned&&b._origin!=='bin';if(ap!==bp)return ap?-1:1;}
+  if(!am){const ap=!!a.pinned&&a._origin!=='archived',bp=!!b.pinned&&b._origin!=='archived';if(ap!==bp)return ap?-1:1;}
   return (b.last_active_at||0)-(a.last_active_at||0)||String(a.id).localeCompare(String(b.id));
 };
 export function createSessionAdapter({request, roster, userId, changed, isAlive=()=>true}) {
@@ -29,26 +29,28 @@ export function createSessionAdapter({request, roster, userId, changed, isAlive=
     const agent=roster.find(a=>a.id===item.agent_id),usage=item.usage;
     const recorded=(usage?.reported_calls||0)>0;
     const partial=(usage?.unreported_calls||0)>0;
-    const row={...item,session_id:item.id,_rowType:'session',agent_name:agent?.name||item.agent_id,agent_icon:agent?.icon||'bot',last_active:iso(item.last_active_at),created_at:iso(item.created_at),_origin:item.status==='recycled'?'bin':'active',total_input_tokens:recorded?usage.input_tokens:null,total_output_tokens:recorded?usage.output_tokens:null,total_cost:recorded&&usage.unknown_cost_calls===0&&!partial?usage.known_cost_usd:null,total_duration_ms:null,usage_note:!usage?'Usage unavailable; historical calls may predate recording':partial?'Partial provider-reported token totals; some calls have no usage':'Provider-reported token totals',run_status:({completed:'complete',failed:'error'})[item.run_status]||item.run_status};
+    const row={...item,session_id:item.id,_rowType:'session',agent_name:agent?.name||item.agent_id,agent_icon:agent?.icon||'bot',last_active:iso(item.last_active_at),created_at:iso(item.created_at),_origin:item.status==='archived'?'archived':'active',total_input_tokens:recorded?usage.input_tokens:null,total_output_tokens:recorded?usage.output_tokens:null,total_cost:recorded&&usage.unknown_cost_calls===0&&!partial?usage.known_cost_usd:null,total_duration_ms:null,usage_note:!usage?'Usage unavailable; historical calls may predate recording':partial?'Partial provider-reported token totals; some calls have no usage':'Provider-reported token totals',run_status:({completed:'complete',failed:'error'})[item.run_status]||item.run_status};
     rows.set(item.id,row);return row;
   }
   async function catalog(endpoint){let offset=0,result=[];do{const data=await request(endpoint+'&limit=100&offset='+offset);if(!isAlive())return [];result.push(...data.sessions.map(project));if(data.next_offset==null)break;if(data.next_offset<=offset)throw Error('Invalid statistics continuation');offset=data.next_offset;}while(isAlive());return result;}
   async function mutate(id,action,fields={}){
     if(!isAlive())throw Error('Sessions page closed');
     const row=rows.get(id);if(!row)throw Error('Refresh before changing this session');
-    if(['recycle','purge'].includes(action)&&(row.main_chat===true||row.can_delete===false))throw Error('Main Chat cannot be deleted');
-    if(action==='recycle'&&row._origin==='bin')throw Error('Permanent deletion is pending in V3');
+    if(['archive','delete'].includes(action)&&(row.main_chat===true||row.can_delete===false))throw Error('Main Chat cannot be archived or deleted');
+    if(action==='archive'&&row._origin==='archived')throw Error('Session is already archived');
+    if(action==='delete'&&row._origin!=='archived')throw Error('Archive the session before deleting it');
     const signature=JSON.stringify({id,action,fields});
     let body=receipts.get(signature);
     if(!body){body={client_request_id:crypto.randomUUID(),expected_revision:row.metadata_revision,...fields};receipts.set(signature,body);}
     try{
-      const method=action==='restore'?'POST':action==='recycle'?'DELETE':'PATCH';
-      const data=await request('/sessions/'+encodeURIComponent(id)+(action==='restore'?'/restore':''),method,body);
-      if(isAlive()){rows.set(id,{...row,...data.session,_origin:data.session.status==='recycled'?'bin':'active'});receipts.delete(signature);changed();}
+      const lifecycle=['archive','unarchive'].includes(action);
+      const method=lifecycle?'POST':action==='delete'?'DELETE':'PATCH';
+      const data=await request('/sessions/'+encodeURIComponent(id)+(lifecycle?'/'+action:''),method,body);
+      if(isAlive()){if(action==='delete')rows.delete(id);else rows.set(id,{...row,...data.session,_origin:data.session.status==='archived'?'archived':'active'});receipts.delete(signature);changed();}
       return data;
     }catch(error){if(error.status===409||error.status===400)receipts.delete(signature);throw error;}
   }
-  async function markRead(id){if(!isAlive())throw Error('Sessions page closed');const row=rows.get(id);if(!row||row._origin==='bin')throw Error('Restore this session before marking it read');await request('/sessions/'+encodeURIComponent(id)+'/read','PUT',{through_seq:row.last_public_seq||0});if(isAlive())changed();}
+  async function markRead(id){if(!isAlive())throw Error('Sessions page closed');const row=rows.get(id);if(!row||row._origin==='archived')throw Error('Unarchive this session before marking it read');await request('/sessions/'+encodeURIComponent(id)+'/read','PUT',{through_seq:row.last_public_seq||0});if(isAlive())changed();}
   const stateKey='v3:sessions-view:'+userId;
   return {project,catalog,mutate,markRead,rows,
     loadState(key){try{return JSON.parse(localStorage.getItem(stateKey+":"+key)||'{}');}catch{return {}; }},

@@ -220,7 +220,7 @@ function isUnavailable(path, control) {
     if (node.classList.contains('chat-element-full-view-message')) return true;
   }
   if (control.matches(':disabled')) return true;
-  return control.matches('.session-row.recycled');
+  return control.matches('.session-row.archived');
 }
 
 /** Resolves the nearest enabled control and its owning synchronous callback, or null outside registered surfaces. */

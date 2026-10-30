@@ -27,7 +27,7 @@ pub enum LaneStatus {
 pub enum LaneError {
     /// A rejection with a public message.
     Rejected(LaneStatus, &'static str),
-    /// The model call did not complete. The error may mark a recycled session.
+    /// The model call did not complete. The error may mark a archived session.
     Dispatch(anyhow::Error),
     /// Storage or authority failure outside the model call.
     Internal(anyhow::Error),

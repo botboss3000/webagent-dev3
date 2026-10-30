@@ -5,15 +5,15 @@
  * 🤖 AI CODING AGENT — READ THIS FIRST
  * ═══════════════════════════════════════════════════════════════════════════════
  * THIS FILE is the single source of truth for the sessions page viewer
- * configuration. The inline config objects (SESSIONS_CONFIG, RECYCLE_BIN_CONFIG,
+ * configuration. The inline config objects (SESSIONS_CONFIG, ARCHIVED_CONFIG,
  * BOTH_CONFIG) drive every column, every responsive breakpoint, the gutter,
  * sort keys, data-source endpoints, and row-type scoping — the rendering code
  * in sessions-page.js is a GENERIC ENGINE that reads these configs and builds
  * the table.
  *
  * The page is one combined dataset filtered by a chip switcher
- * (Sessions | Recycling bin | Both). Each data source carries an `origin`
- * ('active' | 'bin') so rows from the two catalogs can be told apart in the
+ * (Sessions | Archived | Both). Each data source carries an `origin`
+ * ('active' | 'archived') so rows from the two catalogs can be told apart in the
  * merged 'both' view.
  *
  * TO CHANGE ANYTHING about the table's structure:
@@ -38,7 +38,7 @@
  * ═══════════════════════════════════════════════════════════════════════════════
  *
  * Column Config — inline definitions for the sessions data viewer.
- * Each view (sessions, recycle-bin, both) declares:
+ * Each view (sessions, archived, both) declares:
  *   - id, label, icon        → chip identity
  *   - data_sources[]         → { row_type, endpoint, origin } per source
  *   - gutter                 → { width, default_open, auto_collapse_at }
@@ -115,20 +115,20 @@ const AUTOMATIONS_CONFIG = {
   }
 };
 
-const RECYCLE_BIN_CONFIG = {
-  id: "recycle-bin",
-  label: "Recycling bin",
-  icon: "trash-2",
+const ARCHIVED_CONFIG = {
+  id: "archived",
+  label: "Archived",
+  icon: "archive",
   data_sources: [
-    { row_type: "session", endpoint: "/sessions/stats?status=recycled", origin: "bin" }
+    { row_type: "session", endpoint: "/sessions/stats?status=archived", origin: "archived" }
   ],
   gutter: { width: 6, default_open: true, auto_collapse_at: 800 },
   columns: SESSION_COLUMNS,
   responsive: SESSION_RESPONSIVE
 };
 
-// The 'both' chip — merges the active and recycled catalogs into ONE table.
-// Rows keep their `_origin` ('active' | 'bin') so the renderer can badge binned
+// The 'both' chip — merges the active and archived catalogs into ONE table.
+// Rows keep their `_origin` ('active' | 'archived') so the renderer can badge archived
 // rows and keep them non-loadable. Columns are the shared session set.
 const BOTH_CONFIG = {
   id: "both",
@@ -136,7 +136,7 @@ const BOTH_CONFIG = {
   icon: "layers",
   data_sources: [
     { row_type: "session", endpoint: "/sessions/stats?status=active",  origin: "active" },
-    { row_type: "session", endpoint: "/sessions/stats?status=recycled", origin: "bin" }
+    { row_type: "session", endpoint: "/sessions/stats?status=archived", origin: "archived" }
   ],
   gutter: { width: 6, default_open: true, auto_collapse_at: 800 },
   columns: SESSION_COLUMNS,
@@ -146,7 +146,7 @@ const BOTH_CONFIG = {
 // Lookup table — viewId → config object
 const _BUILTIN = {
   'sessions':     SESSIONS_CONFIG,
-  'recycle-bin':  RECYCLE_BIN_CONFIG,
+  'archived':     ARCHIVED_CONFIG,
   'both':         BOTH_CONFIG,
   // AUTOMATIONS_CONFIG retained for reference only — the Automations tab is its
   // own main-panel page and is no longer offered by the sessions switcher.
@@ -154,7 +154,7 @@ const _BUILTIN = {
 };
 
 // Canonical list of view ids (order drives the chip switcher)
-const VIEW_IDS = ['sessions', 'recycle-bin', 'both'];
+const VIEW_IDS = ['sessions', 'archived', 'both'];
 
 /**
  * Return a viewer config synchronously. No fetch — configs are inline.

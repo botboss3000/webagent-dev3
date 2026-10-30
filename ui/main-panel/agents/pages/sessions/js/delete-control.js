@@ -6,7 +6,7 @@ import { icon } from './adapter.js';
  * ============================================================================
  * SHARED-DELETE-CONTROL
  * ============================================================================
- * The two-click "trash → single pulse → hazard → pulsing trash → gone" delete affordance. This is the
+ * The two-click "icon → single pulse → hazard → pulsing icon → gone" archive/delete affordance. This is the
  * SINGLE source of truth for that interaction and is shared by THREE call sites
  * that must stay in sync. Grep `SHARED-DELETE-CONTROL` to find them:
  *
@@ -16,23 +16,26 @@ import { icon } from './adapter.js';
  *   2) Agents page agent card    →  ui/main-panel/agents/js/view.js
  *        - the trash button on each custom agent's card
  *   3) Agents page Config tab    →  ui/main-panel/agents/js/tab-config.js
- *        - the "Delete agent" button at the top of the Config tab (soft-delete
- *          to the recycling bin, sessions included)
+ *        - the "Archive agent" button at the top of the Config tab (archives
+ *          the agent, sessions included)
+ *
+ * The resting icon and texts default to Archive (reversible). A permanent
+ * Delete call site passes iconName 'trash-2' and its own Delete texts.
  *
  * If you change the states, icons, timing, or behaviour, do it HERE so both
  * places pick it up. Do NOT re-implement the state machine inline in either
  * call site — call advanceDeleteBtn()/resetDeleteBtn() instead.
  *
  * Interaction (driven by the button's data-state attribute):
- *   "trash"   --click-->  "arming"   : one delete pulse (0.4s, clicks ignored)
+ *   "archive" --click-->  "arming"   : one pulse (0.4s, clicks ignored)
  *   "arming"  --auto--->  "warning"  : swap to hazard icon, mark .warning
- *   "warning" --click-->  "deleting" : swap to a pulsing-aura trash icon,
+ *   "warning" --click-->  "deleting" : swap to a pulsing-aura icon,
  *                                      run onConfirm()
  *   "deleting" --click--> "undoing"  : if onUndo() is set, cancel the delete and
  *                                      swap to a green pulsing triangle while the
- *                                      session is restored, run onUndo()
+ *                                      session is unarchived, run onUndo()
  *   any reset (menu open/close, a sibling arming, a timeout, a failed delete)
- *             ------------ "trash"   : back to the trash icon
+ *             ------------ "archive" : back to the resting icon
  *
  * Colour for the .warning and busy states lives in CSS next to each call site
  * (also tagged SHARED-DELETE-CONTROL). The arming state shows a single delete
@@ -40,11 +43,11 @@ import { icon } from './adapter.js';
  * state keeps the trash icon and wraps it in `.delete-pulse-aura` which pulses
  * a danger ring while the delete is in flight — so the button reads as
  * "deleting", not "loading". The undoing state reuses the same aura but green
- * (`.delete-pulse-aura.undo`) on the hazard triangle, signalling "restoring".
+ * (`.delete-pulse-aura.undo`) on the hazard triangle, signalling "unarchiving".
  * ============================================================================
  */
 
-const TRASH = 'trash';
+const REST  = 'archive';
 const WARN  = 'warning';
 const BUSY  = 'deleting';
 const UNDOING = 'undoing';
@@ -53,20 +56,20 @@ const ARMING = 'arming';
 const ARM_DELAY_MS = 400; // one-pulse duration before the hazard appears
 
 /**
- * Return a button to its resting trash state. Safe to call on any state.
+ * Return a button to its resting state. Safe to call on any state.
  *
  * Options:
- *   size   icon size for the trash icon      (default '14px')
- *   title  resting tooltip                    (default 'Delete')
+ *   size   icon size for the resting icon    (default '14px')
+ *   title  resting tooltip                    (default 'Archive')
  *   label  resting accessible name (aria-label). Only set when provided, so
  *          call sites that manage their own aria-label keep it.
  */
 export function resetDeleteBtn(btn, {
-  size = '14px', title = 'Delete', label = null, iconName = 'trash-2',
+  size = '14px', title = 'Archive', label = null, iconName = 'archive',
 } = {}) {
   if (!btn) return;
   clearTimeout(btn._armTimer);
-  btn.dataset.state = TRASH;
+  btn.dataset.state = REST;
   btn.classList.remove('warning', 'deleting', 'undoing');
   btn.title = title;
   if (label) btn.setAttribute('aria-label', label);
@@ -79,10 +82,10 @@ export function resetDeleteBtn(btn, {
  *   'warning'  — after 0.4s: armed, showing the hazard icon
  *   'deleting' — second click: confirmed; the pulsing-aura trash is shown and
  *                onConfirm() has been scheduled (microtask, so the aura paints first)
- *   'trash'    — no-op (the button was already mid-delete)
+ *   'archive'  — no-op (the button was already mid-action)
  *
  * Options:
- *   size      icon size for trash/hazard      (default '14px')
+ *   size      icon size for icon/hazard       (default '14px')
  *   spinSize  icon size for the pulse/busy spans (default matches `size`)
  *   armTitle  tooltip while armed
  *   busyTitle tooltip while deleting
@@ -96,16 +99,16 @@ export function resetDeleteBtn(btn, {
  *   onConfirm(btn) fired (async) when the delete is confirmed
  *   onUndo(btn)    optional: when provided, a SECOND click while the delete is in
  *                  flight (the "deleting" pulse) cancels it and fires this — swap
- *                  to a green pulsing triangle and restore the session. Omit to
+ *                  to a green pulsing triangle and unarchive the session. Omit to
  *                  keep the classic "second clicks ignored while deleting" behaviour.
  */
 export function advanceDeleteBtn(btn, {
   size = '14px',
   spinSize = null,
-  iconName = 'trash-2',
-  armTitle = 'Click again to delete',
-  busyTitle = 'Deleting\u2026',
-  undoTitle = 'Click to restore',
+  iconName = 'archive',
+  armTitle = 'Click again to archive',
+  busyTitle = 'Archiving\u2026',
+  undoTitle = 'Click to unarchive',
   armLabel = null,
   busyLabel = null,
   busyText = null,
@@ -114,11 +117,11 @@ export function advanceDeleteBtn(btn, {
   onConfirm = null,
   onUndo = null,
 } = {}) {
-  if (!btn) return TRASH;
+  if (!btn) return REST;
   const spin = spinSize || size;
-  const state = btn.dataset.state || TRASH;
+  const state = btn.dataset.state || REST;
 
-  if (state === TRASH) {
+  if (state === REST) {
     // --- ARMING phase: one delete pulse for ARM_DELAY_MS, clicks ignored ---
     // (trash icon + a single expanding ring via .delete-pulse-aura.arm —
     // replaces the old spinner so it reads as a "delete beat", not "loading")
@@ -168,7 +171,7 @@ export function advanceDeleteBtn(btn, {
 
   if (state === BUSY) {
     // Undoable delete: a second click while the delete is in flight cancels it
-    // and swaps to a green pulsing triangle while the session is restored.
+    // and swaps to a green pulsing triangle while the session is unarchived.
     // Only when the call site opted in via onUndo; otherwise extra clicks are
     // ignored (the delete is already committed).
     if (onUndo) {
@@ -184,8 +187,8 @@ export function advanceDeleteBtn(btn, {
       if (onUndo) Promise.resolve().then(() => onUndo(btn));
       return UNDOING;
     }
-    return TRASH; // already deleting and no undo configured — ignore extra clicks
+    return REST; // already deleting and no undo configured — ignore extra clicks
   }
 
-  return TRASH; // already deleting, undoing, or arming — ignore extra clicks
+  return REST; // already deleting, undoing, or arming — ignore extra clicks
 }

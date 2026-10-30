@@ -31,8 +31,8 @@ fn reset_key(user: Option<&str>, agent: &str) -> String {
 /// of agents that user may currently access are counted; administrators pass None.
 async fn collect(store: &Store, user: Option<&str>, agent: Option<&str>, samples: &mut Vec<Sample>, labels: &mut HashMap<String, String>) -> anyhow::Result<()> {
     let mut sessions = HashMap::new();
-    for recycled in [false, true] {
-        for summary in store.ordered_sessions_status(recycled).await? {
+    for archived in [false, true] {
+        for summary in store.ordered_sessions_status(archived).await? {
             let Some(id) = summary["id"].as_str() else { continue };
             let agent_id = summary["agent_id"].as_str().unwrap_or("shared_default");
             if let Some(title) = summary["title"].as_str().filter(|t| !t.is_empty()) { labels.insert(id.to_owned(), title.to_owned()); }

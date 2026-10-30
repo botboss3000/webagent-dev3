@@ -25,7 +25,7 @@
       <button type="button" id="sessions-refresh-btn" class="sessions-popover-item"><i data-lucide="refresh-cw" style="width:15px;height:15px;"></i><span>Refresh</span></button>
       <div class="sessions-popover-separator"></div>
       <button type="button" class="sessions-popover-item sessions-view-option" data-view="sessions"><i data-lucide="message-square" style="width:15px;height:15px;"></i><span>Active Sessions</span><i data-lucide="check" class="sessions-view-check" style="width:14px;height:14px;"></i></button>
-      <button type="button" class="sessions-popover-item sessions-view-option" data-view="recycle-bin"><i data-lucide="recycle" style="width:15px;height:15px;"></i><span>Recycled Sessions</span><i data-lucide="check" class="sessions-view-check" style="width:14px;height:14px;"></i></button>
+      <button type="button" class="sessions-popover-item sessions-view-option" data-view="archived"><i data-lucide="archive" style="width:15px;height:15px;"></i><span>Archived Sessions</span><i data-lucide="check" class="sessions-view-check" style="width:14px;height:14px;"></i></button>
       <button type="button" class="sessions-popover-item sessions-view-option" data-view="both"><i data-lucide="layers" style="width:15px;height:15px;"></i><span>All Sessions</span><i data-lucide="check" class="sessions-view-check" style="width:14px;height:14px;"></i></button>
     </div>
   </div>
@@ -37,8 +37,8 @@
     <i data-lucide="grip-horizontal" aria-hidden="true"></i>
   </div>
   <div class="sessions-selection-panel-actions">
-    <button type="button" id="sessions-undo-btn" class="sessions-selection-panel-btn" data-state="trash" title="Undo recycling selected sessions" aria-label="Undo recycling selected sessions" hidden><i data-lucide="undo-2"></i></button>
-    <button type="button" id="sessions-trash-btn" class="sessions-selection-panel-btn sessions-tb-trash" data-state="trash" title="Move selected to the recycling bin" aria-label="Delete selected sessions"><i data-lucide="trash-2"></i></button>
+    <button type="button" id="sessions-undo-btn" class="sessions-selection-panel-btn" data-state="archive" title="Unarchive selected sessions" aria-label="Unarchive selected sessions" hidden><i data-lucide="undo-2"></i></button>
+    <button type="button" id="sessions-archive-btn" class="sessions-selection-panel-btn sessions-tb-archive" data-state="archive" title="Archive selected" aria-label="Archive selected sessions"><i data-lucide="archive"></i></button>
     <button type="button" id="sessions-clear-selection-btn" class="sessions-selection-panel-btn" title="Clear session selection"><i data-lucide="x"></i><span>Clear</span></button>
   </div>
 </aside>
@@ -79,7 +79,7 @@
     <button type="button" class="session-manage-flag-filter" data-sessions-footer-flag data-state="off" title="Show only sessions with a flag" aria-pressed="false">FLAG</button>
   </span>
   <span class="session-manage-actions">
-    <button type="button" class="session-manage-bin" data-sessions-footer-view="recycle-bin" title="Recycled sessions" aria-label="Recycled sessions"><i data-lucide="recycle" style="width:15px;height:15px;"></i></button>
+    <button type="button" class="session-manage-archived" data-sessions-footer-view="archived" title="Archived sessions" aria-label="Archived sessions"><i data-lucide="archive" style="width:15px;height:15px;"></i></button>
     <button type="button" class="session-manage-eye" data-sessions-footer-view="both" title="All sessions" aria-label="All sessions"><i data-lucide="eye-off" style="width:15px;height:15px;"></i></button>
   </span>
   <!-- SESSION-STORAGE-METER — trailing element of the left-aligned control

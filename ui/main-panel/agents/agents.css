@@ -23,13 +23,19 @@
 #create-agent-page .ac-ability-desc { display: block; -webkit-line-clamp: unset; white-space: normal; }
 #create-agent-page form > .ac-btn { margin-top: 14px; }
 
-/* Recycling bin (V2 parity): the bin replaces the squares and hides every detail region. */
-#agents-grid.agents-bin-view > [id$="-region"] { display: none !important; }
+/* Archived agents (V2 parity): the archived view replaces the squares and hides every detail region. */
+#agents-grid.agents-archive-view > [id$="-region"] { display: none !important; }
 #agents-toolbar-actions > [hidden] { display: none !important; }
-#agents-delete-btn { color: var(--danger); border-color: rgba(var(--danger-rgb), 0.3); }
-#agents-delete-btn:hover { background: rgba(var(--danger-rgb), 0.14); }
-#agents-delete-btn.warning { color: var(--warning); border-color: rgba(var(--warning-rgb), 0.5); }
-#agents-delete-btn::after { content: 'Delete'; }
-#agents-delete-btn[data-state="warning"]::after { content: 'Delete?'; }
-#agents-delete-btn[data-state="deleting"]::after { content: none; }
+#agents-remove-btn,
+#agents-delete-permanent-btn { color: var(--danger); border-color: rgba(var(--danger-rgb), 0.3); }
+#agents-remove-btn:hover,
+#agents-delete-permanent-btn:hover { background: rgba(var(--danger-rgb), 0.14); }
+#agents-remove-btn.warning,
+#agents-delete-permanent-btn.warning { color: var(--warning); border-color: rgba(var(--warning-rgb), 0.5); }
+#agents-remove-btn::after { content: 'Remove'; }
+#agents-remove-btn[data-state="warning"]::after { content: 'Remove?'; }
+#agents-delete-permanent-btn::after { content: 'Delete'; }
+#agents-delete-permanent-btn[data-state="warning"]::after { content: 'Delete?'; }
+#agents-remove-btn[data-state="deleting"]::after,
+#agents-delete-permanent-btn[data-state="deleting"]::after { content: none; }
 .agent-select-box { -webkit-tap-highlight-color: transparent; padding: 0; }

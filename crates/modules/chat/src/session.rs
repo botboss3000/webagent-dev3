@@ -11,7 +11,7 @@ pub const MIGRATION_KEY: &str = "storage:session_metadata_v1";
 #[serde(rename_all = "snake_case")]
 pub enum SessionStatus {
     Active,
-    Recycled,
+    Archived,
     Deleted,
 }
 
@@ -23,7 +23,7 @@ pub struct SessionMetadata {
     pub created_at: i64,
     pub last_active_at: i64,
     pub read_through_seq: u64,
-    pub recycled_at: Option<i64>,
+    pub archived_at: Option<i64>,
     pub metadata_revision: u64,
     pub metadata_schema_version: u32,
 }
@@ -44,7 +44,7 @@ pub fn with_session_metadata(value: &Value, activity: Option<i64>) -> Result<Val
     let defaults = json!({
         "title":"New chat", "pinned":false, "status":"active",
         "last_active_at":activity.unwrap_or(created).max(created),
-        "read_through_seq":0, "recycled_at":null, "metadata_revision":0,
+        "read_through_seq":0, "archived_at":null, "metadata_revision":0,
         "metadata_schema_version":1
     });
     for (key, default) in defaults.as_object().unwrap() {
@@ -54,7 +54,7 @@ pub fn with_session_metadata(value: &Value, activity: Option<i64>) -> Result<Val
     if metadata.metadata_schema_version != 1
         || metadata.created_at < 0
         || metadata.last_active_at < metadata.created_at
-        || metadata.recycled_at.is_some_and(|timestamp| timestamp < 0)
+        || metadata.archived_at.is_some_and(|timestamp| timestamp < 0)
     {
         return Err(anyhow!("Unsupported or invalid session metadata"));
     }
@@ -101,14 +101,14 @@ pub struct SessionLifecycle {
 }
 
 #[derive(Debug)]
-pub struct RecycledSession;
-impl std::fmt::Display for RecycledSession {
-    /// Hide recycled-session existence behind the same public not-found message.
+pub struct ArchivedSession;
+impl std::fmt::Display for ArchivedSession {
+    /// Hide archived-session existence behind the same public not-found message.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Session not found")
     }
 }
-impl std::error::Error for RecycledSession {}
+impl std::error::Error for ArchivedSession {}
 
 pub enum SessionPatchOutcome {
     Saved(Value),
@@ -199,7 +199,7 @@ pub async fn require_active_session<C: RecordCodec>(
         .await?
     {
         if codec.unseal(&raw)?["status"] != "active" {
-            return Err(RecycledSession.into());
+            return Err(ArchivedSession.into());
         }
     }
     Ok(())
@@ -224,7 +224,7 @@ pub async fn prepare_session_document<C: RecordCodec>(
     if let Some(raw) = previous {
         let previous = codec.unseal(&raw)?;
         if previous["status"] == "deleted" {
-            return Err(RecycledSession.into());
+            return Err(ArchivedSession.into());
         }
         // Checkpoints retain the current trusted role, including demotion.
         object.insert("main_chat".into(), json!(previous["main_chat"] == true));
@@ -311,7 +311,7 @@ pub async fn prepare_session_document<C: RecordCodec>(
             "status",
             "last_active_at",
             "read_through_seq",
-            "recycled_at",
+            "archived_at",
             "metadata_revision",
             "metadata_schema_version",
             "auto_naming",
@@ -355,11 +355,11 @@ pub async fn prepare_session_document<C: RecordCodec>(
     with_session_metadata(&next, None)
 }
 
-/// Project active or recycled public sessions and order pins, activity and identities deterministically.
+/// Project active or archived public sessions and order pins, activity and identities deterministically.
 pub async fn ordered_sessions_status<C: RecordCodec>(
     pool: &SqlitePool,
     codec: &C,
-    recycled: bool,
+    archived: bool,
 ) -> Result<Vec<Value>> {
     let mut tx = pool.begin().await?;
     let rows = sqlx::query("SELECT value FROM docs WHERE key LIKE 'session:%' ORDER BY key")
@@ -369,7 +369,7 @@ pub async fn ordered_sessions_status<C: RecordCodec>(
     for row in rows {
         let session = codec.unseal(&row.get::<Vec<u8>, _>("value"))?;
         if session["module_silent"] != true
-            && session["status"] == if recycled { "recycled" } else { "active" }
+            && session["status"] == if archived { "archived" } else { "active" }
         {
             let sid = session["id"]
                 .as_str()

@@ -39,7 +39,7 @@ forwarding always needs fresh owner approval.
 ## Authority and approval
 
 Sender and recipient must belong to the authenticated storage owner. Reject self,
-foreign, deleted/recycled sessions, inactive recipients, sharing-enabled agents,
+foreign, deleted/archived sessions, inactive recipients, sharing-enabled agents,
 admin-view/admin-join agents and participant-bearing shared sessions. Live access,
 mode, capability catalog and session lifecycle revisions bind the approval and
 remembered route. A changed binding invalidates approval; it does not silently
@@ -138,7 +138,7 @@ These views do not grant authority; the API always rechecks it.
 | live_tool_decision, filter_ability_entry, effective_policy_for_mode | Keep ordinary policy/visibility checks while allowing only the dedicated read-only delegation exception. |
 | execute_run_inner; execute_parallel_batch; call_raw_inner; native_schemas | Apply the same preflight in single/batch paths, bind call-scoped delegation guidance and execute the native adapter. |
 | api/chat::approval; shared_projection::messages | Recheck exact owner approval binding and expose durable origin to public transcript projection. |
-| Store::action_origin, conversation_history, purge_session | Exclude agent input as human authority; preserve fork evidence and remove session-owned messaging state on deletion. |
+| Store::action_origin, conversation_history, delete_session | Exclude agent input as human authority; preserve fork evidence and remove session-owned messaging state on deletion. |
 | mountMessagingRoutes; load; open/disconnect/destroy | Mount disclosure, fence late reads, reset session state and dispose UI callbacks. |
 | mountChatActionPanel; showTool; destroy | Display exact destination/approval, retain eligible explicit remember choice across polling and clear it on disposal. |
 | createMessage; panel::open, runs, disconnect, destroy | Show origin labels and connect owner route UI and approval callbacks to selected-session lifecycle. |

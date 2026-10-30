@@ -44,7 +44,7 @@ impl Store {
     ) -> Result<()> {
         webagent_chat::followup::queue_write_tx(self, t, q).await
     }
-    /// Called inside the session lifecycle transaction, including repeated recycle.
+    /// Called inside the session lifecycle transaction, including repeated archive.
     pub(super) async fn cancel_session_followups(
         &self,
         t: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -1008,7 +1008,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn followup_queue_lifecycle_cancels_choices_and_purges_receipts() {
+    async fn followup_queue_lifecycle_cancels_choices_and_deletes_receipts() {
         let (root, s) = fixture().await;
         s.session_read_summary("s").await.unwrap();
         for choice in ["queue", "steer", "interrupt"] {
@@ -1045,7 +1045,7 @@ mod tests {
             .iter()
             .all(|e| e["status"] == "cancelled" && e["choice"] == "cancel"));
         let body = crate::store::session::SessionLifecycle {
-            client_request_id: "restore".into(),
+            client_request_id: "unarchive".into(),
             expected_revision: revision + 1,
         };
         reopened.lifecycle_session("s", &body, true).await.unwrap();
@@ -1081,10 +1081,10 @@ mod tests {
         };
         reopened.lifecycle_session("s", &body, false).await.unwrap();
         let body = crate::store::session::SessionLifecycle {
-            client_request_id: "purge".into(),
+            client_request_id: "delete".into(),
             expected_revision: revision + 3,
         };
-        reopened.purge_session("s", &body).await.unwrap();
+        reopened.delete_session("s", &body).await.unwrap();
         assert!(reopened
             .get("receipt:queue:s:choose")
             .await

@@ -90,8 +90,9 @@ modules live in `v3/ui/chat/controls/`.
 The session selector now uses the active v2 trigger markup and adapted v2
 portal/positioning/open-close lifecycle under `chat/controls/session-dropdown/`.
 Its v3 data adapter supports private title/content search with continuation,
-opening and refreshing sessions, persisted rename/pin, reversible recycle/restore,
-and visible-message read acknowledgments. Checkbox batch recycle uses the same
+opening and refreshing sessions, persisted rename/pin, reversible archive/unarchive,
+permanent delete of archived sessions, and visible-message read acknowledgments.
+Checkbox batch archive uses the same
 revision-fenced Rust lifecycle writes: two-click confirmation, individually
 processed sessions, explicit partial failures, and retained failed selections
 with retry receipts. It is not an atomic batch. Unsupported management actions
@@ -133,7 +134,7 @@ after a browser refresh; backend catalog code changes require a v3 rebuild.
 user-owned `session:<id>` document. It follows v2's title, pinned flag, lifecycle
 status and timestamps, without copying v2's plaintext schema or importing v2 data.
 V3 adds `metadata_revision`, `metadata_schema_version`, `last_active_at`,
-`read_through_seq`, and nullable `recycled_at`; status is `active` or `recycled`.
+`read_through_seq`, and nullable `archived_at`; status is `active` or `archived`.
 The read marker is a durable sequence cursor, not v2's wall-clock `read_at`.
 
 On first use of each user database, an atomic, idempotent migration fills only
@@ -157,7 +158,7 @@ For example: `{"client_request_id":"rename-1","expected_revision":0,"title":"Wor
 Titles are trimmed, nonempty, at most 200 UTF-8 bytes, and contain no control
 characters. Unknown fields and malformed types are rejected. The route retains
 browser authentication, CSRF, user ownership and live agent-access checks; it
-is not added to the machine messaging API. Missing sessions return 404; recycled
+is not added to the machine messaging API. Missing sessions return 404; archived
 sessions, stale revisions and request-ID reuse with different input return 409.
 A success returns `{"session":<safe summary>}`. Session writes, encrypted retry
 receipts and `session_updated` events commit atomically after reserving the SQLite
@@ -176,7 +177,7 @@ server epoch seconds and never decreases; it does not change metadata revisions.
 authentication, CSRF, user ownership and live agent-access checks. Zero is a
 no-op; any nonzero cursor must identify an existing public chat message in that
 session (not a global sequence gap or another session's message). Invalid
-cursors return 400, missing/inaccessible sessions 404, and recycled sessions 409.
+cursors return 400, missing/inaccessible sessions 404, and archived sessions 409.
 The cursor advances by maximum, making identical retries and older tabs harmless
 without request IDs or metadata revision changes. Cursor writes and encrypted
 `session_read` events commit atomically. Reading a snapshot does not acknowledge
@@ -191,21 +192,23 @@ snapshot. Stale checkpoint writes preserve activity and read cursors even when
 metadata revisions are equal. The elapsed "last active" counter remains a later
 browser feature derived from these timestamps and server time.
 
-Reversible lifecycle (phase 4, source-tested; not deployed): browser
-`DELETE /api/v3/sessions/{id}` recycles and `POST /api/v3/sessions/{id}/restore`
-restores. Both require `{"client_request_id":"unique-id","expected_revision":<u64>}`
+Session lifecycle: browser `POST /api/v3/sessions/{id}/archive` archives and
+`POST /api/v3/sessions/{id}/unarchive` unarchives (reversible);
+`DELETE /api/v3/sessions/{id}` deletes an archived session permanently and
+irreversibly (an active session returns "Archive the session before deleting it").
+All three require `{"client_request_id":"unique-id","expected_revision":<u64>}`
 and authentication, CSRF, user ownership and live agent access. Lifecycle changes,
 encrypted receipts and events commit atomically. Exact retries return the original
-receipt (even after a later restore); reused IDs with different input or revisions
+receipt (even after a later unarchive); reused IDs with different input or revisions
 that changed return 409. Already-in-target-state requests are no-ops with receipts.
-Recycling blocks any nonterminal indexed run, including queued work, stopped runs,
+Archiving blocks any nonterminal indexed run, including queued work, stopped runs,
 approval/recovery waits and unknown statuses. Only completed/cancelled/failed runs
-are terminal. No implicit cancellation or permanent purge occurs. History,
-checkpoint, agent binding, pinning, activity and read cursor are retained; restore
-clears `recycled_at` without counting as activity. Snapshots remain readable.
-`GET /api/v3/sessions?status=recycled` lists recycled summaries with the same stable
+are terminal. Archiving never cancels implicitly or deletes. History,
+checkpoint, agent binding, pinning, activity and read cursor are retained; unarchive
+clears `archived_at` without counting as activity. Snapshots remain readable.
+`GET /api/v3/sessions?status=archived` lists archived summaries with the same stable
 ordering; the default/`status=active` lists active ones. Invalid status returns 400.
-Recycled sessions reject new messages and nonterminal run writes/claims with 409;
+Archived sessions ("Session is archived") reject new messages and nonterminal run writes/claims with 409;
 storage checks the lifecycle in the write transaction, fencing independent-store
 admission races. Existing accepted-message receipts remain retryable.
 
@@ -215,7 +218,7 @@ signed-in user's encrypted session titles and chat-visible user/assistant string
 content. It never searches reasoning, checkpoints, tool records or another user's
 store. Live agent access filters results; no machine-messaging search route is
 exposed. Matching is case-insensitive and literal, not regex, fuzzy or stemming.
-`status` is active (default) or recycled; `limit` is 1–50 (default 20). Queries
+`status` is active (default) or archived; `limit` is 1–50 (default 20). Queries
 are trimmed and normalized, capped at 128 characters and 256 normalized bytes.
 
 Results identify title/message hits, session/agent IDs, title, a plain-text snippet
@@ -602,7 +605,19 @@ configure models immediately; later membership edits still revoke sign-ins.
 
 `GET/PUT /api/v3/models/catalog?agent_id=<id>` returns and atomically updates a
 caller-scoped catalog using optimistic revisions. `/models/agents` lists permitted
-agents and supports retry-safe creation. `/models/agents/{id}/members` lists or
+agents and supports retry-safe creation; `?archived=true` lists the caller's own
+archived agents (status `archived` or `archived_disabled`).
+`POST /models/agents/{id}/remove` (body `{"expected_revision":<u64>}`) takes an agent
+off the caller's list: the owner's Remove archives it with its sessions; anyone
+else's revokes their own membership (origin `left`), hiding them from the member
+list and ignoring app-login or visitor access until an Operator adds them again.
+The default agent cannot be removed. `POST /models/agents/{id}/unarchive` (same
+body, owner only) restores an archived agent.
+`DELETE /models/agents/{id}` with the same body deletes an archived agent
+permanently, only by its owner, erasing the agent, all its sessions and data
+irreversibly; it returns `{"agent_id":<id>,"deleted":true}` and refuses with
+"Archive the agent before deleting it" or "Only the agent owner can delete it
+permanently". `/models/agents/{id}/members` lists or
 assigns existing accounts. Browser writes require CSRF. Connection authorization
 and API-key writes require connection ownership; credential references are minted
 by the server and secrets are never returned.

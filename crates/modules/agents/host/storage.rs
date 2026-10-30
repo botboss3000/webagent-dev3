@@ -59,7 +59,9 @@ pub(crate) async fn open_agent_pool(root:&Path, agent_id:&str) -> Result<SqliteP
         merge_mode TEXT NOT NULL CHECK(merge_mode IN ('replace','append')),
         content BLOB NOT NULL, revision INTEGER NOT NULL, updated_at INTEGER NOT NULL,
         UNIQUE(agent_id,slot_name));
-        CREATE INDEX IF NOT EXISTS agent_prompts_order ON agent_prompts(agent_id,order_index,slot_name);")
+        CREATE INDEX IF NOT EXISTS agent_prompts_order ON agent_prompts(agent_id,order_index,slot_name);
+        -- Former recycling-bin statuses become archive statuses on first open.
+        UPDATE agents SET status=replace(status,'deleted','archived') WHERE status IN ('deleted','deleted_disabled');")
         .execute(&pool).await?;
     Ok(pool)
 }
@@ -325,6 +327,22 @@ impl Store {
         sqlx::query("INSERT OR IGNORE INTO agent_directory(id,owner_id) VALUES(?,?)")
             .bind(id).bind(owner).execute(&self.app_pool).await?;
         Ok(())
+    }
+
+    /// Drop the registration first so no late caller reopens and recreates the files.
+    pub async fn unregister_agent(&self,id:&str) -> Result<()> {
+        if id=="shared_default" || !access::valid_agent_id(id) {bail!("Invalid agent identity");}
+        let mut tx=self.app_pool.begin().await?;
+        sqlx::query("DELETE FROM agent_directory WHERE id=?").bind(id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM agent_memberships WHERE agent_id=?").bind(id).execute(&mut *tx).await?;
+        tx.commit().await?;
+        let pool=self.agent_states.write().await.remove(id);
+        if let Some(pool)=pool {pool.close().await;}
+        self.agent_keys.write().map_err(|_|anyhow!("Agent key registry unavailable"))?.remove(id);
+        match std::fs::remove_dir_all(self.root.join("agent_data").join(id)) {
+            Err(error) if error.kind()!=std::io::ErrorKind::NotFound => Err(error.into()),
+            _ => Ok(()),
+        }
     }
 }
 

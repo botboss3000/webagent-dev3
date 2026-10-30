@@ -145,6 +145,7 @@ impl Store {
         if existing_key_table.is_some() {store.initialize_agent_encryption().await?;}
         store.migrate_legacy(root).await?;
         store.migrate_session_metadata().await?;
+        store.migrate_archived_status().await?;
         store.init_accounts().await?;
         store.init_access_policy().await?;
         store.init_policy_tiers().await?;
@@ -188,6 +189,7 @@ impl Store {
         // Marker-guarded migrations never revert; scans call for_user for every account each tick.
         if !migrated.load(std::sync::atomic::Ordering::Acquire) {
             handle.migrate_session_metadata().await?;
+            handle.migrate_archived_status().await?;
             handle.pin_conversation_privacy().await?;
             migrated.store(true,std::sync::atomic::Ordering::Release);
         }

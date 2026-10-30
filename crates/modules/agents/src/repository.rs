@@ -119,15 +119,15 @@ impl<'a, C: RecordCodec> Repository<'a, C> {
         }
         Ok(json!({"agent_id":self.agent,"status":status,"revision":expected+1}))
     }
-    /// Owner recycling bin. A disabled agent bins as `deleted_disabled` and restores disabled,
-    /// so a restore never lifts an administrator's disable.
-    pub async fn set_deleted(&self, expected: u64, deleted: bool) -> Result<Value> {
+    /// Owner archive. A disabled agent archives as `archived_disabled` and unarchives disabled,
+    /// so unarchiving never lifts an administrator's disable.
+    pub async fn set_archived(&self, expected: u64, archived: bool) -> Result<Value> {
         let current = self.status().await?;
-        let to = match (deleted, current["status"].as_str().unwrap_or("")) {
-            (true, "active") => "deleted",
-            (true, "disabled") => "deleted_disabled",
-            (false, "deleted") => "active",
-            (false, "deleted_disabled") => "disabled",
+        let to = match (archived, current["status"].as_str().unwrap_or("")) {
+            (true, "active") => "archived",
+            (true, "disabled") => "archived_disabled",
+            (false, "archived") => "active",
+            (false, "archived_disabled") => "disabled",
             _ => "",
         };
         let from = current["status"].as_str().unwrap_or("");
@@ -142,10 +142,10 @@ impl<'a, C: RecordCodec> Repository<'a, C> {
             if current["revision"].as_u64() != Some(expected) {
                 bail!("Agent revision changed");
             }
-            bail!(if deleted {
-                "Agent is already in the recycling bin"
+            bail!(if archived {
+                "Agent is already archived"
             } else {
-                "Agent is not in the recycling bin"
+                "Agent is not archived"
             });
         }
         Ok(json!({"agent_id":self.agent,"status":to,"revision":expected+1}))

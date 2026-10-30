@@ -146,6 +146,9 @@ impl Access for Fixture {
     async fn status_authority(&self, _agent: &str) -> Result<()> {
         Ok(())
     }
+    async fn leave(&self, _agent: &str) -> Result<()> {
+        Ok(())
+    }
 }
 impl Effects for Fixture {
     async fn seed_model(&self, _owner: &str, _agent: &str) -> Result<bool> {
@@ -157,6 +160,8 @@ impl Effects for Fixture {
     }
     async fn quiesce(&self, _agent: &str) -> Result<()> {
         self.quiesced.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }    async fn erase(&self, _agent: &str) -> Result<()> {
         Ok(())
     }
 }
@@ -311,7 +316,7 @@ fn invalid_fields_and_mode_boundaries() {
         json!({"name":"Name","client_request_id":"id","model":"private"})
     )
     .is_err());
-    assert!(validate_status(1, "deleted").is_err());
+    assert!(validate_status(1, "archived").is_err());
     assert!(validate_status(i64::MAX as u64, "active").is_err());
 }
 #[tokio::test]
@@ -523,7 +528,7 @@ fn stable_identity_matches_existing_request_digest_contract() {
         "receipt:model-agent:owner:new-agent"
     );
 }
-async fn bin_status(f: &Fixture, id: &str) -> Value {
+async fn archive_status(f: &Fixture, id: &str) -> Value {
     Repository::new(&f.pools[id], id, f)
         .unwrap()
         .status()
@@ -531,25 +536,25 @@ async fn bin_status(f: &Fixture, id: &str) -> Value {
         .unwrap()
 }
 #[tokio::test]
-async fn recycling_bin_hides_quiesces_restores_and_never_lifts_a_disable() {
+async fn archive_hides_quiesces_unarchives_and_never_lifts_a_disable() {
     let f = Fixture::new().await;
     let id = f.service().create(&request(), 2).await.unwrap()["id"]
         .as_str()
         .unwrap()
         .to_owned();
-    let revision = bin_status(&f, &id).await["revision"].as_u64().unwrap();
+    let revision = archive_status(&f, &id).await["revision"].as_u64().unwrap();
     assert!(f
         .service()
-        .set_deleted("shared_default", 1, true)
+        .set_archived("shared_default", 1, true)
         .await
         .is_err());
     assert!(f
         .service()
-        .set_deleted(&id, revision + 1, true)
+        .set_archived(&id, revision + 1, true)
         .await
         .is_err());
-    let deleted = f.service().set_deleted(&id, revision, true).await.unwrap();
-    assert_eq!(deleted["status"], "deleted");
+    let archived = f.service().set_archived(&id, revision, true).await.unwrap();
+    assert_eq!(archived["status"], "archived");
     assert_eq!(f.quiesced.load(Ordering::SeqCst), 1);
     let listed = f.service().list().await.unwrap();
     assert!(listed["agents"]
@@ -559,20 +564,20 @@ async fn recycling_bin_hides_quiesces_restores_and_never_lifts_a_disable() {
         .all(|a| a["id"] != id.as_str()));
     let error = f
         .service()
-        .set_deleted(&id, revision + 1, true)
+        .set_archived(&id, revision + 1, true)
         .await
         .unwrap_err();
-    assert_eq!(error.to_string(), "Agent is already in the recycling bin");
-    let restored = f
+    assert_eq!(error.to_string(), "Agent is already archived");
+    let unarchived = f
         .service()
-        .set_deleted(&id, revision + 1, false)
+        .set_archived(&id, revision + 1, false)
         .await
         .unwrap();
-    assert_eq!(restored["status"], "active");
+    assert_eq!(unarchived["status"], "active");
     assert_eq!(
         f.quiesced.load(Ordering::SeqCst),
         1,
-        "a restore has no work to stop"
+        "unarchiving has no work to stop"
     );
     assert_eq!(f.events.lock().unwrap().len(), 2);
     f.service()
@@ -581,31 +586,31 @@ async fn recycling_bin_hides_quiesces_restores_and_never_lifts_a_disable() {
         .unwrap();
     assert!(
         f.service()
-            .set_deleted(&id, revision + 3, false)
+            .set_archived(&id, revision + 3, false)
             .await
             .is_err(),
-        "a disabled agent is not in the bin"
+        "a disabled agent is not archived"
     );
-    let binned = f
+    let archived = f
         .service()
-        .set_deleted(&id, revision + 3, true)
+        .set_archived(&id, revision + 3, true)
         .await
         .unwrap();
-    assert_eq!(binned["status"], "deleted_disabled");
+    assert_eq!(archived["status"], "archived_disabled");
     let listed = f.service().list().await.unwrap();
     assert!(listed["agents"]
         .as_array()
         .unwrap()
         .iter()
         .all(|a| a["id"] != id.as_str()));
-    let restored = f
+    let unarchived = f
         .service()
-        .set_deleted(&id, revision + 4, false)
+        .set_archived(&id, revision + 4, false)
         .await
         .unwrap();
     assert_eq!(
-        restored["status"], "disabled",
-        "a restore keeps the disable"
+        unarchived["status"], "disabled",
+        "unarchiving keeps the disable"
     );
-    assert_eq!(bin_status(&f, &id).await["status"], "disabled");
+    assert_eq!(archive_status(&f, &id).await["status"], "disabled");
 }

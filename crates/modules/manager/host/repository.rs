@@ -133,7 +133,7 @@ mod tests {
         assert_eq!(count, 1);
     }
     #[tokio::test]
-    async fn review_error_does_not_admit_and_pending_blocks_recycle() {
+    async fn review_error_does_not_admit_and_pending_blocks_archive() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         let record = submitted(&store, "session", "review").await;

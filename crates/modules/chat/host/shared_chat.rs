@@ -96,8 +96,8 @@ pub async fn live_access(
 pub async fn scope_lifecycle(app: App, sid: &str) -> Result<App> {
     scope_lifecycle_receipt(app,sid,false).await
 }
-// A deleted owner's tombstone is accessible solely for an idempotent purge receipt.
-pub async fn scope_purge(app: App, sid: &str) -> Result<App> {
+// A deleted owner's tombstone is accessible solely for an idempotent delete receipt.
+pub async fn scope_delete(app: App, sid: &str) -> Result<App> {
     scope_lifecycle_receipt(app,sid,true).await
 }
 async fn scope_lifecycle_receipt(app: App, sid: &str, deleted_receipt:bool) -> Result<App> {
@@ -204,7 +204,7 @@ pub(crate) async fn resolve_store(store:&Store,sid:&str,user:&str)->Result<Sessi
 pub(crate) async fn guard_operation<T>(store:&Store,sid:&str,cancel:CancellationToken,operation:impl std::future::Future<Output=Result<T>>)->Result<T> {
         let initial=store.get(&key("session",sid)).await?
             .filter(|session|session["status"]=="active")
-            .ok_or_else(||anyhow::Error::from(crate::store::session::RecycledSession))?;
+            .ok_or_else(||anyhow::Error::from(crate::store::session::ArchivedSession))?;
         let epoch=initial["execution_epoch"].as_u64().unwrap_or(0);
         tokio::pin!(operation);
         let mut poll=tokio::time::interval(Duration::from_millis(100));
@@ -214,7 +214,7 @@ pub(crate) async fn guard_operation<T>(store:&Store,sid:&str,cancel:Cancellation
                     let available=store.get(&key("session",sid)).await
                         .is_ok_and(|session|session.is_some_and(|s|s["status"]=="active"
                             && s["execution_epoch"].as_u64().unwrap_or(0)==epoch));
-                    if !available {cancel.cancel();return Err(crate::store::session::RecycledSession.into());}
+                    if !available {cancel.cancel();return Err(crate::store::session::ArchivedSession.into());}
                     return result;
                 },
                 _=poll.tick()=>{
@@ -225,7 +225,7 @@ pub(crate) async fn guard_operation<T>(store:&Store,sid:&str,cancel:Cancellation
                         cancel.cancel();
                         // Poll cancellation cleanup before dropping a worker socket.
                         let _=tokio::time::timeout(Duration::from_secs(5),&mut operation).await;
-                        return Err(crate::store::session::RecycledSession.into());
+                        return Err(crate::store::session::ArchivedSession.into());
                     }
                 }
             }
@@ -245,7 +245,7 @@ impl webagent_engine::runtime::ports::ChatAuthority<Store> for EngineChat {
  fn operation<'a,T:Send+'a,F:std::future::Future<Output=Result<T>>+Send+'a>(&'a self,store:&'a Store,sid:&'a str,cancel:CancellationToken,operation:F)->impl std::future::Future<Output=Result<T>>+Send+'a{guard_operation(store,sid,cancel,operation)}
  fn agent_id<'a>(&'a self,store:&'a Store,sid:&'a str)->impl std::future::Future<Output=Result<String>>+Send+'a {async move {
   let session=store.get(&format!("session:{sid}")).await?.ok_or_else(||anyhow!("Session not found"))?;
-  if session["status"]!="active" {return Err(crate::store::session::RecycledSession.into());}
+  if session["status"]!="active" {return Err(crate::store::session::ArchivedSession.into());}
   Ok(session["agent_id"].as_str().unwrap_or("shared_default").to_owned())
  }}
  fn messaging_owns(name:&str)->bool {crate::session_messaging::owns(name)}

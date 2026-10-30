@@ -45,7 +45,7 @@ impl Store {
         let mut value = self.unseal(&raw)?;
         if value["status"] != "active" {
             return Ok(session::SessionPatchOutcome::Conflict(
-                "Session is recycled",
+                "Session is archived",
             ));
         }
         if seq != 0 {

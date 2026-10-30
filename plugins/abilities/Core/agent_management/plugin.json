@@ -44,8 +44,8 @@
     "sessions.create",
     "sessions.read",
     "sessions.update",
-    "sessions.recycle",
-    "sessions.restore",
+    "sessions.archive",
+    "sessions.unarchive",
     "sessions.watch",
     "ability.settings"
   ],

@@ -99,11 +99,11 @@ pub fn validate_identity(name: Option<&str>, description: Option<&str>) -> Resul
     Ok(())
 }
 
-/// Recycling-bin statuses: `deleted` (was active) and `deleted_disabled` (was disabled).
-pub fn binned(agent: &Value) -> bool {
+/// Archive statuses: `archived` (was active) and `archived_disabled` (was disabled).
+pub fn archived(agent: &Value) -> bool {
     agent["status"]
         .as_str()
-        .is_some_and(|status| status.starts_with("deleted"))
+        .is_some_and(|status| status.starts_with("archived"))
 }
 
 pub fn validate_status(revision: u64, status: &str) -> Result<()> {

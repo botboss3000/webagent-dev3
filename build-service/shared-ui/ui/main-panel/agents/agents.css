@@ -53,12 +53,12 @@ body {
   flex-shrink: 0;
 }
 
-/* The toolbar is hidden while loading and shown only for Back/Restore actions
-   after a bin or clones view is opened. */
+/* The toolbar is hidden while loading and shown only for Back/Unarchive actions
+   after the archived or clones view is opened. */
 #agents-grid.agents-phantom #agents-toolbar,
 #agents-grid.agents-skeleton #agents-toolbar { display: none; }
 
-/* ── Recycling-bin toolbar actions (right side) ── */
+/* ── Archived-view toolbar actions (right side) ── */
 #agents-toolbar-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
 #agents-back-btn {
   display: inline-flex; align-items: center; justify-content: center;
@@ -84,8 +84,8 @@ body {
 .agents-tb-btn:hover { background: rgba(var(--ink-rgb), 0.12); border-color: rgba(var(--ink-rgb), 0.30); }
 .agents-tb-btn:disabled { opacity: 0.4; cursor: default; }
 .agents-tb-btn > * { pointer-events: none; }
-.agents-tb-restore { color: var(--success); border-color: rgba(var(--success-rgb), 0.30); }
-.agents-tb-restore:hover { background: rgba(var(--success-rgb), 0.14); border-color: rgba(var(--success-rgb), 0.5); }
+.agents-tb-unarchive { color: var(--success); border-color: rgba(var(--success-rgb), 0.30); }
+.agents-tb-unarchive:hover { background: rgba(var(--success-rgb), 0.14); border-color: rgba(var(--success-rgb), 0.5); }
 
 /* Config tab "Danger zone" delete button — the same trash→hazard→spin two-click
    affordance as the header trash (SHARED-DELETE-CONTROL, driven by
@@ -103,8 +103,8 @@ body {
 .agents-config-delete-btn:disabled { opacity: 0.4; cursor: default; }
 .agents-config-delete-btn > * { pointer-events: none; }
 
-/* Recycling-bin notice toast — brief fixed pill shown after the Config tab's
-   delete moves an agent (and its sessions) to the bin. */
+/* Archive notice toast — brief fixed pill shown after the Config tab's
+   archive moves an agent (and its sessions) to the archived view. */
 #agents-notice-toast {
   position: fixed; bottom: 24px; left: 50%; transform: translate(-50%, 16px);
   display: flex; align-items: center; gap: 10px; max-width: min(92vw, 560px);
@@ -180,19 +180,19 @@ body.light-mode .agents-tb-btn {
   color: var(--fg-1); border-color: rgba(61, 44, 46, 0.18); background: rgba(61, 44, 46, 0.03);
 }
 body.light-mode .agents-tb-btn:hover { background: rgba(61, 44, 46, 0.08); border-color: rgba(61, 44, 46, 0.30); }
-body.light-mode .agents-tb-restore { color: var(--success); border-color: rgba(var(--success-rgb), 0.35); }
-body.light-mode .agents-tb-restore:hover { background: rgba(var(--success-rgb), 0.12); }
+body.light-mode .agents-tb-unarchive { color: var(--success); border-color: rgba(var(--success-rgb), 0.35); }
+body.light-mode .agents-tb-unarchive:hover { background: rgba(var(--success-rgb), 0.12); }
 body.light-mode .agent-select-box { background: rgba(255, 255, 255, 0.75); border-color: rgba(61, 44, 46, 0.35); }
 body.light-mode .agent-square-chat-btn { background: rgba(255, 255, 255, 0.75); border-color: rgba(61, 44, 46, 0.35); color: var(--fg-3); }
 body.light-mode .agent-square-chat-btn:hover { border-color: var(--brand); color: var(--brand); background: rgba(var(--brand-rgb), 0.10); }
 body.light-mode .agent-square-add-btn { background: rgba(255, 255, 255, 0.75); border-color: rgba(61, 44, 46, 0.35); color: var(--fg-3); }
 body.light-mode .agent-square-add-btn:hover { border-color: var(--brand); color: var(--brand); background: rgba(var(--brand-rgb), 0.10); }
 
-.agents-bin-empty {
+.agents-archive-empty {
   width: 100%; padding: 40px 20px;
   font-size: 13px; color: var(--fg-4); text-align: center;
 }
-body.light-mode .agents-bin-empty { color: var(--fg-4); }
+body.light-mode .agents-archive-empty { color: var(--fg-4); }
 
 /* ── Clones view ────────────────────────────────────────────────── */
 .agents-clones-group-heading {
@@ -261,7 +261,7 @@ body.light-mode .agent-clones-status { background: rgba(60, 44, 46, 0.08); color
 
 /* ── Top row: carousel strip + right-side action stack ──
    One shared row: the squares strip takes the remaining width and the toolbar
-   (back / restore / eye / recycle, stacked vertically) hugs the right edge.
+   (back / archive / delete / archived / unarchive, stacked vertically) hugs the right edge.
    Grid mode fills the panel; carousel and merged-overview modes auto-size to
    the strip's height. */
 .agents-top-row {

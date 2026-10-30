@@ -104,9 +104,9 @@ pub(crate) async fn chat_model_set(
         .get(&key("session", &sid))
         .await?
         .ok_or_else(|| bad("Session not found"))?;
-    if session["status"] == "recycled" {
+    if session["status"] == "archived" {
         return Err(conflict(
-            "Restore this conversation before changing its model",
+            "Unarchive this conversation before changing its model",
         ));
     }
     let options = choices(&app, &sid).await?;

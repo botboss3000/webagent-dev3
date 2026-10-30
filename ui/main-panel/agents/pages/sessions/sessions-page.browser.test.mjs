@@ -11,13 +11,13 @@ let browser;try{
   const html=await(await fetch('/ui/main-panel/agents/pages/sessions/sessions.html')).text();document.body.innerHTML='<div id="tab-agents" class="active"><div id="sessions-region"><section id="sessions-section"></section></div></div>';
   const style=document.createElement('link');style.rel='stylesheet';style.href='/ui/main-panel/agents/pages/sessions/sessions.css';document.head.append(style);
   const host=document.getElementById('sessions-section');host.innerHTML=html;
-  const rows=[{id:'a',agent_id:'one',title:'Alpha',status:'active',metadata_revision:0,created_at:1,last_active_at:10,is_unread:true,unread_count:1,read_through_seq:0,last_public_seq:3,message_count:3,usage:{input_tokens:0,output_tokens:0,reported_calls:1,unreported_calls:0,known_cost_usd:0,unknown_cost_calls:0}},{id:'b',agent_id:'two',title:'Beta',status:'active',metadata_revision:0,created_at:1,last_active_at:9,is_unread:false,message_count:0},{id:'c',agent_id:'one',title:'Recycled',status:'recycled',metadata_revision:0,created_at:1,last_active_at:8,is_unread:false,message_count:0}];
+  const rows=[{id:'a',agent_id:'one',title:'Alpha',status:'active',metadata_revision:0,created_at:1,last_active_at:10,is_unread:true,unread_count:1,read_through_seq:0,last_public_seq:3,message_count:3,usage:{input_tokens:0,output_tokens:0,reported_calls:1,unreported_calls:0,known_cost_usd:0,unknown_cost_calls:0}},{id:'b',agent_id:'two',title:'Beta',status:'active',metadata_revision:0,created_at:1,last_active_at:9,is_unread:false,message_count:0},{id:'c',agent_id:'one',title:'Archived',status:'archived',metadata_revision:0,created_at:1,last_active_at:8,is_unread:false,message_count:0}];
   const writes=[],opens=[],calls=[];let failB=true;
   const request=async(url,method='GET',body)=>{
    calls.push(url);const parsed=new URL(url,location.origin);
    if(url.startsWith('/sessions/stats'))return {sessions:rows.filter(r=>r.status===parsed.searchParams.get('status')),next_offset:null};
    if(url.startsWith('/sessions/search'))return {results:[{session_id:'b',kind:'message',snippet:'needle <script> bad'}],continuation:null};
-   const id=decodeURIComponent(parsed.pathname.split('/')[2]),row=rows.find(r=>r.id===id);if(method!=='GET'){writes.push({id,method,body:structuredClone(body)});if(id==='b'&&method==='DELETE'&&failB){const e=Error('fixture network failure');throw e;}if(method==='DELETE')row.status='recycled';if(parsed.pathname.endsWith('/restore'))row.status='active';if(method==='PATCH')Object.assign(row,body);if(method==='PUT')row.is_unread=false;row.metadata_revision++;return {session:structuredClone(row)};}
+   const id=decodeURIComponent(parsed.pathname.split('/')[2]),row=rows.find(r=>r.id===id);if(method!=='GET'){writes.push({id,method,path:parsed.pathname,body:structuredClone(body)});if(id==='b'&&parsed.pathname.endsWith('/archive')&&failB){const e=Error('fixture network failure');throw e;}if(method==='DELETE'){rows.splice(rows.indexOf(row),1);return {};}if(parsed.pathname.endsWith('/archive'))row.status='archived';if(parsed.pathname.endsWith('/unarchive'))row.status='active';if(method==='PATCH')Object.assign(row,body);if(method==='PUT')row.is_unread=false;row.metadata_revision++;return {session:structuredClone(row)};}
    throw Error('Unexpected '+url);
   };
   const {mountSessions}=await import('/ui/main-panel/agents/pages/sessions/js/sessions-page.js');
@@ -32,17 +32,21 @@ let browser;try{
  await page.locator('.sessions-check-cell').first().focus();await page.keyboard.press('Space');
  assert.equal(await page.evaluate(()=>fixture.opens.length),0);assert.equal(await page.evaluate(()=>fixture.writes.length),0);
  await page.locator('[data-sessions-footer-checkall]').click();
- await page.locator('#sessions-trash-btn').click();await page.waitForTimeout(500);
+ await page.locator('#sessions-archive-btn').click();await page.waitForTimeout(500);
  assert.equal(await page.evaluate(()=>fixture.writes.length),0);
- await page.locator('#sessions-trash-btn').click();await page.waitForTimeout(300);
+ await page.locator('#sessions-archive-btn').click();await page.waitForTimeout(300);
  assert.equal(await page.locator('.sessions-check-cell.checked').count(),1);
  const receipt=await page.evaluate(()=>fixture.writes.find(w=>w.id==='b').body.client_request_id);
- await page.evaluate(()=>fixture.setFailB(false));await page.locator('#sessions-trash-btn').click();await page.waitForTimeout(500);await page.locator('#sessions-trash-btn').click();await page.waitForTimeout(300);
- const retries=await page.evaluate(()=>fixture.writes.filter(w=>w.id==='b'&&w.method==='DELETE'));assert.equal(retries.length,2);assert.equal(retries[1].body.client_request_id,receipt);
- // Restore the retained undo context and exercise recycled view.
+ await page.evaluate(()=>fixture.setFailB(false));await page.locator('#sessions-archive-btn').click();await page.waitForTimeout(500);await page.locator('#sessions-archive-btn').click();await page.waitForTimeout(300);
+ const retries=await page.evaluate(()=>fixture.writes.filter(w=>w.id==='b'&&w.path.endsWith('/archive')));assert.equal(retries.length,2);assert.equal(retries[1].body.client_request_id,receipt);
+ // Unarchive the retained context, then permanently delete from the archived view.
  await page.locator('#sessions-undo-btn').click();await page.waitForTimeout(500);await page.locator('#sessions-undo-btn').click();await page.waitForTimeout(300);
- await page.locator('[data-sessions-footer-view="recycle-bin"]').click();await page.waitForTimeout(300);
- await page.locator('[data-session-row-more]').first().click();assert.equal(await page.locator('[data-action="delete"]').isDisabled(),true);
+ assert.deepEqual(await page.evaluate(()=>fixture.writes.filter(w=>w.path.endsWith('/unarchive')).map(w=>w.id)),['b'],'unarchive acts on the retained just-archived context');
+ await page.locator('[data-sessions-footer-view="archived"]').click();await page.waitForTimeout(300);
+ await page.locator('tr[data-session-id="c"] [data-session-row-more]').click();const remove=page.locator('.session-row-actions [data-action="delete"]');assert.equal(await remove.isDisabled(),false);
+ await remove.click();await page.waitForTimeout(500);assert.equal(await page.evaluate(()=>fixture.writes.some(w=>w.method==='DELETE')),false,'the first press only arms the permanent delete');
+ await remove.click();await page.waitForTimeout(300);
+ assert.deepEqual(await page.evaluate(()=>fixture.writes.filter(w=>w.method==='DELETE').map(w=>[w.path,w.body.expected_revision])),[['/sessions/c',0]]);
  await page.locator('#sessions-heading').click();
  assert.equal(await page.locator('.session-row-actions').count(),0);
  await page.locator('[data-sessions-footer-view="both"]').click();await page.waitForTimeout(300);
@@ -60,7 +64,7 @@ let browser;try{
   const {mountSessions}=await import('/ui/main-panel/agents/pages/sessions/js/sessions-page.js');
   const main={id:'main-protected',title:'Renamed coordinator',agent_id:'one',status:'active',metadata_revision:3,main_chat:true,can_delete:false,message_count:0};
   window.protectedPage=mountSessions(host,{request:async()=>({sessions:[{...main,id:'pin',main_chat:false,can_delete:true,pinned:true,title:'A pinned',last_active_at:900},{...main,id:'recent',main_chat:false,can_delete:true,title:'Main Chat',last_active_at:999},main,{...main,id:'main-other',agent_id:'two',title:'Z another agent',last_active_at:100}],next_offset:null}),userId:'protected-fixture',roster:[{id:'one',name:'One'}],getSessionId:()=>null,open:()=>{},changed:()=>{}});
-  const {createSessionAdapter}=await import('/ui/main-panel/agents/pages/sessions/js/adapter.js');let writes=0;const adapter=createSessionAdapter({request:async()=>{writes++;},roster:[],userId:'protected',changed:()=>{}});adapter.project(main);let blocked=false;try{await adapter.mutate(main.id,'recycle');}catch(error){blocked=error.message.includes('cannot be deleted');}window.protectedResult={blocked,writes};
+  const {createSessionAdapter}=await import('/ui/main-panel/agents/pages/sessions/js/adapter.js');let writes=0;const adapter=createSessionAdapter({request:async()=>{writes++;},roster:[],userId:'protected',changed:()=>{}});adapter.project(main);let blocked=false;try{await adapter.mutate(main.id,'archive');}catch(error){blocked=error.message.includes('cannot be archived');}window.protectedResult={blocked,writes};
  });
  await page.locator('tr[data-session-id="main-protected"]').waitFor();
  assert.deepEqual(await page.locator('#sessions-table-body tr[data-session-id]').evaluateAll(rows=>rows.map(r=>r.dataset.sessionId)),['main-other','main-protected','pin','recent']);
@@ -70,7 +74,7 @@ let browser;try{
  assert.equal(await page.locator('tr[data-session-id="pin"] .sess-title-agent-warning').count(),1);
  const mask=await page.locator('tr[data-session-id="main-protected"] .session-row-agent-main').evaluate(n=>getComputedStyle(n,'::after').maskImage);assert.match(mask,/data:image\/svg\+xml/);
 assert.equal(await page.locator('tr[data-session-id="main-protected"] .sessions-check-cell').count(),0);
- await page.locator('tr[data-session-id="main-protected"] [data-session-row-more]').click();assert.equal(await page.locator('.session-row-actions [data-action="delete"]').count(),0);assert.equal(await page.locator('.session-row-actions [data-action="rename"]').count(),1);assert.deepEqual(await page.evaluate(()=>protectedResult),{blocked:true,writes:0});await page.evaluate(()=>protectedPage.destroy());
+ await page.locator('tr[data-session-id="main-protected"] [data-session-row-more]').click();assert.equal(await page.locator('.session-row-actions :is([data-action="archive"],[data-action="delete"])').count(),0);assert.equal(await page.locator('.session-row-actions [data-action="rename"]').count(),1);assert.deepEqual(await page.evaluate(()=>protectedResult),{blocked:true,writes:0});await page.evaluate(()=>protectedPage.destroy());
  assert.deepEqual(errors,[]);
  // Exercise the public page mount with a long catalog and its docked footer.
  await page.evaluate(async()=>{
@@ -95,5 +99,5 @@ assert.equal(await page.locator('tr[data-session-id="main-protected"] .sessions-
  }
  await page.evaluate(()=>longPage.destroy());assert.equal(await page.locator('#sessions-footer-dock').count(),0);
  assert.deepEqual(errors,[]);
- console.log('PASS reference renderer: zero statistics, selection, confirmation, partial batch, stable retry receipt, restore, disabled permanent deletion, server search, narrow layout, teardown, long catalog scrolling and docked footer');
+ console.log('PASS reference renderer: zero statistics, selection, confirmation, partial batch, stable retry receipt, unarchive, two-step permanent deletion, server search, narrow layout, teardown, long catalog scrolling and docked footer');
 }finally{await browser?.close();server.close();}

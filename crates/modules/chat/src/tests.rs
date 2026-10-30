@@ -445,7 +445,7 @@ mod session {
     }
 
     #[tokio::test]
-    async fn checkpoints_preserve_newer_metadata_and_tombstones_stay_recycled() {
+    async fn checkpoints_preserve_newer_metadata_and_tombstones_stay_archived() {
         let dir = tempfile::tempdir().unwrap();
         let pool = pool(dir.path()).await;
         put(&pool, "session:s", &json!({"id":"s","title":"Renamed","metadata_revision":3,"status":"active",
@@ -481,7 +481,7 @@ mod session {
         put(
             &pool,
             "session:old",
-            &json!({"id":"old","status":"recycled"}),
+            &json!({"id":"old","status":"archived"}),
         )
         .await;
         let mut tx = pool.begin().await.unwrap();
@@ -494,11 +494,11 @@ mod session {
         )
         .await
         .unwrap_err();
-        assert!(error.is::<RecycledSession>());
+        assert!(error.is::<ArchivedSession>());
         assert!(require_active_session(&TaggedCodec, &mut tx, "old")
             .await
             .unwrap_err()
-            .is::<RecycledSession>());
+            .is::<ArchivedSession>());
         require_active_session(&TaggedCodec, &mut tx, "s")
             .await
             .unwrap();

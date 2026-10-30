@@ -23,7 +23,7 @@ impl StoreCore {
             .await?
             .ok_or_else(|| anyhow!("Session unavailable"))?;
         let session = self.unseal(&session_raw)?;
-        if session["id"] != sid || session["status"] == "recycled" {
+        if session["id"] != sid || session["status"] == "archived" {
             return Err(anyhow!("Session unavailable"));
         }
         let run_raw = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")

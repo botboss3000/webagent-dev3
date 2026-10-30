@@ -444,8 +444,8 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
  function toggle(){if(!menu.hidden && menu.dataset.state!=='closing')closeMenu();else if(menu.dataset.state!=='closing')openMenu();}
  root.addEventListener('click',e=>{if(e.target.closest('button,input'))return;e.stopPropagation();toggle();},{signal:abort.signal});
  root.addEventListener('keydown',e=>{if(e.target.closest('button,input'))return;if(['Enter',' '].includes(e.key)){e.preventDefault();toggle();}},{signal:abort.signal});
- menu.addEventListener('click',e=>{e.stopPropagation();if(e.target.closest('button,input'))return;const row=e.target.closest('.session-row');if(row&&!row.classList.contains('recycled')){closeMenu();guard(()=>select(row.dataset.id))();}},{signal:abort.signal});
- menu.addEventListener('keydown',e=>{const row=e.target.closest('.session-row');if(row&&!row.classList.contains('recycled')&&!e.target.closest('button,input')&&['Enter',' '].includes(e.key)){e.preventDefault();closeMenu();guard(()=>select(row.dataset.id))();}},{signal:abort.signal});
+ menu.addEventListener('click',e=>{e.stopPropagation();if(e.target.closest('button,input'))return;const row=e.target.closest('.session-row');if(row&&!row.classList.contains('archived')){closeMenu();guard(()=>select(row.dataset.id))();}},{signal:abort.signal});
+ menu.addEventListener('keydown',e=>{const row=e.target.closest('.session-row');if(row&&!row.classList.contains('archived')&&!e.target.closest('button,input')&&['Enter',' '].includes(e.key)){e.preventDefault();closeMenu();guard(()=>select(row.dataset.id))();}},{signal:abort.signal});
  // Shared outside click/focus callback accounts for the menu being detached to body.
  const outside=e=>{if(!root.contains(e.target)&&!menu.contains(e.target)&&!popup?.contains(e.target))closeMenu();};
  document.addEventListener('click',outside,{signal:abort.signal});document.addEventListener('focusin',outside,{signal:abort.signal});

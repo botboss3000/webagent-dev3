@@ -1,6 +1,6 @@
 {
   "name": "manage_user_session",
-  "description": "Rename, pin, recycle or restore a caller-owned session. Request: expected_revision plus title/pinned for update. Recycling is reversible.",
+  "description": "Rename, pin, archive or unarchive a caller-owned session. Request: expected_revision plus title/pinned for update. Archiving is reversible.",
   "effect": "write",
   "default_access": {
     "operator": "auto",
@@ -13,8 +13,8 @@
       "action": {
         "enum": [
           "update",
-          "recycle",
-          "restore"
+          "archive",
+          "unarchive"
         ],
         "type": "string"
       },

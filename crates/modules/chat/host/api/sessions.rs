@@ -29,10 +29,10 @@ pub(crate) async fn session_search_scoped(app:App,args:SessionSearchArgs,agent:O
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionListArgs { pub status: Option<String> }
 pub(crate) async fn sessions(State(app): State<App>, Query(args): Query<SessionListArgs>) -> Api {
-    let recycled = match args.status.as_deref().unwrap_or("active") {
-        "active" => false, "recycled" => true, _ => return Err(bad("Invalid session status")),
+    let archived = match args.status.as_deref().unwrap_or("active") {
+        "active" => false, "archived" => true, _ => return Err(bad("Invalid session status")),
     };
-    let mut list = app.store.ordered_sessions_status(recycled).await?;
+    let mut list = app.store.ordered_sessions_status(archived).await?;
     let actor=crate::shared_chat::actor(&app);
     let mut allowed=Vec::new();
     for row in list {let agent=row["agent_id"].as_str().unwrap_or("shared_default");
@@ -45,7 +45,7 @@ pub(crate) async fn sessions(State(app): State<App>, Query(args): Query<SessionL
         let Ok(scoped)=crate::shared_chat::scope(app.clone(),sid).await else{continue};
         if scoped.store.get(&key("session",sid)).await?.is_some_and(|s|s["module_silent"]==true){continue;}
         let mut summary=scoped.store.shared_read_summary(sid,actor).await?;
-        if (summary["status"]=="recycled")!=recycled{continue;}
+        if (summary["status"]=="archived")!=archived{continue;}
         summary["shared"]=json!(true);summary["owner_id"]=entry["owner_id"].clone();
         list.push(summary);
     }
@@ -334,38 +334,38 @@ pub(crate) async fn session_read_api(State(app): State<App>, Path(id): Path<Stri
     }
 }
 
-pub(crate) async fn recycle_session_api(State(app): State<App>, Path(id): Path<String>, Json(body): Json<crate::store::session::SessionLifecycle>) -> Api {
+pub(crate) async fn archive_session_api(State(app): State<App>, Path(id): Path<String>, Json(body): Json<crate::store::session::SessionLifecycle>) -> Api {
     lifecycle_session_api(app,id,body,false).await
 }
-pub(crate) async fn purge_session_api(State(app):State<App>,Path(id):Path<String>,Json(body):Json<crate::store::session::SessionLifecycle>)->Api {
+pub(crate) async fn delete_session_api(State(app):State<App>,Path(id):Path<String>,Json(body):Json<crate::store::session::SessionLifecycle>)->Api {
     use crate::store::session::SessionPatchOutcome;
     let _guard=app.gate.lock().await;
     let validation=crate::store::session::SessionPatch {client_request_id:body.client_request_id.clone(),
         expected_revision:body.expected_revision,title:None,pinned:Some(false)};
     validation.validate().map_err(bad)?;
-    if let Some(session)=app.store.get(&key("session",&id)).await?.filter(|s|s["status"]=="recycled") {
+    if let Some(session)=app.store.get(&key("session",&id)).await?.filter(|s|s["status"]=="archived") {
         if session["metadata_revision"].as_u64()!=Some(body.expected_revision) {
             return Err(conflict("Session metadata revision changed"));
         }
         crate::api::voice::quiesce(&app,&id).await;
         crate::phase3_api::quiesce_session_resources(&app,&id).await?;
     }
-    match app.store.purge_session(&id,&body).await? {
+    match app.store.delete_session(&id,&body).await? {
         SessionPatchOutcome::Saved(value)=>Ok(Json(value)),
         SessionPatchOutcome::NotFound=>Err(ApiError(StatusCode::NOT_FOUND,"Session not found".into())),
         SessionPatchOutcome::Conflict(message)=>Err(conflict(message)),
         SessionPatchOutcome::Invalid(message)=>Err(bad(message)),
     }
 }
-pub(crate) async fn restore_session_api(State(app): State<App>, Path(id): Path<String>, Json(body): Json<crate::store::session::SessionLifecycle>) -> Api {
+pub(crate) async fn unarchive_session_api(State(app): State<App>, Path(id): Path<String>, Json(body): Json<crate::store::session::SessionLifecycle>) -> Api {
     lifecycle_session_api(app,id,body,true).await
 }
-async fn lifecycle_session_api(app: App, id: String, body: crate::store::session::SessionLifecycle, restore: bool) -> Api {
+async fn lifecycle_session_api(app: App, id: String, body: crate::store::session::SessionLifecycle, unarchive: bool) -> Api {
     use crate::store::session::SessionPatchOutcome;
     let _guard=app.gate.lock().await;
-    match app.store.lifecycle_session(&id,&body,restore).await? {
+    match app.store.lifecycle_session(&id,&body,unarchive).await? {
         SessionPatchOutcome::Saved(value) => {
-            if !restore && app.store.get(&key("session",&id)).await?.is_some_and(|s|s["status"]=="recycled") {
+            if !unarchive && app.store.get(&key("session",&id)).await?.is_some_and(|s|s["status"]=="archived") {
                 crate::api::voice::quiesce(&app,&id).await;
                 crate::phase3_api::quiesce_session_resources(&app,&id).await?;
             }

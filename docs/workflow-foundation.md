@@ -420,8 +420,8 @@ uses the same ledger and committed run identity; explicit Stop/failure holds
 ordinary messages until Resume queue. New document families are additive, versioned
 and do not copy or rewrite historical messages.
 
-Session recycling cancels pending queue entries inside its lifecycle transaction,
-advancing revisions so restore and late review results cannot revive them.
+Session archiving cancels pending queue entries inside its lifecycle transaction,
+advancing revisions so unarchive and late review results cannot revive them.
 Permanent deletion also removes queue retry receipts and queued-message
 attachment metadata.
 

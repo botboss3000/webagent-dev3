@@ -120,15 +120,17 @@ rotation, physical drag gestures, mobile layout and both-theme regression checks
 are not established by this journey and remain follow-up verification. No Rust,
 schema, service restart or image deployment was performed by this UI port.
 
-## Session dropdown batch recycle — 2026-10-03
+## Session dropdown batch archive — 2026-10-03
 
 Route: `/app?session_id=<disposable-v3-session-id>` on the independent development
 origin. Open the conversation selector, enable checkbox mode, and select empty
 fixtures using a row click, row Enter/Space, or the checkbox button. Selection
 must leave the active conversation and read cursors unchanged. The first
-Recycle selected click arms confirmation for three seconds; the second starts
+Archive selected click arms confirmation for three seconds; the second starts
 the batch. Busy controls prevent duplicate submission. Each selected conversation
-uses the existing cookie/CSRF, ownership and revision-fenced Rust DELETE contract.
+uses the existing cookie/CSRF, ownership and revision-fenced Rust
+`POST /sessions/{id}/archive` contract (`DELETE /sessions/{id}` is now permanent
+deletion of an archived session).
 A batch is not atomic: successful rows leave the selection; failed rows stay
 selected with explicit feedback and their unchanged request receipts for retry.
 Closing the dropdown clears checkbox mode when no batch is running. Teardown
@@ -138,8 +140,8 @@ undo a write already accepted by Rust.
 Live server-browser acceptance selected two newly created empty fixtures with
 row click and Enter, preserved the active conversation, verified the first
 confirmation click made no lifecycle change, and then observed both fixtures
-recycled with read cursors zero and the notice “Recycled 2 of 2 selected
-sessions.” Isolated real-adapter/mock-client checks verified partial-failure
+archived (then called recycled) with read cursors zero and the notice, now
+“Archived 2 of 2 selected sessions.” Isolated real-adapter/mock-client checks verified partial-failure
 selection retention, no duplicate retry of successful rows, and reuse of the
 failed request receipt. These isolated checks are not live authorization tests.
 Full dropdown port acceptance remains open for hidden-session and custom-order
@@ -153,7 +155,8 @@ container configuration provenance. Reference functions remain pending in
 
 - Chat widget: `/app?session_id=<disposable-v3-session-id>`. Float the active panel, retain its draft and attachments, move/resize with grip keys or pointer, Minimize/Restore, Close/reopen and Dock. Verify the same conversation and exactly one stream/reply. Check light/dark and narrow viewport. On `/app?tab=agents&agent=<authorized-fixture-agent>&agentView=identity`, expand Website chat widget and save an exact disposable host origin; verify settings reload and revision conflict. Load the fixture website with the documented loader and verify scoped guest/sign-in and host-command chat. Direct iframe route: `/embed/<authorized-fixture-agent>?origin=<encoded-configured-origin>`. Check popup Connect review, blocked third-party cookies, disallowed origin/CSP, hidden read cursor, approval/recovery and close during a running turn. Restore fixture embed configuration afterward.
 
-- Sessions: `/app?tab=agents&agentScope=sessions&agentView=sessions`. Verify the Sessions entry, common-only Sessions navigation, bounded vertical wheel/touch scrolling and the page-docked V2 footer (visible before and after scrolling to the last row), across-agent caller-owned rows, active/recycled/all views, title/content search with continuation, sortable/resizable reference columns, selection and movable action panel, rename/pin, mark read, confirmed recycle, restore and undo, partial-batch failure feedback and reload persistence. Selection/listing must not acknowledge messages. Opening a row preserves its bound agent; configuring an individual agent has no Sessions tab. Pending controls identify absent V3 contracts. Check both themes and narrow viewport; no V2 API calls.
+- Sessions: `/app?tab=agents&agentScope=sessions&agentView=sessions`. Verify the Sessions entry, common-only Sessions navigation, bounded vertical wheel/touch scrolling and the page-docked V2 footer (visible before and after scrolling to the last row), across-agent caller-owned rows, active/archived/all views, title/content search with continuation, sortable/resizable reference columns, selection and movable action panel, rename/pin, mark read, confirmed archive, unarchive, two-click permanent delete of archived sessions (disposable fixtures only; irreversible), partial-batch failure feedback and reload persistence. Selection/listing must not acknowledge messages. Opening a row preserves its bound agent; configuring an individual agent has no Sessions tab. Pending controls identify absent V3 contracts. Check both themes and narrow viewport; no V2 API calls.
+- Agent remove and archive: `/app?tab=agents`. As the owner, tick a disposable fixture agent, Remove it with the two-click confirm (it is archived), open Archived (only the owner sees it), Unarchive it, then remove it again and Delete it permanently (owner only; erases the agent, its sessions and data). As a non-owner member, Remove an agent and verify it leaves your list and the agent's member list while the owner keeps it. Verify failures stay selected with their reason and the default agent has no checkbox.
 
 - Follow-up delivery: `/app?session_id=<disposable-v3-session-id>`. While a run is active, Send two messages and verify the composer stays available and each original user bubble shows Queued with Interrupt, Steer, Remain queued and Cancel message. Choose Steer on one, Interrupt on the other; verify acknowledged states, no duplicate bubbles and the interruption note in affected tool results. Reload the exact route and restart a fixture while delivery is pending: choices and delivery receipts must persist. Leave two messages queued and verify one combined subsequent run. Stop or fail a fixture and verify Queue held and Resume queue; unresolved effects must block unsafe resumption. Check cancellation, stale revisions in two tabs, reconnect snapshot recovery, attachments, both themes, narrow viewport and the embedded panel. Queue status updates must not advance public message read cursors.
 

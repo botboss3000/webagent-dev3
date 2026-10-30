@@ -415,7 +415,7 @@ mod tests {
         let guest_cookie = cookie(&app,&guest).await;
         let admin_cookie = cookie(&app,"admin").await;
         let router = crate::router(app.clone());
-        for status in ["recycled","deleted"] {
+        for status in ["archived","deleted"] {
             let sid = format!("archive-{status}");
             owner_store.put(&format!("session:{sid}"),&json!({"id":sid,"agent_id":"shared_default","title":"Archived","status":status})).await.unwrap();
             app.store.register_shared_session(&owner,&sid,"shared_default").await.unwrap();

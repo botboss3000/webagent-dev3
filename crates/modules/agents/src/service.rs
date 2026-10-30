@@ -28,6 +28,8 @@ pub trait Access: Sync {
         &'a self,
         agent: &'a str,
     ) -> impl Future<Output = Result<()>> + Send + 'a;
+    /// Revoke the caller's own membership and stop the caller's work with the agent.
+    fn leave<'a>(&'a self, agent: &'a str) -> impl Future<Output = Result<()>> + Send + 'a;
 }
 /// Storage owns routing, pool lifecycle, registration, receipts and codec implementation.
 pub trait Storage: RecordCodec {
@@ -68,6 +70,8 @@ pub trait Effects: Sync {
         status: &'a Value,
     ) -> impl Future<Output = Result<()>> + Send + 'a;
     fn quiesce<'a>(&'a self, agent: &'a str) -> impl Future<Output = Result<()>> + Send + 'a;
+    /// Erase every session, catalog reference, registration and file of a quiesced agent.
+    fn erase<'a>(&'a self, agent: &'a str) -> impl Future<Output = Result<()>> + Send + 'a;
 }
 
 pub struct Service<'a, S: Storage, A: Access, E: Effects> {
@@ -106,7 +110,7 @@ impl<S: Storage, A: Access, E: Effects> Service<'_, S, A, E> {
             };
             let pool = self.storage.agent_pool(&id).await?;
             let mut identity = Repository::new(&pool, &id, self.storage)?.summary().await?;
-            if crate::binned(&identity) {
+            if crate::archived(&identity) {
                 continue;
             }
             identity["can_manage"] = rights["can_manage"].clone();
@@ -187,24 +191,67 @@ impl<S: Storage, A: Access, E: Effects> Service<'_, S, A, E> {
         self.effects.quiesce(agent).await?;
         Ok(value)
     }
-    /// Managers move their agents to and from the recycling bin; the default agent stays.
-    pub async fn set_deleted(&self, agent: &str, expected: u64, deleted: bool) -> Result<Value> {
+    /// Remove takes an agent off the caller's list: the owner archives it, anyone else leaves it.
+    pub async fn remove(&self, agent: &str, expected: u64) -> Result<Value> {
         if agent == "shared_default" {
-            bail!("The default agent cannot be deleted");
+            bail!("The default agent cannot be removed");
+        }
+        let caller = self.principal().await?;
+        if !webagent_access::valid_agent_id(agent) {
+            bail!("Invalid agent identity");
+        }
+        if self.access.authority(agent, false).await?["owner_id"] == caller.user_id.as_str() {
+            return self.set_archived(agent, expected, true).await;
+        }
+        let _guard = self.gate.lock().await;
+        self.access.leave(agent).await?;
+        Ok(json!({"agent_id":agent,"removed":true}))
+    }
+    /// Owners archive and unarchive their agents; the default agent stays.
+    pub async fn set_archived(&self, agent: &str, expected: u64, archived: bool) -> Result<Value> {
+        if agent == "shared_default" {
+            bail!("The default agent cannot be archived");
         }
         if expected >= i64::MAX as u64 {
             bail!("Invalid agent status");
         }
         let _guard = self.gate.lock().await;
-        self.authorize(agent, true).await?;
+        let rights = self.authorize(agent, true).await?;
+        if rights["owner_id"] != self.principal().await?.user_id.as_str() {
+            bail!("Only the agent owner can archive it");
+        }
         let pool = self.storage.agent_pool(agent).await?;
         let value = Repository::new(&pool, agent, self.storage)?
-            .set_deleted(expected, deleted)
+            .set_archived(expected, archived)
             .await?;
         self.effects.status_event(&value).await?;
-        if deleted {
+        if archived {
             self.effects.quiesce(agent).await?;
         }
         Ok(value)
+    }
+    /// Owners permanently delete an archived agent together with its sessions and data.
+    pub async fn delete(&self, agent: &str, expected: u64) -> Result<Value> {
+        if agent == "shared_default" {
+            bail!("The default agent cannot be deleted");
+        }
+        let _guard = self.gate.lock().await;
+        let rights = self.authorize(agent, true).await?;
+        if rights["owner_id"] != self.principal().await?.user_id.as_str() {
+            bail!("Only the agent owner can delete it permanently");
+        }
+        let pool = self.storage.agent_pool(agent).await?;
+        let status = Repository::new(&pool, agent, self.storage)?.status().await?;
+        if status["revision"].as_u64() != Some(expected) {
+            bail!("Agent revision changed");
+        }
+        if !crate::archived(&status) {
+            bail!("Archive the agent before deleting it");
+        }
+        self.effects.quiesce(agent).await?;
+        self.effects.erase(agent).await?;
+        let deleted = json!({"agent_id":agent,"status":"deleted","revision":expected.saturating_add(1)});
+        self.effects.status_event(&deleted).await?;
+        Ok(json!({"agent_id":agent,"deleted":true}))
     }
 }

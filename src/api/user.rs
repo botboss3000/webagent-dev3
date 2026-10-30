@@ -73,7 +73,7 @@ macro_rules! path_json {
             let app = match session_app(app, path.session_id()).await {
                 Ok(app) => app, Err(error) => return error.into_response(),
             };
-            let owner_only=matches!(stringify!($inner),"recycle_session_api"|"restore_session_api"|"patch_session_api"|"memory_save"|"promotion_reject"|"voice_route"|"voice_control"|"voice_audio"|"voice_speech"|"undo_session_api"|"fork_session_api");
+            let owner_only=matches!(stringify!($inner),"archive_session_api"|"unarchive_session_api"|"patch_session_api"|"memory_save"|"promotion_reject"|"voice_route"|"voice_control"|"voice_audio"|"voice_speech"|"undo_session_api"|"fork_session_api");
             if let Err(error)=guard_access(&app,true,owner_only){return error.into_response();}
             crate::$inner(State(app), Path(path), Json(body)).await.into_response()
         }
@@ -88,12 +88,12 @@ async fn sessions(Extension(app): Extension<App>, identity:Option<Extension<Valu
 struct SessionStatisticsArgs { status: Option<String>, offset: Option<usize>, limit: Option<usize> }
 async fn session_statistics(Extension(app): Extension<App>, Query(args): Query<SessionStatisticsArgs>) -> Response {
     async fn read(app: App, args: SessionStatisticsArgs) -> crate::Api {
-        let recycled = match args.status.as_deref().unwrap_or("active") {
-            "active" => false, "recycled" => true, _ => return Err(crate::bad("Invalid session status")),
+        let archived = match args.status.as_deref().unwrap_or("active") {
+            "active" => false, "archived" => true, _ => return Err(crate::bad("Invalid session status")),
         };
         let limit = args.limit.unwrap_or(100);
         if !(1..=100).contains(&limit) { return Err(crate::bad("Invalid statistics limit")); }
-        let (page, next) = app.store.session_statistics_page(recycled,args.offset.unwrap_or(0),limit).await?;
+        let (page, next) = app.store.session_statistics_page(archived,args.offset.unwrap_or(0),limit).await?;
         let mut admitted = HashMap::new();
         let mut sessions = Vec::new();
         for item in page {
@@ -134,22 +134,22 @@ async fn session_read(Extension(app):Extension<App>,Path(id):Path<String>,Json(b
 }
 path_json!(session_undo => undo_session_api, String, crate::store::conversation_history::HistoryRequest);
 path_json!(session_fork => fork_session_api, String, crate::store::conversation_history::HistoryRequest);
-async fn session_lifecycle(app:App,id:String,body:crate::store::session::SessionLifecycle,restore:bool)->Response {
+async fn session_lifecycle(app:App,id:String,body:crate::store::session::SessionLifecycle,unarchive:bool)->Response {
     let app=match session_app_lifecycle(app,&id,true).await {Ok(app)=>app,Err(error)=>return error.into_response()};
     if let Err(error)=guard_access(&app,true,true){return error.into_response();}
-    if restore {crate::restore_session_api(State(app),Path(id),Json(body)).await.into_response()}
-    else {crate::recycle_session_api(State(app),Path(id),Json(body)).await.into_response()}
+    if unarchive {crate::unarchive_session_api(State(app),Path(id),Json(body)).await.into_response()}
+    else {crate::archive_session_api(State(app),Path(id),Json(body)).await.into_response()}
 }
-async fn session_recycle(Extension(app):Extension<App>,Path(id):Path<String>,Json(body):Json<crate::store::session::SessionLifecycle>)->Response {
+async fn session_archive(Extension(app):Extension<App>,Path(id):Path<String>,Json(body):Json<crate::store::session::SessionLifecycle>)->Response {
     session_lifecycle(app,id,body,false).await
 }
-async fn session_restore(Extension(app):Extension<App>,Path(id):Path<String>,Json(body):Json<crate::store::session::SessionLifecycle>)->Response {
+async fn session_unarchive(Extension(app):Extension<App>,Path(id):Path<String>,Json(body):Json<crate::store::session::SessionLifecycle>)->Response {
     session_lifecycle(app,id,body,true).await
 }
-async fn session_purge(Extension(app):Extension<App>,Path(id):Path<String>,Json(body):Json<crate::store::session::SessionLifecycle>)->Response {
-    let app=match crate::shared_chat::scope_purge(app,&id).await.map_err(session_access_error) {Ok(app)=>app,Err(error)=>return error.into_response()};
+async fn session_delete(Extension(app):Extension<App>,Path(id):Path<String>,Json(body):Json<crate::store::session::SessionLifecycle>)->Response {
+    let app=match crate::shared_chat::scope_delete(app,&id).await.map_err(session_access_error) {Ok(app)=>app,Err(error)=>return error.into_response()};
     if let Err(error)=guard_access(&app,true,true){return error.into_response();}
-    crate::purge_session_api(State(app),Path(id),Json(body)).await.into_response()
+    crate::delete_session_api(State(app),Path(id),Json(body)).await.into_response()
 }
 path_json!(session_patch => patch_session_api, String, crate::store::session::SessionPatch);
 path_arg!(diagnostics => run_diagnostics_api, (String, String));
@@ -344,9 +344,9 @@ pub(crate) fn router() -> Router<App> {
         .route("/sessions/{sid}/runs/{rid}/progress", get(progress))
         .route("/sessions/{sid}/runs/{rid}/logs", get(run_logs))
         .route("/sessions/{sid}/background-tasks/{task_id}", get(background_task_metadata))
-        .route("/sessions/{id}", get(snapshot).patch(session_patch).delete(session_recycle))
-        .route("/sessions/{id}/purge", post(session_purge))
-        .route("/sessions/{id}/restore", post(session_restore))
+        .route("/sessions/{id}", get(snapshot).patch(session_patch).delete(session_delete))
+        .route("/sessions/{id}/archive", post(session_archive))
+        .route("/sessions/{id}/unarchive", post(session_unarchive))
         .route("/sessions/{id}/undo", post(session_undo))
         .route("/sessions/{id}/fork", post(session_fork))
         .route("/sessions/{id}/read", axum::routing::put(session_read))

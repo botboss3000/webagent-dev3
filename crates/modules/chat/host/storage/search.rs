@@ -40,7 +40,7 @@ impl Store {
     pub(crate) async fn search_private_sessions_scoped(&self, query:&str,status:&str,limit:usize,continuation:Option<&str>,agent:Option<&str>)->Result<Value> {
         let query = query.trim().to_lowercase();
         if query.is_empty() || query.len() > 256 || query.chars().count() > 128 || query.chars().any(char::is_control)
-            || !matches!(status, "active" | "recycled") || !(1..=50).contains(&limit) { return Err(invalid()); }
+            || !matches!(status, "active" | "archived") || !(1..=50).contains(&limit) { return Err(invalid()); }
         let mut tx = self.pool.begin().await?;
         let mut cursor = if let Some(token) = continuation {
             if token.len() > 4096 || token.len() % 2 != 0 || !token.bytes().all(|b| b.is_ascii_hexdigit()) { return Err(invalid()); }
@@ -115,7 +115,7 @@ mod tests {
         assert_eq!(next["results"][0]["kind"],"message"); assert!(next["results"][0]["snippet"].as_str().unwrap().contains("<script>"));
         assert_eq!(next["scan_complete"],true);
         assert!(store.search_private_sessions("different","active",50,Some(token)).await.is_err());
-        assert!(store.search_private_sessions("needle","recycled",50,Some(token)).await.is_err());
+        assert!(store.search_private_sessions("needle","archived",50,Some(token)).await.is_err());
         let mut tampered = token.to_owned();
         // Always change the encrypted token, including when its first byte is ff.
         let replacement = if &tampered[..2] == "ff" { "00" } else { "ff" };
@@ -150,19 +150,19 @@ mod tests {
         assert_eq!(next["skipped_oversized_total"],0);
     }
     #[tokio::test]
-    async fn private_search_recycle_size_expiry_and_validation() {
+    async fn private_search_archive_size_expiry_and_validation() {
         let root=tempfile::tempdir().unwrap(); let store=Store::open(root.path()).await.unwrap();
-        store.put("session:a",&json!({"id":"a","title":"needle","status":"recycled"})).await.unwrap();
+        store.put("session:a",&json!({"id":"a","title":"needle","status":"archived"})).await.unwrap();
         store.put("session:b",&json!({"id":"b","title":"needle","checkpoint_input":"x".repeat(RECORD_BYTES)})).await.unwrap();
         let result=store.search_private_sessions("needle","active",50,None).await.unwrap(); assert_eq!(result["skipped_oversized_total"],1); assert_eq!(result["incomplete_due_to_size"],true); assert!(result["results"].as_array().unwrap().is_empty());
-        assert_eq!(store.search_private_sessions("needle","recycled",50,None).await.unwrap()["results"][0]["session_id"],"a");
+        assert_eq!(store.search_private_sessions("needle","archived",50,None).await.unwrap()["results"][0]["session_id"],"a");
         for (q,s,l) in [("","active",1),("needle","all",1),("needle","active",0),("needle","active",51),("bad\nquery","active",1)] { assert!(store.search_private_sessions(q,s,l,None).await.is_err()); }
-        let page=store.search_private_sessions("needle","recycled",1,None).await.unwrap();
+        let page=store.search_private_sessions("needle","archived",1,None).await.unwrap();
         let token=page["continuation"].as_str().unwrap();
         let bytes:Vec<u8>=(0..token.len()).step_by(2).map(|i|u8::from_str_radix(&token[i..i+2],16).unwrap()).collect();
         let mut c:Cursor=serde_json::from_value(store.unseal(&bytes).unwrap()).unwrap(); c.expires=0;
         let expired=store.seal(&serde_json::to_value(c).unwrap()).unwrap().iter().map(|b|format!("{b:02x}")).collect::<String>();
-        assert!(store.search_private_sessions("needle","recycled",1,Some(&expired)).await.is_err());
+        assert!(store.search_private_sessions("needle","archived",1,Some(&expired)).await.is_err());
         assert!(snippet("İstanbul 你好", "i\u{307}stanbul").is_some());
     }
 }

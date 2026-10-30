@@ -26,7 +26,7 @@ pub async fn background_permitted(&self,task:&Value)->Result<bool> {let app=self
     if app.stop.is_cancelled() || app.shutoff().await? || task["user_id"]!=app.store.current_user_id() {return Ok(false);}
     let sid=task["session_id"].as_str().ok_or_else(||anyhow!("Missing task session"))?;
     let session=app.store.get(&key("session",sid)).await?.ok_or_else(||anyhow!("Missing task session"))?;
-    if session["recycled"]==true || session["recycled_at"].as_u64().is_some_and(|value|value>0) {return Ok(false);}
+    if session["archived"]==true || session["archived_at"].as_u64().is_some_and(|value|value>0) {return Ok(false);}
     let agent=app.session_agent_id(sid).await?;
     if task["agent_id"]!=agent {return Ok(false);}
     let origin=app.run(task["run_id"].as_str().unwrap_or("")).await?;

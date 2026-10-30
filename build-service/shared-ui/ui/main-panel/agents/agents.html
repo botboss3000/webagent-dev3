@@ -1,24 +1,26 @@
 <!-- Toolbar
-     ---- HARMONY: this toolbar's bin logic (back button, title/subtitle swap,
-     ---- restore button, and the morphing recycle↔trash button) mirrors
-     ---- sessions.html and automations.html. Any change to the bin states or
-     ---- right-side actions here must be copied to those two (and vice versa).
-     ---- Grep HARMONY-AGENTS-BIN / HARMONY-SESSIONS-BIN to find the call sites.
+     ---- HARMONY: this toolbar's archive logic (back button, title/subtitle swap,
+     ---- unarchive button, and the archive / delete-permanently buttons) mirrors
+     ---- sessions.html. Any change to the archive states or right-side actions
+     ---- here must be copied there (and vice versa). Automations keep their own
+     ---- recycling bin toolbar below.
+     ---- Grep HARMONY-AGENTS-ARCHIVE / HARMONY-SESSIONS-ARCHIVE to find the call sites.
      ---- NOTE — divergence: the Agents page dropped its icon Select-all / Clear
      ---- buttons (bulk selection still works via each card's checkbox) and its
      ---- toolbar is now a vertical action stack beside the carousel strip.
      ---- Sessions and Automations are tables whose top-left header cell already
      ---- toggles all rows, so they deliberately DROP the toolbar select buttons. -->
-<!-- The right-side actions drive the recycling bin. On the Agents page the recycle
-     button moves checked agents to the bin (or, with nothing checked, opens the
-     bin). In the bin a Restore button shows, and the recycle button permanently
-     deletes the checked agents. -->
+<!-- The right-side actions drive the archived view (ui/main-panel/agents/agent-archive.js
+     adds the Archive, Delete and Archived buttons). On the Agents page Archive
+     moves checked agents to the archived view; Archived opens it. There an
+     Unarchive button shows, and Delete permanently erases the checked agents,
+     their sessions and data. -->
 <!-- Card grid -->
 <div id="agents-grid" class="agents-phantom">
-  <!-- RETURN-TO-AGENTS-HEADER (sister of the recycling-bin header — keep cohesive)
-       This toolbar is shared between the normal Agents view, the recycling bin, and
-       the Clones view. The right-side toolbar is reserved for Back (bin/clones)
-       and Restore (bin) actions. -->
+  <!-- RETURN-TO-AGENTS-HEADER (sister of the archived-view header — keep cohesive)
+       This toolbar is shared between the normal Agents view, the archived view, and
+       the Clones view. The right-side toolbar is reserved for Back (archived/clones)
+       and Unarchive/Delete (archived) actions. -->
   <div class="agents-top-row">
   <!-- PHANTOM FIRST PAINT — static skeleton, shipped INSIDE the partial so the
        tab is never blank between opening and agents.js's first render (the entry
@@ -74,11 +76,7 @@
           <i data-lucide="arrow-left" style="width:16px;height:16px;"></i>
         </button>
       </div>
-      <div id="agents-toolbar-actions">
-        <button type="button" id="agents-restore-btn" class="agents-tb-btn agents-tb-restore" title="Restore selected agents" style="display:none;">
-          <i data-lucide="archive-restore" style="width:15px;height:15px;"></i><span>Restore</span>
-        </button>
-      </div>
+      <div id="agents-toolbar-actions"></div>
     </div>
   </div>
   <!-- NORMAL sub-page skeleton for the detail area — see the PHANTOM FIRST PAINT
@@ -135,7 +133,7 @@
         <button type="button" id="sessions-refresh-btn" class="sessions-popover-item"><i data-lucide="refresh-cw" style="width:15px;height:15px;"></i><span>Refresh</span></button>
         <div class="sessions-popover-separator"></div>
         <button type="button" class="sessions-popover-item sessions-view-option" data-view="sessions"><i data-lucide="message-square" style="width:15px;height:15px;"></i><span>Active Sessions</span><i data-lucide="check" class="sessions-view-check" style="width:14px;height:14px;"></i></button>
-        <button type="button" class="sessions-popover-item sessions-view-option" data-view="recycle-bin"><i data-lucide="recycle" style="width:15px;height:15px;"></i><span>Recycled Sessions</span><i data-lucide="check" class="sessions-view-check" style="width:14px;height:14px;"></i></button>
+        <button type="button" class="sessions-popover-item sessions-view-option" data-view="archived"><i data-lucide="archive" style="width:15px;height:15px;"></i><span>Archived Sessions</span><i data-lucide="check" class="sessions-view-check" style="width:14px;height:14px;"></i></button>
         <button type="button" class="sessions-popover-item sessions-view-option" data-view="both"><i data-lucide="layers" style="width:15px;height:15px;"></i><span>All Sessions</span><i data-lucide="check" class="sessions-view-check" style="width:14px;height:14px;"></i></button>
       </div>
     </div>
@@ -147,8 +145,8 @@
       <i data-lucide="grip-horizontal" aria-hidden="true"></i>
     </div>
     <div class="sessions-selection-panel-actions">
-      <button type="button" id="sessions-undo-btn" class="sessions-selection-panel-btn" data-state="trash" title="Undo recycling selected sessions" aria-label="Undo recycling selected sessions" hidden><i data-lucide="undo-2"></i></button>
-      <button type="button" id="sessions-trash-btn" class="sessions-selection-panel-btn sessions-tb-trash" data-state="trash" title="Move selected to the recycling bin" aria-label="Delete selected sessions"><i data-lucide="trash-2"></i></button>
+      <button type="button" id="sessions-undo-btn" class="sessions-selection-panel-btn" data-state="archive" title="Unarchive selected sessions" aria-label="Unarchive selected sessions" hidden><i data-lucide="undo-2"></i></button>
+      <button type="button" id="sessions-archive-btn" class="sessions-selection-panel-btn sessions-tb-archive" data-state="archive" title="Archive selected" aria-label="Archive selected sessions"><i data-lucide="archive"></i></button>
       <button type="button" id="sessions-clear-selection-btn" class="sessions-selection-panel-btn" title="Clear session selection"><i data-lucide="x"></i><span>Clear</span></button>
     </div>
   </aside>
@@ -270,7 +268,7 @@
       <button type="button" class="session-manage-flag-filter" data-sessions-footer-flag data-state="off" title="Show only sessions with a flag" aria-pressed="false">FLAG</button>
     </span>
     <span class="session-manage-actions">
-      <button type="button" class="session-manage-bin" data-sessions-footer-view="recycle-bin" title="Recycled sessions" aria-label="Recycled sessions"><i data-lucide="recycle" style="width:15px;height:15px;"></i></button>
+      <button type="button" class="session-manage-archived" data-sessions-footer-view="archived" title="Archived sessions" aria-label="Archived sessions"><i data-lucide="archive" style="width:15px;height:15px;"></i></button>
       <button type="button" class="session-manage-eye" data-sessions-footer-view="both" title="All sessions" aria-label="All sessions"><i data-lucide="eye-off" style="width:15px;height:15px;"></i></button>
     </span>
     <!-- SESSION-STORAGE-METER — session storage used vs available. Trailing
@@ -302,7 +300,7 @@
     <button type="button" class="session-manage-flag-filter" data-sessions-footer-flag data-state="off" title="Show only sessions with a flag" aria-pressed="false">FLAG</button>
   </span>
   <span class="session-manage-actions">
-    <button type="button" class="session-manage-bin" data-sessions-footer-view="recycle-bin" title="Recycled sessions" aria-label="Recycled sessions"><i data-lucide="recycle" style="width:15px;height:15px;"></i></button>
+    <button type="button" class="session-manage-archived" data-sessions-footer-view="archived" title="Archived sessions" aria-label="Archived sessions"><i data-lucide="archive" style="width:15px;height:15px;"></i></button>
     <button type="button" class="session-manage-eye" data-sessions-footer-view="both" title="All sessions" aria-label="All sessions"><i data-lucide="eye-off" style="width:15px;height:15px;"></i></button>
   </span>
   <!-- SESSION-STORAGE-METER — bar only; trailing element of the left-aligned

@@ -269,18 +269,22 @@ impl<C: RecordCodec> Repository<'_, C> {
                 .bind(agent)
                 .fetch_all(self.agent_pool)
                 .await?;
-        rows.iter()
-            .map(|row| {
-                let mut value = self.unseal_agent(&row.get::<Vec<u8>, _>("value"))?;
-                value["agent_operator"] =
-                    json!(value["agent_administrator"] == true || value["relationship"] == "owner");
-                value["capability_level_id"] = json!(crate::capabilities::membership_level(
-                    Some(&value),
-                    serde_json::from_value(value["relationship"].clone())?
-                )?);
-                Ok(value)
-            })
-            .collect()
+        let mut members = Vec::new();
+        for row in &rows {
+            let mut value = self.unseal_agent(&row.get::<Vec<u8>, _>("value"))?;
+            // A user who removed the agent is no longer one of its members.
+            if value["origin"] == "left" {
+                continue;
+            }
+            value["agent_operator"] =
+                json!(value["agent_administrator"] == true || value["relationship"] == "owner");
+            value["capability_level_id"] = json!(crate::capabilities::membership_level(
+                Some(&value),
+                serde_json::from_value(value["relationship"].clone())?
+            )?);
+            members.push(value);
+        }
+        Ok(members)
     }
     pub async fn assign_agent_membership(
         &self,
@@ -312,6 +316,25 @@ impl<C: RecordCodec> Repository<'_, C> {
     ) -> Result<Value> {
         self.write_agent_membership(user, agent, relationship, expected, None, None, "explicit")
             .await
+    }
+    /// A non-owner removes the agent from their own list: access is revoked and the
+    /// hidden row keeps app-login or visitor access from granting it again.
+    pub async fn leave_agent(&self, user: &str, agent: &str) -> Result<Value> {
+        let current = self
+            .agent_membership(user, agent)
+            .await?
+            .filter(|v| v["origin"] != "left");
+        let expected = current.and_then(|v| v["revision"].as_u64()).unwrap_or(0);
+        self.write_agent_membership(
+            user,
+            agent,
+            Relationship::Revoked,
+            expected,
+            None,
+            None,
+            "left",
+        )
+        .await
     }
     pub async fn manage_agent_member(
         &self,
@@ -385,7 +408,12 @@ impl<C: RecordCodec> Repository<'_, C> {
         .bind(agent)
         .fetch_optional(&mut *tx)
         .await?;
-        let previous = blob.as_ref().map(|b| self.unseal_agent(b)).transpose()?;
+        // A user who left is listed nowhere, so re-adding them starts a new membership.
+        let previous = blob
+            .as_ref()
+            .map(|b| self.unseal_agent(b))
+            .transpose()?
+            .filter(|v| v["origin"] != "left");
         if previous
             .as_ref()
             .and_then(|v| v["revision"].as_u64())

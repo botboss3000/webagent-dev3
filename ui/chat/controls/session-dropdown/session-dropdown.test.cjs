@@ -27,7 +27,7 @@ async function fixture(t,{mobile=false}={}) {
   const root=document.querySelector('#session-dropdown');
   window.items=Array.from({length:18},(_,i)=>({id:'s'+i,title:'Session '+i,agent_id:'shared_default',last_active_at:123,metadata_revision:1,status:'active'}));
   window.controller=mountSessionDropdown(root,{refresh:async()=>{refreshes++;list.update(items,window.fixtureSelected||'s0');},select:id=>selectedCalls.push(id),guard:fn=>fn,resetSearch:()=>list.reset()});
-  window.list=createSessionList(root,{guard:fn=>fn,refresh:async()=>{refreshes++;},select:id=>selectedCalls.push(id),client:{sessions:async status=>({sessions:status==='active'?items:[{...items[0],id:'bin',status:'recycled'}]}),patch:async(id,body)=>{writes.push({id,body});return {session:{...items[0],title:body.title}};}},screenSettings:()=>{const d=document.createElement('details');d.className='display-settings';d.innerHTML='<summary>Screen display</summary>';return d;}});
+  window.list=createSessionList(root,{guard:fn=>fn,refresh:async()=>{refreshes++;},select:id=>selectedCalls.push(id),client:{sessions:async status=>({sessions:status==='active'?items:[{...items[0],id:'archived',status:'archived'}]}),patch:async(id,body)=>{writes.push({id,body});return {session:{...items[0],title:body.title}};}},screenSettings:()=>{const d=document.createElement('details');d.className='display-settings';d.innerHTML='<summary>Screen display</summary>';return d;}});
   list.configure(config);list.update(items,'s0');
  });
  return page;
@@ -41,11 +41,11 @@ test('JSON owns trigger, rows, independent menu actions, optional More and foote
  await p.locator('#session-dropdown-trigger').click({button:'right'});
  assert.equal(await p.locator('.session-row-actions button').count(),9);assert.equal(await p.locator('.display-settings').count(),1);assert.equal(await p.evaluate(()=>selectedCalls.length),0);
  await p.keyboard.press('Escape');assert.equal(await p.locator('.session-row-actions').count(),0);
- await configure(p,{menu:{pinning:false,auto_rename:false,open_in_widget:false,refresh:false,start_scratchpad:false,delete:false,agent_id:false,session_id:false,always_on_display:false},footer:{enabled:false},trigger:{agent_icon:false,session_name:false,status:false,row_actions:true}});
+ await configure(p,{menu:{pinning:false,auto_rename:false,open_in_widget:false,refresh:false,start_scratchpad:false,archive:false,agent_id:false,session_id:false,always_on_display:false},footer:{enabled:false},trigger:{agent_icon:false,session_name:false,status:false,row_actions:true}});
  assert.equal(await p.locator('#session-dropdown-icon').isVisible(),false);assert.equal(await p.locator('#session-dropdown-label').isVisible(),false);assert.equal(await p.locator('#session-dropdown-status').isVisible(),false);
  await p.locator('#session-dropdown-kebab').click();assert.deepEqual(await p.locator('.session-row-actions button').allTextContents(),[' Rename session']);
  await p.keyboard.press('Escape');await openList(p);assert.equal(await p.locator('.session-manage-row').count(),0);
- await configure(p,{menu:{default_rows:3,agent_icons:false,session_name:false,status:false,row_actions:true},footer:{enabled:true,search:false,recycle_bin:false,hidden_sessions:false,batch_delete:true}});
+ await configure(p,{menu:{default_rows:3,agent_icons:false,session_name:false,status:false,row_actions:true},footer:{enabled:true,search:false,archived:false,hidden_sessions:false,batch_archive:true}});
  assert.equal(await p.locator('.session-row-agent-icon').count(),1);assert.equal(await p.locator('.session-manage-row button').count(),1);assert.equal(await p.locator('.session-manage-search-input').count(),0);
  assert.equal(await p.locator('.session-row-kebab:visible').count(),19);
  const geometry=await p.locator('.session-dropdown-rows').evaluate(e=>({height:e.clientHeight,scroll:e.scrollHeight,three:[...e.children].slice(0,3).reduce((s,r)=>s+r.getBoundingClientRect().height,0)}));
@@ -61,9 +61,9 @@ test('keyboard action menu, footer selections and hiding an active footer reset 
  const p=await fixture(t);await p.locator('#session-dropdown-trigger').focus();await p.keyboard.press('Shift+F10');await p.locator('.session-row-actions').waitFor();await p.keyboard.press('Escape');
  await openList(p);await p.getByRole('button',{name:'Enable checkbox mode',exact:true}).click();await p.locator('.session-row[data-id="s2"]').click();assert.equal(await p.evaluate(()=>selectedCalls.length),0);
  await configure(p,{footer:{enabled:false}});assert.equal(await p.locator('.session-row-checkbox').count(),0);
- await configure(p,{footer:{enabled:true}});await p.getByRole('button',{name:'Recycle bin',exact:true}).click();await p.locator('.session-row.recycled').waitFor();
- await configure(p,{menu:{restore:false,purge:false}});assert.equal(await p.locator('.session-row.recycled button').count(),0);
- await configure(p,{footer:{enabled:false}});assert.equal(await p.locator('.session-row.recycled').count(),0);
+ await configure(p,{footer:{enabled:true}});await p.getByRole('button',{name:'Archived',exact:true}).click();await p.locator('.session-row.archived').waitFor();
+ await configure(p,{menu:{unarchive:false,delete:false}});assert.equal(await p.locator('.session-row.archived button').count(),0);
+ await configure(p,{footer:{enabled:false}});assert.equal(await p.locator('.session-row.archived').count(),0);
 });
 test('long press opens once, suppresses navigation, cancels on movement and teardown on mobile',async t=>{
  const p=await fixture(t,{mobile:true});await configure(p,{gestures:{long_press_ms:250}});
@@ -82,11 +82,11 @@ test('configuration deep-merges surface overlays without consulting legacy chat 
  await p.route('**/session-dropdown.json',route=>route.fulfill({status:503,body:'unavailable'}));assert.deepEqual(await p.evaluate(async()=>{await cfg.loadSessionDropdownConfig();return cfg.sessionDropdownConfig('chat_mobile');}),value);
 });
 
-test('renamed Main Chat keeps rename and hides delete across trigger, menu and batch selection',async t=>{
+test('renamed Main Chat keeps rename and hides archive and delete across trigger, menu and batch selection',async t=>{
  const p=await fixture(t);await p.evaluate(()=>{items[0]={...items[0],title:'Renamed coordinator',main_chat:true,can_delete:false};list.update(items,'s0');});
- await configure(p,{trigger:{delete:true,row_actions:true},menu:{rename:true,delete:true,purge:true,row_actions:true}});
+ await configure(p,{trigger:{archive:true,row_actions:true},menu:{rename:true,archive:true,delete:true,row_actions:true}});
  assert.equal(await p.locator('#session-dropdown-delete').isVisible(),false);
- await p.locator('#session-dropdown-kebab').click();assert.equal(await p.getByRole('button',{name:'Recycle session',exact:true}).count(),0);assert.equal(await p.getByRole('button',{name:'Rename session',exact:true}).count(),1);await p.keyboard.press('Escape');
+ await p.locator('#session-dropdown-kebab').click();assert.equal(await p.getByRole('button',{name:'Archive session',exact:true}).count(),0);assert.equal(await p.getByRole('button',{name:'Rename session',exact:true}).count(),1);await p.keyboard.press('Escape');
  await openList(p);await p.getByRole('button',{name:'Enable checkbox mode',exact:true}).click();assert.equal(await p.locator('.session-row[data-id="s0"] .session-row-checkbox').isDisabled(),true);await p.locator('.session-row[data-id="s0"]').click();assert.equal(await p.evaluate(()=>writes.length),0);
 });
 

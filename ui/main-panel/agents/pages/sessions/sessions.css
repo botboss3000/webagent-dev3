@@ -1,7 +1,7 @@
 @import url("/v3-ui/shared/main-chat-avatar.css");
 /* ── Sessions Panel ──────────────────────────────────────────────── */
-/* ---- HARMONY: toolbar action styles (sessions-tb-btn, sessions-tb-trash,
-       sessions-tb-restore) mirror the agents page's
+/* ---- HARMONY: toolbar action styles (sessions-tb-btn, sessions-tb-archive,
+       sessions-tb-unarchive) mirror the agents page's
        agents-tb-* rules in ui/main-panel/agents/agents.css. Keep them in sync. */
 
 /* COLOR SCHEME → ui/shared/css/design-system.css (single source of truth).
@@ -155,14 +155,14 @@
 .sessions-popover-separator { height: 1px; margin: 5px 3px; background: var(--border); }
 .sessions-selection-actions { display: flex; flex-direction: column; }
 .sessions-selection-actions[hidden] { display: none !important; }
-.sessions-selection-actions .sessions-tb-trash {
+.sessions-selection-actions .sessions-tb-archive {
   width: 100%;
   height: auto;
   justify-content: flex-start;
   border: 0;
   background: transparent;
 }
-.sessions-selection-actions .sessions-tb-restore { border: 0; }
+.sessions-selection-actions .sessions-tb-unarchive { border: 0; }
 #sessions-table thead th.col-title { overflow: visible; }
 
 /* ── Legacy toolbar control primitives (also used inside the popovers) ── */
@@ -175,11 +175,11 @@
 }
 #sessions-toolbar-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
 
-/* ── View switcher button (Sessions · All · Bin) ────────────────────
+/* ── View switcher button (Sessions · All · Archived) ────────────────────
    ONE glass-chip button styled identically to the search-mode chip
    (T+C/Title) in the same toolbar — the two share every selector below
    (.sessions-search-mode-btn, .sessions-view-btn). Clicking cycles the
-   active view filter: Sessions → All → Bin → Sessions. All/Bin show the
+   active view filter: Sessions → All → Archived → Sessions. All/Archived show the
    accent "alternate mode" tint (.alt-mode), mirroring how the search chip
    tints in Title mode. */
 .sessions-view-btn {
@@ -209,10 +209,10 @@
 .sessions-tb-btn:hover { background: rgba(var(--ink-rgb),0.12); border-color: rgba(var(--ink-rgb),0.30); }
 .sessions-tb-btn:disabled { opacity: 0.4; cursor: default; }
 .sessions-tb-btn > * { pointer-events: none; }
-.sessions-tb-restore { color: var(--success); border-color: rgba(var(--success-rgb),0.30); }
-.sessions-tb-restore:hover { background: rgba(var(--success-rgb),0.14); border-color: rgba(var(--success-rgb),0.5); }
+.sessions-tb-unarchive { color: var(--success); border-color: rgba(var(--success-rgb),0.30); }
+.sessions-tb-unarchive:hover { background: rgba(var(--success-rgb),0.14); border-color: rgba(var(--success-rgb),0.5); }
 
-/* Header refresh button — icon-only square (same footprint as the trash
+/* Header refresh button — icon-only square (same footprint as the archive
    button), sitting directly left of the search bar. */
 .sessions-tb-refresh {
   width: 28px; height: 28px; padding: 0;
@@ -232,19 +232,19 @@
 .sessions-tb-search i,
 .sessions-tb-search svg { flex-shrink: 0; }
 
-/* Header trash button — reuses the shared trash→hazard→spin states */
-.sessions-tb-trash {
+/* Header archive button — reuses the shared icon→hazard→spin states */
+.sessions-tb-archive {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; padding: 0;
   border: 1px solid rgba(var(--danger-rgb),0.22); border-radius: 7px;
   background: rgba(var(--danger-rgb),0.05); color: var(--danger); cursor: pointer;
   transition: background .12s ease, border-color .12s ease, color .12s ease, opacity .12s ease;
 }
-.sessions-tb-trash:hover { background: rgba(var(--danger-rgb),0.14); border-color: rgba(var(--danger-rgb),0.45); }
-.sessions-tb-trash.warning { color: var(--warning); border-color: rgba(var(--warning-rgb),0.5); background: rgba(var(--warning-rgb),0.12); }
-.sessions-tb-trash.warning:hover { background: rgba(var(--warning-rgb),0.2); color: var(--warning); }
-.sessions-tb-trash:disabled { opacity: 0.4; cursor: default; }
-.sessions-tb-trash > * { pointer-events: none; }
+.sessions-tb-archive:hover { background: rgba(var(--danger-rgb),0.14); border-color: rgba(var(--danger-rgb),0.45); }
+.sessions-tb-archive.warning { color: var(--warning); border-color: rgba(var(--warning-rgb),0.5); background: rgba(var(--warning-rgb),0.12); }
+.sessions-tb-archive.warning:hover { background: rgba(var(--warning-rgb),0.2); color: var(--warning); }
+.sessions-tb-archive:disabled { opacity: 0.4; cursor: default; }
+.sessions-tb-archive > * { pointer-events: none; }
 
 /* Light mode: only the neutral text tone differs (fg-1 → fg-2); the accent /
    status hues + neutral tints now come from the per-theme tokens above, so no
@@ -661,26 +661,26 @@ body.light-mode .sessions-tb-btn { color: var(--fg-2); border-color: rgba(var(--
   transition: background 0.1s;
   cursor: pointer;   /* whole row is clickable → switches chat to this session */
 }
-/* Bin view: rows aren't loadable, so don't advertise them as clickable. */
-#sessions-table.bin-view tbody tr {
+/* Archived view: rows aren't loadable, so don't advertise them as clickable. */
+#sessions-table.archive-view tbody tr {
   cursor: default;
 }
-/* Merged 'both' view: binned rows aren't loadable either — same rule applied
+/* Merged 'both' view: archived rows aren't loadable either — same rule applied
    per-row (by data-origin) so live rows keep the pointer affordance. */
-#sessions-table tbody tr[data-origin="bin"] {
+#sessions-table tbody tr[data-origin="archived"] {
   cursor: default;
 }
 /* Cross-catalog search results — rows surfaced from the OTHER catalog
-   (sessions ↔ recycle bin) while a search is active. Dimmed so it's clear they
-   live outside the current view. Bin-origin rows are never loadable; live rows
-   found while in the bin view are (keep the pointer affordance). */
+   (sessions ↔ archived) while a search is active. Dimmed so it's clear they
+   live outside the current view. Archived-origin rows are never loadable; live rows
+   found while in the archived view are (keep the pointer affordance). */
 #sessions-table tbody tr.sess-cross-row td {
   color: var(--fg-3);
 }
-#sessions-table tbody tr.sess-cross-row[data-origin="bin"] {
+#sessions-table tbody tr.sess-cross-row[data-origin="archived"] {
   cursor: default;
 }
-#sessions-table.bin-view tbody tr.sess-cross-row[data-origin="active"] {
+#sessions-table.archive-view tbody tr.sess-cross-row[data-origin="active"] {
   cursor: pointer;
 }
 /* Origin badge — which catalog a cross-catalog search row came from. */
@@ -702,22 +702,22 @@ body.light-mode .sessions-tb-btn { color: var(--fg-2); border-color: rgba(var(--
   background: var(--bg-2);
   border: var(--border-width) solid var(--border);
 }
-.sess-origin-badge.bin {
+.sess-origin-badge.archived {
   color: var(--danger);
   background: var(--danger-soft, rgba(var(--danger-rgb), 0.08));
   border-color: var(--danger-mid, rgba(var(--danger-rgb), 0.25));
-  cursor: pointer;   /* clickable — two-click restore (see _onBinChipClick) */
+  cursor: pointer;   /* clickable — two-click unarchive (see _onArchivedChipClick) */
   transition: color .12s ease, background .12s ease, border-color .12s ease;
 }
-.sess-origin-badge.bin:hover {
+.sess-origin-badge.archived:hover {
   color: var(--danger);
   background: var(--danger-mid, rgba(var(--danger-rgb), 0.25));
   border-color: var(--danger);
 }
-/* Armed ("Restore?") — restoring is a positive action, so the chip shifts to
-   the brand accent until the second click performs the restore. */
-.sess-origin-badge.bin.armed,
-.sess-origin-badge.bin.armed:hover {
+/* Armed ("Unarchive?") — unarchiving is a positive action, so the chip shifts to
+   the brand accent until the second click performs the unarchive. */
+.sess-origin-badge.archived.armed,
+.sess-origin-badge.archived.armed:hover {
   color: var(--accent);
   background: var(--accent-soft);
   border-color: var(--accent);
@@ -743,9 +743,9 @@ body.light-mode .sessions-tb-btn { color: var(--fg-2); border-color: rgba(var(--
   background: var(--accent-soft);
   border: var(--border-width) solid var(--accent-mid);
 }
-/* bin badge renders as "bin" in mixed case — keep the existing pill but trim
-   the horizontal space now that the label is shorter. */
-.sess-origin-badge.bin {
+/* archived badge renders as "archived" in lower case — keep the existing pill but trim
+   the horizontal space for the short label. */
+.sess-origin-badge.archived {
   min-width: auto;
   padding: 0 8px;
 }
@@ -1218,7 +1218,7 @@ body.light-mode .sessions-search-input {
   background: rgba(var(--ink-rgb), 0.14);
   border-color: rgba(var(--ink-rgb), 0.28);
 }
-/* Alternate mode (search chip: Title; view chip: All / Bin): subtle accent
+/* Alternate mode (search chip: Title; view chip: All / Archived): subtle accent
    tint so it's clearly a different state. */
 .sessions-search-mode-btn.title-mode,
 .sessions-view-btn.alt-mode {
@@ -1378,7 +1378,7 @@ body.light-mode .sess-agent-badge {
   }
   body.mobile-mode .sessions-tb-refresh,
   body.mobile-mode .sessions-tb-search,
-  body.mobile-mode .sessions-tb-trash {
+  body.mobile-mode .sessions-tb-archive {
     width: 36px;
     height: 36px;
   }
@@ -1482,26 +1482,26 @@ body.light-mode .sess-agent-badge {
   height: 15px;
   pointer-events: none;
 }
-#sessions-selection-panel[data-mode="binned"] { width: 276px; }
+#sessions-selection-panel[data-mode="archived"] { width: 276px; }
 #sessions-selection-panel #sessions-undo-btn[hidden] { display: none; }
-#sessions-selection-panel #sessions-undo-btn::after { content: 'Undo'; }
-#sessions-selection-panel #sessions-undo-btn[data-state="warning"]::after { content: 'Undo?'; }
-#sessions-selection-panel #sessions-trash-btn {
+#sessions-selection-panel #sessions-undo-btn::after { content: 'Unarchive'; }
+#sessions-selection-panel #sessions-undo-btn[data-state="warning"]::after { content: 'Unarchive?'; }
+#sessions-selection-panel #sessions-archive-btn {
   width: auto;
   height: 32px;
   padding: 0 10px;
   border: 1px solid rgba(var(--danger-rgb), 0.28);
   background: rgba(var(--danger-rgb), 0.07);
 }
-#sessions-selection-panel #sessions-trash-btn::after { content: 'Delete'; }
-#sessions-selection-panel #sessions-trash-btn[data-state="warning"]::after { content: 'Delete?'; }
+#sessions-selection-panel #sessions-archive-btn::after { content: 'Archive'; }
+#sessions-selection-panel #sessions-archive-btn[data-state="warning"]::after { content: 'Archive?'; }
 /* The shared control supplies the live text span while the request is in flight. */
-#sessions-selection-panel #sessions-trash-btn[data-state="deleting"]::after { content: none; }
-#sessions-selection-panel[data-mode="binned"] #sessions-trash-btn::after { content: 'Permanent delete'; }
-#sessions-selection-panel[data-mode="binned"] #sessions-trash-btn[data-state="warning"]::after { content: 'Permanent delete?'; }
-/* The binned follow-up panel is intentionally a two-action state: undo or
+#sessions-selection-panel #sessions-archive-btn[data-state="deleting"]::after { content: none; }
+#sessions-selection-panel[data-mode="archived"] #sessions-archive-btn::after { content: 'Delete'; }
+#sessions-selection-panel[data-mode="archived"] #sessions-archive-btn[data-state="warning"]::after { content: 'Delete?'; }
+/* The archived follow-up panel is intentionally a two-action state: unarchive or
    permanent deletion. Keep Clear out even during a delayed attribute repaint. */
-#sessions-selection-panel[data-mode="binned"] #sessions-clear-selection-btn { display: none !important; }
+#sessions-selection-panel[data-mode="archived"] #sessions-clear-selection-btn { display: none !important; }
 
 /* ── Session activity chart ──────────────────────────────────────────────────
    One vertical lane per session, mounted above #sessions-table-wrap by

@@ -5,8 +5,17 @@
 use super::*;
 
 use webagent_chat::session::MIGRATION_KEY;
-pub use webagent_chat::session::{RecycledSession, SessionLifecycle, SessionMetadata, SessionPatch, SessionPatchOutcome, SessionStatus};
+pub use webagent_chat::session::{ArchivedSession, SessionLifecycle, SessionMetadata, SessionPatch, SessionPatchOutcome, SessionStatus};
 pub(super) use webagent_chat::session::with_session_metadata;
+
+/// Which sessions a permanent deletion accepts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Erase {
+    /// The user deletes one archived, non-Main Chat session.
+    Archived,
+    /// The owner deletes the session's agent.
+    AgentDeletion,
+}
 
 /// Chat repositories receive the Store codec; user-plane writes keep the owner's
 /// administrator-plaintext policy while `seal` always encrypts.
@@ -49,7 +58,7 @@ impl Store {
         let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
             .bind(&key).fetch_optional(&mut *tx).await? else { return Ok(SessionPatchOutcome::NotFound); };
         let mut session = self.unseal(&raw)?;
-        if session["status"] != "active" { return Ok(SessionPatchOutcome::Conflict("Session is recycled")); }
+        if session["status"] != "active" { return Ok(SessionPatchOutcome::Conflict("Session is archived")); }
         if seq != 0 {
             let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chat WHERE session_id=? AND seq=?")
                 .bind(sid).bind(seq).fetch_one(&mut *tx).await?;
@@ -75,15 +84,15 @@ impl Store {
         self.ordered_sessions_status(false).await
     }
 
-    /// Project active or recycled public sessions and order pins, activity and identities deterministically.
-    pub async fn ordered_sessions_status(&self, recycled: bool) -> Result<Vec<Value>> {
-        webagent_chat::session::ordered_sessions_status(&self.pool, self, recycled).await
+    /// Project active or archived public sessions and order pins, activity and identities deterministically.
+    pub async fn ordered_sessions_status(&self, archived: bool) -> Result<Vec<Value>> {
+        webagent_chat::session::ordered_sessions_status(&self.pool, self, archived).await
     }
 
     /// Table-only statistics from this user's public chat and recorded usage.
     /// Pagination bounds payloads; authority is rechecked by the browser handler.
-    pub async fn session_statistics_page(&self, recycled: bool, offset: usize, limit: usize) -> Result<(Vec<Value>, Option<usize>)> {
-        let summaries = self.ordered_sessions_status(recycled).await?;
+    pub async fn session_statistics_page(&self, archived: bool, offset: usize, limit: usize) -> Result<(Vec<Value>, Option<usize>)> {
+        let summaries = self.ordered_sessions_status(archived).await?;
         let end = offset.saturating_add(limit).min(summaries.len());
         let next = (end < summaries.len()).then_some(end);
         let mut tx = self.pool.begin().await?;
@@ -141,7 +150,7 @@ impl Store {
         let metadata: SessionMetadata = serde_json::from_value(session.clone())?;
         if metadata.status != SessionStatus::Active {
             tx.rollback().await?;
-            return Ok(SessionPatchOutcome::Conflict("Session is recycled"));
+            return Ok(SessionPatchOutcome::Conflict("Session is archived"));
         }
         if metadata.metadata_revision != patch.expected_revision {
             tx.rollback().await?;
@@ -200,7 +209,7 @@ impl Store {
     }
 
     /// Revoke all durable session work in the lifecycle writer transaction.
-    /// Increment run/task fences so old executors cannot publish after restore.
+    /// Increment run/task fences so old executors cannot publish after unarchive.
     async fn cancel_session_work(&self, tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, sid: &str) -> Result<()> {
         self.cancel_session_followups(tx,sid).await?;
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed')")
@@ -263,13 +272,13 @@ impl Store {
 
     /// Lifecycle, event and encrypted retry receipt commit atomically. History,
     /// pinning, activity, read cursor and agent binding are deliberately retained.
-    pub async fn lifecycle_session(&self, sid: &str, body: &SessionLifecycle, restore: bool) -> Result<SessionPatchOutcome> {
+    pub async fn lifecycle_session(&self, sid: &str, body: &SessionLifecycle, unarchive: bool) -> Result<SessionPatchOutcome> {
         let validation = SessionPatch { client_request_id: body.client_request_id.clone(),
             expected_revision: body.expected_revision, title: None, pinned: Some(false) };
         if let Err(message) = validation.validate() { return Ok(SessionPatchOutcome::Invalid(message)); }
         let key = format!("session:{sid}");
         let receipt_key = format!("receipt:session:lifecycle:{sid}:{}",body.client_request_id);
-        let fingerprint = crate::digest(&json!({"body":body,"restore":restore}));
+        let fingerprint = crate::digest(&json!({"body":body,"unarchive":unarchive}));
         let _guard = self.context_gate.write().await;
         let mut tx = self.pool.begin().await?;
         sqlx::query("UPDATE docs SET key=key WHERE key=?").bind(&key).execute(&mut *tx).await?;
@@ -287,9 +296,9 @@ impl Store {
         let metadata: SessionMetadata = serde_json::from_value(session.clone())?;
         if metadata.status == SessionStatus::Deleted { return Ok(SessionPatchOutcome::NotFound); }
         if metadata.metadata_revision != body.expected_revision { return Ok(SessionPatchOutcome::Conflict("Session metadata revision changed")); }
-        let target = if restore { "active" } else { "recycled" };
+        let target = if unarchive { "active" } else { "archived" };
         let changed = session["status"] != target;
-        if !restore {
+        if !unarchive {
             self.cancel_session_work(&mut tx,sid).await?;
             if session["auto_naming"].is_object() {
                 session["auto_naming"]["stage"] = json!("locked");
@@ -299,10 +308,10 @@ impl Store {
         }
         if changed {
             let Some(revision) = metadata.metadata_revision.checked_add(1) else { return Ok(SessionPatchOutcome::Conflict("Session metadata revision exhausted")); };
-            if !restore { session["execution_epoch"] = json!(session["execution_epoch"].as_u64().unwrap_or(0)
+            if !unarchive { session["execution_epoch"] = json!(session["execution_epoch"].as_u64().unwrap_or(0)
                 .checked_add(1).ok_or_else(||anyhow!("Session execution epoch exhausted"))?); }
             session["status"] = json!(target);
-            session["recycled_at"] = if restore { Value::Null } else { json!(crate::now()) };
+            session["archived_at"] = if unarchive { Value::Null } else { json!(crate::now()) };
             session["metadata_revision"] = json!(revision);
             self.write_document(&mut tx,&key,&session).await?;
         }
@@ -311,7 +320,7 @@ impl Store {
             .bind(self.encode_user_record(&json!({"digest":fingerprint,"result":result}))?).execute(&mut *tx).await?;
         if changed {
             sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,?,?)").bind(sid)
-                .bind(if restore { "session_restored" } else { "session_recycled" })
+                .bind(if unarchive { "session_unarchived" } else { "session_archived" })
                 .bind(self.encode_user_record(&result)?).execute(&mut *tx).await?;
         }
         tx.commit().await?;
@@ -322,14 +331,30 @@ impl Store {
 
     /// Permanent deletion leaves only an identity tombstone and retry receipt.
     /// Uncertain external jobs retain their independent broker audit/rollback data.
-    pub(crate) async fn purge_session(&self,sid:&str,body:&SessionLifecycle)->Result<SessionPatchOutcome> {
+    pub(crate) async fn delete_session(&self,sid:&str,body:&SessionLifecycle)->Result<SessionPatchOutcome> {
+        self.erase_session(sid,body,Erase::Archived).await
+    }
+
+    /// Agent deletion erases each of its sessions in any status, Main Chat included.
+    pub(crate) async fn delete_agent_session(&self,sid:&str)->Result<()> {
+        let Some(session)=self.get(&format!("session:{sid}")).await? else {return Ok(())};
+        let body=SessionLifecycle {client_request_id:"agent-delete".into(),
+            expected_revision:session["metadata_revision"].as_u64().unwrap_or(0)};
+        match self.erase_session(sid,&body,Erase::AgentDeletion).await? {
+            SessionPatchOutcome::Saved(_)|SessionPatchOutcome::NotFound=>Ok(()),
+            SessionPatchOutcome::Conflict(message)=>Err(anyhow!("{message}")),
+            SessionPatchOutcome::Invalid(message)=>Err(anyhow!("{message}")),
+        }
+    }
+
+    async fn erase_session(&self,sid:&str,body:&SessionLifecycle,mode:Erase)->Result<SessionPatchOutcome> {
         let validation=SessionPatch {client_request_id:body.client_request_id.clone(),
             expected_revision:body.expected_revision,title:None,pinned:Some(false)};
         if let Err(message)=validation.validate() {return Ok(SessionPatchOutcome::Invalid(message));}
         let _guard=self.context_gate.write().await;
         let mut tx=self.pool.begin().await?;
         let key=format!("session:{sid}");
-        let receipt_key=format!("receipt:session:purge:{sid}:{}",body.client_request_id);
+        let receipt_key=format!("receipt:session:delete:{sid}:{}",body.client_request_id);
         let fingerprint=crate::digest(body);
         sqlx::query("UPDATE docs SET value=value WHERE key=?").bind(&key).execute(&mut *tx).await?;
         if let Some(raw)=sqlx::query_scalar::<_,Vec<u8>>("SELECT value FROM docs WHERE key=?")
@@ -341,16 +366,17 @@ impl Store {
         let Some(raw)=sqlx::query_scalar::<_,Vec<u8>>("SELECT value FROM docs WHERE key=?")
             .bind(&key).fetch_optional(&mut *tx).await? else {return Ok(SessionPatchOutcome::NotFound);};
         let session=self.unseal(&raw)?;
-        if session["main_chat"]==true && session["main_chat_agent_id"]==session["agent_id"] {return Ok(SessionPatchOutcome::Conflict("Main Chat cannot be deleted"));}
+        let main_chat=session["main_chat"]==true && session["main_chat_agent_id"]==session["agent_id"];
+        if main_chat && mode==Erase::Archived {return Ok(SessionPatchOutcome::Conflict("Main Chat cannot be deleted"));}
         if session["status"]=="deleted" {return Ok(SessionPatchOutcome::NotFound);}
         if session["metadata_revision"].as_u64()!=Some(body.expected_revision) {
             return Ok(SessionPatchOutcome::Conflict("Session metadata revision changed"));
         }
-        if session["status"]!="recycled" {return Ok(SessionPatchOutcome::Conflict("Recycle the session before permanently deleting it"));}
+        if session["status"]!="archived" && mode==Erase::Archived {return Ok(SessionPatchOutcome::Conflict("Archive the session before deleting it"));}
         self.cancel_session_work(&mut tx,sid).await?;
         let mut ids:Vec<String>=sqlx::query_scalar("SELECT id FROM run_index WHERE session_id=?")
             .bind(sid).fetch_all(&mut *tx).await?;
-        // Undo retains audited runs outside the active index. Purge their recovery data too.
+        // Undo retains audited runs outside the active index. Delete their recovery data too.
         let archived_runs=sqlx::query("SELECT value FROM docs WHERE substr(key,1,4)=?")
             .bind("run:").fetch_all(&mut *tx).await?;
         for row in archived_runs {
@@ -490,6 +516,40 @@ impl Store {
         tx.commit().await?;
         Ok(())
     }
+
+    /// One-time rename of the former recycling-bin status, its timestamp and lifecycle events.
+    pub(super) async fn migrate_archived_status(&self) -> Result<()> {
+        const KEY: &str = "migration:session_archived_status";
+        let marker = "SELECT 1 FROM docs WHERE key=?";
+        if sqlx::query(marker).bind(KEY).fetch_optional(&self.pool).await?.is_some() {
+            return Ok(());
+        }
+        let _guard = self.context_gate.write().await;
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("UPDATE docs SET key=key WHERE key=?").bind(KEY).execute(&mut *tx).await?;
+        if sqlx::query(marker).bind(KEY).fetch_optional(&mut *tx).await?.is_some() {
+            return Ok(());
+        }
+        let rows = sqlx::query("SELECT key,value FROM docs WHERE key LIKE 'session:%'")
+            .fetch_all(&mut *tx).await?;
+        for row in rows {
+            let mut session = self.unseal(&row.get::<Vec<u8>, _>("value"))?;
+            let Some(map) = session.as_object_mut() else { continue };
+            let legacy = map.get("status").is_some_and(|status| status == "recycled");
+            let at = map.remove("recycled_at");
+            if !legacy && at.is_none() { continue; }
+            map.insert("archived_at".into(), at.unwrap_or(Value::Null));
+            if legacy { map.insert("status".into(), json!("archived")); }
+            sqlx::query("UPDATE docs SET value=? WHERE key=?").bind(self.encode_user_record(&session)?)
+                .bind(row.get::<String, _>("key")).execute(&mut *tx).await?;
+        }
+        sqlx::query("UPDATE events SET kind=CASE kind WHEN 'session_recycled' THEN 'session_archived' ELSE 'session_unarchived' END WHERE kind IN ('session_recycled','session_restored')")
+            .execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
+            .bind(KEY).bind(self.encode_user_record(&json!({"version":1}))?).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -502,7 +562,7 @@ mod tests {
             title:title.map(str::to_owned), pinned }
     }
 
-    /// Build a typed recycle/restore/purge request for lifecycle assertions.
+    /// Build a typed archive/unarchive/delete request for lifecycle assertions.
     fn lifecycle(request: &str, revision: u64) -> SessionLifecycle {
         SessionLifecycle { client_request_id: request.into(), expected_revision: revision }
     }
@@ -532,7 +592,7 @@ mod tests {
         assert!(store.session_statistics_page(true,0,100).await.unwrap().0.is_empty());
     }
 
-    /// Verify recycle/restore preserves history and metadata and old receipts cannot repeat an effect after restart.
+    /// Verify archive/unarchive preserves history and metadata and old receipts cannot repeat an effect after restart.
     #[tokio::test]
     async fn lifecycle_preserves_history_metadata_retries_and_restart() {
         let root = tempfile::tempdir().unwrap();
@@ -543,39 +603,39 @@ mod tests {
         let history = store.chat_snapshot("s").await.unwrap();
         let stale = store.get("session:s").await.unwrap().unwrap();
         let SessionPatchOutcome::Saved(result) = store.lifecycle_session("s",&lifecycle("delete",0),false).await.unwrap() else { panic!() };
-        assert_eq!(result["session"]["status"],"recycled");
+        assert_eq!(result["session"]["status"],"archived");
         assert_eq!(result["session"]["metadata_revision"],1);
         assert!(store.ordered_sessions().await.unwrap().is_empty());
         assert_eq!(store.ordered_sessions_status(true).await.unwrap().len(),1);
         assert_eq!(store.chat_snapshot("s").await.unwrap(),history);
         store.put("session:s",&stale).await.unwrap();
-        assert_eq!(store.get("session:s").await.unwrap().unwrap()["status"],"recycled");
+        assert_eq!(store.get("session:s").await.unwrap().unwrap()["status"],"archived");
         let SessionPatchOutcome::Saved(retry) = store.lifecycle_session("s",&lifecycle("delete",0),false).await.unwrap() else { panic!() };
         assert_eq!(result,retry);
         assert!(matches!(store.lifecycle_session("s",&lifecycle("delete",0),true).await.unwrap(),SessionPatchOutcome::Conflict(_)));
-        assert!(matches!(store.lifecycle_session("s",&lifecycle("restore-stale",0),true).await.unwrap(),SessionPatchOutcome::Conflict(_)));
+        assert!(matches!(store.lifecycle_session("s",&lifecycle("unarchive-stale",0),true).await.unwrap(),SessionPatchOutcome::Conflict(_)));
         assert!(matches!(store.lifecycle_session("missing",&lifecycle("missing",0),false).await.unwrap(),SessionPatchOutcome::NotFound));
         assert!(matches!(store.lifecycle_session("s",&lifecycle(" ",1),true).await.unwrap(),SessionPatchOutcome::Invalid(_)));
         let resumed = Store::open(root.path()).await.unwrap();
-        let SessionPatchOutcome::Saved(restored) = resumed.lifecycle_session("s",&lifecycle("restore",1),true).await.unwrap() else { panic!() };
-        assert_eq!(restored["session"]["status"],"active");
-        assert!(restored["session"]["recycled_at"].is_null());
-        for field in ["title","pinned","last_active_at","read_through_seq","created_at"] { assert_eq!(restored["session"][field],stale[field]); }
+        let SessionPatchOutcome::Saved(unarchived) = resumed.lifecycle_session("s",&lifecycle("unarchive",1),true).await.unwrap() else { panic!() };
+        assert_eq!(unarchived["session"]["status"],"active");
+        assert!(unarchived["session"]["archived_at"].is_null());
+        for field in ["title","pinned","last_active_at","read_through_seq","created_at"] { assert_eq!(unarchived["session"][field],stale[field]); }
         let saved = resumed.get("session:s").await.unwrap().unwrap();
         assert_eq!(saved["checkpoint_input"],stale["checkpoint_input"]);
         assert_eq!(saved["checkpoint_through"],42);
         assert_eq!(resumed.chat_snapshot("s").await.unwrap(),history);
         let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key='receipt:session:lifecycle:s:delete'").fetch_one(&resumed.pool).await.unwrap();
         assert!(!String::from_utf8_lossy(&raw).contains("Keep me"));
-        // Retrying an old delete after restore returns its receipt, not a new deletion.
+        // Retrying an old delete after unarchive returns its receipt, not a new deletion.
         resumed.lifecycle_session("s",&lifecycle("delete",0),false).await.unwrap();
         assert_eq!(resumed.get("session:s").await.unwrap().unwrap()["status"],"active");
     }
 
 
-    /// Verify purge removes conversation-owned private records and selections without touching another session or reviving work.
+    /// Verify delete removes conversation-owned private records and selections without touching another session or reviving work.
     #[tokio::test]
-    async fn purge_erases_private_data_without_reviving_work_or_other_sessions() {
+    async fn delete_erases_private_data_without_reviving_work_or_other_sessions() {
         let root=tempfile::tempdir().unwrap();
         let store=Store::open(root.path()).await.unwrap();
         store.put("session:s",&json!({"id":"s","agent_id":"shared_default","title":"Private title"})).await.unwrap();
@@ -587,13 +647,13 @@ mod tests {
         let mut tx=store.pool.begin().await.unwrap();
         store.write_document(&mut tx,"receipt:base:s:r:call",&json!({"output":{"artifact":"private checkpoint"}})).await.unwrap();
         tx.commit().await.unwrap();
-        assert!(matches!(store.purge_session("s",&lifecycle("purge",0)).await.unwrap(),SessionPatchOutcome::Conflict(_)));
-        store.lifecycle_session("s",&lifecycle("recycle",0),false).await.unwrap();
+        assert!(matches!(store.delete_session("s",&lifecycle("delete",0)).await.unwrap(),SessionPatchOutcome::Conflict(_)));
+        store.lifecycle_session("s",&lifecycle("archive",0),false).await.unwrap();
         assert!(store.get("session_context_assets:s").await.unwrap().is_some());
-        let receipt=lifecycle("purge",1);
-        assert!(matches!(store.purge_session("s",&receipt).await.unwrap(),SessionPatchOutcome::Saved(_)));
-        assert!(matches!(store.purge_session("s",&receipt).await.unwrap(),SessionPatchOutcome::Saved(_)));
-        assert!(matches!(store.lifecycle_session("s",&lifecycle("restore",2),true).await.unwrap(),SessionPatchOutcome::NotFound));
+        let receipt=lifecycle("delete",1);
+        assert!(matches!(store.delete_session("s",&receipt).await.unwrap(),SessionPatchOutcome::Saved(_)));
+        assert!(matches!(store.delete_session("s",&receipt).await.unwrap(),SessionPatchOutcome::Saved(_)));
+        assert!(matches!(store.lifecycle_session("s",&lifecycle("unarchive",2),true).await.unwrap(),SessionPatchOutcome::NotFound));
         assert!(store.get("run:r").await.unwrap().is_none());
         assert!(store.get("attachment:a").await.unwrap().is_none());
         assert!(store.get("session_context_assets:s").await.unwrap().is_none());
@@ -613,9 +673,9 @@ mod tests {
         assert!(!reopened.session_available("s").await.unwrap());
     }
 
-    /// Verify recycle cancels session runs/tasks/reviews and rejects late publication even after restore.
+    /// Verify archive cancels session runs/tasks/reviews and rejects late publication even after unarchive.
     #[tokio::test]
-    async fn recycle_cancels_owned_work_and_fences_late_writers() {
+    async fn archive_cancels_owned_work_and_fences_late_writers() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         store.create_admin_account("root","long-hash-placeholder","generation").await.unwrap();
@@ -638,7 +698,7 @@ mod tests {
         assert!(!store.renew_run_lease("r","generation","owner",1).await.unwrap());
         run["status"]=json!("completed");
         assert!(store.save_run(&mut run,"model_output",&json!({"output":[],"terminal_text":"late"})).await.is_err());
-        store.lifecycle_session("s",&lifecycle("restore",1),true).await.unwrap();
+        store.lifecycle_session("s",&lifecycle("unarchive",1),true).await.unwrap();
         assert!(store.active_runs().await.unwrap().iter().all(|r|r["session_id"]!="s"));
         assert!(!store.background_cas(&task,Some(0)).await.unwrap());
     }
@@ -660,19 +720,48 @@ mod tests {
         sqlx::query("CREATE TRIGGER reject_lifecycle BEFORE INSERT ON docs WHEN NEW.key LIKE 'receipt:session:lifecycle:%' BEGIN SELECT RAISE(ABORT,'receipt failure'); END").execute(&store.pool).await.unwrap();
         assert!(store.lifecycle_session("s",&lifecycle("delete",0),false).await.is_err());
         assert_eq!(store.get("session:s").await.unwrap().unwrap()["status"],"active");
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE kind='session_recycled' AND session_id='s'").fetch_one(&store.pool).await.unwrap(); assert_eq!(count,0);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE kind='session_archived' AND session_id='s'").fetch_one(&store.pool).await.unwrap(); assert_eq!(count,0);
         sqlx::query("DROP TRIGGER reject_lifecycle").execute(&store.pool).await.unwrap();
         store.lifecycle_session("s",&lifecycle("delete",0),false).await.unwrap();
-        assert!(store.put("run:new",&json!({"id":"new","session_id":"s","status":"queued"})).await.unwrap_err().downcast_ref::<RecycledSession>().is_some());
+        assert!(store.put("run:new",&json!({"id":"new","session_id":"s","status":"queued"})).await.unwrap_err().downcast_ref::<ArchivedSession>().is_some());
         let mut run = store.get("run:r").await.unwrap().unwrap(); run["status"] = json!("queued");
-        assert!(store.save_run_override(&mut run,"resumed",&json!({})).await.unwrap_err().downcast_ref::<RecycledSession>().is_some());
-        assert!(store.atomic_docs_event(vec![],"s","message",&json!({"role":"user","run_id":"new","content":"blocked"})).await.unwrap_err().downcast_ref::<RecycledSession>().is_some());
+        assert!(store.save_run_override(&mut run,"resumed",&json!({})).await.unwrap_err().downcast_ref::<ArchivedSession>().is_some());
+        assert!(store.atomic_docs_event(vec![],"s","message",&json!({"role":"user","run_id":"new","content":"blocked"})).await.unwrap_err().downcast_ref::<ArchivedSession>().is_some());
         assert!(store.chat_snapshot("s").await.unwrap().0.is_empty());
     }
 
-    /// Verify lifecycle no-ops produce no new revision/event and claims cannot revive recycled sessions.
+    /// Verify the one-time conversion renames former recycling-bin status, timestamp and events.
     #[tokio::test]
-    async fn lifecycle_noops_and_scheduler_claim_do_not_revive_recycled_sessions() {
+    async fn legacy_recycled_sessions_convert_to_archived_once() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        // Legacy documents bypass put, which rejects the retired status.
+        let legacy = |key: &'static str, value: Value| {
+            let store = store.clone();
+            async move {
+                sqlx::query("INSERT OR REPLACE INTO docs(key,value) VALUES(?,?)").bind(key)
+                    .bind(store.encode_user_record(&value).unwrap()).execute(&store.pool).await.unwrap();
+            }
+        };
+        legacy("session:old", json!({"id":"old","status":"recycled","recycled_at":5})).await;
+        legacy("session:live", json!({"id":"live","status":"active","recycled_at":null})).await;
+        sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES('old','session_recycled',x'')").execute(&store.pool).await.unwrap();
+        sqlx::query("DELETE FROM docs WHERE key='migration:session_archived_status'").execute(&store.pool).await.unwrap();
+        store.migrate_archived_status().await.unwrap();
+        let old = store.get("session:old").await.unwrap().unwrap();
+        assert_eq!((old["status"].as_str(), old["archived_at"].as_i64(), old.get("recycled_at")), (Some("archived"), Some(5), None));
+        let live = store.get("session:live").await.unwrap().unwrap();
+        assert_eq!((live["status"].as_str(), live.get("recycled_at")), (Some("active"), None));
+        let kind: String = sqlx::query_scalar("SELECT kind FROM events WHERE session_id='old'").fetch_one(&store.pool).await.unwrap();
+        assert_eq!(kind, "session_archived");
+        legacy("session:late", json!({"id":"late","status":"recycled"})).await;
+        store.migrate_archived_status().await.unwrap();
+        assert_eq!(store.get("session:late").await.unwrap().unwrap()["status"], "recycled", "the marker runs it once");
+    }
+
+    /// Verify lifecycle no-ops produce no new revision/event and claims cannot revive archived sessions.
+    #[tokio::test]
+    async fn lifecycle_noops_and_scheduler_claim_do_not_revive_archived_sessions() {
         let root = tempfile::tempdir().unwrap(); let store = Store::open(root.path()).await.unwrap();
         store.put("session:s",&json!({"id":"s"})).await.unwrap();
         store.lifecycle_session("s",&lifecycle("already-active",0),true).await.unwrap();
@@ -680,18 +769,18 @@ mod tests {
         store.put("run:r",&json!({"id":"r","session_id":"s","status":"queued","generation":"","lease_epoch":0,"run_revision":0})).await.unwrap();
         // A legacy inconsistent fixture must not bypass scheduler admission.
         let mut session = store.get("session:s").await.unwrap().unwrap();
-        session["status"] = json!("recycled"); session["metadata_revision"] = json!(1); session["recycled_at"] = json!(1);
+        session["status"] = json!("archived"); session["metadata_revision"] = json!(1); session["archived_at"] = json!(1);
         store.put("session:s",&session).await.unwrap();
         let mut run = store.get("run:r").await.unwrap().unwrap();
-        assert!(store.claim_run(&mut run,"test-owner","test-generation").await.unwrap_err().downcast_ref::<RecycledSession>().is_some());
+        assert!(store.claim_run(&mut run,"test-owner","test-generation").await.unwrap_err().downcast_ref::<ArchivedSession>().is_some());
         assert_eq!(store.get("run:r").await.unwrap().unwrap()["status"],"queued");
-        store.lifecycle_session("s",&lifecycle("already-recycled",1),false).await.unwrap();
+        store.lifecycle_session("s",&lifecycle("already-archived",1),false).await.unwrap();
         assert_eq!(store.get("session:s").await.unwrap().unwrap()["metadata_revision"],1);
-        let count:i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE kind IN ('session_recycled','session_restored')").fetch_one(&store.pool).await.unwrap();
+        let count:i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE kind IN ('session_archived','session_unarchived')").fetch_one(&store.pool).await.unwrap();
         assert_eq!(count,0);
     }
 
-    /// Race message admission against recycle and verify admitted work is cancelled or never committed.
+    /// Race message admission against archive and verify admitted work is cancelled or never committed.
     #[tokio::test]
     async fn lifecycle_and_admission_race_across_independent_stores() {
         let root = tempfile::tempdir().unwrap(); let a = Store::open(root.path()).await.unwrap(); let b = Store::open(root.path()).await.unwrap();
@@ -703,7 +792,7 @@ mod tests {
             let (deleted, admitted) = tokio::join!(a.lifecycle_session(&sid,&request,false),b.atomic_docs_event(docs,&sid,"message",&payload));
             let deleted = matches!(deleted.unwrap(),SessionPatchOutcome::Saved(_));
             assert!(deleted);
-            assert_eq!(a.get(&format!("session:{sid}")).await.unwrap().unwrap()["status"],"recycled");
+            assert_eq!(a.get(&format!("session:{sid}")).await.unwrap().unwrap()["status"],"archived");
             if admitted.is_ok() {
                 assert_eq!(a.get(&format!("run:r-{i}")).await.unwrap().unwrap()["status"],"cancelled");
             } else {
@@ -873,11 +962,11 @@ mod tests {
             store.put(&format!("session:{id}"), &json!({"id":id,"pinned":pinned,"created_at":100,
                 "last_active_at":active,"checkpoint_input":["secret"]})).await.unwrap();
         }
-        store.put("session:recycled", &json!({"id":"recycled","status":"recycled","pinned":true})).await.unwrap();
+        store.put("session:archived", &json!({"id":"archived","status":"archived","pinned":true})).await.unwrap();
         let list = store.ordered_sessions().await.unwrap();
         assert_eq!(list.iter().map(|s|s["id"].as_str().unwrap()).collect::<Vec<_>>(), vec!["p","new","a","b"]);
         assert!(list.iter().all(|s|s.get("checkpoint_input").is_none()));
-        assert!(matches!(store.patch_session("recycled", &patch("r",0,None,Some(false))).await.unwrap(),SessionPatchOutcome::Conflict(_)));
+        assert!(matches!(store.patch_session("archived", &patch("r",0,None,Some(false))).await.unwrap(),SessionPatchOutcome::Conflict(_)));
         sqlx::query("INSERT INTO user_accounts(user_id,username,value) VALUES('other','other',?)")
             .bind(store.seal(&json!({"user_id":"other","username":"other"})).unwrap())
             .execute(&store.app_pool).await.unwrap();
@@ -930,8 +1019,8 @@ mod tests {
         assert_eq!(with_session_metadata(&upgraded, Some(999)).unwrap(), upgraded);
         let mut edited = upgraded.clone();
         edited["pinned"] = json!(true);
-        edited["status"] = json!("recycled");
-        edited["recycled_at"] = json!(200);
+        edited["status"] = json!("archived");
+        edited["archived_at"] = json!(200);
         edited["read_through_seq"] = json!(17);
         edited["metadata_revision"] = json!(3);
         assert_eq!(with_session_metadata(&edited, None).unwrap(), edited);
@@ -947,13 +1036,13 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         let original = json!({"id":"s", "title":"Keep title", "created_at":100,
-            "pinned":true, "status":"recycled", "recycled_at":160,
+            "pinned":true, "status":"archived", "archived_at":160,
             "last_active_at":150, "read_through_seq":17, "metadata_revision":3});
         store.put("session:s", &original).await.unwrap();
         store.put("session:s", &json!({"id":"s", "checkpoint_input":[{"text":"updated"}], "checkpoint_through":42}))
             .await.unwrap();
         let saved = store.get("session:s").await.unwrap().unwrap();
-        for field in ["title", "created_at", "pinned", "status", "recycled_at", "last_active_at", "read_through_seq", "metadata_revision"] {
+        for field in ["title", "created_at", "pinned", "status", "archived_at", "last_active_at", "read_through_seq", "metadata_revision"] {
             assert_eq!(saved[field], original[field]);
         }
         assert_eq!(saved["checkpoint_through"], 42);

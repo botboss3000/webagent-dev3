@@ -112,14 +112,14 @@ mod tests {
                 .await
                 .is_err()
         );
-        let body = json!({"client_request_id":"core-management-recycle","expected_revision":snapshot["session"]["metadata"]["revision"].as_u64().or_else(||snapshot["session"]["metadata_revision"].as_u64()).unwrap_or(0)});
-        let recycled = request(&app, "DELETE", format!("/sessions/{sid}"), body)
+        let body = json!({"client_request_id":"core-management-archive","expected_revision":snapshot["session"]["metadata"]["revision"].as_u64().or_else(||snapshot["session"]["metadata_revision"].as_u64()).unwrap_or(0)});
+        let archived = request(&app, "POST", format!("/sessions/{sid}/archive"), body)
             .await
             .unwrap();
-        assert!(recycled.is_object());
+        assert!(archived.is_object());
         assert_eq!(
             app.store.get(&key("session", &sid)).await.unwrap().unwrap()["status"],
-            "recycled"
+            "archived"
         );
     }
 }

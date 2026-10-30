@@ -48,6 +48,13 @@ impl Store {
             .agent_authority(user_id, agent_id)
             .await
     }
+    /// The caller removes a non-owned agent from their own list.
+    pub async fn leave_agent(&self, user_id: &str, agent_id: &str) -> Result<Value> {
+        let view = self.for_agent(agent_id).await?;
+        view.access_repository()
+            .leave_agent(user_id, agent_id)
+            .await
+    }
     /// Caller must authorize roster access before returning these bounded records.
     pub async fn agent_memberships(&self, agent_id: &str) -> Result<Vec<Value>> {
         let view = self.for_agent(agent_id).await?;

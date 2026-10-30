@@ -20,7 +20,7 @@ impl IntoResponse for ApiError {
 impl From<anyhow::Error> for ApiError {
     fn from(error: anyhow::Error) -> Self {
         if error
-            .downcast_ref::<webagent_chat::session::RecycledSession>()
+            .downcast_ref::<webagent_chat::session::ArchivedSession>()
             .is_some()
         {
             return ApiError(StatusCode::NOT_FOUND, "Session not found".into());
