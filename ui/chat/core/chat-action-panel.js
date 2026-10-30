@@ -119,7 +119,10 @@ export function mountChatActionPanel({root,guard,request,note}) {
     }else where.textContent='Paste the value for '+new URL(detail.origin).host+'.';
     // The privacy note expands inside the card behind an info toggle so the card stays compact.
     const note=document.createElement('p');note.id='chat-action-note-'+detail.requestId.slice(0,12);note.className='chat-action-note';note.hidden=true;
-    note.textContent='Only you see this value. It is stored privately in your vault, and the agent receives status only, never the value itself.';
+    // The same shield, larger, marks the note as security information.
+    const noteShield=document.createElement('span');noteShield.className='chat-action-secure';noteShield.setAttribute('aria-hidden','true');
+    const noteText=document.createElement('span');noteText.textContent='Only you see this value. It is stored privately in your vault, and the agent receives status only, never the value itself.';
+    note.append(noteShield,noteText);
     const info=document.createElement('button');info.type='button';info.className='chat-action-info';info.textContent='i';info.setAttribute('aria-label','Who can see this value');
     info.setAttribute('aria-controls',note.id);info.setAttribute('aria-expanded','false');
     info.onclick=()=>{note.hidden=!note.hidden;info.setAttribute('aria-expanded',String(!note.hidden));};

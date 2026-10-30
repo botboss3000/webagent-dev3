@@ -99,7 +99,7 @@ test('credential card follows its session request: link not vault name, draft ke
  const link=all(slot,'a')[0];assert.equal(link.href,detail.createUrl);assert.equal(link.target,'_blank');assert.equal(link.textContent,'github.com/settings/personal-access-tokens/new');
  const button=label=>all(slot,'button').find(b=>b.textContent===label);
  assert.equal(slot.querySelector('.chat-action-secure').attributes['aria-label'],'Private vault input');
- const note=slot.querySelector('.chat-action-note');assert.match(note.textContent,/Only you see this value/);assert.equal(note.hidden,true);
+ const note=slot.querySelector('.chat-action-note');assert.match(flat(note),/Only you see this value/);assert.ok(note.querySelector('.chat-action-secure'),'the note carries the shield');assert.equal(note.hidden,true);
  button('i').onclick();assert.equal(note.hidden,false);assert.equal(button('i').attributes['aria-expanded'],'true');
  button('i').onclick();assert.equal(note.hidden,true,'a second tap collapses the note');
  all(slot,'input')[0].value='typed';ui.showCredential({...detail},'sid');assert.equal(all(slot,'input')[0].value,'typed');
