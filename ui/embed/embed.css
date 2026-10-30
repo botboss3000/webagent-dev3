@@ -2,7 +2,7 @@ html,body{height:100%;width:100%;overflow:hidden}body{margin:0}.wa-embed-root{he
 .wa-embed-root #chat-header [data-header-control="title"]{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* Wiki reader: beside the chat once the host has widened the window, over it on narrow screens. */
 .wa-wiki-reader{display:flex;flex-direction:column;flex:1 1 auto;min-width:0;height:100dvh;background:var(--bg-0);color:var(--fg-1)}.wa-wiki-reader[hidden]{display:none}
-body.wa-reader-open{display:flex}
+body.wa-reader-open{display:flex;flex-direction:row-reverse}
 @media (min-width:760px){body.wa-reader-open .wa-wiki-reader{border-right:var(--border-width,1px) solid var(--border)}body.wa-reader-open .wa-embed-root{flex:0 0 max(320px,calc(100% - 480px));min-width:0}}
 /* Too narrow for both: the reader takes the window until it is closed. */
 @media (max-width:759.98px){body.wa-reader-open .wa-embed-root{display:none}}
