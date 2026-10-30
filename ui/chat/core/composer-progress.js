@@ -31,7 +31,8 @@ export function mountComposerProgress({root,getProfile,isAdmin}) {
     wrap.style.alignItems=({left:'flex-start',center:'center',right:'flex-end'})[wrap.dataset.zone];
     wrap.hidden=!label||!placed;host.classList.toggle('visible',!!label&&placed);bar.classList.toggle('ambient',!!label&&!run);
     const seconds=started?Math.floor((performance.now()-started)/1000):0;
-    text.textContent=label+(label&&seconds>=1?' · '+seconds+'s':'');
+    // A stopped note is final state, not progress, so it shows no elapsed time.
+    text.textContent=label+(label&&!held&&seconds>=1?' · '+seconds+'s':'');
     root.querySelector('#chat-input-row').classList.toggle('thinking',!!run);
   }
   // Reset the elapsed-time origin only when the visible label changes.
