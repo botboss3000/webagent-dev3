@@ -294,15 +294,17 @@ let csrf='',state={},poll;
 const ids=new Map();
 const keyId=key=>{if(!ids.has(key))ids.set(key,crypto.randomUUID());return ids.get(key);};
 let noticeSource='',actionNotice='',backgroundNotices=[];
+// Shown for transport and gateway failures; the next server response clears it.
+const OFFLINE="Can't reach the server. Retrying automatically.";
 const paintNotices=()=>{$('notice').textContent=[actionNotice,...backgroundNotices].filter(Boolean).join(' · ');};
 const issues=createBackgroundIssues({request:(...args)=>api(...args),render:messages=>{backgroundNotices=messages;paintNotices();}});
 const note=(text,source='')=>{
   const visibleText=(text==='Sign in required'||text==='Guest access is not enabled')?'':text;
   actionNotice=visibleText;paintNotices();
-  noticeSource=visibleText?source:'';
+  noticeSource=visibleText?(source||(visibleText.endsWith(OFFLINE)?'network':'')):'';
 };
 const clearNoticeFrom=source=>{if(noticeSource===source)note('');};
-async function api(path,method='GET',body){const response=await fetch('/api/v3'+path,{method,credentials:'same-origin',headers:{'Content-Type':'application/json',...(method==='GET'?{}:{'x-csrf-token':csrf})},...(body===undefined?{}:{body:JSON.stringify(body)})});const data=await response.json().catch(()=>({}));if(!response.ok){if(response.status===401&&path!=='/auth/login')out();const error=Error(data.error||data.message||'Request failed ('+response.status+')');error.status=response.status;throw error;}return data;}
+async function api(path,method='GET',body){let response;try{response=await fetch('/api/v3'+path,{method,credentials:'same-origin',headers:{'Content-Type':'application/json',...(method==='GET'?{}:{'x-csrf-token':csrf})},...(body===undefined?{}:{body:JSON.stringify(body)})});}catch{throw Error(OFFLINE);}const data=await response.json().catch(()=>({}));const gateway=response.status>=502&&!data.error&&!data.message;if(!gateway)clearNoticeFrom('network');if(!response.ok){if(response.status===401&&path!=='/auth/login')out();const error=Error(data.error||data.message||(gateway?OFFLINE:'Request failed ('+response.status+')'));error.status=response.status;throw error;}return data;}
 const guard=fn=>async event=>{event?.preventDefault();try{await fn(event);note('');}catch(error){note(error.message);}};
 const chat = await mountChatPanel({request:api, guard, note, clearNoticeFrom, issues, keyId, forgetKey:key=>ids.delete(key), refresh, getState:()=>state, getAgentId:()=>agentId, getIdentity:()=>accountMe, onLogin:()=>openSignInPanel({agent:agentRoster.find(agent=>agent.id===agentId)?.name||'WebAgent',message:'Sign in with your WebAgent account to use your access to this agent. Your current session ends first.',identity:accountMe?(accountMe.role==='guest'?'Guest':accountMe.user):'',signIn:guard(async()=>{await signOut();showLeftOverlay();}),guest:null})});
 await loadMainPages();
@@ -890,7 +892,8 @@ $('connect').onclick=guard(async()=>{await api('/provider/login','POST',{});awai
 $('disconnect').onclick=guard(async()=>{await api('/provider/logout','POST',{});await refresh();});
 $('model-form').onsubmit=guard(async()=>{agentModel=(await api('/agents/'+agentId+'/model','PUT',{model:$('model').value.trim()})).model;await refresh();});
 $('policy-form').onsubmit=guard(async()=>{const rules=Object.fromEntries([...$('rules').querySelectorAll('select')].map(node=>[node.name,node.value]));await api('/policy','PUT',{rules});await refresh();});
-api('/auth/setup-status').then(status=>{if(!status.initialized){location.replace('/setup.html');return;}return boot();}).catch(error=>{if(error.status===401)out();note(error.message);window.__boot?.reveal();});
+const start=()=>api('/auth/setup-status').then(status=>{if(!status.initialized){location.replace('/setup.html');return;}return boot();}).catch(error=>{if(error.status===401)out();note(error.message);if(error.message===OFFLINE)setTimeout(start,3000);window.__boot?.reveal();});
+start();
 
 // App-shell ownership includes the header account portal; chat shares its gesture registry.
 import './shared/header-feedback.js';
