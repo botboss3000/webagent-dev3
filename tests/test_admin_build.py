@@ -604,8 +604,8 @@ class BuildTests(unittest.TestCase):
                                  {"id": "b", "phase": "compile_linked", "recipe": "engine:rust1.90:linked-release", "started_at": now - 380}],
                "execution_observation": {"phase": "test", "elapsed_seconds": 380}}
         value = host.job_progress(job, {}, now)
-        self.assertEqual([r["stage"] for r in value["running_stages"]], ["run tests", "linked release build"])
-        self.assertEqual((value["stage"], value["stage_seconds"]), ("linked release build", 380))
+        self.assertEqual([r["stage"] for r in value["running_stages"]], ["run tests", "release build"])
+        self.assertEqual((value["stage"], value["stage_seconds"]), ("release build", 380))
         self.assertEqual([d["stage"] for d in value["finished_stages"]], ["compile tests"])
         finished = {"job_id": "plugins", "status": "completed", "operation": "build_deploy", "started_at": 0, "finished_at": 400,
                     "phase_history": [{"phase": "building_api", "at": 0}, {"phase": "preparing_plugins", "at": 100}, {"phase": "frontend_tests", "at": 300}],
@@ -615,7 +615,7 @@ class BuildTests(unittest.TestCase):
                     "active_phases": [{"id": "stale", "phase": "test", "started_at": 5}]}
         spans = host.stage_spans(finished)
         self.assertEqual(spans["dependencies"], [1, 10])
-        self.assertEqual(spans["prepare plugins"], [100, 300])
+        self.assertEqual(spans["package release"], [100, 300])
         self.assertNotIn("run tests", spans)
 
     def test_pending_journal_scan_sees_new_and_rewritten_records(self):
