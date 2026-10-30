@@ -78,36 +78,28 @@ impl
                 generation: &generation,
                 pending_id: &pending_id,
             };
-            if name == "screenshot_genui" {
-                tools::core_visual_capture::execute(
-                    &app,
-                    &sid,
-                    &run_id,
-                    &generation,
-                    &pending_id,
-                    &args,
-                    cancel,
-                )
-                .await
-            } else if tools::core_vault::owns(&name) {
-                tools::core_vault::execute(
-                    &app,
-                    &sid,
-                    &run_id,
-                    &generation,
-                    &pending_id,
+            if tools::native::visual_capture::owns(&name) {
+                tools::native::visual_capture::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
                     &name,
                     &args,
                     cancel,
                 )
                 .await
-            } else if tools::core_visualizer::owns(&name) {
-                tools::core_visualizer::execute(
-                    &app,
-                    &sid,
-                    &run_id,
-                    &generation,
-                    &pending_id,
+            } else if tools::native::vault::owns(&name) {
+                tools::native::vault::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
+                    &name,
+                    &args,
+                    cancel,
+                )
+                .await
+            } else if tools::native::visualizer::owns(&name) {
+                tools::native::visualizer::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
                     &name,
                     &args,
                     cancel,
@@ -136,13 +128,10 @@ impl
                     cancel,
                 ))
                 .await
-            } else if tools::core_webhooks::owns(&name) {
-                tools::core_webhooks::execute(
-                    &app,
-                    &sid,
-                    &run_id,
-                    &generation,
-                    &pending_id,
+            } else if tools::native::webhooks::owns(&name) {
+                tools::native::webhooks::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
                     &name,
                     &args,
                     cancel,
@@ -181,25 +170,20 @@ impl
                     cancel,
                 )
                 .await
-            } else if tools::core_ui_admin::owns(&name) {
-                tools::core_ui_admin::execute(
-                    &app,
-                    &sid,
-                    &run_id,
-                    &generation,
-                    &pending_id,
+            } else if tools::native::ui_admin::owns(&name) {
+                tools::native::ui_admin::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
                     &name,
                     &args,
                     cancel,
                 )
                 .await
-            } else if tools::core_app_control::owns(&name) {
-                tools::core_app_control::execute(
-                    &app,
-                    &sid,
-                    &run_id,
-                    &generation,
-                    &pending_id,
+            } else if tools::native::app_control::owns(&name) {
+                tools::native::app_control::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
+                    &name,
                     &args,
                     cancel,
                 )

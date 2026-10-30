@@ -112,12 +112,15 @@ mod tests {
             "{:?}",
             decision.reason
         );
-        let result = tools::core_app_control::execute(
-            &app,
-            &sid,
-            &rid,
-            "fixture",
-            &pending,
+        let result = tools::native::app_control::execute(
+            &tools::native_host::Host(&app),
+            tools::native::Call {
+                sid: &sid,
+                run_id: &rid,
+                generation: "fixture",
+                pending_id: &pending,
+            },
+            "set_app_view",
             &args,
             CancellationToken::new(),
         )
@@ -191,14 +194,17 @@ mod tests {
         .is_err());
         run["status"] = json!("cancelled");
         app.store.put(&key("run", &rid), &run).await.unwrap();
-        assert!(tools::core_app_control::execute(
-            &app,
-            &sid,
-            &rid,
-            "fixture",
-            &pending,
+        assert!(tools::native::app_control::execute(
+            &tools::native_host::Host(&app),
+            tools::native::Call {
+                sid: &sid,
+                run_id: &rid,
+                generation: "fixture",
+                pending_id: &pending,
+            },
+            "set_app_view",
             &args,
-            CancellationToken::new()
+            CancellationToken::new(),
         )
         .await
         .is_err());

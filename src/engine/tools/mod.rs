@@ -51,12 +51,8 @@ pub(crate) mod core_skills;
 pub(crate) mod core_task;
 #[path = "../../../crates/modules/abilities/host/base/tool_search_adapter.rs"]
 pub(crate) mod core_tool_search;
-#[path = "../../../crates/modules/abilities/host/ui_admin.rs"]
-pub(crate) mod core_ui_admin;
 #[path = "../../../crates/modules/abilities/host/vault.rs"]
 pub(crate) mod core_vault;
-#[path = "../../../crates/modules/abilities/host/visual_capture.rs"]
-pub(crate) mod core_visual_capture;
 #[path = "../../../crates/modules/abilities/host/visualizer.rs"]
 pub(crate) mod core_visualizer;
 #[path = "../../../crates/modules/abilities/host/webhooks.rs"]
@@ -84,7 +80,7 @@ pub fn is_read(name: &str) -> bool {
         return definition.is_read();
     }
     crate::source_control::is_read(name)
-        || core_webhooks::is_read(name)
+        || native::webhooks::is_read(name)
         || name == "main_notes_read"
         || crate::modules::is_read(name)
         || matches!(
@@ -137,13 +133,13 @@ pub(crate) fn folder_handlers() -> impl Iterator<Item = &'static str> {
         core_agent_management::TOOLS,
         native::image_vision::TOOLS,
         core_image_generation::TOOLS,
-        core_app_control::TOOLS,
-        core_ui_admin::TOOLS,
+        native::app_control::TOOLS,
+        native::ui_admin::TOOLS,
         native::functions::TOOLS,
         core_orchestration::TOOLS,
-        core_visualizer::TOOLS,
-        core_vault::TOOLS,
-        core_visual_capture::TOOLS,
+        native::visualizer::TOOLS,
+        native::vault::TOOLS,
+        native::visual_capture::TOOLS,
     ]
     .into_iter()
     .flatten()
@@ -288,15 +284,15 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         schemas.extend(core_agent_management::schemas());
         schemas.extend(native::schemas(native::image_vision::TOOLS));
         schemas.extend(core_image_generation::schemas());
-        schemas.extend(core_app_control::schemas());
-        schemas.extend(core_ui_admin::schemas());
+        schemas.extend(native::schemas(native::app_control::TOOLS));
+        schemas.extend(native::schemas(native::ui_admin::TOOLS));
         schemas.extend(native::functions::schemas());
         schemas.extend(core_orchestration::schemas());
         schemas.extend(core_base_extras::schemas());
-        schemas.extend(core_webhooks::schemas());
-        schemas.extend(core_visualizer::schemas());
-        schemas.extend(core_vault::schemas());
-        schemas.extend(core_visual_capture::schemas());
+        schemas.extend(native::webhooks::schemas());
+        schemas.extend(native::schemas(native::visualizer::TOOLS));
+        schemas.extend(native::schemas(native::vault::TOOLS));
+        schemas.extend(native::schemas(native::visual_capture::TOOLS));
         schemas.extend(core_session::schemas());
         schemas.extend(crate::session_messaging::schemas());
         schemas.extend(crate::main_chat::schemas());

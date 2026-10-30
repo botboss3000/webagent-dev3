@@ -68,44 +68,6 @@ impl Store {
         Ok(true)
     }
 
-    pub(crate) async fn module_state(&self, id: &str) -> Result<Value> {
-        Ok(self
-            .get(&format!("module_state:{id}"))
-            .await?
-            .unwrap_or_else(|| json!({"revision":0,"state":{},"pending":[]})))
-    }
-    pub(crate) async fn module_cas(&self, id: &str, expected: u64, value: &Value) -> Result<()> {
-        if serde_json::to_vec(value)?.len() > 3 * 1024 * 1024 {
-            return Err(anyhow!("Module state capacity reached"));
-        }
-        let key = format!("module_state:{id}");
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE docs SET key=key WHERE key=?")
-            .bind(&key)
-            .execute(&mut *tx)
-            .await?;
-        let raw: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-            .bind(&key)
-            .fetch_optional(&mut *tx)
-            .await?;
-        let previous = raw.map(|raw| self.unseal(&raw)).transpose()?;
-        if previous
-            .as_ref()
-            .and_then(|v| v["revision"].as_u64())
-            .unwrap_or(0)
-            != expected
-        {
-            return Err(anyhow!("Module revision changed"));
-        }
-        let mut next = value.clone();
-        next["revision"] = json!(expected + 1);
-        // Never let administrator plaintext storage expose connector signing keys.
-        sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-            .bind(&key).bind(self.seal(&next)?).execute(&mut *tx).await?;
-        tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[key]);
-        Ok(())
-    }
     pub(crate) async fn module_events(&self, after: i64) -> Result<Value> {
         let bounds = self.notification_page(after, 1).await?;
         if bounds["error"] == "cursor_expired" {

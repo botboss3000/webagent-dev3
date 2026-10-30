@@ -1,6 +1,12 @@
 //! UI-only source aliases retain the protected broker and legacy source permission ceilings.
-use crate::*;
+use crate::{Call, NativeHost};
+use anyhow::{anyhow, Result};
 use serde::Deserialize;
+use serde_json::{json, Value};
+use tokio_util::sync::CancellationToken;
+use webagent_host_core::digest;
+
+#[must_use]
 pub fn owns(name: &str) -> bool {
     matches!(
         name,
@@ -14,10 +20,15 @@ pub fn owns(name: &str) -> bool {
     )
 }
 /// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
-pub const TOOLS: &[&str] = &["read_source", "write_source", "edit_source", "patch_source", "delete_source", "read_directory", "search_source"];
-pub fn schemas() -> Vec<Value> {
-    crate::tools::folder_schemas(TOOLS)
-}
+pub const TOOLS: &[&str] = &[
+    "read_source",
+    "write_source",
+    "edit_source",
+    "patch_source",
+    "delete_source",
+    "read_directory",
+    "search_source",
+];
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Args {
@@ -133,16 +144,13 @@ pub fn patch_paths(patch: &str, delete: Option<&str>) -> Result<()> {
     Ok(())
 }
 pub async fn execute(
-    app: &App,
-    sid: &str,
-    rid: &str,
-    generation: &str,
-    pending: &str,
+    host: &dyn NativeHost,
+    call: Call<'_>,
     name: &str,
     args: &Value,
     cancel: CancellationToken,
 ) -> Result<Value> {
-    super::core_authority::check(app, sid, rid, generation, pending, name, args, &cancel).await?;
+    host.authorize(call, name, args, &cancel).await?;
     let q: Args = serde_json::from_value(args.clone())?;
     let operation = match name {
         "read_source" => "file_read",
@@ -203,10 +211,14 @@ pub async fn execute(
             forwarded["limit"] = json!(limit);
         }
     }
-    if !crate::tools::is_read(name) {
-        forwarded["request_id"] = json!(format!("ui-{}", digest(&json!([sid, rid, pending]))));
+    if !crate::is_read(name) {
+        forwarded["request_id"] = json!(format!(
+            "ui-{}",
+            digest(&json!([call.sid, call.run_id, call.pending_id]))
+        ));
     }
-    tools::administrator::ui_host(app, sid, rid, name, operation, &forwarded, cancel).await
+    host.ui_admin(call.sid, call.run_id, name, operation, &forwarded, cancel)
+        .await
 }
 #[cfg(test)]
 mod tests {

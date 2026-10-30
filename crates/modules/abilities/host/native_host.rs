@@ -23,6 +23,9 @@ impl NativeHost for Host<'_> {
     fn user_store<'a>(&'a self, user: &'a str) -> Pending<'a, Result<StoreCore>> {
         Box::pin(async move { Ok((*self.0.store.for_user(user).await?).clone()) })
     }
+    fn gate(&self) -> &tokio::sync::Mutex<()> {
+        &self.0.gate
+    }
     fn actor(&self) -> &str {
         shared_chat::actor(self.0)
     }
@@ -100,6 +103,19 @@ impl NativeHost for Host<'_> {
                 .await
                 .map_err(|e| anyhow!(e.1))
         })
+    }
+    fn ui_admin<'a>(
+        &'a self,
+        sid: &'a str,
+        run_id: &'a str,
+        tool: &'a str,
+        operation: &'a str,
+        args: &'a Value,
+        cancel: CancellationToken,
+    ) -> Pending<'a, Result<Value>> {
+        Box::pin(tools::administrator::ui_host(
+            self.0, sid, run_id, tool, operation, args, cancel,
+        ))
     }
     fn upload<'a>(&'a self, sid: &'a str, body: Value) -> Pending<'a, Result<Value>> {
         Box::pin(async move {

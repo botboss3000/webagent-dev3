@@ -454,7 +454,7 @@ pub(crate) async fn ui_host(
     args: &Value,
     cancel: CancellationToken,
 ) -> Result<Value> {
-    if !super::core_ui_admin::owns(tool)
+    if !super::native::ui_admin::owns(tool)
         || !matches!(
             operation,
             "file_list"

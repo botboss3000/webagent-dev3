@@ -14,12 +14,18 @@ use webagent_files::uploads::AttachmentLimits;
 use webagent_host_core::StoreCore;
 use webagent_models::model_selection::ModelRole;
 
+pub mod app_control;
 pub mod functions;
 pub mod image_vision;
 pub mod knowledge_files;
+pub mod ui_admin;
 pub mod user_files;
 pub mod utilities;
+pub mod vault;
+pub mod visual_capture;
+pub mod visualizer;
 pub mod web_access;
+pub mod webhooks;
 
 /// A boxed `Send` future borrowed from the host.
 pub type Pending<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -42,6 +48,9 @@ pub trait NativeHost: Sync {
     fn agent_store<'a>(&'a self, agent: &'a str) -> Pending<'a, Result<StoreCore>>;
     /// Storage scoped to `user`'s private plane.
     fn user_store<'a>(&'a self, user: &'a str) -> Pending<'a, Result<StoreCore>>;
+    /// The application's write gate; state changes that must not interleave with a run's
+    /// dispatch are made under it.
+    fn gate(&self) -> &tokio::sync::Mutex<()>;
     /// The user a session acts for: the caller, or a shared chat's owner.
     fn actor(&self) -> &str;
     /// Fresh run authority for tool `name` with `args` at `call`'s position: the current
@@ -79,6 +88,16 @@ pub trait NativeHost: Sync {
     ) -> Pending<'a, Result<Value>>;
     /// The attachment limits of session `sid`'s agent.
     fn attachment_limits<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<AttachmentLimits>>;
+    /// Forward an authorized UI Admin `operation` for `tool` to the Administration host.
+    fn ui_admin<'a>(
+        &'a self,
+        sid: &'a str,
+        run_id: &'a str,
+        tool: &'a str,
+        operation: &'a str,
+        args: &'a Value,
+        cancel: CancellationToken,
+    ) -> Pending<'a, Result<Value>>;
     /// Attach a file to session `sid` as the actor's upload; `body` is an upload request
     /// (`client_upload_id`, `name`, `media_type`, `data`). Returns the upload record.
     fn upload<'a>(&'a self, sid: &'a str, body: Value) -> Pending<'a, Result<Value>>;

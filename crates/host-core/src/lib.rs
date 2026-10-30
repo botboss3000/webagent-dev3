@@ -5,6 +5,7 @@
 //! extension traits on `StoreCore`. Everything links into the one program.
 mod documents;
 mod error;
+mod module_state;
 pub mod notifications;
 mod run_fence;
 mod store;
