@@ -5,6 +5,9 @@
   "default_access": {
     "operator": "ask"
   },
+  "account_access": {
+    "operator": "auto"
+  },
   "parameters": {
     "type": "object",
     "properties": {

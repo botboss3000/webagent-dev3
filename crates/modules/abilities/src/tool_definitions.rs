@@ -39,13 +39,17 @@ pub struct ToolDefinition {
     /// Access when an agent's capability level saves no explicit tool permission.
     /// A role left out gets the next role down; none at all means Deny.
     pub default_access: BTreeMap<String, Permission>,
+    /// Account-tier template by tier ID, used when a tier names neither the tool, a
+    /// wildcard nor its entitlement group. Not a security boundary; tools enforce their own.
+    #[serde(default)]
+    pub account_access: BTreeMap<String, Permission>,
 }
 
 impl ToolDefinition {
     /// Parse and validate one `tool.json`; `folder` is the tool folder's name.
     pub fn parse(bytes: &[u8], folder: &str) -> Result<Self> {
-        let definition: Self =
-            serde_json::from_slice(bytes).with_context(|| format!("Invalid tool.json: {folder}"))?;
+        let definition: Self = serde_json::from_slice(bytes)
+            .with_context(|| format!("Invalid tool.json: {folder}"))?;
         definition.validate(folder)?;
         Ok(definition)
     }
@@ -74,8 +78,19 @@ impl ToolDefinition {
         {
             bail!("Invalid tool parameters: {folder}");
         }
-        if self.default_access.keys().any(|role| !ROLES.contains(&role.as_str())) {
+        if self
+            .default_access
+            .keys()
+            .any(|role| !ROLES.contains(&role.as_str()))
+        {
             bail!("default_access names an unknown role: {folder}");
+        }
+        if self
+            .account_access
+            .keys()
+            .any(|tier| !webagent_access::valid_id(tier))
+        {
+            bail!("account_access names an invalid tier: {folder}");
         }
         Ok(())
     }
@@ -148,13 +163,20 @@ pub fn read_folder(ability: &Path) -> Result<Option<Vec<FolderTool>>> {
         return Ok(None);
     }
     if flat {
-        bail!("Ability mixes tool folders and flat tool files: {}", ability.display());
+        bail!(
+            "Ability mixes tool folders and flat tool files: {}",
+            ability.display()
+        );
     }
     if folders.len() > MAX_TOOLS_PER_ABILITY {
         bail!("Too many tools: {}", ability.display());
     }
     folders.sort();
-    folders.into_iter().map(|folder| read_tool(&folder)).collect::<Result<_>>().map(Some)
+    folders
+        .into_iter()
+        .map(|folder| read_tool(&folder))
+        .collect::<Result<_>>()
+        .map(Some)
 }
 
 /// Sorted tool folder names, or `None` for the legacy layout; reads only the directory.
@@ -186,7 +208,12 @@ fn read_tool(folder: &Path) -> Result<FolderTool> {
     if let Some(text) = &skill {
         hasher.update(text.as_bytes());
     }
-    Ok(FolderTool { name, definition, skill, digest: hex::encode(hasher.finalize()) })
+    Ok(FolderTool {
+        name,
+        definition,
+        skill,
+        digest: hex::encode(hasher.finalize()),
+    })
 }
 
 /// The manifest digest with every tool folder folded in, so an edited `tool.json` or
@@ -207,7 +234,9 @@ pub fn load_all(abilities: &Path) -> (BTreeMap<String, ToolDefinition>, Vec<Stri
     let mut definitions = BTreeMap::new();
     let mut problems = Vec::new();
     let groups = fs::read_dir(abilities).into_iter().flatten().flatten();
-    for ability in groups.flat_map(|group| fs::read_dir(group.path()).into_iter().flatten().flatten()) {
+    for ability in
+        groups.flat_map(|group| fs::read_dir(group.path()).into_iter().flatten().flatten())
+    {
         match read_folder(&ability.path()) {
             Ok(tools) => {
                 for tool in tools.into_iter().flatten() {
@@ -267,7 +296,10 @@ pub fn problems() -> &'static [String] {
 fn loaded() -> &'static (BTreeMap<String, ToolDefinition>, Vec<String>) {
     DEFINITIONS.get_or_init(|| match root() {
         Some(root) => load_all(&root),
-        None => (BTreeMap::new(), vec!["No plugins/abilities folder found".into()]),
+        None => (
+            BTreeMap::new(),
+            vec!["No plugins/abilities folder found".into()],
+        ),
     })
 }
 
@@ -301,7 +333,10 @@ mod tests {
         write(&ability, "extra", &extra);
         fs::write(ability.join("tools/lookup/tool.skill.md"), "Use it well.").unwrap();
         let tools = read_folder(&ability).unwrap().unwrap();
-        assert_eq!(tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["extra", "lookup", "renamed"]);
+        assert_eq!(
+            tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            ["extra", "lookup", "renamed"]
+        );
         assert!(tools[0].definition.is_err() && tools[2].definition.is_err());
         let lookup = tools[1].definition.as_ref().unwrap();
         assert_eq!(tools[1].skill.as_deref(), Some("Use it well."));
@@ -314,11 +349,21 @@ mod tests {
 
     #[test]
     fn default_access_falls_to_the_next_role_down_then_deny() {
-        let definition = ToolDefinition::parse(&serde_json::to_vec(&body("lookup")).unwrap(), "lookup").unwrap();
+        let definition =
+            ToolDefinition::parse(&serde_json::to_vec(&body("lookup")).unwrap(), "lookup").unwrap();
         let rungs = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
-        assert_eq!(definition.default_for(&rungs(&["operator", "member", "visitor"])), Permission::Auto);
-        assert_eq!(definition.default_for(&rungs(&["trusted", "member", "visitor"])), Permission::Ask);
-        assert_eq!(definition.default_for(&rungs(&["visitor"])), Permission::Deny);
+        assert_eq!(
+            definition.default_for(&rungs(&["operator", "member", "visitor"])),
+            Permission::Auto
+        );
+        assert_eq!(
+            definition.default_for(&rungs(&["trusted", "member", "visitor"])),
+            Permission::Ask
+        );
+        assert_eq!(
+            definition.default_for(&rungs(&["visitor"])),
+            Permission::Deny
+        );
     }
 
     #[test]

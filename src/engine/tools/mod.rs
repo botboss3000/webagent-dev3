@@ -13,8 +13,6 @@ pub(crate) mod core_authority;
 pub(crate) mod core_image_generation;
 #[path = "../../../crates/modules/abilities/host/base/mode_adapter.rs"]
 pub(crate) mod core_mode;
-#[path = "../../../crates/modules/abilities/host/native_host.rs"]
-pub(crate) mod native_host;
 #[path = "../../../crates/modules/abilities/host/base/prompt_adapter.rs"]
 pub(crate) mod core_prompt;
 #[path = "../../../crates/modules/abilities/host/base/recall_adapter.rs"]
@@ -30,6 +28,8 @@ pub(crate) mod core_visualizer;
 #[path = "../../../crates/modules/abilities/host/webhooks.rs"]
 pub(crate) mod core_webhooks;
 mod dispatch;
+#[path = "../../../crates/modules/abilities/host/native_host.rs"]
+pub(crate) mod native_host;
 pub(crate) use webagent_native_tools as native;
 pub(crate) mod failure;
 #[path = "../../../crates/modules/abilities/host/web_search.rs"]
@@ -186,6 +186,19 @@ pub(crate) fn install_tool_defaults() {
         webagent_abilities::ability_access::ability_entitlement,
         webagent_abilities::ability_access::tool_entitlement,
     );
+    webagent_access::install_templates(
+        webagent_abilities::ability_access::ability_template,
+        tool_template,
+    );
+}
+
+/// A tool's manifest template for account tier `tier`; live checkout edits apply at once.
+fn tool_template(name: &str, tier: &str) -> Option<webagent_access::Permission> {
+    let current = crate::ability_drift::current();
+    current
+        .definition(name)
+        .or_else(|| webagent_abilities::tool_definitions::get(name))
+        .and_then(|definition| definition.account_access.get(tier).copied())
 }
 
 pub fn schemas() -> Vec<Value> {

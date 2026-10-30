@@ -12,6 +12,8 @@ use webagent_access::Permission;
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AbilityAccess {
     pub default_access: BTreeMap<String, Permission>,
+    /// Account-tier template by tier ID (see `webagent_access::Template`).
+    pub account_access: BTreeMap<String, Permission>,
     pub entitlement: Option<String>,
 }
 
@@ -59,11 +61,16 @@ pub fn load_all(root: &Path) -> Registry {
             let Ok(bytes) = fs::read(folder.join(format!("{id}.json"))) else {
                 continue;
             };
-            let default_access = match serde_json::from_slice::<Value>(&bytes)
+            let declared = serde_json::from_slice::<Value>(&bytes)
                 .map_err(|_| "unreadable manifest".to_owned())
-                .and_then(|manifest| defaults(&manifest["default_access"]))
-            {
-                Ok(defaults) => defaults,
+                .and_then(|manifest| {
+                    Ok((
+                        defaults(&manifest["default_access"])?,
+                        templates(&manifest["account_access"])?,
+                    ))
+                });
+            let (default_access, account_access) = match declared {
+                Ok(declared) => declared,
                 Err(reason) => {
                     registry.problems.push(format!("{id}: {reason}"));
                     continue;
@@ -78,6 +85,7 @@ pub fn load_all(root: &Path) -> Registry {
                 id,
                 AbilityAccess {
                     default_access,
+                    account_access,
                     entitlement: entitlement.clone(),
                 },
             );
@@ -108,6 +116,28 @@ fn defaults(value: &Value) -> Result<BTreeMap<String, Permission>, String> {
     Ok(defaults)
 }
 
+/// `account_access`: absent, or an object of tier IDs to permissions.
+fn templates(value: &Value) -> Result<BTreeMap<String, Permission>, String> {
+    if value.is_null() {
+        return Ok(BTreeMap::new());
+    }
+    let tiers = value
+        .as_object()
+        .ok_or("account_access must be an object")?;
+    let mut templates = BTreeMap::new();
+    for (tier, permission) in tiers {
+        if !webagent_access::valid_id(tier) {
+            return Err(format!("account_access names an invalid tier: {tier}"));
+        }
+        let permission = permission
+            .as_str()
+            .and_then(|permission| Permission::from_policy(permission).ok())
+            .ok_or("account_access permissions are auto, ask or deny")?;
+        templates.insert(tier.clone(), permission);
+    }
+    Ok(templates)
+}
+
 static LOADED: OnceLock<Registry> = OnceLock::new();
 
 /// Process-wide registry, read once on first use.
@@ -122,6 +152,16 @@ pub fn registry() -> &'static Registry {
 /// An ability's declared default for a level's rungs (installed into the access layer).
 pub fn default_for(id: &str, rungs: &[String]) -> Option<Permission> {
     registry().abilities.get(id)?.default_for(rungs)
+}
+
+/// An ability's manifest template for account tier `tier` (installed into the access layer).
+pub fn ability_template(id: &str, tier: &str) -> Option<Permission> {
+    registry()
+        .abilities
+        .get(id)?
+        .account_access
+        .get(tier)
+        .copied()
 }
 
 /// An ability's entitlement group (installed into the access layer).
@@ -157,7 +197,7 @@ mod tests {
         write(
             root,
             "Web/web_search/web_search.json",
-            r#"{"default_access":{"operator":"auto","member":"ask"}}"#,
+            r#"{"default_access":{"operator":"auto","member":"ask"},"account_access":{"basic":"ask"}}"#,
         );
         write(root, "Web/web_search/tools/web_read/tool.json", "{}");
         write(root, "Core/_group.json", r#"{"name":"Core"}"#);
@@ -181,6 +221,8 @@ mod tests {
         );
         assert_eq!(search.default_for(&rungs(&["visitor"])), None);
         assert_eq!(search.entitlement.as_deref(), Some("web_read"));
+        assert_eq!(search.account_access.get("basic"), Some(&Permission::Ask));
+        assert!(search.account_access.get("anonymous").is_none());
         assert_eq!(
             registry.tools.get("web_read").map(String::as_str),
             Some("web_read")

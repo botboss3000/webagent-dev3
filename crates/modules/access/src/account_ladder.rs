@@ -195,4 +195,34 @@ mod tests {
         .validate()
         .is_err());
     }
+    #[test]
+    fn manifest_templates_fill_only_unnamed_grants_per_tier() {
+        crate::install_templates(
+            |id, tier| (id == "wiki" && tier != "ghost").then_some(Permission::Auto),
+            |name, tier| match (name, tier) {
+                ("wiki_get", _) => Some(Permission::Auto),
+                ("wiki_create", "operator") => Some(Permission::Auto),
+                _ => None,
+            },
+        );
+        let tier = |id: &str, tools: Value, abilities: Value| {
+            json!({"id":id,"revision":1,"allowed_models":["*"],"tools":tools,
+                "ability_permissions":abilities,"max_sessions":8,"max_active_runs":2})
+        };
+        let mut policy = json!({"tier_order":["operator","basic"],"tiers":{
+            "operator":tier("operator",json!({"*":"auto"}),json!({})),
+            "basic":tier("basic",json!({}),json!({}))}});
+        let basic = effective(&policy, "basic").unwrap();
+        assert_eq!(basic.ability_permission("wiki"), Permission::Auto);
+        assert_eq!(basic.tool_permission("wiki_get"), Permission::Auto);
+        assert_eq!(basic.tool_permission("wiki_create"), Permission::Deny);
+        let operator = effective(&policy, "operator").unwrap();
+        assert_eq!(operator.tool_permission("wiki_create"), Permission::Auto);
+        // A tier's own named grant or wildcard overrides the template.
+        policy["tiers"]["basic"]["ability_permissions"] = json!({"wiki":"deny"});
+        policy["tiers"]["basic"]["tools"] = json!({"*":"ask"});
+        let basic = effective(&policy, "basic").unwrap();
+        assert_eq!(basic.ability_permission("wiki"), Permission::Deny);
+        assert_eq!(basic.tool_permission("wiki_get"), Permission::Ask);
+    }
 }

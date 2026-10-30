@@ -73,6 +73,28 @@ pub fn install_entitlements(ability: Entitlement, tool: Entitlement) {
     let _ = ABILITY_ENTITLEMENT.set(ability);
     let _ = TOOL_ENTITLEMENT.set(tool);
 }
+/// An ability's or tool's manifest `account_access` grant for a tier (item, tier), used
+/// only when the tier names neither the item, a wildcard nor its entitlement group.
+pub type Template = fn(&str, &str) -> Option<Permission>;
+static ABILITY_TEMPLATE: std::sync::OnceLock<Template> = std::sync::OnceLock::new();
+static TOOL_TEMPLATE: std::sync::OnceLock<Template> = std::sync::OnceLock::new();
+pub fn install_templates(ability: Template, tool: Template) {
+    let _ = ABILITY_TEMPLATE.set(ability);
+    let _ = TOOL_TEMPLATE.set(tool);
+}
+/// The entitlement and template hooks for abilities or tools.
+fn hooks(
+    tool: bool,
+) -> (
+    &'static std::sync::OnceLock<Entitlement>,
+    &'static std::sync::OnceLock<Template>,
+) {
+    if tool {
+        (&TOOL_ENTITLEMENT, &TOOL_TEMPLATE)
+    } else {
+        (&ABILITY_ENTITLEMENT, &ABILITY_TEMPLATE)
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -100,6 +122,7 @@ pub struct Tier {
 /// One tier's own grants, resolved alone and then met across the account ladder.
 #[derive(Clone, Debug, Default)]
 pub struct TierGrants {
+    tier: String,
     abilities: BTreeMap<String, Permission>,
     tools: BTreeMap<String, Permission>,
     entitlements: BTreeMap<String, Permission>,
@@ -109,6 +132,7 @@ impl TierGrants {
     #[must_use]
     pub fn of(tier: &Tier) -> Self {
         Self {
+            tier: tier.id.clone(),
             abilities: tier.ability_permissions.clone(),
             tools: tier.tools.clone(),
             entitlements: tier.entitlements.clone(),
@@ -126,11 +150,7 @@ impl TierGrants {
     /// Every name any tier grants, resolved in each tier (named, wildcard, then group) and
     /// met across `chain`, plus the wildcard met alone, as an effective tier's named grants.
     pub(crate) fn merge(chain: &[Self], tool: bool) -> BTreeMap<String, Permission> {
-        let hook = if tool {
-            &TOOL_ENTITLEMENT
-        } else {
-            &ABILITY_ENTITLEMENT
-        };
+        let hooks = hooks(tool);
         let names: std::collections::BTreeSet<&String> = chain
             .iter()
             .flat_map(|grants| grants.named(tool).keys())
@@ -144,7 +164,8 @@ impl TierGrants {
                         grants.named(tool),
                         &grants.entitlements,
                         name,
-                        hook,
+                        &grants.tier,
+                        hooks,
                     ))
                 });
                 (name.clone(), permission)
@@ -164,12 +185,17 @@ impl TierGrants {
     }
 }
 
-/// A named grant, else the tier's wildcard, else the grant for the item's entitlement group.
+/// A named grant, else the tier's wildcard, else the grant for the item's entitlement group,
+/// else the item's manifest template for `tier`.
 fn tier_grant(
     named: &BTreeMap<String, Permission>,
     entitlements: &BTreeMap<String, Permission>,
     id: &str,
-    group: &std::sync::OnceLock<Entitlement>,
+    tier: &str,
+    (group, template): (
+        &std::sync::OnceLock<Entitlement>,
+        &std::sync::OnceLock<Template>,
+    ),
 ) -> Permission {
     named
         .get(id)
@@ -181,6 +207,7 @@ fn tier_grant(
                 .and_then(|group| group(id))
                 .and_then(|group| entitlements.get(group).copied())
         })
+        .or_else(|| template.get().and_then(|template| template(id, tier)))
         .unwrap_or(Permission::Deny)
 }
 impl Tier {
@@ -248,17 +275,13 @@ impl Tier {
     pub fn tool_permission(&self, name: &str) -> Permission {
         self.grant(&self.tools, name, true)
     }
-    /// Alone: named, wildcard, then entitlement group. In a ladder, named grants were met
+    /// Alone: named, wildcard, entitlement group, then manifest template. In a ladder, named grants were met
     /// across it by `effective` (later edits to them still count); anything unnamed
     /// resolves in each tier and is met.
     fn grant(&self, named: &BTreeMap<String, Permission>, id: &str, tool: bool) -> Permission {
-        let hook = if tool {
-            &TOOL_ENTITLEMENT
-        } else {
-            &ABILITY_ENTITLEMENT
-        };
+        let hooks = hooks(tool);
         if self.chain.is_empty() {
-            return tier_grant(named, &self.entitlements, id, hook);
+            return tier_grant(named, &self.entitlements, id, &self.id, hooks);
         }
         if let Some(permission) = named.get(id) {
             return *permission;
@@ -270,7 +293,8 @@ impl Tier {
                     grants.named(tool),
                     &grants.entitlements,
                     id,
-                    hook,
+                    &grants.tier,
+                    hooks,
                 ))
             })
     }

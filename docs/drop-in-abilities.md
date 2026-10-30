@@ -31,8 +31,12 @@ ability closed. Account plans (tiers) grant by entitlement group: the
 `entitlement_group` in the group's `_group.json` names it, and a tier's `entitlements`
 map grants it. An ability or tool the tier does not name, and that `*` does not cover,
 inherits its group's grant, so a new ability in a granted group works in that plan at
-once. Named grants always win, and an upper tier still caps the tiers below it
-(`crates/modules/abilities/src/ability_access.rs`, `crates/modules/access`).
+once. Failing all three, an ability manifest's or `tool.json`'s `account_access` (tier ID
+to `auto`, `ask` or `deny`) is its template grant for that tier, so an ability ships its
+plan defaults; a tier with no template entry denies. Named grants always win, and an
+upper tier still caps the tiers below it (`crates/modules/abilities/src/ability_access.rs`,
+`crates/modules/access`). Templates are defaults, not a security boundary: a tool that
+must stay administrator-only checks that in its own code.
 
 Administrator native tools (`webagent_administration::tools::TOOLS`) use the same
 folders under `plugins/abilities/Administrator/`. Tools with no catalog ability (the
