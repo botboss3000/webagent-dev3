@@ -2,8 +2,6 @@ use anyhow::{bail, Result};
 pub(crate) use webagent_engine::tools::outcome;
 // Single and parallel turns share the same Rust dispatch for native and worker tools.
 pub(crate) mod administrator;
-#[path = "../../../plugins/abilities/Business/front_desk/adapter.rs"]
-pub(crate) mod business_front_desk;
 pub(crate) mod code_index_retrieval;
 #[path = "../../../crates/modules/abilities/host/agent_management.rs"]
 pub(crate) mod core_agent_management;
@@ -11,10 +9,6 @@ pub(crate) mod core_agent_management;
 pub(crate) mod core_app_control;
 #[path = "../../../crates/modules/abilities/host/authority.rs"]
 pub(crate) mod core_authority;
-#[path = "../../../crates/modules/abilities/host/base/compaction_adapter.rs"]
-pub(crate) mod core_compaction;
-#[path = "../../../crates/modules/abilities/host/base/context_assets_adapter.rs"]
-pub(crate) mod core_context_assets;
 #[path = "../../../crates/modules/abilities/host/image_generation.rs"]
 pub(crate) mod core_image_generation;
 #[path = "../../../crates/modules/abilities/host/base/mode_adapter.rs"]
@@ -25,16 +19,10 @@ pub(crate) mod native_host;
 pub(crate) mod core_prompt;
 #[path = "../../../crates/modules/abilities/host/base/recall_adapter.rs"]
 pub(crate) mod core_recall;
-#[path = "../../../crates/modules/abilities/host/base/search_adapter.rs"]
-pub(crate) mod core_search;
-#[path = "../../../crates/modules/abilities/host/base/self_edit_adapter.rs"]
-pub(crate) mod core_self_edit;
 #[path = "../../../crates/modules/abilities/host/base/session_adapter.rs"]
 pub(crate) mod core_session;
 #[path = "../../../crates/modules/abilities/host/base/skills_adapter.rs"]
 pub(crate) mod core_skills;
-#[path = "../../../crates/modules/abilities/host/base/task_adapter.rs"]
-pub(crate) mod core_task;
 #[path = "../../../crates/modules/abilities/host/vault.rs"]
 pub(crate) mod core_vault;
 #[path = "../../../crates/modules/abilities/host/visualizer.rs"]
@@ -108,7 +96,7 @@ pub(crate) fn folder_handlers() -> impl Iterator<Item = &'static str> {
     [
         native::web_access::TOOLS,
         web_search::TOOLS,
-        business_front_desk::TOOLS,
+        native::front_desk::TOOLS,
         native::knowledge_files::TOOLS,
         native::decision::TOOLS,
         native::directory_decision::TOOLS,
@@ -258,7 +246,7 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         schemas.extend(crate::background_tasks::schemas());
         schemas.extend(native::schemas(native::web_access::TOOLS));
         schemas.extend(web_search::schemas());
-        schemas.extend(business_front_desk::schemas());
+        schemas.extend(native::schemas(native::front_desk::TOOLS));
         schemas.extend(native::schemas(native::knowledge_files::TOOLS));
         schemas.extend(native::schemas(native::decision::TOOLS));
         schemas.extend(native::schemas(native::directory_decision::TOOLS));
@@ -277,18 +265,18 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         schemas.extend(native::schemas(native::visualizer::TOOLS));
         schemas.extend(native::schemas(native::vault::TOOLS));
         schemas.extend(native::schemas(native::visual_capture::TOOLS));
-        schemas.extend(core_session::schemas());
+        schemas.extend(native::session::schemas());
         schemas.extend(crate::session_messaging::schemas());
         schemas.extend(crate::main_chat::schemas());
         schemas.extend(core_skills::schemas());
-        schemas.extend(core_context_assets::schemas());
-        schemas.extend(core_prompt::schemas());
-        schemas.extend(core_search::schemas());
+        schemas.extend(native::context_assets::schemas());
+        schemas.extend(native::prompt::schemas());
+        schemas.extend(native::search::schemas());
         schemas.extend(native::tool_search::schemas());
-        schemas.extend(core_self_edit::schemas());
-        schemas.extend(core_task::schemas());
-        schemas.extend(core_compaction::schemas());
-        schemas.extend(core_recall::schemas());
+        schemas.extend(native::self_edit::schemas());
+        schemas.extend(native::task::schemas());
+        schemas.extend(native::compaction::schemas());
+        schemas.extend(native::recall::schemas());
         schemas.extend(native::mode::schemas());
         #[cfg(test)] schemas.push(json!({"type":"function","name":"test_owner_purchase","description":"Development-only owner authorization fixture",
             "authorization":{"kind":"credential_owner","credential_kind":"test"},

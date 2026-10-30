@@ -76,13 +76,13 @@ impl webagent_engine::runtime::ports::NativePolicy for NativePolicy {
         tools::administrator::schemas()
             .into_iter()
             .chain(tools::native::mode::schemas())
-            .chain(tools::core_search::schemas())
-            .chain(tools::core_compaction::schemas())
-            .chain(tools::core_recall::schemas())
-            .chain(tools::core_self_edit::schemas())
+            .chain(tools::native::search::schemas())
+            .chain(tools::native::compaction::schemas())
+            .chain(tools::native::recall::schemas())
+            .chain(tools::native::self_edit::schemas())
             .chain(crate::session_messaging::schemas())
             .chain(crate::main_chat::schemas())
-            .chain(tools::core_task::schemas())
+            .chain(tools::native::task::schemas())
             .chain(tools::native::tool_search::schemas())
             .chain(tools::native::schemas(tools::native::decision::TOOLS))
             .chain(tools::native::schemas(
@@ -102,7 +102,7 @@ impl webagent_engine::runtime::ports::NativePolicy for NativePolicy {
             .chain(tools::native::schemas(tools::native::visualizer::TOOLS))
             .chain(tools::native::schemas(tools::native::vault::TOOLS))
             .chain(tools::native::schemas(tools::native::visual_capture::TOOLS))
-            .chain(tools::business_front_desk::schemas())
+            .chain(tools::native::schemas(tools::native::front_desk::TOOLS))
             .chain(tools::native::schemas(
                 tools::native::knowledge_files::TOOLS,
             ))

@@ -105,14 +105,11 @@ impl
                     cancel,
                 )
                 .await
-            } else if tools::business_front_desk::owns(&name) {
+            } else if tools::native::front_desk::owns(&name) {
                 // Boxed so this branch does not grow the shared dispatch future's stack frame.
-                Box::pin(tools::business_front_desk::execute(
-                    &app,
-                    &sid,
-                    &run_id,
-                    &generation,
-                    &pending_id,
+                Box::pin(tools::native::front_desk::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
                     &name,
                     &args,
                     cancel,
@@ -310,17 +307,21 @@ impl
                     cancel,
                 )
                 .await
-            } else if tools::core_task::owns(&name) {
-                tools::core_task::execute(&app, &sid, &run_id, &pending_id, &name, &args, cancel)
-                    .await
-            } else if tools::core_self_edit::owns(&name) {
-                tools::core_self_edit::execute(
-                    &app,
-                    &sid,
-                    &run_id,
+            } else if tools::native::task::owns(&name) {
+                tools::native::task::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
                     &name,
                     &args,
-                    &pending_id,
+                    cancel,
+                )
+                .await
+            } else if tools::native::self_edit::owns(&name) {
+                tools::native::self_edit::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
+                    &name,
+                    &args,
                     cancel,
                 )
                 .await
@@ -333,22 +334,64 @@ impl
                     cancel,
                 )
                 .await
-            } else if tools::core_search::owns(&name) {
-                tools::core_search::execute(&app, &sid, &run_id, &name, &args, cancel).await
-            } else if tools::core_compaction::owns(&name) {
-                tools::core_compaction::execute(&app, &sid, &run_id, &name, &args, cancel).await
-            } else if tools::core_recall::owns(&name) {
-                tools::core_recall::execute(&app, &sid, &run_id, &name, &args, cancel).await
-            } else if tools::core_prompt::owns(&name) {
-                tools::core_prompt::execute(&app, &sid, &run_id, &name, &args, cancel).await
-            } else if tools::core_context_assets::owns(&name) {
-                tools::core_context_assets::execute(&app, &sid, &run_id, &name, &args, cancel).await
+            } else if tools::native::search::owns(&name) {
+                tools::native::search::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
+                    &name,
+                    &args,
+                    cancel,
+                )
+                .await
+            } else if tools::native::compaction::owns(&name) {
+                tools::native::compaction::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
+                    &name,
+                    &args,
+                    cancel,
+                )
+                .await
+            } else if tools::native::recall::owns(&name) {
+                tools::native::recall::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
+                    &name,
+                    &args,
+                    cancel,
+                )
+                .await
+            } else if tools::native::prompt::owns(&name) {
+                tools::native::prompt::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
+                    &name,
+                    &args,
+                    cancel,
+                )
+                .await
+            } else if tools::native::context_assets::owns(&name) {
+                tools::native::context_assets::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
+                    &name,
+                    &args,
+                    cancel,
+                )
+                .await
             } else if tools::core_skills::owns(&name) {
                 // Skill reads recheck current caller, agent and bundle validity; no activation.
                 tools::core_skills::execute(&app, &sid, &run_id, &name, &args, cancel).await
-            } else if tools::core_session::owns(&name) {
+            } else if tools::native::session::owns(&name) {
                 // The authenticated runtime supplies the session; arguments cannot choose one.
-                tools::core_session::execute(&app, &sid, &name, &args, cancel).await
+                tools::native::session::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
+                    &name,
+                    &args,
+                    cancel,
+                )
+                .await
             } else if tools::native::utilities::owns(&name) {
                 // Native utilities remain behind the same live Rust authorization as worker calls.
                 tools::native::utilities::execute(&name, &args, cancel).await

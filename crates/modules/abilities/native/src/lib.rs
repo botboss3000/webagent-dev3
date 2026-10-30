@@ -10,7 +10,9 @@ use std::future::Future;
 use std::pin::Pin;
 use tokio_util::sync::CancellationToken;
 use webagent_access::{authority::LiveAccess, Relationship, ToolDecision};
+use webagent_assets_contracts as assets;
 use webagent_chat::shared::SharedChatPolicy;
+use webagent_context_contracts::context_compaction::Config as CompactionConfig;
 use webagent_files::uploads::AttachmentLimits;
 use webagent_host_core::StoreCore;
 use webagent_models::account_catalog::PlatformPin;
@@ -18,14 +20,23 @@ use webagent_models::model_selection::{Catalog, ModelRole, SelectionPlan};
 
 pub mod app_control;
 pub mod base_extras;
+pub mod compaction;
+pub mod context_assets;
 pub mod decision;
 pub mod directory_decision;
+pub mod front_desk;
 pub mod functions;
 pub mod image_vision;
 pub mod knowledge_files;
 pub mod mode;
 pub mod model_switcher;
 pub mod orchestration;
+pub mod prompt;
+pub mod recall;
+pub mod search;
+pub mod self_edit;
+pub mod session;
+pub mod task;
 pub mod tool_search;
 pub mod ui_admin;
 pub mod user_files;
@@ -232,6 +243,182 @@ pub trait NativeHost: Sync {
         run_id: &'a str,
         args: &'a Value,
     ) -> Pending<'a, Result<Value>>;
+    /// The agent that owns session `sid`, read through agent store `store`'s planes.
+    fn scoped_session_agent_id<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        sid: &'a str,
+    ) -> Pending<'a, Result<String>>;
+    /// Session `sid`'s effective policy, mode revision, ability visibility and ability state,
+    /// read through agent store `store`'s planes.
+    fn scoped_ability_controls<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        sid: &'a str,
+    ) -> Pending<'a, Result<(Value, u64, Value, Value)>>;
+    /// Session `sid`'s validated capability mode, read through agent store `store`'s planes.
+    fn scoped_session_mode<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        sid: &'a str,
+    ) -> Pending<'a, Result<Value>>;
+    /// `user`'s live access to `agent` on agent store `store`'s plane, admitting a shared
+    /// chat's participant in `sid`.
+    fn scoped_live_access<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        user: &'a str,
+        sid: &'a str,
+        agent: &'a str,
+    ) -> Pending<'a, Result<LiveAccess>>;
+    /// The live abilities catalog version.
+    fn abilities_version(&self) -> String;
+    /// The run that produced tool result `call_id` in session `sid`, with the result.
+    fn tool_result_origin<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        sid: &'a str,
+        call_id: &'a str,
+    ) -> Pending<'a, Result<Option<(String, Value)>>>;
+    /// The tool result `call_id` of run `rid` in session `sid`.
+    fn tool_result<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        sid: &'a str,
+        rid: &'a str,
+        call_id: &'a str,
+    ) -> Pending<'a, Result<Option<Value>>>;
+    /// The tool name the model called as `call_id` in run `rid` of session `sid`.
+    fn tool_call_name<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        sid: &'a str,
+        rid: &'a str,
+        call_id: &'a str,
+    ) -> Pending<'a, Result<Option<String>>>;
+    /// A page of session `sid`'s public chat after `after`, context-excluded rows withheld.
+    fn model_chat_page<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        sid: &'a str,
+        after: i64,
+        limit: i64,
+    ) -> Pending<'a, Result<Value>>;
+    /// A bounded literal search of `store`'s caller-owned sessions.
+    fn search_private_sessions<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        query: &'a str,
+        status: &'a str,
+        limit: usize,
+        continuation: Option<&'a str>,
+    ) -> Pending<'a, Result<Value>>;
+    /// Whether search `hit` may be shown to the model.
+    fn model_search_hit_allowed<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        hit: &'a Value,
+    ) -> Pending<'a, Result<bool>>;
+    /// The bounded summary of session `sid` in `store`; an error when absent.
+    fn session_summary<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        sid: &'a str,
+    ) -> Pending<'a, Result<Value>>;
+    /// Whether the message of run `rid` in session `sid` may enter the agent's context.
+    fn model_message_allowed<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        sid: &'a str,
+        rid: &'a str,
+    ) -> Pending<'a, Result<bool>>;
+    /// Agent store `store`'s ordered prompt slots.
+    fn prompt_slots<'a>(&'a self, store: &'a StoreCore) -> Pending<'a, Result<Vec<Value>>>;
+    /// Edit agent store `store`'s unlocked prompt slot under receipt `pending` bound to
+    /// `scope`.
+    #[allow(clippy::too_many_arguments)]
+    fn self_edit_prompt_slot<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        slot: &'a str,
+        content: &'a str,
+        mode: &'a str,
+        expected_revision: i64,
+        pending: &'a str,
+        scope: &'a str,
+    ) -> Pending<'a, Result<Value>>;
+    /// Save or (`remove`) delete agent store `store`'s own skill under receipt `pending`
+    /// bound to `scope`.
+    #[allow(clippy::too_many_arguments)]
+    fn mutate_own_skill<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        name: &'a str,
+        description: Option<&'a str>,
+        instructions: Option<&'a str>,
+        mode: Option<&'a str>,
+        expected_revision: i64,
+        remove: bool,
+        pending: &'a str,
+        scope: &'a str,
+    ) -> Pending<'a, Result<Value>>;
+    /// The storage owner of session `sid` as `user` may reach it.
+    fn shared_chat_owner<'a>(&'a self, sid: &'a str, user: &'a str) -> Pending<'a, Result<String>>;
+    /// Record `actor`'s human-help request `request` on owner store `store`'s shared session
+    /// `sid`.
+    fn shared_help_request<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        sid: &'a str,
+        actor: &'a str,
+        request: &'a str,
+    ) -> Pending<'a, Result<Value>>;
+    /// The chat components of session `sid` in `store`.
+    fn chat_components<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        sid: &'a str,
+    ) -> Pending<'a, Result<Vec<Value>>>;
+    /// The live context compaction policy.
+    fn compaction_config(&self) -> Result<CompactionConfig>;
+    /// The requester-owned action statuses of `run`.
+    fn action_statuses<'a>(&'a self, run: &'a Value) -> Pending<'a, Result<Vec<Value>>>;
+    /// The saved result of action `id` in `run`.
+    fn action_lookup<'a>(&'a self, run: &'a Value, id: &'a str) -> Pending<'a, Result<Value>>;
+    /// Session `sid`'s Base task checkpoint in `store`, fenced to run `rid`.
+    fn task_checkpoint<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        sid: &'a str,
+        rid: &'a str,
+    ) -> Pending<'a, Result<Value>>;
+    /// `requester`'s context asset selections in session `sid` on agent store `store`'s plane.
+    fn context_assets<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        sid: &'a str,
+        agent: &'a str,
+        requester: &'a str,
+    ) -> Pending<'a, Result<assets::State>>;
+    /// The Engine's context fingerprint of these selections on agent store `store`'s plane.
+    #[allow(clippy::too_many_arguments)]
+    fn context_fingerprint<'a>(
+        &'a self,
+        store: &'a StoreCore,
+        sid: &'a str,
+        agent: &'a str,
+        loaded: &'a Value,
+        selected: &'a Value,
+        skills: &'a Value,
+        optimization: &'a Value,
+        requester: &'a str,
+    ) -> Pending<'a, Result<String>>;
+    /// The Engine assets component's bounded plan for `request`.
+    fn assets_plan<'a>(
+        &'a self,
+        request: &'a assets::Request,
+        cancel: &'a CancellationToken,
+    ) -> Pending<'a, Result<assets::Plan>>;
 }
 
 /// Whether tool `name` only reads, from its tool folder's `effect`; an unknown tool counts

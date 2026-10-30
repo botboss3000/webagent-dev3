@@ -22,7 +22,10 @@ webagent-abilities = { path = ".." }
 webagent-abilities-host = { path = "../host/storage" }
 webagent-access = { path = "../../access" }
 webagent-accounts-host = { path = "../../accounts/host" }
+webagent-assets-contracts = { path = "../../../assets-contracts" }
 webagent-chat = { path = "../../chat" }
+webagent-context = { path = "../../context" }
+webagent-context-contracts = { path = "../../../context-contracts" }
 webagent-files = { path = "../../files" }
 webagent-host-core = { path = "../../../host-core" }
 webagent-models = { path = "../../models" }

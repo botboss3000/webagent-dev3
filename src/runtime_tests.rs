@@ -10851,10 +10851,14 @@ async fn retained_read_recall_resolves_only_verified_same_session_origin() {
     }]});
     app.save(&mut recall).await.unwrap();
     let request = json!({"tool_call_id":call_id,"offset_chars":0,"limit_chars":4096});
-    let result = crate::tools::core_recall::execute(
-        &app,
-        &sid,
-        &recall_id,
+    let result = crate::tools::native::recall::execute(
+        &crate::tools::native_host::Host(&app),
+        crate::tools::native::Call {
+            sid: &sid,
+            run_id: &recall_id,
+            generation: "",
+            pending_id: "",
+        },
         "recall_compacted",
         &request,
         CancellationToken::new(),
@@ -10866,10 +10870,14 @@ async fn retained_read_recall_resolves_only_verified_same_session_origin() {
     let mut tampered = app.run(&recall_id).await.unwrap();
     tampered["tool_context_state"]["entries"][0]["output_sha256"] = json!("0".repeat(64));
     app.save(&mut tampered).await.unwrap();
-    let rejected = crate::tools::core_recall::execute(
-        &app,
-        &sid,
-        &recall_id,
+    let rejected = crate::tools::native::recall::execute(
+        &crate::tools::native_host::Host(&app),
+        crate::tools::native::Call {
+            sid: &sid,
+            run_id: &recall_id,
+            generation: "",
+            pending_id: "",
+        },
         "recall_compacted",
         &request,
         CancellationToken::new(),
@@ -10882,10 +10890,14 @@ async fn retained_read_recall_resolves_only_verified_same_session_origin() {
         json!(hex::encode(sha2::Sha256::digest(raw.as_bytes())));
     foreign["tool_context_state"]["entries"][0]["origin_run_id"] = json!(foreign_origin);
     app.save(&mut foreign).await.unwrap();
-    let rejected = crate::tools::core_recall::execute(
-        &app,
-        &sid,
-        &recall_id,
+    let rejected = crate::tools::native::recall::execute(
+        &crate::tools::native_host::Host(&app),
+        crate::tools::native::Call {
+            sid: &sid,
+            run_id: &recall_id,
+            generation: "",
+            pending_id: "",
+        },
         "recall_compacted",
         &request,
         CancellationToken::new(),
@@ -10909,10 +10921,14 @@ async fn retained_read_recall_resolves_only_verified_same_session_origin() {
     let mut permitted_origin = app.run(&recall_id).await.unwrap();
     permitted_origin["tool_context_state"]["entries"][0]["origin_run_id"] = json!(origin_id);
     app.save(&mut permitted_origin).await.unwrap();
-    let rejected = crate::tools::core_recall::execute(
-        &app,
-        &sid,
-        &recall_id,
+    let rejected = crate::tools::native::recall::execute(
+        &crate::tools::native_host::Host(&app),
+        crate::tools::native::Call {
+            sid: &sid,
+            run_id: &recall_id,
+            generation: "",
+            pending_id: "",
+        },
         "recall_compacted",
         &request,
         CancellationToken::new(),
