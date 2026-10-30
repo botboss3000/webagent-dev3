@@ -9,7 +9,7 @@ pub(crate) mod core_agent_management;
 pub(crate) mod core_app_control;
 #[path = "../../../crates/modules/abilities/host/authority.rs"]
 pub(crate) mod core_authority;
-#[path = "../../../crates/modules/abilities/host/image_generation.rs"]
+#[path = "../../../crates/modules/media/host/image_generation.rs"]
 pub(crate) mod core_image_generation;
 #[path = "../../../crates/modules/abilities/host/base/mode_adapter.rs"]
 pub(crate) mod core_mode;

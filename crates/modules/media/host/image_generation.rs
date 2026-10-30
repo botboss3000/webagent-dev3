@@ -1,5 +1,6 @@
 //! Image Out requests retain a durable started receipt before a potentially billable request.
-use crate::{api, digest, model_selection, shared_chat, App, State};
+//! Receipt and attachment rules live in `webagent_media::image`; this root-bound adapter supplies
+//! authority checks, the media lane, the provider request and attachment publication.
 use anyhow::{anyhow, Result};
 use axum::extract::Path;
 use axum::Json;
@@ -8,12 +9,17 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::Digest as _;
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
+use webagent_media::image;
+
+use crate::{api, digest, model_selection, shared_chat, App, State};
+
+/// True when this adapter executes tool `name`.
 pub fn owns(name: &str) -> bool {
-    name == "generate_image"
+    name == image::TOOL
 }
 /// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
-pub const TOOLS: &[&str] = &["generate_image"];
+pub const TOOLS: &[&str] = &[image::TOOL];
+/// Model-facing schemas for [`TOOLS`].
 pub fn schemas() -> Vec<Value> {
     crate::tools::folder_schemas(TOOLS)
 }
@@ -22,18 +28,9 @@ pub fn schemas() -> Vec<Value> {
 struct Args {
     prompt: String,
 }
-fn attachment_id(input: &str) -> String {
-    let h = digest(&json!(input));
-    let bytes = hex::decode(&h[..32]).expect("a digest is lowercase hex");
-    Uuid::from_slice(&bytes)
-        .expect("32 hex characters are 16 bytes")
-        .to_string()
-}
-/// A failure before any provider request: report it plainly instead of as an uncertain effect.
-fn not_sent(message: &str) -> Value {
-    json!({"status":"error","output":message})
-}
 
+/// Run one `generate_image` call: authority, a durable started receipt, the provider request and
+/// attachment publication, rechecking authority after the effect.
 pub async fn execute(
     app: &App,
     sid: &str,
@@ -55,14 +52,11 @@ pub async fn execute(
     )
     .await?;
     let q: Args = serde_json::from_value(args.clone())?;
-    if q.prompt.trim().is_empty() || q.prompt.len() > 16384 {
-        return Ok(not_sent("Image prompt must contain 1..16384 bytes"));
+    if !image::prompt_is_valid(&q.prompt) {
+        return Ok(image::not_sent("Image prompt must contain 1..16384 bytes"));
     }
-    let receipt = format!(
-        "receipt:core_image:{sid}:{}",
-        digest(&json!([rid, pending]))
-    );
-    let id = attachment_id(&receipt);
+    let receipt = image::receipt_key(sid, rid, pending);
+    let id = image::attachment_id(&receipt);
     let hash = digest(args);
     if let Some(saved) = app.store.get(&receipt).await? {
         if saved["digest"] != hash {
@@ -74,22 +68,24 @@ pub async fn execute(
         if saved["state"] == "generated" {
             return publish(app, sid, &receipt, &id, &hash, &saved).await;
         }
-        return Ok(
-            json!({"status":"uncertain","uncertain":true,"output":{"receipt":receipt,"message":"Image request may have been submitted. Reconcile this receipt before another generation."}}),
-        );
+        return Ok(image::uncertain(
+            &receipt,
+            "Image request may have been submitted. Reconcile this receipt before another \
+             generation.",
+        ));
     }
     // Nothing has been submitted yet, so these failures are definite errors.
     let lane = match api::media_lane::lane_run(app, sid, model_selection::ModelRole::ImageOut).await
     {
         Ok(lane) => lane,
-        Err(error) => return Ok(not_sent(&error.1.to_string())),
+        Err(error) => return Ok(image::not_sent(&error.1.to_string())),
     };
     let (selection, tokens) = match api::media_lane::lane_selection(app, &lane).await {
         Ok(selected) => selected,
-        Err(error) => return Ok(not_sent(&error.1.to_string())),
+        Err(error) => return Ok(image::not_sent(&error.1.to_string())),
     };
     if !webagent_models::transport::image_transport(selection.provider) {
-        return Ok(not_sent(
+        return Ok(image::not_sent(
             "Assigned Image Out transport does not support image generation",
         ));
     }
@@ -145,17 +141,26 @@ pub async fn execute(
         Some(value) => value,
         None => request.await,
     };
-    let image = match generated {
-        Ok(image) => image,
-        Err(_) => {
-            return Ok(
-                json!({"status":"uncertain","uncertain":true,"output":{"receipt":receipt,"message":"Image generation did not complete; do not replay a potentially billable request without reconciliation."}}),
-            )
-        }
-    };
+    let image =
+        match generated {
+            Ok(image) => image,
+            Err(_) => return Ok(image::uncertain(
+                &receipt,
+                "Image generation did not complete; do not replay a potentially billable request \
+                 without reconciliation.",
+            )),
+        };
     let bytes = base64::engine::general_purpose::STANDARD.decode(&image.data)?;
     let sha = hex::encode(sha2::Sha256::digest(&bytes));
-    let saved = json!({"digest":hash,"state":"generated","attachment_id":id,"sha256":sha,"media_type":image.media_type,"bytes":bytes.len(),"data":image.data});
+    let saved = json!({
+        "digest": hash,
+        "state": "generated",
+        "attachment_id": id,
+        "sha256": sha,
+        "media_type": image.media_type,
+        "bytes": bytes.len(),
+        "data": image.data,
+    });
     app.store.put(&receipt, &saved).await?;
     let output = publish(app, sid, &receipt, &id, &hash, &saved).await?;
     super::core_authority::check(
@@ -186,7 +191,7 @@ async fn publish(
     let bytes = base64::engine::general_purpose::STANDARD.decode(
         saved["data"]
             .as_str()
-            .filter(|s| s.len() <= 24 * 1024 * 1024)
+            .filter(|s| s.len() <= image::MAX_RECOVERY_DATA_BYTES)
             .ok_or_else(|| anyhow!("Generated image recovery bytes unavailable"))?,
     )?;
     let sha = hex::encode(sha2::Sha256::digest(&bytes));
@@ -194,14 +199,17 @@ async fn publish(
         return Err(anyhow!("Generated image recovery digest conflict"));
     }
     if api::uploads::lookup(app, sid, id).await.is_err() {
-        let filename = match media {
-            "image/jpeg" => "generated.jpg",
-            "image/webp" => "generated.webp",
-            "image/gif" => "generated.gif",
-            "image/png" => "generated.png",
-            _ => return Err(anyhow!("Generated image type unsupported")),
-        };
-        let _ = api::uploads::upload(State(app.clone()),Path(sid.to_owned()),Json(json!({"client_upload_id":id,"name":filename,"media_type":media,"data":saved["data"]}))).await.map_err(|e|anyhow!(e.1))?;
+        let filename = image::generated_filename(media)
+            .ok_or_else(|| anyhow!("Generated image type unsupported"))?;
+        let upload = json!({
+            "client_upload_id": id,
+            "name": filename,
+            "media_type": media,
+            "data": saved["data"],
+        });
+        let _ = api::uploads::upload(State(app.clone()), Path(sid.to_owned()), Json(upload))
+            .await
+            .map_err(|e| anyhow!(e.1))?;
     }
     let file = api::uploads::lookup(app, sid, id)
         .await
@@ -209,7 +217,11 @@ async fn publish(
     if file["uploader_id"] != shared_chat::actor(app) || file["sha256"] != sha {
         return Err(anyhow!("Generated image attachment identity conflict"));
     }
-    let result = json!({"attachment":api::uploads::metadata(&file),"url":format!("/api/v3/sessions/{sid}/attachments/{id}/content"),"role":"Image Out"});
+    let result = json!({
+        "attachment": api::uploads::metadata(&file),
+        "url": format!("/api/v3/sessions/{sid}/attachments/{id}/content"),
+        "role": "Image Out",
+    });
     app.store
         .put(
             receipt,
@@ -248,7 +260,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first, second);
-        let wrong = json!({"data":base64::engine::general_purpose::STANDARD.encode(b"different"),"sha256":hex::encode(sha2::Sha256::digest(b"different")),"media_type":"image/png"});
+        let wrong = json!({
+            "data": base64::engine::general_purpose::STANDARD.encode(b"different"),
+            "sha256": hex::encode(sha2::Sha256::digest(b"different")),
+            "media_type": "image/png",
+        });
         assert!(publish(&app, &sid, &receipt, &id, "input", &wrong)
             .await
             .is_err());

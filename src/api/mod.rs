@@ -56,6 +56,7 @@ pub(crate) mod session_stop;
 mod system;
 #[path = "../../crates/modules/files/host/api/uploads.rs"]
 pub(crate) mod uploads;
+#[path = "../../crates/modules/media/host/voice.rs"]
 mod voice;
 mod wiki;
 pub(crate) use admin::*;

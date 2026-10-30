@@ -1,0 +1,15 @@
+[package]
+name = "webagent-media"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hex = "0.4"
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["sync"] }
+uuid = { version = "1", features = ["v4"] }
+webagent-configuration = { path = "../configuration" }
+
+[lints]
+workspace = true

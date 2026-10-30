@@ -2657,6 +2657,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-media"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "uuid",
+ "webagent-configuration",
+]
+
+[[package]]
 name = "webagent-model-discovery"
 version = "0.1.0"
 dependencies = [
@@ -2914,6 +2926,7 @@ dependencies = [
  "webagent-files",
  "webagent-host-core",
  "webagent-manager",
+ "webagent-media",
  "webagent-model-discovery",
  "webagent-models",
  "webagent-module-service",
