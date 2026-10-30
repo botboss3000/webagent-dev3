@@ -32,8 +32,8 @@ export function createFloatingChat({panel,profile={},storageKey='webagent.widget
  // Purpose: Store current window geometry while ignoring unavailable browser storage.
  const save=()=>{try{localStorage.setItem(storageKey,JSON.stringify(geometry))}catch{}};
  // Purpose: Clamp to profile and viewport bounds before applying and persisting geometry.
- // A reader pane widens the window leftward for as long as it is open; the saved geometry keeps the chat's own size.
- const layout=()=>{geometry=clampGeometry(geometry,profile);const shown=extra?clampGeometry({...geometry,width:geometry.width+extra,x:geometry.x-extra},profile):geometry;Object.assign(shell.style,{left:shown.x+'px',top:shown.y+'px',width:shown.width+'px',height:shown.height+'px'});save()};
+ // A reader pane widens the window leftward while it is open, when the viewport has room; the saved geometry keeps the chat's own size.
+ const layout=()=>{geometry=clampGeometry(geometry,profile);const roomy=geometry.width+extra<=innerWidth-16,shown=extra&&roomy?clampGeometry({...geometry,width:geometry.width+extra,x:geometry.x-extra},profile):geometry;Object.assign(shell.style,{left:shown.x+'px',top:shown.y+'px',width:shown.width+'px',height:shown.height+'px'});save()};
  // Purpose: Add an accessible action button to the window bar.
  const button=(label,text,action)=>{const b=document.createElement('button');b.type='button';b.textContent=text;b.title=label;b.setAttribute('aria-label',label);b.addEventListener('click',action);bar.append(b);return b};
  // Window lifecycle API preserves focus and restores the panel at its dock anchor.

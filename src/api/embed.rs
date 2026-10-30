@@ -1,6 +1,5 @@
 //! Embed credentials authorize only the selected agent's caller-owned chat.
 //! Host-page configuration never changes agent, account, or tool authority.
-use webagent_accounts_host::AccountsStore;
 use super::{
     access, admin_agent_view, bad, conflict, digest, json, key, now, registration, required,
     ui_config_value, uuid, Api, ApiError, App, Deserialize, HashMap, HeaderMap, HeaderValue, Json,
@@ -11,6 +10,7 @@ use axum::Extension;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::Serialize;
 use sha2::Digest;
+use webagent_accounts_host::AccountsStore;
 #[derive(Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields)]
 struct Config {
@@ -552,6 +552,11 @@ fn scope_path(path: &str) -> bool {
     ) || path.starts_with("/sessions/")
         || path.starts_with("/runs/")
         || path.starts_with("/approvals/")
+        || wiki_path(path)
+}
+/// The Wiki reader opens articles the agent linked; the visitor's own access applies.
+fn wiki_path(path: &str) -> bool {
+    path == "/wiki" || path.starts_with("/wiki/")
 }
 async fn bound_run_session(
     app: &App,
@@ -609,6 +614,8 @@ async fn scope_request(
         || path.contains("/promotions")
         || path.ends_with("/source-review")
         || path.ends_with("/state-inspect")
+        // Embedded chats only read the Wiki; changes go through the agent's tools.
+        || (wiki_path(&path) && request.method() != axum::http::Method::GET)
     {
         return Err(denied());
     }
@@ -736,6 +743,8 @@ mod tests {
             "/runs/a/cancel",
             "/approvals/a/decision",
             "/auth/me",
+            "/api/v3/wiki/articles/lessons",
+            "/wiki/search",
         ] {
             assert!(scope_path(p));
         }
@@ -746,6 +755,7 @@ mod tests {
             "/models/me/catalog",
             "/messages",
             "/sessions-other",
+            "/wikis",
         ] {
             assert!(!scope_path(p));
         }
