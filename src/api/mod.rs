@@ -57,6 +57,7 @@ mod system;
 #[path = "../../crates/modules/files/host/api/uploads.rs"]
 pub(crate) mod uploads;
 mod voice;
+mod wiki;
 pub(crate) use admin::*;
 pub(crate) use auth::*;
 pub(crate) use chat::*;
@@ -190,6 +191,13 @@ pub(super) fn router(app: App) -> Router {
                 .delete(crate::chat_config::reset),
         )
         .route("/policy", get(policy_get).put(policy_set))
+        .route("/wiki", get(wiki::list))
+        .route("/wiki/search", get(wiki::search))
+        .route("/wiki/articles", post(wiki::create))
+        .route("/wiki/articles/{slug}", get(wiki::get).patch(wiki::change))
+        .route("/wiki/articles/{slug}/history", get(wiki::history))
+        .route("/wiki/articles/{slug}/backlinks", get(wiki::backlinks))
+        .route("/wiki/revisions/{id}", get(wiki::revision))
         .route("/abilities", get(ability_catalog))
         .route("/provider/login", post(provider_start))
         .route("/provider/logout", post(provider_logout))
@@ -395,6 +403,8 @@ pub(super) fn router(app: App) -> Router {
     let shared = std::env::var("V3_SHARED_UI_ROOT").unwrap_or_else(|_| "/opt/v3/shared-ui".into());
     Router::new().merge(event_aliases).route("/api/v3/pages/catalog",get(ui_pages::catalog))
         .route("/embed/{id}",get(embed::page))
+        .route("/wiki",get(wiki::public_index))
+        .route("/wiki/{slug}",get(wiki::public_article))
         .route("/api/v3/embed/{id}/descriptor",get(embed::descriptor))
         .route("/api/v3/embed/{id}/challenge",post(embed::challenge))
         .route("/api/v3/embed/{id}/guest",post(embed::guest))

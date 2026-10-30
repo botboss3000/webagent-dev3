@@ -106,7 +106,7 @@ const SEO_DESCRIPTION: &str =
 give them tools and automations, and build visual pages \u{2014} all in one app.";
 
 /// Absolute origin for canonical/Open Graph URLs; never taken from the request Host header.
-fn public_origin() -> String {
+pub fn public_origin() -> String {
     std::env::var("V3_PUBLIC_ORIGIN")
         .unwrap_or_else(|_| "https://dev.webagent.live".into())
         .trim_end_matches('/')
@@ -164,7 +164,7 @@ pub fn robots(origin: &str) -> String {
 
 pub fn sitemap(origin: &str) -> String {
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n  <url><loc>{}/</loc></url>\n</urlset>\n",
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n  <url><loc>{0}/</loc></url>\n  <url><loc>{0}/wiki</loc></url>\n</urlset>\n",
         escape(origin)
     )
 }

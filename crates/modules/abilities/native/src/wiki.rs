@@ -31,6 +31,20 @@ pub const TOOLS: &[&str] = &[
     "wiki_restore",
     "wiki_backlinks",
 ];
+/// Whether operation `name` only reads.
+#[must_use]
+pub fn read_only(name: &str) -> bool {
+    READS.contains(&name)
+}
+/// Operations that change nothing; every other one needs an app administrator.
+const READS: &[&str] = &[
+    "wiki_search",
+    "wiki_list",
+    "wiki_get",
+    "wiki_history",
+    "wiki_get_revision",
+    "wiki_backlinks",
+];
 
 fn valid_slug(slug: &str) -> bool {
     !slug.is_empty()
@@ -116,9 +130,14 @@ fn status_arg(value: &Value) -> Result<&'static str> {
 fn revision_id(slug: &str, revision: u64) -> String {
     format!("{slug}:{revision}")
 }
+/// The article's page: the public `/wiki/<slug>` page, or the in-app reader in a chat.
+#[must_use]
+pub fn article_url(slug: &str) -> String {
+    format!("/wiki/{slug}")
+}
 fn summary(article: &Value) -> Value {
     let body = article["body"].as_str().unwrap_or("");
-    json!({"slug":article["slug"],"title":article["title"],"tags":article["tags"],
+    json!({"slug":article["slug"],"url":article_url(article["slug"].as_str().unwrap_or("")),"title":article["title"],"tags":article["tags"],
         "category":article["category"],"status":article["status"],"revision":article["revision"],
         "updated_by":article["updated_by"],"updated_at":article["updated_at"],"snippet":excerpt(body, 0, 200)})
 }
@@ -196,6 +215,13 @@ async fn save(store: &StoreCore, article: &Value) -> Result<()> {
     store.put(&format!("{ARTICLES}{slug}"), article).await
 }
 
+/// Who is asking. Only administrators write; staff also see drafts and history.
+pub struct Viewer<'a> {
+    pub administrator: bool,
+    pub staff: bool,
+    pub actor: &'a str,
+}
+
 /// Runs one Wiki tool. Reads hide drafts from non-staff; writes need an app administrator.
 pub async fn execute(
     host: &dyn NativeHost,
@@ -212,18 +238,38 @@ pub async fn execute(
     // The actor is the real participant, not a shared chat's owner.
     let access = host.session_access(call.sid, &agent).await?;
     let administrator = access.principal.administrator();
-    if !crate::is_read(name) && !administrator {
-        return Ok(
-            json!({"status":"denied","output":"Only app administrators can change the server Wiki"}),
-        );
-    }
     let staff = administrator
         || matches!(
             access.relationship,
             Relationship::Owner | Relationship::Member
         );
+    let viewer = Viewer {
+        administrator,
+        staff,
+        actor: host.actor(),
+    };
     // The application plane is shared by every caller's store view.
-    let store = host.store();
+    operate(host.store(), &viewer, name, args, call.pending_id).await
+}
+
+/// One Wiki operation, named like its tool, for the tools and the Wiki API alike.
+/// `pending_id` makes a retried write report its saved result instead of repeating it.
+pub async fn operate(
+    store: &StoreCore,
+    viewer: &Viewer<'_>,
+    name: &str,
+    args: &Value,
+    pending_id: &str,
+) -> Result<Value> {
+    if !owns(name) {
+        bail!("Unknown Wiki tool");
+    }
+    if !READS.contains(&name) && !viewer.administrator {
+        return Ok(
+            json!({"status":"denied","output":"Only app administrators can change the server Wiki"}),
+        );
+    }
+    let staff = viewer.staff || viewer.administrator;
     // shortcut: every call decodes all articles; fine to ~1000 articles, index if it grows.
     let all = store.list(ARTICLES).await?;
     let visible: Vec<&Value> = all
@@ -232,7 +278,7 @@ pub async fn execute(
         .collect();
     let find = |slug: &str| visible.iter().find(|a| a["slug"] == slug).copied();
     let stored = |slug: &str| all.iter().find(|a| a["slug"] == slug);
-    let actor = host.actor().to_owned();
+    let actor = viewer.actor;
     let output = match name {
         "wiki_search" => {
             let limit = args["limit"].as_u64().unwrap_or(5).clamp(1, 10) as usize;
@@ -331,7 +377,7 @@ pub async fn execute(
                 _ => slug_arg(args)?,
             };
             let current = stored(&slug);
-            if let Some(done) = current.filter(|a| a["pending_id"] == call.pending_id) {
+            if let Some(done) = current.filter(|a| a["pending_id"] == pending_id) {
                 return Ok(json!({"status":"success","output":summary(done)}));
             }
             let live = current.filter(|a| a["deleted"] != true);
@@ -344,7 +390,7 @@ pub async fn execute(
                     bail!("Wiki article changed; wiki_get it again before changing it");
                 }
             }
-            let stamp = json!({"revision":revision + 1,"updated_by":actor,"updated_at":now(),"pending_id":call.pending_id});
+            let stamp = json!({"revision":revision + 1,"updated_by":actor,"updated_at":now(),"pending_id":pending_id});
             let mut article = match name {
                 "wiki_create" => {
                     if live.is_some() {
