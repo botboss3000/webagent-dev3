@@ -151,7 +151,7 @@ export function mountChatActionPanel({root,guard,request,note}) {
   }
   // Run status, observer approval and uncertain-outcome controls share the approval card UI.
   function showRun({run,active,canControl=false,expanded,renderRecovery,cancel,recover}) {
-    if(run.status==='completed'||(!run.uncertain&&['queued','running','waiting_gate','waiting_external','failed','paused','stopped'].includes(run.status)))return;
+    if(run.status==='completed'||(!run.uncertain&&['queued','running','waiting_gate','waiting_external','failed','paused','stopped','cancelled'].includes(run.status)))return;
     let title=run.status+(run.error?' — '+run.error:''),body;const actions=[];
     if(run.pending&&run.status==='waiting_approval')title=run.pending.waiting_message||'Waiting for the authorized user';
     else {
