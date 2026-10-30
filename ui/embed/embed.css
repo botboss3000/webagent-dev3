@@ -1,2 +1,18 @@
 html,body{height:100%;width:100%;overflow:hidden}body{margin:0}.wa-embed-root{height:100dvh;display:flex;flex-direction:column}.wa-embed-root #chat-panel{position:relative!important;flex:1;min-height:0;width:100%!important}.wa-embed-connect button{border:1px solid var(--border);border-radius:999px;background:var(--bg-elev);color:var(--fg-1);padding:6px 12px;cursor:pointer}.wa-embed-connect{max-width:520px;margin:40px auto;padding:24px}.wa-embed-connect button{margin-right:12px}#notice{position:static;padding:0 12px;overflow-wrap:anywhere}.wa-embed-root #chat-header{position:absolute!important}#chat-panel[data-embed-visible="false"] #chat-messages{visibility:hidden}
 .wa-embed-root #chat-header [data-header-control="title"]{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Wiki reader: beside the chat once the host has widened the window, over it on narrow screens. */
+.wa-wiki-reader{display:flex;flex-direction:column;min-height:0;background:var(--bg-0);color:var(--fg-1)}.wa-wiki-reader[hidden]{display:none}
+body.wa-reader-open{display:flex}
+@media (min-width:760px){body.wa-reader-open .wa-wiki-reader{flex:1 1 auto;min-width:0;height:100dvh;border-right:var(--border-width,1px) solid var(--border)}body.wa-reader-open .wa-embed-root{flex:0 0 max(320px,calc(100% - 480px));min-width:0}}
+@media (max-width:759.98px){.wa-wiki-reader{position:fixed;inset:0;z-index:60}}
+.wa-wiki-reader-head{display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:var(--border-width,1px) solid var(--border)}
+.wa-wiki-reader-title{flex:1;min-width:0;margin:0;font-size:1rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wa-wiki-reader-button,.wa-wiki-reader-page{display:inline-flex;align-items:center;justify-content:center;flex:none;width:32px;height:32px;padding:0;border:1px solid transparent;border-radius:8px;background:none;color:var(--fg-2);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.wa-wiki-reader-button:hover,.wa-wiki-reader-page:hover{background:var(--bg-2);border-color:var(--border);color:var(--fg-1)}
+.wa-wiki-reader-button:active,.wa-wiki-reader-page:active{border-color:var(--accent)}
+.wa-wiki-reader-button:focus-visible,.wa-wiki-reader-page:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.wa-wiki-reader-button[hidden],.wa-wiki-reader-page[hidden]{display:none}
+.wa-wiki-reader-button .lucide-icon,.wa-wiki-reader-page .lucide-icon{width:16px;height:16px}
+.wa-wiki-reader-body{flex:1;min-height:0;overflow:auto;padding:16px 20px 32px;line-height:1.6;overflow-wrap:anywhere}
+.wa-wiki-reader-body pre{overflow:auto}.wa-wiki-reader-body img{max-width:100%;height:auto}
+.wa-wiki-reader-body .wiki-link-missing,.wa-wiki-reader-note{color:var(--fg-3)}

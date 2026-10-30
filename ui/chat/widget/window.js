@@ -25,23 +25,25 @@ export function createFloatingChat({panel,profile={},storageKey='webagent.widget
  const content=document.createElement('div');content.className='wa-chat-window-content';shell.append(bar,content);container.append(shell);
  // Reparenting a live iframe reloads its document and loses in-memory authentication.
  if(embedded)content.append(panel);
- let mode='closed',geometry={},savedFocus=null,disposed=false;
+ let mode='closed',geometry={},savedFocus=null,disposed=false,extra=0;
  try{const saved=JSON.parse(localStorage.getItem(storageKey)||'{}');if(saved&&typeof saved==='object')geometry=saved}catch{}
  if(!Number.isFinite(geometry.x)&&profile.launcher?.position?.endsWith('left'))geometry.x=20;
  if(!Number.isFinite(geometry.y)&&profile.launcher?.position?.startsWith('top'))geometry.y=20;
  // Purpose: Store current window geometry while ignoring unavailable browser storage.
  const save=()=>{try{localStorage.setItem(storageKey,JSON.stringify(geometry))}catch{}};
  // Purpose: Clamp to profile and viewport bounds before applying and persisting geometry.
- const layout=()=>{geometry=clampGeometry(geometry,profile);Object.assign(shell.style,{left:geometry.x+'px',top:geometry.y+'px',width:geometry.width+'px',height:geometry.height+'px'});save()};
+ // A reader pane widens the window leftward for as long as it is open; the saved geometry keeps the chat's own size.
+ const layout=()=>{geometry=clampGeometry(geometry,profile);const shown=extra?clampGeometry({...geometry,width:geometry.width+extra,x:geometry.x-extra},profile):geometry;Object.assign(shell.style,{left:shown.x+'px',top:shown.y+'px',width:shown.width+'px',height:shown.height+'px'});save()};
  // Purpose: Add an accessible action button to the window bar.
  const button=(label,text,action)=>{const b=document.createElement('button');b.type='button';b.textContent=text;b.title=label;b.setAttribute('aria-label',label);b.addEventListener('click',action);bar.append(b);return b};
  // Window lifecycle API preserves focus and restores the panel at its dock anchor.
- /** Methods: open displays and focuses the window; minimize/close hide it and restore prior focus; dock restores the panel; setProfile reclamps; isOpen/state expose mode; destroy removes the window. */
+ /** Methods: open displays and focuses the window; minimize/close hide it and restore prior focus; dock restores the panel; setProfile reclamps; setExtraWidth widens it for a side pane (0 restores); isOpen/state expose mode; destroy removes the window. */
  const api={open(){if(disposed)return;if(mode!=='open')savedFocus=document.activeElement;if(panel.parentNode!==content)content.append(panel);shell.hidden=false;mode='open';layout();bar.focus({preventScroll:true})},
  minimize(){shell.hidden=true;mode='minimized';onMinimize();savedFocus?.focus?.({preventScroll:true})},
  close(){shell.hidden=true;mode='closed';onClose();savedFocus?.focus?.({preventScroll:true})},
  dock(){anchor.parentNode?.insertBefore(panel,anchor.nextSibling);shell.hidden=true;mode='docked';onDock()},
  setProfile(next){profile=next||{};shell.dataset.resizable=String(profile.window?.resizable!==false);applyWindowStyle(shell,profile);layout()},
+ setExtraWidth(px){extra=Math.max(0,Math.min(640,Math.round(Number(px))||0));layout()},
  isOpen(){return mode==='open'},get state(){return mode},
  destroy(){if(disposed)return;disposeFeedback();api.dock();disposed=true;window.removeEventListener('resize',layout);shell.remove();anchor.remove()}};
  if(!embedded)button('Dock chat','↗',()=>api.dock());button('Minimize chat','−',()=>api.minimize());button('Close chat','×',()=>api.close());

@@ -1,0 +1,201 @@
+<!-- Wiki: the shared, searchable knowledge base (ported from the v2 Wiki page).
+     Logic: wiki-page.js · styles: wiki.css · API: /api/v3/wiki.
+     Layout: a banner (brand + search), a contents tree grouped by category on
+     the left, and the article surface on the right (welcome / reader /
+     history / editor). Everyone signed in can read; controls marked
+     data-edit-only are shown only when the API reports can_edit (admins). -->
+<div class="wiki-page">
+
+  <!-- ── Banner across the top ── -->
+  <header class="wiki-banner">
+    <!-- Contents toggle: only visible on narrow screens, where the sidebar is a popover. -->
+    <button class="wiki-sidebar-toggle" type="button" data-act="toggle-sidebar"
+            title="Toggle contents" aria-label="Toggle contents" aria-expanded="false">
+      <i data-lucide="menu" class="lucide-icon"></i>
+    </button>
+    <div class="wiki-banner-brand">
+      <span class="wiki-banner-mark"><i data-lucide="book-open" class="lucide-icon"></i></span>
+      <span class="wiki-banner-title">Wiki</span>
+    </div>
+    <div class="wiki-search">
+      <i data-lucide="search" class="lucide-icon wiki-search-icon"></i>
+      <input class="wiki-search-input" type="search" spellcheck="false" autocomplete="off"
+             placeholder="Search articles&hellip;" aria-label="Search the wiki" />
+      <kbd class="wiki-search-kbd" aria-hidden="true">Ctrl K</kbd>
+      <button class="wiki-search-clear" type="button" data-act="clear-search"
+              title="Clear search" aria-label="Clear search" hidden>
+        <i data-lucide="x" class="lucide-icon"></i>
+      </button>
+    </div>
+  </header>
+
+  <div class="wiki-body">
+
+    <!-- Left: article tree grouped by category, or flat search/filter results -->
+    <aside class="wiki-sidebar">
+      <div class="wiki-sidebar-head">
+        <span class="wiki-sidebar-title">Contents</span>
+        <span class="wiki-sidebar-count" hidden></span>
+      </div>
+      <div class="wiki-filter-active" hidden>
+        <span class="wiki-filter-active-text"></span>
+        <button class="wiki-filter-active-clear" type="button" data-act="clear-filter"
+                title="Clear filter" aria-label="Clear filter">
+          <i data-lucide="x" class="lucide-icon"></i>
+        </button>
+      </div>
+      <nav class="wiki-tree" aria-label="Wiki articles"></nav>
+      <div class="wiki-sidebar-foot" hidden>
+        <i data-lucide="clock" class="lucide-icon"></i>
+        <span class="wiki-sidebar-foot-text"></span>
+      </div>
+    </aside>
+
+    <main class="wiki-content">
+
+      <!-- Welcome landing (nothing selected) -->
+      <div class="wiki-welcome">
+        <div class="wiki-welcome-inner">
+          <div class="wiki-welcome-hero">
+            <span class="wiki-welcome-mark"><i data-lucide="book-open" class="lucide-icon"></i></span>
+            <h1 class="wiki-welcome-title">The Knowledge Base</h1>
+            <p class="wiki-welcome-text">Everything the team knows, in one searchable place &mdash; policies,
+              runbooks, onboarding and the way we work.</p>
+          </div>
+          <div class="wiki-welcome-section" data-welcome="featured" hidden>
+            <div class="wiki-welcome-label">Recently updated</div>
+            <div class="wiki-welcome-cards"></div>
+          </div>
+          <div class="wiki-welcome-section" data-welcome="categories" hidden>
+            <div class="wiki-welcome-label">Browse by category</div>
+            <div class="wiki-welcome-chips"></div>
+          </div>
+          <button class="wiki-btn wiki-btn-primary wiki-welcome-new" type="button" data-act="new" data-edit-only hidden>
+            <i data-lucide="plus" class="lucide-icon"></i><span>New article</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Article surface: toolbar + reader / history / revision / editor -->
+      <div class="wiki-article" hidden>
+        <div class="wiki-toolbar">
+          <div class="wiki-breadcrumb">
+            <button class="wiki-breadcrumb-cat" type="button" data-filter-type="category" hidden></button>
+            <i data-lucide="chevron-right" class="lucide-icon wiki-breadcrumb-sep" hidden></i>
+            <span class="wiki-breadcrumb-title"></span>
+          </div>
+          <div class="wiki-toolbar-actions" data-mode="reading">
+            <button class="wiki-btn" type="button" data-act="copy-link" title="Copy public link">
+              <i data-lucide="link" class="lucide-icon"></i><span>Copy link</span>
+            </button>
+            <a class="wiki-btn wiki-open-public" target="_blank" rel="noopener" title="Open public page" hidden>
+              <i data-lucide="external-link" class="lucide-icon"></i><span>Public page</span>
+            </a>
+            <button class="wiki-btn wiki-publish-btn" type="button" data-act="toggle-status" data-edit-only hidden>
+              <i data-lucide="globe" class="lucide-icon"></i><span class="wiki-publish-label">Publish</span>
+            </button>
+            <button class="wiki-btn" type="button" data-act="history" title="Revision history" data-edit-only hidden>
+              <i data-lucide="history" class="lucide-icon"></i><span>History</span>
+            </button>
+            <button class="wiki-btn" type="button" data-act="edit" title="Edit article" data-edit-only hidden>
+              <i data-lucide="pencil" class="lucide-icon"></i><span>Edit</span>
+            </button>
+            <button class="wiki-btn wiki-btn-danger" type="button" data-act="delete" title="Delete article" data-edit-only hidden>
+              <i data-lucide="trash-2" class="lucide-icon"></i><span class="wiki-delete-label"></span>
+            </button>
+          </div>
+          <div class="wiki-toolbar-actions" data-mode="editing" hidden>
+            <button class="wiki-btn wiki-btn-primary" type="button" data-act="save" title="Save changes">
+              <i data-lucide="check" class="lucide-icon"></i><span>Save</span>
+            </button>
+            <button class="wiki-btn" type="button" data-act="cancel" title="Discard changes"><span>Cancel</span></button>
+          </div>
+        </div>
+
+        <div class="wiki-article-scroll">
+          <!-- Banner while viewing an old revision (read-only) -->
+          <div class="wiki-revision-banner" hidden>
+            <span class="wiki-revision-banner-text"></span>
+            <span class="wiki-revision-banner-actions">
+              <button class="wiki-btn wiki-btn-primary" type="button" data-act="restore-this">
+                <i data-lucide="rotate-ccw" class="lucide-icon"></i><span>Restore this version</span>
+              </button>
+              <button class="wiki-btn" type="button" data-act="exit-revision"><span>Back to current</span></button>
+            </span>
+          </div>
+
+          <!-- Reader -->
+          <div class="wiki-reader-layout">
+            <article class="wiki-reader">
+              <div class="wiki-reader-badges">
+                <button class="wiki-reader-category" type="button" data-filter-type="category" hidden></button>
+                <span class="wiki-reader-status wiki-status-draft" hidden>Draft</span>
+              </div>
+              <h1 class="wiki-reader-title"></h1>
+              <div class="wiki-reader-meta">
+                <span class="wiki-reader-updated"></span>
+              </div>
+              <div class="wiki-reader-body md-body"></div>
+              <pre class="wiki-reader-raw" hidden></pre>
+              <div class="wiki-reader-tags" hidden></div>
+              <div class="wiki-backlinks" hidden>
+                <div class="wiki-backlinks-title">Linked from</div>
+                <div class="wiki-backlinks-list"></div>
+              </div>
+            </article>
+          </div>
+
+          <!-- Revision history (admins) -->
+          <div class="wiki-revisions" hidden>
+            <div class="wiki-revisions-head">Revision history</div>
+            <div class="wiki-revisions-list"></div>
+          </div>
+
+          <!-- Editor (admins) -->
+          <form class="wiki-editor" hidden>
+            <label class="wiki-field">
+              <span class="wiki-field-label">Title</span>
+              <input class="wiki-editor-title" name="title" type="text" maxlength="200" placeholder="Article title" required />
+            </label>
+            <div class="wiki-field-row">
+              <label class="wiki-field">
+                <span class="wiki-field-label">Category</span>
+                <input class="wiki-editor-input" name="category" type="text" placeholder="e.g. HR, Product (optional)" />
+              </label>
+              <label class="wiki-field">
+                <span class="wiki-field-label">Status</span>
+                <select class="wiki-editor-input" name="status">
+                  <option value="draft">Draft &mdash; administrators only</option>
+                  <option value="published">Published &mdash; everyone, with a public link</option>
+                </select>
+              </label>
+            </div>
+            <label class="wiki-field">
+              <span class="wiki-field-label">Tags <span class="wiki-field-hint">comma-separated</span></span>
+              <input class="wiki-editor-input" name="tags" type="text" placeholder="onboarding, policy" />
+            </label>
+            <label class="wiki-field">
+              <span class="wiki-field-label">Keywords
+                <span class="wiki-field-hint">comma-separated synonyms and questions this answers, so searches find it</span>
+              </span>
+              <input class="wiki-editor-input" name="keywords" type="text" placeholder="time off, how do I book holiday" />
+            </label>
+            <label class="wiki-field wiki-field-grow">
+              <span class="wiki-field-label">Content
+                <span class="wiki-field-hint">Markdown &middot; link another article with <code>[[Title]]</code></span>
+              </span>
+              <textarea class="wiki-editor-body" name="body" placeholder="Write the article in Markdown&hellip;"></textarea>
+            </label>
+          </form>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Floating "+" for a new article (admins only) -->
+  <button class="wiki-fab" type="button" data-act="new" title="New article" aria-label="New article" data-edit-only hidden>
+    <i data-lucide="plus" class="lucide-icon"></i>
+  </button>
+
+  <div class="wiki-toast" role="status" aria-live="polite" hidden></div>
+</div>

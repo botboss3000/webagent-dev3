@@ -10,6 +10,8 @@
  if(!agent){console.error('WebAgent widget requires data-agent.');return}
  const origin=new URL(script.src,location.href).origin;
  const namespace='webagent.widget',version=1;
+ // The chat's Wiki reader opens beside it; the iframe only says open or closed, the host picks the width.
+ const READER_WIDTH=480;
  const host=document.createElement('div');host.setAttribute('data-webagent-widget','');document.body.append(host);
  const shadow=host.attachShadow({mode:'open'});
  const style=document.createElement('link');style.rel='stylesheet';style.href=origin+'/v3-ui/chat/widget/window.css';shadow.append(style);
@@ -39,7 +41,7 @@
   if(message.type==='result'){
    const request=requests.get(message.id);if(!request)return;requests.delete(message.id);clearTimeout(request.timer);
    if(message.ok)request.resolve(message.result);else request.reject(new Error(typeof message.error==='string'?message.error:'Chat action failed.'));
-  }else if(message.type==='event'&&typeof message.event==='string'){if(message.event==='vibration-config'){const value=message.data?.config;vibrationConfig=typeof value?.enabled==='boolean'&&Number.isSafeInteger(value.duration_ms)&&value.duration_ms>=0?{enabled:value.enabled,duration_ms:value.duration_ms}:null;}else if(message.event==='theme'&&['light','dark'].includes(message.data?.theme))host.dataset.theme=message.data.theme;else if(message.event==='minimize')shell?.minimize();else if(message.event==='close')shell?.close();notify(message.event,message.data);}
+  }else if(message.type==='event'&&typeof message.event==='string'){if(message.event==='vibration-config'){const value=message.data?.config;vibrationConfig=typeof value?.enabled==='boolean'&&Number.isSafeInteger(value.duration_ms)&&value.duration_ms>=0?{enabled:value.enabled,duration_ms:value.duration_ms}:null;}else if(message.event==='theme'&&['light','dark'].includes(message.data?.theme))host.dataset.theme=message.data.theme;else if(message.event==='minimize')shell?.minimize();else if(message.event==='reader')shell?.setExtraWidth(message.data?.open===true?READER_WIDTH:0);else if(message.event==='close')shell?.close();notify(message.event,message.data);}
  }
  window.addEventListener('message',onMessage);
  // Purpose: Send a correlated command after readiness; requests time out after 30 seconds and advise reconciling uncertain effects before retry.

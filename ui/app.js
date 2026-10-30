@@ -191,7 +191,7 @@ async function loadAgentRoster(){
 }
 let mainPages=[];
 // Lucide names for the mobile sidebar; pages without an entry use a plain square.
-const mobileNavIcons={app:'layout-grid',agents:'bot',account:'user-cog',builds:'hammer','session-metrics':'chart-line'};
+const mobileNavIcons={app:'layout-grid',agents:'bot',account:'user-cog',builds:'hammer','session-metrics':'chart-line',wiki:'book-open'};
 let activeMainPage='';
 const protectedPageStarts=new Map();
 const protectedAsset=path=>typeof path==='string'&&path.startsWith('/api/v3/modules/');
@@ -266,6 +266,12 @@ async function loadMainPages(){
   }
   updateMainPageState();
 }
+// Wiki links in chat replies open the article in the Wiki tab beside the chat.
+document.addEventListener('webagent:wiki-open',event=>{
+  if(!mainPages.some(page=>page.id==='wiki'))return;
+  event.preventDefault();showMainPage('wiki');
+  document.dispatchEvent(new CustomEvent('webagent:wiki-show',{detail:{slug:event.detail.slug}}));
+});
 function updateMainPageState(){
   for(const page of mainPages){
     const selected=page.id===activeMainPage;

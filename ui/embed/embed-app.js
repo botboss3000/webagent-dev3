@@ -5,6 +5,7 @@ import {initChatConfig,setChatSurfaceActions} from '../chat/controls/chat-config
 import {watchAuthorization} from './auth-handoff.js';
 import {openSignInPanel} from '../chat/core/sign-in-panel.js';
 import {createFetchStream} from '../chat/core/fetch-stream.js';
+import {createWikiReader} from './wiki-reader.js';
 const params=new URL(location.href).searchParams,hostOrigin=params.get('origin'),agentId=decodeURIComponent(location.pathname.split('/').pop());
 const root=document.getElementById('chat-panel');root.dataset.embedVisible='false';window.__CHAT_PORTAL__=true;
 const namespace='webagent.widget',version=1,channel=crypto.randomUUID();
@@ -56,6 +57,9 @@ const descriptor=await publicRequest('/embed/'+encodeURIComponent(agentId)+'/des
 setChatSurfaceActions({title:descriptor.agent.name||'WebAgent',minimize:()=>emit('minimize'),close:()=>emit('close')});
 chat=await mountChatPanel({root,resolveAsset,enableMainNotes:false,request,guard,note,keyId,forgetKey:key=>ids.delete(key),refresh,getState:()=>state,getAgentId:()=>agentId,getIdentity:()=>identity,onLogin:()=>login(),onEvent:emit,createStream:url=>createFetchStream(url,{headers:()=>({Authorization:'Bearer '+credential})})});
 await initChatConfig({config:descriptor.chat_ui,root});
+// Wiki links in replies open in the reader with the visitor's own access; the host widens the window while it is open.
+const wikiReader=createWikiReader({request:path=>request(path),onToggle:open=>emit('reader',{open})});
+document.addEventListener('webagent:wiki-open',event=>{event.preventDefault();wikiReader.open(event.detail.slug);});
 // Apply the normal send rules before sign-in; the shell's Send starts disabled and only status refresh re-enables it, so /login could not be clicked.
 chat.runs([]);
 const access=await publicRequest('/auth/access-mode').catch(()=>({guest_access:false}));
@@ -115,7 +119,7 @@ window.addEventListener('message',event=>{
  const entry={input,done:false};
  entry.promise=queue.then(()=>action(m.command,m.args)).then(result=>({ok:true,result}),error=>({ok:false,error:error.message})).then(value=>{entry.done=true;return value});receipts.set(m.id,entry);queue=entry.promise.then(()=>{});entry.promise.then(reply);
 });
-window.addEventListener('pagehide',()=>{clearInterval(poll);authWatch?.cancel();chat.destroy();clearAssets();credential=null;popup?.close();});
+window.addEventListener('pagehide',()=>{wikiReader.destroy();clearInterval(poll);authWatch?.cancel();chat.destroy();clearAssets();credential=null;popup?.close();});
 parent.postMessage({namespace,version,type:'ready',channel},hostOrigin);
 // Only sanitized UI configuration crosses the bridge; each host tap requests its own local pulse.
 void vibrationConfigReady.then(()=>emit('vibration-config',{config:getVibrationConfig()}));
