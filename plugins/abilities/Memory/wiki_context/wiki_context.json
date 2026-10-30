@@ -1,25 +1,13 @@
 {
   "display_name": "Wiki Control",
   "kind": "ability",
-  "description": "Automatically recalls relevant company Wiki excerpts into the agent's context, and lets it search, read, create, edit, publish, restore, and delete Wiki entries. Writes change shared data everyone sees, so grant per agent with care.",
-  "tools": [
-    "wiki_search",
-    "wiki_list",
-    "wiki_get",
-    "wiki_create",
-    "wiki_update",
-    "wiki_set_status",
-    "wiki_delete",
-    "wiki_history",
-    "wiki_get_revision",
-    "wiki_restore",
-    "wiki_backlinks"
-  ],
+  "description": "Search and read the shared server Wiki, a company-wide Markdown knowledge base; app administrators can also create, edit, publish, restore and delete its articles.",
   "icon": "database",
   "color": "#7dcfff",
   "order": 2,
   "placeholder": false,
-  "readiness": "pending",
+  "readiness": "ready",
   "config": {},
-  "migration_note": "Catalog metadata only. V3 adapter, configuration and credential lifecycle remain pending; v2 runtime and skills are not imported."
+  "migration_note": "Compiled Rust adapter storing articles and revisions in the application plane. Reads are open to permitted sessions (visitors see published articles only); writes are limited to app administrators in code. Keyword search, widened by caller-supplied synonyms and per-article keywords (no embeddings); automatic recall, a Wiki page and external (GitHub) wikis are not ported yet. Deployment requires rebuilding both API and loop.",
+  "skill_summary": "Search, read and cite the shared server Wiki; app administrators can maintain its articles with revision history."
 }

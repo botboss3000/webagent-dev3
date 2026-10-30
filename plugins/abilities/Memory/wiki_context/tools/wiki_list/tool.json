@@ -1,0 +1,21 @@
+{
+  "name": "wiki_list",
+  "description": "List Wiki articles newest first (title, tags, category, status, snippet), optionally in one category. At most 100 are returned with the total count.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "category": {
+        "type": "string",
+        "maxLength": 60
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  }
+}

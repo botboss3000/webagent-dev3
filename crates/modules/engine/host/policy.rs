@@ -106,6 +106,7 @@ impl webagent_engine::runtime::ports::NativePolicy for NativePolicy {
             .chain(tools::native::schemas(
                 tools::native::knowledge_files::TOOLS,
             ))
+            .chain(tools::native::schemas(tools::native::wiki::TOOLS))
             .chain(modules::schemas())
             .chain(mcp::all_schemas())
             .collect()

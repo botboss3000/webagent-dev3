@@ -1,0 +1,28 @@
+{
+  "name": "wiki_delete",
+  "description": "App administrators only. Remove an article for everyone; its history is kept and wiki_restore can bring it back. Prefer wiki_set_status draft to hide an article. Check wiki_backlinks first.",
+  "effect": "write",
+  "default_access": {
+    "operator": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "slug": {
+        "type": "string",
+        "maxLength": 80,
+        "description": "Article slug from wiki_search or wiki_list."
+      },
+      "expected_revision": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "The article's current revision from wiki_get."
+      }
+    },
+    "required": [
+      "slug",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  }
+}

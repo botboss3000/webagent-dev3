@@ -125,6 +125,16 @@ impl
                     cancel,
                 ))
                 .await
+            } else if tools::native::wiki::owns(&name) {
+                // Boxed so this branch does not grow the shared dispatch future's stack frame.
+                Box::pin(tools::native::wiki::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
+                    &name,
+                    &args,
+                    cancel,
+                ))
+                .await
             } else if tools::native::webhooks::owns(&name) {
                 tools::native::webhooks::execute(
                     &tools::native_host::Host(&app),

@@ -46,6 +46,7 @@ pub mod visual_capture;
 pub mod visualizer;
 pub mod web_access;
 pub mod webhooks;
+pub mod wiki;
 
 /// A boxed `Send` future borrowed from the host.
 pub type Pending<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;

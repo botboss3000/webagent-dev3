@@ -1,0 +1,34 @@
+{
+  "name": "wiki_restore",
+  "description": "App administrators only. Restore an article, including a deleted one, to a saved version from wiki_history. The restore is itself a new version.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "slug": {
+        "type": "string",
+        "maxLength": 80,
+        "description": "Article slug from wiki_search or wiki_list."
+      },
+      "revision_id": {
+        "type": "string",
+        "maxLength": 100,
+        "description": "Revision ID from wiki_history."
+      },
+      "expected_revision": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "The article's current revision from wiki_get."
+      }
+    },
+    "required": [
+      "slug",
+      "revision_id",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  }
+}

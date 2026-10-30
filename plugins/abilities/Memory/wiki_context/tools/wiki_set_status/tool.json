@@ -1,0 +1,36 @@
+{
+  "name": "wiki_set_status",
+  "description": "App administrators only. Publish an article (published: visible to visitors) or make it internal (draft: staff only).",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "slug": {
+        "type": "string",
+        "maxLength": 80,
+        "description": "Article slug from wiki_search or wiki_list."
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "published"
+        ]
+      },
+      "expected_revision": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "The article's current revision from wiki_get."
+      }
+    },
+    "required": [
+      "slug",
+      "status",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  }
+}

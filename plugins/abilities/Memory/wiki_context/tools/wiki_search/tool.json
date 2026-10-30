@@ -1,0 +1,37 @@
+{
+  "name": "wiki_search",
+  "description": "Search the shared server Wiki by keywords across titles, tags, keywords and bodies. Pass synonyms and other phrasings of the query in also; articles matching more of them rank higher. Returns slugs, titles and excerpts, best match first. Search before answering from or writing to the Wiki.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "maxLength": 500
+      },
+      "also": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "maxItems": 8,
+        "description": "Synonyms and alternate phrasings of the query, e.g. for refund: money back, reimbursement, return policy."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "additionalProperties": false
+  }
+}

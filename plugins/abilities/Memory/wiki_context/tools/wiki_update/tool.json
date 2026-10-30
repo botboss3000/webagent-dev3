@@ -1,0 +1,64 @@
+{
+  "name": "wiki_update",
+  "description": "App administrators only. Edit an article; only the fields you pass change and the slug stays. wiki_get it first and pass its revision. The previous version stays in history.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "slug": {
+        "type": "string",
+        "maxLength": 80,
+        "description": "Article slug from wiki_search or wiki_list."
+      },
+      "expected_revision": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "The article's current revision from wiki_get."
+      },
+      "title": {
+        "type": "string",
+        "maxLength": 200
+      },
+      "body": {
+        "type": "string",
+        "description": "Markdown. Link articles with [[Title]] or [[slug]]."
+      },
+      "tags": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "maxItems": 20
+      },
+      "keywords": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "maxItems": 30,
+        "description": "Synonyms, related terms and questions this article answers, so searches with other wording find it."
+      },
+      "category": {
+        "type": "string",
+        "maxLength": 60
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "published"
+        ]
+      }
+    },
+    "required": [
+      "slug",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  }
+}

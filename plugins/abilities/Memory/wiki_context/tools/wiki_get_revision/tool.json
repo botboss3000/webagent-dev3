@@ -1,0 +1,24 @@
+{
+  "name": "wiki_get_revision",
+  "description": "Staff only. Read one saved version of an article without changing it.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "revision_id": {
+        "type": "string",
+        "maxLength": 100,
+        "description": "Revision ID from wiki_history."
+      }
+    },
+    "required": [
+      "revision_id"
+    ],
+    "additionalProperties": false
+  }
+}

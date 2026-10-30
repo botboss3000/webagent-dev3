@@ -1,0 +1,24 @@
+{
+  "name": "wiki_history",
+  "description": "Staff only. List an article's saved versions, newest first, with revision IDs.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "slug": {
+        "type": "string",
+        "maxLength": 80,
+        "description": "Article slug from wiki_search or wiki_list."
+      }
+    },
+    "required": [
+      "slug"
+    ],
+    "additionalProperties": false
+  }
+}

@@ -3653,14 +3653,14 @@ pub mod registered_tests {
                     .iter()
                     .filter(|entry| Catalog::<H>::executable(entry))
                     .count(),
-                20
+                21
             );
             assert_eq!(
                 ordinary
                     .iter()
                     .filter(|entry| entry.readiness == Readiness::Ready)
                     .count(),
-                21
+                22
             );
             assert_eq!(
                 catalog
