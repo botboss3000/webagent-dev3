@@ -98,9 +98,10 @@ test('credential card follows its session request: link not vault name, draft ke
  assert.ok(flat(slot).includes('GitHub token'));assert.ok(!flat(slot).includes('source_x'));
  const link=all(slot,'a')[0];assert.equal(link.href,detail.createUrl);assert.equal(link.target,'_blank');assert.equal(link.textContent,'github.com/settings/personal-access-tokens/new');
  const button=label=>all(slot,'button').find(b=>b.textContent===label);
- assert.ok(!flat(slot).includes('Only you see'));api.document.body=new E('body');button('i').onclick();
- const dialog=api.document.body.children[0];assert.equal(dialog.tag,'dialog');assert.equal(dialog.open,true);assert.match(flat(dialog),/Only you see this value/);
- dialog.children.find(b=>b.textContent==='OK').onclick();assert.equal(api.document.body.children.length,0);
+ assert.equal(slot.querySelector('.chat-action-secure').attributes['aria-label'],'Private vault input');
+ const note=slot.querySelector('.chat-action-note');assert.match(note.textContent,/Only you see this value/);assert.equal(note.hidden,true);
+ button('i').onclick();assert.equal(note.hidden,false);assert.equal(button('i').attributes['aria-expanded'],'true');
+ button('i').onclick();assert.equal(note.hidden,true,'a second tap collapses the note');
  all(slot,'input')[0].value='typed';ui.showCredential({...detail},'sid');assert.equal(all(slot,'input')[0].value,'typed');
  await button('Save').onclick();
  assert.deepEqual(calls[0].slice(0,2),['/core/vault/sid/source_x','POST']);assert.equal(calls[0][2].value,'typed');assert.equal(calls[0][2].request_id,detail.requestId);

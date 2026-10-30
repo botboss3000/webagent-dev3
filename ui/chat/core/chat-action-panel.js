@@ -117,18 +117,16 @@ export function mountChatActionPanel({root,guard,request,note}) {
       const url=new URL(detail.createUrl);link.textContent=url.host+(url.pathname==='/'?'':url.pathname);
       where.append(document.createTextNode('Create it at '),link,document.createTextNode(', then paste it here.'));
     }else where.textContent='Paste the value for '+new URL(detail.origin).host+'.';
-    // The privacy note lives behind an info button so the card stays compact.
+    // The privacy note expands inside the card behind an info toggle so the card stays compact.
+    const note=document.createElement('p');note.id='chat-action-note-'+detail.requestId.slice(0,12);note.className='chat-action-note';note.hidden=true;
+    note.textContent='Only you see this value. It is stored privately in your vault, and the agent receives status only, never the value itself.';
     const info=document.createElement('button');info.type='button';info.className='chat-action-info';info.textContent='i';info.setAttribute('aria-label','Who can see this value');
-    info.onclick=()=>{
-      const dialog=document.createElement('dialog');dialog.className='wa-confirm-panel';
-      const text=document.createElement('p');text.textContent='Only you see this value. It is stored privately in your vault, and the agent receives status only, never the value itself.';
-      const ok=document.createElement('button');ok.type='button';ok.textContent='OK';ok.onclick=()=>{dialog.close();dialog.remove();};
-      dialog.append(text,ok);document.body.append(dialog);dialog.showModal();ok.focus();
-    };
+    info.setAttribute('aria-controls',note.id);info.setAttribute('aria-expanded','false');
+    info.onclick=()=>{note.hidden=!note.hidden;info.setAttribute('aria-expanded',String(!note.hidden));};
     where.append(document.createTextNode(' '),info);
     const input=document.createElement('input');input.type='password';input.autocomplete='off';input.required=true;input.maxLength=8192;input.dataset.secret='true';input.setAttribute('aria-label',title);
     const status=document.createElement('p');status.className='chat-action-message';status.setAttribute('role','status');status.setAttribute('aria-live','polite');
-    body.append(where,input,status);
+    body.append(where,note,input,status);
     const save=async()=>{
       if(!input.value)return input.focus();
       status.textContent='Saving…';
@@ -138,11 +136,15 @@ export function mountChatActionPanel({root,guard,request,note}) {
       credentialSlot.replaceChildren(card({title:title+' saved',message:'Saved privately. Tell the agent to continue.',actions:[{label:'Dismiss',kind:'neutral',run:clearCredential}]}));
     };
     body.onsubmit=guard(async event=>{event.preventDefault();await save();});
-    credentialSlot.replaceChildren(card({title,body,actions:[
+    const node=card({title,body,actions:[
       {label:'Save',kind:'approve',run:save},
       // Dismiss clears the request server-side, so the card disappears on every device.
       {label:'Dismiss',kind:'neutral',run:async()=>{await request(endpoint,'DELETE',{request_id:detail.requestId});clearCredential();}}
-    ]}));
+    ]});
+    // A shield marks the private vault form apart from ordinary approval cards.
+    const shield=document.createElement('span');shield.className='chat-action-secure';shield.setAttribute('role','img');shield.setAttribute('aria-label','Private vault input');
+    const heading=node.querySelector('.chat-action-heading');heading.insertBefore(shield,heading.children[0]);
+    credentialSlot.replaceChildren(node);
   }
   // Run status, observer approval and uncertain-outcome controls share the approval card UI.
   function showRun({run,active,canControl=false,expanded,renderRecovery,cancel,recover}) {
