@@ -7,6 +7,11 @@
   "order": 3,
   "placeholder": false,
   "readiness": "ready",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
   "config": {
     "settings": [
       {

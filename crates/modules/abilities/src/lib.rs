@@ -1,4 +1,5 @@
 //! Abilities infrastructure: validated catalog/package IO, activation projections and encrypted controls.
+pub mod ability_access;
 pub mod base;
 mod cache;
 mod catalog;

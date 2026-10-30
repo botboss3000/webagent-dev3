@@ -215,9 +215,17 @@ fn tool_defaults(name: &str, rungs: &[String]) -> Option<webagent_access::Permis
     webagent_abilities::tool_definitions::get(name).map(|definition| definition.default_for(rungs))
 }
 
-/// Let capability levels fall back to these defaults; once per process.
+/// Let capability levels fall back to tool and ability defaults, and account plans grant by
+/// entitlement group; once per process.
 pub(crate) fn install_tool_defaults() {
     webagent_access::capabilities::install_tool_defaults(tool_defaults);
+    webagent_access::capabilities::install_ability_defaults(
+        webagent_abilities::ability_access::default_for,
+    );
+    webagent_access::install_entitlements(
+        webagent_abilities::ability_access::ability_entitlement,
+        webagent_abilities::ability_access::tool_entitlement,
+    );
 }
 
 pub fn schemas() -> Vec<Value> {

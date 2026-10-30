@@ -1,7 +1,7 @@
 //! Credential-owner authority binds trusted requester identity and exact pending revisions.
-use anyhow::{anyhow,Result};
-use serde_json::{json,Value};
-pub fn reference(run:&Value,current_user:&str,requirement:&Value)->Result<String> {
+use anyhow::{anyhow, Result};
+use serde_json::{json, Value};
+pub fn reference(run: &Value, current_user: &str, requirement: &Value) -> Result<String> {
     if requirement["kind"] != "credential_owner" {
         anyhow::bail!("Unsupported tool authorization declaration");
     }
@@ -11,14 +11,19 @@ pub fn reference(run:&Value,current_user:&str,requirement:&Value)->Result<String
     if kind.is_empty() || !kind.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
         anyhow::bail!("Invalid credential kind");
     }
-    let owner = run["requester_user_id"]
-        .as_str()
-        .unwrap_or(current_user);
+    let owner = run["requester_user_id"].as_str().unwrap_or(current_user);
     // The authenticated run requester selects the credential namespace. Model arguments cannot select it.
     let reference = format!("tool_credential:{owner}:{kind}");
     Ok(reference)
 }
-pub fn binding(run:&Value,current_user:&str,name:&str,args:&Value,requirement:&Value,credential:&Value)->Result<Value> {
+pub fn binding(
+    run: &Value,
+    current_user: &str,
+    name: &str,
+    args: &Value,
+    requirement: &Value,
+    credential: &Value,
+) -> Result<Value> {
     if requirement["kind"] != "credential_owner" {
         anyhow::bail!("Unsupported tool authorization declaration");
     }
@@ -28,9 +33,7 @@ pub fn binding(run:&Value,current_user:&str,name:&str,args:&Value,requirement:&V
     if kind.is_empty() || !kind.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
         anyhow::bail!("Invalid credential kind");
     }
-    let owner = run["requester_user_id"]
-        .as_str()
-        .unwrap_or(current_user);
+    let owner = run["requester_user_id"].as_str().unwrap_or(current_user);
     // The authenticated run requester selects the credential namespace. Model arguments cannot select it.
     let reference = format!("tool_credential:{owner}:{kind}");
     if credential["owner_user_id"] != owner || credential["revoked"] == true {

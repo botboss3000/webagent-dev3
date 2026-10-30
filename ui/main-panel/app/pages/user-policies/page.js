@@ -19,6 +19,9 @@ export async function mountPolicies(host){
     const permissionOptions=[['deny','Deny'],['ask','Ask'],['auto','Auto']];
     const abilities=catalog.abilities||[];
     const tools=[...new Set(abilities.flatMap(ability=>(ability.tools||[]).map(tool=>tool.name)))].sort();
+    // Entitlement groups come from each group's _group.json; several groups may share one.
+    const groupNames=new Map();for(const ability of abilities){if(!ability.entitlement)continue;const set=groupNames.get(ability.entitlement)||new Set();set.add(ability.group_name||ability.entitlement);groupNames.set(ability.entitlement,set);}
+    const groups=[...groupNames].sort(([a],[b])=>a.localeCompare(b)).map(([id,names])=>[id,[...names].sort().join(', ')+' ('+id+')']);
     for(const [index,id]of order.entries()){
       const tier=levels.get(id),next=structuredClone(tier);delete next.name;
       const section=el('details','ac-row');section.append(el('summary','ac-ability-row',title(tier)));const form=el('form','ac-ability-body');section.append(form);host.append(section);
@@ -31,8 +34,8 @@ export async function mountPolicies(host){
           move.disabled=index+step<=0||index+step>=order.length-1;form.append(move);
         }
       }
-      form.append(el('p','ac-hint','These are maximum account permissions across all agents. Lower agent levels may restrict them further.'));
-      for(const [mapKey,heading,entries]of [['ability_permissions','Abilities',[['*','All abilities (including future additions)'],...abilities.map(a=>[a.id,a.name])]],['tools','Tools',[['*','All tools (including future additions)'],...tools.map(name=>[name,name])]]]){
+      form.append(el('p','ac-hint','These are maximum account permissions across all agents. Lower agent levels may restrict them further. An ability group grant covers every ability in the group and its tools, including ones added later; a named ability or tool grant overrides it.'));
+      for(const [mapKey,heading,entries]of [['entitlements','Ability groups',groups],['ability_permissions','Abilities',[['*','All abilities (including future additions)'],...abilities.map(a=>[a.id,a.name])]],['tools','Tools',[['*','All tools (including future additions)'],...tools.map(name=>[name,name])]]]){
         const details=el('details');details.append(el('summary','',heading));form.append(details);next[mapKey]||={};
         for(const [key,label]of entries){const row=el('label','ac-label',label);const input=select(label,permissionOptions,next[mapKey][key]||next[mapKey]['*']||'deny');input.onchange=()=>{next[mapKey][key]=input.value;};row.append(input);details.append(row);}
       }

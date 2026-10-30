@@ -21,6 +21,19 @@ down, then deny. Built-in Base tools are compiled in (`crates/modules/abilities/
 with coded defaults: Operators get them all, Members and Visitors may ask for read tools.
 Abilities not yet moved keep the manifest `tools` list and flat `tools/<tool>.skill.md`.
 
+## Ability access defaults and plan entitlements
+
+An ability's manifest may declare `default_access` per role, like `tool.json`. In a saved
+capability ladder, a level with no saved permission for the ability (and no `*`) uses
+that default for its role, then the next role down, then deny; an ability that declares
+none stays closed until a level grants it, and an unconfigured ladder keeps every
+ability closed. Account plans (tiers) grant by entitlement group: the
+`entitlement_group` in the group's `_group.json` names it, and a tier's `entitlements`
+map grants it. An ability or tool the tier does not name, and that `*` does not cover,
+inherits its group's grant, so a new ability in a granted group works in that plan at
+once. Named grants always win, and an upper tier still caps the tiers below it
+(`crates/modules/abilities/src/ability_access.rs`, `crates/modules/access`).
+
 Administrator native tools (`webagent_administration::tools::TOOLS`) use the same
 folders under `plugins/abilities/Administrator/`. Tools with no catalog ability (the
 in-app broker, terminal and tunnel tools) live in the retired `v3_build`,
@@ -43,6 +56,14 @@ skills, the ability's settings and session watches). Every request runs as the c
 user with that user's permissions, after the app re-authorizes the tool call; a request
 the plugin did not declare is refused, and route parameters cannot leave their path
 segment. Agent Management (`plugins/abilities/Core/agent_management`) is the first.
+
+A plugin that needs external services declares them in `providers` with
+`web.provider_request` (`crates/modules/extensions/src/providers.rs`): each provider has
+a fixed HTTPS origin, fixed endpoint methods and paths, and optionally a vault
+credential the app adds to a declared header. The sandboxed plugin has no network; the
+app makes each call as the chatting user, never returns the key, and counts each user's
+monthly use against a cap the plugin passes. Web Search (`plugins/abilities/Web/web_search`)
+is the first.
 
 The plugin is one standalone crate with no workspace dependencies (the root workspace
 excludes its folder). Dev releases build it in the broker's plugin lane and run each call

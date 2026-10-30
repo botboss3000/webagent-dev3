@@ -1453,6 +1453,7 @@ impl<H: Host> Catalog<H> {
             "name":ability.name,"description":ability.description,
             "kind":ability.kind,"readiness":ability.readiness,"config":ability.config,
             "skill_summary":ability.skill_summary,"migration_note":ability.migration_note,
+            "entitlement":crate::ability_access::ability_entitlement(&ability.id),
             "icon":ability.icon,"color":ability.color,"tools":tools,
             "has_skill":Self::core_skill(ability).is_some(),
             "selectable_skills":ability.selectable_skills.iter().filter_map(|(name,cached)| Self::asset_text(ability,"selectable",name,cached).filter(|text|Self::skill_live(ability,"selectable",name,text) && Self::selectable_metadata(name,text).is_some() && Self::selectable_mode(visibility,&ability.id,name,text)!="off").map(|_|name)).collect::<Vec<_>>(),
