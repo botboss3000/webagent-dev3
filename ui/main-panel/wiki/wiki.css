@@ -5,6 +5,8 @@
    screens (≤760px, or body.mobile-mode) the sidebar becomes a popover. */
 
 .wiki-page {
+  /* Layout follows the page's own width, which shrinks while the chat is docked beside it. */
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
@@ -929,12 +931,12 @@ select.wiki-editor-input { cursor: pointer; }
 .wiki-delete-label:empty { display: none; }
 .wiki-page.wiki-busy .wiki-btn { cursor: progress; }
 
-@media (max-width: 980px) {
+@container (max-width: 980px) {
   .wiki-welcome-cards { grid-template-columns: repeat(2, 1fr); }
 }
 
 /* ── Narrow: sidebar becomes a popover opened by the banner toggle ── */
-@media (max-width: 760px) {
+@container (max-width: 760px) {
   .wiki-sidebar-toggle { display: inline-flex; }
   .wiki-sidebar {
     position: absolute; top: 6px; left: 4px;

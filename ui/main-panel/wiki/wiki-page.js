@@ -78,9 +78,14 @@ export async function start(mount) {
     toastTimer = setTimeout(() => { box.hidden = true; }, isError ? 5000 : 2600);
   }
 
+  /** The API stamps articles in Unix seconds; ISO strings are accepted too. */
+  function toDate(value) {
+    return new Date(typeof value === 'number' ? value * 1000 : value);
+  }
+
   /** Friendly relative date: today / yesterday / N days ago / Mon D, YYYY. */
   function relDate(iso) {
-    const date = new Date(iso);
+    const date = toDate(iso);
     if (!iso || Number.isNaN(date.getTime())) return '';
     const days = Math.round((Date.now() - date.getTime()) / 86400000);
     if (days <= 0) return 'today';
@@ -90,7 +95,7 @@ export async function start(mount) {
   }
 
   function fullDate(iso) {
-    const date = new Date(iso);
+    const date = toDate(iso);
     return !iso || Number.isNaN(date.getTime()) ? '' : date.toLocaleString(undefined, {dateStyle: 'medium', timeStyle: 'short'});
   }
 
