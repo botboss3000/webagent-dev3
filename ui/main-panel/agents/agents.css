@@ -39,3 +39,9 @@
 #agents-remove-btn[data-state="deleting"]::after,
 #agents-delete-permanent-btn[data-state="deleting"]::after { content: none; }
 .agent-select-box { -webkit-tap-highlight-color: transparent; padding: 0; }
+
+/* Members: V2 table (styles from the shared agents.css); blocked rows get the danger tone and buttons drop the tap wash. */
+.members-status.blocked { color: var(--danger); background: rgba(var(--danger-rgb),0.12); border: 1px solid rgba(var(--danger-rgb),0.3); }
+.members-table td { vertical-align: middle; }
+.members-actions .members-btn { -webkit-tap-highlight-color: transparent; margin-left: 4px; }
+.members-btn:not(.authorize):not(.restrict) { color: var(--fg-2); border-color: var(--border); }
