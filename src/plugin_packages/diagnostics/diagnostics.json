@@ -20,6 +20,7 @@
   },
   "background_issues": {
     "enabled": true,
-    "show_toasts": true
+    "show_toasts": true,
+    "cleared_toast_seconds": 0
   }
 }
