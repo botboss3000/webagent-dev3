@@ -10,12 +10,13 @@ Source templates are `config/diagnostics.json` and `src/plugin_packages/diagnost
 The loop reads settings through the UID-checked socket. Both Rust schemas must agree.
 
 ```json
-"background_issues": {"enabled": true, "show_toasts": true}
+"background_issues": {"enabled": true, "show_toasts": true, "cleared_toast_seconds": 3}
 ```
 
 `/enabled` is the master capture switch; `/background_issues/enabled` selects browser observations.
 `/background_issues/show_toasts` changes presentation independently. Both nested defaults are true;
-the checked-in master capture default remains false. Hidden mode retains logging when its separate
+the checked-in master capture default remains false. `/background_issues/cleared_toast_seconds`
+(0–3600, default 3) is how long a recovered issue stays as "(Cleared N)"; 0 removes it at once. Hidden mode retains logging when its separate
 authorization/configuration gates permit capture. Visibility never grants capture permission.
 `V3_DIAGNOSTICS_ENABLED=false` disables host capture. No new settings editor is added.
 
@@ -72,7 +73,7 @@ Logging is bounded observation evidence, not guaranteed delivery or recovery aut
 capture disablement, capacity eviction or exhausted transport retries can leave an opening without
 a resolution. Retention may remove either row. Missing resolution is not proof of an active failure.
 
-- `GET /api/v3/diagnostics/background/config`: browser authentication; effective caller-specific capture and `show_toasts`.
+- `GET /api/v3/diagnostics/background/config`: browser authentication; effective caller-specific capture, `show_toasts` and `cleared_toast_seconds`.
 - `POST /api/v3/diagnostics/background/events`: browser authentication, normal CSRF/origin checks and additional original fixed `admin` administrator authority; 2,048-byte body limit and unknown-field rejection.
 - `GET /api/v3/admin/diagnostics?category=app_background`: existing fixed-admin archive reader and bounded pagination.
 - `GET /api/v3/admin/diagnostics/status`: existing status plus background switches and config adoption.

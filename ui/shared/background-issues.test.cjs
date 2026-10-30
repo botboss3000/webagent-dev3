@@ -48,6 +48,10 @@ test('resolved toast counts down 3, 2, 1 then disappears without delaying or rep
  f.advance(1000);assert.deepEqual(f.messages,['App status unavailable: offline (Cleared 1)']);
  f.advance(1000);assert.deepEqual(f.messages,[]);assert.equal(f.events.length,2);
 });
+test('configured cleared seconds set or skip the recovered countdown',async()=>{
+ const f=await setup();await f.setConfig({enabled:true,show_toasts:true,cleared_toast_seconds:5});f.issues.fail('status_poll',Error('down'));f.issues.resolve('status_poll');assert.deepEqual(f.messages,['App status unavailable: down (Cleared 5)']);f.advance(5000);assert.deepEqual(f.messages,[]);
+ await f.setConfig({enabled:true,show_toasts:true,cleared_toast_seconds:0});f.issues.fail('status_poll',Error('down'));assert.deepEqual(f.messages,['App status unavailable: down']);f.issues.resolve('status_poll');assert.deepEqual(f.messages,[]);
+});
 test('recurrence replaces countdown with new episode and old expiry cannot remove it',async()=>{
  const f=await setup();const first=f.issues.fail('status_poll',Error('first'));f.issues.resolve('status_poll');f.advance(1000);
  const second=f.issues.fail('status_poll',Error('again'));assert.notEqual(first,second);assert.deepEqual(f.messages,['App status unavailable: again']);f.advance(3000);assert.deepEqual(f.messages,['App status unavailable: again']);

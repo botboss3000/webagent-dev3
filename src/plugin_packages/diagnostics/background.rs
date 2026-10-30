@@ -1,7 +1,10 @@
 //! Browser reports are untrusted operational observations, never runtime authority.
-use crate::{recorder::{self,Recorder,settings,scope,permits},SnapshotStore,Error,bridge};
-use serde_json::{json,Value};
-
+use crate::{
+    bridge,
+    recorder::{self, permits, scope, settings, Recorder},
+    Error, SnapshotStore,
+};
+use serde_json::{json, Value};
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,17 +51,24 @@ impl IssueEvent {
     }
 }
 /// Exposes presentation policy only. Capture remains restricted to the fixed admin account.
-pub fn configuration<S:SnapshotStore>(recorder:Option<&Recorder<S>>,store:&S)->Value {
+pub fn configuration<S: SnapshotStore>(recorder: Option<&Recorder<S>>, store: &S) -> Value {
     let s = settings(recorder);
     json!({
         "enabled": scope(store) && bridge::available() && s.as_ref().is_some_and(|s| permits(s,"app_background")),
-        "show_toasts": s.filter(|s| s.error.is_none()).map(|s|s.config.background_issues.show_toasts).unwrap_or(true)
+        "show_toasts": s.as_ref().filter(|s| s.error.is_none()).map(|s|s.config.background_issues.show_toasts).unwrap_or(true),
+        "cleared_toast_seconds": s.filter(|s| s.error.is_none()).map(|s|s.config.background_issues.cleared_toast_seconds).unwrap_or(3)
     })
 }
 /// Bounds and allowlists client observations; never accepts raw messages, URLs, headers or credentials.
-pub async fn report<S:SnapshotStore>(recorder:Option<&Recorder<S>>,store:&S,body:IssueEvent)->Result<Value,Error> {
+pub async fn report<S: SnapshotStore>(
+    recorder: Option<&Recorder<S>>,
+    store: &S,
+    body: IssueEvent,
+) -> Result<Value, Error> {
     body.validate()?;
-    let Some(s) = settings(recorder).filter(|s| bridge::available() && permits(s, "app_background")) else {
+    let Some(s) =
+        settings(recorder).filter(|s| bridge::available() && permits(s, "app_background"))
+    else {
         return Ok(json!({"accepted":false}));
     };
     // A missing/deleted session can itself be the failure. Do not invent verified ownership.

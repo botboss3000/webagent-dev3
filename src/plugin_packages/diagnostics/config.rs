@@ -21,12 +21,19 @@ pub struct Config {
 pub struct BackgroundIssues {
     pub enabled: bool,
     pub show_toasts: bool,
+    /// Seconds a recovered issue's toast stays as "(Cleared N)"; 0 removes it at once.
+    #[serde(default = "cleared_toast_seconds_default")]
+    pub cleared_toast_seconds: u32,
+}
+fn cleared_toast_seconds_default() -> u32 {
+    3
 }
 impl Default for BackgroundIssues {
     fn default() -> Self {
         Self {
             enabled: true,
             show_toasts: true,
+            cleared_toast_seconds: cleared_toast_seconds_default(),
         }
     }
 }
@@ -123,6 +130,7 @@ impl Config {
             || self.full_context.max_retained_bytes == 0
             || self.full_context.max_retained_bytes > i64::MAX as u64
             || self.full_context.sessions.len() > 128
+            || self.background_issues.cleared_toast_seconds > 3600
         {
             bail!("Invalid diagnostics configuration");
         }
@@ -217,6 +225,14 @@ mod tests {
         assert!(!c.active());
         c.validate().unwrap();
         c.capture_scope = "all".into();
+        assert!(c.validate().is_err());
+        let c: Config = serde_json::from_value(serde_json::json!({"version":1,"enabled":true,"capture_scope":"fixed_admin",
+            "categories":{"provider":true,"context_assembly":true},"assembly_successes":false,"retention":{"hours":1,"max_rows":1},
+            "full_context":{"enabled":false,"sessions":[],"retention_hours":1,"max_snapshot_bytes":1,"max_retained_bytes":1},
+            "background_issues":{"enabled":true,"show_toasts":true}})).unwrap();
+        assert_eq!(c.background_issues.cleared_toast_seconds, 3);
+        let mut c = Config::disabled();
+        c.background_issues.cleared_toast_seconds = 3601;
         assert!(c.validate().is_err());
         assert_eq!(expiry("1970-01-01T00:00:00Z"), Some(0));
         assert_eq!(expiry("2026-10-09T00:00:00Z"), Some(1791504000));
