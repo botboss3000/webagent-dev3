@@ -14,7 +14,7 @@
     }
   },
   "registration": "open",
-  "revision": 46,
+  "revision": 49,
   "tier_names": {
     "anonymous": "Anonymous",
     "basic": "Base",
@@ -30,17 +30,19 @@
       "ability_permissions": {
         "front_desk": "auto",
         "managed_knowledge_files": "auto",
-        "web_access": "auto",
-        "web_search": "auto"
+        "web_access": "auto"
       },
       "allowed_models": [
         "deepseek-flash"
       ],
+      "entitlements": {
+        "web_read": "auto"
+      },
       "id": "anonymous",
       "max_active_runs": 2,
       "max_sessions": 10,
       "model_policy": null,
-      "revision": 4,
+      "revision": 5,
       "tools": {
         "business_profile_get": "auto",
         "get_weather": "auto",
@@ -51,7 +53,6 @@
         "maps_geocode": "auto",
         "offer_choices": "auto",
         "request_human": "auto",
-        "web_read": "auto",
         "web_search": "auto"
       }
     },
@@ -59,17 +60,19 @@
       "ability_permissions": {
         "front_desk": "auto",
         "managed_knowledge_files": "auto",
-        "web_access": "auto",
-        "web_search": "auto"
+        "web_access": "auto"
       },
       "allowed_models": [
         "deepseek-flash"
       ],
+      "entitlements": {
+        "web_read": "auto"
+      },
       "id": "basic",
       "max_active_runs": 2,
       "max_sessions": 10,
       "model_policy": null,
-      "revision": 4,
+      "revision": 5,
       "tools": {
         "business_profile_get": "auto",
         "get_weather": "auto",
@@ -80,7 +83,6 @@
         "maps_geocode": "auto",
         "offer_choices": "auto",
         "request_human": "auto",
-        "web_read": "auto",
         "web_search": "auto"
       }
     },
@@ -111,17 +113,19 @@
         "v3_build": "auto",
         "v3_workspace": "auto",
         "visualizer": "auto",
-        "web_access": "auto",
-        "web_search": "auto"
+        "web_access": "auto"
       },
       "allowed_models": [
         "*"
       ],
+      "entitlements": {
+        "web_read": "auto"
+      },
       "id": "operator",
       "max_active_runs": 200,
       "max_sessions": 10000,
       "model_policy": null,
-      "revision": 12,
+      "revision": 13,
       "tools": {
         "*": "auto"
       }
