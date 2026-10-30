@@ -116,6 +116,14 @@ async function mountAgents(){
   grid.append(create);
   const css=document.createElement('link');css.rel='stylesheet';css.href='/v3-ui/main-panel/agents/pages/sessions/sessions.css';document.head.append(css);
   $('agents-grid').replaceWith(grid);
+  // The shared CSS fades and shows a chevron at each edge with hidden squares; these classes drive it.
+  const strip=grid.querySelector('.agents-squares-wrap'),edges=()=>{
+    strip.classList.toggle('can-scroll-left',squares.scrollLeft>1);
+    strip.classList.toggle('can-scroll-right',squares.scrollLeft+squares.clientWidth<squares.scrollWidth-1);
+  };
+  squares.addEventListener('scroll',edges,{passive:true});
+  new ResizeObserver(edges).observe(squares);new MutationObserver(edges).observe(squares,{childList:true});
+  for(const [side,sign] of [['left',-1],['right',1]])strip.querySelector('.agents-carousel-chev.'+side).onclick=()=>squares.scrollBy({left:sign*squares.clientWidth*0.8,behavior:'smooth'});
   agentArchive=createAgentArchive({grid,request:api,roster:()=>agentRoster,rerender:()=>renderAgentCards(),notify:note,onChanged:agentsArchived,canUseArchive:()=>accountMe?.role!=='guest'});
   const route=new URL(location.href);
   if(activeMainPage==='agents'){

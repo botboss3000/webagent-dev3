@@ -69,7 +69,7 @@ try{
   assert.equal(await box('Alpha').count(),0);
   await press(box('Gamma'));
   assert.equal(await remove.isVisible(),false);
-  await press(page.getByRole('button',{name:'Archived',exact:true}));
+  await press(page.getByRole('button',{name:'Show archived agents',exact:true}));
   await page.getByText('Alpha').waitFor();
   assert.equal(await page.locator('#agents-detail-region').isVisible(),false,'the archived view hides the detail regions');
   const unarchive=page.locator('#agents-unarchive-btn'),permanentDelete=page.locator('#agents-delete-permanent-btn');
@@ -81,7 +81,7 @@ try{
   assert.deepEqual(await page.evaluate(()=>calls.filter(call=>call.path.endsWith('/unarchive')).map(call=>[call.method,call.path,call.body.expected_revision])),[['POST','/models/agents/a1/unarchive',4]]);
   assert.deepEqual(await page.evaluate(()=>changes),[['removed','a1'],['unarchived','a1']]);
   await page.evaluate(()=>{const gamma=roster.find(item=>item.id==='a3');roster=roster.filter(item=>item.id!=='a3');archived.push({...gamma,status:'archived',revision:6});});
-  await press(page.locator('#agents-back-btn'));await press(page.getByRole('button',{name:'Archived',exact:true}));
+  await press(page.locator('#agents-back-btn'));await press(page.getByRole('button',{name:'Show archived agents',exact:true}));
   await press(page.locator('.agent-card',{hasText:'Gamma'}));
   await press(permanentDelete);
   await page.waitForFunction(()=>document.getElementById('agents-delete-permanent-btn').dataset.state==='warning');

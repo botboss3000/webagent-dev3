@@ -32,12 +32,11 @@
 #agents-delete-permanent-btn:hover { background: rgba(var(--danger-rgb), 0.14); }
 #agents-remove-btn.warning,
 #agents-delete-permanent-btn.warning { color: var(--warning); border-color: rgba(var(--warning-rgb), 0.5); }
-#agents-remove-btn::after { content: 'Remove'; }
-#agents-remove-btn[data-state="warning"]::after { content: 'Remove?'; }
-#agents-delete-permanent-btn::after { content: 'Delete'; }
-#agents-delete-permanent-btn[data-state="warning"]::after { content: 'Delete?'; }
-#agents-remove-btn[data-state="deleting"]::after,
-#agents-delete-permanent-btn[data-state="deleting"]::after { content: none; }
+/* Icon-only action stack: square buttons and a tight column so the carousel keeps the width. */
+#agents-grid .agents-top-row.agents-top-row { gap: 4px; }
+#agents-toolbar { padding: 16px 0 12px; gap: 4px; }
+#agents-toolbar-actions { gap: 4px; }
+.agents-tb-btn { width: 28px; padding: 0; justify-content: center; }
 .agent-select-box { -webkit-tap-highlight-color: transparent; padding: 0; }
 
 /* Members: V2 table (styles from the shared agents.css); blocked rows get the danger tone and buttons drop the tap wash. */

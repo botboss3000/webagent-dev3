@@ -14,12 +14,12 @@ export function createAgentArchive({grid,request,roster,rerender,notify,onChange
   let open=false,archived=[];
   const actions=grid.querySelector('#agents-toolbar-actions'),back=grid.querySelector('#agents-back-btn');
   // Built here, like its siblings, so the toolbar never depends on the shared agents.html revision.
-  const unarchive=press(document.createElement('button'));unarchive.id='agents-unarchive-btn';unarchive.className='agents-tb-btn agents-tb-unarchive';unarchive.title='Unarchive selected agents';unarchive.style.display='none';
-  unarchive.innerHTML=icon('archive-restore',{size:'15px'})+'<span>Unarchive</span>';
+  const unarchive=press(document.createElement('button'));unarchive.id='agents-unarchive-btn';unarchive.className='agents-tb-btn agents-tb-unarchive';unarchive.title='Unarchive selected agents';unarchive.setAttribute('aria-label',unarchive.title);unarchive.style.display='none';
+  unarchive.innerHTML=icon('archive-restore',{size:'15px'});
   const archive=press(document.createElement('button'));archive.id='agents-remove-btn';archive.className='agents-tb-btn agents-tb-remove';
   const remove=press(document.createElement('button'));remove.id='agents-delete-permanent-btn';remove.className='agents-tb-btn agents-tb-delete';
-  const view=press(document.createElement('button'));view.id='agents-archive-view-btn';view.className='agents-tb-btn';view.title='Show archived agents';
-  view.innerHTML=icon('archive',{size:'15px'})+'<span>Archived</span>';
+  const view=press(document.createElement('button'));view.id='agents-archive-view-btn';view.className='agents-tb-btn';view.title='Show archived agents';view.setAttribute('aria-label',view.title);
+  view.innerHTML=icon('archive',{size:'15px'});
   actions.append(unarchive,archive,remove,view);press(back);
   const resetRemoveFromList=()=>resetDeleteBtn(archive,{size:'15px',iconName:'circle-minus',title:'Remove selected agents from your list',label:'Remove selected agents'});
   const resetRemove=()=>resetDeleteBtn(remove,{size:'15px',iconName:'trash-2',title:'Delete selected agents permanently',label:'Delete selected agents permanently'});
