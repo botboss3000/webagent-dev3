@@ -397,7 +397,7 @@ impl<
         .await
     }
     /// Invalid host input pauses for review; unavailable pure services retain accepted work.
-    /// The stage names the failed step in the operator log alongside the error.
+    /// The stage and error are logged for operators and kept as the run's visible error.
     async fn pause_context_preparation(
         app: &Self,
         run: &mut Value,
@@ -417,8 +417,7 @@ impl<
         );
         run["status"] = json!("paused");
         run["component_pause"] = Value::Null;
-        run["error"] =
-            json!("Current context sources or projection are invalid; review before resuming");
+        run["error"] = json!(format!("Context preparation failed at {stage}: {error}"));
         app.save(run).await
     }
     /// Bound freshness reconstruction independently of normal model/tool turn limits.

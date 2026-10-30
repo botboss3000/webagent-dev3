@@ -549,6 +549,88 @@ async fn message_receipts_are_idempotent_and_conflicting_reuse_is_rejected() {
     assert_eq!(app.store.list("run:").await.unwrap().len(), 1);
 }
 
+// A new message replaces paused work and releases its held queue; uncertain work stays.
+#[tokio::test]
+async fn new_message_supersedes_paused_run_but_not_uncertain_work() {
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    let (_, Json(first)) = send(
+        State(app.clone()),
+        Path(sid.clone()),
+        Json(json!({"client_message_id":"one","text":"hello"})),
+    )
+    .await
+    .unwrap();
+    let paused_id = first["run_id"].as_str().unwrap().to_owned();
+    let mut paused = app.run(&paused_id).await.unwrap();
+    paused["status"] = json!("paused");
+    paused["error"] = json!("Context preparation failed at fixture: invalid");
+    app.save(&mut paused).await.unwrap();
+    app.store
+        .followup_hold(&sid, "Existing work must be resolved before queue delivery")
+        .await
+        .unwrap();
+    let (_, Json(second)) = send(
+        State(app.clone()),
+        Path(sid.clone()),
+        Json(json!({"client_message_id":"two","text":"continue"})),
+    )
+    .await
+    .unwrap();
+    let paused = app.run(&paused_id).await.unwrap();
+    assert_eq!(paused["status"], "cancelled");
+    assert_eq!(paused["superseded_by_message"], true);
+    assert_eq!(app.store.followup_queue(&sid).await.unwrap()["held"], false);
+    let next_id = second["run_id"]
+        .as_str()
+        .expect("message dispatched, not held");
+    let mut uncertain = app.run(next_id).await.unwrap();
+    uncertain["status"] = json!("paused");
+    uncertain["uncertain"] = json!(true);
+    app.save(&mut uncertain).await.unwrap();
+    let _ = send(
+        State(app.clone()),
+        Path(sid.clone()),
+        Json(json!({"client_message_id":"three","text":"again"})),
+    )
+    .await;
+    assert_eq!(app.run(next_id).await.unwrap()["status"], "paused");
+}
+
+// A bare stop phrase stops in-flight work without recording a message; idle sessions
+// receive it as an ordinary message.
+#[tokio::test]
+async fn typed_stop_phrase_stops_running_work_without_a_message() {
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    let (_, Json(first)) = send(
+        State(app.clone()),
+        Path(sid.clone()),
+        Json(json!({"client_message_id":"one","text":"hello"})),
+    )
+    .await
+    .unwrap();
+    let run_id = first["run_id"].as_str().unwrap().to_owned();
+    let body = json!({"client_message_id":"two","text":"Please stop."});
+    for _ in 0..2 {
+        let (_, Json(stopped)) = send(State(app.clone()), Path(sid.clone()), Json(body.clone()))
+            .await
+            .unwrap();
+        assert_eq!(stopped["stopped_run"]["id"], run_id.as_str());
+    }
+    assert_eq!(app.run(&run_id).await.unwrap()["status"], "cancelled");
+    assert_eq!(app.store.chat_snapshot(&sid).await.unwrap().0.len(), 1);
+    let (_, Json(sent)) = send(
+        State(app.clone()),
+        Path(sid.clone()),
+        Json(json!({"client_message_id":"three","text":"stop"})),
+    )
+    .await
+    .unwrap();
+    assert!(sent["stopped_run"].is_null());
+    assert_eq!(app.store.chat_snapshot(&sid).await.unwrap().0.len(), 2);
+}
+
 #[tokio::test]
 async fn agent_proposal_is_visible_and_admin_can_promote_the_same_review() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -2397,14 +2479,7 @@ async fn shutoff_cancels_midstream_model_without_waiting_for_eof() {
 #[tokio::test]
 async fn runtime_restart_resumes_model_once_but_preserves_intentional_stops() {
     use axum::response::{sse::Event, Sse};
-    for action in [
-        "restart",
-        "disabled",
-        "pause",
-        "cancel",
-        "shutoff",
-        "lease_cancel",
-    ] {
+    for action in ["restart", "disabled", "cancel", "shutoff", "lease_cancel"] {
         let (root, mut app) = fixture().await;
         let started = Arc::new(tokio::sync::Notify::new());
         let signal = started.clone();
@@ -2451,7 +2526,7 @@ async fn runtime_restart_resumes_model_once_but_preserves_intentional_stops() {
             "restart" | "disabled" => {
                 app.stop.cancel();
             }
-            "pause" | "cancel" => {
+            "cancel" => {
                 command(
                     State(app.clone()),
                     Path((id.clone(), action.into())),
@@ -2502,7 +2577,6 @@ async fn runtime_restart_resumes_model_once_but_preserves_intentional_stops() {
         recover(&restarted, true).await.unwrap();
         let expected = match action {
             "restart" => "queued",
-            "pause" => "paused",
             "cancel" => "cancelled",
             _ => "stopped",
         };
@@ -12137,28 +12211,24 @@ async fn late_single_tool_case(name: &str, action: &str, mutation: &str, success
 }
 
 #[tokio::test]
-async fn late_single_tool_failure_survives_stop_pause_and_reopen() {
+async fn late_single_tool_failure_survives_stop_and_reopen() {
     for name in ["file_list", "file_write"] {
-        for action in ["cancel", "pause"] {
-            late_single_tool_case(name, action, "none", false).await;
-        }
+        late_single_tool_case(name, "cancel", "none", false).await;
     }
 }
 
 #[tokio::test]
 async fn late_single_tool_rejects_stale_attempts_and_keeps_known_write_result() {
     for mutation in ["generation", "pending", "requested"] {
-        late_single_tool_case("file_write", "pause", mutation, false).await;
-        late_single_tool_case("file_write", "pause", mutation, true).await;
+        late_single_tool_case("file_write", "cancel", mutation, false).await;
+        late_single_tool_case("file_write", "cancel", mutation, true).await;
     }
     late_single_tool_case("file_write", "cancel", "none", true).await;
 }
 
 #[tokio::test]
 async fn late_single_tool_broker_finish_keeps_receipt_reconciliation() {
-    for action in ["cancel", "pause"] {
-        late_single_tool_case("build_work", action, "none", false).await;
-    }
+    late_single_tool_case("build_work", "cancel", "none", false).await;
 }
 
 /// Terminal storage accepts a safe diagnostic attachment, never a state/result edit.
@@ -12237,6 +12307,12 @@ async fn cancelling_a_finished_run_is_a_conflict_not_a_storage_failure() {
     run["status"] = json!("completed");
     app.save(&mut run).await.unwrap();
     for action in ["cancel", "pause"] {
+        // "pause" is no longer a run action; a finished run rejects "cancel" as a conflict.
+        let expected = if action == "pause" {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::CONFLICT
+        };
         let error = command(
             State(app.clone()),
             Path((id.clone(), action.into())),
@@ -12244,7 +12320,7 @@ async fn cancelling_a_finished_run_is_a_conflict_not_a_storage_failure() {
         )
         .await
         .unwrap_err();
-        assert_eq!(error.0, StatusCode::CONFLICT, "{action}");
+        assert_eq!(error.0, expected, "{action}");
     }
     assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
 }

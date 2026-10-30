@@ -27,8 +27,8 @@ static LANES: OnceLock<Mutex<HashMap<String, Lane>>> = OnceLock::new();
 fn lanes() -> &'static Mutex<HashMap<String, Lane>> {
     LANES.get_or_init(|| Mutex::new(HashMap::new()))
 }
-pub(crate) async fn quiesce(app:&App,sid:&str) {
-    lanes().lock().await.remove(&lane_key(app,sid));
+pub(crate) async fn quiesce(app: &App, sid: &str) {
+    lanes().lock().await.remove(&lane_key(app, sid));
 }
 fn lane_key(app: &App, sid: &str) -> String {
     format!("{}\0{sid}", app.store.current_user_id())
@@ -38,13 +38,21 @@ fn get_lane<'a>(all: &'a mut HashMap<String, Lane>, key: &str) -> Result<&'a mut
     if !all.contains_key(key) && all.len() >= 64 {
         return Err(conflict("Voice is busy; try again shortly"));
     }
-    let lane = all.entry(key.to_owned()).or_insert_with(|| Lane {generation:uuid(),..Lane::default()});
+    let lane = all.entry(key.to_owned()).or_insert_with(|| Lane {
+        generation: uuid(),
+        ..Lane::default()
+    });
     lane.expires = now() + 1800;
     Ok(lane)
 }
-fn existing_lane<'a>(all: &'a mut HashMap<String,Lane>,key:&str,generation:&str) -> Result<&'a mut Lane,ApiError> {
-    all.get_mut(key).filter(|lane|lane.generation==generation)
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND,"Session not found".into()))
+fn existing_lane<'a>(
+    all: &'a mut HashMap<String, Lane>,
+    key: &str,
+    generation: &str,
+) -> Result<&'a mut Lane, ApiError> {
+    all.get_mut(key)
+        .filter(|lane| lane.generation == generation)
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Session not found".into()))
 }
 fn wav(pcm: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(pcm.len() + 44);
@@ -65,12 +73,22 @@ fn wav(pcm: &[u8]) -> Vec<u8> {
 }
 async fn transcribe(app: &App, run: &Value, bytes: &[u8], mime: &str) -> Result<String, ApiError> {
     let (selection, tokens) = media_lane::lane_selection(app, run).await?;
-    let cancel=app.stop.child_token();
-    let text = app.session_operation(run["session_id"].as_str().unwrap_or(""),cancel.clone(),
-        app.provider.transcribe(&selection, &tokens, bytes, mime, cancel))
+    let cancel = app.stop.child_token();
+    let text = app
+        .session_operation(
+            run["session_id"].as_str().unwrap_or(""),
+            cancel.clone(),
+            app.provider
+                .transcribe(&selection, &tokens, bytes, mime, cancel),
+        )
         .await
         .map_err(|error| {
-            if error.downcast_ref::<crate::store::session::ArchivedSession>().is_some() {return ApiError::from(error);}
+            if error
+                .downcast_ref::<crate::store::session::ArchivedSession>()
+                .is_some()
+            {
+                return ApiError::from(error);
+            }
             ApiError(
                 StatusCode::BAD_GATEWAY,
                 "Recording could not be transcribed by the configured Voice model".into(),
@@ -84,7 +102,7 @@ pub(crate) async fn voice_audio(
     Path(sid): Path<String>,
     Json(body): Json<Value>,
 ) -> Api {
-    session_agent_id(&app,&sid).await?;
+    session_agent_id(&app, &sid).await?;
     let op = required(&body, "op", 16)?;
     let k = lane_key(&app, &sid);
     if op == "start" {
@@ -185,9 +203,9 @@ pub(crate) async fn voice_audio(
         drop(all);
         let partial_text = if let Some((run, bytes)) = partial {
             match transcribe(&app, &run, &bytes, "audio/wav").await {
-                Ok(text)=>Some(text),
-                Err(error) if error.0==StatusCode::NOT_FOUND=>return Err(error),
-                Err(_)=>None,
+                Ok(text) => Some(text),
+                Err(error) if error.0 == StatusCode::NOT_FOUND => return Err(error),
+                Err(_) => None,
             }
         } else {
             None
@@ -353,14 +371,14 @@ fn control(text: &str) -> Option<&'static str> {
     .contains(&tail.as_str())
     {
         match verb {
-            "stop" | "cancel" | "abort" => return Some("cancel"),
-            "pause" => return Some("pause"),
+            // A spoken pause is a stop; the next message carries the work forward.
+            "stop" | "cancel" | "abort" | "pause" => return Some("cancel"),
             "resume" | "continue" => return Some("resume"),
             _ => {}
         }
     }
     if matches!(text, "hold on" | "wait a moment" | "wait a second") {
-        Some("pause")
+        Some("cancel")
     } else {
         None
     }
@@ -693,13 +711,22 @@ pub(crate) async fn voice_speech(
             )
         })?;
     let model = std::env::var("V3_VOICE_TTS_MODEL").unwrap_or_else(|_| "gpt-4o-mini-tts".into());
-    session_agent_id(&app,&sid).await?;
-    let cancel=app.stop.child_token();
-    let bytes = app.session_operation(&sid,cancel.clone(),
-        app.provider.speak(&key, &model, &text, cancel))
+    session_agent_id(&app, &sid).await?;
+    let cancel = app.stop.child_token();
+    let bytes = app
+        .session_operation(
+            &sid,
+            cancel.clone(),
+            app.provider.speak(&key, &model, &text, cancel),
+        )
         .await
         .map_err(|error| {
-            if error.downcast_ref::<crate::store::session::ArchivedSession>().is_some() {return ApiError::from(error);}
+            if error
+                .downcast_ref::<crate::store::session::ArchivedSession>()
+                .is_some()
+            {
+                return ApiError::from(error);
+            }
             ApiError(
                 StatusCode::BAD_GATEWAY,
                 "Server speech did not complete; browser speech can be used".into(),
@@ -724,14 +751,14 @@ mod deletion_tests {
     use super::*;
     #[test]
     fn removed_voice_lane_cannot_be_recreated_by_an_old_result() {
-        let mut all=HashMap::new();
-        let old=get_lane(&mut all,"test").unwrap().generation.clone();
+        let mut all = HashMap::new();
+        let old = get_lane(&mut all, "test").unwrap().generation.clone();
         all.remove("test");
-        assert!(existing_lane(&mut all,"test",&old).is_err());
+        assert!(existing_lane(&mut all, "test", &old).is_err());
         assert!(all.is_empty());
-        let fresh=get_lane(&mut all,"test").unwrap().generation.clone();
-        assert_ne!(fresh,old);
-        assert!(existing_lane(&mut all,"test",&old).is_err());
-        assert!(existing_lane(&mut all,"test",&fresh).is_ok());
+        let fresh = get_lane(&mut all, "test").unwrap().generation.clone();
+        assert_ne!(fresh, old);
+        assert!(existing_lane(&mut all, "test", &old).is_err());
+        assert!(existing_lane(&mut all, "test", &fresh).is_ok());
     }
 }

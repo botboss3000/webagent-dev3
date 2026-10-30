@@ -39,6 +39,9 @@ pub(crate) async fn send(
         return Err(bad("text has invalid length"));
     }
     let request_id = required(&body, "client_message_id", 128)?;
+    if let Some(stopped) = typed_stop(&app, &id, &body, text, request_id).await? {
+        return Ok((StatusCode::ACCEPTED, Json(stopped)));
+    }
     let _guard = app.gate.lock().await;
     session_agent_id(&app, &id).await?;
     let receipt_key = format!(
@@ -72,6 +75,9 @@ pub(crate) async fn send(
     let participation = app.store.participation_state(&id).await?;
     let legacy = participation["active"] == true
         && !crate::shared_chat::uses_shared_queue(&app, &id).await?;
+    if legacy && !app.shutoff().await? {
+        supersede_stopped_runs(&app, &id, request_id).await?;
+    }
     if legacy && crate::followup_queue::should_queue(&app, &id).await? {
         let result = crate::followup_queue::submit(&app, &id, &body).await?;
         return Ok((StatusCode::ACCEPTED, Json(result)));
@@ -104,6 +110,116 @@ pub(crate) async fn send(
         .map_err(admission_error)?;
     crate::wake::notify(&app).await;
     Ok((StatusCode::ACCEPTED, Json(result)))
+}
+/// True when a typed message is only a stop phrase such as "stop", "pause" or "hold on".
+fn stop_phrase(text: &str) -> bool {
+    let text = text
+        .trim()
+        .trim_end_matches(['.', '!'])
+        .to_ascii_lowercase();
+    let text = text.strip_prefix("please ").unwrap_or(&text);
+    matches!(
+        text,
+        "stop"
+            | "stop it"
+            | "stop that"
+            | "stop now"
+            | "stop please"
+            | "pause"
+            | "hold on"
+            | "wait"
+            | "wait a moment"
+            | "wait a second"
+            | "cancel"
+    )
+}
+/// A bare stop phrase typed while work is in flight stops that run without recording
+/// a message or calling a model. Its message receipt makes retries return the same stop.
+async fn typed_stop(
+    app: &App,
+    sid: &str,
+    body: &Value,
+    text: &str,
+    request_id: &str,
+) -> std::result::Result<Option<Value>, ApiError> {
+    let attached = body["attachment_ids"]
+        .as_array()
+        .is_some_and(|ids| !ids.is_empty());
+    let receipt_key = format!(
+        "receipt:message:{sid}:{}:{request_id}",
+        crate::shared_chat::actor(app)
+    );
+    if attached || !stop_phrase(text) || app.store.get(&receipt_key).await?.is_some() {
+        return Ok(None);
+    }
+    let running = app.store.active_runs().await?.into_iter().find(|run| {
+        run["session_id"] == sid
+            && matches!(
+                status(run),
+                "queued" | "running" | "waiting_approval" | "waiting_gate" | "waiting_external"
+            )
+    });
+    let Some(run_id) = running.as_ref().and_then(|run| run["id"].as_str()) else {
+        return Ok(None);
+    };
+    let Json(run) = command(
+        State(app.clone()),
+        Path((run_id.to_owned(), "cancel".to_owned())),
+        Json(json!({"client_request_id":format!("typed-stop-{request_id}")})),
+    )
+    .await?;
+    let result = json!({"run_id":null,"stopped_run":run});
+    app.store
+        .put(
+            &receipt_key,
+            &json!({"digest":digest(body),"result":result}),
+        )
+        .await?;
+    Ok(Some(result))
+}
+/// A new message replaces paused or stopped work in its conversation, so the message
+/// (and any queue held behind that work) is delivered instead of waiting on it.
+/// Uncertain tool outcomes still need explicit recovery and are never replaced.
+async fn supersede_stopped_runs(
+    app: &App,
+    sid: &str,
+    request_id: &str,
+) -> std::result::Result<(), ApiError> {
+    let mut superseded = false;
+    for view in app.store.active_runs().await? {
+        if view["session_id"] != sid
+            || !matches!(status(&view), "paused" | "stopped")
+            || view["uncertain"] == true
+        {
+            continue;
+        }
+        let Some(run_id) = view["id"].as_str() else {
+            continue;
+        };
+        let mut run = app.run(run_id).await?;
+        if !matches!(status(&run), "paused" | "stopped") || run["uncertain"] == true {
+            continue;
+        }
+        run["status"] = json!("cancelled");
+        run["component_pause"] = Value::Null;
+        run["superseded_by_message"] = json!(true);
+        let result = public_run(&run);
+        app.store
+            .atomic_docs_event(vec![(key("run", run_id), run)], sid, "run_status", &result)
+            .await?;
+        superseded = true;
+    }
+    let queue = app.store.followup_queue(sid).await?;
+    if superseded && queue["held"] == true {
+        let revision = queue["revision"].as_u64().unwrap_or(0);
+        let request = format!("supersede:{request_id}");
+        let body = json!({"client_request_id":request,"expected_revision":revision});
+        app.store
+            .followup_choice(sid, None, revision, &request, &body)
+            .await
+            .map_err(|error| conflict(&error.to_string()))?;
+    }
+    Ok(())
 }
 pub(crate) struct PreparedMessage {
     pub docs: Vec<(String, Value)>,
@@ -877,7 +993,7 @@ pub(crate) async fn command(
         ));
     }
     match action.as_str() {
-        "cancel" | "pause" => {
+        "cancel" => {
             // Storage fences finished runs; report the race instead of a storage failure.
             if terminal(status(&run)) {
                 return Err(conflict("Run already finished"));
@@ -888,11 +1004,7 @@ pub(crate) async fn command(
             }
             if !terminal(status(&run)) {
                 if run["pending"]["external_job"]["kind"] == "v3_build" {
-                    run["status"] = json!(if action == "pause" {
-                        "paused"
-                    } else {
-                        "cancelled"
-                    });
+                    run["status"] = json!("cancelled");
                 } else if (run["pending"]["state"] == "executing"
                     && !tools::is_read(run["pending"]["name"].as_str().unwrap_or("")))
                     || parallel_batch::executing_write(&run)
@@ -901,11 +1013,7 @@ pub(crate) async fn command(
                     run["uncertain"] = json!(true);
                     parallel_batch::mark_uncertain_writes(&mut run);
                 } else {
-                    run["status"] = json!(if action == "pause" {
-                        "paused"
-                    } else {
-                        "cancelled"
-                    });
+                    run["status"] = json!("cancelled");
                 }
                 run["error"] = json!("Cancelled by user");
                 // Stop only this conversation; background work runs until a session stop.

@@ -282,31 +282,12 @@ async fn voice_composer_requires_matching_confirmation_and_publishes_one_turn() 
     )
     .await
     .unwrap();
+    // A spoken pause is a stop; the next message carries the work forward.
     assert_eq!(
         app.run(replacement["run_id"].as_str().unwrap())
             .await
             .unwrap()["status"],
-        "paused"
-    );
-    let Json(resume) = voice_route(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(route("resume", Value::Null)),
-    )
-    .await
-    .unwrap();
-    let _ = voice_control(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(json!({"ticket":resume["ticket"]})),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        app.run(replacement["run_id"].as_str().unwrap())
-            .await
-            .unwrap()["status"],
-        "queued"
+        "cancelled"
     );
     assert_eq!(app.store.chat_snapshot(&sid).await.unwrap().0.len(), 2);
 }
@@ -484,52 +465,166 @@ async fn attachment_limits_follow_chat_json_and_fail_closed() {
     let (root, mut app) = fixture().await;
     let sid = session(&app).await;
     app.chat_ui_config_path = root.path().join("chat.json");
-    let defaults = uploads::limits(&app,&sid).await.unwrap();
-    assert_eq!((defaults.max_file_size_mb,defaults.max_per_message),(None,None));
-    let write = |mb: Value,count: Value| std::fs::write(&app.chat_ui_config_path,
-        json!({"chat_limits":{"attachments":{"max_file_size_mb":mb,"max_per_message":count}}}).to_string()).unwrap();
-    write(json!(1),json!(1));
-    let Json(controls) = chat_controls_get(State(app.clone()),Path(sid.clone())).await.unwrap();
-    assert_eq!(controls["composer"]["attachment_limits"],json!({"max_file_size_mb":1,"max_per_message":1}));
-    let make = |id: &str,bytes: usize| json!({"client_upload_id":id,"name":"limits.txt","media_type":"text/plain","data":STANDARD.encode(vec![b'x';bytes])});
+    let defaults = uploads::limits(&app, &sid).await.unwrap();
+    assert_eq!(
+        (defaults.max_file_size_mb, defaults.max_per_message),
+        (None, None)
+    );
+    let write = |mb: Value, count: Value| {
+        std::fs::write(
+            &app.chat_ui_config_path,
+            json!({"chat_limits":{"attachments":{"max_file_size_mb":mb,"max_per_message":count}}})
+                .to_string(),
+        )
+        .unwrap()
+    };
+    write(json!(1), json!(1));
+    let Json(controls) = chat_controls_get(State(app.clone()), Path(sid.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        controls["composer"]["attachment_limits"],
+        json!({"max_file_size_mb":1,"max_per_message":1})
+    );
+    let make = |id: &str, bytes: usize| json!({"client_upload_id":id,"name":"limits.txt","media_type":"text/plain","data":STANDARD.encode(vec![b'x';bytes])});
     let id = uuid();
-    let _ = upload(State(app.clone()),Path(sid.clone()),Json(make(&id,1024*1024))).await.unwrap();
-    assert!(upload(State(app.clone()),Path(sid.clone()),Json(make(&uuid(),1024*1024+1))).await.is_err());
-    let request = Request::builder().header("content-type","application/json").body(Body::from(vec![b' ';2*1024*1024])).unwrap();
-    assert_eq!(uploads::request_body(&app,&sid,request).await.unwrap_err().0,StatusCode::PAYLOAD_TOO_LARGE);
-    let second=uuid();
-    let _ = upload(State(app.clone()),Path(sid.clone()),Json(make(&second,1))).await.unwrap();
-    let ids=json!([id,second]);
-    let mut prepared=attachments::prepare(None,&sid,"limits-run").unwrap();
-    assert!(uploads::prepare_uploads(&app,&sid,"shared_default","limits-run",Some(&ids),&mut prepared).await.is_err());
-    write(json!(30),json!(2));
-    let limits=uploads::limits(&app,&sid).await.unwrap();
-    assert_eq!((limits.max_file_size_mb,limits.max_per_message),(Some(30),Some(2)));
-    uploads::prepare_uploads(&app,&sid,"shared_default","limits-run",Some(&ids),&mut prepared).await.unwrap();
-    assert_eq!(prepared.metadata.len(),2);
+    let _ = upload(
+        State(app.clone()),
+        Path(sid.clone()),
+        Json(make(&id, 1024 * 1024)),
+    )
+    .await
+    .unwrap();
+    assert!(upload(
+        State(app.clone()),
+        Path(sid.clone()),
+        Json(make(&uuid(), 1024 * 1024 + 1))
+    )
+    .await
+    .is_err());
+    let request = Request::builder()
+        .header("content-type", "application/json")
+        .body(Body::from(vec![b' '; 2 * 1024 * 1024]))
+        .unwrap();
+    assert_eq!(
+        uploads::request_body(&app, &sid, request)
+            .await
+            .unwrap_err()
+            .0,
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+    let second = uuid();
+    let _ = upload(
+        State(app.clone()),
+        Path(sid.clone()),
+        Json(make(&second, 1)),
+    )
+    .await
+    .unwrap();
+    let ids = json!([id, second]);
+    let mut prepared = attachments::prepare(None, &sid, "limits-run").unwrap();
+    assert!(uploads::prepare_uploads(
+        &app,
+        &sid,
+        "shared_default",
+        "limits-run",
+        Some(&ids),
+        &mut prepared
+    )
+    .await
+    .is_err());
+    write(json!(30), json!(2));
+    let limits = uploads::limits(&app, &sid).await.unwrap();
+    assert_eq!(
+        (limits.max_file_size_mb, limits.max_per_message),
+        (Some(30), Some(2))
+    );
+    uploads::prepare_uploads(
+        &app,
+        &sid,
+        "shared_default",
+        "limits-run",
+        Some(&ids),
+        &mut prepared,
+    )
+    .await
+    .unwrap();
+    assert_eq!(prepared.metadata.len(), 2);
     // Raising the file limit also raises transport admission; 25 MiB is no longer hard-coded.
-    let large_id=uuid();
-    let large=make(&large_id,26*1024*1024);
-    let request=Request::builder().header("content-type","application/json").body(Body::from(large.to_string())).unwrap();
-    let parsed=uploads::request_body(&app,&sid,request).await.unwrap();
-    let _ = upload(State(app.clone()),Path(sid.clone()),Json(parsed)).await.unwrap();
-    write(json!(1),json!(2));
-    let mut lowered=attachments::prepare(None,&sid,"lowered").unwrap();
-    assert!(uploads::prepare_uploads(&app,&sid,"shared_default","lowered",Some(&json!([large_id])),&mut lowered).await.is_err());
+    let large_id = uuid();
+    let large = make(&large_id, 26 * 1024 * 1024);
+    let request = Request::builder()
+        .header("content-type", "application/json")
+        .body(Body::from(large.to_string()))
+        .unwrap();
+    let parsed = uploads::request_body(&app, &sid, request).await.unwrap();
+    let _ = upload(State(app.clone()), Path(sid.clone()), Json(parsed))
+        .await
+        .unwrap();
+    write(json!(1), json!(2));
+    let mut lowered = attachments::prepare(None, &sid, "lowered").unwrap();
+    assert!(uploads::prepare_uploads(
+        &app,
+        &sid,
+        "shared_default",
+        "lowered",
+        Some(&json!([large_id])),
+        &mut lowered
+    )
+    .await
+    .is_err());
     // The session agent's overlay may lower, never raise, the installation limits.
-    write(json!(30),json!(2));
-    let agent=app.store.for_agent("shared_default").await.unwrap();
-    let overlay=json!({"chat_limits":{"attachments":{"max_file_size_mb":1,"max_per_message":5}}});
-    webagent_chat::agent_config::save(&agent.agent_pool,&agent,"shared_default","chat",
-        webagent_chat::agent_config::Change::Patch(&overlay),0,&json!({}),"admin",1).await.unwrap();
-    let limits=uploads::limits(&app,&sid).await.unwrap();
-    assert_eq!((limits.max_file_size_mb,limits.max_per_message),(Some(1),Some(2)));
-    assert!(upload(State(app.clone()),Path(sid.clone()),Json(make(&uuid(),1024*1024+1))).await.is_err());
-    webagent_chat::agent_config::save(&agent.agent_pool,&agent,"shared_default","chat",
-        webagent_chat::agent_config::Change::Reset,1,&json!({}),"admin",2).await.unwrap();
-    for (mb,count) in [(json!(0),json!(2)),(json!(30),json!("2")),(json!(-1),json!(2))] {
-        write(mb,count);
-        assert_eq!(uploads::limits(&app,&sid).await.err().unwrap().0,StatusCode::SERVICE_UNAVAILABLE);
+    write(json!(30), json!(2));
+    let agent = app.store.for_agent("shared_default").await.unwrap();
+    let overlay = json!({"chat_limits":{"attachments":{"max_file_size_mb":1,"max_per_message":5}}});
+    webagent_chat::agent_config::save(
+        &agent.agent_pool,
+        &agent,
+        "shared_default",
+        "chat",
+        webagent_chat::agent_config::Change::Patch(&overlay),
+        0,
+        &json!({}),
+        "admin",
+        1,
+    )
+    .await
+    .unwrap();
+    let limits = uploads::limits(&app, &sid).await.unwrap();
+    assert_eq!(
+        (limits.max_file_size_mb, limits.max_per_message),
+        (Some(1), Some(2))
+    );
+    assert!(upload(
+        State(app.clone()),
+        Path(sid.clone()),
+        Json(make(&uuid(), 1024 * 1024 + 1))
+    )
+    .await
+    .is_err());
+    webagent_chat::agent_config::save(
+        &agent.agent_pool,
+        &agent,
+        "shared_default",
+        "chat",
+        webagent_chat::agent_config::Change::Reset,
+        1,
+        &json!({}),
+        "admin",
+        2,
+    )
+    .await
+    .unwrap();
+    for (mb, count) in [
+        (json!(0), json!(2)),
+        (json!(30), json!("2")),
+        (json!(-1), json!(2)),
+    ] {
+        write(mb, count);
+        assert_eq!(
+            uploads::limits(&app, &sid).await.err().unwrap().0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 }
 
@@ -538,30 +633,76 @@ async fn unrestricted_attachment_defaults_remove_size_count_and_storage_caps() {
     let (root, mut app) = fixture().await;
     let sid = session(&app).await;
     app.chat_ui_config_path = root.path().join("chat.json");
-    for config in [json!({}),json!({"chat_limits":{"attachments":{}}}),
-        json!({"chat_limits":{"attachments":{"max_file_size_mb":null,"max_per_message":null}}})] {
-        std::fs::write(&app.chat_ui_config_path,config.to_string()).unwrap();
-        let limit = uploads::limits(&app,&sid).await.unwrap();
-        assert_eq!((limit.max_file_size_mb,limit.max_per_message),(None,None));
+    for config in [
+        json!({}),
+        json!({"chat_limits":{"attachments":{}}}),
+        json!({"chat_limits":{"attachments":{"max_file_size_mb":null,"max_per_message":null}}}),
+    ] {
+        std::fs::write(&app.chat_ui_config_path, config.to_string()).unwrap();
+        let limit = uploads::limits(&app, &sid).await.unwrap();
+        assert_eq!(
+            (limit.max_file_size_mb, limit.max_per_message),
+            (None, None)
+        );
     }
-    let Json(controls)=chat_controls_get(State(app.clone()),Path(sid.clone())).await.unwrap();
-    assert_eq!(controls["composer"]["attachment_limits"]["max_file_size_mb"],Value::Null);
-    assert_eq!(controls["composer"]["attachment_limits"]["max_per_message"],Value::Null);
+    let Json(controls) = chat_controls_get(State(app.clone()), Path(sid.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        controls["composer"]["attachment_limits"]["max_file_size_mb"],
+        Value::Null
+    );
+    assert_eq!(
+        controls["composer"]["attachment_limits"]["max_per_message"],
+        Value::Null
+    );
     // Existing storage accounting above the former quota cannot block another upload.
-    app.store.put("attachment_quota",&json!({"bytes":300*1024*1024u64})).await.unwrap();
-    let aid=uuid();
-    let body=json!({"client_upload_id":aid,"name":"unrestricted.txt","media_type":"text/plain",
+    app.store
+        .put("attachment_quota", &json!({"bytes":300*1024*1024u64}))
+        .await
+        .unwrap();
+    let aid = uuid();
+    let body = json!({"client_upload_id":aid,"name":"unrestricted.txt","media_type":"text/plain",
         "data":STANDARD.encode(vec![b'x';26*1024*1024])});
-    let request=Request::builder().header("content-type","application/json").body(Body::from(body.to_string())).unwrap();
-    let parsed=uploads::request_body(&app,&sid,request).await.unwrap();
-    let _=upload(State(app.clone()),Path(sid.clone()),Json(parsed)).await.unwrap();
-    assert!(app.store.get("attachment_quota").await.unwrap().unwrap()["bytes"].as_u64().unwrap()>300*1024*1024u64);
-    let items=json!((0..12).map(|n|json!({"name":format!("{n}.txt"),"media_type":"text/plain","text":"source"})).collect::<Vec<_>>());
-    let mut prepared=attachments::prepare(Some(&items),&sid,"unrestricted-run").unwrap();
-    uploads::prepare_uploads(&app,&sid,"shared_default","unrestricted-run",Some(&json!([aid])),&mut prepared).await.unwrap();
-    assert_eq!(prepared.metadata.len(),13);
+    let request = Request::builder()
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let parsed = uploads::request_body(&app, &sid, request).await.unwrap();
+    let _ = upload(State(app.clone()), Path(sid.clone()), Json(parsed))
+        .await
+        .unwrap();
+    assert!(
+        app.store.get("attachment_quota").await.unwrap().unwrap()["bytes"]
+            .as_u64()
+            .unwrap()
+            > 300 * 1024 * 1024u64
+    );
+    let items = json!((0..12)
+        .map(|n| json!({"name":format!("{n}.txt"),"media_type":"text/plain","text":"source"}))
+        .collect::<Vec<_>>());
+    let mut prepared = attachments::prepare(Some(&items), &sid, "unrestricted-run").unwrap();
+    uploads::prepare_uploads(
+        &app,
+        &sid,
+        "shared_default",
+        "unrestricted-run",
+        Some(&json!([aid])),
+        &mut prepared,
+    )
+    .await
+    .unwrap();
+    assert_eq!(prepared.metadata.len(), 13);
     // Configuration is a refinement, without the former 256 MiB/100-file ceilings.
-    std::fs::write(&app.chat_ui_config_path,json!({"chat_limits":{"attachments":{"max_file_size_mb":512,"max_per_message":1000}}}).to_string()).unwrap();
-    let limits=uploads::limits(&app,&sid).await.unwrap();
-    assert_eq!((limits.max_file_size_mb,limits.max_per_message),(Some(512),Some(1000)));
+    std::fs::write(
+        &app.chat_ui_config_path,
+        json!({"chat_limits":{"attachments":{"max_file_size_mb":512,"max_per_message":1000}}})
+            .to_string(),
+    )
+    .unwrap();
+    let limits = uploads::limits(&app, &sid).await.unwrap();
+    assert_eq!(
+        (limits.max_file_size_mb, limits.max_per_message),
+        (Some(512), Some(1000))
+    );
 }

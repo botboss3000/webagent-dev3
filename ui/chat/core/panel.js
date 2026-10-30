@@ -291,7 +291,8 @@ async function stopAll(){const id=session;progress.hold(STOPPED,stoppedRun);cons
 // Adds/removes a transcript notice only for certain failed runs; uncertain outcomes remain in recovery UI.
 function failedRunMessages(items){
   const target=$('chat-messages-inner');
-  const failed=items.filter(run=>run.status==='failed'&&!run.uncertain);
+  // Error stops share the failed notice; uncertain outcomes keep their recovery controls.
+  const failed=items.filter(run=>!run.uncertain&&(run.status==='failed'||(['paused','stopped'].includes(run.status)&&run.error)));
   const ids=new Set(failed.map(run=>run.id));
   for(const row of target.querySelectorAll('[data-failed-run-id]'))if(!ids.has(row.dataset.failedRunId))row.remove();
   for(const run of failed){
@@ -303,7 +304,7 @@ function failedRunMessages(items){
       const after=turns.at(-1);
       target.insertBefore(row,after?.nextSibling||null);
     }
-    row.firstChild.querySelector('strong').textContent='Run failed'+(run.error?' — '+run.error:'');
+    row.firstChild.querySelector('strong').textContent=(run.status==='failed'?'Run failed':'Stopped')+(run.error?' — '+run.error:'');
     row.firstChild.querySelector('.chat-action-message').textContent='To continue, write a new message in the chat.';
   }
 }
@@ -312,8 +313,8 @@ function runs(items,authoritative=false){if(!authoritative&&sharing.state&&activ
 $('chat-input').readOnly=sharedAccess?.can_send===false;
 $('chat-stop-btn').disabled=sharedAccess?.can_control===false;
 failedRunMessages(relevant);
-// A paused or stopped run holds the queue, so a Continue would only queue behind it.
-const unresolved=relevant.some(run=>['paused','stopped','recovery'].includes(run.status));
+// Uncertain work needs recovery first; a Continue would only queue behind it.
+const unresolved=relevant.some(run=>run.uncertain||run.status==='recovery');
 const continuing=!pendingReview&&!active&&!unresolved&&!media?.count&&!$('chat-input').value.trim()&&$('chat-continue-btn').dataset.configEnabled!=='false';
 $('chat-continue-btn').hidden=!continuing;$('chat-continue-btn').style.display=continuing?'':'none';
 $('chat-continue-btn').disabled=sharedAccess?.can_send===false||sharing.state?.participation?.active===false||!!getState().shutoff||submitting;
@@ -392,7 +393,7 @@ async function submit(text,clearInput=false){
       ? request('/sessions/'+encodeURIComponent(sid)+'/operator-replies','POST',{text:content,attachment_ids:ids,client_message_id:keyId(requestKey)})
       : client.send(sid,{text:content,attachment_ids:ids,client_message_id:keyId(requestKey)}));
     if(sid===session){
-      progress.note(sent.submission_id?'Message queued':sent.review_id?'Awaiting manager review…':'Message sent');
+      progress.note(sent.stopped_run?'Stopped':sent.submission_id?'Message queued':sent.review_id?'Awaiting manager review…':'Message sent');
       const data=await client.snapshot(sid);
       if(sid===session)syncSnapshot(data);
     }
