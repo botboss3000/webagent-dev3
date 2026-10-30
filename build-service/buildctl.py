@@ -137,9 +137,12 @@ def main():
     preflight.add_argument("task_id")
     preflight.add_argument("--offset", type=int, default=0)
     decide = commands.add_parser("decide", help="decide an existing paused job; never create a duplicate")
-    decide.add_argument("task_id")
-    decide.add_argument("sync_decision", choices=("synchronize", "proceed", "cancel"))
-    decide.add_argument("--sync-digest", required=True)
+    decide.add_argument("task_id", help="task ID; the job ID with --accept-ui-failure")
+    decide.add_argument("sync_decision", nargs="?", choices=("synchronize", "proceed", "cancel"))
+    decide.add_argument("--sync-digest")
+    decide.add_argument("--accept-ui-failure", action="append", metavar="TEST_FILE",
+                        help="operator only: accept exactly the twice-failed UI test files of a paused job")
+    decide.add_argument("--reason", help="required with --accept-ui-failure, 10-300 characters")
     abandon = commands.add_parser("abandon")
     abandon.add_argument("task_id")
     progress = commands.add_parser("progress", help="stage k of N with durations against class history; no logs")
@@ -175,6 +178,14 @@ def main():
     check.add_argument("--timeout",type=int,default=600)
     check.add_argument("--compiler-memory-cap",type=int)
     args = parser.parse_args()
+    if args.command == "decide":
+        if args.accept_ui_failure:
+            if args.sync_decision or args.sync_digest or not args.reason:
+                parser.error("--accept-ui-failure takes a job ID and --reason, without a sync decision")
+            print(json.dumps(call("v3_build_adopt_release", {"job_id": args.task_id, "accept_ui_failure": args.accept_ui_failure, "reason": args.reason}), sort_keys=True))
+            return 0
+        if not args.sync_decision or not args.sync_digest or args.reason:
+            parser.error("decide requires a sync decision and --sync-digest")
     if args.command=="check":
         if not 1<=args.timeout<=600:parser.error("--timeout must be between 1 and 600 seconds")
         request={"action":"check","task_id":args.task_id,"check":"check","expected_inputs_sha256":args.expected,

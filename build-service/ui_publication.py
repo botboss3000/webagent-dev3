@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import time
 import uuid
@@ -11,15 +12,30 @@ import contextlib
 class PublicationWaitTimeout(TimeoutError):
     """Pre-effect publication admission can resume through the existing decision lane."""
 
+UI_TEST_AT=re.compile(r"test at (?:file://)?(\S+?):\d+:\d+")
+UI_HISTORY_JOBS=40
+
+def failing_fixtures(text,tests,strict=True):
+    """Selected fixture files named by node's failing-tests summary; None whenever any doubt remains."""
+    if "failing tests:"not in text:return None
+    found=set()
+    for path in UI_TEST_AT.findall(text.rsplit("failing tests:",1)[1]):
+        path=path.removeprefix("/candidate/");path=path if path.startswith("v3/")else "v3/"+path
+        if path not in tests:
+            if strict:return None
+            continue
+        found.add(path)
+    return sorted(found)or None
+
 
 
 # @code-index {"version":1,"feature":"concurrent-ui-publication","aliases":["concurrent ui publication"],"purpose":"Prepare private candidates and serialize exact source/index publication. Config: build-service/scheduler-defaults.json -> concurrent_ui_preparation, max_ui_preparations.","span_lines":70,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/concurrent_ui_preparation","/max_ui_preparations"]}],"opportunities":[]}}
 class UIPublication:
     """Keep stale preparation outside publication; host authorization owns every effect."""
-    def __init__(self,broker,release,validate,context,asset_root,policy):
+    def __init__(self,broker,release,validate,context,asset_root,policy,scrub=lambda text:text):
         """Bind preparation and recovery to this protected host's fixed release authority."""
         self.broker=broker;self.release=release;self.validate=validate
-        self.context=context;self.assets=asset_root;self.policy=policy
+        self.context=context;self.assets=asset_root;self.policy=policy;self.scrub=scrub
         self.wait_timeout=300.;self.holder=None
 
     def enabled(self,job):
@@ -159,7 +175,8 @@ class UIPublication:
                 test_result={"status":"not_required","tests":[],"reason":"host-only broker candidate leaves UI assets unchanged"}
             else:
                 with self.broker.host_phase(job,"frontend_tests"):
-                    test_result=self.broker.runner.validate_selected_tests(job["job_id"],destination,evidence)
+                    test_result=self.frontend_tests(job,destination,evidence,attempt,revision)
+                if test_result is None:return None
             with self.broker.lock:
                 job.setdefault("ui_verification_history",[]).append({"attempt":attempt,"base_release_id":revision,"result":test_result})
                 job["ui_test_evidence"]=test_result
@@ -227,6 +244,58 @@ class UIPublication:
             job.update(status="needs_decision",phase="waiting_publication_base",reason="Publication inputs changed during three preparation attempts; resume this job after contention settles")
             self.broker._save(job)
         return None
+
+    def frontend_tests(self,job,destination,evidence,attempt,revision):
+        """Run selected fixtures; rerun only failing files once, then pause a build_deploy for operator judgement.
+
+        Returns None after a durable needs_decision pause. No lock is held here and no effect has started.
+        """
+        run=self.broker.runner.validate_selected_tests;tests=evidence["tests"]
+        override=job.get("ui_test_override")or{}
+        # An acceptance covers only the exact candidate and failing files it was granted for.
+        accepted=sorted(override["files"])if override.get("inputs_sha256")==job["inputs_sha256"]and override.get("files")and set(override["files"])<=set(tests)else[]
+        try:
+            result=run(job["job_id"],destination,{**evidence,"tests":[t for t in tests if t not in accepted]})
+        except RuntimeError as error:
+            files=failing_fixtures(str(error),tests)
+            if files is None:raise
+            with self.broker.lock:
+                job.setdefault("ui_verification_history",[]).append({"attempt":attempt,"base_release_id":revision,"result":{"status":"failed","tests":files,"output_tail":self.scrub(str(error))[-4000:]}})
+                self.broker._save(job)
+            try:
+                rerun=run(job["job_id"],destination,{**evidence,"tests":files})
+            except RuntimeError as again:
+                failed=failing_fixtures(str(again),files)
+                if failed is None or job.get("operation")!="build_deploy":raise
+                with self.broker.lock:
+                    job.pop("ui_test_override",None)
+                    job["ui_test_failure"]={"files":failed,"attempts":2,"output_tail":self.scrub(str(again))[-4000:],"at":time.time(),"inputs_sha256":job["inputs_sha256"],"history":self.history(failed)}
+                    job.setdefault("ui_verification_history",[]).append({"attempt":attempt,"base_release_id":revision,"rerun":True,"files":files,"result":{"status":"failed","tests":failed}})
+                    job.update(status="needs_decision",phase="awaiting_ui_test_decision",
+                        reason="UI tests failed twice: "+", ".join(failed)+"; no deployment effects started; fix them or an operator may accept exactly these files with a reason")
+                    self.broker._save(job)
+                return None
+            with self.broker.lock:
+                job.setdefault("ui_verification_history",[]).append({"attempt":attempt,"base_release_id":revision,"rerun":True,"files":files,"result":rerun})
+            result={**rerun,"status":"passed","tests":tests,"rerun":True,"rerun_files":files}
+        if accepted:result={**result,"status":"accepted_override","tests":tests,"accepted_files":accepted,"override_reason":override["reason"]}
+        return result
+
+    def history(self,files):
+        """Per-file pass/fail counts over recent finished receipts, for operator judgement only."""
+        counts={f:{"passed":0,"failed":0}for f in files}
+        jobs=sorted((j for j in self.broker.jobs.values()if j.get("status")in {"completed","failed"}),key=lambda j:j.get("finished_at",0))[-UI_HISTORY_JOBS:]
+        for job in jobs:
+            failed=set()
+            for entry in job.get("ui_verification_history",()):
+                if entry.get("result",{}).get("status")=="failed":failed.update(entry["result"].get("tests",()))
+            failed.update(failing_fixtures(job.get("reason",""),set(files),strict=False)or ())
+            final=job.get("ui_test_evidence",{})
+            passed=set(final.get("tests",()))-set(final.get("accepted_files",()))if final.get("status")in {"passed","accepted_override"}else set()
+            for f in files:
+                if f in failed:counts[f]["failed"]+=1
+                if f in passed:counts[f]["passed"]+=1
+        return {"jobs":len(jobs),"files":counts}
 
     def run(self,job,blob,locked):
         """Use the shared coordinator while preserving host-owned activation and source promotion."""

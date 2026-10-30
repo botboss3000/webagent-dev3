@@ -2830,7 +2830,7 @@ class Broker:
         self.index_coordinator=index_coordinator_module.IndexCoordinator(self,index_queue_module,release,context_digest,TASK_CONTEXT,ASSET_ROOT,scheduler_module.ownership.source_path)
         self.runner.index_seed_provider=self.index_coordinator.publication_seeds
         self.publication_targets=TARGETS
-        self.ui_publication=ui_publication_module.UIPublication(self,release,context_digest,CONTEXT,ASSET_ROOT,ui_policy_module)
+        self.ui_publication=ui_publication_module.UIPublication(self,release,context_digest,CONTEXT,ASSET_ROOT,ui_policy_module,scrub=lambda text:scrub(text,self.runner.secrets))
         self.work_activity = {key: self._work_content(item) for key, item in self.work.items()}
         for path in sorted(self.state.glob("*.json")):
             if path==self.maintenance_file:continue
@@ -3522,6 +3522,37 @@ class Broker:
                            finished_at=time.time(), **failure_fields(error))
                 self._save(job)
 
+    def _accept_ui_failure(self, args, trusted, workspace):
+        """Operator judgement passes only the exact twice-failed UI fixtures of one paused pre-effect build_deploy."""
+        files, reason = args["accept_ui_failure"], args["reason"]
+        if not isinstance(files, list) or not files or not all(isinstance(f, str) for f in files) or len(set(files)) != len(files):
+            raise ValueError("Exact failing UI test files required")
+        reason = reason.strip() if isinstance(reason, str) else ""
+        if not 10 <= len(reason) <= 300 or any(ord(c) < 32 for c in reason):
+            raise ValueError("Reason of 10-300 characters required")
+        deadline, fingerprint = self._incoming_lease(trusted)
+        with self.lock:
+            job = self.jobs.get(args["job_id"]) if isinstance(args["job_id"], str) else None
+            failure = (job or {}).get("ui_test_failure")
+            if (not job or job.get("operation") != "build_deploy" or job.get("status") != "needs_decision"
+                    or job.get("phase") != "awaiting_ui_test_decision" or not failure or job.get("effects_started")):
+                raise ValueError("Job is not paused on a UI test decision")
+            if not self._owned(job, trusted, workspace) or job.get("revoked") or job.get("access_fingerprint") != fingerprint:
+                raise PermissionError("Deployment authorization changed")
+            if failure.get("inputs_sha256") != job.get("inputs_sha256"):
+                raise ValueError("UI test failure record is stale")
+            if sorted(files) != sorted(failure["files"]):
+                raise ValueError("Accepted files must exactly equal the failing files: " + ", ".join(failure["files"]))
+            job["ui_test_override"] = {"files": sorted(files), "reason": reason, "accepted_at": time.time(), "by": "codex-local",
+                                       "inputs_sha256": job["inputs_sha256"], "history": self.ui_publication.history(sorted(files))}
+            # Same durable requeue as a synchronization "proceed": the candidate is rebased onto the live
+            # base, so any changed input yields a new inputs_sha256 and the override no longer applies.
+            job.update(status="queued", phase="waiting", lease_until=deadline, sync_resume=True,
+                       reason="Operator accepted the UI test failure; resuming publication")
+            self._save(job)
+            self._start_next()
+            return {"job_id": job["job_id"], "status": job["status"], "ui_test_override": job["ui_test_override"]}
+
     def _cancel_job(self, args, trusted, workspace):
         if set(args) != {"job_id", "request_id", "expected_job_ids"} or not isinstance(args["job_id"], str) or not re.fullmatch(r"[0-9a-f-]{36}", args["job_id"]):
             raise ValueError("cancel requires a valid job_id and stable request_id")
@@ -3645,7 +3676,7 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "compiler_recipe", "compiler_runtime", "linker_proof", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight", "verification_cache", "focused_verification", "test_reuse", "phase_timings", "active_verification", "publication_wait", "publication_wait_history", "last_resource_wait", "broker_install") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "compiler_recipe", "compiler_runtime", "linker_proof", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight", "verification_cache", "focused_verification", "test_reuse", "phase_timings", "active_verification", "publication_wait", "publication_wait_history", "last_resource_wait", "broker_install", "ui_test_failure", "ui_test_override") if key in job}
         for key in ("publication_wait","resource_waiting"):
             if view.get(key,{}).get("state","waiting")=="waiting"and view.get(key,{}).get("since"):
                 view[key]={**view[key],"elapsed_seconds":round(max(0,time.time()-view[key]["since"]),3)}
@@ -4626,7 +4657,7 @@ class Broker:
     def host_source_scope(self):
         """Broker modules and their docs/tests that the host-only lane may publish."""
         review_modules={"source_status.py","workspace.py","compiler.Dockerfile","ui_policy.py","monitoring_component.py","buildctl.py","index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
-        allowed={"v3/tests/test_build_source_status.py","v3/tests/test_admin_workspace.py","v3/plugins/abilities/Administrator/code_index/maintenance.py","v3/tests/test_code_index_maintenance.py","v3/tests/test_published_code_index.py","v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py","v3/tests/test_broker_shared_ui.py","v3/tests/test_scheduler_broker.py","v3/tests/test_build_cancel.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
+        allowed={"v3/tests/test_build_source_status.py","v3/tests/test_admin_workspace.py","v3/plugins/abilities/Administrator/code_index/maintenance.py","v3/tests/test_code_index_maintenance.py","v3/tests/test_published_code_index.py","v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py","v3/tests/test_broker_shared_ui.py","v3/tests/test_broker_ui_override.py","v3/tests/test_scheduler_broker.py","v3/tests/test_build_cancel.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py","v3/tests/test_admin_build.py",
                  "v3/tests/test_context_component_builds.py","v3/tests/test_engine_components.py","v3/tests/test_build_lifecycle_entry.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
@@ -5410,8 +5441,10 @@ class Broker:
                 return self.rebuild_checkout(args, trusted, workspace)
             if name == "v3_build_adopt_release":
                 if (not trusted.get("local_caller") or trusted["user_id"] != "codex-local"
-                        or workspace != LOCAL_WORKSPACE or set(args) != {"job_id"}):
+                        or workspace != LOCAL_WORKSPACE or set(args) not in ({"job_id"}, {"job_id", "accept_ui_failure", "reason"})):
                     raise PermissionError("local release reconciliation required")
+                if "accept_ui_failure" in args:
+                    return self._accept_ui_failure(args, trusted, workspace)
                 job = self.jobs.get(args["job_id"])
                 if self.active is not None or self.active_ui is not None or not job:
                     raise ValueError("release queue must be idle")

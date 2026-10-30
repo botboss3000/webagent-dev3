@@ -402,6 +402,12 @@ reference falls back to the whole file). Root-package edits, new workspace
 members and other packages' profile overrides no longer rebuild components.
 Source-stability and compiled-input checks still use raw file hashes.
 
+## Failing UI fixtures: one rerun, then operator judgement
+
+A failed UI fixture run reruns only its failing files once. If they fail again, a `build_deploy` pauses before any deployment effect (`needs_decision`, phase `awaiting_ui_test_decision`, `ui_test_failure` with the files, output tail and recent pass/fail history); unparseable failures and other lanes still fail.
+Only the local operator may resume it with `buildctl decide JOB_ID --accept-ui-failure FILE [...] --reason "10-300 chars"`, naming exactly the failing files. The `ui_test_override` record stays in the receipt and binds to the job's `inputs_sha256`; any changed candidate reruns every fixture.
+Rust tests, compilation, health checks, promotion and every other decision cannot be overridden.
+
 ## Cross-release UI fixture reuse
 
 A frontend fixture runs with no network, credentials or API, against a scratch
