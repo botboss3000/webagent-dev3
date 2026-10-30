@@ -14,7 +14,7 @@
     }
   },
   "registration": "open",
-  "revision": 49,
+  "revision": 52,
   "tier_names": {
     "anonymous": "Anonymous",
     "basic": "Base",
@@ -28,8 +28,9 @@
   "tiers": {
     "anonymous": {
       "ability_permissions": {
-        "front_desk": "auto",
+        "human_escalation": "auto",
         "managed_knowledge_files": "auto",
+        "reply_buttons": "auto",
         "web_access": "auto"
       },
       "allowed_models": [
@@ -42,24 +43,24 @@
       "max_active_runs": 2,
       "max_sessions": 10,
       "model_policy": null,
-      "revision": 5,
+      "revision": 6,
       "tools": {
-        "business_profile_get": "auto",
         "get_weather": "auto",
         "knowledge_file_get": "auto",
         "knowledge_file_list": "auto",
         "knowledge_file_search": "auto",
-        "lead_capture": "auto",
         "maps_geocode": "auto",
         "offer_choices": "auto",
         "request_human": "auto",
+        "staff_message_send": "auto",
         "web_search": "auto"
       }
     },
     "basic": {
       "ability_permissions": {
-        "front_desk": "auto",
+        "human_escalation": "auto",
         "managed_knowledge_files": "auto",
+        "reply_buttons": "auto",
         "web_access": "auto"
       },
       "allowed_models": [
@@ -72,17 +73,16 @@
       "max_active_runs": 2,
       "max_sessions": 10,
       "model_policy": null,
-      "revision": 5,
+      "revision": 6,
       "tools": {
-        "business_profile_get": "auto",
         "get_weather": "auto",
         "knowledge_file_get": "auto",
         "knowledge_file_list": "auto",
         "knowledge_file_search": "auto",
-        "lead_capture": "auto",
         "maps_geocode": "auto",
         "offer_choices": "auto",
         "request_human": "auto",
+        "staff_message_send": "auto",
         "web_search": "auto"
       }
     },
@@ -98,8 +98,8 @@
         "create_tools": "auto",
         "decision": "auto",
         "diagnostics": "auto",
-        "front_desk": "auto",
         "git_control": "auto",
+        "human_escalation": "auto",
         "image_generation": "auto",
         "image_vision": "auto",
         "managed_knowledge_files": "auto",
@@ -107,6 +107,7 @@
         "model_switcher": "auto",
         "optimization": "auto",
         "remote_tunnel": "auto",
+        "reply_buttons": "auto",
         "terminal_control": "auto",
         "ui_admin": "auto",
         "user_files": "auto",
@@ -125,7 +126,7 @@
       "max_active_runs": 200,
       "max_sessions": 10000,
       "model_policy": null,
-      "revision": 13,
+      "revision": 14,
       "tools": {
         "*": "auto"
       }
