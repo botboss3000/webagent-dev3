@@ -3628,7 +3628,7 @@ pub mod registered_tests {
                 .iter()
                 .filter(|entry| !matches!(entry.id.as_str(), "optimization" | "mcp"))
                 .collect::<Vec<_>>();
-            assert_eq!(ordinary.len(), 79);
+            assert_eq!(ordinary.len(), 80);
             assert_eq!(
                 catalog
                     .abilities
@@ -3653,14 +3653,14 @@ pub mod registered_tests {
                     .iter()
                     .filter(|entry| Catalog::<H>::executable(entry))
                     .count(),
-                21
+                22
             );
             assert_eq!(
                 ordinary
                     .iter()
                     .filter(|entry| entry.readiness == Readiness::Ready)
                     .count(),
-                22
+                23
             );
             assert_eq!(
                 catalog

@@ -102,7 +102,10 @@ impl webagent_engine::runtime::ports::NativePolicy for NativePolicy {
             .chain(tools::native::schemas(tools::native::visualizer::TOOLS))
             .chain(tools::native::schemas(tools::native::vault::TOOLS))
             .chain(tools::native::schemas(tools::native::visual_capture::TOOLS))
-            .chain(tools::native::schemas(tools::native::front_desk::TOOLS))
+            .chain(tools::native::schemas(
+                tools::native::human_escalation::TOOLS,
+            ))
+            .chain(tools::native::schemas(tools::native::reply_buttons::TOOLS))
             .chain(tools::native::schemas(
                 tools::native::knowledge_files::TOOLS,
             ))

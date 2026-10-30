@@ -1,6 +1,6 @@
 {
-  "name": "lead_capture",
-  "description": "Save a visitor's contact details and request for staff follow-up. Ask for consent first and include at least an email or phone number. Never collect payment card or government ID numbers.",
+  "name": "staff_message_send",
+  "description": "Leave a message for staff to follow up: the visitor's contact details and request. Ask for consent first and include at least an email or phone number. Never collect payment card or government ID numbers.",
   "effect": "write",
   "default_access": {
     "operator": "auto",
@@ -16,11 +16,10 @@
       },
       "kind": {
         "enum": [
-          "inquiry",
+          "question",
           "booking",
-          "event",
-          "catering",
           "callback",
+          "feedback",
           "other"
         ],
         "type": "string"

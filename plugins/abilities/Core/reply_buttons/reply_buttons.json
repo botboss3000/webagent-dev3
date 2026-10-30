@@ -1,0 +1,13 @@
+{
+  "display_name": "Reply Buttons",
+  "kind": "ability",
+  "description": "Offer short reply buttons under a message; a click sends that label as the user's next message.",
+  "icon": "list",
+  "color": "#7dcfff",
+  "order": 14,
+  "placeholder": false,
+  "readiness": "ready",
+  "config": {},
+  "migration_note": "Compiled Rust adapter writing a user_reply choice card to the conversation. The card carries no authority; a click goes through normal message admission.",
+  "skill_summary": "Show up to 8 reply buttons for short, clear options."
+}

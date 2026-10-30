@@ -429,9 +429,9 @@ pub fn default_policy<A: crate::tools::execution::ActionCatalog, X: NativePolicy
     for name in ["message_other_session", "start_session"] {
         policy["rules"][name] = json!("allow");
     }
-    // Visitor front-desk actions only store a lead, notify staff or show reply buttons;
-    // staff-side writes keep the require_approval default above.
-    for name in ["lead_capture", "request_human", "offer_choices"] {
+    // Visitor escalation actions only store a staff message, notify staff or show reply
+    // buttons; staff-side writes keep the require_approval default above.
+    for name in ["staff_message_send", "request_human", "offer_choices"] {
         if policy["rules"].get(name).is_some() {
             policy["rules"][name] = json!("allow");
         }

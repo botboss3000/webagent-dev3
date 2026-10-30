@@ -96,7 +96,8 @@ pub(crate) fn folder_handlers() -> impl Iterator<Item = &'static str> {
     [
         native::web_access::TOOLS,
         web_search::TOOLS,
-        native::front_desk::TOOLS,
+        native::human_escalation::TOOLS,
+        native::reply_buttons::TOOLS,
         native::knowledge_files::TOOLS,
         native::wiki::TOOLS,
         native::decision::TOOLS,
@@ -260,7 +261,8 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         schemas.extend(crate::background_tasks::schemas());
         schemas.extend(native::schemas(native::web_access::TOOLS));
         schemas.extend(web_search::schemas());
-        schemas.extend(native::schemas(native::front_desk::TOOLS));
+        schemas.extend(native::schemas(native::human_escalation::TOOLS));
+        schemas.extend(native::schemas(native::reply_buttons::TOOLS));
         schemas.extend(native::schemas(native::knowledge_files::TOOLS));
         schemas.extend(native::schemas(native::wiki::TOOLS));
         schemas.extend(native::schemas(native::decision::TOOLS));

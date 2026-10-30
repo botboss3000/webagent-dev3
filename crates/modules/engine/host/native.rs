@@ -105,9 +105,18 @@ impl
                     cancel,
                 )
                 .await
-            } else if tools::native::front_desk::owns(&name) {
+            } else if tools::native::human_escalation::owns(&name) {
                 // Boxed so this branch does not grow the shared dispatch future's stack frame.
-                Box::pin(tools::native::front_desk::execute(
+                Box::pin(tools::native::human_escalation::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
+                    &name,
+                    &args,
+                    cancel,
+                ))
+                .await
+            } else if tools::native::reply_buttons::owns(&name) {
+                Box::pin(tools::native::reply_buttons::execute(
                     &tools::native_host::Host(&app),
                     native_call,
                     &name,

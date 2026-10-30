@@ -1,6 +1,6 @@
 {
-  "name": "lead_update",
-  "description": "Staff only. Change a lead's status and optionally add a note, using the lead's current revision.",
+  "name": "staff_message_update",
+  "description": "Staff only. Change a visitor message's status and optionally add a note, using the message's current revision.",
   "effect": "write",
   "default_access": {
     "operator": "auto",
@@ -14,7 +14,7 @@
         "minimum": 1,
         "type": "integer"
       },
-      "lead_id": {
+      "message_id": {
         "maxLength": 64,
         "type": "string"
       },
@@ -26,14 +26,14 @@
         "enum": [
           "new",
           "contacted",
-          "won",
+          "resolved",
           "closed"
         ],
         "type": "string"
       }
     },
     "required": [
-      "lead_id",
+      "message_id",
       "status",
       "expected_revision"
     ],

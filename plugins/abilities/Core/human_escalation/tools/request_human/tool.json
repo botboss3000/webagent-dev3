@@ -1,6 +1,6 @@
 {
   "name": "request_human",
-  "description": "Ask the business's staff to take over this conversation, when the visitor asks for a person or needs something you cannot do. Staff are notified in the app; tell the visitor someone will join.",
+  "description": "Ask this agent's staff to take over the conversation, when the user asks for a person or needs something you cannot do. Staff are notified in the app; tell the user someone will join.",
   "effect": "write",
   "default_access": {
     "operator": "auto",
