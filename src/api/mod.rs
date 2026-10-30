@@ -191,13 +191,6 @@ pub(super) fn router(app: App) -> Router {
                 .delete(crate::chat_config::reset),
         )
         .route("/policy", get(policy_get).put(policy_set))
-        .route("/wiki", get(wiki::list))
-        .route("/wiki/search", get(wiki::search))
-        .route("/wiki/articles", post(wiki::create))
-        .route("/wiki/articles/{slug}", get(wiki::get).patch(wiki::change))
-        .route("/wiki/articles/{slug}/history", get(wiki::history))
-        .route("/wiki/articles/{slug}/backlinks", get(wiki::backlinks))
-        .route("/wiki/revisions/{id}", get(wiki::revision))
         .route("/abilities", get(ability_catalog))
         .route("/provider/login", post(provider_start))
         .route("/provider/logout", post(provider_logout))
@@ -223,6 +216,14 @@ pub(super) fn router(app: App) -> Router {
         .route_layer(middleware::from_fn_with_state(app.clone(), admin_auth));
     // Model handlers enforce tenant authority themselves; all retain browser auth and CSRF.
     let api = Router::new()
+        // Every signed-in caller reads the Wiki; its handlers keep writes to administrators.
+        .route("/wiki", get(wiki::list))
+        .route("/wiki/search", get(wiki::search))
+        .route("/wiki/articles", post(wiki::create))
+        .route("/wiki/articles/{slug}", get(wiki::get).patch(wiki::change))
+        .route("/wiki/articles/{slug}/history", get(wiki::history))
+        .route("/wiki/articles/{slug}/backlinks", get(wiki::backlinks))
+        .route("/wiki/revisions/{id}", get(wiki::revision))
         .merge(diagnostics::background_router())
         .route(
             "/modules/{id}/assets/{asset}",
