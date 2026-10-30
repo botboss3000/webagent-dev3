@@ -12259,3 +12259,33 @@ async fn cancelling_a_finished_run_is_a_conflict_not_a_storage_failure() {
     }
     assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
 }
+
+/// A closing status answered in the same model response is saved after its call, so
+/// the next turn's history pairs every tool result with an earlier call.
+#[tokio::test]
+async fn same_response_tool_result_is_saved_after_its_call() {
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    let id = queued(&app, &sid).await;
+    let mut run = app.run(&id).await.unwrap();
+    run["turns"] = json!(1);
+    let call = json!({"type":"function_call","call_id":"closer-call","name":"set_closer_status","arguments":"{}"});
+    let output = json!({"type":"function_call_output","call_id":"closer-call","output":"{}"});
+    run["input"]
+        .as_array_mut()
+        .unwrap()
+        .extend([call.clone(), output]);
+    app.store
+        .save_run_observed(&mut run, "model_output", &json!({"output":[call]}))
+        .await
+        .unwrap();
+    let activity = app.store.private_run_activity(&sid, &id, 0).await.unwrap();
+    let kinds: Vec<&str> = activity["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|event| event["kind"].as_str())
+        .filter(|kind| kind.starts_with("tool_"))
+        .collect();
+    assert_eq!(kinds, ["tool_call", "tool_result"]);
+}
