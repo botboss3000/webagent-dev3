@@ -32,6 +32,31 @@ impl webagent_chat::RecordCodec for StoreCore {
     }
 }
 
+// Access borrows the existing cipher, identities and pools; no resource is duplicated.
+impl webagent_access::storage::RecordCodec for StoreCore {
+    fn seal(&self, value: &Value) -> Result<Vec<u8>> {
+        StoreCore::seal(self, value)
+    }
+    fn unseal(&self, value: &[u8]) -> Result<Value> {
+        StoreCore::unseal(self, value)
+    }
+    fn encode_application(&self, value: &Value) -> Result<Vec<u8>> {
+        self.encode_for_pool(&self.app_pool, value)
+    }
+    fn seal_agent(&self, value: &Value) -> Result<Vec<u8>> {
+        StoreCore::seal_agent(self, value)
+    }
+    fn unseal_agent(&self, value: &[u8]) -> Result<Value> {
+        StoreCore::unseal_agent(self, value)
+    }
+    fn seal_agent_for(&self, agent: &str, value: &Value) -> Result<Vec<u8>> {
+        StoreCore::seal_agent_for(self, agent, value)
+    }
+    fn unseal_agent_for(&self, agent: &str, value: &[u8]) -> Result<Value> {
+        StoreCore::unseal_agent_for(self, agent, value)
+    }
+}
+
 impl StoreCore {
     /// Reconstruct a split recovery record under the reader's transaction.
     pub async fn decode_document(

@@ -14,9 +14,6 @@ pub fn owns(name: &str) -> bool {
 }
 /// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
 pub const TOOLS: &[&str] = &["get_weather", "maps_geocode"];
-pub fn schemas() -> Vec<Value> {
-    crate::tools::folder_schemas(TOOLS)
-}
 fn five() -> usize {
     5
 }

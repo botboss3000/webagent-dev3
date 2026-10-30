@@ -1,9 +1,16 @@
 //! Native User Files adapter. The actor's private database owns files; no host path is accepted.
-use crate::*;
+use crate::{Call, NativeHost};
+use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 use webagent_abilities::user_files::{metadata, Repository};
+use webagent_files::uploads::allowed_media;
 
+#[must_use]
 pub fn owns(name: &str) -> bool {
     matches!(
         name,
@@ -11,10 +18,12 @@ pub fn owns(name: &str) -> bool {
     )
 }
 /// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
-pub const TOOLS: &[&str] = &["save_file", "list_user_files", "read_user_file", "attach_file"];
-pub fn schemas() -> Vec<Value> {
-    crate::tools::folder_schemas(TOOLS)
-}
+pub const TOOLS: &[&str] = &[
+    "save_file",
+    "list_user_files",
+    "read_user_file",
+    "attach_file",
+];
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Save {
@@ -43,16 +52,14 @@ struct Attach {
     name: String,
 }
 fn stable_uuid(input: &str) -> String {
-    let hash = digest(&json!(input));
+    let hash = webagent_host_core::digest(&json!(input));
     let bytes = hex::decode(&hash[..32]).unwrap();
     Uuid::from_slice(&bytes).unwrap().to_string()
 }
+/// Saves, lists, reads or attaches the owner's private files.
 pub async fn execute(
-    app: &App,
-    sid: &str,
-    rid: &str,
-    generation: &str,
-    pending: &str,
+    host: &dyn NativeHost,
+    call: Call<'_>,
     name: &str,
     args: &Value,
     cancel: CancellationToken,
@@ -60,15 +67,15 @@ pub async fn execute(
     if cancel.is_cancelled() {
         return Err(anyhow!("File operation cancelled"));
     }
-    let run = super::core_authority::check(app, sid, rid, generation, pending, name, args, &cancel)
-        .await?;
-    let actor = shared_chat::actor(app);
-    if actor != app.store.current_user_id() {
+    let run = host.authorize(call, name, args, &cancel).await?;
+    let actor = host.actor();
+    if actor != host.store().current_user_id() {
         return Err(anyhow!(
             "Use an owner-private conversation for private saved files"
         ));
     }
-    let user = app.store.for_user(actor).await?;
+    let sid = call.sid;
+    let user = host.user_store(actor).await?;
     let repo = Repository::new(&user.pool, &user);
     let output = match name {
         "save_file" => {
@@ -82,10 +89,10 @@ pub async fn execute(
                 _ => return Err(anyhow!("Supply exactly one of text or data")),
             };
             let media = q.media_type.unwrap_or_else(|| "text/plain".into());
-            if !api::uploads::allowed_media(&media) {
+            if !allowed_media(&media) {
                 return Err(anyhow!("Unsupported file media type"));
             }
-            let limits = api::uploads::limits(app, sid).await.map_err(|e| anyhow!(e.1))?;
+            let limits = host.attachment_limits(sid).await?;
             if limits
                 .max_file_size_mb
                 .is_some_and(|n| bytes.len() > n.saturating_mul(1024 * 1024))
@@ -99,8 +106,8 @@ pub async fn execute(
                 q.expected_revision,
                 &webagent_abilities::user_files::Invocation {
                     session_id: sid,
-                    run_id: rid,
-                    pending_id: pending,
+                    run_id: call.run_id,
+                    pending_id: call.pending_id,
                     generation: run["generation"]
                         .as_str()
                         .ok_or_else(|| anyhow!("Run generation unavailable"))?,
@@ -144,10 +151,13 @@ pub async fn execute(
                 .read(&q.name)
                 .await?
                 .ok_or_else(|| anyhow!("User file not found"))?;
-            let id = stable_uuid(&format!("{sid}:{rid}:{pending}"));
-            let info=api::uploads::upload(State(app.clone()),axum::extract::Path(sid.to_owned()),
-                Json(json!({"client_upload_id":id,"name":file["name"],"media_type":file["media_type"],"data":file["data"]})))
-                .await.map_err(|e|anyhow!(e.1))?.0;
+            let id = stable_uuid(&format!("{sid}:{}:{}", call.run_id, call.pending_id));
+            let info = host
+                .upload(
+                    sid,
+                    json!({"client_upload_id":id,"name":file["name"],"media_type":file["media_type"],"data":file["data"]}),
+                )
+                .await?;
             json!({"file":info,"url":format!("/api/v3/sessions/{sid}/attachments/{id}/content")})
         }
         _ => return Err(anyhow!("Unknown User Files tool")),

@@ -25,14 +25,12 @@ pub(crate) mod core_context_assets;
 pub(crate) mod core_decision;
 #[path = "../../../plugins/abilities/Core/decision/directory_adapter.rs"]
 pub(crate) mod core_directory_decision;
-#[path = "../../../crates/modules/abilities/host/functions.rs"]
-pub(crate) mod core_functions;
 #[path = "../../../crates/modules/abilities/host/image_generation.rs"]
 pub(crate) mod core_image_generation;
-#[path = "../../../crates/modules/abilities/host/image_vision.rs"]
-pub(crate) mod core_image_vision;
 #[path = "../../../crates/modules/abilities/host/base/mode_adapter.rs"]
 pub(crate) mod core_mode;
+#[path = "../../../crates/modules/abilities/host/native_host.rs"]
+pub(crate) mod native_host;
 #[path = "../../../crates/modules/abilities/host/model_switcher.rs"]
 pub(crate) mod core_model_switcher;
 #[path = "../../../crates/modules/abilities/host/orchestration.rs"]
@@ -55,10 +53,6 @@ pub(crate) mod core_task;
 pub(crate) mod core_tool_search;
 #[path = "../../../crates/modules/abilities/host/ui_admin.rs"]
 pub(crate) mod core_ui_admin;
-#[path = "../../../crates/modules/abilities/host/user_files.rs"]
-pub(crate) mod core_user_files;
-#[path = "../../../crates/modules/abilities/host/base/adapter.rs"]
-pub(crate) mod core_utilities;
 #[path = "../../../crates/modules/abilities/host/vault.rs"]
 pub(crate) mod core_vault;
 #[path = "../../../crates/modules/abilities/host/visual_capture.rs"]
@@ -68,11 +62,8 @@ pub(crate) mod core_visualizer;
 #[path = "../../../crates/modules/abilities/host/webhooks.rs"]
 pub(crate) mod core_webhooks;
 mod dispatch;
+pub(crate) use webagent_native_tools as native;
 pub(crate) mod failure;
-#[path = "../../../plugins/abilities/Memory/managed_knowledge_files/adapter.rs"]
-pub(crate) mod knowledge_files;
-#[path = "../../../plugins/abilities/Web/web_access/adapter.rs"]
-pub(crate) mod web_access;
 #[path = "../../../crates/modules/abilities/host/web_search.rs"]
 pub(crate) mod web_search;
 #[cfg(test)]
@@ -135,20 +126,20 @@ pub fn is_read(name: &str) -> bool {
 /// Compiled handlers whose schemas, effect and role defaults live in tool folders.
 pub(crate) fn folder_handlers() -> impl Iterator<Item = &'static str> {
     [
-        web_access::TOOLS,
+        native::web_access::TOOLS,
         web_search::TOOLS,
         business_front_desk::TOOLS,
-        knowledge_files::TOOLS,
+        native::knowledge_files::TOOLS,
         core_decision::TOOLS,
         core_directory_decision::TOOLS,
-        core_user_files::TOOLS,
+        native::user_files::TOOLS,
         core_model_switcher::TOOLS,
         core_agent_management::TOOLS,
-        core_image_vision::TOOLS,
+        native::image_vision::TOOLS,
         core_image_generation::TOOLS,
         core_app_control::TOOLS,
         core_ui_admin::TOOLS,
-        core_functions::TOOLS,
+        native::functions::TOOLS,
         core_orchestration::TOOLS,
         core_visualizer::TOOLS,
         core_vault::TOOLS,
@@ -285,21 +276,21 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
             }
         }
         schemas.extend(crate::background_tasks::schemas());
-        schemas.extend(web_access::schemas());
+        schemas.extend(native::schemas(native::web_access::TOOLS));
         schemas.extend(web_search::schemas());
         schemas.extend(business_front_desk::schemas());
-        schemas.extend(knowledge_files::schemas());
+        schemas.extend(native::schemas(native::knowledge_files::TOOLS));
         schemas.extend(core_decision::schemas());
         schemas.extend(core_directory_decision::schemas());
-        schemas.extend(core_utilities::schemas());
-        schemas.extend(core_user_files::schemas());
+        schemas.extend(native::utilities::schemas());
+        schemas.extend(native::schemas(native::user_files::TOOLS));
         schemas.extend(core_model_switcher::schemas());
         schemas.extend(core_agent_management::schemas());
-        schemas.extend(core_image_vision::schemas());
+        schemas.extend(native::schemas(native::image_vision::TOOLS));
         schemas.extend(core_image_generation::schemas());
         schemas.extend(core_app_control::schemas());
         schemas.extend(core_ui_admin::schemas());
-        schemas.extend(core_functions::schemas());
+        schemas.extend(native::functions::schemas());
         schemas.extend(core_orchestration::schemas());
         schemas.extend(core_base_extras::schemas());
         schemas.extend(core_webhooks::schemas());

@@ -1,0 +1,28 @@
+[package]
+name = "webagent-native-tools"
+version = "0.1.0"
+edition = "2021"
+
+# Native tool handlers over the shared host core. Each family is one module with its
+# tool names (`TOOLS`), `owns` and `execute`; schemas, effects and role defaults stay in
+# the abilities' tool folders. Run authority, sessions, uploads and model lanes belong to
+# other modules and come through `NativeHost`, which the root implements.
+[dependencies]
+anyhow = "1"
+base64 = "=0.22.1"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+uuid = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+tokio-util = "0.7"
+webagent-abilities = { path = ".." }
+webagent-access = { path = "../../access" }
+webagent-files = { path = "../../files" }
+webagent-host-core = { path = "../../../host-core" }
+webagent-models = { path = "../../models" }
+
+[lints]
+workspace = true

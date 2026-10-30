@@ -1,13 +1,19 @@
 //! Private pure-function definitions; execution is a bounded interpreter in the isolated worker.
-use crate::*;
+use crate::{Call, NativeHost};
+use anyhow::{anyhow, Result};
 use serde::Deserialize;
+use serde_json::{json, Value};
+use tokio_util::sync::CancellationToken;
+
+#[must_use]
 pub fn owns(name: &str) -> bool {
     matches!(name, "create_tool" | "run_soft_ability")
 }
 /// Tools whose schemas live in tool folders; `run_soft_ability` is built-in Base.
 pub const TOOLS: &[&str] = &["create_tool"];
+#[must_use]
 pub fn schemas() -> Vec<Value> {
-    let mut schemas = crate::tools::folder_schemas(TOOLS);
+    let mut schemas = crate::schemas(TOOLS);
     schemas.push(json!({"type":"function","name":"run_soft_ability",
         "description":"List private saved functions when name is omitted, or call one by name with JSON arguments. The current run's normal tool policy still applies.",
         "parameters":{"type":"object","properties":{"name":{"type":"string","maxLength":64},"arguments":{"type":"object"}},"required":[],"additionalProperties":false}}));
@@ -32,19 +38,17 @@ fn identifier(raw: &str) -> Result<&str> {
     }
     Ok(raw)
 }
+/// Lists, saves or invokes the owner's private functions. Authority is checked again after
+/// each worker call, so a revocation during validation or invocation discards its result.
 pub async fn execute(
-    app: &App,
-    sid: &str,
-    rid: &str,
-    generation: &str,
-    pending: &str,
+    host: &dyn NativeHost,
+    call: Call<'_>,
     name: &str,
     args: &Value,
     cancel: CancellationToken,
 ) -> Result<Value> {
-    let run = super::core_authority::check(app, sid, rid, generation, pending, name, args, &cancel)
-        .await?;
-    if shared_chat::actor(app) != app.store.current_user_id() {
+    let run = host.authorize(call, name, args, &cancel).await?;
+    if host.actor() != host.store().current_user_id() {
         return Err(anyhow!(
             "Use an owner-private conversation for private functions"
         ));
@@ -54,7 +58,7 @@ pub async fn execute(
         if name != "run_soft_ability" {
             return Err(anyhow!("Function name required"));
         }
-        let items=app.store.list("core_tool:").await?.into_iter().map(|v|json!({"name":v["id"],"revision":v["revision"],"description":v["artifact"]["description"]})).take(100).collect::<Vec<_>>();
+        let items=host.store().list("core_tool:").await?.into_iter().map(|v|json!({"name":v["id"],"revision":v["revision"],"description":v["artifact"]["description"]})).take(100).collect::<Vec<_>>();
         return Ok(json!({"status":"success","output":{"functions":items}}));
     };
     let id = identifier(raw)?;
@@ -71,48 +75,43 @@ pub async fn execute(
         if code.len() > 16384 {
             return Err(anyhow!("Function source exceeds bounds"));
         }
-        let validation = tools::execute_trusted(
-            "core_function",
-            &json!({"operation":"validate","code":code,"name":id}),
-            sid,
-            &app.tool_socket,
-            None,
-            cancel.clone(),
-        )
-        .await?;
+        let validation = host
+            .worker(
+                "core_function",
+                &json!({"operation":"validate","code":code,"name":id}),
+                call.sid,
+                cancel.clone(),
+            )
+            .await?;
         if validation["status"] != "success" {
             return Ok(validation);
         }
-        super::core_authority::check(app, sid, rid, generation, pending, name, args, &cancel)
-            .await?;
-        let prior = app.store.list("core_tool:").await?;
+        host.authorize(call, name, args, &cancel).await?;
+        let prior = host.store().list("core_tool:").await?;
         if !prior.iter().any(|v| v["id"] == id) && prior.len() >= 100 {
             return Err(anyhow!("Private function quota reached"));
         }
-        app.store
-            .base_write_artifact(
-                sid,
-                rid,
-                pending,
-                run["generation"]
-                    .as_str()
-                    .ok_or_else(|| anyhow!("Run generation missing"))?,
-                "core_tool",
-                id,
-                q.expected_revision
-                    .ok_or_else(|| anyhow!("Function revision required"))?,
-                &json!({"description":description,"code":code}),
-            )
-            .await?
+        // The write carries the generation of the first run authority, not the caller's.
+        let generation = run["generation"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Run generation missing"))?;
+        host.write_artifact(
+            Call { generation, ..call },
+            "core_tool",
+            id,
+            q.expected_revision
+                .ok_or_else(|| anyhow!("Function revision required"))?,
+            &json!({"description":description,"code":code}),
+        )
+        .await?
     } else {
-        let definition = app
-            .store
+        let definition = host
+            .store()
             .get(&format!("core_tool:{id}"))
             .await?
             .ok_or_else(|| anyhow!("Private function not found"))?;
-        let result=tools::execute_trusted("core_function",&json!({"operation":"invoke","code":definition["artifact"]["code"],"name":id,"arguments":q.arguments.unwrap_or(json!({}))}),sid,&app.tool_socket,None,cancel.clone()).await?;
-        super::core_authority::check(app, sid, rid, generation, pending, name, args, &cancel)
-            .await?;
+        let result=host.worker("core_function",&json!({"operation":"invoke","code":definition["artifact"]["code"],"name":id,"arguments":q.arguments.unwrap_or(json!({}))}),call.sid,cancel.clone()).await?;
+        host.authorize(call, name, args, &cancel).await?;
         return Ok(result);
     };
     Ok(json!({"status":"success","output":{"name":id,"revision":output["revision"],"saved":true}}))

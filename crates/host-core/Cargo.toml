@@ -18,6 +18,7 @@ tokio = { version = "1", features = ["sync"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
 webagent-accounts = { path = "../modules/accounts" }
+webagent-access = { path = "../modules/access" }
 webagent-chat = { path = "../modules/chat" }
 webagent-configuration = { path = "../modules/configuration" }
 webagent-models = { path = "../modules/models" }

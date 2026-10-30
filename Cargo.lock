@@ -2625,6 +2625,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "webagent-access",
  "webagent-accounts",
  "webagent-chat",
  "webagent-configuration",
@@ -2721,6 +2722,27 @@ dependencies = [
  "tokio",
  "webagent-engine-service",
  "webagent-module-interface",
+]
+
+[[package]]
+name = "webagent-native-tools"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-util",
+ "uuid",
+ "webagent-abilities",
+ "webagent-access",
+ "webagent-files",
+ "webagent-host-core",
+ "webagent-models",
 ]
 
 [[package]]
@@ -2889,6 +2911,7 @@ dependencies = [
  "webagent-model-discovery",
  "webagent-models",
  "webagent-module-service",
+ "webagent-native-tools",
  "webagent-provider-contracts",
  "webagent-provider-projection",
  "webagent-storage",

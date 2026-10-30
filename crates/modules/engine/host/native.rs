@@ -72,6 +72,12 @@ impl
                 )
                 .await;
             }
+            let native_call = tools::native::Call {
+                sid: &sid,
+                run_id: &run_id,
+                generation: &generation,
+                pending_id: &pending_id,
+            };
             if name == "screenshot_genui" {
                 tools::core_visual_capture::execute(
                     &app,
@@ -120,14 +126,11 @@ impl
                     cancel,
                 ))
                 .await
-            } else if tools::knowledge_files::owns(&name) {
+            } else if tools::native::knowledge_files::owns(&name) {
                 // Boxed so this branch does not grow the shared dispatch future's stack frame.
-                Box::pin(tools::knowledge_files::execute(
-                    &app,
-                    &sid,
-                    &run_id,
-                    &generation,
-                    &pending_id,
+                Box::pin(tools::native::knowledge_files::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
                     &name,
                     &args,
                     cancel,
@@ -169,13 +172,10 @@ impl
                     cancel,
                 )
                 .await
-            } else if tools::core_functions::owns(&name) {
-                tools::core_functions::execute(
-                    &app,
-                    &sid,
-                    &run_id,
-                    &generation,
-                    &pending_id,
+            } else if tools::native::functions::owns(&name) {
+                tools::native::functions::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
                     &name,
                     &args,
                     cancel,
@@ -215,13 +215,10 @@ impl
                     cancel,
                 )
                 .await
-            } else if tools::core_image_vision::owns(&name) {
-                tools::core_image_vision::execute(
-                    &app,
-                    &sid,
-                    &run_id,
-                    &generation,
-                    &pending_id,
+            } else if tools::native::image_vision::owns(&name) {
+                tools::native::image_vision::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
                     &args,
                     cancel,
                 )
@@ -250,13 +247,10 @@ impl
                     cancel,
                 )
                 .await
-            } else if tools::core_user_files::owns(&name) {
-                tools::core_user_files::execute(
-                    &app,
-                    &sid,
-                    &run_id,
-                    &generation,
-                    &pending_id,
+            } else if tools::native::user_files::owns(&name) {
+                tools::native::user_files::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
                     &name,
                     &args,
                     cancel,
@@ -376,9 +370,9 @@ impl
             } else if tools::core_session::owns(&name) {
                 // The authenticated runtime supplies the session; arguments cannot choose one.
                 tools::core_session::execute(&app, &sid, &name, &args, cancel).await
-            } else if tools::core_utilities::owns(&name) {
+            } else if tools::native::utilities::owns(&name) {
                 // Native utilities remain behind the same live Rust authorization as worker calls.
-                tools::core_utilities::execute(&name, &args, cancel).await
+                tools::native::utilities::execute(&name, &args, cancel).await
             } else if tools::web_search::owns(&name) {
                 tools::web_search::execute(
                     &app,
@@ -391,8 +385,8 @@ impl
                     cancel,
                 )
                 .await
-            } else if tools::web_access::owns(&name) {
-                tools::web_access::execute(&name, &args, cancel).await
+            } else if tools::native::web_access::owns(&name) {
+                tools::native::web_access::execute(&name, &args, cancel).await
             } else if tools::core_decision::owns(&name) {
                 // The compiled adapter resolves this session's assigned Decision model and credential.
                 tools::core_decision::execute(&app, &sid, &run_id, &args, cancel).await

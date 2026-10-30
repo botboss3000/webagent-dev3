@@ -2503,15 +2503,17 @@ impl webagent_storage::ScopedCodec for Store {
     fn encode_user_record(&self,value:&Value)->Result<Vec<u8>> {StoreCore::encode_user_record(self,value)}
 }
 
-// Access borrows the existing cipher, identities and pools; no resource is duplicated.
+// The codec itself lives on StoreCore in host-core; Store forwards for modules bound to it.
 impl webagent_access::storage::RecordCodec for Store {
-    fn seal(&self,value:&Value)->Result<Vec<u8>> {StoreCore::seal(self,value)}
-    fn unseal(&self,value:&[u8])->Result<Value> {StoreCore::unseal(self,value)}
-    fn encode_application(&self,value:&Value)->Result<Vec<u8>> {self.encode_for_pool(&self.app_pool,value)}
-    fn seal_agent(&self,value:&Value)->Result<Vec<u8>> {StoreCore::seal_agent(self,value)}
-    fn unseal_agent(&self,value:&[u8])->Result<Value> {StoreCore::unseal_agent(self,value)}
-    fn seal_agent_for(&self,agent:&str,value:&Value)->Result<Vec<u8>> {StoreCore::seal_agent_for(self,agent,value)}
-    fn unseal_agent_for(&self,agent:&str,value:&[u8])->Result<Value> {StoreCore::unseal_agent_for(self,agent,value)}
+    fn seal(&self,value:&Value)->Result<Vec<u8>> {self.core.seal(value)}
+    fn unseal(&self,value:&[u8])->Result<Value> {self.core.unseal(value)}
+    fn encode_application(&self,value:&Value)->Result<Vec<u8>> {
+        webagent_access::storage::RecordCodec::encode_application(&self.core,value)
+    }
+    fn seal_agent(&self,value:&Value)->Result<Vec<u8>> {self.core.seal_agent(value)}
+    fn unseal_agent(&self,value:&[u8])->Result<Value> {self.core.unseal_agent(value)}
+    fn seal_agent_for(&self,agent:&str,value:&Value)->Result<Vec<u8>> {self.core.seal_agent_for(agent,value)}
+    fn unseal_agent_for(&self,agent:&str,value:&[u8])->Result<Value> {self.core.unseal_agent_for(agent,value)}
 }
 impl Store {
     pub(crate) fn access_repository(&self)->webagent_access::storage::Repository<'_,Self> {
