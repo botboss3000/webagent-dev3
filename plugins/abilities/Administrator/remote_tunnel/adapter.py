@@ -206,6 +206,9 @@ async def execute(name,args,base):
   if lease:await lease.close()
   raise
  except Exception:return {"status":"error","error_kind":"preview_tunnel_rejected","output":"Authenticated workspace preview unavailable or invalid; no automatic retry"}
+def count(base):
+ """Open preview tunnels in this workspace; trusted worker status only."""
+ return int(base_path(base) in LEASES)
 async def close_workspace(base):
  base=base_path(base)
  if lease:=LEASES.get(base):await lease.close()

@@ -51,6 +51,8 @@ mod service_admin;
 mod session_deletion_tests;
 #[path = "../../crates/modules/chat/host/api/session_messaging.rs"]
 pub(crate) mod session_messaging;
+#[path = "../../crates/modules/chat/host/api/session_stop.rs"]
+pub(crate) mod session_stop;
 mod system;
 #[path = "../../crates/modules/files/host/api/uploads.rs"]
 pub(crate) mod uploads;

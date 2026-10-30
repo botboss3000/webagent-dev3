@@ -265,6 +265,12 @@ async def execute(name, arguments, base):
                     "sequence": terminal.sequence, "requires_read": True}
 
 
+def count(base):
+    """Open terminals in this workspace; trusted worker status, never a model tool."""
+    base = _base(base)
+    return sum(1 for terminal in _TERMINALS.values() if terminal.base == base)
+
+
 async def close_all(base):
     """Trusted worker revocation/shutdown hook; never exposed as a model tool."""
     base = _base(base)

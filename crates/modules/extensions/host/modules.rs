@@ -823,6 +823,43 @@ async fn perform(
     }
     Ok(public)
 }
+/// Active automations that deliver into `sid`; Main Notes bootstraps stay with their owner.
+pub(crate) async fn session_automations(app: &App, sid: &str) -> Result<Vec<Value>> {
+    let envelope = app.store.module_state("automation").await?;
+    let definitions = envelope["state"]["definitions"].as_object();
+    Ok(definitions
+        .into_iter()
+        .flat_map(|items| items.values())
+        .filter(|d| {
+            d["status"] == "active"
+                && d["destination"]["session_id"] == sid
+                && d["trigger"]["kind"] != "main_notes"
+                && !d["id"].as_str().unwrap_or("").starts_with("main-notes-")
+        })
+        .cloned()
+        .collect())
+}
+/// Pause this conversation's active automations; the agent resumes them after user confirmation.
+pub(crate) async fn pause_session_automations(app: &App, sid: &str) -> Result<Vec<Value>> {
+    let mut paused = Vec::new();
+    for d in session_automations(app, sid).await? {
+        let args = json!({"id":d["id"],"expected_revision":d["revision"]});
+        let scope = json!({"agent_id":d["agent_id"],"session_id":sid});
+        perform(
+            app,
+            "automation",
+            "pause_automation",
+            args,
+            None,
+            None,
+            false,
+            scope,
+        )
+        .await?;
+        paused.push(d);
+    }
+    Ok(paused)
+}
 pub(crate) async fn tool_call(
     app: &App,
     sid: &str,

@@ -50,6 +50,37 @@ pub async fn renew_jobs(host: &dyn AdministrationHost) -> Result<()> {
     Ok(())
 }
 
+/// Count broker jobs still leased to `sid`, renewing them as `renew_jobs` does. Changed
+/// authority counts none; the next renewal pass revokes those jobs.
+pub async fn session_jobs(host: &dyn AdministrationHost, sid: &str) -> Result<u64> {
+    let store = host.store();
+    let Some(record) = store.get(&format!("administrator_host:{sid}")).await? else {
+        return Ok(0);
+    };
+    let (Some(run_id), Some(name)) = (record["run_id"].as_str(), record["tool_name"].as_str())
+    else {
+        return Ok(0);
+    };
+    let fresh = host.fingerprint(sid, run_id, name).await;
+    if !fresh.is_ok_and(|value| record["access_fingerprint"] == value.as_str()) {
+        return Ok(0);
+    }
+    let identity = trusted(store.current_user_id(), sid, &record["access_fingerprint"]);
+    let empty = json!({});
+    let request = host.broker(
+        "administrator_host_lease",
+        &empty,
+        sid,
+        Some(identity),
+        CancellationToken::new(),
+    );
+    let reply = tokio::time::timeout(Duration::from_secs(2), request).await??;
+    Ok(reply["output"]["updated"]
+        .as_u64()
+        .or_else(|| reply["updated"].as_u64())
+        .unwrap_or(0))
+}
+
 /// Whether the caller opted into repository notices for this session and may run Git
 /// without approval.
 async fn watching(host: &dyn AdministrationHost, sid: &str) -> Result<Option<String>> {

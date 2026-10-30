@@ -499,8 +499,8 @@ async def execute_locked(request, lock):
     if request["name"]=="codebase_admin_protocol":
         fcntl.flock(lock,fcntl.LOCK_UN)
         return {"status":"success","output":{"protocol":1,"interface":1}}
-    if request["name"] == "administrator_quiesce" and not (ROOT / str(uuid.UUID(request["workspace"]))).exists():
-        return {"status": "success"}
+    if request["name"] in ("administrator_quiesce", "administrator_resources") and not (ROOT / str(uuid.UUID(request["workspace"]))).exists():
+        return {"status": "success", "output": {"terminals": 0, "tunnels": 0}}
     base = workspace_path(request["workspace"])
     args = request.get("arguments", {})
     name = request["name"]
@@ -555,6 +555,11 @@ async def execute_locked(request, lock):
         return await DIAGNOSTICS_PACKAGES.call(name,args,base,request.get("trusted"))
     if name == "administrator_artifact_get":
         return await DIAGNOSTICS_PACKAGES.call(name,args,base,request.get("trusted"))
+    if name == "administrator_resources":
+        # Counts persistent resources that survive a conversation stop.
+        terminals = PLUGINS["terminal_control"].count(base) if "terminal_control" in PLUGINS else 0
+        tunnels = PLUGINS["remote_tunnel"].count(base) if "remote_tunnel" in PLUGINS else 0
+        return {"status": "success", "output": {"terminals": terminals, "tunnels": tunnels}}
     if name == "administrator_quiesce":
         await stop_workspace_operations(request["workspace"])
         if "terminal_control" in PLUGINS:

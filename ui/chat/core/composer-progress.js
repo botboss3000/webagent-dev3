@@ -12,7 +12,7 @@ export function mountComposerProgress({root,getProfile,isAdmin}) {
   const text=document.createElement('span');text.className='chat-activity-text';text.setAttribute('aria-live','polite');text.setAttribute('aria-atomic','true');
   const chevron=document.createElement('span');chevron.className='chat-activity-chevron';chevron.textContent='›';chevron.setAttribute('aria-hidden','true');bar.append(text,chevron);wrap.append(panel,bar);host.prepend(wrap);
   const css=document.createElement('link');css.rel='stylesheet';css.href=new URL('./composer-progress.css',import.meta.url).href;document.head.append(css);
-  let session='',run=null,label='',started=0,stop=null,events=[],disposed=false,optimistic='',generation=0;
+  let session='',run=null,label='',started=0,stop=null,events=[],disposed=false,optimistic='',generation=0,held=null;
   // Close the details panel and remove expanded styling.
   function close(){panel.hidden=true;bar.setAttribute('aria-expanded','false');host.classList.remove('expanded');}
   // Toggle only when there are tool rows to display.
@@ -48,10 +48,10 @@ export function mountComposerProgress({root,getProfile,isAdmin}) {
     // A call without its result is the current tool represented by the progress label.
     const pending=rows.find(r=>!r.events.some(e=>e.kind==='tool_result'));
     const phase={queued:'Queued…',waiting_approval:'Waiting for approval…',waiting_gate:'Checking response…',waiting_external:'Waiting for build…',running:'Working…'};
-    setLabel(optimistic||(run?(run.status!=='running'?phase[run.status]:pending?'Calling '+pending.events[0].payload.tool+'…':'Working…'):''));
+    setLabel(held?.label||optimistic||(run?(run.status!=='running'?phase[run.status]:pending?'Calling '+pending.events[0].payload.tool+'…':'Working…'):''));
   }
   // Invalidate stale callbacks, stop the prior watch, and clear session-specific progress state.
-  function reset(id=''){++generation;stop?.();stop=null;session=id;run=null;events=[];optimistic='';panel.replaceChildren();close();setLabel('');}
+  function reset(id=''){++generation;stop?.();stop=null;session=id;run=null;events=[];optimistic='';held=null;panel.replaceChildren();close();setLabel('');}
   // Start a fresh session watch; private activity is requested only for administrators.
   function open(id){
     reset(id);const epoch=generation;setLabel('Assessing…');
@@ -65,12 +65,17 @@ export function mountComposerProgress({root,getProfile,isAdmin}) {
     });
   }
   // Select this session's active run and refresh details from its latest run snapshot.
-  function update(runs){const next=runs.filter(r=>!r.session_id||r.session_id===session).find(r=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(r.status));if(next?.id!==run?.id)close();run=next||null;optimistic='';details();}
+  function update(runs){const next=runs.filter(r=>!r.session_id||r.session_id===session).find(r=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(r.status));
+    // A stopped note stays until a different run starts; the stopped run's late snapshots are ignored.
+    if(held&&(!next||next.id===held.run)){run=null;optimistic='';close();details();return;}
+    held=null;if(next?.id!==run?.id)close();run=next||null;optimistic='';details();}
   const timer=setInterval(render,1000);
   const observer=new MutationObserver(render);observer.observe(root.querySelector('#chat-input-area'),{attributes:true,attributeFilter:['class']});
   return {open,update,
     // Surface an optimistic action label until the next run update or reset.
     note(value){optimistic=value;setLabel(value);},reset,
+    // Freeze progress on a stopped note until a run other than `runId` starts.
+    hold(value,runId){held={label:value,run:runId};run=null;optimistic='';close();details();},
     // Stop mount-owned timers/watchers and remove its DOM and stylesheet.
     destroy(){reset();disposed=true;clearInterval(timer);observer.disconnect();bar.onclick=null;wrap.remove();css.remove();}};
 }

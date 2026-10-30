@@ -75,7 +75,8 @@ function applyComposerState() {
   const text = !!input.value.trim() || !!Number(pill.dataset.attachmentCount);
   pill.classList.toggle('has-text', text);
   send.style.display = text ? '' : 'none'; mic.style.display = text ? 'none' : '';
-  stop.hidden = !stop.dataset.run || stop.dataset.configEnabled === 'false';
+  // Stop also stays for background work left running after a conversation stop.
+  stop.hidden = !(stop.dataset.run || stop.dataset.background === 'true') || stop.dataset.configEnabled === 'false';
   stop.style.display = stop.hidden ? 'none' : '';
   continuation.hidden = !!stop.dataset.run || text || continuation.dataset.configEnabled === 'false';
   continuation.style.display = continuation.hidden ? 'none' : '';

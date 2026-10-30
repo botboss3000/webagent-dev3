@@ -1,13 +1,13 @@
 //! HTTP handlers for chat operations.
-use webagent_accounts_host::AccountsStore;
 use super::{
     access, anyhow, append_tool, assembled_agent_instructions, attachments, bad, conflict, digest,
     effective_policy, json, key, loop_runtime, marker, memory, model_selection, now,
-    parallel_batch, phase3_api, provider, public_run, required, session_ability_state,
-    session_agent_abilities, session_agent_id, status, terminal, tools, uploads, user_apps, uuid,
-    workflow, Api, ApiError, App, Duration, Event, HashMap, HeaderMap, Infallible, Json, KeepAlive,
-    Path, Query, Result, Sse, State, StatusCode, SystemTime, Uuid, Value, UNIX_EPOCH,
+    parallel_batch, provider, public_run, required, session_ability_state, session_agent_abilities,
+    session_agent_id, status, terminal, tools, uploads, user_apps, uuid, workflow, Api, ApiError,
+    App, Duration, Event, HashMap, HeaderMap, Infallible, Json, KeepAlive, Path, Query, Result,
+    Sse, State, StatusCode, SystemTime, Uuid, Value, UNIX_EPOCH,
 };
+use webagent_accounts_host::AccountsStore;
 pub(crate) async fn workflow_policy_get(State(app): State<App>) -> Api {
     let policy = current_workflow_policy(&app).await?;
     Ok(Json(json!({"policy":policy,"revision":policy.revision()?})))
@@ -276,6 +276,25 @@ async fn prepare_message_inner(
     if !prepared.metadata.is_empty() {
         message["context_content"] = json!(prepared.context_content(text)?);
     }
+    // A total stop leaves one note so the agent confirms before restarting stopped work.
+    let stop_key = format!("session_stopped:{id}");
+    let stop_record = app
+        .store
+        .get(&stop_key)
+        .await?
+        .filter(|r| r["delivered"] != true);
+    if let Some(record) = &stop_record {
+        let content = message["context_content"]
+            .as_str()
+            .unwrap_or(text)
+            .to_owned();
+        let note = super::session_stop::stopped_note(record);
+        message["context_content"] = json!(format!("{content}\n\n{note}"));
+    }
+    let stop_delivery = stop_record.map(|mut record| {
+        record["delivered"] = json!(true);
+        (stop_key, record)
+    });
     let agent_store = app.store.for_agent(&agent_id).await?;
     let catalog = app.store.model_catalog().await?;
     // The requested entry is a call-scoped override; it never appoints Standard.
@@ -419,6 +438,7 @@ async fn prepare_message_inner(
         ));
         docs.push((format!("manager_review:{run_id}"), record));
         docs.push((format!("manager_pending:{id}"), json!({"id":run_id})));
+        docs.extend(stop_delivery);
         return Ok(PreparedMessage {
             docs,
             kind: "manager_submission",
@@ -433,6 +453,7 @@ async fn prepare_message_inner(
         json!(prepared.metadata),
     ));
     docs.push((key("run", &run_id), run));
+    docs.extend(stop_delivery);
     Ok(PreparedMessage {
         docs,
         kind: "message",
@@ -834,11 +855,6 @@ pub(crate) async fn command(
         if r["digest"] != digest(&body) {
             return Err(conflict("Identifier reused"));
         }
-        if matches!(action.as_str(), "cancel" | "pause") {
-            if let Some(sid) = r["result"]["session_id"].as_str() {
-                phase3_api::quiesce_session_resources(&app, sid).await?;
-            }
-        }
         let mut views = vec![r["result"].clone()];
         crate::shared_projection::runs(&app, &mut views).await?;
         return Ok(Json(views.remove(0)));
@@ -892,6 +908,8 @@ pub(crate) async fn command(
                     });
                 }
                 run["error"] = json!("Cancelled by user");
+                // Stop only this conversation; background work runs until a session stop.
+                run["stopped_by"] = json!("user");
             }
         }
         "resume" => {
@@ -1067,15 +1085,6 @@ pub(crate) async fn command(
             &result,
         )
         .await?;
-    if matches!(action.as_str(), "cancel" | "pause") {
-        phase3_api::quiesce_session_resources(
-            &app,
-            result["session_id"]
-                .as_str()
-                .expect("decision results carry their session"),
-        )
-        .await?;
-    }
     let mut views = vec![result];
     crate::shared_projection::runs(&app, &mut views).await?;
     Ok(Json(views.remove(0)))

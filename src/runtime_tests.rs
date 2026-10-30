@@ -12002,14 +12002,6 @@ async fn late_single_tool_case(name: &str, action: &str, mutation: &str, success
         &app.tool_socket
     };
     let listener = tokio::net::UnixListener::bind(socket).unwrap();
-    let quiesce = if name == "build_work" {
-        let listener = tokio::net::UnixListener::bind(&app.tool_socket).unwrap();
-        Some(tokio::spawn(async move {
-            late_single_control_reply(listener.accept().await.unwrap().0).await;
-        }))
-    } else {
-        None
-    };
     let (sent, received) = tokio::sync::oneshot::channel();
     let (release, held) = tokio::sync::oneshot::channel();
     let worker = tokio::spawn(async move {
@@ -12081,9 +12073,6 @@ async fn late_single_tool_case(name: &str, action: &str, mutation: &str, success
         .unwrap()
         .unwrap();
     worker.await.unwrap();
-    if let Some(quiesce) = quiesce {
-        quiesce.await.unwrap();
-    }
     let after = app.run(&id).await.unwrap();
     if mutation != "none" {
         assert_eq!(
