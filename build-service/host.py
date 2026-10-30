@@ -540,13 +540,8 @@ def context_digest(blob):
     for required in ("v3/Dockerfile", "v3/Cargo.toml", "v3/Cargo.lock"):
         if required not in entries:
             raise ValueError("snapshot missing required input")
-    if "v3/ui-baseline.json" in entries:
-        with tarfile.open(fileobj=io.BytesIO(blob), mode="r:") as archive:
-            baseline = json.load(archive.extractfile("v3/ui-baseline.json"))
-        for name, expected in baseline["assets"].items():
-            if name not in entries or entries[name][2] != expected:
-                raise ValueError("shared UI baseline changed")
     return hashlib.sha256(canonical(entries)).hexdigest(), len(entries)
+
 
 
 # Terminal failure classification (P2): additive fields next to the reason, never
@@ -3452,6 +3447,8 @@ class Broker:
                     base = (folder / "admitted_base.tar").read_bytes()
                     task = (folder / "candidate.tar").read_bytes()
                 candidate, changed = release.candidate(base, task, live, context_digest, allow_empty=True)
+                if pins := release.ui_baseline_mismatch(candidate):
+                    raise ValueError("Shared UI pinned asset changed without matching v3/ui-baseline.json: " + ", ".join(pins))
                 if not self._sync_job(job, live, candidate, changed):
                     continue
                 members = [self.jobs[jid] for jid in job.get("batch_members", ())] if resuming else []
@@ -4601,13 +4598,18 @@ class Broker:
         operation="host_service_deploy" if host_only else "plugin_deploy" if plugin_only else "index_deploy" if index_only else "ui_deploy" if ui_only else "build_deploy"
         broker_paths=[p for p in current_changed if p.startswith("v3/build-service/")and not p.startswith("v3/build-service/shared-ui/")]
         refusal=None
+        shared_ui=sorted(p for p in changed if p.startswith(release.SHARED_UI_SOURCE))
+        pins=release.ui_baseline_mismatch(candidate)
+        if pins:
+            refusal=("Shared UI pinned asset changed without matching v3/ui-baseline.json: "+", ".join(pins)
+                     +". Update its sha256 in v3/ui-baseline.json in this task.")
         if not host_only and broker_paths and set(current_changed)<=self.host_source_scope()[1]:
             # A build_deploy would rebuild unchanged app images and still not install the broker.
             refusal=("Broker-only change is not installed: build_deploy would rebuild app images and leave the old broker running. "
                      +("Install this task tree while idle (lifecycle.py install --install-tree <task tree hash>), then finish again to publish as host_service_deploy."
                        if trusted.get("local_caller")else"A local operator must install the task tree and publish it."))
         return {"operation":operation,"changed_paths":sorted(changed),"ui_only":ui_only,"plugin_only":plugin_only,"index_only":index_only,"host_only":host_only,
-                "refusal":refusal,"broker_install_required":bool(broker_paths)and not host_only}
+                "refusal":refusal,"broker_install_required":bool(broker_paths)and not host_only,"shared_ui_paths":shared_ui}
 
     def _require_expected_plan(self,args,plan):
         """Refuse a finish whose broker-computed paths or lane differ from the caller's stated plan."""
@@ -4624,7 +4626,7 @@ class Broker:
     def host_source_scope(self):
         """Broker modules and their docs/tests that the host-only lane may publish."""
         review_modules={"source_status.py","workspace.py","compiler.Dockerfile","ui_policy.py","monitoring_component.py","buildctl.py","index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
-        allowed={"v3/tests/test_build_source_status.py","v3/tests/test_admin_workspace.py","v3/plugins/abilities/Administrator/code_index/maintenance.py","v3/tests/test_code_index_maintenance.py","v3/tests/test_published_code_index.py","v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py","v3/tests/test_scheduler_broker.py","v3/tests/test_build_cancel.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
+        allowed={"v3/tests/test_build_source_status.py","v3/tests/test_admin_workspace.py","v3/plugins/abilities/Administrator/code_index/maintenance.py","v3/tests/test_code_index_maintenance.py","v3/tests/test_published_code_index.py","v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py","v3/tests/test_broker_shared_ui.py","v3/tests/test_scheduler_broker.py","v3/tests/test_build_cancel.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py","v3/tests/test_admin_build.py",
                  "v3/tests/test_context_component_builds.py","v3/tests/test_engine_components.py","v3/tests/test_build_lifecycle_entry.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
@@ -6464,12 +6466,19 @@ class Broker:
                         and prior.get("inputs_sha256")==context_digest(blob)[0] and set(prior.get("images",{}))=={"api","loop"}),
                         key=lambda prior:prior.get("finished_at",0),reverse=True)
                     if previous:
-                        if not self.package_cache.enabled:raise ValueError("Persistent dependency cache required before failed image recovery")
-                        self.package_cache.ready(blob)
-                        proof=image_reuse_module.legacy_pair(self.runner,previous[0],blob)
-                        with self.lock:
-                            job["legacy_image_proof"]=proof
-                            self._save(job)
+                        # Recovery is an optimization: an unprovable prior pair means a fresh build.
+                        try:
+                            if not self.package_cache.enabled:raise ValueError("Persistent dependency cache required before failed image recovery")
+                            self.package_cache.ready(blob)
+                            proof=image_reuse_module.legacy_pair(self.runner,previous[0],blob)
+                        except ValueError as error:
+                            with self.lock:
+                                job["legacy_image_rejection"]=scrub(str(error),self.runner.secrets)
+                                self._save(job)
+                        else:
+                            with self.lock:
+                                job["legacy_image_proof"]=proof
+                                self._save(job)
                 if job.get("legacy_image_proof"):self.runner.check_space(MIN_DEPLOY_FREE)
                 else:self.runner.prepare_build_space()
                 # Capture current environment values privately solely to scrub

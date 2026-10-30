@@ -166,10 +166,52 @@ def extract(root, blob, validate):
     finally:os.close(fd)
 
 
+# Shared UI archive names and their source: v3/build-service/shared-ui/<name>, the
+# same mapping install.py uses for the checkout. Keep equal to host.CONTEXT's ui/ entries.
+SHARED_UI_SOURCE = "v3/build-service/shared-ui/"
+SHARED_UI_CONTEXT = (
+    "ui/shared/css/app1.css", "ui/shared/css/app2.css", "ui/shared/css/app3.css",
+    "ui/shared/css/design-system.css", "ui/shared/css/index.css",
+    "ui/main-panel/agents/agents.html", "ui/main-panel/agents/agents.css",
+    "ui/vendor/fonts", "ui/vendor/lucide", "ui/favicon.svg")
+
+
+def shared_ui_name(name):
+    """The ui/ archive name a shared-ui source path ships as, or None."""
+    if not name.startswith(SHARED_UI_SOURCE):
+        return None
+    ui = name.removeprefix(SHARED_UI_SOURCE)
+    return ui if any(ui == p or ui.startswith(p + "/") for p in SHARED_UI_CONTEXT) else None
+
+
+def ui_baseline_mismatch(blob):
+    """Pinned shared UI assets whose bytes differ from v3/ui-baseline.json, or [] when they match.
+
+    Checked where a release is planned and admitted, not in context_digest: a pin
+    mismatch there would refuse every later snapshot, including the fix."""
+    with tarfile.open(fileobj=io.BytesIO(blob), mode="r:") as archive:
+        try:
+            baseline = json.load(archive.extractfile("v3/ui-baseline.json"))
+        except KeyError:
+            return []
+        wrong = []
+        for name, expected in baseline["assets"].items():
+            try:
+                body = archive.extractfile(name).read()
+            except KeyError:
+                body = None
+            if body is None or hashlib.sha256(body).hexdigest() != expected:
+                wrong.append(name)
+    return wrong
+
 def snapshot(root, allowlist, validate):
     files = {}
+    shared = root / SHARED_UI_SOURCE
     for allowed in allowlist:
-        path = root / allowed
+        # A tree's ui/ is derived from its own shared-ui source when it has one, so a task
+        # that edits shared-ui ships those bytes; older roots keep their sibling ui/.
+        base = shared if allowed.startswith("ui/") and shared.is_dir() else root
+        path = base / allowed
         if not path.exists():
             continue
         paths = [path] if path.is_file() else path.rglob("*")
@@ -180,7 +222,7 @@ def snapshot(root, allowlist, validate):
                 continue
             if not entry.is_file():
                 raise ValueError("source workspace special file forbidden")
-            name = entry.relative_to(root).as_posix()
+            name = entry.relative_to(base).as_posix()
             if "__pycache__" in entry.parts or name.endswith((".pyc", ".pyo")):
                 continue
             info = entry.stat()
@@ -221,8 +263,10 @@ def candidate(base_blob, task_blob, live_blob, validate, *, allow_empty=False, s
     (base,base_inspection),(task,task_inspection),(live,_) = (candidate_entries(value,validate)for value in (base_blob,task_blob,live_blob))
     # Same attested identity without holding private inspection bodies in memory.
     if base_inspection!=task_inspection:raise ValueError("read-only inspection snapshot changed")
+    # ui/ is projected from v3/build-service/shared-ui/, so only its source counts as a change.
     changed = [name for name in sorted(set(base) | set(task))
-               if name not in RETIRED_CONTEXT and source_differs(base.get(name), task.get(name))]
+               if name not in RETIRED_CONTEXT and not name.startswith("ui/")
+               and source_differs(base.get(name), task.get(name))]
     if (not changed and not allow_empty) or len(changed) > 256 or any(
             not name.startswith("v3/") or name.startswith("v3/data/")
             for name in changed):
@@ -242,7 +286,21 @@ def candidate(base_blob, task_blob, live_blob, validate, *, allow_empty=False, s
             merged[name] = task[name]
         else:
             merged.pop(name, None)
+    project_shared_ui(merged)
     return archive(merged, validate), changed
+
+
+def project_shared_ui(entries):
+    """Rebuild ui/ from v3/build-service/shared-ui/ in place; ui/ is never edited directly."""
+    if not any(shared_ui_name(name) for name in entries):
+        return entries
+    for name in [name for name in entries if name.startswith("ui/")]:
+        del entries[name]
+    for name, value in list(entries.items()):
+        ui = shared_ui_name(name)
+        if ui:
+            entries[ui] = value
+    return entries
 
 
 def compensating_candidate(before_blob,after_blob,live_blob,owned_paths,validate):

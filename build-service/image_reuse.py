@@ -159,6 +159,23 @@ def cached_rebuild_lineage(prior, jobs, lineage_job_id=None):
     return {"version": 1, "lineage_job_id": lineage_job_id, "legacy_image_proof": proof}
 
 
+# The first phase after the loop image build; packaging sub-phases may come before it.
+AFTER_LOOP = {"preparing_plugins", "preparing_ui", "indexing_source", "waiting_publication"}
+
+
+def image_windows(phases):
+    """Creation windows for the api and loop images from a failed job's phase history.
+
+    Only the two image builds matter; the job may have failed at any later phase."""
+    names = [phase.get("phase") for phase in phases]
+    if names[:2] != ["building_api", "building_loop"]:
+        raise ValueError("Legacy image phase history incomplete")
+    end = next((phase["at"] for phase in phases[2:] if phase.get("phase") in AFTER_LOOP), None)
+    if end is None:
+        raise ValueError("Legacy image phase history incomplete")
+    return {"api": (phases[0]["at"], phases[1]["at"]), "loop": (phases[1]["at"], end)}
+
+
 def legacy_pair(runner, prior, blob):
     """Prove a failed pre-activation job's retained image pair before a new attempt uses it."""
     if (prior.get("status") != "failed" or prior.get("operation") != "build_deploy"
@@ -174,10 +191,7 @@ def legacy_pair(runner, prior, blob):
     compiler = json.loads(row_path.read_bytes())
     phases = prior.get("phase_history", [])
     names = [phase.get("phase") for phase in phases]
-    if names[:4] != ["building_api", "building_loop", "preparing_plugins", "preparing_ui"] or names[-1] != "building_api":
-        raise ValueError("Legacy image phase history incomplete")
-    windows = {"api": (phases[0]["at"], phases[1]["at"]),
-               "loop": (phases[1]["at"], phases[2]["at"])}
+    windows = image_windows(phases)
     result = {}
     for role, copies in COPIES.items():
         image = prior["images"][role]
