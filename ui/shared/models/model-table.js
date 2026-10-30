@@ -293,6 +293,27 @@ export function capabilityFlagsHtml(row, { all = true } = {}) {
   }).join('');
 }
 
+// The press that dismisses a floating popover only closes it: its mousedown,
+// touchend and click never reach the page, so engaging another control takes a
+// second press. The next pointerdown ends the swallow even if no click followed.
+function _swallowDismissPress(event) {
+  if (event.type !== 'pointerdown') return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  const swallowed = ['mousedown', 'mouseup', 'touchend', 'click'];
+  const release = () => {
+    for (const type of swallowed) document.removeEventListener(type, eat, true);
+    document.removeEventListener('pointerdown', release, true);
+  };
+  const eat = (e) => {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.type === 'click') release();
+  };
+  for (const type of swallowed) document.addEventListener(type, eat, true);
+  document.addEventListener('pointerdown', release, true);
+}
+
 export function mountModelTable(host, opts = {}) {
   const adapter = opts.adapter || {};
   const fetchFn = opts.fetchFn || ((...a) => window.fetch(...a));
@@ -398,6 +419,7 @@ export function mountModelTable(host, opts = {}) {
   const subscriptionCountdownHandles = new Set();
   let _directiveModalCleanup = null;  // closes an open directive editor on destroy
   const docListeners = [];
+  let closeRolesPopover = null;       // closes the one open More popover, if any
 
   // ── default endpoint helpers (adapter may override any) ──
   async function fetchPresets() {
@@ -2749,15 +2771,7 @@ export function mountModelTable(host, opts = {}) {
         // Re-open this row's popover — renderSaved destroys the DOM, so we
         // re-find the new row by uid and open its popover.
         const newRow = table.querySelector(`.ac-saved-injected[data-mt-uid="${target._uid}"]`);
-        if (newRow) {
-          const newBtn = newRow.querySelector('.ac-saved-roles-btn');
-          const newPop = newRow.querySelector('.ac-saved-roles-popover');
-          if (newBtn && newPop) {
-            newPop.hidden = false;
-            newBtn.classList.add('open');
-            _positionRolesPopover(newBtn, newPop);
-          }
-        }
+        newRow?.querySelector('.ac-saved-roles-btn')?._openRoles?.();
       } catch (e) {
         S.roleAssignments = before;
         _flashSaveCheck(cb.closest('.ac-saved-cap'), false, e.message || 'Save failed');
@@ -2786,29 +2800,51 @@ export function mountModelTable(host, opts = {}) {
       (v, cb) => persistRole('decision', v, cb), locked, lockHint);
     popover.appendChild(rolesSection);
 
-    // Wire popover open/close
     // ── Wire popover open/close ──
-    rolesBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const isOpen = !popover.hidden;
-      // Close all other popovers first
-      table.querySelectorAll('.ac-saved-roles-popover:not([hidden])').forEach(m => {
-        if (m !== popover) m.hidden = true;
-      });
-      table.querySelectorAll('.ac-saved-roles-btn.open').forEach(b => b.classList.remove('open'));
-      popover.hidden = isOpen;
-      rolesBtn.classList.toggle('open', !isOpen);
-      if (!isOpen) _positionRolesPopover(rolesBtn, popover);
-    });
-    // Click-away closes
-    const closeRoles = (e) => {
-      if (!rolesCell.contains(e.target)) {
+    const openRoles = () => {
+      closeRolesPopover?.();
+      // The agent panel's transform and backdrop blur would become this fixed
+      // popover's containing block and push it off screen, so it lives on
+      // <body> while open and returns to its row on close.
+      document.body.appendChild(popover);
+      popover.hidden = false;
+      rolesBtn.classList.add('open');
+      const reposition = () => _positionRolesPopover(rolesBtn, popover);
+      reposition();
+      const outside = (e) => {
+        if (popover.contains(e.target) || rolesBtn.contains(e.target)) return;
+        close();
+        _swallowDismissPress(e);
+      };
+      // Scrolling anything but the popover closes it instead of leaving it behind.
+      const onScroll = (e) => {
+        const active = document.activeElement;
+        if (popover.contains(e.target) || (active?.tagName === 'INPUT' && popover.contains(active))) return;
+        close();
+      };
+      const onKey = (e) => { if (e.key === 'Escape') close(); };
+      const close = () => {
+        document.removeEventListener('pointerdown', outside, true);
+        document.removeEventListener('scroll', onScroll, true);
+        document.removeEventListener('keydown', onKey, true);
+        window.removeEventListener('resize', reposition);
         popover.hidden = true;
         rolesBtn.classList.remove('open');
-      }
+        rolesCell.appendChild(popover);
+        if (closeRolesPopover === close) closeRolesPopover = null;
+      };
+      closeRolesPopover = close;
+      document.addEventListener('pointerdown', outside, true);
+      document.addEventListener('scroll', onScroll, true);
+      document.addEventListener('keydown', onKey, true);
+      window.addEventListener('resize', reposition);
     };
-    document.addEventListener('pointerdown', closeRoles);
-    docListeners.push(['pointerdown', closeRoles]);
+    rolesBtn._openRoles = openRoles;
+    rolesBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (popover.hidden) openRoles();
+      else closeRolesPopover?.();
+    });
     } // end !catalogOnly role-popover block
     const usageCell = document.createElement('span'); usageCell.className = 'ac-saved-usage';
     const statIn = usageLine('Total input tokens'), statOut = usageLine('Total output tokens'), statCost = usageLine('Total provider cost');
@@ -3129,6 +3165,7 @@ export function mountModelTable(host, opts = {}) {
 
   function renderSaved({ animate = false, enteringUids = [] } = {}) {
     closeAliasForm();
+    closeRolesPopover?.();   // its row is about to be rebuilt
     const before = animate ? _snapshotSavedLayout() : null;
     // MODEL-ROW-FOCUS: this rebuild collapses every row detail, so the chart's
     // single-model focus goes with them. Without this, saving the roster would leave
@@ -3566,6 +3603,7 @@ export function mountModelTable(host, opts = {}) {
       if (pending) { cancelAnimationFrame(pending); dropdownRafs.delete(dd); }
     });
     if (_directiveModalCleanup) { try { _directiveModalCleanup(); } catch (_) {} _directiveModalCleanup = null; }
+    closeRolesPopover?.();
     docListeners.forEach(([t, fn]) => document.removeEventListener(t, fn));
     document.removeEventListener('scroll', repositionDropdowns, true);
     window.removeEventListener('resize', repositionDropdowns);
