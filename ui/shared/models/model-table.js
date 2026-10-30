@@ -1889,23 +1889,22 @@ export function mountModelTable(host, opts = {}) {
     popover.style.maxHeight = 'none';
     popover.style.overflowY = 'hidden';
 
+    // Show the whole panel whenever the window can hold it: below the button,
+    // else above it, else slid along the window so it fits (overlapping the
+    // button). Only a panel taller than the window is capped and scrolls.
     const anchor = button.getBoundingClientRect();
     const width = popover.offsetWidth;
     const naturalHeight = popover.scrollHeight;
-    const below = Math.max(0, window.innerHeight - anchor.bottom - gap - margin);
-    const above = Math.max(0, anchor.top - gap - margin);
-    const openBelow = below >= Math.min(naturalHeight, 160) || below >= above;
-    const available = Math.max(64, openBelow ? below : above);
-    const maxHeight = Math.min(320, available);
-    const renderedHeight = Math.min(naturalHeight, maxHeight);
+    const maxHeight = Math.min(naturalHeight, window.innerHeight - 2 * margin);
+    let top;
+    if (anchor.bottom + gap + maxHeight <= window.innerHeight - margin) top = anchor.bottom + gap;
+    else if (anchor.top - gap - maxHeight >= margin) top = anchor.top - gap - maxHeight;
+    else top = Math.max(margin, Math.min(anchor.bottom + gap, window.innerHeight - margin - maxHeight));
     const maxLeft = Math.max(margin, window.innerWidth - width - margin);
     const left = Math.min(Math.max(margin, anchor.right - width), maxLeft);
-    const top = openBelow
-      ? Math.min(window.innerHeight - margin - renderedHeight, anchor.bottom + gap)
-      : Math.max(margin, anchor.top - gap - renderedHeight);
 
     popover.style.left = Math.round(left) + 'px';
-    popover.style.top = Math.round(Math.max(margin, top)) + 'px';
+    popover.style.top = Math.round(top) + 'px';
     popover.style.maxHeight = Math.round(maxHeight) + 'px';
     popover.style.overflowY = naturalHeight > maxHeight ? 'auto' : 'visible';
   }
