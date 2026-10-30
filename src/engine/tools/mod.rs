@@ -4,10 +4,6 @@ pub(crate) use webagent_engine::tools::outcome;
 pub(crate) mod administrator;
 #[path = "../../../plugins/abilities/Business/front_desk/adapter.rs"]
 pub(crate) mod business_front_desk;
-#[path = "../../../plugins/abilities/Administrator/code_index/configuration_adapter.rs"]
-pub(crate) mod code_index_configuration;
-#[path = "../../../plugins/abilities/Administrator/code_index/maintenance_adapter.rs"]
-pub(crate) mod code_index_maintenance;
 pub(crate) mod code_index_retrieval;
 #[path = "../../../crates/modules/abilities/host/agent_management.rs"]
 pub(crate) mod core_agent_management;
@@ -15,26 +11,16 @@ pub(crate) mod core_agent_management;
 pub(crate) mod core_app_control;
 #[path = "../../../crates/modules/abilities/host/authority.rs"]
 pub(crate) mod core_authority;
-#[path = "../../../crates/modules/abilities/host/base_extras.rs"]
-pub(crate) mod core_base_extras;
 #[path = "../../../crates/modules/abilities/host/base/compaction_adapter.rs"]
 pub(crate) mod core_compaction;
 #[path = "../../../crates/modules/abilities/host/base/context_assets_adapter.rs"]
 pub(crate) mod core_context_assets;
-#[path = "../../../plugins/abilities/Core/decision/adapter.rs"]
-pub(crate) mod core_decision;
-#[path = "../../../plugins/abilities/Core/decision/directory_adapter.rs"]
-pub(crate) mod core_directory_decision;
 #[path = "../../../crates/modules/abilities/host/image_generation.rs"]
 pub(crate) mod core_image_generation;
 #[path = "../../../crates/modules/abilities/host/base/mode_adapter.rs"]
 pub(crate) mod core_mode;
 #[path = "../../../crates/modules/abilities/host/native_host.rs"]
 pub(crate) mod native_host;
-#[path = "../../../crates/modules/abilities/host/model_switcher.rs"]
-pub(crate) mod core_model_switcher;
-#[path = "../../../crates/modules/abilities/host/orchestration.rs"]
-pub(crate) mod core_orchestration;
 #[path = "../../../crates/modules/abilities/host/base/prompt_adapter.rs"]
 pub(crate) mod core_prompt;
 #[path = "../../../crates/modules/abilities/host/base/recall_adapter.rs"]
@@ -49,8 +35,6 @@ pub(crate) mod core_session;
 pub(crate) mod core_skills;
 #[path = "../../../crates/modules/abilities/host/base/task_adapter.rs"]
 pub(crate) mod core_task;
-#[path = "../../../crates/modules/abilities/host/base/tool_search_adapter.rs"]
-pub(crate) mod core_tool_search;
 #[path = "../../../crates/modules/abilities/host/vault.rs"]
 pub(crate) mod core_vault;
 #[path = "../../../crates/modules/abilities/host/visualizer.rs"]
@@ -126,17 +110,17 @@ pub(crate) fn folder_handlers() -> impl Iterator<Item = &'static str> {
         web_search::TOOLS,
         business_front_desk::TOOLS,
         native::knowledge_files::TOOLS,
-        core_decision::TOOLS,
-        core_directory_decision::TOOLS,
+        native::decision::TOOLS,
+        native::directory_decision::TOOLS,
         native::user_files::TOOLS,
-        core_model_switcher::TOOLS,
+        native::model_switcher::TOOLS,
         core_agent_management::TOOLS,
         native::image_vision::TOOLS,
         core_image_generation::TOOLS,
         native::app_control::TOOLS,
         native::ui_admin::TOOLS,
         native::functions::TOOLS,
-        core_orchestration::TOOLS,
+        native::orchestration::TOOLS,
         native::visualizer::TOOLS,
         native::vault::TOOLS,
         native::visual_capture::TOOLS,
@@ -276,19 +260,19 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         schemas.extend(web_search::schemas());
         schemas.extend(business_front_desk::schemas());
         schemas.extend(native::schemas(native::knowledge_files::TOOLS));
-        schemas.extend(core_decision::schemas());
-        schemas.extend(core_directory_decision::schemas());
+        schemas.extend(native::schemas(native::decision::TOOLS));
+        schemas.extend(native::schemas(native::directory_decision::TOOLS));
         schemas.extend(native::utilities::schemas());
         schemas.extend(native::schemas(native::user_files::TOOLS));
-        schemas.extend(core_model_switcher::schemas());
+        schemas.extend(native::schemas(native::model_switcher::TOOLS));
         schemas.extend(core_agent_management::schemas());
         schemas.extend(native::schemas(native::image_vision::TOOLS));
         schemas.extend(core_image_generation::schemas());
         schemas.extend(native::schemas(native::app_control::TOOLS));
         schemas.extend(native::schemas(native::ui_admin::TOOLS));
         schemas.extend(native::functions::schemas());
-        schemas.extend(core_orchestration::schemas());
-        schemas.extend(core_base_extras::schemas());
+        schemas.extend(native::schemas(native::orchestration::TOOLS));
+        schemas.extend(native::base_extras::schemas());
         schemas.extend(native::webhooks::schemas());
         schemas.extend(native::schemas(native::visualizer::TOOLS));
         schemas.extend(native::schemas(native::vault::TOOLS));
@@ -300,12 +284,12 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         schemas.extend(core_context_assets::schemas());
         schemas.extend(core_prompt::schemas());
         schemas.extend(core_search::schemas());
-        schemas.extend(core_tool_search::schemas());
+        schemas.extend(native::tool_search::schemas());
         schemas.extend(core_self_edit::schemas());
         schemas.extend(core_task::schemas());
         schemas.extend(core_compaction::schemas());
         schemas.extend(core_recall::schemas());
-        schemas.extend(core_mode::schemas());
+        schemas.extend(native::mode::schemas());
         #[cfg(test)] schemas.push(json!({"type":"function","name":"test_owner_purchase","description":"Development-only owner authorization fixture",
             "authorization":{"kind":"credential_owner","credential_kind":"test"},
             "parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}}));

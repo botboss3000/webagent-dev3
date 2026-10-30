@@ -1,13 +1,20 @@
 //! Caller-owned identity presets, skill feedback and protected connection setup.
-use super::core_agent_management::request;
-use crate::*;
+use crate::{app_control, Call, NativeHost};
+use anyhow::{anyhow, Result};
 use serde::Deserialize;
+use serde_json::{json, Value};
+use tokio_util::sync::CancellationToken;
+use webagent_host_core::digest;
+/// Whether this family executes tool `name`.
+#[must_use]
 pub fn owns(name: &str) -> bool {
     matches!(
         name,
         "register_user" | "manage_agent_profiles" | "rate_skill" | "request_agent_login"
     )
 }
+/// Schemas for this family's tools.
+#[must_use]
 pub fn schemas() -> Vec<Value> {
     [
  ("register_user","Request a private account-registration form in the active browser. The user enters their own credentials; the existing registration policy and administrator approval still apply. No account is created until the user submits the form.",json!({}),vec![]),
@@ -45,19 +52,20 @@ fn identifier(raw: Option<&str>, max: usize) -> Result<&str> {
     }
     Ok(raw)
 }
+/// Run one owner-private account tool at `call`'s position under fresh run authority.
+///
+/// # Errors
+/// When authority, the caller, the arguments or the private record checks fail.
 pub async fn execute(
-    app: &App,
-    sid: &str,
-    rid: &str,
-    generation: &str,
-    pending: &str,
+    host: &dyn NativeHost,
+    call: Call<'_>,
     name: &str,
     args: &Value,
     cancel: CancellationToken,
 ) -> Result<Value> {
-    let run = super::core_authority::check(app, sid, rid, generation, pending, name, args, &cancel)
-        .await?;
-    if shared_chat::actor(app) != app.store.current_user_id() {
+    let (sid, rid) = (call.sid, call.run_id);
+    let run = host.authorize(call, name, args, &cancel).await?;
+    if host.actor() != host.store().current_user_id() {
         return Err(anyhow!(
             "Use an owner-private conversation for private account records"
         ));
@@ -66,34 +74,24 @@ pub async fn execute(
     let generation = run["generation"]
         .as_str()
         .ok_or_else(|| anyhow!("Run generation missing"))?;
+    let call = Call { generation, ..call };
     let output = match name {
         "register_user" => {
-            return super::core_app_control::enqueue(
-                app,
-                sid,
-                rid,
-                generation,
-                pending,
-                name,
-                args,
-                "registration",
-                cancel,
-            )
-            .await
+            return app_control::enqueue(host, call, name, args, "registration", cancel).await
         }
         "request_agent_login" => {
             let id = identifier(q.connection_id.as_deref(), 128)?;
-            let started = request(
-                app,
-                "POST",
-                format!("/models/connections/{id}/authorization"),
-                json!({}),
-            )
-            .await?;
+            let started = host
+                .agent_request(
+                    "POST",
+                    format!("/models/connections/{id}/authorization"),
+                    json!({}),
+                )
+                .await?;
             if !started.is_object() {
                 return Err(anyhow!("Authorization setup unavailable"));
             }
-            json!({"authorization_started":true,"user_action_required":true,"setup_url":format!("/app?tab=agents&agent={}&agentView=model",session_agent_id(app,sid).await?)})
+            json!({"authorization_started":true,"user_action_required":true,"setup_url":format!("/app?tab=agents&agent={}&agentView=model",host.session_agent_id(sid).await?)})
         }
         "rate_skill" => {
             let ability = identifier(q.ability_id.as_deref(), 64)?;
@@ -102,17 +100,17 @@ pub async fn execute(
                 .kind
                 .as_deref()
                 .ok_or_else(|| anyhow!("Skill kind required"))?;
-            let asset = tools::core_skills::rating_asset(
-                app,
-                sid,
-                rid,
-                &json!({"ability_id":ability,"kind":kind,"skill_id":skill}),
-            )
-            .await?;
+            let asset = host
+                .rating_asset(
+                    sid,
+                    rid,
+                    &json!({"ability_id":ability,"kind":kind,"skill_id":skill}),
+                )
+                .await?;
             let id = digest(&json!([run["agent_id"], ability, kind, skill]));
             if q.score.is_none() {
-                let rating = app
-                    .store
+                let rating = host
+                    .store()
                     .get(&format!("core_rating:{id}"))
                     .await?
                     .unwrap_or(json!({"revision":0,"artifact":null}));
@@ -128,16 +126,16 @@ pub async fn execute(
             if comment.len() > 1000 {
                 return Err(anyhow!("Rating comment exceeds bounds"));
             }
-            let result=app.store.base_write_artifact(sid,rid,pending,generation,"core_rating",&id,q.expected_revision.ok_or_else(||anyhow!("Rating revision required"))?,&json!({"ability_id":ability,"kind":kind,"skill_id":skill,"asset_sha256":asset["sha256"],"score":score,"comment":comment,"authority":"private_feedback"})).await?;
+            let result=host.write_artifact(call,"core_rating",&id,q.expected_revision.ok_or_else(||anyhow!("Rating revision required"))?,&json!({"ability_id":ability,"kind":kind,"skill_id":skill,"asset_sha256":asset["sha256"],"score":score,"comment":comment,"authority":"private_feedback"})).await?;
             json!({"saved":true,"rating_id":id,"revision":result["revision"]})
         }
         "manage_agent_profiles" => {
             if q.action.as_deref() == Some("list") {
-                let items=app.store.list("core_profile:").await?.into_iter().filter(|v|v["artifact"]["deleted"]!=true).map(|v|json!({"profile_id":v["id"],"revision":v["revision"],"name":v["artifact"]["name"],"description":v["artifact"]["description"]})).take(100).collect::<Vec<_>>();
+                let items=host.store().list("core_profile:").await?.into_iter().filter(|v|v["artifact"]["deleted"]!=true).map(|v|json!({"profile_id":v["id"],"revision":v["revision"],"name":v["artifact"]["name"],"description":v["artifact"]["description"]})).take(100).collect::<Vec<_>>();
                 return Ok(json!({"status":"success","output":{"profiles":items}}));
             }
             let id = identifier(q.profile_id.as_deref(), 64)?;
-            let prior = app.store.get(&format!("core_profile:{id}")).await?;
+            let prior = host.store().get(&format!("core_profile:{id}")).await?;
             match q.action.as_deref() {
                 Some("read") => prior
                     .filter(|v| v["artifact"]["deleted"] != true)
@@ -165,24 +163,21 @@ pub async fn execute(
                         if description.len() > 2000 {
                             return Err(anyhow!("Profile description exceeds bounds"));
                         }
-                        if prior.is_none() && app.store.list("core_profile:").await?.len() >= 100 {
+                        if prior.is_none() && host.store().list("core_profile:").await?.len() >= 100
+                        {
                             return Err(anyhow!("Profile quota reached"));
                         }
                         json!({"name":name,"description":description,"deleted":false})
                     };
-                    app.store
-                        .base_write_artifact(
-                            sid,
-                            rid,
-                            pending,
-                            generation,
-                            "core_profile",
-                            id,
-                            q.expected_revision
-                                .ok_or_else(|| anyhow!("Profile revision required"))?,
-                            &artifact,
-                        )
-                        .await?
+                    host.write_artifact(
+                        call,
+                        "core_profile",
+                        id,
+                        q.expected_revision
+                            .ok_or_else(|| anyhow!("Profile revision required"))?,
+                        &artifact,
+                    )
+                    .await?
                 }
                 Some("apply") => {
                     let preset = prior
@@ -195,7 +190,7 @@ pub async fn execute(
                         return Err(anyhow!("Profile revision changed"));
                     }
                     let agent = identifier(q.agent_id.as_deref(), 128)?;
-                    request(app,"PUT",format!("/models/agents/{agent}/identity"),json!({"revision":q.agent_revision.ok_or_else(||anyhow!("Agent identity revision required"))?,"name":preset["artifact"]["name"],"description":preset["artifact"]["description"]})).await?
+                    host.agent_request("PUT",format!("/models/agents/{agent}/identity"),json!({"revision":q.agent_revision.ok_or_else(||anyhow!("Agent identity revision required"))?,"name":preset["artifact"]["name"],"description":preset["artifact"]["description"]})).await?
                 }
                 _ => return Err(anyhow!("Unknown profile action")),
             }

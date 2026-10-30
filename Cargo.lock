@@ -2742,6 +2742,7 @@ dependencies = [
  "webagent-abilities-host",
  "webagent-access",
  "webagent-accounts-host",
+ "webagent-chat",
  "webagent-files",
  "webagent-host-core",
  "webagent-models",

@@ -198,6 +198,12 @@ impl AdministrationHost for Fake {
     fn stopping(&self) -> CancellationToken {
         CancellationToken::new()
     }
+    fn chat_ui_config_path(&self) -> &Path {
+        Path::new("/nonexistent/chat.json")
+    }
+    fn compaction_config_path(&self) -> &Path {
+        Path::new("/nonexistent/context-compaction.json")
+    }
 }
 
 async fn call(host: &Fake, name: &str, args: Value) -> Result<Value> {
@@ -508,4 +514,46 @@ async fn promotions_refuse_unknown_sessions_and_recover_dispatching_records() {
             format!("promotion:{SID}:r1")
         )]
     );
+}
+
+#[tokio::test]
+async fn code_index_maintenance_routes_snapshots_to_worker_and_live_work_to_broker() {
+    let dir = root();
+    let host = Fake::new(dir.path()).await;
+    let read = json!({"action":"get","root":"published","entry_id":"e","task_id":"t"});
+    crate::code_index::maintenance(&host, SID, RUN, &read, CancellationToken::new())
+        .await
+        .unwrap();
+    let sync = json!({"action":"sync","task_id":"t"});
+    crate::code_index::maintenance(&host, SID, RUN, &sync, CancellationToken::new())
+        .await
+        .unwrap();
+    let sent = host.sent();
+    assert_eq!(sent[0].socket, "worker");
+    assert_eq!(
+        sent[0].args,
+        json!({"action":"get","root":"published","entry_id":"e"})
+    );
+    assert!(sent[0].trusted.is_none());
+    assert_eq!(sent[1].socket, "broker");
+    assert_eq!(sent[1].name, "code_index_maintenance");
+    assert_eq!(
+        sent[1].args,
+        json!({"action":"sync","root":"live","task_id":"t"})
+    );
+    let trusted = sent[1].trusted.as_ref().unwrap();
+    assert_eq!(trusted["session_id"], SID);
+    assert_eq!(
+        trusted["access_fingerprint"],
+        "authority:code_index_maintenance"
+    );
+    assert!(crate::code_index::maintenance(
+        &host,
+        SID,
+        RUN,
+        &json!({"action":"record","root":"published"}),
+        CancellationToken::new()
+    )
+    .await
+    .is_err());
 }

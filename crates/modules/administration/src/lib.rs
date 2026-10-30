@@ -7,6 +7,7 @@
 //! Model arguments never choose identity, agent, workspace, credentials, host origin
 //! or a Docker command; the host attaches those.
 pub mod arguments;
+pub mod code_index;
 pub mod dashboard;
 pub mod notices;
 pub mod review;

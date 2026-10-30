@@ -11434,9 +11434,21 @@ async fn visibility_native_call(app: &App, sid: &str, id: &str, name: &str, args
             .await
             .unwrap()
     } else {
-        tools::core_tool_search::execute(app, sid, id, name, &args, CancellationToken::new())
-            .await
-            .unwrap()
+        let call = tools::native::Call {
+            sid,
+            run_id: id,
+            generation: "",
+            pending_id: "",
+        };
+        tools::native::tool_search::execute(
+            &tools::native_host::Host(app),
+            call,
+            name,
+            &args,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap()
     };
     let mut run = app.run(id).await.unwrap();
     append_tool(&mut run, &result).unwrap();

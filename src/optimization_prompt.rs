@@ -76,7 +76,7 @@ async fn prospective(
                 active.push(json!(id));
             }
         }
-        let marker = json!(crate::tools::core_tool_search::marker(name));
+        let marker = json!(crate::tools::native::tool_search::marker(name));
         if !loaded.contains(&marker) {
             loaded.push(marker);
         }

@@ -137,25 +137,19 @@ impl
                     cancel,
                 )
                 .await
-            } else if tools::core_base_extras::owns(&name) {
-                tools::core_base_extras::execute(
-                    &app,
-                    &sid,
-                    &run_id,
-                    &generation,
-                    &pending_id,
+            } else if tools::native::base_extras::owns(&name) {
+                tools::native::base_extras::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
                     &name,
                     &args,
                     cancel,
                 )
                 .await
-            } else if tools::core_orchestration::owns(&name) {
-                tools::core_orchestration::execute(
-                    &app,
-                    &sid,
-                    &run_id,
-                    &generation,
-                    &pending_id,
+            } else if tools::native::orchestration::owns(&name) {
+                tools::native::orchestration::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
                     &name,
                     &args,
                     cancel,
@@ -219,13 +213,10 @@ impl
                     cancel,
                 )
                 .await
-            } else if tools::core_model_switcher::owns(&name) {
-                tools::core_model_switcher::execute(
-                    &app,
-                    &sid,
-                    &run_id,
-                    &generation,
-                    &pending_id,
+            } else if tools::native::model_switcher::owns(&name) {
+                tools::native::model_switcher::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
                     &name,
                     &args,
                     cancel,
@@ -282,13 +273,10 @@ impl
                         Ok(json!({"status":"denied","output":"Invalid state inspection arguments"}))
                     }
                 }
-            } else if tools::core_mode::owns(&name) {
-                tools::core_mode::execute(
-                    &app,
-                    &sid,
-                    &run_id,
-                    &generation,
-                    &pending_id,
+            } else if tools::native::mode::owns(&name) {
+                tools::native::mode::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
                     &name,
                     &args,
                     cancel,
@@ -336,8 +324,15 @@ impl
                     cancel,
                 )
                 .await
-            } else if tools::core_tool_search::owns(&name) {
-                tools::core_tool_search::execute(&app, &sid, &run_id, &name, &args, cancel).await
+            } else if tools::native::tool_search::owns(&name) {
+                tools::native::tool_search::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
+                    &name,
+                    &args,
+                    cancel,
+                )
+                .await
             } else if tools::core_search::owns(&name) {
                 tools::core_search::execute(&app, &sid, &run_id, &name, &args, cancel).await
             } else if tools::core_compaction::owns(&name) {
@@ -371,12 +366,26 @@ impl
                 .await
             } else if tools::native::web_access::owns(&name) {
                 tools::native::web_access::execute(&name, &args, cancel).await
-            } else if tools::core_decision::owns(&name) {
+            } else if tools::native::decision::owns(&name) {
                 // The compiled adapter resolves this session's assigned Decision model and credential.
-                tools::core_decision::execute(&app, &sid, &run_id, &args, cancel).await
-            } else if tools::core_directory_decision::owns(&name) {
+                tools::native::decision::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
+                    &name,
+                    &args,
+                    cancel,
+                )
+                .await
+            } else if tools::native::directory_decision::owns(&name) {
                 // Rust checks file_list authority before the worker returns names to Jev.
-                tools::core_directory_decision::execute(&app, &sid, &run_id, &args, cancel).await
+                tools::native::directory_decision::execute(
+                    &tools::native_host::Host(&app),
+                    native_call,
+                    &name,
+                    &args,
+                    cancel,
+                )
+                .await
             } else if matches!(name.as_str(), "shell" | "python")
                 && optimization_run["asset_revision"].is_string()
             {
@@ -426,7 +435,15 @@ impl
         cancel: CancellationToken,
     ) -> impl std::future::Future<Output = Result<Value>> + Send + 'a {
         async move {
-            crate::tools::core_decision::execute(&self.host.app(view), sid, run, args, cancel).await
+            let app = self.host.app(view);
+            crate::tools::native::decision::decide(
+                &crate::tools::native_host::Host(&app),
+                sid,
+                run,
+                args,
+                cancel,
+            )
+            .await
         }
     }
     fn own_skill_guidance<'a>(
@@ -486,7 +503,10 @@ impl
         async move {
             let app = self.host.app(view);
             let changed = crate::apply_chat_model_preference(&app, run).await?;
-            Ok(tools::core_model_switcher::apply(&app, run).await? || changed)
+            Ok(
+                tools::native::model_switcher::apply(&tools::native_host::Host(&app), run).await?
+                    || changed,
+            )
         }
     }
     fn messaging_preflight<'a>(
@@ -504,7 +524,13 @@ impl
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         async move {
             let app = self.host.app(view);
-            tools::core_model_switcher::require_premium_confirmation(&app, run, name, args).await?;
+            tools::native::model_switcher::require_premium_confirmation(
+                &tools::native_host::Host(&app),
+                run,
+                name,
+                args,
+            )
+            .await?;
             crate::session_messaging::preflight(&app, run, name, args).await
         }
     }
@@ -603,8 +629,9 @@ impl
         cancel: &'a CancellationToken,
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         async move {
-            crate::tools::code_index_configuration::attach(
-                &self.host.app(view),
+            let app = self.host.app(view);
+            webagent_administration_host::code_index::attach_configuration(
+                &crate::tools::administrator::Host(&app),
                 args,
                 result,
                 cancel,
@@ -613,7 +640,7 @@ impl
         }
     }
     fn code_index_configuration_snippet_bytes(source: &Value) -> usize {
-        crate::tools::code_index_configuration::snippet_bytes(source)
+        webagent_administration::code_index::snippet_bytes(source)
     }
 
     fn messaging_revalidate<'a>(

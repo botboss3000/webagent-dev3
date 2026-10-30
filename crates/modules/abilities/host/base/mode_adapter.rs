@@ -1,56 +1,10 @@
-//! A model can change only the authenticated run's own session mode.
-//! Elevating read_only to write always needs a fresh human approval.
-use crate::{api, session_agent_id, App};
-use anyhow::{bail, Result};
-use serde::Deserialize;
-use serde_json::{json, Value};
-use tokio_util::sync::CancellationToken;
-
-pub fn owns(name: &str) -> bool { name == "set_execution_mode" }
-pub fn schemas() -> Vec<Value> {
-    vec![json!({"type":"function","name":"set_execution_mode",
-        "description":"Change this session to an agent execution mode ID (ask, plan, auto, or custom); legacy read_only/write are supported at a revision checkpoint. Moving to write requires human approval.",
-        "parameters":{"type":"object","properties":{
-            "mode":{"type":"string","maxLength":32},
-            "expected_revision":{"type":"integer","minimum":0},
-            "reason":{"type":"string","maxLength":500}},
-            "required":["mode","expected_revision"],"additionalProperties":false}})]
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Args { mode:String, expected_revision:u64, #[serde(default)] reason:Option<String> }
-pub async fn execute(app:&App,sid:&str,run_id:&str,generation:&str,pending_id:&str,name:&str,args:&Value,
-    cancel:CancellationToken)->Result<Value> {
-    if !owns(name) || cancel.is_cancelled() {bail!("Mode change unavailable");}
-    let result:Result<Value>=async {
-        let query:Args=serde_json::from_value(args.clone())?;
-        if query.mode.is_empty() || query.mode.len()>32
-            || query.reason.as_ref().is_some_and(|r|r.len()>500) {
-            bail!("Invalid mode change");
-        }
-        let agent=session_agent_id(app,sid).await?;
-        let mut scoped=app.clone();
-        scoped.store=app.store.for_agent(&agent).await?;
-        let response=api::change_session_mode(&scoped,sid,&query.mode,
-            Some(query.expected_revision),Some(api::ModeCall{run_id,generation,pending_id})).await
-            .map_err(|_|anyhow::anyhow!("Session mode revision or access changed"))?.0;
-        Ok(json!({"status":"success","output":response}))
-    }.await;
-    Ok(match result {
-        Ok(value)=>value,
-        Err(error)=>json!({"status":"error","error_kind":"mode_change_rejected",
-            "output":error.to_string()}),
-    })
-}
-#[cfg(test)]
+#![cfg(test)]
+//! Root fixture tests for session mode changes; the tool lives in
+//! `webagent_native_tools::mode`.
+use crate::api;
+use serde_json::json;
 mod tests {
     use super::*;
-    #[test]
-    fn schema_cannot_select_another_session() {
-        assert_eq!(schemas()[0]["name"],"set_execution_mode");
-        assert!(serde_json::from_value::<Args>(json!({"mode":"write",
-            "expected_revision":0,"session_id":"other"})).is_err());
-    }
     #[tokio::test]
     async fn mode_receipt_and_upgrade_approval_are_run_fenced() {
         let (_root,app)=crate::runtime_tests::fixture().await;

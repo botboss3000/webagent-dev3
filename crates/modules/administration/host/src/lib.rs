@@ -16,6 +16,7 @@ use webagent_access::Permission;
 use webagent_host_core::StoreCore;
 
 pub mod artifacts;
+pub mod code_index;
 pub mod dashboard;
 pub mod notices;
 pub mod promotion;
@@ -136,6 +137,10 @@ pub trait AdministrationHost: Sync {
     fn promotion_socket(&self) -> &Path;
     /// A token cancelled when the application stops.
     fn stopping(&self) -> CancellationToken;
+    /// The live chat UI configuration file Code Index excerpts read.
+    fn chat_ui_config_path(&self) -> &Path;
+    /// The live context compaction configuration file Code Index excerpts read.
+    fn compaction_config_path(&self) -> &Path;
 }
 
 /// The trusted identity block the broker checks on every request.

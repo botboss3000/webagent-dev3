@@ -53,14 +53,14 @@ pub(crate) async fn binding(app:&App,run:&Value,name:&str,args:&Value)->Result<V
   let a:MessageArgs=serde_json::from_value(args.clone())?;checked_text(&a.text)?;
   uuid::Uuid::parse_str(&a.target_session_id)?;
   if a.target_session_id==source{bail!("Use the current conversation directly");}
-  if name=="message_spawn"{tools::core_orchestration::require_child(app,source,&a.target_session_id).await?;}
+  if name=="message_spawn"{tools::native::orchestration::require_child(&tools::native_host::Host(app),source,&a.target_session_id).await?;}
   if !matches!(a.delivery.as_str(),"queue"|"steer"|"interrupt"){bail!("Invalid delivery");}
   let target=private_session(app,&a.target_session_id).await?;
   let agent=target["agent_id"].as_str().unwrap_or("shared_default").to_owned();
   let mode=session_mode(app,&a.target_session_id).await?;
   (a.target_session_id,agent,a.delivery,mode,target["participation"].clone(),a.text,None)
  };
- let spawn_limits=if starts(name){tools::core_orchestration::spawn_limits(app,source,name).await?}else{Value::Null};
+ let spawn_limits=if starts(name){tools::native::orchestration::spawn_limits(&tools::native_host::Host(app),source,name).await?}else{Value::Null};
  let raw_mode=if starts(name){mode.clone()}else{app.store.get(&key("session_mode",&target)).await?.unwrap_or_else(default_session_mode)};
  let mut mode=mode;
  if starts(name){if let Some(id)=mode["execution_mode"].as_str(){let config=crate::agents_api::modes_config(&app.store,&agent).await?;mode["definition"]=webagent_agents::modes::resolve(&config,id)?;}}
@@ -365,7 +365,7 @@ mod tests {
   let (mut policy,_)=effective_policy(&app,&sid).await.unwrap();
   let visibility=session_agent_abilities(&app,&sid).await.unwrap();
   let state=session_ability_state(&app,&sid).await.unwrap();
-  let loaded=json!([tools::core_tool_search::marker("message_other_session")]);
+  let loaded=json!([tools::native::tool_search::marker("message_other_session")]);
   let decision=live_tool_decision(&app,&access,"message_other_session",&policy,&visibility,&state,&loaded,true);
   assert_ne!(decision.permission,access::Permission::Deny);
   assert_eq!(live_tool_decision(&app,&access,"file_write",&policy,&visibility,&state,&json!([]),true).permission,access::Permission::Deny);

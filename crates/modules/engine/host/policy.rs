@@ -75,7 +75,7 @@ impl webagent_engine::runtime::ports::NativePolicy for NativePolicy {
     fn default_policy_schemas() -> Vec<Value> {
         tools::administrator::schemas()
             .into_iter()
-            .chain(tools::core_mode::schemas())
+            .chain(tools::native::mode::schemas())
             .chain(tools::core_search::schemas())
             .chain(tools::core_compaction::schemas())
             .chain(tools::core_recall::schemas())
@@ -83,19 +83,21 @@ impl webagent_engine::runtime::ports::NativePolicy for NativePolicy {
             .chain(crate::session_messaging::schemas())
             .chain(crate::main_chat::schemas())
             .chain(tools::core_task::schemas())
-            .chain(tools::core_tool_search::schemas())
-            .chain(tools::core_decision::schemas())
-            .chain(tools::core_directory_decision::schemas())
+            .chain(tools::native::tool_search::schemas())
+            .chain(tools::native::schemas(tools::native::decision::TOOLS))
+            .chain(tools::native::schemas(
+                tools::native::directory_decision::TOOLS,
+            ))
             .chain(tools::native::schemas(tools::native::user_files::TOOLS))
-            .chain(tools::core_model_switcher::schemas())
+            .chain(tools::native::schemas(tools::native::model_switcher::TOOLS))
             .chain(tools::core_agent_management::schemas())
             .chain(tools::native::schemas(tools::native::image_vision::TOOLS))
             .chain(tools::core_image_generation::schemas())
             .chain(tools::native::schemas(tools::native::app_control::TOOLS))
             .chain(tools::native::schemas(tools::native::ui_admin::TOOLS))
             .chain(tools::native::functions::schemas())
-            .chain(tools::core_orchestration::schemas())
-            .chain(tools::core_base_extras::schemas())
+            .chain(tools::native::schemas(tools::native::orchestration::TOOLS))
+            .chain(tools::native::base_extras::schemas())
             .chain(tools::native::webhooks::schemas())
             .chain(tools::native::schemas(tools::native::visualizer::TOOLS))
             .chain(tools::native::schemas(tools::native::vault::TOOLS))
@@ -141,10 +143,10 @@ impl webagent_engine::runtime::ports::SkillSources<Store> for NativePolicy {
         store.list_own_skills()
     }
     fn tool_marker(name: &str) -> String {
-        tools::core_tool_search::marker(name)
+        tools::native::tool_search::marker(name)
     }
     fn apply_tool_selection(run: &mut Value, result: &Value) {
-        tools::core_tool_search::apply_selection(run, result)
+        tools::native::tool_search::apply_selection(run, result)
     }
     fn apply_skill_selection(run: &mut Value, result: &Value) {
         tools::core_skills::apply_selection(run, result)

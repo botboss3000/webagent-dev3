@@ -9,15 +9,24 @@ use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 use tokio_util::sync::CancellationToken;
-use webagent_access::Relationship;
+use webagent_access::{authority::LiveAccess, Relationship, ToolDecision};
+use webagent_chat::shared::SharedChatPolicy;
 use webagent_files::uploads::AttachmentLimits;
 use webagent_host_core::StoreCore;
-use webagent_models::model_selection::ModelRole;
+use webagent_models::account_catalog::PlatformPin;
+use webagent_models::model_selection::{Catalog, ModelRole, SelectionPlan};
 
 pub mod app_control;
+pub mod base_extras;
+pub mod decision;
+pub mod directory_decision;
 pub mod functions;
 pub mod image_vision;
 pub mod knowledge_files;
+pub mod mode;
+pub mod model_switcher;
+pub mod orchestration;
+pub mod tool_search;
 pub mod ui_admin;
 pub mod user_files;
 pub mod utilities;
@@ -112,6 +121,117 @@ pub trait NativeHost: Sync {
         input: Vec<Value>,
         instructions: &'a str,
     ) -> Pending<'a, Result<String>>;
+    /// The agent session `sid` belongs to; fails for a missing or archived session.
+    fn session_agent_id<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<String>>;
+    /// `user`'s live access to `agent`.
+    fn live_access<'a>(&'a self, user: &'a str, agent: &'a str) -> Pending<'a, Result<LiveAccess>>;
+    /// The current model catalog.
+    fn model_catalog(&self) -> Pending<'_, Result<Catalog>>;
+    /// Rehydrate `plan`'s platform metadata for the actor's session and freeze it.
+    fn pin_model_plan<'a>(&'a self, plan: &'a mut SelectionPlan) -> Pending<'a, Result<()>>;
+    /// Dispatch tokens of platform model `pin` for `user` and `agent`.
+    fn dispatch_tokens<'a>(
+        &'a self,
+        user: &'a str,
+        agent: &'a str,
+        pin: &'a PlatformPin,
+    ) -> Pending<'a, Result<Value>>;
+    /// Session `sid`'s effective policy, mode revision, ability visibility and ability state.
+    fn ability_controls<'a>(
+        &'a self,
+        sid: &'a str,
+    ) -> Pending<'a, Result<(Value, u64, Value, Value)>>;
+    /// Session `sid`'s validated capability mode.
+    fn session_mode<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Value>>;
+    /// The engine's live permission decision for tool `name` under these controls.
+    #[allow(clippy::too_many_arguments)]
+    fn live_tool_decision(
+        &self,
+        access: &LiveAccess,
+        name: &str,
+        policy: &Value,
+        visibility: &Value,
+        state: &Value,
+        loaded: &Value,
+        read_only: bool,
+    ) -> ToolDecision;
+    /// The model a provider selection without one falls back to.
+    fn default_agent_model(&self) -> &'static str;
+    /// Live dependency authority: the wrapper run `run` in `sid` may still use `tool`.
+    fn dependency<'a>(
+        &'a self,
+        sid: &'a str,
+        run: &'a Value,
+        tool: &'a str,
+    ) -> Pending<'a, Result<()>>;
+    /// Send a fixed management API request as the actor.
+    fn agent_request<'a>(
+        &'a self,
+        method: &'a str,
+        path: String,
+        body: Value,
+    ) -> Pending<'a, Result<Value>>;
+    /// `agent`'s shared-conversation policy.
+    fn shared_chat_policy<'a>(&'a self, agent: &'a str) -> Pending<'a, Result<SharedChatPolicy>>;
+    /// Prompt slot `slot` of `agent` as `user` stores it, if any.
+    fn prompt_slot<'a>(
+        &'a self,
+        user: &'a str,
+        agent: &'a str,
+        slot: &'a str,
+    ) -> Pending<'a, Result<Option<Value>>>;
+    /// Run installed module tool `tool` for session `sid` at run `run_id`'s pending call.
+    fn module_tool_call<'a>(
+        &'a self,
+        sid: &'a str,
+        run_id: &'a str,
+        tool: &'a str,
+        args: &'a Value,
+        pending_id: &'a str,
+        cancel: CancellationToken,
+    ) -> Pending<'a, Result<Value>>;
+    /// Bounded nonterminal run views in admission order.
+    fn active_runs(&self) -> Pending<'_, Result<Vec<Value>>>;
+    /// Session `sid`'s follow-up queue.
+    fn followup_queue<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Value>>;
+    /// Whether run `status` is terminal in the Engine's run lifecycle.
+    fn terminal(&self, status: &str) -> bool;
+    /// The actor's live access to `agent` in session `sid`, shared-chat membership included.
+    fn session_access<'a>(
+        &'a self,
+        sid: &'a str,
+        agent: &'a str,
+    ) -> Pending<'a, Result<LiveAccess>>;
+    /// The abilities catalog's ability state with conversation selections `loaded` applied.
+    fn selected_state(&self, visibility: &Value, state: &Value, loaded: &Value) -> Value;
+    /// The abilities catalog's entries under `policy`, `visibility` and `state`.
+    fn catalog_with(&self, policy: &Value, visibility: &Value, state: &Value) -> Vec<Value>;
+    /// Every tool schema the abilities catalog knows.
+    fn all_schemas(&self) -> Vec<Value>;
+    /// Whether tool `name` is (available, visible) in the abilities catalog.
+    fn tool_gate(
+        &self,
+        name: &str,
+        visibility: &Value,
+        state: &Value,
+        loaded: &Value,
+    ) -> (bool, bool);
+    /// Change session `call.sid` in `agent`'s plane to `mode` for the tool call at `call`; the
+    /// outer error is the agent scope, the inner one the rejected change.
+    fn change_session_mode<'a>(
+        &'a self,
+        agent: &'a str,
+        call: Call<'a>,
+        mode: &'a str,
+        expected_revision: u64,
+    ) -> Pending<'a, Result<Result<Value>>>;
+    /// The skill asset `args` selects for rating, without its text, under live skill access.
+    fn rating_asset<'a>(
+        &'a self,
+        sid: &'a str,
+        run_id: &'a str,
+        args: &'a Value,
+    ) -> Pending<'a, Result<Value>>;
 }
 
 /// Whether tool `name` only reads, from its tool folder's `effect`; an unknown tool counts
