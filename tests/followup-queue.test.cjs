@@ -22,7 +22,7 @@ async function fixture(canWrite=()=>true){
  let session='one',data={queue:[{id:'a',message_id:'user:a',revision:2,choice:'queue',status:'pending'}],queue_state:{revision:3,held:false}};
  const calls=[],errors=[],keys=new Map();let write=null;
  const client={snapshot:async()=>data,delivery:async(...args)=>{calls.push(args);if(write)return write();data={queue:[{...data.queue[0],choice:args[2].choice,revision:3}],queue_state:{revision:4}};},resumeQueue:async(...args)=>calls.push(args)};
- const queue=mod.namespace.mountFollowupQueue({root,host,client,getSession:()=>session,canWrite,guard:fn=>async()=>{try{await fn();}catch(e){errors.push(e.message);}},note:()=>{},keyId:k=>{if(!keys.has(k))keys.set(k,'request-'+keys.size);return keys.get(k);},forgetKey:k=>keys.delete(k),onSnapshot:d=>queue.update(d)});
+ const queue=mod.namespace.mountFollowupQueue({root,client,getSession:()=>session,canWrite,guard:fn=>async()=>{try{await fn();}catch(e){errors.push(e.message);}},note:()=>{},keyId:k=>{if(!keys.has(k))keys.set(k,'request-'+keys.size);return keys.get(k);},forgetKey:k=>keys.delete(k),onSnapshot:d=>queue.update(d)});
  queue.update(data);
  return {queue,row,host,calls,errors,document,buttons:()=>row.querySelector('.followup-delivery-actions').children,setData:d=>data=d,setWrite:fn=>write=fn,session:s=>session=s};
 }
@@ -32,15 +32,15 @@ test('queue choices update the existing bubble with revision and request identit
  assert.match(flatten(f.row),/Steering/);assert.equal(f.row.dataset.seq,'7');assert.equal(f.row.children.length,1);assert.equal(f.buttons()[1].attributes['aria-pressed'],'true');
  f.queue.update({queue:[{id:'a',message_id:'user:a',status:'delivered',choice:'steer'}],queue_state:{revision:5}});assert.equal(f.row.querySelector('.followup-delivery-actions'),null);assert.match(flatten(f.row),/Delivered/);
 });
-test('claimed interruption hides choices and held queue exposes explicit resume',async()=>{
+test('claimed interruption hides choices and held queue exposes inline resume only',async()=>{
  const f=await fixture();f.queue.update({queue:[{id:'a',message_id:'user:a',status:'interrupting',choice:'interrupt'}],queue_state:{revision:4,held:true,reason:'Stopped'}});
- assert.equal(f.row.querySelector('.followup-delivery-actions'),null);assert.match(flatten(f.row),/Interrupting/);assert.match(flatten(f.host),/Queue held.*Stopped.*Resume queue/);
- await f.host.children[0].querySelector('button').onclick();assert.equal(f.calls[0][0],'one');assert.ok(f.calls[0][1].client_request_id);assert.equal(f.calls[0][1].expected_revision,4);
+ assert.match(flatten(f.row),/Interrupting/);assert.deepEqual(f.buttons().map(b=>b.textContent),['Resume']);assert.equal(f.host.children.length,0);
+ await f.buttons()[0].onclick();assert.equal(f.calls[0][0],'one');assert.ok(f.calls[0][1].client_request_id);assert.equal(f.calls[0][1].expected_revision,4);
 });
 test('stale snapshots and late choice results cannot overwrite a new session',async()=>{
  const f=await fixture();let resolve;f.setWrite(()=>new Promise(r=>resolve=r));const pending=f.buttons()[1].onclick();await tick();assert.ok(f.buttons().every(b=>b.disabled));
  f.queue.reset();f.session('two');f.queue.update({queue:[{id:'a',message_id:'user:a',choice:'queue',status:'held'}],queue_state:{revision:10,held:true,reason:'New session'}});resolve();await pending;
- assert.match(flatten(f.row),/Held/);assert.match(flatten(f.host),/New session/);
+ assert.match(flatten(f.row),/Held: New session/);
  f.queue.update({queue:[],queue_state:{revision:9}});assert.match(flatten(f.row),/Held/);
 });
 test('cancelled entries remain visible with no actions and uncertain writes reuse request ID',async()=>{
@@ -59,7 +59,8 @@ test('unchanged polling preserves focused actions and resume, but paints newly r
  f.queue.update(snapshot);assert.equal(f.buttons()[1],button);assert.equal(f.document.activeElement,button);
  f.row.querySelector('.followup-delivery').remove();f.queue.update(snapshot);assert.equal(f.buttons().length,4);
  const held={...snapshot,queue_state:{revision:4,held:true,reason:'Stopped'}};f.queue.update(held);
- const resume=f.host.children[0].querySelector('button');resume.focus();f.queue.update(held);assert.equal(f.host.children[0].querySelector('button'),resume);assert.equal(f.document.activeElement,resume);
+ assert.match(flatten(f.row),/Held: Stopped/);assert.deepEqual(f.buttons().map(b=>b.textContent),['Resume','Interrupt','Steer','Queue','Cancel']);
+ const resume=f.buttons()[0];resume.focus();f.queue.update(held);assert.equal(f.buttons()[0],resume);assert.equal(f.document.activeElement,resume);
 });
 test('busy choices retain nodes and semantic updates restore focus',async()=>{
  const f=await fixture(),button=f.buttons()[1];button.focus();let resolve;f.setWrite(()=>new Promise(r=>resolve=r));const pending=button.onclick();await tick();
@@ -73,8 +74,8 @@ test('read-only queue projection keeps status visible and blocks every mutation'
  assert.match(flatten(f.row),/Queued/);assert.ok(f.buttons().every(b=>b.disabled));
  await f.buttons()[1].onclick();assert.equal(f.calls.length,0);assert.match(f.errors[0],/not available/);
  const held={queue:[{id:'a',message_id:'user:a',revision:2,choice:'queue',status:'held'}],queue_state:{revision:4,held:true,reason:'Stopped'}};
- f.queue.update(held);const resume=f.host.children[0].querySelector('button');assert.ok(resume.disabled);
+ f.queue.update(held);const resume=f.buttons()[0];assert.equal(resume.textContent,'Resume');assert.ok(resume.disabled);
  await resume.onclick();assert.equal(f.calls.length,0);
- allowed=true;f.queue.update(held);assert.ok(f.buttons().every(b=>!b.disabled));assert.equal(f.host.children[0].querySelector('button').disabled,false);
- allowed=false;f.queue.update(held);assert.ok(f.buttons().every(b=>b.disabled));assert.ok(f.host.children[0].querySelector('button').disabled);
+ allowed=true;f.queue.update(held);assert.ok(f.buttons().every(b=>!b.disabled));
+ allowed=false;f.queue.update(held);assert.ok(f.buttons().every(b=>b.disabled));
 });

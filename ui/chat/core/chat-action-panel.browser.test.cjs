@@ -10,7 +10,7 @@ for(const mobile of [false,true])for(const light of [false,true])test(`shared no
  const context=await browser.newContext({viewport:mobile?{width:390,height:844}:{width:1200,height:1000},isMobile:mobile,hasTouch:mobile});const p=await context.newPage();await p.goto('http://127.0.0.1:'+server.address().port);
  await p.evaluate(async light=>{
  document.body.classList.toggle('light-mode',light);window.calls=[];window.errors=[];
- const {mountChatActionPanel}=await import('/chat/core/chat-action-panel.js');const {createRecoveryDetails}=await import('/chat/core/recovery-details.js');const {mountFollowupQueue}=await import('/chat/core/followup-queue.js');const {repositoryNoticeRenderer,buildNoticeRenderer}=await import('/chat/core/administrator-notices.js');
+ const {mountChatActionPanel}=await import('/chat/core/chat-action-panel.js');const {createRecoveryDetails}=await import('/chat/core/recovery-details.js');const {repositoryNoticeRenderer,buildNoticeRenderer}=await import('/chat/core/administrator-notices.js');
  const guard=fn=>async(...args)=>{try{return await fn(...args);}catch(e){errors.push(e.message);}};
  window.notifications=mountChatActionPanel({root:document,guard,request:async()=>({routes:[]}),note:e=>errors.push(e)});
  notifications.messagingRoutes.open('session',true);await notifications.messagingRoutes.refresh();
@@ -22,8 +22,6 @@ for(const mobile of [false,true])for(const light of [false,true])test(`shared no
  window.recovery=notifications.showRun({run:{id:'recovery',status:'recovery',uncertain:true,pending:{name:'shell',arguments:{command:'echo safe'},interruption:{reason:'uncertain'}}},canControl:true,expanded:new Set(['recovery']),renderRecovery:createRecoveryDetails,recover:(...args)=>calls.push(['recover',...args])});
  notifications.showTool({approval:{id:'approve',name:'file_write',arguments:{path:'example'}},run:{id:'approval-run'},expanded:new Set(),decide:decision=>calls.push(['approval',decision])});
  window.mode=notifications.confirmMode('Auto');
- window.queue=mountFollowupQueue({root:document,host:document.querySelector('#chat-action-panel'),client:{resumeQueue:async(...args)=>calls.push(['queue',...args]),snapshot:async()=>({queue:[],queue_state:{revision:8,held:false}})},getSession:()=> 'session',canWrite:()=>true,guard,note:e=>errors.push(e),keyId:()=> 'queue-request',forgetKey:()=>{},onSnapshot:data=>queue.update(data)});
- queue.update({queue:[],queue_state:{revision:7,held:true,reason:'Stopped'}});
  window.repository=repositoryNoticeRenderer(document);repository('Repository changed.');
  window.builds=buildNoticeRenderer(document);builds([{id:'notice',notification:'Investigate retained work. <img src=invalid>',retained_bytes:1024}],async id=>calls.push(['review',id]));
  },light);
@@ -36,10 +34,9 @@ for(const mobile of [false,true])for(const light of [false,true])test(`shared no
  assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  if(process.env.EVIDENCE_DIR)await p.screenshot({path:path.join(process.env.EVIDENCE_DIR,`shared-${mobile?'mobile':'desktop'}-${light?'light':'dark'}.png`),fullPage:true});
  await p.getByRole('textbox',{name:'Known action result'}).fill('Confirmed result');await p.getByRole('button',{name:'Accept known result'}).click();assert.deepEqual(await p.evaluate(()=>calls.find(x=>x[0]==='recover')),['recover','accept','Confirmed result']);
- await p.getByRole('button',{name:'Resume queue',exact:true}).click();assert.equal(await p.evaluate(()=>calls.find(x=>x[0]==='queue')[2].expected_revision),7);
  await p.getByRole('button',{name:'Mark reviewed'}).click();assert.deepEqual(await p.evaluate(()=>calls.find(x=>x[0]==='review')),['review','notice']);
  const approve=p.getByRole('button',{name:'Approve',exact:true});await approve.click();assert.deepEqual(await p.evaluate(()=>calls.find(x=>x[0]==='approval')),['approval','approve']);
  await p.getByRole('group',{name:'This will allow all write permitted tools',exact:true}).getByRole('button',{name:'Deny',exact:true}).click();assert.equal(await p.evaluate(()=>mode),false);
- await p.evaluate(()=>{notifications.clearRuns();repository('');builds([],null);queue.reset();});assert.equal(await p.locator('.chat-action:not([hidden])').count(),0);
- await p.evaluate(()=>{queue.destroy();notifications.destroy();});assert.equal(await p.locator('#chat-action-panel > *').count(),0);assert.deepEqual(await p.evaluate(()=>errors),[]);
+ await p.evaluate(()=>{notifications.clearRuns();repository('');builds([],null);});assert.equal(await p.locator('.chat-action:not([hidden])').count(),0);
+ await p.evaluate(()=>{notifications.destroy();});assert.equal(await p.locator('#chat-action-panel > *').count(),0);assert.deepEqual(await p.evaluate(()=>errors),[]);
 });

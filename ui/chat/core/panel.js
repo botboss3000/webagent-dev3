@@ -90,7 +90,7 @@ const gutterClock=setInterval(()=>{if(document.visibilityState==='visible')updat
 const controls=mountSessionControls({root,client,guard,note,issues,ensureSession,notifications:chatActions,canWrite:()=>sharedAccess?.can_control!==false,/* Forwards advertised attachment availability and limits, and whether the selected model reads images itself, to media controls. */onState:data=>{media?.setAvailable(sharedAccess?.can_send!==false&&data?.composer?.attachments===true,data?.composer?.attachment_limits);media?.setDescribeImages(describesUploads(data));}});
 let credentialView=null,submitting=false,sessionGeneration=0,creatingSession=null,media=null,historyBusy=false,historyLastSeq=0,historyRevision=0,historyDeferredRevision=0,historyReady=false,closeUndoDialog=null,canManageQueue=false;
 const historyRequests=new Map();
-const followups=mountFollowupQueue({root,host:$('chat-action-panel'),client,getSession:()=>session,canWrite:()=>canManageQueue&&sharedAccess?.can_control!==false,guard,note,keyId,forgetKey,onSnapshot:syncSnapshot});
+const followups=mountFollowupQueue({root,client,getSession:()=>session,canWrite:()=>canManageQueue&&sharedAccess?.can_control!==false,guard,note,keyId,forgetKey,onSnapshot:syncSnapshot});
 /** Background history reopening is independent from explicit undo/fork action feedback. */
 async function reopenHistory(id){
   const pending=open(id,'replace'),generation=sessionGeneration;
@@ -312,7 +312,9 @@ function runs(items,authoritative=false){if(!authoritative&&sharing.state&&activ
 $('chat-input').readOnly=sharedAccess?.can_send===false;
 $('chat-stop-btn').disabled=sharedAccess?.can_control===false;
 failedRunMessages(relevant);
-const continuing=!pendingReview&&!active&&!media?.count&&!$('chat-input').value.trim()&&$('chat-continue-btn').dataset.configEnabled!=='false';
+// A paused or stopped run holds the queue, so a Continue would only queue behind it.
+const unresolved=relevant.some(run=>['paused','stopped','recovery'].includes(run.status));
+const continuing=!pendingReview&&!active&&!unresolved&&!media?.count&&!$('chat-input').value.trim()&&$('chat-continue-btn').dataset.configEnabled!=='false';
 $('chat-continue-btn').hidden=!continuing;$('chat-continue-btn').style.display=continuing?'':'none';
 $('chat-continue-btn').disabled=sharedAccess?.can_send===false||sharing.state?.participation?.active===false||!!getState().shutoff||submitting;
 // Context reports live in the composer panel and each bubble's More menu.
