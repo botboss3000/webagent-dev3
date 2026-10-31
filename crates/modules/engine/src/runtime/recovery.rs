@@ -88,7 +88,7 @@ impl<
         run["error"] = Value::Null;
         Ok(())
     }
-    async fn build_result(app: &Self, run: &Value) -> Result<Option<Value>> {
+    async fn build_result(app: &Self, run: &Value) -> Result<BuildPoll> {
         let sid = run["session_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing session"))?;
@@ -131,7 +131,7 @@ impl<
                 .as_array()
                 .and_then(|items| items.iter().find(|item| item["task_id"] == task));
             let Some(item) = item else {
-                return Ok(Some(json!({"status":"error","output":{
+                return Ok(BuildPoll::Done(json!({"status":"error","output":{
                 "task_id":task,"status":"not_submitted","reason":"Task receipt unavailable; no build was submitted"}})));
             };
             if item["inputs_sha256"] != run["pending"]["arguments"]["expected_inputs_sha256"]
@@ -141,11 +141,11 @@ impl<
             }
             job_id = item["job_id"].as_str().map(str::to_owned);
             if job_id.is_none() && item["status"] == "open" {
-                return Ok(Some(json!({"status":"error","output":{
+                return Ok(BuildPoll::Done(json!({"status":"error","output":{
                 "task_id":task,"status":"not_submitted","reason":"Task remains open; no build was submitted"}})));
             }
             if job_id.is_none() {
-                return Ok(None);
+                return Ok(BuildPoll::Waiting(None));
             }
         }
         let job_id = job_id.unwrap();
@@ -163,7 +163,20 @@ impl<
         }
         let job = &response["output"];
         let state = job["status"].as_str().unwrap_or("");
-        if !matches!(
+        // Stage timings only; a missing table never holds back the result.
+        let progress = crate::tools::transport::execute_host_trusted(
+            "v3_build_progress",
+            &json!({"job_id":job_id}),
+            sid,
+            socket,
+            Some(trusted.clone()),
+            CancellationToken::new(),
+        )
+        .await
+        .ok()
+        .filter(|reply| reply["status"] == "success")
+        .map(|reply| reply["output"].clone());
+        let terminal = matches!(
             state,
             "completed"
                 | "failed"
@@ -172,11 +185,20 @@ impl<
                 | "uncertain"
                 | "interrupted"
                 | "needs_decision"
-        ) {
-            return Ok(None);
+        );
+        // The broker commits a completed release and frees its claims right after it
+        // finishes; wait briefly so the result carries that commit.
+        let closing = state == "completed"
+            && job["rebuild_closeout"].is_null()
+            && job["finished_at"]
+                .as_f64()
+                .is_some_and(|at| (now() as f64) - at < CLOSEOUT_WAIT_SECONDS);
+        if !terminal || closing {
+            return Ok(BuildPoll::Waiting(progress));
         }
         let mut output = json!({"task_id":task,"job_id":job_id,"status":state,
-        "phase":job["phase"],"reason":job["reason"],"log":job["log"],"synchronization":job["synchronization"]});
+        "phase":job["phase"],"reason":job["reason"],"log":job["log"],"synchronization":job["synchronization"],
+        "stages":progress,"closeout":job["rebuild_closeout"]});
         if state == "completed" {
             let health = crate::tools::transport::execute_host_trusted(
                 "v3_build_status",
@@ -188,7 +210,7 @@ impl<
             )
             .await?;
             if health["status"] != "success" {
-                return Ok(None);
+                return Ok(BuildPoll::Waiting(None));
             }
             let containers = &health["output"]["containers"];
             output["containers"] = containers.clone();
@@ -197,7 +219,7 @@ impl<
                 .all(|role| containers[*role]["state"] == "running"
                     && containers[*role]["health"] == "healthy"));
         }
-        Ok(Some(json!({"status":"success","output":output})))
+        Ok(BuildPoll::Done(json!({"status":"success","output":output})))
     }
     // After a restart, put safe unfinished work back in the queue. An interrupted
     // external write is held for review because its effect may already have happened.
@@ -250,7 +272,21 @@ impl<
                     )
                     .await
                     {
-                        Ok(Ok(Some(result))) => {
+                        Ok(Ok(BuildPoll::Waiting(Some(progress)))) => {
+                            if let Some((key, text)) = progress_notice(&run, &progress) {
+                                run["pending"]["external_job"]["progress_key"] = json!(key);
+                                let message_id = format!("working:{id}:build:{key}");
+                                user_app
+                                    .store
+                                    .save_run_override_observed(
+                                        &mut run,
+                                        "working_message",
+                                        &json!({"id":message_id,"text":text}),
+                                    )
+                                    .await?;
+                            }
+                        }
+                        Ok(Ok(BuildPoll::Done(result))) => {
                             Self::attach_external_build_result(&mut run, &result)?;
                             user_app
                                 .store
@@ -328,5 +364,130 @@ impl<
             }
         }
         Ok(())
+    }
+}
+
+/// How long a finished release's result waits for the broker's commit and claim release.
+const CLOSEOUT_WAIT_SECONDS: f64 = 120.0;
+
+/// What one poll of an in-app build's broker job found.
+enum BuildPoll {
+    /// The job ended; this becomes the pending finish call's result.
+    Done(Value),
+    /// Still queued or running, with the broker's stage table when it has one.
+    Waiting(Option<Value>),
+}
+
+/// The chat line for a build stage change, keyed so each change is posted once. A
+/// verdict change counts, so a stage running past its normal range is reported too.
+fn progress_notice(run: &Value, progress: &Value) -> Option<(String, String)> {
+    let job = progress["job_id"].as_str()?;
+    let short = job.get(..8).unwrap_or(job);
+    let stage = progress["stage"].as_str().unwrap_or("queued");
+    let verdict = progress["verdict"].as_str().unwrap_or("");
+    let finished = progress["finished_stages"]
+        .as_array()
+        .map_or(&[][..], Vec::as_slice);
+    let key = format!("{short}:{}:{stage}:{verdict}", finished.len()).replace(' ', "-");
+    if run["pending"]["external_job"]["progress_key"] == key.as_str() {
+        return None;
+    }
+    let mut text = format!("Build {short}: ");
+    if progress["stage_count"]
+        .as_u64()
+        .is_some_and(|count| count > 0)
+    {
+        text += &format!(
+            "stage {} of {}, ",
+            progress["stage_index"], progress["stage_count"]
+        );
+    }
+    text += stage;
+    if let Some(seconds) = progress["stage_seconds"].as_u64().filter(|s| *s > 0) {
+        text += &format!(" running {}", minutes(seconds));
+    }
+    if !progress["stage_normal"].is_null() {
+        text += &format!(" (normal {})", range(&progress["stage_normal"]));
+    }
+    text += &format!(", {verdict}.");
+    if let Some(last) = finished.last() {
+        text += &format!(
+            " Last finished: {} in {} (normal {}).",
+            last["stage"].as_str().unwrap_or("stage"),
+            minutes(last["seconds"].as_u64().unwrap_or(0)),
+            range(&last["normal"])
+        );
+    }
+    if let [low, high] = progress["remaining_seconds"]
+        .as_array()
+        .map_or(&[][..], Vec::as_slice)
+    {
+        text += &format!(
+            " About {}–{} left.",
+            minutes(low.as_u64().unwrap_or(0)),
+            minutes(high.as_u64().unwrap_or(0))
+        );
+    }
+    Some((key, text))
+}
+
+fn minutes(seconds: u64) -> String {
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else {
+        format!("{}m", (seconds + 30) / 60)
+    }
+}
+
+/// A stage's normal p50–p90 range, or a note that its class has no history yet.
+fn range(normal: &Value) -> String {
+    match normal.as_array().map(Vec::as_slice) {
+        Some([low, high]) => format!(
+            "{}–{}",
+            minutes(low.as_u64().unwrap_or(0)),
+            minutes(high.as_u64().unwrap_or(0))
+        ),
+        _ => "no history".to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn progress(stage: &str, finished: usize, verdict: &str) -> Value {
+        let done: Vec<Value> = (0..finished)
+            .map(|_| json!({"stage":"compile tests","seconds":480,"normal":[540,1140]}))
+            .collect();
+        json!({"job_id":"0420b7ab-6855-409a-9dc3-6ab5efc3890f","stage":stage,
+            "stage_index":finished + 1,"stage_count":6,"stage_seconds":125,
+            "stage_normal":[300,600],"verdict":verdict,"finished_stages":done,
+            "remaining_seconds":[900,3300]})
+    }
+
+    #[test]
+    fn each_stage_change_is_posted_once() {
+        let mut run = json!({"pending":{"external_job":{"kind":"v3_build"}}});
+        let (key, text) = progress_notice(&run, &progress("run tests", 2, "on track")).unwrap();
+        assert_eq!(
+            text,
+            "Build 0420b7ab: stage 3 of 6, run tests running 2m (normal 5m–10m), on track. \
+             Last finished: compile tests in 8m (normal 9m–19m). About 15m–55m left."
+        );
+        assert!(!key.contains(' '));
+        run["pending"]["external_job"]["progress_key"] = json!(key);
+        assert!(progress_notice(&run, &progress("run tests", 2, "on track")).is_none());
+        assert!(progress_notice(&run, &progress("run tests", 2, "slow, past p90")).is_some());
+        assert!(progress_notice(&run, &progress("release build", 3, "on track")).is_some());
+    }
+
+    #[test]
+    fn a_queued_job_without_history_still_reads_plainly() {
+        let run = json!({"pending":{"external_job":{}}});
+        let queued = json!({"job_id":"abc","stage":"queued","stage_index":1,"stage_count":0,
+            "stage_seconds":0,"stage_normal":null,"verdict":"no baseline","finished_stages":[]});
+        let (_, text) = progress_notice(&run, &queued).unwrap();
+        assert_eq!(text, "Build abc: queued, no baseline.");
+        assert!(progress_notice(&run, &json!({})).is_none());
     }
 }
