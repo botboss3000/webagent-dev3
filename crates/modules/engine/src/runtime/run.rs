@@ -2362,7 +2362,12 @@ impl<
                         X::default_model(),
                     )?;
                     let summary_source = app.dedup_summary_source(&run, &plan.source).await?;
-                    let prompt = match compaction_config.prompt_source(&summary_source, true) {
+                    // Restored full tool outputs can outgrow the source the planner sized;
+                    // summarize those shortened previews instead of stopping the run.
+                    let prompt = match compaction_config
+                        .prompt_source(&summary_source, true)
+                        .or_else(|_| compaction_config.prompt_source(&plan.source, true))
+                    {
                         Ok(prompt) => prompt,
                         Err(_) => {
                             run["status"] = json!("paused");
