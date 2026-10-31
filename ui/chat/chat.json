@@ -890,6 +890,7 @@
               "mode",
               "model_changer",
               "abilities",
+              "voice_reply",
               "browser_notifications"
             ]
           }
@@ -1049,6 +1050,7 @@
               "mode",
               "model_changer",
               "abilities",
+              "voice_reply",
               "browser_notifications"
             ]
           }
@@ -1172,6 +1174,7 @@
               "mode",
               "model_changer",
               "abilities",
+              "voice_reply",
               "browser_notifications"
             ]
           }
