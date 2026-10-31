@@ -444,7 +444,7 @@ impl<
                     crate::ports::AgentMetadata::root(app.store.records()),
                     crate::components::BACKGROUND,
                 ) {
-                    if let Ok(users) = crate::send_future(app.user_views()).await {
+                    if let Ok(users) = crate::send_future(app.user_views(false)).await {
                         for user in users {
                             if let Ok(tasks) =
                                 crate::send_future(user.store.background_scan(None)).await
@@ -669,9 +669,15 @@ impl<
             Ok(())
         }
     }
-    pub async fn user_views(&self) -> Result<Vec<Self>> {
+    /// Per-account views: every account when `every`, otherwise only those a periodic scan must visit.
+    pub async fn user_views(&self, every: bool) -> Result<Vec<Self>> {
         let mut views = Vec::new();
-        for user_id in self.store.all_user_ids().await? {
+        let users = if every {
+            self.store.all_user_ids().await?
+        } else {
+            self.store.scan_user_ids().await?
+        };
+        for user_id in users {
             let mut view = self.clone();
             view.store = self.store.for_user(&user_id).await?;
             views.push(view);

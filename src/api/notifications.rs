@@ -200,20 +200,25 @@ async fn valid(app: &App, identity: &Value) -> bool {
     let auth_live = if key.starts_with("notification_reader:") {
         // Reader credentials retain their resource owner's lifecycle.
         app.store.get(key).await.ok().flatten().is_some_and(|doc| {
-            doc["expires"].as_u64().unwrap_or(0)>now()
-                &&doc["generation"]==identity["generation"]
-                &&doc["user_id"].as_str().unwrap_or("admin")==user
+            doc["expires"].as_u64().unwrap_or(0) > now()
+                && doc["generation"] == identity["generation"]
+                && doc["user_id"].as_str().unwrap_or("admin") == user
         })
     } else {
-        app.store.accounts_repository().session_reference_live(key,user,&identity["generation"],now()).await.unwrap_or(false)
+        app.store
+            .accounts_repository()
+            .session_reference_live(key, user, &identity["generation"], now())
+            .await
+            .unwrap_or(false)
     };
     let account = app.store.account_by_id(user).await.ok().flatten();
-    auth_live && account.as_ref().is_some_and(|account| {
-        account["generation"] == identity["generation"]
-            && account["is_approved"] == true
-            && access::Principal::from_account(account)
-                .is_ok_and(|p| p.active() && p.administrator())
-    })
+    auth_live
+        && account.as_ref().is_some_and(|account| {
+            account["generation"] == identity["generation"]
+                && account["is_approved"] == true
+                && access::Principal::from_account(account)
+                    .is_ok_and(|p| p.active() && p.administrator())
+        })
 }
 pub(super) async fn read(
     State(app): State<App>,
@@ -339,7 +344,7 @@ pub(crate) async fn service(app: App) {
         if app.stop.is_cancelled() {
             break;
         }
-        match app.store.all_user_ids().await {
+        match app.store.scan_user_ids().await {
             Ok(ids) => {
                 for id in ids {
                     if app.stop.is_cancelled() {

@@ -13,6 +13,8 @@ pub trait ScopedStorage:
     fn configure_cache(&self, documents: usize, contexts: usize);
     fn for_user<'a>(&'a self, user: &'a str) -> impl Future<Output = Result<Self>> + Send + 'a;
     fn all_user_ids(&self) -> impl Future<Output = Result<Vec<String>>> + Send;
+    /// Accounts a periodic scan must visit now; idle, unchanged accounts are left closed.
+    fn scan_user_ids(&self) -> impl Future<Output = Result<Vec<String>>> + Send;
     fn get<'a>(&'a self, key: &'a str) -> impl Future<Output = Result<Option<Value>>> + Send + 'a;
     fn put<'a>(
         &'a self,

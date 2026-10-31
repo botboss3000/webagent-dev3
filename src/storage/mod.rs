@@ -1,48 +1,49 @@
 //! Durable storage for the three owners: application, agent, and user.
 //! A run revision and a time-limited lease stop stale processes from replacing
 //! newer progress. See docs/code-tour.md before following the SQL below.
-#[path = "../../crates/modules/chat/host/storage/session.rs"]
-pub(crate) mod session;
-#[path = "../../crates/modules/chat/host/storage/conversation_history.rs"]
-pub(crate) mod conversation_history;
+mod account_levels;
+mod activity;
+mod agent_encryption;
+mod agent_memberships;
 mod agent_pages;
 mod app_pages;
-#[path = "../../crates/modules/chat/host/storage/search.rs"]
-pub(crate) mod search;
-pub(crate) mod own_skills;
+mod background_followup;
+mod background_tasks;
 pub(crate) mod base_task;
-mod activity;
-mod execution_metadata;
-mod agent_memberships;
-mod account_levels;
-mod agent_encryption;
+#[path = "../../crates/modules/chat/host/storage/conversation_history.rs"]
+pub(crate) mod conversation_history;
 #[path = "../../crates/modules/chat/host/storage/conversation_privacy.rs"]
 mod conversation_privacy;
-#[path = "../../crates/modules/chat/host/storage/naming.rs"]
-mod naming;
-mod background_tasks;
-mod background_followup;
+mod execution_metadata;
 #[path = "../../crates/modules/chat/host/storage/followup_queue.rs"]
 mod followup_queue;
+#[path = "../../crates/modules/chat/host/storage/naming.rs"]
+mod naming;
+pub(crate) mod own_skills;
+mod reasoning_cleanup;
+#[path = "../../crates/modules/chat/host/storage/search.rs"]
+pub(crate) mod search;
+#[path = "../../crates/modules/chat/host/storage/session.rs"]
+pub(crate) mod session;
 #[path = "../../crates/modules/chat/host/storage/session_messaging.rs"]
 mod session_messaging;
-mod reasoning_cleanup;
 pub(crate) use webagent_host_core::notifications;
-#[path = "../../crates/modules/chat/host/storage/shared_chat.rs"]
-pub(crate) mod shared_chat;
-#[path = "../../crates/modules/chat/host/storage/participation.rs"]
-pub(crate) mod participation;
-#[path = "../../crates/modules/chat/host/storage/shared_read.rs"]
-mod shared_read;
-mod requester_quota;
 mod actions;
-mod module_records;
 #[path = "../../crates/modules/files/host/storage/attachments.rs"]
 mod attachments;
-#[path = "../../crates/modules/chat/host/storage/main_notes.rs"]
-mod main_notes;
 pub(crate) mod context_assets;
 mod engine;
+#[path = "../../crates/modules/chat/host/storage/main_notes.rs"]
+mod main_notes;
+mod module_records;
+#[path = "../../crates/modules/chat/host/storage/participation.rs"]
+pub(crate) mod participation;
+mod requester_quota;
+mod scan;
+#[path = "../../crates/modules/chat/host/storage/shared_chat.rs"]
+pub(crate) mod shared_chat;
+#[path = "../../crates/modules/chat/host/storage/shared_read.rs"]
+mod shared_read;
 
 use crate::access;
 use anyhow::{anyhow, bail, Context, Result};
@@ -51,16 +52,20 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteRow},
     Row, SqlitePool,
 };
-use std::{collections::HashMap, sync::Arc};
 use std::path::Path;
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
+use webagent_accounts_host::AccountsStore;
+pub use webagent_host_core::StoreCore;
 use webagent_storage::recovery::recovery_item_digest;
 #[cfg(test)]
 use webagent_storage::{codec::load_or_create_key, recovery::recovery_digest};
-use webagent_storage::{codec::{AgentKeys, Codec}, docs, pool::UserPlane};
-pub use webagent_host_core::StoreCore;
-use webagent_accounts_host::AccountsStore;
+use webagent_storage::{
+    codec::{AgentKeys, Codec},
+    docs,
+    pool::UserPlane,
+};
 // The app-settings policy is Storage-owned; existing callers keep the crate::store path.
 pub(crate) use webagent_storage::settings::{admin_encryption_enabled, read_app_settings};
 
@@ -106,28 +111,36 @@ impl Store {
         std::fs::create_dir_all(root)?;
         let codec = Codec::open(root)?;
         // Keep the administrator's original data path during migration.
-        let admin_state = UserPlane::new(open_pool(&root.join("user_data/admin/admin.db"),true,true).await?);
+        let admin_state =
+            UserPlane::new(open_pool(&root.join("user_data/admin/admin.db"), true, true).await?);
         let mut user_states = HashMap::new();
-        user_states.insert("admin".to_owned(),admin_state.clone());
-        let shared_agent_pool = open_pool(&root.join("agent_data/shared_default/shared_default.db"),false,false).await?;
+        user_states.insert("admin".to_owned(), admin_state.clone());
+        let shared_agent_pool = open_pool(
+            &root.join("agent_data/shared_default/shared_default.db"),
+            false,
+            false,
+        )
+        .await?;
         let mut agent_states = HashMap::new();
-        agent_states.insert("shared_default".to_owned(),shared_agent_pool.clone());
-        let mut store = Self { core: StoreCore {
-            app_pool: open_pool(&root.join("db/app.db"), true, false).await?,
-            pool: admin_state.pool.clone(),
-            agent_pool: shared_agent_pool,
-            root: root.to_owned(),
-            user_id: "admin".to_owned(),
-            agent_id: "shared_default".to_owned(),
-            user_states: Arc::new(RwLock::new(user_states)),
-            agent_states: Arc::new(RwLock::new(agent_states)),
-            codec,
-            agent_cipher: None,
-            agent_keys: AgentKeys::default(),
-            cache: admin_state.cache,
-            context_cache: admin_state.context_cache,
-            context_gate: admin_state.context_gate,
-        } };
+        agent_states.insert("shared_default".to_owned(), shared_agent_pool.clone());
+        let mut store = Self {
+            core: StoreCore {
+                app_pool: open_pool(&root.join("db/app.db"), true, false).await?,
+                pool: admin_state.pool.clone(),
+                agent_pool: shared_agent_pool,
+                root: root.to_owned(),
+                user_id: "admin".to_owned(),
+                agent_id: "shared_default".to_owned(),
+                user_states: Arc::new(RwLock::new(user_states)),
+                agent_states: Arc::new(RwLock::new(agent_states)),
+                codec,
+                agent_cipher: None,
+                agent_keys: AgentKeys::default(),
+                cache: admin_state.cache,
+                context_cache: admin_state.context_cache,
+                context_gate: admin_state.context_gate,
+            },
+        };
         sqlx::raw_sql(
             "CREATE TABLE IF NOT EXISTS prompt_slots (
                 slot_name TEXT PRIMARY KEY, order_index INTEGER NOT NULL,
@@ -139,10 +152,15 @@ impl Store {
         )
         .execute(&store.agent_pool)
         .await?;
-        let existing_key_table:Option<String>=sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_key_envelopes'")
-            .fetch_optional(&store.agent_pool).await?;
+        let existing_key_table: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='agent_key_envelopes'",
+        )
+        .fetch_optional(&store.agent_pool)
+        .await?;
         // Reopen must load the retained key before legacy/default readers encounter encrypted records.
-        if existing_key_table.is_some() {store.initialize_agent_encryption().await?;}
+        if existing_key_table.is_some() {
+            store.initialize_agent_encryption().await?;
+        }
         store.migrate_legacy(root).await?;
         store.migrate_session_metadata().await?;
         store.migrate_archived_status().await?;
@@ -155,72 +173,133 @@ impl Store {
         store.ensure_default_agent_directory().await?;
         store.initialize_agent_encryption().await?;
         // Complete the bounded authority conversion before either API or loop can serve work.
-        for agent in store.agent_ids().await? {let view=store.for_agent(&agent).await?;view.import_agent_memberships().await?;}
+        for agent in store.agent_ids().await? {
+            let view = store.for_agent(&agent).await?;
+            view.import_agent_memberships().await?;
+        }
         store.pin_conversation_privacy().await?;
-        for user in store.all_user_ids().await? {store.for_user(&user).await?;}
-        store.models_repository().ensure_agent_roster_storage().await?;
+        for user in store.all_user_ids().await? {
+            store.for_user(&user).await?;
+            // Migrated; close the pool so start-up does not keep a connection per account.
+            if user != "admin" {
+                if let Some(state) = store.user_states.write().await.remove(&user) {
+                    state.pool.close().await;
+                }
+            }
+        }
+        store
+            .models_repository()
+            .ensure_agent_roster_storage()
+            .await?;
         Ok(store)
     }
     /// Select an existing account database while sharing cache budgets and retaining active invalidation gates.
-    pub async fn for_user(&self, user_id:&str) -> Result<Self> {
-        if !access::valid_id(user_id) {return Err(anyhow!("Invalid account identity"));}
-        if self.account_by_id(user_id).await?.is_none() {return Err(anyhow!("Account not found"));}
+    pub async fn for_user(&self, user_id: &str) -> Result<Self> {
+        if !access::valid_id(user_id) {
+            return Err(anyhow!("Invalid account identity"));
+        }
+        if self.account_by_id(user_id).await?.is_none() {
+            return Err(anyhow!("Account not found"));
+        }
         let existing = self.user_states.read().await.get(user_id).cloned();
-        let state = match existing {Some(state)=>state,None=>{
-            let mut states=self.user_states.write().await;
-            if let Some(state)=states.get(user_id) {state.clone()} else {
-                webagent_storage::pool::retain_active_users(&mut states);
-                let path=self.root.join("user_data").join(user_id).join(format!("{user_id}.db"));
-                let mut state=UserPlane::new(open_pool(&path,true,true).await?);
-                // Every user shares one retained-cache budget per Store family.
-                // User-qualified context keys prevent cross-account collisions.
-                state.cache=self.cache.clone();
-                state.context_cache=self.context_cache.clone();
-                states.insert(user_id.to_owned(),state.clone()); state
+        let state = match existing {
+            Some(state) => state,
+            None => {
+                let mut states = self.user_states.write().await;
+                if let Some(state) = states.get(user_id) {
+                    state.clone()
+                } else {
+                    webagent_storage::pool::retain_active_users(&mut states);
+                    let path = self
+                        .root
+                        .join("user_data")
+                        .join(user_id)
+                        .join(format!("{user_id}.db"));
+                    let mut state = UserPlane::new(open_pool(&path, true, true).await?);
+                    // Every user shares one retained-cache budget per Store family.
+                    // User-qualified context keys prevent cross-account collisions.
+                    state.cache = self.cache.clone();
+                    state.context_cache = self.context_cache.clone();
+                    states.insert(user_id.to_owned(), state.clone());
+                    state
+                }
             }
-        }};
-        let migrated=state.migrated.clone();
-        let handle = Self { core: StoreCore {app_pool:self.app_pool.clone(),pool:state.pool,
-            agent_pool:self.agent_pool.clone(),root:self.root.clone(),
-            user_id:user_id.to_owned(),agent_id:self.agent_id.clone(),
-            user_states:self.user_states.clone(),agent_states:self.agent_states.clone(),
-            codec:self.codec.clone(),agent_cipher:self.agent_cipher.clone(),agent_keys:self.agent_keys.clone(),cache:state.cache,
-            context_cache:state.context_cache,context_gate:state.context_gate} };
+        };
+        let migrated = state.migrated.clone();
+        let handle = Self {
+            core: StoreCore {
+                app_pool: self.app_pool.clone(),
+                pool: state.pool,
+                agent_pool: self.agent_pool.clone(),
+                root: self.root.clone(),
+                user_id: user_id.to_owned(),
+                agent_id: self.agent_id.clone(),
+                user_states: self.user_states.clone(),
+                agent_states: self.agent_states.clone(),
+                codec: self.codec.clone(),
+                agent_cipher: self.agent_cipher.clone(),
+                agent_keys: self.agent_keys.clone(),
+                cache: state.cache,
+                context_cache: state.context_cache,
+                context_gate: state.context_gate,
+            },
+        };
         // Marker-guarded migrations never revert; scans call for_user for every account each tick.
         if !migrated.load(std::sync::atomic::Ordering::Acquire) {
             handle.migrate_session_metadata().await?;
             handle.migrate_archived_status().await?;
             handle.pin_conversation_privacy().await?;
-            migrated.store(true,std::sync::atomic::Ordering::Release);
+            migrated.store(true, std::sync::atomic::Ordering::Release);
         }
         Ok(handle)
     }
     /// Select a registered agent database without changing the canonical conversation user authority.
-    pub async fn for_agent(&self, agent_id:&str) -> Result<Self> {
+    pub async fn for_agent(&self, agent_id: &str) -> Result<Self> {
         if !access::valid_agent_id(agent_id) {
             return Err(anyhow!("Invalid agent identity"));
         }
-        if agent_id!="shared_default" {
-            let found:Option<String>=sqlx::query_scalar(
-                "SELECT id FROM agent_directory WHERE id=?")
-                .bind(agent_id).fetch_optional(&self.app_pool).await?;
-            if found.is_none() {return Err(anyhow!("Agent not found"));}
-        }
-        let existing=self.agent_states.read().await.get(agent_id).cloned();
-        let pool=match existing {Some(pool)=>pool,None=>{
-            let mut states=self.agent_states.write().await;
-            if let Some(pool)=states.get(agent_id) {pool.clone()} else {
-                let pool=crate::agent_storage::open_agent_pool(&self.root,agent_id).await?;
-                states.insert(agent_id.to_owned(),pool.clone()); pool
+        if agent_id != "shared_default" {
+            let found: Option<String> =
+                sqlx::query_scalar("SELECT id FROM agent_directory WHERE id=?")
+                    .bind(agent_id)
+                    .fetch_optional(&self.app_pool)
+                    .await?;
+            if found.is_none() {
+                return Err(anyhow!("Agent not found"));
             }
-        }};
-        let mut view=Self { core: StoreCore {app_pool:self.app_pool.clone(),pool:self.pool.clone(),
-            agent_pool:pool,root:self.root.clone(),
-            user_id:self.user_id.clone(),agent_id:agent_id.to_owned(),
-            user_states:self.user_states.clone(),agent_states:self.agent_states.clone(),
-            codec:self.codec.clone(),agent_cipher:None,agent_keys:self.agent_keys.clone(),
-            cache:self.cache.clone(),context_cache:self.context_cache.clone(),
-            context_gate:self.context_gate.clone()} };
+        }
+        let existing = self.agent_states.read().await.get(agent_id).cloned();
+        let pool = match existing {
+            Some(pool) => pool,
+            None => {
+                let mut states = self.agent_states.write().await;
+                if let Some(pool) = states.get(agent_id) {
+                    pool.clone()
+                } else {
+                    let pool = crate::agent_storage::open_agent_pool(&self.root, agent_id).await?;
+                    states.insert(agent_id.to_owned(), pool.clone());
+                    pool
+                }
+            }
+        };
+        let mut view = Self {
+            core: StoreCore {
+                app_pool: self.app_pool.clone(),
+                pool: self.pool.clone(),
+                agent_pool: pool,
+                root: self.root.clone(),
+                user_id: self.user_id.clone(),
+                agent_id: agent_id.to_owned(),
+                user_states: self.user_states.clone(),
+                agent_states: self.agent_states.clone(),
+                codec: self.codec.clone(),
+                agent_cipher: None,
+                agent_keys: self.agent_keys.clone(),
+                cache: self.cache.clone(),
+                context_cache: self.context_cache.clone(),
+                context_gate: self.context_gate.clone(),
+            },
+        };
         view.initialize_agent_encryption().await?;
         Ok(view)
     }
@@ -248,26 +327,42 @@ impl Store {
             CREATE INDEX IF NOT EXISTS agent_prompts_order ON agent_prompts(agent_id,order_index,slot_name);")
             .execute(&self.agent_pool).await?;
         let mut tx = self.agent_pool.begin().await?;
-        let exists: Option<String> = sqlx::query_scalar("SELECT id FROM agents WHERE id='shared_default'")
-            .fetch_optional(&mut *tx).await?;
+        let exists: Option<String> =
+            sqlx::query_scalar("SELECT id FROM agents WHERE id='shared_default'")
+                .fetch_optional(&mut *tx)
+                .await?;
         if exists.is_none() {
-            let model_blob: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key='agent:shared_default:model'")
-                .fetch_optional(&mut *tx).await?;
-            let old_model = model_blob.map(|blob| self.unseal(&blob)).transpose()?
+            let model_blob: Option<Vec<u8>> =
+                sqlx::query_scalar("SELECT value FROM docs WHERE key='agent:shared_default:model'")
+                    .fetch_optional(&mut *tx)
+                    .await?;
+            let old_model = model_blob
+                .map(|blob| self.unseal(&blob))
+                .transpose()?
                 .unwrap_or(json!({"model":"gpt-6-luna"}));
-            let ability_blob: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key='agent_abilities:shared_default'")
-                .fetch_optional(&mut *tx).await?;
-            let old_abilities = ability_blob.map(|blob| self.unseal(&blob)).transpose()?
+            let ability_blob: Option<Vec<u8>> = sqlx::query_scalar(
+                "SELECT value FROM docs WHERE key='agent_abilities:shared_default'",
+            )
+            .fetch_optional(&mut *tx)
+            .await?;
+            let old_abilities = ability_blob
+                .map(|blob| self.unseal(&blob))
+                .transpose()?
                 .unwrap_or(json!({"revision":0,"visibility":{},"skill_visibility":{}}));
             let mut modes = serde_json::Map::new();
             if let Some(old) = old_abilities["visibility"].as_object() {
-                for (id, mode) in old { if mode != "off" { modes.insert(id.clone(),mode.clone()); } }
+                for (id, mode) in old {
+                    if mode != "off" {
+                        modes.insert(id.clone(), mode.clone());
+                    }
+                }
             }
             let metadata = json!({"discovery_default":"discoverable","ability_modes":modes,
                 "skill_modes":old_abilities["skill_visibility"],"tool_modes":{},"ability_access":{},
                 "ability_revision":old_abilities["revision"].as_i64().unwrap_or(0).max(0)});
             let now: i64 = sqlx::query_scalar("SELECT CAST(strftime('%s','now') AS INTEGER)")
-                .fetch_one(&mut *tx).await?;
+                .fetch_one(&mut *tx)
+                .await?;
             sqlx::query("INSERT INTO agents(id,name,description,provider,model,status,metadata,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)")
                 .bind("shared_default").bind("WebAgent").bind("")
                 .bind(old_model["provider"].as_str().unwrap_or("openai_subscription"))
@@ -291,13 +386,17 @@ impl Store {
         Ok(())
     }
     /// Abilities seeds absent connections without overriding saved choices.
-    pub async fn ensure_agent_connections(&self,ability_ids:&[String])->Result<()> {
-        self.ability_controls().ensure_agent_connections(ability_ids).await
+    pub async fn ensure_agent_connections(&self, ability_ids: &[String]) -> Result<()> {
+        self.ability_controls()
+            .ensure_agent_connections(ability_ids)
+            .await
     }
     /// Read the bound agent model assignment from its canonical agent table.
     pub async fn agent_model(&self) -> Result<Value> {
         let row = sqlx::query("SELECT provider,model FROM agents WHERE id=?")
-            .bind(&self.agent_id).fetch_one(&self.agent_pool).await?;
+            .bind(&self.agent_id)
+            .fetch_one(&self.agent_pool)
+            .await?;
         Ok(json!({"provider":row.get::<String,_>("provider"),"model":row.get::<String,_>("model")}))
     }
     /// Replace the bound agent provider/model assignment and advance its table revision.
@@ -314,19 +413,26 @@ impl Store {
         self.agent_abilities_for(&self.agent_id).await
     }
     /// Preserve the shared projection used by Context's deduplication settings adapter.
-    pub(crate) fn tool_result_overrides(metadata:&Value)->Result<Value> {
+    pub(crate) fn tool_result_overrides(metadata: &Value) -> Result<Value> {
         webagent_abilities::controls::tool_result_overrides(metadata)
     }
     /// Read through the independently compiled Abilities owner with the existing scope.
-    pub async fn agent_abilities_for(&self,agent_id:&str)->Result<Value> {
+    pub async fn agent_abilities_for(&self, agent_id: &str) -> Result<Value> {
         self.ability_controls().agent_abilities_for(agent_id).await
     }
     /// Abilities owns the original encrypted CAS/audit transaction.
-    pub async fn save_agent_abilities(&self,value:&Value,expected_revision:u64)->Result<()> {
-        self.ability_controls().save_agent_abilities(value,expected_revision).await
+    pub async fn save_agent_abilities(&self, value: &Value, expected_revision: u64) -> Result<()> {
+        self.ability_controls()
+            .save_agent_abilities(value, expected_revision)
+            .await
     }
-    fn ability_controls(&self)->webagent_abilities::controls::Repository<'_,Self> {
-        webagent_abilities::controls::Repository::new(&self.agent_pool,&self.agent_id,self.current_user_id(),self)
+    fn ability_controls(&self) -> webagent_abilities::controls::Repository<'_, Self> {
+        webagent_abilities::controls::Repository::new(
+            &self.agent_pool,
+            &self.agent_id,
+            self.current_user_id(),
+            self,
+        )
     }
     /// Reject ambiguous, reserved or oversized prompt-slot identities before agent-table access.
     fn validate_prompt_slot_name(name: &str) -> Result<()> {
@@ -362,7 +468,9 @@ impl Store {
     }
     /// Read one bound agent ordered prompt snapshot and enforce count and total-content limits.
     pub async fn list_agent_prompt_slots(&self, agent_id: &str) -> Result<Vec<Value>> {
-        if agent_id != self.agent_id {return Err(anyhow!("Agent view mismatch"));}
+        if agent_id != self.agent_id {
+            return Err(anyhow!("Agent view mismatch"));
+        }
         let rows = sqlx::query(
             "SELECT slot_name,order_index,lock AS locked,merge_mode,content,revision,updated_at
              FROM agent_prompts WHERE agent_id=? ORDER BY order_index,slot_name",
@@ -398,7 +506,8 @@ impl Store {
             "SELECT slot_name,order_index,lock AS locked,merge_mode,content,revision,updated_at
              FROM agent_prompts WHERE agent_id=? AND slot_name=?",
         )
-        .bind(&self.agent_id).bind(name)
+        .bind(&self.agent_id)
+        .bind(name)
         .fetch_optional(&self.agent_pool)
         .await?;
         row.as_ref()
@@ -415,13 +524,28 @@ impl Store {
         merge_mode: Option<&str>,
         expected_revision: i64,
     ) -> Result<Value> {
-        self.upsert_prompt_slot_receipted(name,content,order_index,lock,merge_mode,expected_revision,None).await
+        self.upsert_prompt_slot_receipted(
+            name,
+            content,
+            order_index,
+            lock,
+            merge_mode,
+            expected_revision,
+            None,
+        )
+        .await
     }
     /// Reserve the agent writer, enforce revision/capacity bounds and commit slot plus optional retry receipt atomically.
     pub(crate) async fn upsert_prompt_slot_receipted(
-        &self,name:&str,content:&str,order_index:Option<i64>,lock:Option<bool>,merge_mode:Option<&str>,
-        expected_revision:i64,receipt:Option<(&str,&str)>,
-    )->Result<Value> {
+        &self,
+        name: &str,
+        content: &str,
+        order_index: Option<i64>,
+        lock: Option<bool>,
+        merge_mode: Option<&str>,
+        expected_revision: i64,
+        receipt: Option<(&str, &str)>,
+    ) -> Result<Value> {
         Self::validate_prompt_slot_name(name)?;
         if content.len() > PROMPT_SLOT_CONTENT_MAX {
             return Err(anyhow!("Prompt slot content exceeds limit"));
@@ -441,9 +565,11 @@ impl Store {
         sqlx::query("UPDATE agent_prompts SET revision=revision WHERE 0")
             .execute(&mut *tx)
             .await?;
-        if let Some((key,hash))=receipt {
-            if let Some(record)=self.action_agent_receipt_tx(&mut tx,key).await? {
-                if record["arguments_digest"]!=hash {return Err(anyhow!("Action receipt input conflict"));}
+        if let Some((key, hash)) = receipt {
+            if let Some(record) = self.action_agent_receipt_tx(&mut tx, key).await? {
+                if record["arguments_digest"] != hash {
+                    return Err(anyhow!("Action receipt input conflict"));
+                }
                 return Ok(record["result"]["output"]["slot"].clone());
             }
         }
@@ -451,7 +577,8 @@ impl Store {
             "SELECT slot_name,order_index,lock AS locked,merge_mode,content,revision,updated_at
              FROM agent_prompts WHERE agent_id=?",
         )
-        .bind(&self.agent_id).fetch_all(&mut *tx)
+        .bind(&self.agent_id)
+        .fetch_all(&mut *tx)
         .await?;
         let existing = rows
             .iter()
@@ -531,37 +658,55 @@ impl Store {
             .bind(format!("{}:{name}",self.agent_id)).bind(&self.agent_id).bind(name).bind(order).bind(locked as i64).bind(&mode).bind(sealed)
             .bind(revision).bind(now).execute(&mut *tx).await?;
         }
-        let slot=json!({"slot_name":name,"order_index":order,"lock":locked,
+        let slot = json!({"slot_name":name,"order_index":order,"lock":locked,
             "merge_mode":mode,"content":content,"revision":revision,"updated_at":now});
-        if let Some((key,hash))=receipt {
-            self.action_agent_receipt_write(&mut tx,key,hash,&json!({"status":"success","output":{"slot":slot}})).await?;
+        if let Some((key, hash)) = receipt {
+            self.action_agent_receipt_write(
+                &mut tx,
+                key,
+                hash,
+                &json!({"status":"success","output":{"slot":slot}}),
+            )
+            .await?;
         }
         tx.commit().await?;
         Ok(slot)
     }
     /// Delete one prompt slot through the same revision-fenced path used by native actions.
     pub async fn delete_prompt_slot(&self, name: &str, expected_revision: i64) -> Result<bool> {
-        self.delete_prompt_slot_receipted(name,expected_revision,None).await
+        self.delete_prompt_slot_receipted(name, expected_revision, None)
+            .await
     }
     /// Delete only the expected slot revision and bind an optional action receipt to the same commit.
-    pub(crate) async fn delete_prompt_slot_receipted(&self,name:&str,expected_revision:i64,receipt:Option<(&str,&str)>)->Result<bool> {
+    pub(crate) async fn delete_prompt_slot_receipted(
+        &self,
+        name: &str,
+        expected_revision: i64,
+        receipt: Option<(&str, &str)>,
+    ) -> Result<bool> {
         Self::validate_prompt_slot_name(name)?;
         if expected_revision <= 0 {
             return Err(anyhow!("Invalid prompt slot revision"));
         }
         let mut tx = self.agent_pool.begin().await?;
-        sqlx::query("UPDATE agent_prompts SET revision=revision WHERE 0").execute(&mut *tx).await?;
-        if let Some((key,hash))=receipt {
-            if let Some(record)=self.action_agent_receipt_tx(&mut tx,key).await? {
-                if record["arguments_digest"]!=hash {return Err(anyhow!("Action receipt input conflict"));}
-                return Ok(record["result"]["output"]["deleted"]==true);
+        sqlx::query("UPDATE agent_prompts SET revision=revision WHERE 0")
+            .execute(&mut *tx)
+            .await?;
+        if let Some((key, hash)) = receipt {
+            if let Some(record) = self.action_agent_receipt_tx(&mut tx, key).await? {
+                if record["arguments_digest"] != hash {
+                    return Err(anyhow!("Action receipt input conflict"));
+                }
+                return Ok(record["result"]["output"]["deleted"] == true);
             }
         }
-        let actual: Option<i64> =
-            sqlx::query_scalar("SELECT revision FROM agent_prompts WHERE agent_id=? AND slot_name=?")
-                .bind(&self.agent_id).bind(name)
-                .fetch_optional(&mut *tx)
-                .await?;
+        let actual: Option<i64> = sqlx::query_scalar(
+            "SELECT revision FROM agent_prompts WHERE agent_id=? AND slot_name=?",
+        )
+        .bind(&self.agent_id)
+        .bind(name)
+        .fetch_optional(&mut *tx)
+        .await?;
         match actual {
             None => return Err(anyhow!("Prompt slot not found")),
             Some(revision) if revision != expected_revision => {
@@ -569,17 +714,26 @@ impl Store {
             }
             Some(_) => {}
         }
-        let changed = sqlx::query("DELETE FROM agent_prompts WHERE agent_id=? AND slot_name=? AND revision=?")
-            .bind(&self.agent_id).bind(name)
-            .bind(expected_revision)
-            .execute(&mut *tx)
-            .await?
-            .rows_affected();
+        let changed = sqlx::query(
+            "DELETE FROM agent_prompts WHERE agent_id=? AND slot_name=? AND revision=?",
+        )
+        .bind(&self.agent_id)
+        .bind(name)
+        .bind(expected_revision)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
         if changed != 1 {
             return Err(anyhow!("Prompt slot revision mismatch"));
         }
-        if let Some((key,hash))=receipt {
-            self.action_agent_receipt_write(&mut tx,key,hash,&json!({"status":"success","output":{"deleted":true,"slot_name":name}})).await?;
+        if let Some((key, hash)) = receipt {
+            self.action_agent_receipt_write(
+                &mut tx,
+                key,
+                hash,
+                &json!({"status":"success","output":{"deleted":true,"slot_name":name}}),
+            )
+            .await?;
         }
         tx.commit().await?;
         Ok(true)
@@ -600,7 +754,11 @@ impl Store {
         let through = session["checkpoint_through"].as_i64().unwrap_or(0);
         // A rewind may retain the same compaction cursor. Each process must reject its previous history cache.
         let history_revision = session["history_revision"].as_u64().unwrap_or(0);
-        let cached = self.context_cache.lock().unwrap().get(&self.context_cache_key(sid), through, history_revision);
+        let cached = self.context_cache.lock().unwrap().get(
+            &self.context_cache_key(sid),
+            through,
+            history_revision,
+        );
         let (mut input, mut cursor) = cached.unwrap_or_else(|| {
             (
                 session["checkpoint_input"]
@@ -619,16 +777,25 @@ impl Store {
         .await?;
         for row in rows {
             cursor = row.get::<i64, _>("seq");
-            if row.get::<String,_>("step")=="user" {
-                let rid:String=row.get("run_id");
-                if self.get(&format!("message_meta:{rid}")).await?.is_some_and(|meta|meta["context_eligible"]==false || meta["queued"]==true) {continue;}
+            if row.get::<String, _>("step") == "user" {
+                let rid: String = row.get("run_id");
+                if self
+                    .get(&format!("message_meta:{rid}"))
+                    .await?
+                    .is_some_and(|meta| meta["context_eligible"] == false || meta["queued"] == true)
+                {
+                    continue;
+                }
             }
             input.push(self.unseal(&row.get::<Vec<u8>, _>("item"))?);
         }
-        self.context_cache
-            .lock()
-            .unwrap()
-            .insert(self.context_cache_key(sid), through, history_revision, cursor, input.clone());
+        self.context_cache.lock().unwrap().insert(
+            self.context_cache_key(sid),
+            through,
+            history_revision,
+            cursor,
+            input.clone(),
+        );
         Ok(input)
     }
     /// Read public messages and their maximum sequence from one consistent user transaction.
@@ -762,7 +929,9 @@ impl Store {
         let inserted = sqlx::query("INSERT OR IGNORE INTO interactions(session_id,run_id,step,item,created_at) VALUES(?,?,?,?,strftime('%s','now'))")
             .bind(sid).bind(run_id).bind(step).bind(self.encode_user_record(item)?)
             .execute(&mut **tx).await?.rows_affected();
-        if inserted == 0 { return Ok(()); }
+        if inserted == 0 {
+            return Ok(());
+        }
         // ACTIVITY-BOUNDARY: immutable public anchor, atomic with the private item.
         // Never infer same-second promotion ordering from timestamps.
         sqlx::query("INSERT OR IGNORE INTO activity_boundaries(interaction_seq,boundary_item_id) SELECT i.seq,c.id FROM interactions i JOIN chat c ON c.seq=(SELECT MAX(seq) FROM chat WHERE session_id=?) WHERE i.run_id=? AND i.step=?")
@@ -792,25 +961,41 @@ impl Store {
                 .bind(&id).bind(sid).execute(&mut **tx).await?;
             self.touch_session_activity(tx, sid).await?;
             if role == "user" {
-                self.stage_notification(tx,&format!("message:{run_id}"),"message.received",sid,Some(run_id),None).await?;
+                self.stage_notification(
+                    tx,
+                    &format!("message:{run_id}"),
+                    "message.received",
+                    sid,
+                    Some(run_id),
+                    None,
+                )
+                .await?;
             }
         }
         Ok(())
     }
     /// Publish a bounded nonterminal bubble once; reject reuse of its stable ID with different text.
     async fn insert_working_message(
-        &self, tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, sid: &str,
-        rid: &str, message_id: &str, text: &str,
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        sid: &str,
+        rid: &str,
+        message_id: &str,
+        text: &str,
     ) -> Result<()> {
         // Working rows have no terminal_run_id. Their stable IDs make a
         // recovered model response or private control safe to replay.
         if !message_id.starts_with(&format!("working:{rid}:"))
-            || message_id.len() > 256 || text.trim().is_empty() || text.len() > 16384 {
+            || message_id.len() > 256
+            || text.trim().is_empty()
+            || text.len() > 16384
+        {
             return Err(anyhow!("Invalid working message"));
         }
-        let existing = sqlx::query_scalar::<_, Vec<u8>>(
-            "SELECT content FROM chat WHERE id=?")
-            .bind(message_id).fetch_optional(&mut **tx).await?;
+        let existing = sqlx::query_scalar::<_, Vec<u8>>("SELECT content FROM chat WHERE id=?")
+            .bind(message_id)
+            .fetch_optional(&mut **tx)
+            .await?;
         if let Some(raw) = existing {
             if self.unseal(&raw)? != json!(text) {
                 return Err(anyhow!("Working message ID conflicts with existing text"));
@@ -833,7 +1018,9 @@ impl Store {
         }
         self.validate_agent_doc_key(key)?;
         let mut tx = self.pool_for(key).begin().await?;
-        let sid = value["session_id"].as_str().ok_or_else(|| anyhow!("Run has no session"))?;
+        let sid = value["session_id"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Run has no session"))?;
         self.require_active_session(&mut tx, sid).await?;
         self.write_document(&mut tx, key, value).await?;
         self.index_run(&mut tx, value).await?;
@@ -847,7 +1034,7 @@ impl Store {
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         run: &Value,
     ) -> Result<()> {
-        self.engine_repository().index_run(tx,run).await
+        self.engine_repository().index_run(tx, run).await
     }
     /// List bounded nonterminal run views in admission order for scheduler recovery.
     pub async fn active_runs(&self) -> Result<Vec<Value>> {
@@ -864,35 +1051,58 @@ impl Store {
         } else {
             &self.pool
         };
-        docs::append_event(destination, sid, kind, &self.encode_for_pool(destination, payload)?).await
+        docs::append_event(
+            destination,
+            sid,
+            kind,
+            &self.encode_for_pool(destination, payload)?,
+        )
+        .await
     }
     // Save one checkpoint only if the caller still has the revision and, for
     // loop execution, the live lease it read. The override below is reserved
     // for deliberate recovery or access shutdown and still checks revision.
     pub async fn save_run(&self, run: &mut Value, kind: &str, payload: &Value) -> Result<()> {
-        self.engine_repository().save_run(run,kind,payload).await
+        self.engine_repository().save_run(run, kind, payload).await
     }
     /// Allow deliberate terminal shutdown without planner availability while preserving revision fences and failed staging.
-    pub async fn save_run_override(&self, run:&mut Value, kind:&str, payload:&Value) -> Result<()> {
-        self.engine_repository().save_run_override(run,kind,payload).await
+    pub async fn save_run_override(
+        &self,
+        run: &mut Value,
+        kind: &str,
+        payload: &Value,
+    ) -> Result<()> {
+        self.engine_repository()
+            .save_run_override(run, kind, payload)
+            .await
     }
     /// Commit run-owned effects and publication only after revision, generation, lease and participation fences pass.
 
     // Take temporary ownership of queued work in one transaction. A new
     // generation, lease epoch, and revision fence out a previous loop worker.
     pub async fn claim_run(&self, run: &mut Value, owner: &str, generation: &str) -> Result<bool> {
-        self.engine_repository().claim_run(run,owner,generation).await
+        self.engine_repository()
+            .claim_run(run, owner, generation)
+            .await
     }
     /// Reserve the SQLite writer before checking ownership so queue commits cannot stale the renewal snapshot.
-    pub async fn renew_run_lease(&self, rid:&str, generation:&str, owner:&str, epoch:i64) -> Result<bool> {
-        self.engine_repository().renew_run_lease(rid,generation,owner,epoch).await
+    pub async fn renew_run_lease(
+        &self,
+        rid: &str,
+        generation: &str,
+        owner: &str,
+        epoch: i64,
+    ) -> Result<bool> {
+        self.engine_repository()
+            .renew_run_lease(rid, generation, owner, epoch)
+            .await
     }
     /// Publish the current loop owner liveness using the fixed heartbeat protocol.
-    pub async fn write_loop_heartbeat(&self, owner:&str) -> Result<()> {
+    pub async fn write_loop_heartbeat(&self, owner: &str) -> Result<()> {
         self.engine_repository().write_loop_heartbeat(owner).await
     }
     /// Check whether a compatible loop heartbeat is within the caller allowed age.
-    pub async fn loop_fresh(&self, seconds:i64) -> Result<bool> {
+    pub async fn loop_fresh(&self, seconds: i64) -> Result<bool> {
         self.engine_repository().loop_fresh(seconds).await
     }
     /// Invalidate recorded loop liveness without deleting its protocol or owner identity.
@@ -906,8 +1116,13 @@ impl Store {
     }
     /// Read a bounded authenticated session-event delta after a sequence cursor.
     pub async fn events(&self, sid: &str, after: i64) -> Result<Vec<Value>> {
-        docs::session_events(&self.pool, sid, after).await?.into_iter()
-            .map(|(seq,kind,payload)|Ok(json!({"seq":seq,"kind":kind,"payload":self.unseal(&payload)?}))).collect()
+        docs::session_events(&self.pool, sid, after)
+            .await?
+            .into_iter()
+            .map(|(seq, kind, payload)| {
+                Ok(json!({"seq":seq,"kind":kind,"payload":self.unseal(&payload)?}))
+            })
+            .collect()
     }
     // Save related documents and their event together. For message admission,
     // this includes the queued run and retry receipt: either all exist or none do.
@@ -918,24 +1133,41 @@ impl Store {
         kind: &str,
         payload: &Value,
     ) -> Result<()> {
-        self.atomic_admission(docs,sid,kind,payload,None).await
+        self.atomic_admission(docs, sid, kind, payload, None).await
     }
     /// Admit only supported first-message events with newly prepared session records in the same transaction.
     pub async fn atomic_first_message(
-        &self, docs:Vec<(String,Value)>,sid:&str,kind:&str,payload:&Value,created:&Value
-    )->Result<()> {
-        if !matches!(kind,"message"|"manager_submission"|"human_message") || sid.is_empty() {
+        &self,
+        docs: Vec<(String, Value)>,
+        sid: &str,
+        kind: &str,
+        payload: &Value,
+        created: &Value,
+    ) -> Result<()> {
+        if !matches!(kind, "message" | "manager_submission" | "human_message") || sid.is_empty() {
             return Err(anyhow!("Invalid first-message admission"));
         }
-        self.atomic_admission(docs,sid,kind,payload,Some(created)).await
+        self.atomic_admission(docs, sid, kind, payload, Some(created))
+            .await
     }
     /// Commit related admission documents, public/private messages and loop commands without crossing authority planes.
     async fn atomic_admission(
-        &self,mut docs:Vec<(String,Value)>,sid:&str,kind:&str,payload:&Value,created:Option<&Value>
-    )->Result<()> {
-        if matches!(kind,"message"|"manager_submission") && payload["role"]=="user" {
-        if let Some((_,run))=docs.iter().find(|(key,_)|key.starts_with("run:")) {self.reserve_requester_run(run).await?;}
-        else if let Some((_,review))=docs.iter().find(|(key,_)|key.starts_with("manager_review:")) {self.reserve_requester_run(&review["run"]).await?;}
+        &self,
+        mut docs: Vec<(String, Value)>,
+        sid: &str,
+        kind: &str,
+        payload: &Value,
+        created: Option<&Value>,
+    ) -> Result<()> {
+        if matches!(kind, "message" | "manager_submission") && payload["role"] == "user" {
+            if let Some((_, run)) = docs.iter().find(|(key, _)| key.starts_with("run:")) {
+                self.reserve_requester_run(run).await?;
+            } else if let Some((_, review)) = docs
+                .iter()
+                .find(|(key, _)| key.starts_with("manager_review:"))
+            {
+                self.reserve_requester_run(&review["run"]).await?;
+            }
         }
         let destination = if sid.is_empty() {
             &self.app_pool
@@ -959,91 +1191,160 @@ impl Store {
             None
         };
         let mut tx = destination.begin().await?;
-        if let Some(created)=created {
-            let exists:i64=sqlx::query_scalar("SELECT count(*) FROM docs WHERE key=?")
-                .bind(format!("session:{sid}")).fetch_one(&mut *tx).await?;
-            if exists!=0 {return Err(anyhow!("Session identifier already exists"));}
+        if let Some(created) = created {
+            let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM docs WHERE key=?")
+                .bind(format!("session:{sid}"))
+                .fetch_one(&mut *tx)
+                .await?;
+            if exists != 0 {
+                return Err(anyhow!("Session identifier already exists"));
+            }
             // Write only the newly prepared session/mode before message guards.
             // Rollback also removes these records and both notification stages.
-            for prefix in ["session","session_mode"] {
-                let name=format!("{prefix}:{sid}");
-                let position=docs.iter().position(|(key,_)|key==&name)
-                    .ok_or_else(||anyhow!("First-message session records missing"))?;
-                let (name,value)=docs.remove(position);
-                self.write_document(&mut tx,&name,&value).await?;
+            for prefix in ["session", "session_mode"] {
+                let name = format!("{prefix}:{sid}");
+                let position = docs
+                    .iter()
+                    .position(|(key, _)| key == &name)
+                    .ok_or_else(|| anyhow!("First-message session records missing"))?;
+                let (name, value) = docs.remove(position);
+                self.write_document(&mut tx, &name, &value).await?;
             }
-            self.stage_notification(&mut tx,&format!("created:{sid}"),"session.created",sid,None,None).await?;
-            sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,'session_created',?)")
-                .bind(sid).bind(self.encode_user_record(created)?).execute(&mut *tx).await?;
+            self.stage_notification(
+                &mut tx,
+                &format!("created:{sid}"),
+                "session.created",
+                sid,
+                None,
+                None,
+            )
+            .await?;
+            sqlx::query(
+                "INSERT INTO events(session_id,kind,payload) VALUES(?,'session_created',?)",
+            )
+            .bind(sid)
+            .bind(self.encode_user_record(created)?)
+            .execute(&mut *tx)
+            .await?;
         }
-        if matches!(kind,"message"|"manager_submission") && payload["role"] == "user" {
-            sqlx::query("UPDATE docs SET key=key WHERE key=?").bind(format!("session:{sid}")).execute(&mut *tx).await?;
+        if matches!(kind, "message" | "manager_submission") && payload["role"] == "user" {
+            sqlx::query("UPDATE docs SET key=key WHERE key=?")
+                .bind(format!("session:{sid}"))
+                .execute(&mut *tx)
+                .await?;
             self.require_active_session(&mut tx, sid).await?;
             let existing:i64=sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE session_id=? AND id!=? AND status NOT IN ('completed','cancelled','failed')")
                 .bind(sid).bind(payload["run_id"].as_str().unwrap_or("")).fetch_one(&mut *tx).await?;
-            if existing>0 {return Err(anyhow!("Session already has an active run"));}
-            let pending:i64=sqlx::query_scalar("SELECT COUNT(*) FROM docs WHERE key=?")
-                .bind(format!("manager_pending:{sid}")).fetch_one(&mut *tx).await?;
-            if pending!=0 {return Err(anyhow!("Resolve the pending message review first"));}
-        }
-        for (_, run) in docs.iter().filter(|(key,_)|key.starts_with("run:")) {
-            if !matches!(run["status"].as_str(), Some("completed" | "cancelled" | "failed")) {
-                self.require_active_session(&mut tx, run["session_id"].as_str().ok_or_else(||anyhow!("Run has no session"))?).await?;
+            if existing > 0 {
+                return Err(anyhow!("Session already has an active run"));
+            }
+            let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM docs WHERE key=?")
+                .bind(format!("manager_pending:{sid}"))
+                .fetch_one(&mut *tx)
+                .await?;
+            if pending != 0 {
+                return Err(anyhow!("Resolve the pending message review first"));
             }
         }
-        if let Some((_, run))=docs.iter_mut().find(|(key,_)|key.starts_with("run:")) {
-            let rid=run["id"].as_str().ok_or_else(||anyhow!("Run has no id"))?.to_owned();
-            let expected=run["run_revision"].as_u64().unwrap_or(0);
-            if let Some(raw)=sqlx::query_scalar::<_,Vec<u8>>("SELECT value FROM docs WHERE key=?")
-                .bind(format!("run:{rid}")).fetch_optional(&mut *tx).await? {
-                let previous=self.decode_document(&mut tx,&raw).await?;
-                if previous["history_removed"] == true { return Err(anyhow!("Run removed by Undo")); }
-                if previous["generation"]!=run["generation"]
-                    || previous["lease_epoch"]!=run["lease_epoch"]
-                    || previous["run_revision"].as_u64().unwrap_or(0)!=expected
-                    || (matches!(previous["status"].as_str(),Some("completed"|"cancelled"|"failed"))
-                        && previous!=*run)
+        for (_, run) in docs.iter().filter(|(key, _)| key.starts_with("run:")) {
+            if !matches!(
+                run["status"].as_str(),
+                Some("completed" | "cancelled" | "failed")
+            ) {
+                self.require_active_session(
+                    &mut tx,
+                    run["session_id"]
+                        .as_str()
+                        .ok_or_else(|| anyhow!("Run has no session"))?,
+                )
+                .await?;
+            }
+        }
+        if let Some((_, run)) = docs.iter_mut().find(|(key, _)| key.starts_with("run:")) {
+            let rid = run["id"]
+                .as_str()
+                .ok_or_else(|| anyhow!("Run has no id"))?
+                .to_owned();
+            let expected = run["run_revision"].as_u64().unwrap_or(0);
+            if let Some(raw) =
+                sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+                    .bind(format!("run:{rid}"))
+                    .fetch_optional(&mut *tx)
+                    .await?
+            {
+                let previous = self.decode_document(&mut tx, &raw).await?;
+                if previous["history_removed"] == true {
+                    return Err(anyhow!("Run removed by Undo"));
+                }
+                if previous["generation"] != run["generation"]
+                    || previous["lease_epoch"] != run["lease_epoch"]
+                    || previous["run_revision"].as_u64().unwrap_or(0) != expected
+                    || (matches!(
+                        previous["status"].as_str(),
+                        Some("completed" | "cancelled" | "failed")
+                    ) && previous != *run)
                 {
                     return Err(anyhow!("Run fence rejected stale command"));
                 }
-            } else if expected!=0 {
+            } else if expected != 0 {
                 return Err(anyhow!("Run revision missing"));
             }
-            run["run_revision"]=json!(expected+1);
+            run["run_revision"] = json!(expected + 1);
         }
-        let command_id=docs.iter().find(|(key,_)|key.starts_with("receipt:"))
-            .map(|(key,_)|key.clone());
+        let command_id = docs
+            .iter()
+            .find(|(key, _)| key.starts_with("receipt:"))
+            .map(|(key, _)| key.clone());
         for (key, value) in docs {
-            self.write_document(&mut tx,&key,&value).await?;
+            self.write_document(&mut tx, &key, &value).await?;
             if key.starts_with("run:") {
                 self.index_run(&mut tx, &value).await?;
-                self.stage_run_notification(&mut tx,&value).await?;
+                self.stage_run_notification(&mut tx, &value).await?;
             }
         }
-        if matches!(kind,"message"|"manager_submission"|"human_message") && payload["role"] == "user" {
+        if matches!(kind, "message" | "manager_submission" | "human_message")
+            && payload["role"] == "user"
+        {
             let run_id = payload["run_id"]
                 .as_str()
                 .ok_or_else(|| anyhow!("User message has no run ID"))?;
             let text = payload["content"]
                 .as_str()
                 .ok_or_else(|| anyhow!("User message has no content"))?;
-            if payload["module_silent"]!=true {self.insert_chat(&mut tx, sid, run_id, "user", &json!(text))
-                .await?;}
+            if payload["module_silent"] != true {
+                self.insert_chat(&mut tx, sid, run_id, "user", &json!(text))
+                    .await?;
+            }
             self.write_document(&mut tx,&format!("message_meta:{run_id}"),
                 &json!({"author_id":payload["author_id"].as_str().unwrap_or(self.current_user_id()),"context_eligible":kind=="message","queued":false})).await?;
-            if kind=="message" {
-                self.begin_session_naming(&mut tx, sid, run_id, payload).await?;
+            if kind == "message" {
+                self.begin_session_naming(&mut tx, sid, run_id, payload)
+                    .await?;
             }
             // Chat shows the author's message; model context also includes
             // the validated attachment text, committed in this same transaction.
             let context_content = payload["context_content"].as_str().unwrap_or(text);
-            if kind=="message" {
-                self.insert_interaction(&mut tx,sid,run_id,"user",
-                    &json!({"role":"user","content":context_content})).await?;
+            if kind == "message" {
+                self.insert_interaction(
+                    &mut tx,
+                    sid,
+                    run_id,
+                    "user",
+                    &json!({"role":"user","content":context_content}),
+                )
+                .await?;
             }
         }
         if kind == "session_created" {
-            self.stage_notification(&mut tx,&format!("created:{sid}"),"session.created",sid,None,None).await?;
+            self.stage_notification(
+                &mut tx,
+                &format!("created:{sid}"),
+                "session.created",
+                sid,
+                None,
+                None,
+            )
+            .await?;
         }
         if kind != "message" {
             sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,?,?)")
@@ -1053,10 +1354,12 @@ impl Store {
                 .execute(&mut *tx)
                 .await?;
         }
-        if !sid.is_empty() && (kind=="message" || kind=="run_status") {
-            let run_id=payload["run_id"].as_str().or_else(||payload["id"].as_str())
-                .ok_or_else(||anyhow!("Run command has no id"))?;
-            let command_id=command_id.unwrap_or_else(||format!("{kind}:{run_id}"));
+        if !sid.is_empty() && (kind == "message" || kind == "run_status") {
+            let run_id = payload["run_id"]
+                .as_str()
+                .or_else(|| payload["id"].as_str())
+                .ok_or_else(|| anyhow!("Run command has no id"))?;
+            let command_id = command_id.unwrap_or_else(|| format!("{kind}:{run_id}"));
             sqlx::query("INSERT INTO loop_commands(command_id,run_id,schema_version,kind,payload,created_at) VALUES(?,?,1,?,?,strftime('%s','now'))")
                 .bind(command_id).bind(run_id).bind(kind)
                 .bind(self.encode_user_record(&json!({"schema_version":1,"run_id":run_id,
@@ -1098,8 +1401,18 @@ mod tests {
             let path = root.path().join(relative);
             for _ in 0..2 {
                 let pool = super::open_pool(&path, false, false).await.unwrap();
-                assert_eq!(std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777, directory_mode);
-                assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, file_mode);
+                assert_eq!(
+                    std::fs::metadata(path.parent().unwrap())
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    directory_mode
+                );
+                assert_eq!(
+                    std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                    file_mode
+                );
                 pool.close().await;
             }
         }
@@ -1110,29 +1423,52 @@ mod tests {
     async fn legacy_agent_docs_and_prompt_slots_migrate_into_canonical_tables() {
         let root = tempfile::tempdir().unwrap();
         let store = super::Store::open(root.path()).await.unwrap();
-        store.put("agent:shared_default:model",
-            &serde_json::json!({"provider":"openai_subscription","model":"gpt-6-sol"}))
-            .await.unwrap();
-        store.put("agent_abilities:shared_default",
-            &serde_json::json!({"revision":3,"visibility":{"codebase_admin":"off"},
-                "skill_visibility":{"codebase_admin":"discoverable"}}))
-            .await.unwrap();
+        store
+            .put(
+                "agent:shared_default:model",
+                &serde_json::json!({"provider":"openai_subscription","model":"gpt-6-sol"}),
+            )
+            .await
+            .unwrap();
+        store
+            .put(
+                "agent_abilities:shared_default",
+                &serde_json::json!({"revision":3,"visibility":{"codebase_admin":"off"},
+                "skill_visibility":{"codebase_admin":"discoverable"}}),
+            )
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO prompt_slots(slot_name,order_index,locked,merge_mode,content,revision,updated_at) VALUES(?,?,?,?,?,?,?)")
             .bind("legacy").bind(10_i64).bind(1_i64).bind("replace")
             .bind(store.seal(&serde_json::json!("saved prompt")).unwrap())
             .bind(2_i64).bind(100_i64).execute(&store.agent_pool).await.unwrap();
         sqlx::query("DELETE FROM agents WHERE id='shared_default'")
-            .execute(&store.agent_pool).await.unwrap();
+            .execute(&store.agent_pool)
+            .await
+            .unwrap();
         store.app_pool.close().await;
         store.pool.close().await;
         store.agent_pool.close().await;
         let migrated = super::Store::open(root.path()).await.unwrap();
         assert_eq!(migrated.agent_model().await.unwrap()["model"], "gpt-6-sol");
-        assert_eq!(migrated.agent_abilities().await.unwrap()["visibility"]["codebase_admin"], "off");
-        assert_eq!(migrated.agent_abilities().await.unwrap()["skill_visibility"]["codebase_admin"], "discoverable");
-        assert_eq!(migrated.get_prompt_slot("legacy").await.unwrap().unwrap()["content"], "saved prompt");
-        let enabled: i64 = sqlx::query_scalar("SELECT enabled FROM agent_connections WHERE id='ability:codebase_admin'")
-            .fetch_one(&migrated.agent_pool).await.unwrap();
+        assert_eq!(
+            migrated.agent_abilities().await.unwrap()["visibility"]["codebase_admin"],
+            "off"
+        );
+        assert_eq!(
+            migrated.agent_abilities().await.unwrap()["skill_visibility"]["codebase_admin"],
+            "discoverable"
+        );
+        assert_eq!(
+            migrated.get_prompt_slot("legacy").await.unwrap().unwrap()["content"],
+            "saved prompt"
+        );
+        let enabled: i64 = sqlx::query_scalar(
+            "SELECT enabled FROM agent_connections WHERE id='ability:codebase_admin'",
+        )
+        .fetch_one(&migrated.agent_pool)
+        .await
+        .unwrap();
         assert_eq!(enabled, 0);
     }
     use super::*;
@@ -1418,7 +1754,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(store.context("s").await.unwrap()[0]["content"], "first");
-        let first_cursor = store.context_cache.lock().unwrap().get(&store.context_cache_key("s"), 0, 0).unwrap().1;
+        let first_cursor = store
+            .context_cache
+            .lock()
+            .unwrap()
+            .get(&store.context_cache_key("s"), 0, 0)
+            .unwrap()
+            .1;
         store
             .atomic_docs_event(
                 vec![],
@@ -1432,7 +1774,13 @@ mod tests {
         assert_eq!(input.len(), 2);
         assert_eq!(input[0]["content"], "first");
         assert_eq!(input[1]["content"], "second");
-        let second_cursor = store.context_cache.lock().unwrap().get(&store.context_cache_key("s"), 0, 0).unwrap().1;
+        let second_cursor = store
+            .context_cache
+            .lock()
+            .unwrap()
+            .get(&store.context_cache_key("s"), 0, 0)
+            .unwrap()
+            .1;
         assert!(second_cursor > first_cursor);
     }
 
@@ -1450,8 +1798,8 @@ mod tests {
             .unwrap();
         assert_eq!(store.context("s").await.unwrap()[0]["content"], "old");
         let summary = json!({"role":"user","content":"summary"});
-        let source=json!([{"role":"user","content":"old"}]);
-        let mut checkpoint=json!({"id":"r1","session_id":"s","status":"running",
+        let source = json!([{"role":"user","content":"old"}]);
+        let mut checkpoint = json!({"id":"r1","session_id":"s","status":"running",
             "input":[summary.clone()],"compactions":1,"updated_at":1});
         store
             .save_run(
@@ -1464,8 +1812,14 @@ mod tests {
             .unwrap();
         assert_eq!(store.context("s").await.unwrap(), vec![summary.clone()]);
         checkpoint["status"] = json!("completed");
-        store.save_run(&mut checkpoint, "run_status", &json!({"run_id":"r1","status":"completed"}))
-            .await.unwrap();
+        store
+            .save_run(
+                &mut checkpoint,
+                "run_status",
+                &json!({"run_id":"r1","status":"completed"}),
+            )
+            .await
+            .unwrap();
         assert_eq!(store.context("s").await.unwrap(), vec![summary.clone()]);
         store
             .atomic_docs_event(
@@ -1507,10 +1861,10 @@ mod tests {
                 async move { clone.context("s").await.unwrap() },
             ));
         }
-        let mut checkpoint=json!({"id":"r1","session_id":"s","status":"running",
+        let mut checkpoint = json!({"id":"r1","session_id":"s","status":"running",
             "input":[],"compactions":1,"updated_at":1});
-        checkpoint["input"]=json!([{"role":"user","content":"new checkpoint"}]);
-        let source=json!([{"role":"user","content":"old"}]);
+        checkpoint["input"] = json!([{"role":"user","content":"new checkpoint"}]);
+        let source = json!([{"role":"user","content":"old"}]);
         store
             .save_run(
                 &mut checkpoint,
@@ -2064,209 +2418,414 @@ mod tests {
     /// Verify progress publication is nonterminal, idempotent by stable ID and rejects conflicting text.
     #[tokio::test]
     async fn working_message_is_atomic_nonterminal_and_idempotent() {
-        let root=tempfile::tempdir().unwrap();
-        let store=Store::open(root.path()).await.unwrap();
-        let mut run=json!({"id":"working-run","session_id":"working-session",
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        let mut run = json!({"id":"working-run","session_id":"working-session",
             "status":"running","generation":"generation","lease_epoch":0,
             "input":[{"type":"function_call_output","call_id":"call-1","output":"ok"}],
             "turns":1});
-        store.put("session:working-session", &json!({"id":"working-session","created_at":1})).await.unwrap();
-        let payload=json!({"id":"working:working-run:call-1","text":"Progress update"});
-        store.save_run(&mut run,"working_message",&payload).await.unwrap();
-        store.save_run(&mut run,"working_message",&payload).await.unwrap();
-        let summary=store.session_read_summary("working-session").await.unwrap();
-        assert!(summary["last_active_at"].as_i64().unwrap()>1);
-        assert_eq!(summary["unread_count"],1);
-        let rows=sqlx::query("SELECT id,terminal_run_id,content FROM chat WHERE run_id=?")
-            .bind("working-run").fetch_all(&store.pool).await.unwrap();
-        assert_eq!(rows.len(),1);
-        assert_eq!(rows[0].get::<String,_>("id"),"working:working-run:call-1");
-        assert!(rows[0].get::<Option<String>,_>("terminal_run_id").is_none());
-        assert_eq!(store.unseal(&rows[0].get::<Vec<u8>,_>("content")).unwrap(),
-            json!("Progress update"));
-        let conflict=json!({"id":"working:working-run:call-1","text":"Different"});
-        assert!(store.save_run(&mut run,"working_message",&conflict).await.is_err());
+        store
+            .put(
+                "session:working-session",
+                &json!({"id":"working-session","created_at":1}),
+            )
+            .await
+            .unwrap();
+        let payload = json!({"id":"working:working-run:call-1","text":"Progress update"});
+        store
+            .save_run(&mut run, "working_message", &payload)
+            .await
+            .unwrap();
+        store
+            .save_run(&mut run, "working_message", &payload)
+            .await
+            .unwrap();
+        let summary = store.session_read_summary("working-session").await.unwrap();
+        assert!(summary["last_active_at"].as_i64().unwrap() > 1);
+        assert_eq!(summary["unread_count"], 1);
+        let rows = sqlx::query("SELECT id,terminal_run_id,content FROM chat WHERE run_id=?")
+            .bind("working-run")
+            .fetch_all(&store.pool)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get::<String, _>("id"), "working:working-run:call-1");
+        assert!(rows[0]
+            .get::<Option<String>, _>("terminal_run_id")
+            .is_none());
+        assert_eq!(
+            store.unseal(&rows[0].get::<Vec<u8>, _>("content")).unwrap(),
+            json!("Progress update")
+        );
+        let conflict = json!({"id":"working:working-run:call-1","text":"Different"});
+        assert!(store
+            .save_run(&mut run, "working_message", &conflict)
+            .await
+            .is_err());
     }
     /// Verify automatic working bubbles retain model order and reject oversized publication without partial changes.
     #[tokio::test]
     async fn auto_promotion_is_ordered_atomic_and_idempotent() {
-        let root=tempfile::tempdir().unwrap();
-        let store=Store::open(root.path()).await.unwrap();
-        store.put("session:auto-session",&json!({"id":"auto-session","created_at":1})).await.unwrap();
-        let mut run=json!({"id":"auto-run","session_id":"auto-session","status":"running",
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store
+            .put(
+                "session:auto-session",
+                &json!({"id":"auto-session","created_at":1}),
+            )
+            .await
+            .unwrap();
+        let mut run = json!({"id":"auto-run","session_id":"auto-session","status":"running",
             "generation":"generation","lease_epoch":0,"input":[],"turns":1});
-        let output=json!([
+        let output = json!([
             {"type":"message","role":"assistant","content":[{"type":"output_text","text":"First"}]},
             {"type":"function_call","call_id":"read-1","name":"file_read","arguments":"{}"},
             {"type":"message","role":"assistant","content":[{"type":"output_text","text":"Second"}]}
         ]);
-        let payload=json!({"output":output,"auto_promote":true});
-        store.save_run(&mut run,"model_output",&payload).await.unwrap();
-        store.save_run(&mut run,"model_output",&payload).await.unwrap();
-        let (chat,_)=store.chat_snapshot("auto-session").await.unwrap();
-        assert_eq!(chat.len(),2);
-        assert_eq!(chat[0]["id"],"working:auto-run:auto:1:0");
-        assert_eq!(chat[0]["content"],"First");
-        assert_eq!(chat[1]["id"],"working:auto-run:auto:1:2");
-        assert_eq!(chat[1]["content"],"Second");
-        let activity=store.private_activity("auto-session",0).await.unwrap();
-        assert_eq!(activity["events"].as_array().unwrap().len(),3);
-        assert_eq!(activity["segments"].as_array().unwrap().len(),2);
-        let mut oversized=json!({"id":"too-large","session_id":"auto-session","status":"running",
+        let payload = json!({"output":output,"auto_promote":true});
+        store
+            .save_run(&mut run, "model_output", &payload)
+            .await
+            .unwrap();
+        store
+            .save_run(&mut run, "model_output", &payload)
+            .await
+            .unwrap();
+        let (chat, _) = store.chat_snapshot("auto-session").await.unwrap();
+        assert_eq!(chat.len(), 2);
+        assert_eq!(chat[0]["id"], "working:auto-run:auto:1:0");
+        assert_eq!(chat[0]["content"], "First");
+        assert_eq!(chat[1]["id"], "working:auto-run:auto:1:2");
+        assert_eq!(chat[1]["content"], "Second");
+        let activity = store.private_activity("auto-session", 0).await.unwrap();
+        assert_eq!(activity["events"].as_array().unwrap().len(), 3);
+        assert_eq!(activity["segments"].as_array().unwrap().len(), 2);
+        let mut oversized = json!({"id":"too-large","session_id":"auto-session","status":"running",
             "generation":"generation","lease_epoch":0,"input":[],"turns":1});
-        let bad=json!({"output":[{"type":"message","content":[{"text":"x".repeat(16385)}]}],
+        let bad = json!({"output":[{"type":"message","content":[{"text":"x".repeat(16385)}]}],
             "auto_promote":true});
-        assert!(store.save_run(&mut oversized,"model_output",&bad).await.is_err());
-        let (unchanged,_)=store.chat_snapshot("auto-session").await.unwrap();
-        assert_eq!(unchanged.len(),2);
+        assert!(store
+            .save_run(&mut oversized, "model_output", &bad)
+            .await
+            .is_err());
+        let (unchanged, _) = store.chat_snapshot("auto-session").await.unwrap();
+        assert_eq!(unchanged.len(), 2);
     }
     /// Create a real claimed run with substantial split input for lease ownership and writer-race tests.
     async fn renewal_fixture() -> (tempfile::TempDir, Store, Value) {
-        let root=tempfile::tempdir().unwrap();
-        let store=Store::open(root.path()).await.unwrap();
-        store.create_admin_account("root","long-hash-placeholder","generation").await.unwrap();
-        store.put("session:renew-session",&json!({"id":"renew-session","agent_id":"shared_default","status":"active"})).await.unwrap();
-        let mut run=json!({"id":"renew-run","session_id":"renew-session","status":"queued",
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store
+            .create_admin_account("root", "long-hash-placeholder", "generation")
+            .await
+            .unwrap();
+        store
+            .put(
+                "session:renew-session",
+                &json!({"id":"renew-session","agent_id":"shared_default","status":"active"}),
+            )
+            .await
+            .unwrap();
+        let mut run = json!({"id":"renew-run","session_id":"renew-session","status":"queued",
             "generation":"","run_revision":0,"turns":1,"updated_at":1,
             "input":(0..64).map(|i|json!({"role":"user","content":format!("{i}:{}","x".repeat(4096))})).collect::<Vec<_>>()});
-        store.put("run:renew-run",&run).await.unwrap();
-        assert!(store.claim_run(&mut run,"renew-owner","renew-generation").await.unwrap());
-        (root,store,run)
+        store.put("run:renew-run", &run).await.unwrap();
+        assert!(store
+            .claim_run(&mut run, "renew-owner", "renew-generation")
+            .await
+            .unwrap());
+        (root, store, run)
     }
 
     /// Verify renewal uses small metadata and rejects wrong generation, owner, epoch and stopped runs.
     #[tokio::test]
     async fn renewal_metadata_keeps_large_input_and_rejects_stale_ownership() {
-        let (_root,store,run)=renewal_fixture().await;
-        let raw:Vec<u8>=sqlx::query_scalar("SELECT value FROM docs WHERE key='run:renew-run'").fetch_one(&store.pool).await.unwrap();
-        let metadata=store.unseal(&raw).unwrap();
-        assert!(metadata["input"].is_null());assert_eq!(metadata["_recovery_input"]["count"],64);
-        assert_eq!(metadata["generation"],"renew-generation");assert_eq!(metadata["lease_epoch"],run["lease_epoch"]);
-        sqlx::query("UPDATE run_index SET lease_expires_at=0 WHERE id='renew-run'").execute(&store.pool).await.unwrap();
-        let epoch=run["lease_epoch"].as_i64().unwrap();
-        assert!(store.renew_run_lease("renew-run","renew-generation","renew-owner",epoch).await.unwrap());
-        let before:i64=sqlx::query_scalar("SELECT lease_expires_at FROM run_index WHERE id='renew-run'").fetch_one(&store.pool).await.unwrap();
-        assert!(before>crate::now() as i64);
-        for (generation,owner,attempt_epoch) in [("wrong-generation","renew-owner",epoch),
-            ("renew-generation","wrong-owner",epoch),("renew-generation","renew-owner",epoch+1)] {
-            assert!(!store.renew_run_lease("renew-run",generation,owner,attempt_epoch).await.unwrap());
-            let after:i64=sqlx::query_scalar("SELECT lease_expires_at FROM run_index WHERE id='renew-run'").fetch_one(&store.pool).await.unwrap();
-            assert_eq!(after,before);
+        let (_root, store, run) = renewal_fixture().await;
+        let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key='run:renew-run'")
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+        let metadata = store.unseal(&raw).unwrap();
+        assert!(metadata["input"].is_null());
+        assert_eq!(metadata["_recovery_input"]["count"], 64);
+        assert_eq!(metadata["generation"], "renew-generation");
+        assert_eq!(metadata["lease_epoch"], run["lease_epoch"]);
+        sqlx::query("UPDATE run_index SET lease_expires_at=0 WHERE id='renew-run'")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        let epoch = run["lease_epoch"].as_i64().unwrap();
+        assert!(store
+            .renew_run_lease("renew-run", "renew-generation", "renew-owner", epoch)
+            .await
+            .unwrap());
+        let before: i64 =
+            sqlx::query_scalar("SELECT lease_expires_at FROM run_index WHERE id='renew-run'")
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        assert!(before > crate::now() as i64);
+        for (generation, owner, attempt_epoch) in [
+            ("wrong-generation", "renew-owner", epoch),
+            ("renew-generation", "wrong-owner", epoch),
+            ("renew-generation", "renew-owner", epoch + 1),
+        ] {
+            assert!(!store
+                .renew_run_lease("renew-run", generation, owner, attempt_epoch)
+                .await
+                .unwrap());
+            let after: i64 =
+                sqlx::query_scalar("SELECT lease_expires_at FROM run_index WHERE id='renew-run'")
+                    .fetch_one(&store.pool)
+                    .await
+                    .unwrap();
+            assert_eq!(after, before);
         }
-        assert!(!store.renew_run_lease("missing-run","renew-generation","renew-owner",epoch).await.unwrap());
-        let mut stopped=run.clone();stopped["status"]=json!("stopped");
-        store.save_run(&mut stopped,"run_status",&json!({})).await.unwrap();
-        assert!(!store.renew_run_lease("renew-run","renew-generation","renew-owner",epoch).await.unwrap());
+        assert!(!store
+            .renew_run_lease("missing-run", "renew-generation", "renew-owner", epoch)
+            .await
+            .unwrap());
+        let mut stopped = run.clone();
+        stopped["status"] = json!("stopped");
+        store
+            .save_run(&mut stopped, "run_status", &json!({}))
+            .await
+            .unwrap();
+        assert!(!store
+            .renew_run_lease("renew-run", "renew-generation", "renew-owner", epoch)
+            .await
+            .unwrap());
     }
 
     /// Demonstrate the obsolete deferred renewal snapshot fails after a real queue commit, then exercise the reserved-writer path.
     #[tokio::test]
     async fn renewal_deferred_snapshot_reproduces_concurrent_queue_write_conflict() {
-        let (_root,store,run)=renewal_fixture().await;
-        let mut old=store.pool.begin().await.unwrap();
-        let _:Vec<u8>=sqlx::query_scalar("SELECT value FROM docs WHERE key='run:renew-run'").fetch_one(&mut *old).await.unwrap();
-        let entry=json!({"id":"queued-followup","message_id":"user:queued-followup","session_id":"renew-session",
+        let (_root, store, run) = renewal_fixture().await;
+        let mut old = store.pool.begin().await.unwrap();
+        let _: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key='run:renew-run'")
+            .fetch_one(&mut *old)
+            .await
+            .unwrap();
+        let entry = json!({"id":"queued-followup","message_id":"user:queued-followup","session_id":"renew-session",
             "agent_id":"shared_default","revision":0,"status":"pending","review_status":"acceptable","choice":"queue",
             "content":"ordinary followup","context_content":"ordinary followup","attachments":[]});
         // A real queue submission commits between the old renewal read/write.
-        store.followup_submit("renew-session",entry,vec![],"queued-followup","digest",&json!({})).await.unwrap();
+        store
+            .followup_submit(
+                "renew-session",
+                entry,
+                vec![],
+                "queued-followup",
+                "digest",
+                &json!({}),
+            )
+            .await
+            .unwrap();
         let failure=sqlx::query("UPDATE run_index SET lease_expires_at=? WHERE id=? AND lease_owner=? AND lease_epoch=?")
             .bind(crate::now() as i64+30).bind("renew-run").bind("renew-owner").bind(run["lease_epoch"].as_i64().unwrap())
             .execute(&mut *old).await.unwrap_err();
-        assert_eq!(failure.as_database_error().and_then(|e|e.code()).as_deref(),Some("517"));
+        assert_eq!(
+            failure
+                .as_database_error()
+                .and_then(|e| e.code())
+                .as_deref(),
+            Some("517")
+        );
         old.rollback().await.unwrap();
-        assert!(store.renew_run_lease("renew-run","renew-generation","renew-owner",run["lease_epoch"].as_i64().unwrap()).await.unwrap());
-        assert_eq!(store.followup_queue("renew-session").await.unwrap()["entries"][0]["status"],"pending");
+        assert!(store
+            .renew_run_lease(
+                "renew-run",
+                "renew-generation",
+                "renew-owner",
+                run["lease_epoch"].as_i64().unwrap()
+            )
+            .await
+            .unwrap());
+        assert_eq!(
+            store.followup_queue("renew-session").await.unwrap()["entries"][0]["status"],
+            "pending"
+        );
     }
 
     /// Verify lease renewal waits behind an active writer without spuriously abandoning ownership.
     #[tokio::test]
     async fn renewal_waits_for_queue_writer_instead_of_cancelling_owned_run() {
-        let (_root,store,run)=renewal_fixture().await;
-        let epoch=run["lease_epoch"].as_i64().unwrap();
+        let (_root, store, run) = renewal_fixture().await;
+        let epoch = run["lease_epoch"].as_i64().unwrap();
         for revision in 1..=3 {
-            let mut queue_writer=store.pool.begin().await.unwrap();
-            let queue=json!({"schema_version":1,"session_id":"renew-session","revision":revision,
+            let mut queue_writer = store.pool.begin().await.unwrap();
+            let queue = json!({"schema_version":1,"session_id":"renew-session","revision":revision,
                 "held":false,"reason":null,"entries":[]});
             sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
                 .bind("followup_queue:renew-session").bind(store.seal(&queue).unwrap()).execute(&mut *queue_writer).await.unwrap();
-            let renewed_store=store.clone();
-            let (started,ready)=tokio::sync::oneshot::channel();
-            let renewal=tokio::spawn(async move {
+            let renewed_store = store.clone();
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let renewal = tokio::spawn(async move {
                 started.send(()).unwrap();
-                renewed_store.renew_run_lease("renew-run","renew-generation","renew-owner",epoch).await
+                renewed_store
+                    .renew_run_lease("renew-run", "renew-generation", "renew-owner", epoch)
+                    .await
             });
             ready.await.unwrap();
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            assert!(!renewal.is_finished(),"Renewal must wait behind an existing writer, not fail a read-to-write upgrade");
+            assert!(
+                !renewal.is_finished(),
+                "Renewal must wait behind an existing writer, not fail a read-to-write upgrade"
+            );
             queue_writer.commit().await.unwrap();
-            assert!(tokio::time::timeout(std::time::Duration::from_secs(10),renewal).await.unwrap().unwrap().unwrap());
-            assert_eq!(store.followup_queue("renew-session").await.unwrap()["revision"],revision);
-            assert_eq!(store.get("run:renew-run").await.unwrap().unwrap()["generation"],"renew-generation");
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_secs(10), renewal)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap()
+            );
+            assert_eq!(
+                store.followup_queue("renew-session").await.unwrap()["revision"],
+                revision
+            );
+            assert_eq!(
+                store.get("run:renew-run").await.unwrap().unwrap()["generation"],
+                "renew-generation"
+            );
         }
     }
 
     /// Verify command acknowledgment, takeover and lease expiry preserve exactly one authorized terminal publication.
     #[tokio::test]
     async fn command_ack_and_lease_takeover_fence_terminal_publication() {
-        let root=tempfile::tempdir().unwrap();
-        let store=Store::open(root.path()).await.unwrap();
-        if store.account_by_id("admin").await.unwrap().is_none(){store.create_admin_account("root","long-hash-placeholder","generation").await.unwrap();}
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        if store.account_by_id("admin").await.unwrap().is_none() {
+            store
+                .create_admin_account("root", "long-hash-placeholder", "generation")
+                .await
+                .unwrap();
+        }
 
-        store.put("session:s1",&json!({"id":"s1","agent_id":"shared_default","status":"active"})).await.unwrap();
-        let run=json!({"id":"r1","session_id":"s1","status":"queued","generation":"",
+        store
+            .put(
+                "session:s1",
+                &json!({"id":"s1","agent_id":"shared_default","status":"active"}),
+            )
+            .await
+            .unwrap();
+        let run = json!({"id":"r1","session_id":"s1","status":"queued","generation":"",
             "input":[],"turns":1,"updated_at":1});
-        store.atomic_docs_event(vec![
-            ("run:r1".into(),run.clone()),
-            ("receipt:message:s1:one".into(),json!({"result":{"run_id":"r1"}})),
-        ],"s1","message",&json!({"role":"user","content":"hello","run_id":"r1"}))
-            .await.unwrap();
-        assert_eq!(store.acknowledge_loop_commands().await.unwrap(),1);
-        assert_eq!(store.acknowledge_loop_commands().await.unwrap(),0);
-        let mut first=store.get("run:r1").await.unwrap().unwrap();
-        assert!(store.claim_run(&mut first,"loop-a","generation-a").await.unwrap());
-        let mut stale_http=first.clone();
-        first["pending"]=json!({"state":"executing","name":"file_write"});
-        store.save_run(&mut first,"run_status",&json!({})).await.unwrap();
-        stale_http["status"]=json!("stopped");
-        assert!(store.save_run(&mut stale_http,"run_status",&json!({})).await.is_err());
-        assert_eq!(store.get("run:r1").await.unwrap().unwrap()["pending"]["state"],
-            "executing");
-        let rejected=store.atomic_docs_event(vec![
-            ("run:r1".into(),stale_http.clone()),
-            ("receipt:run:r1:cancel:stale".into(),json!({"result":{}})),
-        ],"s1","run_status",&json!({"id":"r1","status":"stopped"})).await;
+        store
+            .atomic_docs_event(
+                vec![
+                    ("run:r1".into(), run.clone()),
+                    (
+                        "receipt:message:s1:one".into(),
+                        json!({"result":{"run_id":"r1"}}),
+                    ),
+                ],
+                "s1",
+                "message",
+                &json!({"role":"user","content":"hello","run_id":"r1"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(store.acknowledge_loop_commands().await.unwrap(), 1);
+        assert_eq!(store.acknowledge_loop_commands().await.unwrap(), 0);
+        let mut first = store.get("run:r1").await.unwrap().unwrap();
+        assert!(store
+            .claim_run(&mut first, "loop-a", "generation-a")
+            .await
+            .unwrap());
+        let mut stale_http = first.clone();
+        first["pending"] = json!({"state":"executing","name":"file_write"});
+        store
+            .save_run(&mut first, "run_status", &json!({}))
+            .await
+            .unwrap();
+        stale_http["status"] = json!("stopped");
+        assert!(store
+            .save_run(&mut stale_http, "run_status", &json!({}))
+            .await
+            .is_err());
+        assert_eq!(
+            store.get("run:r1").await.unwrap().unwrap()["pending"]["state"],
+            "executing"
+        );
+        let rejected = store
+            .atomic_docs_event(
+                vec![
+                    ("run:r1".into(), stale_http.clone()),
+                    ("receipt:run:r1:cancel:stale".into(), json!({"result":{}})),
+                ],
+                "s1",
+                "run_status",
+                &json!({"id":"r1","status":"stopped"}),
+            )
+            .await;
         assert!(rejected.is_err());
-        assert!(store.get("receipt:run:r1:cancel:stale").await.unwrap().is_none());
-        first["status"]=json!("queued");
-        store.save_run(&mut first,"run_status",&json!({})).await.unwrap();
-        let mut second=store.get("run:r1").await.unwrap().unwrap();
-        assert!(store.claim_run(&mut second,"loop-b","generation-b").await.unwrap());
+        assert!(store
+            .get("receipt:run:r1:cancel:stale")
+            .await
+            .unwrap()
+            .is_none());
+        first["status"] = json!("queued");
+        store
+            .save_run(&mut first, "run_status", &json!({}))
+            .await
+            .unwrap();
+        let mut second = store.get("run:r1").await.unwrap().unwrap();
+        assert!(store
+            .claim_run(&mut second, "loop-b", "generation-b")
+            .await
+            .unwrap());
         sqlx::query("UPDATE run_index SET lease_expires_at=0 WHERE id='r1'")
-            .execute(&store.pool).await.unwrap();
-        let mut expired=second.clone();
-        expired["status"]=json!("completed");
-        assert!(store.save_run(&mut expired,"model_output",
-            &json!({"output":[],"terminal_text":"expired"})).await.is_err());
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        let mut expired = second.clone();
+        expired["status"] = json!("completed");
+        assert!(store
+            .save_run(
+                &mut expired,
+                "model_output",
+                &json!({"output":[],"terminal_text":"expired"})
+            )
+            .await
+            .is_err());
         sqlx::query("UPDATE run_index SET lease_expires_at=strftime('%s','now')+30 WHERE id='r1'")
-            .execute(&store.pool).await.unwrap();
-        first["status"]=json!("completed");
-        assert!(store.save_run(&mut first,"model_output",
-            &json!({"output":[],"terminal_text":"stale"})).await.is_err());
-        let policy=crate::workflow::Policy::resolve(None).unwrap();
-        crate::publication::terminal(&store,&mut second,&[],"accepted",&policy)
-            .await.unwrap();
-        crate::publication::terminal(&store,&mut second,&[],"accepted",&policy)
-            .await.unwrap();
-        let chat_count:i64=sqlx::query_scalar(
-            "SELECT count(*) FROM chat WHERE terminal_run_id='r1'")
-            .fetch_one(&store.pool).await.unwrap();
-        let outbox_count:i64=sqlx::query_scalar(
-            "SELECT count(*) FROM publication_outbox WHERE run_id='r1'")
-            .fetch_one(&store.pool).await.unwrap();
-        assert_eq!((chat_count,outbox_count),(1,1));
-        let observer=Store::open(root.path()).await.unwrap();
-        assert_eq!(observer.get("run:r1").await.unwrap().unwrap()["status"],"completed");
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        first["status"] = json!("completed");
+        assert!(store
+            .save_run(
+                &mut first,
+                "model_output",
+                &json!({"output":[],"terminal_text":"stale"})
+            )
+            .await
+            .is_err());
+        let policy = crate::workflow::Policy::resolve(None).unwrap();
+        crate::publication::terminal(&store, &mut second, &[], "accepted", &policy)
+            .await
+            .unwrap();
+        crate::publication::terminal(&store, &mut second, &[], "accepted", &policy)
+            .await
+            .unwrap();
+        let chat_count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM chat WHERE terminal_run_id='r1'")
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        let outbox_count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM publication_outbox WHERE run_id='r1'")
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!((chat_count, outbox_count), (1, 1));
+        let observer = Store::open(root.path()).await.unwrap();
+        assert_eq!(
+            observer.get("run:r1").await.unwrap().unwrap()["status"],
+            "completed"
+        );
     }
     /// Status-only saves must leave large history ciphertext untouched, while
     /// append and replacement publish complete recovery state atomically.
@@ -2274,65 +2833,139 @@ mod tests {
     async fn recovery_input_deltas_survive_reopen_and_reject_incomplete_rows() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
-        store.put("session:s",&json!({"id":"s","agent_id":"shared_default","status":"active"})).await.unwrap();
+        store
+            .put(
+                "session:s",
+                &json!({"id":"s","agent_id":"shared_default","status":"active"}),
+            )
+            .await
+            .unwrap();
         let mut run = json!({"id":"delta","session_id":"s","status":"queued",
             "input":[{"role":"user","content":"雪".repeat(1000)}]});
         store.put("run:delta", &run).await.unwrap();
-        let original: Vec<u8> = sqlx::query_scalar("SELECT item FROM recovery_input WHERE run_id='delta' AND ordinal=0")
-            .fetch_one(&store.pool).await.unwrap();
-        store.save_run(&mut run,"run_status",&json!({})).await.unwrap();
-        let unchanged: Vec<u8> = sqlx::query_scalar("SELECT item FROM recovery_input WHERE run_id='delta' AND ordinal=0")
-            .fetch_one(&store.pool).await.unwrap();
-        assert_eq!(original,unchanged);
-        run["input"].as_array_mut().unwrap().push(json!({"type":"function_call_output","call_id":"c","output":"ok"}));
-        store.save_run(&mut run,"tool_result",&json!({})).await.unwrap();
+        let original: Vec<u8> = sqlx::query_scalar(
+            "SELECT item FROM recovery_input WHERE run_id='delta' AND ordinal=0",
+        )
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+        store
+            .save_run(&mut run, "run_status", &json!({}))
+            .await
+            .unwrap();
+        let unchanged: Vec<u8> = sqlx::query_scalar(
+            "SELECT item FROM recovery_input WHERE run_id='delta' AND ordinal=0",
+        )
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(original, unchanged);
+        run["input"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type":"function_call_output","call_id":"c","output":"ok"}));
+        store
+            .save_run(&mut run, "tool_result", &json!({}))
+            .await
+            .unwrap();
         let reopened = Store::open(root.path()).await.unwrap();
-        assert_eq!(reopened.get("run:delta").await.unwrap().unwrap(),run);
-        assert_eq!(reopened.list("run:").await.unwrap(),vec![run.clone()]);
+        assert_eq!(reopened.get("run:delta").await.unwrap().unwrap(), run);
+        assert_eq!(reopened.list("run:").await.unwrap(), vec![run.clone()]);
         let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key='run:delta'")
-            .fetch_one(&store.pool).await.unwrap();
-        let metadata=store.unseal(&raw).unwrap();
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+        let metadata = store.unseal(&raw).unwrap();
         assert!(metadata.get("input").is_none());
-        assert_eq!(metadata["_recovery_input"]["count"],2);
+        assert_eq!(metadata["_recovery_input"]["count"], 2);
         // A failed terminal save must roll back metadata and any item changes.
-        let before=run.clone();
-        run["status"]=json!("completed"); run["turns"]=json!(1);
-        assert!(store.save_run(&mut run,"model_output",&json!({"output":[],"terminal_text":""})).await.is_err());
-        assert_eq!(store.get("run:delta").await.unwrap().unwrap(),before);
-        run=before; run["input"]=json!([{"role":"user","content":"replacement"}]);
-        store.save_run(&mut run,"run_status",&json!({})).await.unwrap();
-        assert_eq!(store.get("run:delta").await.unwrap().unwrap(),run);
-        sqlx::query("DELETE FROM recovery_input WHERE run_id='delta'").execute(&store.pool).await.unwrap();
-        assert!(store.get("run:delta").await.unwrap_err().to_string().contains("Incomplete recovery"));
+        let before = run.clone();
+        run["status"] = json!("completed");
+        run["turns"] = json!(1);
+        assert!(store
+            .save_run(
+                &mut run,
+                "model_output",
+                &json!({"output":[],"terminal_text":""})
+            )
+            .await
+            .is_err());
+        assert_eq!(store.get("run:delta").await.unwrap().unwrap(), before);
+        run = before;
+        run["input"] = json!([{"role":"user","content":"replacement"}]);
+        store
+            .save_run(&mut run, "run_status", &json!({}))
+            .await
+            .unwrap();
+        assert_eq!(store.get("run:delta").await.unwrap().unwrap(), run);
+        sqlx::query("DELETE FROM recovery_input WHERE run_id='delta'")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        assert!(store
+            .get("run:delta")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Incomplete recovery"));
         // RECOVERY-WRITE-REGRESSION: corruption cannot be healed by a status save.
-        assert!(store.save_run(&mut run,"run_status",&json!({})).await.is_err());
+        assert!(store
+            .save_run(&mut run, "run_status", &json!({}))
+            .await
+            .is_err());
         store.delete("run:delta").await.unwrap();
         assert!(store.get("run:delta").await.unwrap().is_none());
-        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT COUNT(*) FROM recovery_input WHERE run_id='delta'")
-            .fetch_one(&store.pool).await.unwrap(),0);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM recovery_input WHERE run_id='delta'"
+            )
+            .fetch_one(&store.pool)
+            .await
+            .unwrap(),
+            0
+        );
     }
 
     /// Verify old inline input remains readable and upgrades through the normal checkpoint writer.
     #[tokio::test]
     async fn legacy_inline_recovery_remains_readable_and_upgrades_on_save() {
-        let root=tempfile::tempdir().unwrap(); let store=Store::open(root.path()).await.unwrap();
-        store.put("session:s",&json!({"id":"s","agent_id":"shared_default","status":"active"})).await.unwrap();
-        let mut run=json!({"id":"legacy-input","session_id":"s","status":"queued","input":[{"role":"user","content":"old"}]});
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store
+            .put(
+                "session:s",
+                &json!({"id":"s","agent_id":"shared_default","status":"active"}),
+            )
+            .await
+            .unwrap();
+        let mut run = json!({"id":"legacy-input","session_id":"s","status":"queued","input":[{"role":"user","content":"old"}]});
         sqlx::query("INSERT INTO docs(key,value) VALUES('run:legacy-input',?)")
-            .bind(store.seal(&run).unwrap()).execute(&store.pool).await.unwrap();
-        assert_eq!(store.get("run:legacy-input").await.unwrap().unwrap(),run);
-        store.save_run(&mut run,"run_status",&json!({})).await.unwrap();
-        assert_eq!(store.get("run:legacy-input").await.unwrap().unwrap(),run);
+            .bind(store.seal(&run).unwrap())
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        assert_eq!(store.get("run:legacy-input").await.unwrap().unwrap(), run);
+        store
+            .save_run(&mut run, "run_status", &json!({}))
+            .await
+            .unwrap();
+        assert_eq!(store.get("run:legacy-input").await.unwrap().unwrap(), run);
     }
 
     /// RECOVERY-HASH-REGRESSION: streaming and buffered hashes agree for nested
     /// objects, escapes, Unicode, numeric values, empty input and large results.
     #[test]
     fn recovery_streaming_digest_matches_compact_json() {
-        for item in [Value::Null, json!([]), json!({"text":"雪\n\"", "nested":[true,1,1.25]}),
-            json!({"output":"x".repeat(100_000)})] {
-            assert_eq!(recovery_item_digest(&item).unwrap(),
-                recovery_digest(&serde_json::to_vec(&item).unwrap()));
+        for item in [
+            Value::Null,
+            json!([]),
+            json!({"text":"雪\n\"", "nested":[true,1,1.25]}),
+            json!({"output":"x".repeat(100_000)}),
+        ] {
+            assert_eq!(
+                recovery_item_digest(&item).unwrap(),
+                recovery_digest(&serde_json::to_vec(&item).unwrap())
+            );
         }
     }
 
@@ -2340,99 +2973,203 @@ mod tests {
     /// commitments, corruption rejection, and rollback using temporary state only.
     #[tokio::test]
     async fn recovery_manifest_upgrades_legacy_split_and_rejects_corruption() {
-        let root=tempfile::tempdir().unwrap(); let store=Store::open(root.path()).await.unwrap();
-        store.put("session:s",&json!({"id":"s","agent_id":"shared_default","status":"active"})).await.unwrap();
-        let mut run=json!({"id":"manifest","session_id":"s","status":"queued",
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store
+            .put(
+                "session:s",
+                &json!({"id":"s","agent_id":"shared_default","status":"active"}),
+            )
+            .await
+            .unwrap();
+        let mut run = json!({"id":"manifest","session_id":"s","status":"queued",
             "input":[{"role":"user","content":"雪"},{"role":"assistant","content":"reply"}]});
-        store.put("run:manifest",&run).await.unwrap();
-        let raw:Vec<u8>=sqlx::query_scalar("SELECT value FROM docs WHERE key='run:manifest'")
-            .fetch_one(&store.pool).await.unwrap();
-        let mut legacy=store.unseal(&raw).unwrap();
-        legacy["_recovery_input"].as_object_mut().unwrap().remove("manifest");
+        store.put("run:manifest", &run).await.unwrap();
+        let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key='run:manifest'")
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+        let mut legacy = store.unseal(&raw).unwrap();
+        legacy["_recovery_input"]
+            .as_object_mut()
+            .unwrap()
+            .remove("manifest");
         sqlx::query("UPDATE docs SET value=? WHERE key='run:manifest'")
-            .bind(store.seal(&legacy).unwrap()).execute(&store.pool).await.unwrap();
-        let before:Vec<Vec<u8>>=sqlx::query_scalar("SELECT item FROM recovery_input WHERE run_id='manifest' ORDER BY ordinal")
-            .fetch_all(&store.pool).await.unwrap();
-        assert_eq!(store.get("run:manifest").await.unwrap().unwrap(),run);
-        store.save_run(&mut run,"run_status",&json!({})).await.unwrap();
-        let metadata_raw:Vec<u8>=sqlx::query_scalar("SELECT value FROM docs WHERE key='run:manifest'")
-            .fetch_one(&store.pool).await.unwrap();
-        let metadata=store.unseal(&metadata_raw).unwrap();
-        assert_eq!(metadata["_recovery_input"]["manifest"].as_array().unwrap().len(),2);
-        let after:Vec<Vec<u8>>=sqlx::query_scalar("SELECT item FROM recovery_input WHERE run_id='manifest' ORDER BY ordinal")
-            .fetch_all(&store.pool).await.unwrap();
-        assert_eq!(before,after);
+            .bind(store.seal(&legacy).unwrap())
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        let before: Vec<Vec<u8>> = sqlx::query_scalar(
+            "SELECT item FROM recovery_input WHERE run_id='manifest' ORDER BY ordinal",
+        )
+        .fetch_all(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(store.get("run:manifest").await.unwrap().unwrap(), run);
+        store
+            .save_run(&mut run, "run_status", &json!({}))
+            .await
+            .unwrap();
+        let metadata_raw: Vec<u8> =
+            sqlx::query_scalar("SELECT value FROM docs WHERE key='run:manifest'")
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        let metadata = store.unseal(&metadata_raw).unwrap();
+        assert_eq!(
+            metadata["_recovery_input"]["manifest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let after: Vec<Vec<u8>> = sqlx::query_scalar(
+            "SELECT item FROM recovery_input WHERE run_id='manifest' ORDER BY ordinal",
+        )
+        .fetch_all(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(before, after);
         // A valid ciphertext from another ordinal must also fail, not just junk.
-        for damaged in [vec![0u8;10],before[1].clone()] {
+        for damaged in [vec![0u8; 10], before[1].clone()] {
             sqlx::query("UPDATE recovery_input SET item=? WHERE run_id='manifest' AND ordinal=0")
-                .bind(damaged).execute(&store.pool).await.unwrap();
+                .bind(damaged)
+                .execute(&store.pool)
+                .await
+                .unwrap();
             assert!(store.get("run:manifest").await.is_err());
-            let revision=run["revision"].clone();
-            assert!(store.save_run(&mut run,"run_status",&json!({})).await.is_err());
-            assert_eq!(run["revision"],revision);
-            let retained:Vec<u8>=sqlx::query_scalar("SELECT value FROM docs WHERE key='run:manifest'")
-                .fetch_one(&store.pool).await.unwrap();
-            assert_eq!(metadata_raw,retained);
+            let revision = run["revision"].clone();
+            assert!(store
+                .save_run(&mut run, "run_status", &json!({}))
+                .await
+                .is_err());
+            assert_eq!(run["revision"], revision);
+            let retained: Vec<u8> =
+                sqlx::query_scalar("SELECT value FROM docs WHERE key='run:manifest'")
+                    .fetch_one(&store.pool)
+                    .await
+                    .unwrap();
+            assert_eq!(metadata_raw, retained);
         }
         sqlx::query("UPDATE recovery_input SET item=? WHERE run_id='manifest' AND ordinal=0")
-            .bind(&before[0]).execute(&store.pool).await.unwrap();
-        let mut malformed=metadata.clone(); malformed["_recovery_input"]["manifest"]=json!([]);
+            .bind(&before[0])
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        let mut malformed = metadata.clone();
+        malformed["_recovery_input"]["manifest"] = json!([]);
         sqlx::query("UPDATE docs SET value=? WHERE key='run:manifest'")
-            .bind(store.seal(&malformed).unwrap()).execute(&store.pool).await.unwrap();
+            .bind(store.seal(&malformed).unwrap())
+            .execute(&store.pool)
+            .await
+            .unwrap();
         assert!(store.get("run:manifest").await.is_err());
-        assert!(store.save_run(&mut run,"run_status",&json!({})).await.is_err());
+        assert!(store
+            .save_run(&mut run, "run_status", &json!({}))
+            .await
+            .is_err());
     }
 
     /// One retained LRU serves all accounts; identical session IDs remain isolated.
     #[tokio::test]
     async fn shared_context_cache_is_account_scoped_and_reconfiguration_is_global() {
-        let root=tempfile::tempdir().unwrap(); let store=Store::open(root.path()).await.unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
         // Fixture-only account creation; exercise the real lazy user-handle path.
         sqlx::query("INSERT INTO user_accounts(user_id,username,value) VALUES('other','other',?)")
-            .bind(store.seal(&json!({"user_id":"other","username":"other"})).unwrap())
-            .execute(&store.app_pool).await.unwrap();
-        let other=store.for_user("other").await.unwrap();
-        assert!(Arc::ptr_eq(&store.context_cache,&other.context_cache));
-        assert!(Arc::ptr_eq(&store.cache,&other.cache));
-        for (handle,text) in [(&store,"admin text"),(&other,"other text")] {
+            .bind(
+                store
+                    .seal(&json!({"user_id":"other","username":"other"}))
+                    .unwrap(),
+            )
+            .execute(&store.app_pool)
+            .await
+            .unwrap();
+        let other = store.for_user("other").await.unwrap();
+        assert!(Arc::ptr_eq(&store.context_cache, &other.context_cache));
+        assert!(Arc::ptr_eq(&store.cache, &other.cache));
+        for (handle, text) in [(&store, "admin text"), (&other, "other text")] {
             handle.put("session:s",&json!({"id":"s","checkpoint_input":[{"role":"user","content":text}],"checkpoint_through":0})).await.unwrap();
-            assert_eq!(handle.context("s").await.unwrap()[0]["content"],text);
+            assert_eq!(handle.context("s").await.unwrap()[0]["content"], text);
         }
-        assert_eq!(store.context("s").await.unwrap()[0]["content"],"admin text");
-        other.put("session:s",&json!({"id":"s","checkpoint_input":[],"checkpoint_through":0})).await.unwrap();
-        assert!(store.context_cache.lock().unwrap().get(&store.context_cache_key("s"), 0, 0).is_some());
-        other.configure_cache(0,0);
-        assert!(store.context_cache.lock().unwrap().get(&store.context_cache_key("s"), 0, 0).is_none());
-        assert_eq!(store.context("s").await.unwrap()[0]["content"],"admin text");
-        assert!(store.context_cache.lock().unwrap().get(&store.context_cache_key("s"), 0, 0).is_none());
+        assert_eq!(
+            store.context("s").await.unwrap()[0]["content"],
+            "admin text"
+        );
+        other
+            .put(
+                "session:s",
+                &json!({"id":"s","checkpoint_input":[],"checkpoint_through":0}),
+            )
+            .await
+            .unwrap();
+        assert!(store
+            .context_cache
+            .lock()
+            .unwrap()
+            .get(&store.context_cache_key("s"), 0, 0)
+            .is_some());
+        other.configure_cache(0, 0);
+        assert!(store
+            .context_cache
+            .lock()
+            .unwrap()
+            .get(&store.context_cache_key("s"), 0, 0)
+            .is_none());
+        assert_eq!(
+            store.context("s").await.unwrap()[0]["content"],
+            "admin text"
+        );
+        assert!(store
+            .context_cache
+            .lock()
+            .unwrap()
+            .get(&store.context_cache_key("s"), 0, 0)
+            .is_none());
     }
-
 }
 
-#[cfg(test)] mod recovery_measurements {
+#[cfg(test)]
+mod recovery_measurements {
     use super::*;
     // RECOVERY-SAVE-BENCHMARK: opt-in, temporary encrypted state only. Measure
     // real transactional saves and reopen, not provider latency or total RSS.
     #[tokio::test]
     #[ignore = "repeatable recovery timing fixture"]
     async fn repeated_recovery_save_measurement() {
-        let root=tempfile::tempdir().unwrap();
-        let store=Store::open(root.path()).await.unwrap();
-        let input=(0..512).map(|i|json!({"role":"user","content":format!("{i}:{}","x".repeat(100))})).collect::<Vec<_>>();
-        let mut run=json!({"id":"bench","session_id":"bench-session","status":"queued","input":input});
-        store.put("run:bench",&run).await.unwrap();
-        let original:Vec<Vec<u8>>=sqlx::query_scalar("SELECT item FROM recovery_input WHERE run_id='bench' ORDER BY ordinal").fetch_all(&store.pool).await.unwrap();
-        let start=std::time::Instant::now();
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        let input = (0..512)
+            .map(|i| json!({"role":"user","content":format!("{i}:{}","x".repeat(100))}))
+            .collect::<Vec<_>>();
+        let mut run =
+            json!({"id":"bench","session_id":"bench-session","status":"queued","input":input});
+        store.put("run:bench", &run).await.unwrap();
+        let original: Vec<Vec<u8>> = sqlx::query_scalar(
+            "SELECT item FROM recovery_input WHERE run_id='bench' ORDER BY ordinal",
+        )
+        .fetch_all(&store.pool)
+        .await
+        .unwrap();
+        let start = std::time::Instant::now();
         for i in 0..50 {
-            run["updated_at"]=json!(i);
-            store.save_run(&mut run,"run_status",&json!({})).await.unwrap();
+            run["updated_at"] = json!(i);
+            store
+                .save_run(&mut run, "run_status", &json!({}))
+                .await
+                .unwrap();
         }
-        let elapsed=start.elapsed();
-        let retained:Vec<Vec<u8>>=sqlx::query_scalar("SELECT item FROM recovery_input WHERE run_id='bench' ORDER BY ordinal").fetch_all(&store.pool).await.unwrap();
-        assert_eq!(original,retained);
-        let start=std::time::Instant::now();
-        let reopened=Store::open(root.path()).await.unwrap();
-        assert_eq!(reopened.get("run:bench").await.unwrap().unwrap(),run);
+        let elapsed = start.elapsed();
+        let retained: Vec<Vec<u8>> = sqlx::query_scalar(
+            "SELECT item FROM recovery_input WHERE run_id='bench' ORDER BY ordinal",
+        )
+        .fetch_all(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(original, retained);
+        let start = std::time::Instant::now();
+        let reopened = Store::open(root.path()).await.unwrap();
+        assert_eq!(reopened.get("run:bench").await.unwrap().unwrap(), run);
         println!("recovery measurement: items=512 status_saves=50 save_total={elapsed:?} reopen_and_read={:?} unchanged_ciphertext_rows=512",start.elapsed());
     }
 }
@@ -2443,8 +3180,11 @@ mod admin_storage_policy_tests {
     /// Write an isolated administrator encryption policy for plaintext-envelope compatibility tests.
     fn configure(root: &Path, enabled: bool) {
         std::fs::create_dir_all(root.join("config")).unwrap();
-        std::fs::write(root.join("config/app-settings.json"),
-            serde_json::to_vec(&json!({"admin_database_encryption":{"enabled":enabled}})).unwrap()).unwrap();
+        std::fs::write(
+            root.join("config/app-settings.json"),
+            serde_json::to_vec(&json!({"admin_database_encryption":{"enabled":enabled}})).unwrap(),
+        )
+        .unwrap();
     }
     /// Verify live administrator plaintext policy changes preserve authentication and never weaken other storage planes.
     #[tokio::test]
@@ -2457,33 +3197,70 @@ mod admin_storage_policy_tests {
         let store = Store::open(root.path()).await.unwrap();
         assert_eq!(store.get("memory:old").await.unwrap(), Some(value.clone()));
         store.put("memory:new", &value).await.unwrap();
-        let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key='memory:new'").fetch_one(&store.pool).await.unwrap();
+        let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key='memory:new'")
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
         let mut envelope: Value = serde_json::from_slice(&raw).unwrap();
         assert_eq!(envelope["value"], value);
         configure(root.path(), true);
         store.put("memory:live_encrypted", &value).await.unwrap();
-        let live_encrypted: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key='memory:live_encrypted'").fetch_one(&store.pool).await.unwrap();
+        let live_encrypted: Vec<u8> =
+            sqlx::query_scalar("SELECT value FROM docs WHERE key='memory:live_encrypted'")
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
         assert!(serde_json::from_slice::<Value>(&live_encrypted).is_err());
         configure(root.path(), false);
         store.put("memory:live_plaintext", &value).await.unwrap();
-        let live_plaintext: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key='memory:live_plaintext'").fetch_one(&store.pool).await.unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&live_plaintext).unwrap()["value"], value);
+        let live_plaintext: Vec<u8> =
+            sqlx::query_scalar("SELECT value FROM docs WHERE key='memory:live_plaintext'")
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&live_plaintext).unwrap()["value"],
+            value
+        );
         envelope["value"]["private"] = json!("tampered");
-        assert!(store.unseal(&serde_json::to_vec(&envelope).unwrap()).is_err());
+        assert!(store
+            .unseal(&serde_json::to_vec(&envelope).unwrap())
+            .is_err());
         store.put("credential:fixture", &value).await.unwrap();
-        let secret: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key='credential:fixture'").fetch_one(&store.app_pool).await.unwrap();
+        let secret: Vec<u8> =
+            sqlx::query_scalar("SELECT value FROM docs WHERE key='credential:fixture'")
+                .fetch_one(&store.app_pool)
+                .await
+                .unwrap();
         assert!(serde_json::from_slice::<Value>(&secret).is_err());
         store.put("agent:shared_default", &value).await.unwrap();
-        let agent: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key='agent:shared_default'").fetch_one(&store.agent_pool).await.unwrap();
+        let agent: Vec<u8> =
+            sqlx::query_scalar("SELECT value FROM docs WHERE key='agent:shared_default'")
+                .fetch_one(&store.agent_pool)
+                .await
+                .unwrap();
         assert!(serde_json::from_slice::<Value>(&agent).is_err());
-        let mut other = store.clone(); other.user_id = "other".into();
-        assert!(serde_json::from_slice::<Value>(&other.encode_user_record(&value).unwrap()).is_err());
+        let mut other = store.clone();
+        other.user_id = "other".into();
+        assert!(
+            serde_json::from_slice::<Value>(&other.encode_user_record(&value).unwrap()).is_err()
+        );
         assert!(serde_json::from_slice::<Value>(&store.seal(&value).unwrap()).is_err());
         configure(root.path(), true);
         let reopened = Store::open(root.path()).await.unwrap();
-        assert_eq!(reopened.get("memory:new").await.unwrap(), Some(value.clone()));
-        reopened.put("memory:encrypted_again", &value).await.unwrap();
-        let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key='memory:encrypted_again'").fetch_one(&reopened.pool).await.unwrap();
+        assert_eq!(
+            reopened.get("memory:new").await.unwrap(),
+            Some(value.clone())
+        );
+        reopened
+            .put("memory:encrypted_again", &value)
+            .await
+            .unwrap();
+        let raw: Vec<u8> =
+            sqlx::query_scalar("SELECT value FROM docs WHERE key='memory:encrypted_again'")
+                .fetch_one(&reopened.pool)
+                .await
+                .unwrap();
         assert!(serde_json::from_slice::<Value>(&raw).is_err());
     }
     /// Verify an invalid encryption-policy type prevents storage initialization.
@@ -2491,122 +3268,270 @@ mod admin_storage_policy_tests {
     async fn invalid_admin_storage_policy_fails_closed() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("config")).unwrap();
-        std::fs::write(root.path().join("config/app-settings.json"), br#"{"admin_database_encryption":{"enabled":"false"}}"#).unwrap();
+        std::fs::write(
+            root.path().join("config/app-settings.json"),
+            br#"{"admin_database_encryption":{"enabled":"false"}}"#,
+        )
+        .unwrap();
         assert!(Store::open(root.path()).await.is_err());
     }
 }
 
 // Storage primitives decode through this handle's agent key and plaintext policy.
 impl webagent_storage::ScopedCodec for Store {
-    fn seal(&self,value:&Value)->Result<Vec<u8>> {StoreCore::seal(self,value)}
-    fn unseal(&self,data:&[u8])->Result<Value> {StoreCore::unseal(self,data)}
-    fn encode_user_record(&self,value:&Value)->Result<Vec<u8>> {StoreCore::encode_user_record(self,value)}
+    fn seal(&self, value: &Value) -> Result<Vec<u8>> {
+        StoreCore::seal(self, value)
+    }
+    fn unseal(&self, data: &[u8]) -> Result<Value> {
+        StoreCore::unseal(self, data)
+    }
+    fn encode_user_record(&self, value: &Value) -> Result<Vec<u8>> {
+        StoreCore::encode_user_record(self, value)
+    }
 }
 
 // The codec itself lives on StoreCore in host-core; Store forwards for modules bound to it.
 impl webagent_access::storage::RecordCodec for Store {
-    fn seal(&self,value:&Value)->Result<Vec<u8>> {self.core.seal(value)}
-    fn unseal(&self,value:&[u8])->Result<Value> {self.core.unseal(value)}
-    fn encode_application(&self,value:&Value)->Result<Vec<u8>> {
-        webagent_access::storage::RecordCodec::encode_application(&self.core,value)
+    fn seal(&self, value: &Value) -> Result<Vec<u8>> {
+        self.core.seal(value)
     }
-    fn seal_agent(&self,value:&Value)->Result<Vec<u8>> {self.core.seal_agent(value)}
-    fn unseal_agent(&self,value:&[u8])->Result<Value> {self.core.unseal_agent(value)}
-    fn seal_agent_for(&self,agent:&str,value:&Value)->Result<Vec<u8>> {self.core.seal_agent_for(agent,value)}
-    fn unseal_agent_for(&self,agent:&str,value:&[u8])->Result<Value> {self.core.unseal_agent_for(agent,value)}
+    fn unseal(&self, value: &[u8]) -> Result<Value> {
+        self.core.unseal(value)
+    }
+    fn encode_application(&self, value: &Value) -> Result<Vec<u8>> {
+        webagent_access::storage::RecordCodec::encode_application(&self.core, value)
+    }
+    fn seal_agent(&self, value: &Value) -> Result<Vec<u8>> {
+        self.core.seal_agent(value)
+    }
+    fn unseal_agent(&self, value: &[u8]) -> Result<Value> {
+        self.core.unseal_agent(value)
+    }
+    fn seal_agent_for(&self, agent: &str, value: &Value) -> Result<Vec<u8>> {
+        self.core.seal_agent_for(agent, value)
+    }
+    fn unseal_agent_for(&self, agent: &str, value: &[u8]) -> Result<Value> {
+        self.core.unseal_agent_for(agent, value)
+    }
 }
 impl Store {
-    pub(crate) fn access_repository(&self)->webagent_access::storage::Repository<'_,Self> {
-        webagent_access::storage::Repository::new(&self.root,&self.app_pool,&self.agent_pool,
-            &self.agent_id,&self.user_id,self)
+    pub(crate) fn access_repository(&self) -> webagent_access::storage::Repository<'_, Self> {
+        webagent_access::storage::Repository::new(
+            &self.root,
+            &self.app_pool,
+            &self.agent_pool,
+            &self.agent_id,
+            &self.user_id,
+            self,
+        )
     }
 }
 
 impl webagent_models::storage::RuntimeStorage for Store {
-    fn credential_get<'a>(&'a self,key:&'a str)->impl std::future::Future<Output=Result<Option<Value>>>+Send+'a {self.get(key)}
-    fn credential_put<'a>(&'a self,key:&'a str,value:&'a Value)->impl std::future::Future<Output=Result<()>>+Send+'a {self.put(key,value)}
-    fn agent_pool<'a>(&'a self,agent:&'a str)->impl std::future::Future<Output=Result<SqlitePool>>+Send+'a {
+    fn credential_get<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> impl std::future::Future<Output = Result<Option<Value>>> + Send + 'a {
+        self.get(key)
+    }
+    fn credential_put<'a>(
+        &'a self,
+        key: &'a str,
+        value: &'a Value,
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+        self.put(key, value)
+    }
+    fn agent_pool<'a>(
+        &'a self,
+        agent: &'a str,
+    ) -> impl std::future::Future<Output = Result<SqlitePool>> + Send + 'a {
         async move {
-            if !access::valid_agent_id(agent) {return Err(anyhow!("Invalid agent identity"));}
+            if !access::valid_agent_id(agent) {
+                return Err(anyhow!("Invalid agent identity"));
+            }
             // Catalog transactions already hold an app connection; initialized handles avoid pool reentry.
-            if let Some(pool)=self.agent_states.read().await.get(agent).cloned() {return Ok(pool);}
+            if let Some(pool) = self.agent_states.read().await.get(agent).cloned() {
+                return Ok(pool);
+            }
             Ok(self.for_agent(agent).await?.agent_pool.clone())
         }
     }
 }
 impl Store {
-    pub(crate) fn models_repository(&self)->webagent_models::storage::Repository<'_,Self> {
-        webagent_models::storage::Repository::new(&self.root,&self.app_pool,&self.agent_pool,&self.agent_id,&self.user_id,self)
+    pub(crate) fn models_repository(&self) -> webagent_models::storage::Repository<'_, Self> {
+        webagent_models::storage::Repository::new(
+            &self.root,
+            &self.app_pool,
+            &self.agent_pool,
+            &self.agent_id,
+            &self.user_id,
+            self,
+        )
     }
 }
 
 impl webagent_manager::storage::RecordEffects for Store {
- fn unseal_agent(&self,agent:&str,bytes:&[u8])->Result<Value> {StoreCore::unseal_agent_for(self,agent,bytes)}
- fn unseal(&self,value:&[u8])->Result<Value> {StoreCore::unseal(self,value)}
- fn encode_user_record(&self,value:&Value)->Result<Vec<u8>> {StoreCore::encode_user_record(self,value)}
- fn public_usage(&self,value:&Value)->Value {crate::usage::public(value)}
- fn record_usage(&self,record:&mut Value,response:&Value) {crate::usage::record(record,response)}
- fn invalidate_documents(&self,keys:&[String]) {self.cache.lock().unwrap().invalidate(keys)}
- async fn agent_pool<'a>(&'a self,id:&'a str)->Result<SqlitePool> {Ok(self.for_agent(id).await?.agent_pool.clone())}
- async fn list_documents<'a>(&'a self,prefix:&'a str)->Result<Vec<Value>> {self.list(prefix).await}
- async fn read_document<'a>(&'a self,key:&'a str)->Result<Option<Value>> {self.get(key).await}
- async fn requester_claim_ready<'a>(&'a self,run:&'a Value)->Result<bool> {Store::requester_claim_ready(self,run).await}
- async fn participation_allows_run<'a>(&'a self,run:&'a Value)->Result<bool> {Store::participation_allows_run(self,run).await}
- async fn reconcile_requester_slots(&self)->Result<()> {Store::reconcile_requester_slots(self).await}
- async fn require_active_session_in<'a,'c>(&'a self,tx:&'a mut sqlx::Transaction<'c,sqlx::Sqlite>,sid:&'a str)->Result<()> where 'c:'a {self.require_active_session(tx,sid).await}
- async fn write_document_in<'a,'c>(&'a self,tx:&'a mut sqlx::Transaction<'c,sqlx::Sqlite>,key:&'a str,value:&'a Value)->Result<()> where 'c:'a {self.write_document(tx,key,value).await}
- async fn admit_message_in<'a,'c>(&'a self,tx:&'a mut sqlx::Transaction<'c,sqlx::Sqlite>,id:&'a str,sid:&'a str,run:&'a Value,message:&'a Value,command_id:&'a str)->Result<()> where 'c:'a {
-            self.require_active_session(tx, sid).await?;
-            self.require_participation(tx,&run).await?;
-            let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed')")
+    fn unseal_agent(&self, agent: &str, bytes: &[u8]) -> Result<Value> {
+        StoreCore::unseal_agent_for(self, agent, bytes)
+    }
+    fn unseal(&self, value: &[u8]) -> Result<Value> {
+        StoreCore::unseal(self, value)
+    }
+    fn encode_user_record(&self, value: &Value) -> Result<Vec<u8>> {
+        StoreCore::encode_user_record(self, value)
+    }
+    fn public_usage(&self, value: &Value) -> Value {
+        crate::usage::public(value)
+    }
+    fn record_usage(&self, record: &mut Value, response: &Value) {
+        crate::usage::record(record, response)
+    }
+    fn invalidate_documents(&self, keys: &[String]) {
+        self.cache.lock().unwrap().invalidate(keys)
+    }
+    async fn agent_pool<'a>(&'a self, id: &'a str) -> Result<SqlitePool> {
+        Ok(self.for_agent(id).await?.agent_pool.clone())
+    }
+    async fn list_documents<'a>(&'a self, prefix: &'a str) -> Result<Vec<Value>> {
+        self.list(prefix).await
+    }
+    async fn read_document<'a>(&'a self, key: &'a str) -> Result<Option<Value>> {
+        self.get(key).await
+    }
+    async fn requester_claim_ready<'a>(&'a self, run: &'a Value) -> Result<bool> {
+        Store::requester_claim_ready(self, run).await
+    }
+    async fn participation_allows_run<'a>(&'a self, run: &'a Value) -> Result<bool> {
+        Store::participation_allows_run(self, run).await
+    }
+    async fn reconcile_requester_slots(&self) -> Result<()> {
+        Store::reconcile_requester_slots(self).await
+    }
+    async fn require_active_session_in<'a, 'c>(
+        &'a self,
+        tx: &'a mut sqlx::Transaction<'c, sqlx::Sqlite>,
+        sid: &'a str,
+    ) -> Result<()>
+    where
+        'c: 'a,
+    {
+        self.require_active_session(tx, sid).await
+    }
+    async fn write_document_in<'a, 'c>(
+        &'a self,
+        tx: &'a mut sqlx::Transaction<'c, sqlx::Sqlite>,
+        key: &'a str,
+        value: &'a Value,
+    ) -> Result<()>
+    where
+        'c: 'a,
+    {
+        self.write_document(tx, key, value).await
+    }
+    async fn admit_message_in<'a, 'c>(
+        &'a self,
+        tx: &'a mut sqlx::Transaction<'c, sqlx::Sqlite>,
+        id: &'a str,
+        sid: &'a str,
+        run: &'a Value,
+        message: &'a Value,
+        command_id: &'a str,
+    ) -> Result<()>
+    where
+        'c: 'a,
+    {
+        self.require_active_session(tx, sid).await?;
+        self.require_participation(tx, &run).await?;
+        let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed')")
                 .bind(sid).fetch_one(&mut **tx).await?;
-            if count != 0 {
-                return Err(anyhow!("Session already has unresolved work"));
-            }
-            self.write_document(tx, &format!("run:{id}"), &run)
-                .await?;
-            self.index_run(tx, &run).await?;
-            self.write_document(tx,&format!("message_meta:{id}"),&json!({"author_id":message["author_id"],"context_eligible":true,"queued":false})).await?;
-            // Naming begins only after the manager admits the message.
-            self.begin_session_naming(tx, sid, id, message).await?;
-            let text = message["context_content"]
-                .as_str()
-                .or_else(|| message["content"].as_str())
-                .ok_or_else(|| anyhow!("Review message missing"))?;
-            self.insert_interaction(
-                tx,
-                sid,
-                id,
-                "user",
-                &json!({"role":"user","content":text}),
-            )
+        if count != 0 {
+            return Err(anyhow!("Session already has unresolved work"));
+        }
+        self.write_document(tx, &format!("run:{id}"), &run).await?;
+        self.index_run(tx, &run).await?;
+        self.write_document(
+            tx,
+            &format!("message_meta:{id}"),
+            &json!({"author_id":message["author_id"],"context_eligible":true,"queued":false}),
+        )
+        .await?;
+        // Naming begins only after the manager admits the message.
+        self.begin_session_naming(tx, sid, id, message).await?;
+        let text = message["context_content"]
+            .as_str()
+            .or_else(|| message["content"].as_str())
+            .ok_or_else(|| anyhow!("Review message missing"))?;
+        self.insert_interaction(tx, sid, id, "user", &json!({"role":"user","content":text}))
             .await?;
-            sqlx::query("INSERT INTO loop_commands(command_id,run_id,schema_version,kind,payload,created_at) VALUES(?,?,1,'message',?,strftime('%s','now'))")
+        sqlx::query("INSERT INTO loop_commands(command_id,run_id,schema_version,kind,payload,created_at) VALUES(?,?,1,'message',?,strftime('%s','now'))")
                 .bind(command_id).bind(id).bind(self.encode_user_record(&json!({"schema_version":1,"run_id":id,"kind":"message","status":"queued"}))?)
                 .execute(&mut **tx).await?;
-  Ok(())
- }
+        Ok(())
+    }
 }
 
 impl webagent_webapp::preferences::RecordCodec for Store {
-    fn encode_user_record(&self,value:&Value)->Result<Vec<u8>> {StoreCore::encode_user_record(self,value)}
-    fn unseal(&self,value:&[u8])->Result<Value> {StoreCore::unseal(self,value)}
+    fn encode_user_record(&self, value: &Value) -> Result<Vec<u8>> {
+        StoreCore::encode_user_record(self, value)
+    }
+    fn unseal(&self, value: &[u8]) -> Result<Value> {
+        StoreCore::unseal(self, value)
+    }
 }
 
-#[cfg(test)]mod core_private_namespace_tests{
- use super::*;
- #[tokio::test]async fn core_records_route_to_the_current_user_database(){
-  let (_root,app)=crate::runtime_tests::fixture_uninitialized().await;
-  let first=app.store.create_user_account("core-first","fixture-password-hash-placeholder").await.unwrap();
-  let second=app.store.create_user_account("core-second","fixture-password-hash-placeholder").await.unwrap();
-  let first=app.store.for_user(first["user_id"].as_str().unwrap()).await.unwrap();
-  let second=app.store.for_user(second["user_id"].as_str().unwrap()).await.unwrap();
-  for prefix in ["core_visual:","core_vault:","receipt:core_vault:","receipt:core_image:","core_tool:","core_profile:","core_rating:","core_webhook:","core_webhook_log:","core_spawn_origin:","base_checkpoint:","base_component:","receipt:base:"]{
-   let key=format!("{prefix}same-id");first.put(&key,&json!({"owner":"first"})).await.unwrap();
-   assert_eq!(first.get(&key).await.unwrap().unwrap()["owner"],"first");
-   assert!(second.get(&key).await.unwrap().is_none(),"{prefix}");
-   assert_eq!(first.list(prefix).await.unwrap().len(),1);assert!(second.list(prefix).await.unwrap().is_empty());
-   let leaked:i64=sqlx::query_scalar("SELECT count(*) FROM docs WHERE key=?").bind(key).fetch_one(&app.store.app_pool).await.unwrap();assert_eq!(leaked,0);
-  }
- }
+#[cfg(test)]
+mod core_private_namespace_tests {
+    use super::*;
+    #[tokio::test]
+    async fn core_records_route_to_the_current_user_database() {
+        let (_root, app) = crate::runtime_tests::fixture_uninitialized().await;
+        let first = app
+            .store
+            .create_user_account("core-first", "fixture-password-hash-placeholder")
+            .await
+            .unwrap();
+        let second = app
+            .store
+            .create_user_account("core-second", "fixture-password-hash-placeholder")
+            .await
+            .unwrap();
+        let first = app
+            .store
+            .for_user(first["user_id"].as_str().unwrap())
+            .await
+            .unwrap();
+        let second = app
+            .store
+            .for_user(second["user_id"].as_str().unwrap())
+            .await
+            .unwrap();
+        for prefix in [
+            "core_visual:",
+            "core_vault:",
+            "receipt:core_vault:",
+            "receipt:core_image:",
+            "core_tool:",
+            "core_profile:",
+            "core_rating:",
+            "core_webhook:",
+            "core_webhook_log:",
+            "core_spawn_origin:",
+            "base_checkpoint:",
+            "base_component:",
+            "receipt:base:",
+        ] {
+            let key = format!("{prefix}same-id");
+            first.put(&key, &json!({"owner":"first"})).await.unwrap();
+            assert_eq!(first.get(&key).await.unwrap().unwrap()["owner"], "first");
+            assert!(second.get(&key).await.unwrap().is_none(), "{prefix}");
+            assert_eq!(first.list(prefix).await.unwrap().len(), 1);
+            assert!(second.list(prefix).await.unwrap().is_empty());
+            let leaked: i64 = sqlx::query_scalar("SELECT count(*) FROM docs WHERE key=?")
+                .bind(key)
+                .fetch_one(&app.store.app_pool)
+                .await
+                .unwrap();
+            assert_eq!(leaked, 0);
+        }
+    }
 }

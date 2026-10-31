@@ -43,9 +43,10 @@ pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePo
         .busy_timeout(std::time::Duration::from_secs(5));
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         // IDLE-POOL-BOUND: release idle connections without closing pools that
-        // active Store clones still use. Reconnection remains transparent.
+        // active Store clones still use. Each connection holds an OS thread, so idle
+        // ones go quickly; reconnection remains transparent.
         .min_connections(0)
-        .idle_timeout(std::time::Duration::from_secs(60))
+        .idle_timeout(std::time::Duration::from_secs(5))
         .max_connections(4)
         .connect_with(options)
         .await?;
