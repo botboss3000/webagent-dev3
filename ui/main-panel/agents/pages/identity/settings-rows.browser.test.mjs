@@ -31,6 +31,7 @@ try{
    window.fixture={agent,widget,writes:[],fail:false};
    const request=async(url,method='GET',body)=>{
     if(url==='/models/agents/one/main-chat')throw Error('Main Chat outside fixture');
+    if(url==='/agents/one/capability-ladder'&&method==='PUT'){fixture.ladder=body;return {capability_levels:body.ladder};}
     const embed=url==='/agents/one/embed';if(!embed&&url!=='/models/agents/one/identity')throw Error('Unscoped route '+url);
     if(method==='GET')return structuredClone(embed?widget:agent);
     fixture.writes.push({url,body:structuredClone(body)});if(fixture.fail){fixture.fail=false;throw Error('stale revision');}
@@ -64,7 +65,8 @@ try{
   assert.equal(await page.evaluate(()=>fixture.widget.config.enabled),false);
   await page.getByRole('button',{name:'Save widget settings',exact:true}).click();await page.waitForFunction(()=>fixture.widget.config.enabled);assert.equal(await page.evaluate(()=>fixture.writes.at(-1).body.expected_revision),5);
   await page.getByLabel('Participants may invite others',{exact:true}).check();await page.getByRole('button',{name:'Save shared-chat policy',exact:true}).click();await page.waitForFunction(()=>fixture.agent.shared_chat.shareable);
-  await page.getByLabel('Accept app registered users as members',{exact:true}).uncheck();await page.waitForFunction(()=>fixture.agent.member_access.app_login_members===false);
+  assert.equal(await page.getByRole('radio',{name:/^Registered/}).isChecked(),true);
+  await page.getByRole('radio',{name:/^Authorized/}).check();await page.waitForFunction(()=>fixture.agent.member_access.app_login_members===false&&fixture.agent.member_access.visitor_access===false);
   await page.getByLabel('Conversation privacy',{exact:true}).selectOption('private');await page.waitForFunction(()=>fixture.agent.member_access.conversation_privacy==='private');
   await page.locator('[data-field="default_execution_mode"]').selectOption('auto');await page.waitForFunction(()=>fixture.agent.default_execution_mode==='auto');
   await page.locator('[data-mode-id="ask"] summary').click();await page.locator('[data-mode-id="ask"] [data-mode-field="prompt"]').fill('Updated prompt');await page.locator('[data-mode-id="ask"] [data-mode-card-save]').click();await page.waitForFunction(()=>fixture.agent.execution_modes[0].prompt==='Updated prompt');
@@ -81,11 +83,16 @@ try{
   await page.getByRole('button',{name:'Expand Chat modes',exact:true}).click();assert.equal(await page.locator('[data-field="default_execution_mode"]').inputValue(),'auto');
   await page.getByRole('button',{name:'Expand Final response',exact:true}).click();assert.equal(await page.getByLabel('Notification guidance',{exact:true}).inputValue(),'Updated closing');assert.equal(await page.locator('[data-closing-key="require_flag"]').isChecked(),false);
   if(touch){const before=await page.evaluate(()=>pulses.length);await page.getByRole('button',{name:'Expand Shared conversations',exact:true}).tap();assert.equal(await page.evaluate(()=>pulses.length),before+1);}
+  // Per-level message limits save as whole numbers on that level only; saving reloads the page.
+  await page.getByRole('button',{name:'Expand Member access',exact:true}).click();
+  await page.getByLabel('Member messages per 24 hours',{exact:true}).fill('5');await page.getByRole('button',{name:'Save limits'}).first().click();
+  await page.waitForFunction(()=>fixture.ladder?.ladder.levels.member.daily_turns===5&&fixture.ladder.ladder.levels.visitor.daily_turns===undefined);
   await page.evaluate(async()=>{fixture.agent.can_manage=false;await remount();});
   assert.equal(await page.locator('[data-identity-section="website-chat-widget"]').count(),0);
   for(const title of titles.slice(1))await page.getByRole('button',{name:'Expand '+title,exact:true}).click();
   assert.equal(await page.locator('[data-field="default_execution_mode"]').isDisabled(),true);
-  for(const label of ['Enable incoming-message review','Working-message promotion','Notification guidance','Accept app registered users as members','Conversation privacy'])assert.equal(await page.getByLabel(label,{exact:true}).isDisabled(),true);
+  for(const label of ['Enable incoming-message review','Working-message promotion','Notification guidance','Conversation privacy'])assert.equal(await page.getByLabel(label,{exact:true}).isDisabled(),true);
+  assert.equal(await page.getByRole('radio',{name:/^Authorized/}).isDisabled(),true);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   if(touch)assert.equal(await page.evaluate(()=>innerWidth===390&&matchMedia('(pointer: coarse)').matches),true);
   assert.deepEqual(errors,[]);await context.close();

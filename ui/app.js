@@ -25,6 +25,7 @@ import { showLeftOverlay } from './chat/controls/login-hook.js';
 // v2 dom-utils imports v1 auth and uploads; v3 uses text nodes and its own transport.
 import { renderIdentity } from './main-panel/agents/pages/identity/page.js';
 import {renderMembers} from './main-panel/agents/pages/members/page.js';
+import {offerAccessRequest} from './main-panel/agents/request-access.js';
 import {renderCreateAgent} from './main-panel/agents/pages/create/page.js';
 import {createAgentArchive} from './main-panel/agents/agent-archive.js';
 import { renderAbilities } from './main-panel/agents/pages/abilities/page.js';
@@ -190,6 +191,8 @@ async function loadAgentRoster(){
   const data=await api('/models/agents');
   if(!Array.isArray(data.agents))throw Error('Agent list unavailable');
   agentRoster=data.agents;
+  // An explicit link to an agent this account cannot use offers an access request.
+  if(new URL(location.href).searchParams.has('agent')&&!agentRoster.some(agent=>agent.id===agentId)&&accountMe&&accountMe.role!=='guest')void offerAccessRequest(api,agentId);
   if(agentRoster.length&&!agentRoster.some(agent=>agent.id===agentId)){
     agentId=(agentRoster.find(agent=>agent.id==='shared_default')||agentRoster[0]).id;
     const route=new URL(location.href);route.searchParams.set('agent',agentId);history.replaceState({},'',route);

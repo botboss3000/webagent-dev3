@@ -1,8 +1,9 @@
 //! Agent Operator roster endpoints; app role never grants tenant authority.
 use super::*;
 use axum::Extension;
+use serde_json::Map;
 use sqlx::Row;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 async fn operator(app: &App, identity: &Value, agent: &str) -> Result<Store, ApiError> {
     let actor = identity["_user_id"]
         .as_str()
@@ -73,8 +74,22 @@ async fn read(
         }
         page.push(member);
     }
+    let mut pending = Vec::new();
+    for (user, requested_at) in access_requests(&store, &id).await? {
+        let Some(account) = store.account_by_id(&user).await? else {
+            continue;
+        };
+        let profile = app.store.user_profile(&user).await?.unwrap_or(Value::Null);
+        let revision = store
+            .agent_membership(&user, &id)
+            .await?
+            .and_then(|membership| membership["revision"].as_u64())
+            .unwrap_or(0);
+        pending.push(json!({"user_id":user,"username":account["username"],
+            "display_name":profile["display_name"],"requested_at":requested_at,"revision":revision}));
+    }
     Ok(Json(
-        json!({"members":page,"next_offset":if offset+100<total {Some(offset+100)}else{None},
+        json!({"members":page,"access_requests":pending,"next_offset":if offset+100<total {Some(offset+100)}else{None},
         "capability_levels":store.capability_levels(&id).await?,"owner_id":store.agent_authority(identity["_user_id"].as_str().unwrap(),&id).await?["owner_id"]}),
     ))
 }
@@ -109,6 +124,7 @@ async fn update(
         .map_err(|_| {
             conflict("Membership changed or appointment rejected; reload before retrying")
         })?;
+    drop_access_request(&store, &id, &body.user_id).await?;
     crate::phase3_api::quiesce_user(&app, &body.user_id, Some(&id)).await?;
     Ok(Json(json!({"member":member})))
 }
@@ -302,12 +318,9 @@ async fn summary(
         "tools_notice":app.store.capability_levels(&id).await?.tools_notice()}),
     ))
 }
-/// This agent's public sessions (active and archived) and messages for one user,
-/// plus the account profile (last login, display name, sign-up channel);
-/// other agents' activity is excluded.
-async fn activity(app: &App, user: &str, agent: &str) -> anyhow::Result<(usize, i64, Value)> {
-    let view = app.store.for_user(user).await?;
-    let mut sessions = std::collections::HashSet::new();
+/// This agent's public sessions (active and archived) for the user `view` belongs to.
+async fn agent_sessions(view: &Store, agent: &str) -> anyhow::Result<HashSet<String>> {
+    let mut sessions = HashSet::new();
     for archived in [false, true] {
         for summary in view.ordered_sessions_status(archived).await? {
             if summary["agent_id"] == agent {
@@ -317,28 +330,330 @@ async fn activity(app: &App, user: &str, agent: &str) -> anyhow::Result<(usize, 
             }
         }
     }
-    let counts: Vec<(String, i64)> =
-        sqlx::query_as("SELECT session_id,COUNT(*) FROM chat GROUP BY session_id")
-            .fetch_all(&view.pool)
-            .await?;
-    let messages = counts
+    Ok(sessions)
+}
+
+/// Messages in `sessions`; with `user_turns_since`, only user turns from that time.
+async fn session_messages(
+    view: &Store,
+    sessions: &HashSet<String>,
+    user_turns_since: Option<i64>,
+) -> anyhow::Result<i64> {
+    let counts: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT session_id,COUNT(*) FROM chat WHERE (?1 IS NULL OR (role='user' AND created_at>=?1)) GROUP BY session_id",
+    )
+    .bind(user_turns_since)
+    .fetch_all(&view.pool)
+    .await?;
+    Ok(counts
         .into_iter()
         .filter(|(session, _)| sessions.contains(session))
         .map(|(_, count)| count)
-        .sum();
+        .sum())
+}
+
+/// This agent's public sessions and messages for one user, plus the account
+/// profile (last login, display name, sign-up channel); other agents' activity
+/// is excluded.
+async fn activity(app: &App, user: &str, agent: &str) -> anyhow::Result<(usize, i64, Value)> {
+    let view = app.store.for_user(user).await?;
+    let sessions = agent_sessions(&view, agent).await?;
+    let messages = session_messages(&view, &sessions, None).await?;
     let profile = app.store.user_profile(user).await?.unwrap_or(Value::Null);
     Ok((sessions.len(), messages, profile))
 }
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
+        })
+}
+
+/// Refuses a new user message once the user's level cap for this agent is
+/// reached over the last 24 hours or 30 days. Operators are never limited.
+/// shortcut: counts turns in the user's own sessions only, not turns they post
+/// in other users' shared sessions; add an author index if that matters.
+pub(crate) async fn enforce_turn_limits(
+    app: &App,
+    user: &str,
+    agent: &str,
+    level: &crate::capabilities::CapabilityLevel,
+) -> Result<(), ApiError> {
+    let windows = [
+        (level.daily_turns, 86_400, "24 hours"),
+        (level.monthly_turns, 30 * 86_400, "30 days"),
+    ];
+    if level.id == "operator" || windows.iter().all(|(limit, _, _)| limit.is_none()) {
+        return Ok(());
+    }
+    let view = app.store.for_user(user).await?;
+    let sessions = agent_sessions(&view, agent).await?;
+    for (limit, span, label) in windows {
+        let Some(limit) = limit else { continue };
+        let used = session_messages(&view, &sessions, Some(unix_now() - span)).await?;
+        if used >= i64::from(limit) {
+            return Err(ApiError(
+                StatusCode::FORBIDDEN,
+                format!(
+                    "Message limit reached: {} allows {limit} messages per {label} with this agent. Try again later.",
+                    level.name
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Pending access requests (user id -> requested_at) live in the agent store,
+/// so recording one never bumps the agent revision.
+const ACCESS_REQUESTS_MAX: usize = 200;
+fn requests_key(agent: &str) -> String {
+    format!("agent:{agent}:access_requests")
+}
+async fn access_requests(store: &Store, agent: &str) -> anyhow::Result<Map<String, Value>> {
+    Ok(store
+        .get(&requests_key(agent))
+        .await?
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default())
+}
+async fn drop_access_request(store: &Store, agent: &str, user: &str) -> anyhow::Result<()> {
+    let mut requests = access_requests(store, agent).await?;
+    if requests.remove(user).is_some() {
+        store
+            .put(&requests_key(agent), &Value::Object(requests))
+            .await?;
+    }
+    Ok(())
+}
+
+/// The caller's own request state for an agent they cannot use yet.
+async fn access_request_status(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Path(id): Path<String>,
+) -> Api {
+    let user = identity["_user_id"]
+        .as_str()
+        .ok_or_else(|| bad("Sign in required"))?;
+    let store = app
+        .store
+        .for_agent(&id)
+        .await
+        .map_err(|_| ApiError(StatusCode::NOT_FOUND, "Agent unavailable".into()))?;
+    let requested = access_requests(&store, &id).await?.contains_key(user);
+    Ok(Json(json!({"requested":requested})))
+}
+
+/// A signed-in app account without any membership asks the agent's Operators
+/// for access; guests, members and blocked users cannot request.
+async fn request_access(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Path(id): Path<String>,
+) -> Api {
+    let user = identity["_user_id"]
+        .as_str()
+        .ok_or_else(|| bad("Sign in required"))?;
+    if !app
+        .store
+        .account_by_id(user)
+        .await?
+        .is_some_and(|account| account["role"] != "guest")
+    {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Sign in with an app account to request access".into(),
+        ));
+    }
+    let _guard = app.gate.lock().await;
+    let store = app
+        .store
+        .for_agent(&id)
+        .await
+        .map_err(|_| ApiError(StatusCode::NOT_FOUND, "Agent unavailable".into()))?;
+    if store
+        .access_repository()
+        .resolved_membership(user, &id)
+        .await?
+        .is_some()
+    {
+        return Err(conflict(
+            "Your access to this agent is already set by its Operators",
+        ));
+    }
+    let mut requests = access_requests(&store, &id).await?;
+    if !requests.contains_key(user) {
+        if requests.len() >= ACCESS_REQUESTS_MAX {
+            return Err(conflict(
+                "Too many pending access requests; try again later",
+            ));
+        }
+        requests.insert(user.to_owned(), json!(unix_now()));
+        store
+            .put(&requests_key(&id), &Value::Object(requests))
+            .await?;
+    }
+    Ok(Json(json!({"requested":true})))
+}
+
+/// Operator declines a pending request without changing any membership.
+async fn dismiss_access_request(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Path((id, user)): Path<(String, String)>,
+) -> Api {
+    let _guard = app.gate.lock().await;
+    let store = operator(&app, &identity, &id).await?;
+    drop_access_request(&store, &id, &user).await?;
+    Ok(Json(json!({"requested":false})))
+}
+
 pub fn router() -> Router<App> {
     Router::new()
         .route("/agents/{id}/members", get(read).put(update))
         .route("/agents/{id}/capability-ladder", put(ladder))
         .route("/agents/{id}/access-summary", get(summary))
+        .route(
+            "/agents/{id}/access-request",
+            get(access_request_status).post(request_access),
+        )
+        .route(
+            "/agents/{id}/access-requests/{user}",
+            axum::routing::delete(dismiss_access_request),
+        )
 }
 
 #[cfg(test)]
 mod reassignment_tests {
     use super::*;
+    #[tokio::test]
+    async fn turn_limits_count_recent_user_turns_and_spare_operators() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let agent = "shared_default";
+        let account = app
+            .store
+            .create_user_account("limited", "fixture-password-hash")
+            .await
+            .unwrap();
+        let user = account["user_id"].as_str().unwrap().to_owned();
+        let view = app.store.for_user(&user).await.unwrap();
+        view.put(
+            "session:limited",
+            &json!({"id":"limited","title":"t","agent_id":agent}),
+        )
+        .await
+        .unwrap();
+        // Two recent user turns, one assistant reply and one turn outside both windows.
+        for (index, (role, at)) in [
+            ("user", unix_now()),
+            ("user", unix_now()),
+            ("assistant", unix_now()),
+            ("user", 1),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            sqlx::query("INSERT INTO chat(id,session_id,run_id,role,content,created_at) VALUES(?,?,?,?,?,?)")
+                .bind(format!("m{index}")).bind("limited").bind("run-test").bind(role)
+                .bind(view.seal(&json!("hi")).unwrap()).bind(at).execute(&view.pool).await.unwrap();
+        }
+        let mut level = app.store.capability_levels(agent).await.unwrap().levels["member"].clone();
+        level.monthly_turns = Some(3);
+        assert!(enforce_turn_limits(&app, &user, agent, &level)
+            .await
+            .is_ok());
+        level.daily_turns = Some(2);
+        let error = enforce_turn_limits(&app, &user, agent, &level)
+            .await
+            .unwrap_err();
+        assert_eq!(error.0, StatusCode::FORBIDDEN);
+        assert!(error.1.contains("2 messages per 24 hours"));
+        level.id = "operator".into();
+        assert!(enforce_turn_limits(&app, &user, agent, &level)
+            .await
+            .is_ok());
+    }
+    #[tokio::test]
+    async fn access_requests_are_recorded_listed_and_resolved_by_an_operator_decision() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let agent = "shared_default";
+        let store = app.store.for_agent(agent).await.unwrap();
+        let raw: Vec<u8> = sqlx::query_scalar("SELECT metadata FROM agents WHERE id=?")
+            .bind(agent)
+            .fetch_one(&store.agent_pool)
+            .await
+            .unwrap();
+        let mut metadata = store.unseal_agent(&raw).unwrap();
+        metadata["member_access"] = json!({"visitor_access":false,"app_login_members":false,"conversation_privacy":"private"});
+        sqlx::query("UPDATE agents SET metadata=? WHERE id=?")
+            .bind(store.seal_agent(&metadata).unwrap())
+            .bind(agent)
+            .execute(&store.agent_pool)
+            .await
+            .unwrap();
+        let account = app
+            .store
+            .create_user_account("asker", "fixture-password-hash")
+            .await
+            .unwrap();
+        let user = account["user_id"].as_str().unwrap().to_owned();
+        let asker = json!({"_user_id":user});
+        let _ = request_access(
+            State(app.clone()),
+            Extension(asker.clone()),
+            Path(agent.into()),
+        )
+        .await
+        .unwrap();
+        let Json(status) = access_request_status(
+            State(app.clone()),
+            Extension(asker.clone()),
+            Path(agent.into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status["requested"], true);
+        let admin = json!({"_user_id":"admin"});
+        let Json(listing) = read(
+            State(app.clone()),
+            Extension(admin.clone()),
+            Path(agent.into()),
+            Query(HashMap::new()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(listing["access_requests"][0]["user_id"], user.as_str());
+        let _ = update(
+            State(app.clone()),
+            Extension(admin),
+            Path(agent.into()),
+            Json(MemberUpdate {
+                user_id: user.clone(),
+                level_id: Some("member".into()),
+                blocked: false,
+                expected_revision: listing["access_requests"][0]["revision"].as_u64().unwrap(),
+            }),
+        )
+        .await
+        .unwrap();
+        let Json(status) = access_request_status(
+            State(app.clone()),
+            Extension(asker.clone()),
+            Path(agent.into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status["requested"], false);
+        // Now a member: asking again is refused rather than re-queued.
+        assert!(
+            request_access(State(app), Extension(asker), Path(agent.into()))
+                .await
+                .is_err()
+        );
+    }
     #[tokio::test]
     async fn activity_counts_only_this_agents_sessions_and_messages() {
         let (_root, app) = crate::runtime_tests::fixture().await;

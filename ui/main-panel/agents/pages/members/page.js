@@ -38,6 +38,21 @@ export async function renderMembers(host,request,{agentId}) {
       }
     }catch(error){helpEmpty.textContent='Help requests unavailable: '+error.message;}
     helpCount.textContent=String(helpBody.rows.length);helpWrap.hidden=!helpBody.rows.length;helpEmpty.hidden=helpBody.rows.length>0;
+    // Pending access requests (Authorized policy): approve as Member or decline.
+    const requests=data.access_requests||[];
+    if(requests.length){
+      const box=node('div','','members-section'),boxHeader=node('div','','members-section-header'),boxWrap=node('div','','members-table-wrap'),boxTable=node('table','','members-table'),boxBody=node('tbody'),boxHead=node('tr');
+      boxHeader.append(node('span','Access requests','members-section-title'),node('span',String(requests.length),'members-section-count'));
+      for(const label of ['User','Requested',''])boxHead.append(node('th',label));boxTable.append(node('thead'),boxBody);boxTable.tHead.append(boxHead);boxWrap.append(boxTable);box.append(boxHeader,boxWrap);host.append(box);
+      for(const item of requests){
+        const name=item.username||item.user_id,shown=item.display_name||name,row=node('tr'),user=node('td'),actions=node('td','','members-actions');
+        user.append(node('div',shown,'members-user-name'));if(name!==shown)user.append(node('div',name,'members-user-sub'));
+        const act=(text,tone,run)=>{const button=node('button',text,'members-btn '+tone);button.type='button';button.style.webkitTapHighlightColor='transparent';button.onclick=async event=>{requestTouchVibration(event);button.disabled=true;await run();button.disabled=false;};actions.append(button);};
+        act('Authorize','authorize',()=>update({user_id:item.user_id,level_id:'member',blocked:false,expected_revision:item.revision}));
+        act('Deny','restrict',async()=>{if(!window.confirm('Decline the access request from '+name+'?'))return;try{await request('/agents/'+encodeURIComponent(agentId)+'/access-requests/'+encodeURIComponent(item.user_id),'DELETE');await renderMembers(host,request,{agentId});}catch(error){statusText(error.message);}});
+        row.append(user,node('td',new Date(item.requested_at*1000).toLocaleString()),actions);boxBody.append(row);
+      }
+    }
     // Read-only V2-style level summary; levels are edited on the Identity page.
     const levelPanel=node('details','','members-levels'),levelSummary=node('summary','Member levels '),levelBody=node('div','','members-levels-body');
     levelSummary.append(node('span',String(levels.order.length),'members-levels-count'));levelPanel.append(levelSummary,levelBody);host.append(levelPanel);

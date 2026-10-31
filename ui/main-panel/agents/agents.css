@@ -44,3 +44,10 @@
 .members-table td { vertical-align: middle; }
 .members-actions .members-btn { -webkit-tap-highlight-color: transparent; margin-left: 4px; }
 .members-btn:not(.authorize):not(.restrict) { color: var(--fg-2); border-color: var(--border); }
+
+/* Request-access prompt for agent links the account cannot use yet. */
+.request-access-dialog { width: min(420px, calc(100vw - 32px)); border: var(--border-width) solid var(--border); border-radius: 8px; background: var(--bg-elev); color: var(--fg-1); padding: 16px; }
+.request-access-dialog > div { display: flex; gap: 8px; justify-content: flex-end; }
+/* Identity: per-level message limits sit under the level name. */
+.member-level-limits { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin-top: 6px; }
+.member-level-limits .ac-input { width: 120px; }

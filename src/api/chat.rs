@@ -298,6 +298,13 @@ async fn prepare_message_inner(
     if !access.admitted() {
         return Err(ApiError(StatusCode::FORBIDDEN, "Agent unavailable".into()));
     }
+    crate::api::agent_members::enforce_turn_limits(
+        app,
+        crate::shared_chat::actor(app),
+        &agent_id,
+        &access.capability_level,
+    )
+    .await?;
     let participation = app.store.participation_state(id).await.or_else(|error| {
         if let Some(session) = supplied_session {
             Ok(session

@@ -22,6 +22,12 @@ pub struct CapabilityLevel {
     pub tool_exposure: BTreeMap<String, Exposure>,
     #[serde(default)]
     pub skill_exposure: BTreeMap<String, Exposure>,
+    /// Optional per-user caps on this agent's user messages over rolling
+    /// 24-hour and 30-day windows; Operators are never limited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_turns: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monthly_turns: Option<u32>,
     /// Set by `CapabilityLevels::effective`: this level's rungs (it, then the levels
     /// below it) and saved tool permissions, followed by each level above it.
     #[serde(skip)]
@@ -91,6 +97,8 @@ impl CapabilityLevel {
             || self.name.trim().is_empty()
             || self.name.len() > 100
             || self.revision == 0
+            || self.daily_turns == Some(0)
+            || self.monthly_turns == Some(0)
             || self.ability_permissions.len() > 128
             || self.tool_permissions.len() > 256
             || self
@@ -254,6 +262,8 @@ impl Default for CapabilityLevels {
                         ability_exposure: BTreeMap::new(),
                         tool_exposure: BTreeMap::new(),
                         skill_exposure: BTreeMap::new(),
+                        daily_turns: None,
+                        monthly_turns: None,
                         chain: Vec::new(),
                         ability_chain: Vec::new(),
                         ability_defaults: false,
