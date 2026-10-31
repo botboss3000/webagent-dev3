@@ -93,9 +93,7 @@ impl<
             .as_str()
             .ok_or_else(|| anyhow!("Missing session"))?;
         let rid = run["id"].as_str().ok_or_else(|| anyhow!("Missing run"))?;
-        let task = run["pending"]["arguments"]["task_id"]
-            .as_str()
-            .ok_or_else(|| anyhow!("Missing build task"))?;
+        let task = finish_task(run);
         let authority = if run["pending"]["name"] == "build_work" {
             "build_work_finish"
         } else {
@@ -115,6 +113,7 @@ impl<
         if job_id.is_none() {
             // The broker may have admitted finish just before the loop stopped.
             // Resolve its task receipt; never submit another finish.
+            let task = task.ok_or_else(|| anyhow!("Missing build task"))?;
             let status = crate::tools::transport::execute_host_trusted(
                 "v3_build_work",
                 &json!({"action":"status","task_id":task}),
@@ -367,6 +366,16 @@ impl<
     }
 }
 
+/// The task a pending finish named: the legacy task_id, or a returned Broker ID, which is
+/// the task's label. A finish that continued the current work names neither; its job ID,
+/// recorded when the broker accepted it, is enough to follow it.
+fn finish_task(run: &Value) -> Option<&str> {
+    let args = &run["pending"]["arguments"];
+    args["task_id"]
+        .as_str()
+        .or_else(|| args["broker_id"].as_str().filter(|id| *id != "new"))
+}
+
 /// How long a finished release's result waits for the broker's commit and claim release.
 const CLOSEOUT_WAIT_SECONDS: f64 = 120.0;
 
@@ -463,6 +472,17 @@ mod tests {
             "stage_index":finished + 1,"stage_count":6,"stage_seconds":125,
             "stage_normal":[300,600],"verdict":verdict,"finished_stages":done,
             "remaining_seconds":[900,3300]})
+    }
+
+    #[test]
+    fn a_finish_names_its_task_by_task_id_or_broker_id() {
+        let named = |args: Value| json!({"pending":{"arguments":args}});
+        let run = named(json!({"task_id":"t-1"}));
+        assert_eq!(finish_task(&run), Some("t-1"));
+        let run = named(json!({"broker_id":"broker-abc"}));
+        assert_eq!(finish_task(&run), Some("broker-abc"));
+        assert_eq!(finish_task(&named(json!({"broker_id":"new"}))), None);
+        assert_eq!(finish_task(&named(json!({}))), None);
     }
 
     #[test]
