@@ -8,8 +8,8 @@ const STORAGE_KEY = 'webagent_voice_reply';
 
 /**
  * Mounts the voice reply toggle. It shows only when the session's agent has voice output on.
- * While the user has it on, each assistant reply published live gets a voice player under its
- * text; the text is never held back for audio. The server streams a plan line, then one MP3
+ * While the user has it on, each assistant reply published live gets a voice player below its
+ * bubble, with an activity line reporting preparation; the text is never held back for audio. The server streams a plan line, then one MP3
  * chunk per line, so the player shows progress and can play from the first sentence; playback
  * starts only when the user presses Play. panel.js
  * drives open/published/destroy; Identity announces setting changes with `v3:voice-output-changed`.
@@ -46,7 +46,19 @@ export function mountVoiceReply({client, note}) {
     abort = controller;
     current = player;
     players.push(player);
-    host.append(player.element);
+    // Below the bubble and its gutter, not inside the bubble; the activity line reports progress.
+    const block = document.createElement('div');
+    block.className = 'voice-reply';
+    const activity = document.createElement('div');
+    activity.className = 'voice-reply-activity';
+    activity.setAttribute('role', 'status');
+    activity.textContent = 'Preparing audio reply…';
+    block.append(player.element, activity);
+    host.append(block);
+    let parts = 0, ready = 0;
+    const progress = () => {
+      activity.textContent = 'Preparing audio reply…' + (parts > 1 ? ' ' + ready + ' of ' + parts + ' parts ready' : '');
+    };
     const stale = () => sid !== session || epoch !== generation || abort !== controller;
     try {
       const me = await (await fetch('/api/v3/auth/me', {credentials: 'same-origin', cache: 'no-store'})).json();
@@ -70,12 +82,16 @@ export function mountVoiceReply({client, note}) {
           if (!line) continue;
           const data = JSON.parse(line);
           if (data.error) throw Error(data.error);
-          if (data.plan) { player.plan(data.plan.chunks); continue; }
+          if (data.plan) { player.plan(data.plan.chunks); parts = data.plan.chunks?.length || 0; progress(); continue; }
           await player.add(Uint8Array.from(atob(data.audio), c => c.charCodeAt(0)).buffer);
+          ready += 1;
+          progress();
         }
       }
       player.finish();
+      activity.remove();
     } catch (error) {
+      activity.textContent = error.name === 'AbortError' ? 'Audio reply stopped' : 'Audio reply unavailable';
       if (error.name === 'AbortError') { player.fail('Voice reply stopped'); return; }
       player.fail('Voice unavailable');
       if (!stale()) note(error.message);
@@ -115,8 +131,7 @@ export function mountVoiceReply({client, note}) {
       if (recovered || !available || !wanted() || item.role !== 'assistant' || typeof item.content !== 'string') return;
       const text = textForSpeech(item.content);
       const row = [...document.querySelectorAll('#chat-messages-inner [data-public-id]')].find(node => node.dataset.publicId === item.id);
-      const host = row?.matches('.chat-bubble') ? row : row?.querySelector('.chat-bubble') || row;
-      if (text && host) void speak(text, host);
+      if (text && row) void speak(text, row);
     },
     destroy() {
       releaseAll(); ++generation;
