@@ -1,22 +1,21 @@
-// @code-index {"version":1,"feature":"chat-voice-reply","aliases":["voice reply","read replies aloud","agent voice output"],"purpose":"Below-composer on/off control that speaks each new agent reply in the agent's Kokoro voice. Config: ui/chat/chat.json -> chat_common.active_footer.below_pill rows/controls.voice_reply places it; the agent's Identity voice_output decides whether it shows.","span_lines":90,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_common/active_footer/below_pill/controls/voice_reply"],"profile_overrides":true}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"chat-voice-reply","aliases":["voice reply","read replies aloud","agent voice output"],"purpose":"Below-composer on/off control that adds a seekable voice player under each new agent reply, spoken in the agent's Kokoro voice. Config: ui/chat/chat.json -> */active_footer/below_pill rows/controls.voice_reply places it; the agent's Identity voice_output decides whether it shows.","span_lines":90,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_common/active_footer/below_pill/controls/voice_reply"],"profile_overrides":true}],"opportunities":[]}}
 import {setVoiceReplyControl} from './chat-config.js';
 import {textForSpeech} from './composer-media.js';
+import {createVoicePlayer, audioContext, unlockAudio} from './voice-player.js';
 import {requestTouchVibration} from '../../shared/vibrate.js';
 
 const STORAGE_KEY = 'webagent_voice_reply';
-// An empty WAV played during the tap so mobile browsers allow later, untouched playback.
-const UNLOCK = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
 
 /**
- * Mounts the voice reply toggle. It shows only when the session's agent has voice output on;
- * while the user has it on, each assistant reply published live is spoken. The server streams
- * one MP3 chunk per NDJSON line, so playback starts after the first sentence. panel.js drives
- * open/published/destroy; Identity announces setting changes with `v3:voice-output-changed`.
+ * Mounts the voice reply toggle. It shows only when the session's agent has voice output on.
+ * While the user has it on, each assistant reply published live gets a voice player under its
+ * text; the text is never held back for audio. The server streams a plan line, then one MP3
+ * chunk per line, so the player shows progress and starts after the first sentence. panel.js
+ * drives open/published/destroy; Identity announces setting changes with `v3:voice-output-changed`.
  */
 export function mountVoiceReply({client, note}) {
-  let session = '', generation = 0, available = false, abort = null, current = '';
-  const queue = [];
-  const player = new Audio();
+  let session = '', generation = 0, available = false, abort = null, current = null;
+  const players = [];
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'chat-voice-reply-btn';
@@ -27,33 +26,26 @@ export function mountVoiceReply({client, note}) {
     const on = wanted();
     button.style.display = available ? '' : 'none';
     button.setAttribute('aria-pressed', String(on));
-    button.title = on ? 'Voice reply on: new replies are read aloud' : 'Voice reply off: tap to hear new replies';
+    button.title = on ? 'Voice reply on: new replies get a voice player' : 'Voice reply off: tap to hear new replies';
     button.setAttribute('aria-label', button.title);
     button.classList.toggle('active', on);
     button.innerHTML = '<i data-lucide="' + (on ? 'volume-2' : 'volume-x') + '" style="width:16px;height:16px;"></i>';
     window.lucide?.createIcons();
   }
-  // Plays queued chunks in order; each blob URL is released once it has played or failed.
-  function playNext() {
-    if (current || !queue.length) return;
-    current = queue.shift();
-    player.src = current;
-    player.play().catch(finished);
-  }
-  function finished() { if (current) URL.revokeObjectURL(current); current = ''; playNext(); }
-  player.onended = finished;
-  player.onerror = finished;
+  // Stop the streaming reply; an unfinished player keeps what it has and says it stopped.
   function stop() {
-    abort?.abort(); abort = null;
-    for (const url of queue.splice(0)) URL.revokeObjectURL(url);
-    player.pause();
-    if (current) URL.revokeObjectURL(current);
-    current = '';
+    abort?.abort();
+    abort = null;
+    current?.pause();
   }
-  async function speak(text) {
+  async function speak(text, host) {
     stop();
     const sid = session, epoch = generation, controller = new AbortController();
+    const player = createVoicePlayer();
     abort = controller;
+    current = player;
+    players.push(player);
+    host.append(player.element);
     const stale = () => sid !== session || epoch !== generation || abort !== controller;
     try {
       const me = await (await fetch('/api/v3/auth/me', {credentials: 'same-origin', cache: 'no-store'})).json();
@@ -64,10 +56,11 @@ export function mountVoiceReply({client, note}) {
       });
       if (!response.ok) throw Error((await response.json().catch(() => ({}))).error || 'Voice reply is unavailable');
       const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-      let buffer = '';
+      let buffer = '', first = true;
       for (;;) {
         const {value, done} = await reader.read();
-        if (done || stale()) return;
+        if (stale()) return;
+        if (done) break;
         buffer += value;
         let end;
         while ((end = buffer.indexOf('\n')) >= 0) {
@@ -76,13 +69,18 @@ export function mountVoiceReply({client, note}) {
           if (!line) continue;
           const data = JSON.parse(line);
           if (data.error) throw Error(data.error);
-          const bytes = Uint8Array.from(atob(data.audio), c => c.charCodeAt(0));
-          queue.push(URL.createObjectURL(new Blob([bytes], {type: 'audio/mpeg'})));
-          playNext();
+          if (data.plan) { player.plan(data.plan.chunks); continue; }
+          await player.add(Uint8Array.from(atob(data.audio), c => c.charCodeAt(0)).buffer);
+          // Autoplay only where the browser already allows audio; otherwise Play is one tap away.
+          if (first && !stale() && audioContext().state === 'running') player.play();
+          first = false;
         }
       }
+      player.finish();
     } catch (error) {
-      if (error.name !== 'AbortError' && !stale()) note(error.message);
+      if (error.name === 'AbortError') { player.fail('Voice reply stopped'); return; }
+      player.fail('Voice unavailable');
+      if (!stale()) note(error.message);
     } finally {
       if (abort === controller) abort = null;
     }
@@ -98,26 +96,38 @@ export function mountVoiceReply({client, note}) {
     if (!available) stop();
     paint();
   }
+  // Any tap while voice reply is on lets the next reply start playing by itself.
+  const unlock = () => { if (wanted()) unlockAudio(); };
+  document.addEventListener('pointerdown', unlock, true);
   button.addEventListener('click', event => {
     requestTouchVibration(event);
     const on = !wanted();
     try { localStorage.setItem(STORAGE_KEY, String(on)); } catch { /* Private mode: this tap still applies. */ }
-    if (on) { player.src = UNLOCK; player.play().catch(() => {}); } else stop();
+    if (on) unlockAudio(); else stop();
     paint();
   });
   const reload = () => { void load(); };
   window.addEventListener('v3:voice-output-changed', reload);
   setVoiceReplyControl(button);
   paint();
+  // Drop decoded audio held by players of the previous conversation.
+  const releaseAll = () => { stop(); for (const player of players.splice(0)) player.release(); current = null; };
   return {
-    /** Selects a session: stops speech and checks its agent's voice output. */
-    open(id) { stop(); ++generation; session = id || ''; void load(); },
-    /** Speaks a live (not recovered) assistant reply while the control is shown and on. */
+    /** Selects a session: stops speech, frees old players and checks its agent's voice output. */
+    open(id) { releaseAll(); ++generation; session = id || ''; void load(); },
+    /** Adds a voice player under a live (not recovered) assistant reply while the control is shown and on. */
     published(item, recovered = false) {
       if (recovered || !available || !wanted() || item.role !== 'assistant' || typeof item.content !== 'string') return;
       const text = textForSpeech(item.content);
-      if (text) void speak(text);
+      const row = [...document.querySelectorAll('#chat-messages-inner [data-public-id]')].find(node => node.dataset.publicId === item.id);
+      const host = row?.matches('.chat-bubble') ? row : row?.querySelector('.chat-bubble') || row;
+      if (text && host) void speak(text, host);
     },
-    destroy() { stop(); ++generation; window.removeEventListener('v3:voice-output-changed', reload); setVoiceReplyControl(null); button.remove(); }
+    destroy() {
+      releaseAll(); ++generation;
+      document.removeEventListener('pointerdown', unlock, true);
+      window.removeEventListener('v3:voice-output-changed', reload);
+      setVoiceReplyControl(null); button.remove();
+    }
   };
 }

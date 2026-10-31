@@ -1,8 +1,10 @@
 """Kokoro speech for agent voice output, run by the API as a short-lived subprocess.
 
 Reads {"text": ..., "voice": ...} as JSON on stdin; the API has already prepared and bounded the
-text and validated the voice. Writes MP3 chunks to stdout, each as a 4-byte big-endian length then
-the bytes, so playback can start before the whole reply is synthesized. No network access is used.
+text and validated the voice. Writes length-prefixed frames to stdout (a 4-byte big-endian length,
+then the bytes): first a JSON plan {"chunks": [characters per chunk]}, sent before the model loads
+so a player can size its track at once, then one MP3 per chunk, so playback can start before the
+whole reply is synthesized. No network access is used.
 """
 import io
 import json
@@ -42,18 +44,25 @@ def chunks(text):
         yield group
 
 
+def frame(out, data):
+    out.write(struct.pack(">I", len(data)) + data)
+    out.flush()
+
+
 def main():
+    os.nice(10)  # speech uses every core; the API and loop keep priority
     request = json.load(sys.stdin)
     voice = request["voice"]
+    parts = list(chunks(request["text"]))
+    out = sys.stdout.buffer
+    frame(out, json.dumps({"chunks": [len(text) for text in parts]}).encode())
     kokoro = Kokoro(MODELS + "/kokoro-v1.0.int8.onnx", MODELS + "/voices-v1.0.bin")
     lang = "en-gb" if voice.startswith("b") else "en-us"
-    out = sys.stdout.buffer
-    for text in chunks(request["text"]):
+    for text in parts:
         audio, rate = kokoro.create(text, voice=voice, lang=lang)
         mp3 = io.BytesIO()
         soundfile.write(mp3, audio, rate, format="MP3")
-        out.write(struct.pack(">I", mp3.tell()) + mp3.getvalue())
-        out.flush()
+        frame(out, mp3.getvalue())
 
 
 if __name__ == "__main__":

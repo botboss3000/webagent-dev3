@@ -239,6 +239,24 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 .chat-voice-reply-btn{-webkit-tap-highlight-color:transparent}
 .chat-voice-reply-btn.active{color:var(--brand)}
 .chat-voice-reply-btn:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+/* Voice reply player under a spoken reply: light gray track = still being synthesized,
+   darker = ready, brand = played; the thumb drags within the ready part. */
+.voice-player{display:flex;align-items:center;gap:10px;margin-top:8px;padding:6px 10px 6px 6px;max-width:360px;border:var(--border-width) solid var(--border);border-radius:999px;background:var(--bg-1);-webkit-tap-highlight-color:transparent}
+.voice-player-toggle{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border:var(--border-width) solid var(--border);border-radius:50%;background:var(--bg-2,var(--bg-1));color:var(--fg-1);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.voice-player-toggle:hover:not(:disabled){border-color:var(--brand);color:var(--brand)}
+.voice-player-toggle:focus-visible,.voice-player-track:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.voice-player-toggle:disabled{cursor:default}
+.voice-player-spinner{width:14px;height:14px;border:2px solid color-mix(in oklab,currentColor 25%,transparent);border-top-color:currentColor;border-radius:50%;animation:voice-player-spin .8s linear infinite}
+@keyframes voice-player-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.voice-player-spinner{animation-duration:2.4s}}
+.voice-player-track{position:relative;flex:1 1 auto;min-width:80px;height:6px;border-radius:3px;background:color-mix(in oklab,var(--fg-3,#999) 22%,transparent);cursor:pointer;touch-action:none}
+.voice-player-track::before{content:"";position:absolute;inset:-10px 0}
+.voice-player-loaded,.voice-player-played{position:absolute;left:0;top:0;bottom:0;border-radius:inherit;pointer-events:none}
+.voice-player-loaded{background:color-mix(in oklab,var(--fg-3,#999) 55%,transparent)}
+.voice-player-played{background:var(--brand)}
+.voice-player-thumb{position:absolute;top:50%;width:14px;height:14px;margin-left:-7px;border-radius:50%;background:var(--brand);box-shadow:0 0 0 2px var(--bg-1);transform:translateY(-50%);pointer-events:none}
+.voice-player-time{flex:0 0 auto;min-width:72px;font-size:11px;color:var(--fg-2);font-variant-numeric:tabular-nums;text-align:right}
+.voice-player.failed .voice-player-time{color:var(--fg-3,var(--fg-2))}
 .chat-action textarea{box-sizing:border-box;max-width:100%;margin:8px 0;padding:8px 10px;min-height:60px;border:var(--border-width) solid var(--border);border-radius:12px;background:var(--bg-1);color:var(--fg-1);font:inherit;resize:vertical}
 .chat-action textarea:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
 .chat-action-credential{display:flex;flex-direction:column;align-items:stretch;margin:0}

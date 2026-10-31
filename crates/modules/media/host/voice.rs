@@ -740,17 +740,22 @@ async fn next_chunk(out: &mut (impl AsyncRead + Unpin)) -> std::io::Result<Optio
     Ok(Some(chunk))
 }
 
-/// One NDJSON line per chunk as it is synthesized: `{"audio": <base64 MP3>}`, or a final
-/// `{"error": ...}` when the speaker fails. A clean exit ends the stream.
+/// NDJSON lines: first the speaker's plan, `{"plan": {"chunks": [characters per chunk]}}`, then
+/// one `{"audio": <base64 MP3>}` per chunk as it is synthesized, or a final `{"error": ...}` when
+/// the speaker fails. A clean exit ends the stream.
 fn speech_lines(speaker: Speaker) -> Body {
-    Body::from_stream(stream::unfold(Some(speaker), |state| async move {
-        let mut speaker = state?;
+    Body::from_stream(stream::unfold(Some((speaker, true)), |state| async move {
+        let (mut speaker, first) = state?;
         let line = match next_chunk(&mut speaker.stdout).await {
+            Ok(Some(plan)) if first => match serde_json::from_slice::<Value>(&plan) {
+                Ok(plan) => json!({"plan": plan}),
+                Err(_) => json!({"error": SPEECH_FAILED}),
+            },
             Ok(Some(mp3)) => json!({"audio": STANDARD.encode(mp3)}),
             Ok(None) if speaker.child.wait().await.is_ok_and(|s| s.success()) => return None,
             Ok(None) | Err(_) => json!({"error": SPEECH_FAILED}),
         };
-        let more = line.get("audio").is_some().then_some(speaker);
+        let more = line.get("error").is_none().then_some((speaker, false));
         Some((Ok::<_, std::io::Error>(format!("{line}\n")), more))
     }))
 }
@@ -802,6 +807,10 @@ pub(crate) async fn voice_sample(
                 return Err(conflict("Global shutoff is active"));
             }
             let mut speaker = start_speaker(&text, &voice).await?;
+            // The first frame is the plan; a sample is one short chunk.
+            next_chunk(&mut speaker.stdout)
+                .await
+                .map_err(|_| speech_unavailable())?;
             let mut mp3 = Vec::new();
             while let Some(chunk) = next_chunk(&mut speaker.stdout)
                 .await
