@@ -15,10 +15,6 @@ export function audioContext() {
   context ??= new (window.AudioContext || window.webkitAudioContext)();
   return context;
 }
-/** Resume audio inside a user gesture; browsers keep it suspended until one. */
-export function unlockAudio() {
-  audioContext().resume().catch(() => {});
-}
 
 const clock = seconds => {
   const s = Math.max(0, Math.round(seconds));

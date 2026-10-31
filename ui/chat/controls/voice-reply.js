@@ -1,7 +1,7 @@
 // @code-index {"version":1,"feature":"chat-voice-reply","aliases":["voice reply","read replies aloud","agent voice output"],"purpose":"Below-composer on/off control that adds a seekable voice player under each new agent reply, spoken in the agent's Kokoro voice. Config: ui/chat/chat.json -> */active_footer/below_pill rows/controls.voice_reply places it; the agent's Identity voice_output decides whether it shows.","span_lines":90,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_common/active_footer/below_pill/controls/voice_reply"],"profile_overrides":true}],"opportunities":[]}}
 import {setVoiceReplyControl} from './chat-config.js';
 import {textForSpeech} from './composer-media.js';
-import {createVoicePlayer, audioContext, unlockAudio} from './voice-player.js';
+import {createVoicePlayer} from './voice-player.js';
 import {requestTouchVibration} from '../../shared/vibrate.js';
 
 const STORAGE_KEY = 'webagent_voice_reply';
@@ -10,7 +10,8 @@ const STORAGE_KEY = 'webagent_voice_reply';
  * Mounts the voice reply toggle. It shows only when the session's agent has voice output on.
  * While the user has it on, each assistant reply published live gets a voice player under its
  * text; the text is never held back for audio. The server streams a plan line, then one MP3
- * chunk per line, so the player shows progress and starts after the first sentence. panel.js
+ * chunk per line, so the player shows progress and can play from the first sentence; playback
+ * starts only when the user presses Play. panel.js
  * drives open/published/destroy; Identity announces setting changes with `v3:voice-output-changed`.
  */
 export function mountVoiceReply({client, note}) {
@@ -56,7 +57,7 @@ export function mountVoiceReply({client, note}) {
       });
       if (!response.ok) throw Error((await response.json().catch(() => ({}))).error || 'Voice reply is unavailable');
       const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-      let buffer = '', first = true;
+      let buffer = '';
       for (;;) {
         const {value, done} = await reader.read();
         if (stale()) return;
@@ -71,9 +72,6 @@ export function mountVoiceReply({client, note}) {
           if (data.error) throw Error(data.error);
           if (data.plan) { player.plan(data.plan.chunks); continue; }
           await player.add(Uint8Array.from(atob(data.audio), c => c.charCodeAt(0)).buffer);
-          // Autoplay only where the browser already allows audio; otherwise Play is one tap away.
-          if (first && !stale() && audioContext().state === 'running') player.play();
-          first = false;
         }
       }
       player.finish();
@@ -96,14 +94,11 @@ export function mountVoiceReply({client, note}) {
     if (!available) stop();
     paint();
   }
-  // Any tap while voice reply is on lets the next reply start playing by itself.
-  const unlock = () => { if (wanted()) unlockAudio(); };
-  document.addEventListener('pointerdown', unlock, true);
   button.addEventListener('click', event => {
     requestTouchVibration(event);
     const on = !wanted();
     try { localStorage.setItem(STORAGE_KEY, String(on)); } catch { /* Private mode: this tap still applies. */ }
-    if (on) unlockAudio(); else stop();
+    if (!on) stop();
     paint();
   });
   const reload = () => { void load(); };
@@ -125,7 +120,6 @@ export function mountVoiceReply({client, note}) {
     },
     destroy() {
       releaseAll(); ++generation;
-      document.removeEventListener('pointerdown', unlock, true);
       window.removeEventListener('v3:voice-output-changed', reload);
       setVoiceReplyControl(null); button.remove();
     }
