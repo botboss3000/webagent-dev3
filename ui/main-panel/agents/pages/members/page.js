@@ -16,6 +16,25 @@ export async function renderMembers(host,request,{agentId}) {
     form.onsubmit=async event=>{event.preventDefault();if(level.value==='operator'&&!window.confirm('Appoint this user as an Agent Operator? Operators can configure this agent and appoint other Operators.'))return;add.disabled=true;
       try{const result=await request(path+'?username='+encodeURIComponent(username.value.trim()));await update({user_id:result.user.user_id,level_id:level.value,blocked:false,expected_revision:0});}catch(error){statusText(error.message);}finally{add.disabled=false;}};
     host.append(node('p','Removing an assignment restores automatic Member or Visitor access. Block from agent overrides both. Counts are scoped to this agent.','members-notice'));
+    // Pending help requests (agent request_human or the chat's Request help), one row each above the members table.
+    const help=node('div','','members-section'),helpHeader=node('div','','members-section-header'),helpCount=node('span','0','members-section-count');
+    helpHeader.append(node('span','Help requests','members-section-title'),helpCount);help.append(helpHeader);host.append(help);
+    const helpWrap=node('div','','members-table-wrap'),helpTable=node('table','','members-table'),helpBody=node('tbody'),helpHead=node('tr');
+    for(const label of ['Conversation','Requested','Status',''])helpHead.append(node('th',label));
+    helpTable.append(node('thead'),helpBody);helpTable.tHead.append(helpHead);helpWrap.append(helpTable);help.append(helpWrap);
+    const helpEmpty=node('div','No pending help requests.','members-empty');help.append(helpEmpty);
+    try{
+      const shared=await request('/agents/'+encodeURIComponent(agentId)+'/shared-sessions');if(host._membersGeneration!==generation)return;
+      for(const item of (shared.sessions||[]).filter(session=>session.help_pending)){
+        const sid=encodeURIComponent(item.id),row=node('tr'),conversation=node('td'),status=node('td'),actions=node('td','','members-actions');
+        const link=node('a',item.title||item.id);link.href='/app?session_id='+sid;conversation.append(link);
+        status.append(node('span','Needs a human','members-status pending'));
+        if(item.can_join){const join=node('button','Join','members-btn authorize');join.type='button';join.style.webkitTapHighlightColor='transparent';
+          join.onclick=async event=>{requestTouchVibration(event);join.disabled=true;try{await request('/sessions/'+sid+'/join','POST',{client_request_id:crypto.randomUUID()});location.href='/app?session_id='+sid;}catch(error){statusText('Join failed: '+error.message);join.disabled=false;}};actions.append(join);}
+        row.append(conversation,node('td',item.help_requested_at?new Date(item.help_requested_at*1000).toLocaleString():'—'),status,actions);helpBody.append(row);
+      }
+    }catch(error){helpEmpty.textContent='Help requests unavailable: '+error.message;}
+    helpCount.textContent=String(helpBody.rows.length);helpWrap.hidden=!helpBody.rows.length;helpEmpty.hidden=helpBody.rows.length>0;
     const section=node('div','','members-section'),header=node('div','','members-section-header'),count=node('span','0','members-section-count');
     header.append(node('span','All members','members-section-title'),count);section.append(header);host.append(section);
     const wrap=node('div','','members-table-wrap'),table=node('table','','members-table'),tbody=node('tbody');

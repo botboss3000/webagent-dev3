@@ -31,7 +31,6 @@ try{
    window.fixture={agent,widget,writes:[],fail:false};
    const request=async(url,method='GET',body)=>{
     if(url==='/models/agents/one/main-chat')throw Error('Main Chat outside fixture');
-    if(url==='/agents/one/shared-sessions')return {sessions:[]};
     const embed=url==='/agents/one/embed';if(!embed&&url!=='/models/agents/one/identity')throw Error('Unscoped route '+url);
     if(method==='GET')return structuredClone(embed?widget:agent);
     fixture.writes.push({url,body:structuredClone(body)});if(fixture.fail){fixture.fail=false;throw Error('stale revision');}

@@ -67,7 +67,7 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
   };
   renderMemberAccess(content,agent,persist,request,{agentId,reload:()=>renderIdentity(host,request,{agentId,onSaved})});
   if(agent.can_manage)await renderEmbedSettings(content,request,{agentId});
-  renderSharedChat(content, agent, persist, request, {agentId});
+  renderSharedChat(content, agent, persist);
   await renderMainChat(content, request, {agentId,canManage:agent.can_manage});
   renderCompaction(content, agent, persist);
   renderToolOutputPolicy(content, agent, persist);
