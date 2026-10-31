@@ -6,7 +6,12 @@ construction, documentation maintenance and Code Index/documentation reviews are
 not part of the release workflow: publication records no review obligations and
 nothing waits on them. There is no automatic indexing on deployment or restart.
 
-After verifying and committing exact promoted bytes, release source write claims
+A completed release that an in-app agent finished closes itself: the broker commits
+exactly the released paths under the task summary and releases the task's claims
+with that commit, recording the outcome as `rebuild_closeout` in the job (also shown
+by `v3_worker_job`). Reading a job's receipt or progress renews its task's heartbeat.
+Local operators (`codex-local`) close their own releases: after verifying and
+committing exact promoted bytes, release source write claims
 with build_work release_claims and the release commit. The broker verifies the
 completed synchronized release, commit bytes and health; releasing the last held
 claim this way completes the task, with no separate acceptance or complete call.

@@ -3675,7 +3675,7 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "compiler_recipe", "compiler_runtime", "linker_proof", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight", "verification_cache", "focused_verification", "test_reuse", "phase_timings", "active_verification", "publication_wait", "publication_wait_history", "last_resource_wait", "broker_install", "ui_test_failure", "ui_test_override") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "compiler_recipe", "compiler_runtime", "linker_proof", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight", "verification_cache", "focused_verification", "test_reuse", "phase_timings", "active_verification", "publication_wait", "publication_wait_history", "last_resource_wait", "broker_install", "ui_test_failure", "ui_test_override", "finished_at", "rebuild_closeout") if key in job}
         for key in ("publication_wait","resource_waiting"):
             if view.get(key,{}).get("state","waiting")=="waiting"and view.get(key,{}).get("since"):
                 view[key]={**view[key],"elapsed_seconds":round(max(0,time.time()-view[key]["since"]),3)}
@@ -3992,13 +3992,30 @@ class Broker:
                                  "sync_decision": "proceed", "expected_sync_digest": report["digest"]})
         return {**finished, "mode": args["mode"], "changed_paths": sorted(drift)}
 
+    def _touch_job_task(self, job, trusted, workspace):
+        """Following a job is liveness for its task, as naming the task is; an in-app finish
+        waits on the job alone and must not let the task's claims lapse during a long build."""
+        if isinstance(job.get("task_id"), str):
+            with self.lock:
+                self.scheduler.touch_task({"task_id": job["task_id"]}, trusted, workspace)
+
+    def _closes_itself(self, job):
+        """A rebuild, or a release an in-app agent finished, is committed and closed by the broker on success.
+        Local operators close their own releases with their own commit message."""
+        return job.get("status") == "completed" and (bool(job.get("rebuild")) or (
+            job.get("operation") in {"build_deploy", "ui_deploy", "plugin_deploy", "host_service_deploy"}
+            and job.get("user_id") != "codex-local"))
+
     def _rebuild_closeout(self, job):
-        """Commit a completed rebuild's released checkout paths, then release its claims with that commit."""
+        """Commit a completed release's released checkout paths, then release its claims with that commit."""
         try:
             item = next(i for i in self.work.values() if i.get("job_id") == job["job_id"])
             paths = sorted(p.removeprefix("v3/") for p in job.get("changed_paths", []) if p.startswith("v3/"))
-            message = ("Rebuild current checkout (" + job.get("release_mode", "dev") + ") requested by "
-                       + job["rebuild"].get("requested_by", "an administrator") + " (broker job " + job["job_id"] + ")")
+            if job.get("rebuild"):
+                message = ("Rebuild current checkout (" + job.get("release_mode", "dev") + ") requested by "
+                           + job["rebuild"].get("requested_by", "an administrator") + " (broker job " + job["job_id"] + ")")
+            else:
+                message = (item.get("summary") or item["task_id"]) + " (broker job " + job["job_id"] + ")"
             commit = self.runner.commit_release(paths, message)
             # The broker renews the owner's own identity briefly to close its task; no new authority.
             local = job["user_id"] == "codex-local"
@@ -4007,7 +4024,7 @@ class Broker:
             row = next(r for r in self.scheduler.store.list() if r["id"] == item["key"])
             result = self.handle({"id": str(uuid.uuid4()), "name": "build_work", "workspace": job["workspace"], "trusted": trusted,
                                   "arguments": {"action": "release_claims", "task_id": item["task_id"], "scopes": row["scopes"],
-                                                "reason": "Checkout rebuild " + job["job_id"][:8] + " committed as " + commit[:7],
+                                                "reason": "Release " + job["job_id"][:8] + " committed as " + commit[:7],
                                                 "request_id": "rebuild-close-" + job["job_id"], "expected_revision": row["revision"],
                                                 "expected_epoch": row["epoch"], "commit": commit}})
             job["rebuild_closeout"] = {"status": "complete" if result.get("state") == "complete" else "partial",
@@ -6205,6 +6222,7 @@ class Broker:
                 completed = sum(1 for j in self.jobs.values() if j.get("status") == "completed")
                 if getattr(self, "_stage_baselines", (None,))[0] != completed:
                     self._stage_baselines = (completed, stage_baselines(list(self.jobs.values())))
+                self._touch_job_task(job, trusted, workspace)
                 return job_progress(job, self._stage_baselines[1], time.time())
             if name == "v3_worker_job":
                 if "job_id" not in args or set(args) - {"job_id", "log_cursor"}:
@@ -6217,6 +6235,7 @@ class Broker:
                 if not job or not (self._owned(job, trusted, workspace) or participant):
                     raise ValueError("job not available to this session")
                 self._incoming_lease(trusted)
+                self._touch_job_task(job, trusted, workspace)
                 return self._view(job, log_cursor=args.get("log_cursor"))
             operation = ("build_deploy" if name == "administrator_auto_build_deploy"
                          else "build" if name == "v3_build_image" else args.get("operation"))
@@ -6456,7 +6475,7 @@ class Broker:
             job.setdefault("phase_history", []).append(
                 {"phase": "finished", "at": job["finished_at"]})
             self._save(job)
-        if job.get("rebuild"):
+        if self._closes_itself(job):
             self._rebuild_closeout(job)
 
     def _run(self, job, blob):
@@ -6682,7 +6701,7 @@ class Broker:
                 job["finished_at"] = time.time()
                 job.setdefault("phase_history", []).append({"phase": "finished", "at": job["finished_at"]})
                 self._save(job)
-            if job.get("rebuild") and job["status"] == "completed":
+            if self._closes_itself(job):
                 self._rebuild_closeout(job)
         except Exception as error:
             # A replacement that failed before any new consumer was healthy restores its

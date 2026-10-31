@@ -1812,11 +1812,13 @@ class BuildTests(unittest.TestCase):
         self.assertEqual((job["status"], job["release_mode"], job["operation"]), ("completed", "dev", "build_deploy"))
         # Commit verification against real git is covered in test_scheduler_broker; the fake checkout has none.
         self.assertIn("status", job["rebuild_closeout"])
+        # The in-app baseline release closed itself first, under its own task summary.
         commits = [c for c in self.runner.calls if c[0] == "commit_release"]
-        self.assertEqual(commits[0][1], ("src/rebuilt.rs",));self.assertIn(job["job_id"], commits[0][2])
+        self.assertEqual([c[1] for c in commits], [("src/base.rs",), ("src/rebuilt.rs",)])
+        self.assertTrue(commits[0][2].startswith("Baseline (broker job "));self.assertIn(job["job_id"], commits[1][2])
         again = self.rebuild("dev", "request-drift")
         self.assertEqual(again["job_id"], first["job_id"])
-        self.assertEqual(len([c for c in self.runner.calls if c[0] == "commit_release"]), 1)
+        self.assertEqual(len([c for c in self.runner.calls if c[0] == "commit_release"]), 2)
 
     def test_rebuild_outlasting_the_callers_short_lease_still_finishes(self):
         self.deployed_baseline();self.drift(**{"v3/src/rebuilt.rs": "fn rebuilt() {}"})

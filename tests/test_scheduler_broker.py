@@ -57,9 +57,9 @@ class SchedulerBrokerTests(unittest.TestCase):
             "inputs_sha256":self.broker.scheduler_digest(blob),"operation":"plugin_deploy","rust_tests":{"status":"not_required"}}
         self.broker.jobs[job_id]=job;item.update(status="closed",job_id=job_id);self.broker._save_work()
         return job,commit
-    def test_rebuild_closeout_commits_released_paths_and_releases_claims(self):
-        """A completed rebuild commits exactly its released bytes; the broker's verification then frees the task."""
-        item=self.begin("rebuild-closeout-task");self.write(item,"README.md","rebuilt\n")
+    def closeout(self,label,**extra):
+        """Close a completed fixture release through the broker's own commit-and-release path."""
+        item=self.begin(label);self.write(item,"README.md","rebuilt\n")
         tree=Path(item["workspace_path"]).parent;blob=self.broker.scheduler_task_snapshot(tree)
         live=self.root/"live";live.mkdir();(live/"README.md").write_text("original\n")
         def git(*args):return subprocess.run(["git","-C",str(live),*args],stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True).stdout.decode().strip()
@@ -71,8 +71,7 @@ class SchedulerBrokerTests(unittest.TestCase):
         (folder/"candidate.tar").write_bytes(blob);(folder/"task.tar").write_bytes(blob)
         job={"job_id":job_id,"task_id":item["task_id"],"user_id":item["user_id"],"workspace":item["workspace"],"status":"completed",
              "synchronization":{"status":"synchronized"},"changed_paths":["v3/README.md"],"inputs_sha256":self.broker.scheduler_digest(blob),
-             "operation":"plugin_deploy","rust_tests":{"status":"not_required"},"release_mode":"dev","access_fingerprint":"f"*64,
-             "rebuild":{"request_id":"rebuild-closeout","mode":"dev","requested_by":"local-operator"}}
+             "operation":"plugin_deploy","rust_tests":{"status":"not_required"},"release_mode":"dev","access_fingerprint":"f"*64,**extra}
         self.broker.jobs[job_id]=job;item.update(status="closed",job_id=job_id);self.broker._save_work()
         def commit(paths,message):
             git("add","--",*paths);git("commit","-qm",message,"--",*paths);return git("rev-parse","HEAD")
@@ -81,6 +80,31 @@ class SchedulerBrokerTests(unittest.TestCase):
         self.assertEqual(job["rebuild_closeout"]["status"],"complete",job["rebuild_closeout"])
         self.assertEqual(git("show","HEAD:README.md"),"rebuilt");self.assertIn(job_id,git("log","-1","--format=%s"))
         self.assertEqual(self.broker.scheduler.store.get(item["key"])["scopes"],[])
+        self.assertEqual(self.broker._view(job)["rebuild_closeout"]["status"],"complete")
+        return git("log","-1","--format=%s")
+    def test_rebuild_closeout_commits_released_paths_and_releases_claims(self):
+        """A completed rebuild commits exactly its released bytes; the broker's verification then frees the task."""
+        subject=self.closeout("rebuild-closeout-task",rebuild={"request_id":"rebuild-closeout","mode":"dev","requested_by":"local-operator"})
+        self.assertTrue(subject.startswith("Rebuild current checkout (dev)"),subject)
+    def test_finished_release_closeout_commits_with_the_task_summary(self):
+        """A non-rebuild release is committed under its task summary and freed the same way."""
+        self.assertTrue(self.closeout("release-closeout-task").startswith("Scheduler fixture (broker job "))
+    def test_following_job_progress_keeps_its_task_alive(self):
+        item=self.begin("progress-liveness-task");self.write(item,"README.md","followed\n")
+        store=self.broker.scheduler.store
+        self.broker.jobs["progress-job"]={"job_id":"progress-job","task_id":item["task_id"],"status":"running","operation":"build_deploy",
+            "user_id":"codex-local","workspace":self.workspace,"created_at":time.time()}
+        for name in ("v3_build_progress","v3_worker_job"):
+            with store.transaction()as db:db.execute("UPDATE tasks SET heartbeat=? WHERE id=?",(store.clock()-600,item["key"]))
+            self.call(name,{"job_id":"progress-job"})
+            self.assertGreater(store.get(item["key"])["heartbeat"],store.clock()-60,name)
+    def test_in_app_releases_close_themselves_and_local_operator_releases_do_not(self):
+        job={"status":"completed","operation":"build_deploy","user_id":"admin"}
+        self.assertTrue(self.broker._closes_itself(job))
+        self.assertFalse(self.broker._closes_itself(dict(job,user_id="codex-local")))
+        self.assertTrue(self.broker._closes_itself(dict(job,user_id="codex-local",rebuild={"mode":"dev"})))
+        self.assertFalse(self.broker._closes_itself(dict(job,operation="check")))
+        self.assertFalse(self.broker._closes_itself(dict(job,status="failed")))
     def test_commit_release_commits_only_released_paths_and_refuses_staged_work(self):
         live=self.root/"repo";live.mkdir()
         def git(*args):return subprocess.run(["git","-C",str(live),*args],stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True).stdout.decode().strip()
