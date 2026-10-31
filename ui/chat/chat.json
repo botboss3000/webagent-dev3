@@ -123,6 +123,10 @@
           "target": {
             "_instructions": "container_size: Control container size as a CSS length; auto allows natural sizing.",
             "container_size": "28px"
+          },
+          "voice_reply": {
+            "_instructions": "container_size: Control container size as a CSS length; auto allows natural sizing.",
+            "container_size": "28px"
           }
         },
         "enabled": true,
@@ -136,6 +140,7 @@
               "mode",
               "model_changer",
               "abilities",
+              "voice_reply",
               "browser_notifications"
             ]
           }
@@ -1558,6 +1563,15 @@
         "icon": "mic",
         "targets": [
           "pill"
+        ]
+      },
+      "voice_reply": {
+        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
+        "description": "Speak each new agent reply aloud in the agent's voice; shown only when the agent's Identity turns voice output on",
+        "display_name": "Voice Reply",
+        "icon": "volume-2",
+        "targets": [
+          "below_pill"
         ]
       }
     },
