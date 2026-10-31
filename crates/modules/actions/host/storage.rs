@@ -1,18 +1,27 @@
-//! Requester-owned action evidence. SQLite, not a process mutex, owns claims.
-use super::*;
+//! Store adapters for the Actions ledger: the requester's user plane and the agent receipt
+//! plane are handed to `webagent_actions` with the Store codec. SQLite, not a process mutex,
+//! owns claims; see `webagent_actions::repository`.
+use super::Store;
+use anyhow::Result;
+use serde_json::Value;
+use sqlx::Row;
+use webagent_actions::intent;
+use webagent_actions::receipts;
+use webagent_actions::repository::Ledger;
 
 impl Store {
+    fn action_ledger(&self) -> Ledger<'_, Self> {
+        Ledger::new(self, &self.pool, &self.user_id)
+    }
+    /// Native receipt `id`, read in the caller's agent transaction.
     pub(super) async fn action_agent_receipt_tx(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         id: &str,
     ) -> Result<Option<Value>> {
-        let raw: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-            .bind(id)
-            .fetch_optional(&mut **tx)
-            .await?;
-        raw.map(|v| self.unseal(&v)).transpose()
+        receipts::read_in(self, tx, id).await
     }
+    /// Write native receipt `id` in the caller's agent transaction.
     pub(super) async fn action_agent_receipt_write(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -20,13 +29,9 @@ impl Store {
         hash: &str,
         result: &Value,
     ) -> Result<()> {
-        sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
-            .bind(id)
-            .bind(self.seal(&json!({"arguments_digest":hash,"result":result}))?)
-            .execute(&mut **tx)
-            .await?;
-        Ok(())
+        receipts::write_in(self, tx, id, hash, result).await
     }
+    /// Native receipt of an action of `name` for `agent` and pending call `pending`.
     pub(crate) async fn action_agent_receipt(
         &self,
         agent: &str,
@@ -34,16 +39,13 @@ impl Store {
         pending: &str,
     ) -> Result<Option<Value>> {
         let scoped = self.for_agent(agent).await?;
-        let key = if name == "prompt_slot_write" {
-            format!("agent:{agent}:action_prompt:{pending}")
-        } else {
-            format!("agent:{agent}:base_self_edit:{pending}")
-        };
-        let raw: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-            .bind(key)
-            .fetch_optional(&scoped.agent_pool)
-            .await?;
-        raw.map(|v| self.unseal(&v)).transpose()
+        // The receipt is read from the agent plane and unsealed with this handle's codec.
+        receipts::read(
+            self,
+            &scoped.agent_pool,
+            &receipts::key(agent, name, pending),
+        )
+        .await
     }
     #[cfg(test)]
     pub(crate) async fn test_provider_purchase(&self, key: &str, result: &Value) -> Result<Value> {
@@ -55,7 +57,7 @@ impl Store {
             .await?;
         self.test_provider_lookup(key)
             .await?
-            .ok_or_else(|| anyhow!("Missing provider receipt"))
+            .ok_or_else(|| anyhow::anyhow!("Missing provider receipt"))
     }
     #[cfg(test)]
     pub(crate) async fn test_provider_lookup(&self, key: &str) -> Result<Option<Value>> {
@@ -75,172 +77,62 @@ impl Store {
                 .await?,
         )
     }
+    /// The human message that authorized run `rid`, or `null` for automated work: a scheduled
+    /// prompt or agent message cannot authorize another matching consequential action.
     pub(crate) async fn action_origin(&self, sid: &str, rid: &str) -> Result<Value> {
-        // A scheduled prompt is executable work, not a fresh human message.
-        // It cannot authorize another matching consequential action.
-        if self.get(&format!("run:{rid}")).await?
-            .is_some_and(|run|run["module_binding"].is_object() || run["received_agent_message"]==true || run["origin_agent_message"].is_object()) {
+        if self
+            .get(&format!("run:{rid}"))
+            .await?
+            .is_some_and(|run| intent::automated_run(&run))
+        {
             return Ok(Value::Null);
         }
-
-        if self.get(&format!("message_meta:{rid}")).await?.is_some_and(|meta|meta["agent_message"].is_object()){return Ok(Value::Null);}
+        if self
+            .get(&format!("message_meta:{rid}"))
+            .await?
+            .is_some_and(|meta| intent::agent_message(&meta))
+        {
+            return Ok(Value::Null);
+        }
         let row = sqlx::query("SELECT id,seq,created_at FROM chat WHERE session_id=? AND run_id=? AND role='user' ORDER BY seq DESC LIMIT 1")
             .bind(sid).bind(rid).fetch_optional(&self.pool).await?;
-        Ok(row.map(|row| json!({"storage_owner":self.user_id,"session_id":sid,"message_id":row.get::<String,_>("id"),"seq":row.get::<i64,_>("seq"),"created_at":row.get::<i64,_>("created_at")}))
+        Ok(row
+            .map(|row| {
+                intent::origin(
+                    &self.user_id,
+                    sid,
+                    &row.get::<String, _>("id"),
+                    row.get::<i64, _>("seq"),
+                    row.get::<i64, _>("created_at"),
+                )
+            })
             .unwrap_or(Value::Null))
     }
+    /// See [`Ledger::get`].
     pub(crate) async fn action_get(&self, id: &str) -> Result<Option<Value>> {
-        let raw: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-            .bind(format!("action:{id}"))
-            .fetch_optional(&self.pool)
-            .await?;
-        raw.map(|raw| self.unseal(&raw)).transpose()
+        self.action_ledger().get(id).await
     }
+    /// See [`Ledger::find_intent`].
     pub(crate) async fn action_match(&self, resource: &str, intent: &str) -> Result<Option<Value>> {
-        let raw:Option<Vec<u8>>=sqlx::query_scalar("SELECT d.value FROM action_index i JOIN docs d ON d.key='action:'||i.id WHERE i.resource=? AND i.intent_key=? ORDER BY i.rowid DESC LIMIT 1")
-            .bind(resource).bind(intent).fetch_optional(&self.pool).await?;
-        raw.map(|v| self.unseal(&v)).transpose()
+        self.action_ledger().find_intent(resource, intent).await
     }
+    /// See [`Ledger::list`].
     pub(crate) async fn action_list(&self, resource: &str) -> Result<Vec<Value>> {
-        let ids: Vec<String> = sqlx::query_scalar(
-            "SELECT id FROM action_index WHERE resource=? ORDER BY rowid DESC LIMIT 32",
-        )
-        .bind(resource)
-        .fetch_all(&self.pool)
-        .await?;
-        let mut records = Vec::new();
-        for id in ids {
-            records.push(
-                self.action_get(&id)
-                    .await?
-                    .ok_or_else(|| anyhow!("Action index is incomplete"))?,
-            );
-        }
-        Ok(records)
+        self.action_ledger().list(resource).await
     }
-    // Writer reservation comes before reading: competing connections cannot both
-    // create a new intent, including when they supply different action IDs.
+    /// See [`Ledger::prepare`].
     pub(crate) async fn action_prepare(
         &self,
         candidate: &Value,
         separate_from: Option<&str>,
     ) -> Result<Value> {
-        if candidate["requester"] != self.user_id {
-            return Err(anyhow!("Action requester mismatch"));
-        }
-        let id = candidate["id"]
-            .as_str()
-            .ok_or_else(|| anyhow!("Missing action ID"))?;
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE action_lock SET revision=revision+1 WHERE singleton=1")
-            .execute(&mut *tx)
-            .await?;
-        let raw: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-            .bind(format!("action:{id}"))
-            .fetch_optional(&mut *tx)
-            .await?;
-        if let Some(raw) = raw {
-            let old = self.unseal(&raw)?;
-            if old["arguments_digest"] != candidate["arguments_digest"]
-                || old["resource"] != candidate["resource"]
-                || old["tool"] != candidate["tool"]
-            {
-                return Ok(json!({"kind":"conflict","action":Value::Null}));
-            }
-            return Ok(json!({"kind":"existing","action":old}));
-        }
-        let prior: Option<Vec<u8>> = sqlx::query_scalar("SELECT d.value FROM action_index i JOIN docs d ON d.key='action:'||i.id WHERE i.resource=? AND i.intent_key=? ORDER BY i.rowid DESC LIMIT 1")
-            .bind(candidate["resource"].as_str()).bind(candidate["intent_key"].as_str()).fetch_optional(&mut *tx).await?;
-        let mut record = candidate.clone();
-        record["requires_new_intent_approval"] = json!(false);
-        if let Some(raw) = prior {
-            let old = self.unseal(&raw)?;
-            if old["requester"] != self.user_id
-                || old["resource"] != candidate["resource"]
-                || old["intent_key"] != candidate["intent_key"]
-            {
-                return Err(anyhow!("Action index scope mismatch"));
-            }
-            let fresh = !candidate["origin"].is_null()
-                && !old["origin"].is_null()
-                && if candidate["origin"]["storage_owner"] == old["origin"]["storage_owner"] {
-                    candidate["origin"]["seq"].as_i64().unwrap_or(0)
-                        > old["origin"]["seq"].as_i64().unwrap_or(0)
-                } else {
-                    candidate["origin"]["created_at"].as_i64().unwrap_or(0)
-                        > old["updated_at"].as_i64().unwrap_or(i64::MAX)
-                };
-            if separate_from != old["id"].as_str()
-                || !fresh
-                || matches!(
-                    old["state"].as_str(),
-                    Some("running" | "uncertain" | "prepared")
-                )
-            {
-                return Ok(json!({"kind":"duplicate","action":old}));
-            }
-            record["requires_new_intent_approval"] = json!(true);
-            record["separate_from"] = old["id"].clone();
-        } else if separate_from.is_some() {
-            return Ok(json!({"kind":"conflict","action":Value::Null}));
-        }
-        record["state"] = json!("prepared");
-        record["attempt"] = json!(0);
-        record["revision"] = json!(0);
-        sqlx::query("INSERT INTO action_index(id,resource,intent_key,state) VALUES(?,?,?,?)")
-            .bind(id)
-            .bind(record["resource"].as_str())
-            .bind(record["intent_key"].as_str())
-            .bind("prepared")
-            .execute(&mut *tx)
-            .await?;
-        self.action_write(&mut tx, &record).await?;
-        tx.commit().await?;
-        Ok(json!({"kind":"created","action":record}))
+        self.action_ledger().prepare(candidate, separate_from).await
     }
-    async fn action_write(
-        &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-        action: &Value,
-    ) -> Result<()> {
-        let id = action["id"]
-            .as_str()
-            .ok_or_else(|| anyhow!("Missing action identity"))?;
-        // Always AEAD-sealed even when admin conversation encryption is disabled.
-        sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-            .bind(format!("action:{id}")).bind(self.seal(action)?).execute(&mut **tx).await?;
-        sqlx::query("UPDATE action_index SET state=? WHERE id=?")
-            .bind(action["state"].as_str())
-            .bind(id)
-            .execute(&mut **tx)
-            .await?;
-        Ok(())
-    }
+    /// See [`Ledger::claim`].
     pub(crate) async fn action_claim(&self, id: &str, approved: bool) -> Result<Value> {
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE action_lock SET revision=revision+1 WHERE singleton=1")
-            .execute(&mut *tx)
-            .await?;
-        let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-            .bind(format!("action:{id}"))
-            .fetch_one(&mut *tx)
-            .await?;
-        let mut action = self.unseal(&raw)?;
-        let retry = action["state"] == "confirmed_failed" && action["retry_safe"] == true;
-        if (action["state"] != "prepared" && !retry)
-            || (action["requires_new_intent_approval"] == true && !approved)
-        {
-            return Ok(json!({"claimed":false,"action":action}));
-        }
-        action["state"] = json!("running");
-        action["attempt"] = json!(action["attempt"].as_u64().unwrap_or(0) + 1);
-        action["revision"] = json!(action["revision"].as_u64().unwrap_or(0) + 1);
-        action["claim"] = json!(crate::uuid());
-        action["updated_at"] = json!(crate::now());
-        self.action_write(&mut tx, &action).await?;
-        tx.commit().await?;
-        Ok(json!({"claimed":true,"action":action}))
+        self.action_ledger().claim(id, approved).await
     }
+    /// See [`Ledger::finish`].
     pub(crate) async fn action_finish(
         &self,
         id: &str,
@@ -250,77 +142,25 @@ impl Store {
         receipt: &Value,
         retry_safe: bool,
     ) -> Result<bool> {
-        if !matches!(state, "completed" | "confirmed_failed" | "uncertain") {
-            return Err(anyhow!("Invalid action outcome"));
-        }
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE action_lock SET revision=revision+1 WHERE singleton=1")
-            .execute(&mut *tx)
-            .await?;
-        let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-            .bind(format!("action:{id}"))
-            .fetch_one(&mut *tx)
-            .await?;
-        let mut action = self.unseal(&raw)?;
-        if action["claim"] != claim
-            || !matches!(action["state"].as_str(), Some("running" | "uncertain"))
-        {
-            return Ok(false);
-        }
-        action["state"] = json!(state);
-        action["result"] = result.clone();
-        action["receipt"] = receipt.clone();
-        action["retry_safe"] = json!(state == "confirmed_failed" && retry_safe);
-        action["revision"] = json!(action["revision"].as_u64().unwrap_or(0) + 1);
-        action["updated_at"] = json!(crate::now());
-        self.action_write(&mut tx, &action).await?;
-        tx.commit().await?;
-        Ok(true)
+        self.action_ledger()
+            .finish(id, claim, state, result, receipt, retry_safe)
+            .await
     }
+    /// See [`Ledger::not_dispatched`].
     pub(crate) async fn action_not_dispatched(&self, id: &str) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE action_lock SET revision=revision+1 WHERE singleton=1")
-            .execute(&mut *tx)
-            .await?;
-        let raw: Option<Vec<u8>> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-            .bind(format!("action:{id}"))
-            .fetch_optional(&mut *tx)
-            .await?;
-        if let Some(raw) = raw {
-            let mut action = self.unseal(&raw)?;
-            if action["state"] == "prepared" {
-                action["state"] = json!("confirmed_failed");
-                action["retry_safe"] = json!(true);
-                action["result"] =
-                    json!({"status":"denied","output":"Operation was not dispatched"});
-                action["revision"] = json!(action["revision"].as_u64().unwrap_or(0) + 1);
-                self.action_write(&mut tx, &action).await?;
-            }
-        }
-        tx.commit().await?;
-        Ok(())
+        self.action_ledger().not_dispatched(id).await
     }
+    /// See [`Ledger::interrupt`].
     pub(crate) async fn action_interrupt(&self, id: &str) -> Result<()> {
-        if let Some(action) = self.action_get(id).await? {
-            if action["state"] == "running" {
-                self.action_finish(
-                    id,
-                    action["claim"].as_str().unwrap_or(""),
-                    "uncertain",
-                    &Value::Null,
-                    &Value::Null,
-                    false,
-                )
-                .await?;
-            }
-        }
-        Ok(())
+        self.action_ledger().interrupt(id).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use webagent_accounts_host::AccountsStore;
     fn candidate(id: &str, seq: i64) -> Value {
         json!({"schema_version":1,"id":id,"requester":"admin","tool":"edit_own_prompt","resource":"agent:shared_default",
             "agent_id":"shared_default","session_id":"s","run_id":"r","pending_id":id,
@@ -586,6 +426,7 @@ mod tests {
 #[cfg(test)]
 mod module_origin_tests {
     use super::*;
+    use serde_json::json;
     #[tokio::test]
     async fn automatic_prompt_is_not_new_human_authorization() {
         let root = tempfile::tempdir().unwrap();

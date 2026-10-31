@@ -11,12 +11,11 @@ use webagent_usage as usage;
 mod abilities;
 mod ability_drift;
 mod ability_plugins;
-#[path = "../crates/modules/extensions/host/plugins.rs"]
-mod extension_plugins;
 #[path = "../crates/modules/access/host/policy.rs"]
 mod access_policy;
 #[path = "../crates/modules/access/host/repository.rs"]
 mod access_store;
+#[path = "../crates/modules/actions/host/actions.rs"]
 mod actions;
 #[path = "../crates/modules/agents/host/storage.rs"]
 mod agent_storage;
@@ -39,6 +38,8 @@ mod engine_components;
 mod engine_runtime;
 #[path = "engine/sandbox.rs"]
 mod engine_sandbox;
+#[path = "../crates/modules/extensions/host/plugins.rs"]
+mod extension_plugins;
 #[path = "../crates/modules/chat/host/followup_queue.rs"]
 mod followup_queue;
 #[path = "gates/controls.rs"]

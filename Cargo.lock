@@ -2248,6 +2248,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-actions"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "webagent-chat",
+ "webagent-configuration",
+]
+
+[[package]]
 name = "webagent-administration"
 version = "0.1.0"
 dependencies = [
@@ -2920,6 +2935,7 @@ dependencies = [
  "webagent-access",
  "webagent-accounts",
  "webagent-accounts-host",
+ "webagent-actions",
  "webagent-administration",
  "webagent-administration-host",
  "webagent-agent-management",

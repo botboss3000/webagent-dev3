@@ -28,6 +28,7 @@ pub(crate) mod session;
 #[path = "../../crates/modules/chat/host/storage/session_messaging.rs"]
 mod session_messaging;
 pub(crate) use webagent_notifications as notifications;
+#[path = "../../crates/modules/actions/host/storage.rs"]
 mod actions;
 #[path = "../../crates/modules/files/host/storage/attachments.rs"]
 mod attachments;

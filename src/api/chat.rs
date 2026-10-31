@@ -1258,12 +1258,11 @@ pub(crate) async fn approval(
     let sid = run["session_id"]
         .as_str()
         .ok_or_else(|| anyhow!("Run without a session"))?;
-    if run["pending"]["new_intent_confirmation"] == true
-        && run["requester_user_id"]
-            .as_str()
-            .unwrap_or(app.store.current_user_id())
-            != crate::shared_chat::actor(&app)
-    {
+    if !webagent_actions::outcome::may_confirm_new_intent(
+        &run,
+        app.store.current_user_id(),
+        crate::shared_chat::actor(&app),
+    ) {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
             "Only the requesting user may confirm an additional matching action".into(),
