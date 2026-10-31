@@ -1,4 +1,5 @@
 'use strict';
+import { applyRubberBand } from './rubber-band.js';
 
 // V2 tab carousel (agents/js/view.js _wireTabCarousel): the strip scrolls natively
 // with a hidden scrollbar; edge chevrons and fades (shared agents.css) show while
@@ -24,6 +25,7 @@ export function wirePageTabCarousel(strip) {
     wrap.classList.toggle('can-scroll-right', overflowing && strip.scrollLeft < maxScroll - 1);
   };
   strip.addEventListener('scroll', update, { passive: true });
+  applyRubberBand(strip);
   new ResizeObserver(update).observe(strip);
   // Tabs are re-rendered, hidden and re-selected in place: keep the active one in view.
   let active = null;
