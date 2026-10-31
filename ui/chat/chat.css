@@ -9,7 +9,8 @@
 /* Run controls stay above, and clickable beside either composer layout. */
 #chat-panel #chat-input-area #chat-above-pill{flex-shrink:0;max-height:35dvh;opacity:1;margin:0 auto 6px;overflow:auto;pointer-events:auto;z-index:8}
 /* Keep progress and repository notices visible even without run-control cards. */
-#chat-panel #chat-input-area #chat-above-pill:not(.visible):not(:has(.chat-action:not([hidden]))){display:none}
+/* The area also stays visible while the message-allowance hint has text. */
+#chat-panel #chat-input-area #chat-above-pill:not(.visible):not(:has(.chat-action:not([hidden]))):not(:has(#chat-allowance-hint:not([hidden]))){display:none}
 #chat-action-panel{padding:0 4px}
 /* Credential and sign-in panels: the page reset removes dialog centering and theme text colour. */
 dialog[data-core-credential]{margin:auto;max-width:min(420px,calc(100vw - 32px));color:var(--fg-1)}dialog[data-core-credential]::backdrop{background:rgba(0,0,0,.5)}
