@@ -21,7 +21,7 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
   const analytics=initModelAnalytics(analyticsHost,{fetchFn:usageFetch('/usage/models'),apiPath:p=>p,scope:'user',agentId,description:'Compare the daily usage of every model used with this agent.',onHistoryCleared:model=>usageCleared('Usage history cleared for '+model)});
   let limits;
   const table=mountModelTable(tableHost,{adapter:bridge.adapter,agentLocalRoster:true,userCatalog:true,inlineCatalogAdd:true,subscriptionScope:'agent',directivePresentation:'inline',directivesEditable:false,manualModelEntry:true,
-    onLimitEdit:(id,field)=>limits?.edit(id,field),modelBudget:id=>limits?.budget(id),
+    onLimitEdit:(id,field,value)=>limits.save(id,field,value),modelBudget:id=>limits?.budget(id),
     fetchFn:bridge.blockedFetch,onRoster:p=>analytics?.setModelLabels(p),onModelFocus:m=>analytics?.setModelFocus(m),onModelChange:()=>{analytics?.reload();limits?.reload();},
     advancedExtra:body=>{
       const row=document.createElement('div');row.className='ac-row';row.dataset.ownUsage='';row.innerHTML='<div class="ac-ability-row"><span class="ac-ability-label"><span class="ac-ability-name">Reset Usage Counters</span><span class="ac-ability-desc">Clear your own usage with this agent: the tokens and cost in the table and graph above. Other users\' usage is unchanged.</span></span></div><div class="ac-ability-body"><select class="ac-input"><option value="all">All (input + output + cost)</option><option value="input">Input Tokens only</option><option value="output">Output Tokens only</option><option value="cost">Cost only</option></select> <button type="button" class="ac-btn ac-btn-ghost" style="color:var(--danger)">Reset</button> <span class="ac-ability-desc" role="status"></span></div>';
@@ -36,8 +36,7 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
       };
       body.append(row);
     }});
-  const limitsHost=document.createElement("div");group.append(limitsHost);
-  limits=await mountModelLimits(limitsHost,bridge.adapter,()=>table.reload());
+  limits=await mountModelLimits(bridge.adapter);
   await table.reload();
   let stopped=false;
   function markPending(el){if(el)el.classList.add('v3-pending-feature');}
@@ -46,7 +45,7 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
     for(const el of group.querySelectorAll('.ac-model-meta-aliases,.ac-directives-section-title,.ac-directive-hint'))markPending(el);
     for(const el of group.querySelectorAll('.ac-model-alias-add')){el.disabled=true;markPending(el);}
     for(const el of group.querySelectorAll('.ac-model-meta-editable')){
-      if(el.closest('.ac-model-meta-nameline'))continue;
+      if(el.closest('.ac-model-meta-nameline')||el.classList.contains('ac-limit-edit'))continue;
       const line=el.closest('.ac-model-meta-line');markPending(line);el.setAttribute('aria-disabled','true');el.tabIndex=-1;el.style.pointerEvents='none';
     }
     // Saved subscription credentials remain unported; API keys use the agent vault.
@@ -61,5 +60,5 @@ export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
   }
   // Rebuilt rows and expanded details keep their pending color after rerender.
   const observer=new MutationObserver(pending);observer.observe(group,{childList:true,subtree:true});pending();
-  return {reload:async()=>{await table.reload();await limits.reload();},getState:()=>table.getState(),destroy:()=>{stopped=true;observer.disconnect();limits.destroy();bridge.destroy();table.destroy();analytics?.destroy?.();host.replaceChildren();}};
+  return {reload:async()=>{await table.reload();await limits.reload();},getState:()=>table.getState(),destroy:()=>{stopped=true;observer.disconnect();bridge.destroy();table.destroy();analytics?.destroy?.();host.replaceChildren();}};
 }
