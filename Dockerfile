@@ -112,7 +112,7 @@ COPY v3/plugins/gates /opt/v3/plugins/gates
 # Agent voice output (crates/modules/media/host/voice.rs): the pinned Kokoro venv and checked
 # models come from the `voice` stage, prepared once as a dependency base.
 COPY --from=voice /opt/voice /opt/voice
-COPY v3/crates/modules/media/voice/speak.py /opt/voice/speak.py
+COPY --chmod=0644 v3/crates/modules/media/voice/speak.py /opt/voice/speak.py
 RUN chmod -R a+rX /opt/v3/plugins
 RUN chmod 0755 /opt/v3 /opt/v3/plugins /opt/v3/plugins/gates /opt/v3/plugins/gates/publication_size_guard_v1 && chmod 0444 /opt/v3/plugins/gates/publication_size_guard_v1/gate.json
 RUN chmod a+r /opt/v3/*.py && python3 -c "import os,pathlib; os.setgid(1100); os.setuid(1101); files=[pathlib.Path('/opt/v3/plugins/abilities/Core/create_tools/runtime.py'),pathlib.Path('/opt/v3/plugins/abilities/Core/visualizer/capture.py')]; [compile(p.read_text(),str(p),'exec') for p in files]"
