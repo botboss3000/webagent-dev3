@@ -97,3 +97,12 @@ test('keyboard-sized scroller changes keep the transcript fixed while content gr
   f.scroller.clientHeight=200;f.resize([f.scroller]);f.flushFrames();assert.equal(f.scroller.scrollTop,1600);
   f.scroller.scrollHeight=2300;f.resize([f.inner]);f.flushFrames();assert.equal(f.scroller.scrollTop,2300);
 });
+test('tail space accumulates so a landing beyond the scroll range settles instead of oscillating',()=>{
+  const f=fixture({},[500,1900]);const values={'--v3-anchor-extra':'138px'};let top=0;
+  f.inner.style={getPropertyValue:name=>values[name]||'',setProperty:(name,value)=>{values[name]=value;},removeProperty:name=>{delete values[name];}};
+  const max=()=>Math.max(0,f.scroller.scrollHeight-f.scroller.clientHeight);
+  Object.defineProperty(f.scroller,'scrollHeight',{configurable:true,get:()=>1862+(parseFloat(values['--v3-anchor-extra'])||0)});
+  Object.defineProperty(f.scroller,'scrollTop',{configurable:true,get:()=>top,set:value=>{top=Math.min(max(),Math.max(0,value));}});
+  f.api.updateRuns([{status:'running'}]);
+  for(let round=0;round<3;round++){f.api.focus();f.flushFrames();assert.equal(f.scroller.scrollTop,1900);assert.equal(values['--v3-anchor-extra'],'438px');}
+});

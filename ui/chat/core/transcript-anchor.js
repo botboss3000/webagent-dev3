@@ -27,7 +27,7 @@ export function mountTranscriptAnchor({scroller,inner,header,getProfile}) {
   /** Converts a row's live rectangle to the scroll position that clears the header. */
   const target=row=>Math.max(0,scroller.scrollTop+row.getBoundingClientRect().top-scroller.getBoundingClientRect().top-pad());
   /** Adds tail space when the desired row alignment exceeds the current scroll range. */
-  function reachable(top){const shortfall=top-Math.max(0,scroller.scrollHeight-scroller.clientHeight);if(shortfall>0){const extra=px(inner.style.getPropertyValue('--v3-anchor-extra'),0);inner.style.setProperty('--v3-anchor-extra',(extra+shortfall)+'px');void inner.offsetHeight;}}
+  function reachable(top){const shortfall=top-Math.max(0,scroller.scrollHeight-scroller.clientHeight);if(shortfall>0){const extra=parseFloat(inner.style.getPropertyValue('--v3-anchor-extra'))||0;inner.style.setProperty('--v3-anchor-extra',(extra+shortfall)+'px');void inner.offsetHeight;}}
   /** Ends the animated snap and clears its fallback timer. */
   function finishSnap(){snapping=false;clearTimeout(snapFallback);snapFallback=0;}
   /** Cancels anchoring after reader input and holds a short intent window against recapture. */
