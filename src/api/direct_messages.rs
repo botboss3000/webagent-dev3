@@ -32,8 +32,10 @@ pub(crate) async fn send(
         if receipt["digest"] != digest(&body) {
             return Err(conflict("Request identifier reused with different input"));
         }
-        let sid=receipt["result"]["session"]["id"].as_str().ok_or_else(||bad("Invalid message receipt"))?;
-        session_agent_id(&app,sid).await?;
+        let sid = receipt["result"]["session"]["id"]
+            .as_str()
+            .ok_or_else(|| bad("Invalid message receipt"))?;
+        session_agent_id(&app, sid).await?;
         return Ok((StatusCode::ACCEPTED, Json(receipt["result"].clone())));
     }
     let mut message_body = body.clone();
@@ -50,13 +52,18 @@ pub(crate) async fn send(
     // A partial admission keeps its requester reservation. Retrying the same
     // immutable request must address that same session and run reservation.
     use sha2::Digest;
-    let hash = sha2::Sha256::digest(serde_json::to_vec(&json!({
-        "domain":"direct-message-session-v1", "actor":app.store.current_user_id(),
-        "request":request_id, "body":digest(&body)
-    })).unwrap());
-    let mut bytes=[0u8;16]; bytes.copy_from_slice(&hash[..16]);
-    bytes[6]=(bytes[6]&0x0f)|0x50; bytes[8]=(bytes[8]&0x3f)|0x80;
-    let sid=uuid::Uuid::from_bytes(bytes).to_string();
+    let hash = sha2::Sha256::digest(
+        serde_json::to_vec(&json!({
+            "domain":"direct-message-session-v1", "actor":app.store.current_user_id(),
+            "request":request_id, "body":digest(&body)
+        }))
+        .unwrap(),
+    );
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&hash[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let sid = uuid::Uuid::from_bytes(bytes).to_string();
     let session = super::chat_sessions::prepare_session_id(&app, &body, Some(sid)).await?;
     let sid = session.result["id"].as_str().unwrap();
     let agent = session.result["agent_id"].as_str().unwrap();
@@ -72,7 +79,9 @@ pub(crate) async fn send(
         .atomic_first_message(docs, sid, prepared.kind, &prepared.message, &session.result)
         .await
         .map_err(super::chat::admission_error)?;
-    app.store.register_shared_session(app.store.current_user_id(),sid,agent).await?;
+    app.store
+        .register_shared_session(app.store.current_user_id(), sid, agent)
+        .await?;
     Ok((StatusCode::ACCEPTED, Json(result)))
 }
 
@@ -145,10 +154,14 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.0, StatusCode::CONFLICT);
         assert_eq!(app.store.list("session:").await.unwrap().len(), 1);
-        let mut account=app.store.account_by_id("admin").await.unwrap().unwrap();
-        account["user_id"]=json!("other");account["username"]=json!("other");
+        let mut account = app.store.account_by_id("admin").await.unwrap().unwrap();
+        account["user_id"] = json!("other");
+        account["username"] = json!("other");
         sqlx::query("INSERT INTO user_accounts(user_id,username,value) VALUES('other','other',?)")
-            .bind(app.store.seal(&account).unwrap()).execute(&app.store.app_pool).await.unwrap();
+            .bind(app.store.seal(&account).unwrap())
+            .execute(&app.store.app_pool)
+            .await
+            .unwrap();
         let other = app.store.for_user("other").await.unwrap();
         assert!(other
             .get("receipt:direct_message:whole-operation")
@@ -293,7 +306,7 @@ mod tests {
         let mut metadata = store.unseal(&raw).unwrap();
         metadata["manager_incoming_message_revision"] = json!(1);
         metadata["manager_incoming_message"] =
-            json!({"enabled":true,"criteria":"Review incoming questions."});
+            json!({"enabled":true,"criteria":"Review incoming questions.","review_staff":true});
         sqlx::query("UPDATE agents SET metadata=? WHERE id='shared_default'")
             .bind(store.seal_agent(&metadata).unwrap())
             .execute(&store.agent_pool)

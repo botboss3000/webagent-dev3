@@ -1677,7 +1677,7 @@ mod manager_identity_tests {
         .0;
         assert_eq!(
             before["manager_incoming_message"],
-            json!({"enabled":false,"criteria":""})
+            json!({"enabled":false,"criteria":"","review_staff":false})
         );
         let revision = before["revision"].as_i64().unwrap();
         let body = |revision, criteria: &str| {
@@ -1796,7 +1796,7 @@ mod manager_disabled_prompt_tests {
         .0;
         assert_eq!(
             saved["manager_incoming_message"],
-            json!({"enabled":false,"criteria":"Clothing store questions"})
+            json!({"enabled":false,"criteria":"Clothing store questions","review_staff":false})
         );
         let reload = identity_get(
             State(app.clone()),

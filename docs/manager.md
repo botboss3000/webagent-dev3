@@ -6,7 +6,9 @@ contracts, or runtime code are imported.
 The agent Identity page has Review incoming messages and Acceptance criteria.
 Agent owners and delegated administrators edit these through the existing
 revision-fenced Identity API. Review defaults off. Enabling requires nonempty
-criteria and an explicitly assigned, authorized System model. Existing permissions,
+criteria and an explicitly assigned, authorized System model. Review applies to
+visitors; the agent's owner and members skip it unless Also review staff
+(`review_staff`) is on. Existing permissions,
 account ceilings, provider ownership, CSRF and session ownership remain mandatory.
 
 ## Lifecycle

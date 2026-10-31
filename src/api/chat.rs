@@ -356,13 +356,33 @@ async fn prepare_message_inner(
             return Err(conflict("Run queue is full"));
         }
     }
-    let manager = crate::manager::prepare(&app, &agent_id)
+    // Review screens visitors; the agent's owner and members skip it unless it also
+    // reviews staff.
+    let staff = app
+        .store
+        .live_access(crate::shared_chat::actor(app), &agent_id)
         .await
-        .map_err(|_| {
-            conflict(
-                "Incoming-message review requires valid criteria and an authorized System model",
+        .is_ok_and(|access| {
+            matches!(
+                access.relationship,
+                crate::access::Relationship::Owner | crate::access::Relationship::Member
             )
-        })?;
+        });
+    let staff_exempt = staff
+        && crate::manager::config::incoming(&app.store, &agent_id)
+            .await
+            .is_ok_and(|settings| !settings.review_staff);
+    let manager = if staff_exempt {
+        None
+    } else {
+        crate::manager::prepare(&app, &agent_id)
+            .await
+            .map_err(|_| {
+                conflict(
+                    "Incoming-message review requires valid criteria and an authorized System model",
+                )
+            })?
+    };
     let workflow_policy = current_workflow_policy(&app).await?;
     let input: Vec<Value> = if crate::shared_chat::actor(app) != app.store.current_user_id()
         && supplied_session.is_none()

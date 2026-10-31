@@ -7,6 +7,9 @@ pub struct IncomingMessage {
     pub enabled: bool,
     #[serde(default)]
     pub criteria: String,
+    /// Also review messages from the agent's owner and members; otherwise only visitors are reviewed.
+    #[serde(default)]
+    pub review_staff: bool,
 }
 impl IncomingMessage {
     pub fn validate(&self) -> Result<()> {
@@ -22,11 +25,32 @@ mod tests {
     #[test]
     fn criteria_bounds_and_enabled_state_are_preserved() {
         IncomingMessage::default().validate().unwrap();
-        for criteria in ["".to_owned(),"  ".to_owned(),"x".repeat(8193)] {
-            assert!(IncomingMessage {enabled:true,criteria}.validate().is_err());
+        for criteria in ["".to_owned(), "  ".to_owned(), "x".repeat(8193)] {
+            assert!(IncomingMessage {
+                enabled: true,
+                criteria,
+                review_staff: false
+            }
+            .validate()
+            .is_err());
         }
-        IncomingMessage {enabled:true,criteria:"x".repeat(8192)}.validate().unwrap();
-        assert!(IncomingMessage {enabled:false,criteria:"x".repeat(8193)}.validate().is_err());
-        assert!(serde_json::from_str::<IncomingMessage>(r#"{"enabled":true,"criteria":"allowed","other":true}"#).is_err());
+        IncomingMessage {
+            enabled: true,
+            criteria: "x".repeat(8192),
+            review_staff: false,
+        }
+        .validate()
+        .unwrap();
+        assert!(IncomingMessage {
+            enabled: false,
+            criteria: "x".repeat(8193),
+            review_staff: false
+        }
+        .validate()
+        .is_err());
+        assert!(serde_json::from_str::<IncomingMessage>(
+            r#"{"enabled":true,"criteria":"allowed","other":true}"#
+        )
+        .is_err());
     }
 }

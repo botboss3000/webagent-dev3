@@ -2326,8 +2326,7 @@ mod automation_evidence_privacy_tests {
                 .unwrap();
         let mut metadata = agent.unseal(&raw).unwrap();
         metadata["manager_incoming_message_revision"] = json!(1);
-        metadata["manager_incoming_message"] =
-            json!({"enabled":true,"criteria":"Review incoming automation tasks."});
+        metadata["manager_incoming_message"] = json!({"enabled":true,"criteria":"Review incoming automation tasks.","review_staff":true});
         sqlx::query("UPDATE agents SET metadata=? WHERE id='shared_default'")
             .bind(agent.seal_agent(&metadata).unwrap())
             .execute(&agent.agent_pool)

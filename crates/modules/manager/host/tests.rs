@@ -2,6 +2,9 @@
 use super::*;
 use axum::{routing::post, Json, Router};
 async fn settings(app: &App, enabled: bool) {
+    staff_settings(app, enabled, true).await;
+}
+async fn staff_settings(app: &App, enabled: bool, review_staff: bool) {
     let store = app.store.for_agent("shared_default").await.unwrap();
     let raw: Vec<u8> = sqlx::query_scalar("SELECT metadata FROM agents WHERE id='shared_default'")
         .fetch_one(&store.agent_pool)
@@ -14,8 +17,7 @@ async fn settings(app: &App, enabled: bool) {
             .unwrap_or(0)
             + 1
     );
-    metadata["manager_incoming_message"] =
-        json!({"enabled":enabled,"criteria":"Only accept questions about clothing and sizes."});
+    metadata["manager_incoming_message"] = json!({"enabled":enabled,"criteria":"Only accept questions about clothing and sizes.","review_staff":review_staff});
     sqlx::query("UPDATE agents SET metadata=? WHERE id='shared_default'")
         .bind(store.seal_agent(&metadata).unwrap())
         .execute(&store.agent_pool)
@@ -75,30 +77,65 @@ async fn provider(
 }
 #[tokio::test]
 async fn archiving_cancels_pending_review_without_provider_dispatch() {
-    let (_root,mut app)=crate::runtime_tests::fixture().await;
-    settings(&app,true).await;
-    let (server,calls)=provider(&mut app,r#"{"verdict":"acceptable"}"#,false).await;
-    let sid=session(&app).await;
-    let result=submit(&app,&sid,"request","Write a Python program").await;
-    let id=result["review_id"].as_str().unwrap();
-    let metadata=app.store.session_read_summary(&sid).await.unwrap();
-    app.store.lifecycle_session(&sid,&crate::store::session::SessionLifecycle {
-        client_request_id:"archive".into(),expected_revision:metadata["metadata_revision"].as_u64().unwrap()
-    },false).await.unwrap();
-    super::scheduler::process(app.clone(),id.to_owned()).await.unwrap();
+    let (_root, mut app) = crate::runtime_tests::fixture().await;
+    settings(&app, true).await;
+    let (server, calls) = provider(&mut app, r#"{"verdict":"acceptable"}"#, false).await;
+    let sid = session(&app).await;
+    let result = submit(&app, &sid, "request", "Write a Python program").await;
+    let id = result["review_id"].as_str().unwrap();
+    let metadata = app.store.session_read_summary(&sid).await.unwrap();
+    app.store
+        .lifecycle_session(
+            &sid,
+            &crate::store::session::SessionLifecycle {
+                client_request_id: "archive".into(),
+                expected_revision: metadata["metadata_revision"].as_u64().unwrap(),
+            },
+            false,
+        )
+        .await
+        .unwrap();
+    super::scheduler::process(app.clone(), id.to_owned())
+        .await
+        .unwrap();
     assert!(calls.lock().await.is_empty());
     assert!(app.store.get(&format!("run:{id}")).await.unwrap().is_none());
-    assert_eq!(app.store.get(&format!("manager_review:{id}")).await.unwrap().unwrap()["status"],"cancelled");
-    assert_eq!(crate::send(State(app),Path(sid),Json(json!({"text":"late","client_message_id":"request"}))).await.unwrap_err().0,StatusCode::NOT_FOUND);
+    assert_eq!(
+        app.store
+            .get(&format!("manager_review:{id}"))
+            .await
+            .unwrap()
+            .unwrap()["status"],
+        "cancelled"
+    );
+    assert_eq!(
+        crate::send(
+            State(app),
+            Path(sid),
+            Json(json!({"text":"late","client_message_id":"request"}))
+        )
+        .await
+        .unwrap_err()
+        .0,
+        StatusCode::NOT_FOUND
+    );
     server.abort();
 }
 
 #[tokio::test]
 async fn unacceptable_keeps_chat_excludes_context_and_retry_does_not_rejudge() {
     let (_root, mut app) = crate::runtime_tests::fixture().await;
-    let raw:Vec<u8>=sqlx::query_scalar("SELECT metadata FROM agents WHERE id='shared_default'").fetch_one(&app.store.agent_pool).await.unwrap();
-    let mut metadata=app.store.unseal(&raw).unwrap();metadata["shared_chat"]=json!({"shareable":true});
-    sqlx::query("UPDATE agents SET metadata=? WHERE id='shared_default'").bind(app.store.seal_agent(&metadata).unwrap()).execute(&app.store.agent_pool).await.unwrap();
+    let raw: Vec<u8> = sqlx::query_scalar("SELECT metadata FROM agents WHERE id='shared_default'")
+        .fetch_one(&app.store.agent_pool)
+        .await
+        .unwrap();
+    let mut metadata = app.store.unseal(&raw).unwrap();
+    metadata["shared_chat"] = json!({"shareable":true});
+    sqlx::query("UPDATE agents SET metadata=? WHERE id='shared_default'")
+        .bind(app.store.seal_agent(&metadata).unwrap())
+        .execute(&app.store.agent_pool)
+        .await
+        .unwrap();
     settings(&app, true).await;
     let (server, calls) = provider(&mut app, r#"{"verdict":"unacceptable"}"#, false).await;
     let sid = session(&app).await;
@@ -121,13 +158,28 @@ async fn unacceptable_keeps_chat_excludes_context_and_retry_does_not_rejudge() {
     assert_eq!(followup["queued"], true);
     assert!(followup["review_id"].is_null());
     assert!(calls.lock().await.is_empty());
-    let queued_session = app.store.get(&format!("session:{sid}")).await.unwrap().unwrap();
+    let queued_session = app
+        .store
+        .get(&format!("session:{sid}"))
+        .await
+        .unwrap()
+        .unwrap();
     let queued = &queued_session["message_queue"][0];
     let followup_id = queued["message"]["run_id"].as_str().unwrap().to_owned();
     assert_eq!(queued["message"]["author_id"], app.store.current_user_id());
-    assert!(app.store.get(&format!("manager_review:{followup_id}")).await.unwrap().is_none());
+    assert!(app
+        .store
+        .get(&format!("manager_review:{followup_id}"))
+        .await
+        .unwrap()
+        .is_none());
     app.store.drain_message_queues().await.unwrap();
-    assert!(app.store.get(&format!("manager_review:{followup_id}")).await.unwrap().is_none());
+    assert!(app
+        .store
+        .get(&format!("manager_review:{followup_id}"))
+        .await
+        .unwrap()
+        .is_none());
     super::scheduler::process(app.clone(), id.to_owned())
         .await
         .unwrap();
@@ -156,12 +208,22 @@ async fn unacceptable_keeps_chat_excludes_context_and_retry_does_not_rejudge() {
     assert!(!snapshot.to_string().contains("Only accept questions"));
     // Completing the first verdict releases the next ordinary review in order.
     app.store.drain_message_queues().await.unwrap();
-    let next = app.store.get(&format!("manager_review:{followup_id}")).await.unwrap().unwrap();
+    let next = app
+        .store
+        .get(&format!("manager_review:{followup_id}"))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(next["status"], "pending_review");
-    assert_eq!(next["run"]["requester_user_id"], app.store.current_user_id());
+    assert_eq!(
+        next["run"]["requester_user_id"],
+        app.store.current_user_id()
+    );
     assert_eq!(next["message"]["content"], "Sizes?");
     assert_eq!(calls.lock().await.len(), 1);
-    super::scheduler::process(app.clone(), followup_id.clone()).await.unwrap();
+    super::scheduler::process(app.clone(), followup_id.clone())
+        .await
+        .unwrap();
     assert_eq!(calls.lock().await.len(), 2);
     assert!(app.store.context(&sid).await.unwrap().is_empty());
     let first_retry = submit(&app, &sid, "request", "Write a Python program").await;
@@ -340,8 +402,16 @@ async fn deactivated_review_never_dispatches_system_model() {
     let id = result["review_id"].as_str().unwrap();
     let mut record = app.store.claim_manager_review(id).await.unwrap().unwrap();
     let state = app.store.participation_state(&sid).await.unwrap();
-    app.store.set_participation(&sid, app.store.current_user_id(), false,
-        state["revision"].as_u64().unwrap(), "deactivate-review").await.unwrap();
+    app.store
+        .set_participation(
+            &sid,
+            app.store.current_user_id(),
+            false,
+            state["revision"].as_u64().unwrap(),
+            "deactivate-review",
+        )
+        .await
+        .unwrap();
     assert!(super::review::judge(&app, &mut record).await.is_err());
     assert!(calls.lock().await.is_empty());
     assert!(app.store.get(&format!("run:{id}")).await.unwrap().is_none());
@@ -358,11 +428,38 @@ async fn reactivation_cannot_revive_an_older_review_generation() {
     let id = result["review_id"].as_str().unwrap();
     let mut record = app.store.claim_manager_review(id).await.unwrap().unwrap();
     let state = app.store.participation_state(&sid).await.unwrap();
-    let off = app.store.set_participation(&sid, app.store.current_user_id(), false,
-        state["revision"].as_u64().unwrap(), "off-before-review").await.unwrap();
-    app.store.set_participation(&sid, app.store.current_user_id(), true,
-        off["revision"].as_u64().unwrap(), "on-before-review").await.unwrap();
+    let off = app
+        .store
+        .set_participation(
+            &sid,
+            app.store.current_user_id(),
+            false,
+            state["revision"].as_u64().unwrap(),
+            "off-before-review",
+        )
+        .await
+        .unwrap();
+    app.store
+        .set_participation(
+            &sid,
+            app.store.current_user_id(),
+            true,
+            off["revision"].as_u64().unwrap(),
+            "on-before-review",
+        )
+        .await
+        .unwrap();
     assert!(super::review::judge(&app, &mut record).await.is_err());
     assert!(calls.lock().await.is_empty());
     server.abort();
+}
+#[tokio::test]
+async fn staff_messages_skip_review_unless_staff_review_is_on() {
+    let (_root, app) = crate::runtime_tests::fixture().await;
+    staff_settings(&app, true, false).await;
+    let sid = session(&app).await;
+    // The fixture's administrator owns the agent, so its message starts a run directly.
+    let sent = submit(&app, &sid, "staff", "List the newest visitor messages.").await;
+    assert!(sent["run_id"].is_string());
+    assert!(sent["review_id"].is_null());
 }
