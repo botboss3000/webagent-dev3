@@ -20,7 +20,6 @@
     }
     var keyboardWasOpen = false;
     var keyboardDismissed = false;
-    var dismissTimer = 0, DISMISS_CONFIRM_MS = 300;
     var keyboardWidth = window.innerWidth, keyboardHeight = window.innerHeight;
     function applyKb() {
       if (!document.body) return;
@@ -40,21 +39,11 @@
       // The OS keyboard-dismiss control can leave the composer focused. Some
       // mobile browsers briefly report a shrunken viewport again during the
       // hide animation; latch that dismissal until the user re-engages an editor.
-      // One near-full reading is not a dismissal: IME panel switches and keyboard
-      // re-layouts report them while the keyboard stays up. Confirm it once settled.
-      if (keyboardWasOpen && !open && editable && !dismissTimer) {
-        dismissTimer = setTimeout(function () {
-          dismissTimer = 0;
-          var height = vv ? vv.height : window.innerHeight;
-          if (document.activeElement !== ae || keyboardWidth !== window.innerWidth
-            || (vv && vv.scale !== 1) || keyboardHeight - height > 120) return;
-          keyboardDismissed = true;
-          // Use normal focusout handling to restore the mobile composer's idle layout.
-          if (window.innerWidth <= 800 && ae.id === 'chat-input') ae.blur();
-          applyKb();
-        }, DISMISS_CONFIRM_MS);
+      if (keyboardWasOpen && !open && editable) {
+        keyboardDismissed = true;
+        // Use normal focusout handling to restore the mobile composer's idle layout.
+        if (isMobile && ae.id === 'chat-input') ae.blur();
       }
-      if (open && dismissTimer) { clearTimeout(dismissTimer); dismissTimer = 0; }
       keyboardWasOpen = open;
       open = open && !keyboardDismissed;
       document.body.classList.toggle('kb-open', open);

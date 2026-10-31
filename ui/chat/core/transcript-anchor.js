@@ -92,7 +92,9 @@ export function mountTranscriptAnchor({scroller,inner,header,getProfile}) {
   },{signal:abort.signal});
   scroller.addEventListener('scroll',()=>{if(snapping||performance.now()>intentUntil)return;rearm();following=scroller.scrollHeight-scroller.clientHeight-scroller.scrollTop<=setting('tail_follow_distance_px',12);clearTimeout(snapTimer);snapTimer=setTimeout(settle,px(config().snap_settle_ms,120));},{passive:true,signal:abort.signal});
   scroller.addEventListener('scrollend',finishSnap,{signal:abort.signal});
-  const observer=new ResizeObserver(changed);observer.observe(inner);observer.observe(header);observer.observe(scroller);
+  // A scroller-only resize (mobile keyboard, browser chrome) keeps rows fixed under the
+  // header, so the composer moves over the transcript; only content changes follow the tail.
+  const observer=new ResizeObserver(entries=>{if(focusedId||entries.some(entry=>entry.target!==scroller))changed();});observer.observe(inner);observer.observe(header);observer.observe(scroller);
   // Polling rechecks focused landings; land honors an active run or the original focus deadline.
   const tick=setInterval(()=>{if(focusedId)land();},300);
   return {reset,focus,changed,

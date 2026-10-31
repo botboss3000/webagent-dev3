@@ -1,7 +1,7 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 function fixture(profile={},positions=[500,1000]) {
-  const timers=new Map(),frames=new Map();let serial=0,rows=[],calls=[];
+  const timers=new Map(),frames=new Map();let serial=0,rows=[],calls=[],resized=null;
   const listeners={};
   const scroller={scrollTop:0,scrollHeight:2000,clientHeight:400,
     getBoundingClientRect:()=>({top:0}),
@@ -11,7 +11,7 @@ function fixture(profile={},positions=[500,1000]) {
   const row=(id,top)=>({dataset:{publicId:id},getBoundingClientRect:()=>({top:top-scroller.scrollTop+62})});
   rows=positions.map((top,i)=>row(String(i),top));
   const context={AbortController,performance:{now:()=>10},matchMedia:()=>({matches:false}),
-    ResizeObserver:class{observe(){}disconnect(){}},
+    ResizeObserver:class{constructor(fn){resized=fn;}observe(){}disconnect(){}},
     setTimeout(fn){const id=++serial;timers.set(id,fn);return id;},clearTimeout:id=>timers.delete(id),
     requestAnimationFrame(fn){const id=++serial;frames.set(id,fn);return id;},cancelAnimationFrame:id=>frames.delete(id),
     setInterval:()=>0,clearInterval(){}};
@@ -20,7 +20,7 @@ function fixture(profile={},positions=[500,1000]) {
   const api=context.mountTranscriptAnchor({scroller,inner,header:{getBoundingClientRect:()=>({bottom:0})},getProfile:()=>({user_turn_anchor:profile})});
   const flush=map=>{const tasks=[...map.values()];map.clear();tasks.forEach(fn=>fn());};
   function move(top,settle=true){listeners.wheel();scroller.scrollTop=top;listeners.scroll();if(settle)flush(timers);}
-  return {api,move,calls,scroller,flushFrames:()=>flush(frames),finish:()=>listeners.scrollend(),reproject:()=>{rows=positions.map((top,i)=>row(String(i),top));}};
+  return {api,move,calls,scroller,inner,resize:targets=>resized(targets.map(target=>({target}))),flushFrames:()=>flush(frames),finish:()=>listeners.scrollend(),reproject:()=>{rows=positions.map((top,i)=>row(String(i),top));}};
 }
 test('snap once, ignore nearby movement, rearm at 100px in either direction',()=>{
   for(const sign of [-1,1]){
@@ -91,4 +91,9 @@ test('programmatic snap completion and layout do not unlock the neighborhood',()
   f.move(510);f.finish();f.api.changed();f.flushFrames();f.move(540);
   assert.equal(f.calls.length,1);
   f.api.reset();f.move(540);assert.deepEqual(f.calls,[500,550]);
+});
+test('keyboard-sized scroller changes keep the transcript fixed while content growth follows the tail',()=>{
+  const f=fixture({enabled:false});f.scroller.scrollTop=1600;
+  f.scroller.clientHeight=200;f.resize([f.scroller]);f.flushFrames();assert.equal(f.scroller.scrollTop,1600);
+  f.scroller.scrollHeight=2300;f.resize([f.inner]);f.flushFrames();assert.equal(f.scroller.scrollTop,2300);
 });
