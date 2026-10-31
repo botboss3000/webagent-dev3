@@ -22,5 +22,8 @@
     "enabled": true,
     "show_toasts": true,
     "cleared_toast_seconds": 0
+  },
+  "ui_traces": {
+    "enabled": true
   }
 }
