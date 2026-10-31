@@ -42,6 +42,7 @@ pub(crate) mod media_lane;
 #[path = "../../crates/modules/models/host/api/platform_catalog.rs"]
 mod model_catalog;
 mod model_usage;
+#[path = "../../crates/modules/notifications/host/api.rs"]
 pub(crate) mod notifications;
 mod promotions;
 pub(crate) mod repository;

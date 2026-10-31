@@ -6,7 +6,7 @@
 mod documents;
 mod error;
 mod module_state;
-pub mod notifications;
+mod notifications;
 mod run_fence;
 mod store;
 

@@ -28,10 +28,10 @@ pub async fn store_core(root: &Path, user: &str) -> StoreCore {
     .expect("fixture agents table");
     let app_pool = open("app.db", true, false).await;
     let pool = open("user.db", true, true).await;
-    crate::notifications::schema(&app_pool, false)
+    webagent_notifications::schema(&app_pool, webagent_notifications::Plane::Application)
         .await
         .expect("fixture outbox tables");
-    crate::notifications::schema(&pool, true)
+    webagent_notifications::schema(&pool, webagent_notifications::Plane::User)
         .await
         .expect("fixture staging tables");
     StoreCore {

@@ -27,7 +27,7 @@ pub(crate) mod search;
 pub(crate) mod session;
 #[path = "../../crates/modules/chat/host/storage/session_messaging.rs"]
 mod session_messaging;
-pub(crate) use webagent_host_core::notifications;
+pub(crate) use webagent_notifications as notifications;
 mod actions;
 #[path = "../../crates/modules/files/host/storage/attachments.rs"]
 mod attachments;
@@ -100,7 +100,12 @@ impl std::ops::DerefMut for Store {
 pub(crate) async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePool> {
     let pool = webagent_storage::pool::open_pool(path, events, runs).await?;
     if events {
-        notifications::schema(&pool, runs).await?;
+        let plane = if runs {
+            notifications::Plane::User
+        } else {
+            notifications::Plane::Application
+        };
+        notifications::schema(&pool, plane).await?;
     }
     Ok(pool)
 }

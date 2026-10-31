@@ -22,6 +22,7 @@ webagent-access = { path = "../modules/access" }
 webagent-chat = { path = "../modules/chat" }
 webagent-configuration = { path = "../modules/configuration" }
 webagent-models = { path = "../modules/models" }
+webagent-notifications = { path = "../modules/notifications" }
 webagent-storage = { path = "../modules/storage" }
 
 [dev-dependencies]

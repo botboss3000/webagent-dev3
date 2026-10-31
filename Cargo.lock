@@ -2630,6 +2630,7 @@ dependencies = [
  "webagent-chat",
  "webagent-configuration",
  "webagent-models",
+ "webagent-notifications",
  "webagent-storage",
 ]
 
@@ -2761,6 +2762,21 @@ dependencies = [
  "webagent-files",
  "webagent-host-core",
  "webagent-models",
+]
+
+[[package]]
+name = "webagent-notifications"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "webagent-configuration",
+ "webagent-storage",
 ]
 
 [[package]]
@@ -2931,6 +2947,7 @@ dependencies = [
  "webagent-models",
  "webagent-module-service",
  "webagent-native-tools",
+ "webagent-notifications",
  "webagent-provider-contracts",
  "webagent-provider-projection",
  "webagent-storage",

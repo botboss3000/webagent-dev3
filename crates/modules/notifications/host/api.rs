@@ -1,81 +1,52 @@
 //! Installation-admin event reads; the assistant uses this feed through outbound polling.
-use super::*;
+//! Reader-credential, connection-cap and cursor rules live in `webagent_notifications`; this
+//! root-bound adapter supplies the HTTP handlers, App/Store, account checks and the relay and
+//! retention service loop.
+use axum::extract::{Path, Query};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::sse::{Event, KeepAlive};
+use axum::response::{IntoResponse, Response, Sse};
+use axum::Json;
+use serde_json::{json, Value};
 use sqlx::Row;
 use std::collections::VecDeque;
-use std::sync::{Mutex as StdMutex, OnceLock};
+use std::convert::Infallible;
+use std::time::Duration;
+use webagent_accounts_host::AccountsStore;
+use webagent_notifications::connections::{AcquireError, Connection};
+use webagent_notifications::cursor::{self, Args, Bounds};
+use webagent_notifications::readers::{self, ReaderBody};
 
-#[derive(Default)]
-struct Counts {
-    credentials: HashMap<String, usize>,
-    users: HashMap<String, usize>,
-    total: usize,
-}
-static COUNTS: OnceLock<StdMutex<Counts>> = OnceLock::new();
-struct Connection {
-    credential: String,
-    user: String,
-}
-impl Connection {
-    fn acquire(identity: &Value) -> std::result::Result<Self, ApiError> {
-        let credential = identity["_auth_key"]
-            .as_str()
-            .filter(|v| !v.is_empty())
-            .ok_or_else(|| bad("Missing event credential"))?
-            .to_owned();
-        let user = identity["_user_id"].as_str().unwrap_or("").to_owned();
-        let mut counts = COUNTS.get_or_init(Default::default).lock().unwrap();
-        if counts.credentials.get(&credential).copied().unwrap_or(0) >= 4
-            || counts.users.get(&user).copied().unwrap_or(0) >= 8
-            || counts.total >= 64
-        {
-            return Err(ApiError(
-                StatusCode::TOO_MANY_REQUESTS,
-                "Event connection limit reached".into(),
-            ));
-        }
-        *counts.credentials.entry(credential.clone()).or_default() += 1;
-        *counts.users.entry(user.clone()).or_default() += 1;
-        counts.total += 1;
-        Ok(Self { credential, user })
-    }
-}
-impl Drop for Connection {
-    fn drop(&mut self) {
-        let mut counts = COUNTS.get().unwrap().lock().unwrap();
-        for (key, credential) in [(&self.credential, true), (&self.user, false)] {
-            let map = if credential {
-                &mut counts.credentials
-            } else {
-                &mut counts.users
-            };
-            if let Some(count) = map.get_mut(key) {
-                *count -= 1;
-                if *count == 0 {
-                    map.remove(key);
-                }
-            }
-        }
-        counts.total -= 1;
-    }
+use crate::{access, bad, conflict, now, Api, ApiError, App, State};
+
+/// Hold one event-read connection slot for `identity`.
+fn connection(identity: &Value) -> std::result::Result<Connection, ApiError> {
+    Connection::acquire(
+        identity["_auth_key"].as_str().unwrap_or(""),
+        identity["_user_id"].as_str().unwrap_or(""),
+    )
+    .map_err(|error| match error {
+        AcquireError::MissingCredential => bad(&error.to_string()),
+        AcquireError::LimitReached => ApiError(StatusCode::TOO_MANY_REQUESTS, error.to_string()),
+    })
 }
 
-// Event-reader credentials are hashed, sealed, revocable, and limited to these two GET routes.
-// This is deliberately separate from the message-submission bearer API.
+/// Validated read bounds.
+fn bounds(args: &Args) -> std::result::Result<Bounds, ApiError> {
+    cursor::bounds(args).map_err(|error| bad(&error.to_string()))
+}
+
+/// The identity of a live event-reader bearer token on an event read route, if any.
+///
+/// Event-reader credentials are hashed, sealed, revocable, and limited to these two GET
+/// routes. This is deliberately separate from the message-submission bearer API.
 pub(crate) async fn bearer_identity(
     app: &App,
     method: &axum::http::Method,
     path: &str,
     headers: &HeaderMap,
 ) -> Option<Value> {
-    if *method != axum::http::Method::GET
-        || !matches!(
-            path,
-            "/api/v3/admin/events"
-                | "/api/v3/admin/events/stream"
-                | "/admin/events"
-                | "/admin/events/stream"
-        )
-    {
+    if *method != axum::http::Method::GET || !readers::reader_route(path) {
         return None;
     }
     let token = headers
@@ -83,10 +54,10 @@ pub(crate) async fn bearer_identity(
         .to_str()
         .ok()?
         .strip_prefix("Bearer ")?;
-    if token.len() != 64 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if !readers::hex64(token) {
         return None;
     }
-    let key = format!("notification_reader:{}", digest(&json!(token)));
+    let key = readers::key(&readers::reader_id(token));
     let mut identity = app.store.get(&key).await.ok()??;
     identity["_auth_key"] = json!(key);
     identity["_user_id"] = identity["user_id"].clone();
@@ -96,17 +67,13 @@ pub(crate) async fn bearer_identity(
         None
     }
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct ReaderBody {
-    expires_in: u64,
-}
+/// Issue a reader credential owned by the caller; the token is returned once.
 pub(super) async fn issue_reader(
     State(app): State<App>,
     axum::Extension(identity): axum::Extension<Value>,
     Json(body): Json<ReaderBody>,
 ) -> Api {
-    if !(60..=90 * 24 * 60 * 60).contains(&body.expires_in) {
+    if !readers::valid_lifetime(body.expires_in) {
         return Err(bad("Reader expiration must be 60 seconds to 90 days"));
     }
     let _guard = app.gate.lock().await;
@@ -115,7 +82,7 @@ pub(super) async fn issue_reader(
             .fetch_one(&app.store.app_pool)
             .await
             .map_err(anyhow::Error::from)?;
-    if count >= 64 {
+    if count >= readers::MAX_READERS {
         return Err(conflict(
             "Event reader credential limit reached; revoke unused readers",
         ));
@@ -128,23 +95,21 @@ pub(super) async fn issue_reader(
         .account_by_id(user)
         .await?
         .ok_or_else(|| bad("Reader owner unavailable"))?;
-    let token = format!(
-        "{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    );
-    let id = digest(&json!(token));
+    let token = readers::new_token();
+    let id = readers::reader_id(&token);
     let record = json!({"user_id":user,"generation":account["generation"],"created_at":now(),"expires":now()+body.expires_in});
     sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
-        .bind(format!("notification_reader:{id}"))
+        .bind(readers::key(&id))
         .bind(app.store.seal(&record)?)
         .execute(&app.store.app_pool)
         .await
         .map_err(anyhow::Error::from)?;
     Ok(Json(
-        json!({"id":id,"token":token,"expires":record["expires"],"scope":"events:read","max_connections":4}),
+        json!({"id":id,"token":token,"expires":record["expires"],"scope":readers::SCOPE,
+            "max_connections":webagent_notifications::connections::MAX_PER_CREDENTIAL}),
     ))
 }
+/// List reader credentials without their tokens.
 pub(super) async fn readers(State(app): State<App>) -> Api {
     let rows = sqlx::query(
         "SELECT key,value FROM docs WHERE key LIKE 'notification_reader:%' ORDER BY key LIMIT 64",
@@ -155,41 +120,25 @@ pub(super) async fn readers(State(app): State<App>) -> Api {
     let mut readers = Vec::new();
     for row in rows {
         let doc = app.store.unseal(&row.get::<Vec<u8>, _>("value"))?;
-        readers.push(json!({"id":row.get::<String,_>("key").trim_start_matches("notification_reader:"),
-            "user_id":doc["user_id"],"created_at":doc["created_at"],"expires":doc["expires"],"scope":"events:read"}));
+        readers.push(json!({"id":row.get::<String,_>("key").trim_start_matches(readers::KEY_PREFIX),
+            "user_id":doc["user_id"],"created_at":doc["created_at"],"expires":doc["expires"],"scope":readers::SCOPE}));
     }
     Ok(Json(json!({"readers":readers})))
 }
+/// Revoke reader credential `id`.
 pub(super) async fn revoke_reader(State(app): State<App>, Path(id): Path<String>) -> Api {
-    if id.len() != 64 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if !readers::hex64(&id) {
         return Err(bad("Invalid event reader ID"));
     }
     sqlx::query("DELETE FROM docs WHERE key=?")
-        .bind(format!("notification_reader:{id}"))
+        .bind(readers::key(&id))
         .execute(&app.store.app_pool)
         .await
         .map_err(anyhow::Error::from)?;
     Ok(Json(json!({"revoked":true})))
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct Args {
-    since: Option<i64>,
-    limit: Option<i64>,
-    wait: Option<u64>,
-}
-fn bounds(args: &Args) -> std::result::Result<(i64, i64, u64), ApiError> {
-    let (since, limit, wait) = (
-        args.since.unwrap_or(0),
-        args.limit.unwrap_or(200),
-        args.wait.unwrap_or(30),
-    );
-    if since < 0 || !(1..=200).contains(&limit) || wait > 30 {
-        return Err(bad("Invalid event cursor, limit or wait"));
-    }
-    Ok((since, limit, wait))
-}
+/// Whether `identity`'s credential and its administrator account are still live.
 async fn valid(app: &App, identity: &Value) -> bool {
     let Some(key) = identity["_auth_key"].as_str() else {
         return false;
@@ -197,7 +146,7 @@ async fn valid(app: &App, identity: &Value) -> bool {
     let Some(user) = identity["_user_id"].as_str() else {
         return false;
     };
-    let auth_live = if key.starts_with("notification_reader:") {
+    let auth_live = if key.starts_with(readers::KEY_PREFIX) {
         // Reader credentials retain their resource owner's lifecycle.
         app.store.get(key).await.ok().flatten().is_some_and(|doc| {
             doc["expires"].as_u64().unwrap_or(0) > now()
@@ -220,13 +169,14 @@ async fn valid(app: &App, identity: &Value) -> bool {
                     .is_ok_and(|p| p.active() && p.administrator())
         })
 }
+/// Long-poll one outbox page after the cursor.
 pub(super) async fn read(
     State(app): State<App>,
     axum::Extension(identity): axum::Extension<Value>,
     Query(args): Query<Args>,
 ) -> std::result::Result<Response, ApiError> {
-    let (since, limit, wait) = bounds(&args)?;
-    let _connection = Connection::acquire(&identity)?;
+    let Bounds { since, limit, wait } = bounds(&args)?;
+    let _connection = connection(&identity)?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(wait);
     loop {
         if !valid(&app, &identity).await {
@@ -239,8 +189,10 @@ pub(super) async fn read(
         if page["error"] == "cursor_expired" {
             return Ok((StatusCode::GONE, Json(page)).into_response());
         }
-        if !page["events"].as_array().unwrap().is_empty() || tokio::time::Instant::now() >= deadline
-        {
+        let events = page["events"]
+            .as_array()
+            .expect("a page that is not cursor_expired lists events");
+        if !events.is_empty() || tokio::time::Instant::now() >= deadline {
             if !valid(&app, &identity).await {
                 return Err(ApiError(
                     StatusCode::UNAUTHORIZED,
@@ -255,23 +207,25 @@ pub(super) async fn read(
         }
     }
 }
+/// Stream outbox events as SSE from the cursor or `Last-Event-ID`.
 pub(super) async fn stream(
     State(app): State<App>,
     axum::Extension(identity): axum::Extension<Value>,
     headers: HeaderMap,
     Query(args): Query<Args>,
 ) -> std::result::Result<Response, ApiError> {
-    let (mut since, limit, _) = bounds(&args)?;
+    let Bounds {
+        mut since, limit, ..
+    } = bounds(&args)?;
     if let Some(header) = headers.get("last-event-id") {
         let value = header
             .to_str()
             .ok()
-            .and_then(|value| value.parse::<i64>().ok())
-            .filter(|v| *v >= 0)
+            .and_then(cursor::last_event_id)
             .ok_or_else(|| bad("Invalid Last-Event-ID"))?;
         since = since.max(value);
     }
-    let connection = Connection::acquire(&identity)?;
+    let connection = connection(&identity)?;
     if !valid(&app, &identity).await {
         return Err(ApiError(
             StatusCode::UNAUTHORIZED,
@@ -284,7 +238,7 @@ pub(super) async fn stream(
     }
     let queue: VecDeque<Value> = initial["events"]
         .as_array()
-        .unwrap()
+        .expect("a page that is not cursor_expired lists events")
         .iter()
         .cloned()
         .collect();
@@ -303,10 +257,10 @@ pub(super) async fn stream(
                     return None;
                 }
                 if let Some(row) = queue.pop_front() {
-                    cursor = row["seq"].as_i64().unwrap();
+                    cursor = row["seq"].as_i64().expect("outbox events carry a sequence");
                     let event = Event::default()
                         .id(cursor.to_string())
-                        .event(row["type"].as_str().unwrap())
+                        .event(row["type"].as_str().expect("outbox events carry a type"))
                         .data(row.to_string());
                     return Some((
                         Ok::<Event, Infallible>(event),
@@ -336,8 +290,11 @@ pub(super) async fn stream(
         .into_response())
 }
 
-// One API-owned relay; run emission still belongs to the independent loop's transactions.
-// Store methods are the only permitted route to user state.
+/// The relay and retention loop: relay every user's staging rows each second, prune each
+/// minute.
+///
+/// One API-owned relay; run emission still belongs to the independent loop's transactions.
+/// Store methods are the only permitted route to user state.
 pub(crate) async fn service(app: App) {
     let mut last_pruned = 0;
     loop {
@@ -375,8 +332,13 @@ pub(crate) async fn service(app: App) {
 
 #[cfg(test)]
 mod tests {
+    // The workspace has no clippy.toml with `allow-unwrap-in-tests` yet.
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
+    use crate::{digest, uuid};
     use axum::body::Body;
+    use axum::extract::Request;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
     async fn credential(app: &App) -> (String, Value) {
@@ -473,7 +435,7 @@ mod tests {
             .unwrap()
             .contains("event: session.created"));
         app.store
-            .prune_notifications(now() as i64 + crate::store::notifications::RETENTION_SECONDS + 1)
+            .prune_notifications(now() as i64 + webagent_notifications::RETENTION_SECONDS + 1)
             .await
             .unwrap();
         let response = route
@@ -499,14 +461,14 @@ mod tests {
         let identity = json!({"_auth_key":uuid(),"_user_id":uuid()});
         let mut connections = Vec::new();
         for _ in 0..4 {
-            connections.push(Connection::acquire(&identity).unwrap());
+            connections.push(connection(&identity).unwrap());
         }
         assert!(matches!(
-            Connection::acquire(&identity),
+            connection(&identity),
             Err(ApiError(StatusCode::TOO_MANY_REQUESTS, _))
         ));
         connections.pop();
-        assert!(Connection::acquire(&identity).is_ok());
+        assert!(connection(&identity).is_ok());
         let (_root, app) = crate::runtime_tests::fixture().await;
         let (cookie, identity) = credential(&app).await;
         let mut account = app.store.account_by_id("admin").await.unwrap().unwrap();
@@ -620,11 +582,11 @@ mod tests {
         .unwrap();
         let mut connections = Vec::new();
         for _ in 0..3 {
-            connections.push(Connection::acquire(&identity).unwrap());
+            connections.push(connection(&identity).unwrap());
         }
-        assert!(Connection::acquire(&identity).is_err());
+        assert!(connection(&identity).is_err());
         drop(response);
-        assert!(Connection::acquire(&identity).is_ok());
+        assert!(connection(&identity).is_ok());
     }
     #[tokio::test]
     async fn emission_follows_committed_lifecycle_and_terminal_publication() {
