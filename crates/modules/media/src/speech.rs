@@ -7,7 +7,8 @@ pub const MAX_SPEECH_CHARS: usize = 1800;
 
 /// Replace fenced code with a short notice, read Markdown as plain text (link text without its URL),
 /// omit links, redact bearer tokens and key-like words, collapse whitespace and truncate to
-/// [`MAX_SPEECH_CHARS`].
+/// [`MAX_SPEECH_CHARS`]. Each line ends a sentence, so headings and list items get a spoken pause
+/// instead of running into the next line.
 pub fn speech_text(text: &str) -> String {
     let mut result = String::new();
     for (index, part) in text.split("\u{60}\u{60}\u{60}").enumerate() {
@@ -19,7 +20,7 @@ pub fn speech_text(text: &str) -> String {
     }
     let result = result
         .lines()
-        .map(plain_line)
+        .map(|line| end_sentence(plain_line(line)))
         .collect::<Vec<_>>()
         .join("\n");
     let mut redact_next = false;
@@ -49,6 +50,15 @@ pub fn speech_text(text: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     result.chars().take(MAX_SPEECH_CHARS).collect()
+}
+
+/// A non-empty line without closing punctuation gets a period; speech pauses on punctuation.
+fn end_sentence(line: String) -> String {
+    let line = line.trim_end();
+    match line.chars().last() {
+        Some(last) if !".!?:;,\u{2026}".contains(last) => format!("{line}."),
+        _ => line.to_owned(),
+    }
 }
 
 /// One Markdown line as spoken text: no heading, quote or bullet marker, no bold or inline-code
@@ -126,7 +136,7 @@ pub const VOICES: &[(&str, &str)] = &[
 ];
 
 /// Voice used until an agent chooses one.
-pub const DEFAULT_VOICE: &str = "af_sarah";
+pub const DEFAULT_VOICE: &str = "af_heart";
 
 /// The voice catalog for clients: id, name and accent/gender group.
 pub fn voice_catalog() -> serde_json::Value {

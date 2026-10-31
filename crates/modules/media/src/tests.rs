@@ -261,9 +261,10 @@ fn speech_text_omits_code_links_and_secrets() {
     assert_eq!(
         speech_text(&text),
         "Run Code omitted. then see link omitted now. [redacted] [redacted] [redacted] \
-         [redacted] [redacted] sk-short"
+         [redacted] [redacted] sk-short."
     );
-    assert_eq!(speech_text("  a \n b  "), "a b");
+    assert_eq!(speech_text("  a \n b  "), "a. b.");
+    assert_eq!(speech_text("Done!\nNext: step\n\n"), "Done! Next: step.");
     let tick = "\u{60}";
     let markdown = format!(
         "# Results\n\n## **Bold** heading\n- Run {tick}cargo test{tick} first\n\
@@ -272,8 +273,8 @@ fn speech_text_omits_code_links_and_secrets() {
     );
     assert_eq!(
         speech_text(&markdown),
-        "Results Bold heading Run cargo test first quoted the docs and link omitted \
-         keep [brackets] and a < b"
+        "Results. Bold heading. Run cargo test first. quoted the docs and link omitted. \
+         keep [brackets] and a < b."
     );
     assert_eq!(speech_text(&"x".repeat(5000)).chars().count(), 1800);
 }

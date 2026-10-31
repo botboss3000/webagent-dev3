@@ -1462,7 +1462,7 @@ mod tests {
         let Json(before) = get().await.unwrap();
         assert_eq!(
             before["voice_output"],
-            json!({"enabled":false,"voice":"af_sarah"})
+            json!({"enabled":false,"voice":"af_heart"})
         );
         assert!(before["voice_catalog"].as_array().unwrap().len() >= 28);
         let put = |body: Value| {
