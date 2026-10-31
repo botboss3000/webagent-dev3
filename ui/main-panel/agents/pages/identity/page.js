@@ -7,6 +7,7 @@ import { renderSharedChat } from './shared-chat.js';
 import { renderEmbedSettings } from './embed.js';
 import { renderVisibility } from './visibility.js';
 import { renderClosing } from './closing.js';
+import { renderVoiceOutput } from './voice.js';
 import { renderManager } from './manager.js';
 import { renderCompaction } from './compaction.js';
 import { renderToolOutputPolicy } from './tool-output-policy.js';
@@ -114,4 +115,5 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
   renderVisibility(content, agent, persist);
 
   renderClosing(content, agent, persist);
+  renderVoiceOutput(content, agent, persist);
 }

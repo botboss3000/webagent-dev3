@@ -63,6 +63,18 @@ RUN --mount=type=cache,id=webagent-v3-target,target=/build/target,sharing=locked
     awk 'FNR==1 {sub(/^[^:]*: /,"");print}' /build/target/release/deps/webagent_v3-*.d /build/target/release/deps/webagent_context_contracts-*.d /build/target/release/deps/webagent_assets_contracts-*.d /build/target/release/deps/webagent_capability_contracts-*.d /build/target/release/deps/webagent_provider_contracts-*.d \
       | tr ' ' '\n' | LC_ALL=C sort -u > /out/core-inputs.txt
 RUN test -s /out/core-inputs.txt
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS voice
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/voice/venv \
+    && /opt/voice/venv/bin/pip install --no-cache-dir kokoro-onnx==0.6.1 onnxruntime==1.31.0 soundfile==0.14.0 numpy==2.4.6 \
+    && mkdir /opt/voice/models && cd /opt/voice/models \
+    && curl -fsSLO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx \
+    && curl -fsSLO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin \
+    && printf '%s  %s\n' 6e742170d309016e5891a994e1ce1559c702a2ccd0075e67ef7157974f6406cb kokoro-v1.0.int8.onnx \
+        bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d voices-v1.0.bin | sha256sum -c - \
+    && chmod -R a+rX /opt/voice
+
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS api
 RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates curl tini git ripgrep build-essential pkg-config chromium chromium-driver python3-selenium valgrind heaptrack linux-perf \
     && rm -rf /var/lib/apt/lists/* \
@@ -97,6 +109,10 @@ COPY --from=tested_builder /out/webagent-assets-service /usr/local/lib/webagent/
 COPY --from=tested_builder /out/webagent-capability-service /usr/local/lib/webagent/engine/capability-context/webagent-capability-service
 COPY --from=tested_builder /out/webagent-provider-service /usr/local/lib/webagent/engine/provider-projection/webagent-provider-service
 COPY v3/plugins/gates /opt/v3/plugins/gates
+# Agent voice output (crates/modules/media/host/voice.rs): the pinned Kokoro venv and checked
+# models come from the `voice` stage, prepared once as a dependency base.
+COPY --from=voice /opt/voice /opt/voice
+COPY v3/crates/modules/media/voice/speak.py /opt/voice/speak.py
 RUN chmod -R a+rX /opt/v3/plugins
 RUN chmod 0755 /opt/v3 /opt/v3/plugins /opt/v3/plugins/gates /opt/v3/plugins/gates/publication_size_guard_v1 && chmod 0444 /opt/v3/plugins/gates/publication_size_guard_v1/gate.json
 RUN chmod a+r /opt/v3/*.py && python3 -c "import os,pathlib; os.setgid(1100); os.setuid(1101); files=[pathlib.Path('/opt/v3/plugins/abilities/Core/create_tools/runtime.py'),pathlib.Path('/opt/v3/plugins/abilities/Core/visualizer/capture.py')]; [compile(p.read_text(),str(p),'exec') for p in files]"

@@ -16,7 +16,11 @@ import time
 import uuid
 
 ROLES = ("api", "loop")
-ALIASES = {"api": "webagent_runtime_api", "loop": "webagent_runtime_loop"}
+# Optional dependency stages: prepared with network like the runtime bases, then consumed offline
+# by name (`COPY --from=voice ...`). Each is a pinned Debian stage of RUN steps only.
+DEPENDENCIES = ("voice",)
+ALIASES = {"api": "webagent_runtime_api", "loop": "webagent_runtime_loop",
+           "voice": "webagent_dependency_voice"}
 DIGEST = re.compile(r"sha256:([a-f0-9]{64})")
 KEY = re.compile(r"[a-f0-9]{64}")
 
@@ -56,7 +60,8 @@ def stages(dockerfile):
             raise ValueError("Duplicate Docker stage")
         result[name] = {"image": match[1], "header": match[0].strip(),
                         "body": dockerfile[match.end():matches[i + 1].start() if i + 1 < len(matches) else len(dockerfile)]}
-    if set(result) != {"preview_tunnel", "tested_builder", "api", "loop"}:
+    if not {"preview_tunnel", "tested_builder", "api", "loop"} <= set(result) <= {
+            "preview_tunnel", "tested_builder", "api", "loop", *DEPENDENCIES}:
         raise ValueError("Unsupported runtime dependency stage graph")
     return result
 
@@ -129,12 +134,36 @@ def runtime_recipe(dockerfile, role, helper, generation=1, workers=4):
             "helper_sha256": identity["helper_sha256"]}
 
 
+def dependency_recipe(dockerfile, name, generation=1):
+    """A whole optional dependency stage becomes one prepared base; it may not read the context."""
+    if name not in DEPENDENCIES or type(generation) is not int or not 1 <= generation <= 1000000:
+        raise ValueError("Fixed dependency stage and generation required")
+    selected = stages(dockerfile)[name]
+    if not re.fullmatch(r"debian:bookworm-slim@sha256:[a-f0-9]{64}", selected["image"]):
+        raise ValueError("Pinned Debian bookworm dependency required")
+    body = selected["body"].strip("\n") + "\n"
+    steps = [line for line in body.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    joined = " ".join(body.replace("\\\n", " ").splitlines())
+    if not steps or not steps[0].startswith("RUN ") or re.search(r"(^|\n)\s*(COPY|ADD|FROM)\b", body) or "--mount" in joined:
+        raise ValueError("Dependency stage must contain only RUN steps")
+    stage = ALIASES[name]
+    rendered = "FROM " + selected["image"] + " AS " + stage + "\nARG WEBAGENT_RUNTIME_BASE_GENERATION=1\n" + body
+    identity = {"protocol": 1, "role": name, "generation": generation, "stage": rendered}
+    key = sha(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode())
+    rendered += 'LABEL webagent.runtime-base.role="' + name + '" webagent.runtime-base.recipe="' + key + '"\n'
+    return {"key": key, "role": name, "generation": generation, "stage": stage, "dockerfile": rendered,
+            "packages": [], "source_prefix_sha256": sha(body.encode()), "helper_sha256": None}
+
+
 def package_dockerfile(dockerfile, role):
     """Package only from pinned local OCI bases; no APT or registry base remains in this graph."""
     if role not in ROLES:
         raise ValueError("Fixed packaging role required")
     graph = stages(dockerfile)
     output = "FROM scratch AS tested_builder\nCOPY scheduler-out /out\n"
+    for name in DEPENDENCIES:
+        if name in graph:
+            output += "FROM " + ALIASES[name] + " AS " + name + "\n"
     for current in ROLES:
         body = graph[current]["body"]
         start = re.search(r"^COPY ", body, re.M)
@@ -262,7 +291,11 @@ class PackagingCache:
         dockerfile = files["v3/Dockerfile"][1].decode()
         helper = self.helper()
         workers = self.config.get("scheduler", {}).get("package_cache_download_workers", 4)
-        return {role: runtime_recipe(dockerfile, role, helper, generation, workers) for role in ROLES}
+        result = {role: runtime_recipe(dockerfile, role, helper, generation, workers) for role in ROLES}
+        for name in DEPENDENCIES:
+            if name in stages(dockerfile):
+                result[name] = dependency_recipe(dockerfile, name, generation)
+        return result
 
     def check(self, row, recipe, sync=False):
         """Rehash immutable OCI inputs and reject expired or mismatched preparations."""
@@ -405,7 +438,7 @@ class PackagingCache:
             self.runner.job_context.preparing_runtime_base = True
             try:
                 self.broker._phase(job, "preparing_runtime_base_" + role)
-                with self.runner.executor.packager(job, role) as builder:
+                with self.runner.executor.packager(job, role if role in ROLES else "generic") as builder:
                     with context.open("rb") as stream:
                         log = self.runner.command(["docker", "buildx", "build", "--builder", builder,
                             "--platform", "linux/amd64", "--provenance=false", "--progress=plain",

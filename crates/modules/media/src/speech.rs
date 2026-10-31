@@ -1,5 +1,6 @@
 //! Text prepared for server speech: code blocks, links, Markdown markup and credential-like words
 //! are not read aloud, and the result is bounded.
+//! Also the Kokoro voice catalog and the per-agent voice output setting it validates.
 
 /// Most characters sent to speech synthesis.
 pub const MAX_SPEECH_CHARS: usize = 1800;
@@ -89,4 +90,121 @@ fn plain_line(line: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// English Kokoro voices offered for agent voice output, as (id, name). The id prefix is the
+/// accent and gender: `af` American female, `am` American male, `bf`/`bm` British.
+pub const VOICES: &[(&str, &str)] = &[
+    ("af_alloy", "Alloy"),
+    ("af_aoede", "Aoede"),
+    ("af_bella", "Bella"),
+    ("af_heart", "Heart"),
+    ("af_jessica", "Jessica"),
+    ("af_kore", "Kore"),
+    ("af_nicole", "Nicole"),
+    ("af_nova", "Nova"),
+    ("af_river", "River"),
+    ("af_sarah", "Sarah"),
+    ("af_sky", "Sky"),
+    ("am_adam", "Adam"),
+    ("am_echo", "Echo"),
+    ("am_eric", "Eric"),
+    ("am_fenrir", "Fenrir"),
+    ("am_liam", "Liam"),
+    ("am_michael", "Michael"),
+    ("am_onyx", "Onyx"),
+    ("am_puck", "Puck"),
+    ("am_santa", "Santa"),
+    ("bf_alice", "Alice"),
+    ("bf_emma", "Emma"),
+    ("bf_isabella", "Isabella"),
+    ("bf_lily", "Lily"),
+    ("bm_daniel", "Daniel"),
+    ("bm_fable", "Fable"),
+    ("bm_george", "George"),
+    ("bm_lewis", "Lewis"),
+];
+
+/// Voice used until an agent chooses one.
+pub const DEFAULT_VOICE: &str = "af_sarah";
+
+/// The voice catalog for clients: id, name and accent/gender group.
+pub fn voice_catalog() -> serde_json::Value {
+    let group = |id: &str| match &id[..2] {
+        "af" => "American female",
+        "am" => "American male",
+        "bf" => "British female",
+        _ => "British male",
+    };
+    VOICES
+        .iter()
+        .map(|(id, name)| serde_json::json!({"id": id, "name": name, "group": group(id)}))
+        .collect()
+}
+
+/// Spoken introduction used for a voice's sample.
+pub fn sample_text(voice: &str) -> Option<String> {
+    VOICES
+        .iter()
+        .find(|(id, _)| *id == voice)
+        .map(|(_, name)| format!("Hi, I'm {name}. This is how I sound when I read a reply aloud."))
+}
+
+/// An agent's voice output setting, stored as `voice_output` in its encrypted metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceOutput {
+    /// Whether chats with this agent offer the voice reply control.
+    pub enabled: bool,
+    /// One of [`VOICES`].
+    pub voice: String,
+}
+
+/// A submitted or stored voice output setting that is not `{enabled: bool, voice: <known id>}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidVoiceOutput;
+
+impl std::fmt::Display for InvalidVoiceOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Voice output needs enabled (true or false) and a listed voice")
+    }
+}
+
+impl std::error::Error for InvalidVoiceOutput {}
+
+impl Default for VoiceOutput {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            voice: DEFAULT_VOICE.into(),
+        }
+    }
+}
+
+impl VoiceOutput {
+    /// Parse a setting; null (never set) is off with the default voice. Unknown fields and
+    /// voices are rejected.
+    pub fn from_value(value: &serde_json::Value) -> Result<Self, InvalidVoiceOutput> {
+        if value.is_null() {
+            return Ok(Self::default());
+        }
+        let fields = value.as_object().ok_or(InvalidVoiceOutput)?;
+        let enabled = fields.get("enabled").and_then(|v| v.as_bool());
+        let voice = fields.get("voice").and_then(|v| v.as_str());
+        match (enabled, voice) {
+            (Some(enabled), Some(voice))
+                if fields.len() == 2 && VOICES.iter().any(|(id, _)| *id == voice) =>
+            {
+                Ok(Self {
+                    enabled,
+                    voice: voice.into(),
+                })
+            }
+            _ => Err(InvalidVoiceOutput),
+        }
+    }
+
+    /// The stored and public form.
+    pub fn to_value(&self) -> serde_json::Value {
+        serde_json::json!({"enabled": self.enabled, "voice": self.voice})
+    }
 }

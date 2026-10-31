@@ -163,10 +163,52 @@ class RuntimeRecipeTests(unittest.TestCase):
         for text in (
             self.dockerfile + "\nFROM alpine:latest AS surprise\n",
             self.dockerfile.replace("debian:bookworm-slim@sha256:", "unapproved.invalid/debian@sha256:"),
-            self.dockerfile.replace("RUN apt-get update && apt-get install", "RUN arbitrary-init && apt-get install", 1),
+            self.dockerfile.replace("RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates curl tini",
+                                    "RUN arbitrary-init && apt-get install -y --no-install-recommends python3 ca-certificates curl tini", 1),
         ):
             with self.subTest(text=text[:30]), self.assertRaises(ValueError):
                 self.runtime.runtime_recipe(text, "api", b"helper")
+
+    def without_voice(self):
+        import re
+        text = re.sub(r"FROM [^\n]+ AS voice\n.*?(?=\nFROM )", "", self.dockerfile, flags=re.S)
+        return "".join(line for line in text.splitlines(keepends=True) if "--from=voice" not in line)
+
+    def test_voice_dependency_is_prepared_whole_and_consumed_offline_by_name(self):
+        recipe = self.runtime.dependency_recipe(self.dockerfile, "voice")
+        self.assertIn("FROM debian:bookworm-slim@sha256:", recipe["dockerfile"])
+        self.assertIn("pip install", recipe["dockerfile"])
+        self.assertIn('webagent.runtime-base.role="voice"', recipe["dockerfile"])
+        self.assertEqual(recipe["stage"], "webagent_dependency_voice")
+        output = self.runtime.package_dockerfile(self.dockerfile, "api")
+        self.assertIn("FROM webagent_dependency_voice AS voice", output)
+        self.assertIn("COPY --from=voice /opt/voice /opt/voice", output)
+        self.assertNotIn("pip install", output)
+        self.assertNotIn("FROM debian", output)
+        api = self.runtime.runtime_recipe(self.dockerfile, "api", b"helper")["key"]
+        changed = self.dockerfile.replace("numpy==2.4.6", "numpy==2.4.5")
+        self.assertEqual(api, self.runtime.runtime_recipe(changed, "api", b"helper")["key"])
+        self.assertNotEqual(recipe["key"], self.runtime.dependency_recipe(changed, "voice")["key"])
+        self.assertNotEqual(recipe["key"], self.runtime.dependency_recipe(self.dockerfile, "voice", 2)["key"])
+
+    def test_dependency_stage_is_optional_and_cannot_read_the_context(self):
+        plain = self.without_voice()
+        self.assertNotIn("AS voice", plain)
+        self.assertNotIn("dependency_voice", self.runtime.package_dockerfile(plain, "api"))
+        with self.assertRaises(KeyError):
+            self.runtime.dependency_recipe(plain, "voice")
+        for text in (
+            self.dockerfile.replace("    && chmod -R a+rX /opt/voice\n", "    && chmod -R a+rX /opt/voice\nCOPY v3/src /opt/voice/src\n", 1),
+            self.dockerfile.replace("python3-venv ca-certificates curl", "python3-venv ca-certificates curl --mount=type=bind,target=/x", 1),
+            self.dockerfile.replace("AS voice", "AS speech", 1),
+        ):
+            with self.subTest(text=text[:20]), self.assertRaises((ValueError, KeyError)):
+                self.runtime.dependency_recipe(text, "voice")
+        unpinned = self.dockerfile.replace(
+            "FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS voice",
+            "FROM debian:bookworm-slim AS voice")
+        with self.assertRaises(ValueError):
+            self.runtime.dependency_recipe(unpinned, "voice")
 
     def layout(self, root, role="api", recipe="a" * 64):
         import json

@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use crate::capture::{self, Capture, Chunk, SequenceRejected};
 use crate::image;
 use crate::lanes::{self, LaneError, Lanes};
-use crate::speech::speech_text;
+use crate::speech::{sample_text, speech_text, voice_catalog, VoiceOutput, DEFAULT_VOICE, VOICES};
 use crate::utterance::{self, Control};
 
 fn pcm(sample: i16, samples: usize) -> Vec<u8> {
@@ -312,4 +312,36 @@ fn image_receipts_fix_the_attachment_identity() {
         Some("generated.jpg")
     );
     assert_eq!(image::generated_filename("image/svg+xml"), None);
+}
+
+#[test]
+fn voice_output_accepts_only_listed_voices_and_exact_fields() {
+    assert_eq!(
+        VoiceOutput::from_value(&json!(null)).unwrap(),
+        VoiceOutput::default()
+    );
+    assert!(!VoiceOutput::default().enabled);
+    let saved = VoiceOutput::from_value(&json!({"enabled": true, "voice": "bm_george"})).unwrap();
+    assert_eq!(saved.voice, "bm_george");
+    assert_eq!(VoiceOutput::from_value(&saved.to_value()).unwrap(), saved);
+    for bad in [
+        json!({"enabled": true, "voice": "zf_xiaobei"}),
+        json!({"enabled": "yes", "voice": "af_sarah"}),
+        json!({"enabled": true}),
+        json!({"enabled": true, "voice": "af_sarah", "speed": 2}),
+        json!("af_sarah"),
+    ] {
+        assert!(VoiceOutput::from_value(&bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn voice_catalog_lists_every_voice_with_its_group() {
+    let catalog = voice_catalog();
+    assert_eq!(catalog.as_array().unwrap().len(), VOICES.len());
+    assert!(VOICES.iter().any(|(id, _)| *id == DEFAULT_VOICE));
+    assert_eq!(catalog[0]["group"], "American female");
+    assert_eq!(catalog[VOICES.len() - 1]["group"], "British male");
+    assert!(sample_text("bf_emma").unwrap().contains("Emma"));
+    assert_eq!(sample_text("../etc"), None);
 }

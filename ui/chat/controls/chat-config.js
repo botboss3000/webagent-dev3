@@ -13,6 +13,9 @@ let surfaceActions = {};
 let sharedControls = {};
 /** Registers session-owned modular controls, used by both header and footer profiles. */
 export function setSharedChatControls(nodes){sharedControls=nodes;currentSurface="";if(documentConfig)applyChatConfig();}
+let voiceReplyControl = null;
+/** Registers the voice reply toggle (voice-reply.js) for below-pill placement; null removes it. */
+export function setVoiceReplyControl(node){voiceReplyControl=node;currentSurface="";if(documentConfig)applyChatConfig();}
 /** Supplies widget actions consumed by the generated chat header controls. */
 export function setChatSurfaceActions(actions){surfaceActions=actions;}
 /** Returns only supported panel/widget defaults from the loaded profile. */
@@ -277,7 +280,7 @@ function applyFooter(profile, mode) {
       for(const zoneName of ['left','center','right']) {
         const zone=document.createElement('span'); zone.className='chat-header-zone chat-header-zone-'+zoneName;
         for(const name of spec[zoneName] || []) {
-          const node=sharedControls[name] || footerControls[name]; const cfg=below.controls?.[name] || {};
+          const node=sharedControls[name] || (name === 'voice_reply' ? voiceReplyControl : null) || footerControls[name]; const cfg=below.controls?.[name] || {};
           if(!node || cfg.enabled === false)continue;
           node.hidden=false;sizeControl(node,cfg);zone.append(node);
         }

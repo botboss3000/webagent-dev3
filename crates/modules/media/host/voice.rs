@@ -1,15 +1,28 @@
 //! Parallel voice conversation: transient recordings/questions, explicit durable work admission.
 //! Lane, capture, routing and speech rules live in `webagent_media`; this root-bound adapter
 //! supplies the HTTP handlers, App/Store, the session gate, model lanes and run commands.
+//! Agent voice output runs local Kokoro speech (`/opt/voice`, see `crates/modules/media/voice`).
+use std::collections::HashMap;
+use std::process::Stdio;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
+
+use axum::body::Body;
 use axum::extract::Path;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use futures_util::stream;
 use serde_json::{json, Value};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::process::{Child, ChildStdout, Command};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use webagent_media::capture::{self, Capture, Chunk};
 use webagent_media::lanes::{self, Completed, Lane, LaneError, Lanes};
-use webagent_media::speech::speech_text;
+use webagent_media::speech::{sample_text, speech_text};
 use webagent_media::utterance;
 
 use super::chat::{command, send};
@@ -578,11 +591,14 @@ pub(crate) async fn voice_capabilities(State(app): State<App>, Path(sid): Path<S
     };
     let tts_available =
         std::env::var("V3_VOICE_TTS_API_KEY").is_ok_and(|key| !key.trim().is_empty());
+    let agent = session_agent_id(&app, &sid).await?;
+    let voice_output = crate::agents_api::voice_output(&app.store, &agent).await?;
     Ok(Json(json!({
         "voice_configured": configured,
         "streaming": true,
         "tts_available": tts_available,
         "browser_fallback": true,
+        "voice_output": voice_output.to_value(),
     })))
 }
 pub(crate) async fn voice_speech(
@@ -643,4 +659,224 @@ pub(crate) async fn voice_speech(
         "media_type": "audio/mpeg",
         "ephemeral": true,
     })))
+}
+
+/// The local Kokoro speaker; its packaging is the `voice` stage of the Dockerfile.
+const SPEAKER: &str = "/opt/voice/venv/bin/python";
+const SPEAKER_ARGS: [&str; 2] = ["-I", "/opt/voice/speak.py"];
+/// Larger than any MP3 chunk the speaker writes for a bounded reply.
+const MAX_CHUNK_BYTES: u32 = 16 << 20;
+const SPEECH_FAILED: &str = "Voice reply stopped; the reply is still on screen";
+
+/// Kokoro uses every core, so one synthesis runs at a time and later ones queue.
+fn speech_slot() -> Arc<Semaphore> {
+    static SLOT: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    SLOT.get_or_init(|| Arc::new(Semaphore::new(1))).clone()
+}
+
+fn speech_unavailable() -> ApiError {
+    ApiError(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Voice output is unavailable".into(),
+    )
+}
+
+/// A running speaker; dropping it (for example when the client disconnects) kills the process
+/// and frees the speech slot.
+struct Speaker {
+    _slot: OwnedSemaphorePermit,
+    child: Child,
+    stdout: ChildStdout,
+}
+
+/// Wait up to two minutes for the speech slot, then start the speaker on `text` in `voice`.
+/// Callers have bounded the text and validated the voice.
+async fn start_speaker(text: &str, voice: &str) -> Result<Speaker, ApiError> {
+    let slot = tokio::time::timeout(Duration::from_secs(120), speech_slot().acquire_owned())
+        .await
+        .map_err(|_| {
+            ApiError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Voice is busy; try again shortly".into(),
+            )
+        })?
+        .map_err(anyhow::Error::from)?;
+    let mut child = Command::new(SPEAKER)
+        .args(SPEAKER_ARGS)
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|_| speech_unavailable())?;
+    let mut stdin = child.stdin.take().ok_or_else(speech_unavailable)?;
+    let request = json!({"text": text, "voice": voice}).to_string();
+    stdin
+        .write_all(request.as_bytes())
+        .await
+        .map_err(|_| speech_unavailable())?;
+    drop(stdin);
+    let stdout = child.stdout.take().ok_or_else(speech_unavailable)?;
+    Ok(Speaker {
+        _slot: slot,
+        child,
+        stdout,
+    })
+}
+
+/// The next length-prefixed MP3 chunk, or `None` once the speaker has closed its output.
+async fn next_chunk(out: &mut (impl AsyncRead + Unpin)) -> std::io::Result<Option<Vec<u8>>> {
+    let length = match out.read_u32().await {
+        Ok(length) => length,
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if length == 0 || length > MAX_CHUNK_BYTES {
+        return Err(std::io::ErrorKind::InvalidData.into());
+    }
+    let mut chunk = vec![0; length as usize];
+    out.read_exact(&mut chunk).await?;
+    Ok(Some(chunk))
+}
+
+/// One NDJSON line per chunk as it is synthesized: `{"audio": <base64 MP3>}`, or a final
+/// `{"error": ...}` when the speaker fails. A clean exit ends the stream.
+fn speech_lines(speaker: Speaker) -> Body {
+    Body::from_stream(stream::unfold(Some(speaker), |state| async move {
+        let mut speaker = state?;
+        let line = match next_chunk(&mut speaker.stdout).await {
+            Ok(Some(mp3)) => json!({"audio": STANDARD.encode(mp3)}),
+            Ok(None) if speaker.child.wait().await.is_ok_and(|s| s.success()) => return None,
+            Ok(None) | Err(_) => json!({"error": SPEECH_FAILED}),
+        };
+        let more = line.get("audio").is_some().then_some(speaker);
+        Some((Ok::<_, std::io::Error>(format!("{line}\n")), more))
+    }))
+}
+
+/// Speak a reply in the session agent's voice when the agent has voice output on. Streams
+/// [`speech_lines`] so the client can start playing after the first sentence.
+pub(crate) async fn voice_reply(
+    State(app): State<App>,
+    Path(sid): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Response, ApiError> {
+    let text = speech_text(required(&body, "text", 8192)?);
+    if text.is_empty() {
+        return Err(bad("Speech text is empty"));
+    }
+    if app.shutoff().await? {
+        return Err(conflict("Global shutoff is active"));
+    }
+    let agent = session_agent_id(&app, &sid).await?;
+    let output = crate::agents_api::voice_output(&app.store, &agent).await?;
+    if !output.enabled {
+        return Err(conflict("Voice output is off for this agent"));
+    }
+    let speaker = start_speaker(&text, &output.voice).await?;
+    Ok((
+        [
+            (CONTENT_TYPE, "application/x-ndjson"),
+            (CACHE_CONTROL, "no-store"),
+        ],
+        speech_lines(speaker),
+    )
+        .into_response())
+}
+
+/// A short MP3 introduction in `voice` for the Identity voice picker, cached after first use.
+pub(crate) async fn voice_sample(
+    State(app): State<App>,
+    Path(voice): Path<String>,
+) -> Result<Response, ApiError> {
+    static SAMPLES: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
+    let text = sample_text(&voice)
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Unknown voice".into()))?;
+    let samples = SAMPLES.get_or_init(Default::default);
+    let cached = samples.lock().await.get(&voice).cloned();
+    let mp3 = match cached {
+        Some(mp3) => mp3,
+        None => {
+            if app.shutoff().await? {
+                return Err(conflict("Global shutoff is active"));
+            }
+            let mut speaker = start_speaker(&text, &voice).await?;
+            let mut mp3 = Vec::new();
+            while let Some(chunk) = next_chunk(&mut speaker.stdout)
+                .await
+                .map_err(|_| speech_unavailable())?
+            {
+                mp3.extend(chunk);
+            }
+            if !speaker.child.wait().await.is_ok_and(|s| s.success()) {
+                return Err(speech_unavailable());
+            }
+            samples.lock().await.insert(voice, mp3.clone());
+            mp3
+        }
+    };
+    Ok((
+        [
+            (CONTENT_TYPE, "audio/mpeg"),
+            (CACHE_CONTROL, "private, max-age=86400"),
+        ],
+        mp3,
+    )
+        .into_response())
+}
+
+#[cfg(test)]
+mod voice_output_tests {
+    // Test code may unwrap (the standard's `allow-unwrap-in-tests`).
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[tokio::test]
+    async fn speaker_chunks_are_length_prefixed_and_bounded() {
+        let mut frames: &[u8] = &[0, 0, 0, 2, 7, 8, 0, 0, 0, 1, 9];
+        assert_eq!(next_chunk(&mut frames).await.unwrap(), Some(vec![7, 8]));
+        assert_eq!(next_chunk(&mut frames).await.unwrap(), Some(vec![9]));
+        assert_eq!(next_chunk(&mut frames).await.unwrap(), None);
+        for bad in [&[0u8, 0, 0, 0][..], &[2, 0, 0, 0], &[0, 0, 0, 5, 1]] {
+            let mut frames = bad;
+            assert!(next_chunk(&mut frames).await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn voice_reply_follows_the_agent_setting() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let sid = crate::create_session(
+            State(app.clone()),
+            Json(json!({"client_request_id":uuid(),"agent_id":"shared_default"})),
+        )
+        .await
+        .unwrap()
+        .0["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let Json(capabilities) = voice_capabilities(State(app.clone()), Path(sid.clone()))
+            .await
+            .unwrap();
+        assert_eq!(capabilities["voice_output"]["enabled"], false);
+        let reply = |text: &str| {
+            voice_reply(
+                State(app.clone()),
+                Path(sid.clone()),
+                Json(json!({"text": text})),
+            )
+        };
+        assert_eq!(reply("Hello.").await.err().unwrap().0, StatusCode::CONFLICT);
+        assert_eq!(reply("   ").await.err().unwrap().0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            voice_sample(State(app.clone()), Path("../speak".into()))
+                .await
+                .err()
+                .unwrap()
+                .0,
+            StatusCode::NOT_FOUND
+        );
+    }
 }

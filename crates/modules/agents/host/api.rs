@@ -1,5 +1,4 @@
 //! Agent API composition: neighbors validate their settings; Agents owns identity/revisions/SQL.
-use webagent_accounts_host::AccountsStore;
 use crate::access::Principal;
 use crate::{Api, ApiError, App, State};
 use axum::{
@@ -9,6 +8,7 @@ use axum::{
     Extension, Json, Router,
 };
 use serde_json::{json, Value};
+use webagent_accounts_host::AccountsStore;
 #[path = "bridge.rs"]
 mod super_bridge;
 async fn principal(app: &App, identity: &Value) -> Result<Principal, ApiError> {
@@ -69,6 +69,17 @@ pub(crate) async fn status_value(
     webagent_agents::repository::Repository::new(&store.agent_pool, agent, store)?
         .status()
         .await
+}
+/// The agent's voice output setting; Media's voice routes read it per request.
+pub(crate) async fn voice_output(
+    store: &crate::store::Store,
+    agent: &str,
+) -> anyhow::Result<webagent_media::speech::VoiceOutput> {
+    let view = store.for_agent(agent).await?;
+    let metadata = agent_metadata(&view, agent).await?;
+    Ok(webagent_media::speech::VoiceOutput::from_value(
+        &metadata["voice_output"],
+    )?)
 }
 /// Existing mode readers in Chat/Engine use the same encrypted metadata and defaults.
 pub(crate) async fn modes_config(
@@ -153,9 +164,10 @@ async fn identity_get(
     let closing = crate::gate_controls::agent_closing(&store, &id).await?;
     let manager = crate::manager::config::incoming(&store, &id).await?;
     let closing_protocol = crate::gate_registry::closing_config()?;
+    let voice_output = voice_output(&store, &id).await?;
     let fixed = crate::gate_registry::visibility_config()?.guidance;
     Ok(Json(
-        json!({"member_access":store.access_repository().member_access(&id).await?,"capability_levels":store.capability_levels(&id).await?,"shared_chat":crate::shared_chat::policy(&store,&id).await?,"manager_incoming_message":manager,"closing_message":closing,"closing_protocol":{"flags":closing_protocol.flags,"notification_max_words":closing_protocol.notification_max_words},"message_visibility":{"mode":settings.mode,"guidance":settings.guidance,"fixed_protocol":fixed},"execution_modes":config["execution_modes"],"default_execution_mode":config["default_execution_mode"],"id":id,"name":owned["name"],
+        json!({"member_access":store.access_repository().member_access(&id).await?,"capability_levels":store.capability_levels(&id).await?,"shared_chat":crate::shared_chat::policy(&store,&id).await?,"manager_incoming_message":manager,"closing_message":closing,"voice_output":voice_output.to_value(),"voice_catalog":webagent_media::speech::voice_catalog(),"closing_protocol":{"flags":closing_protocol.flags,"notification_max_words":closing_protocol.notification_max_words},"message_visibility":{"mode":settings.mode,"guidance":settings.guidance,"fixed_protocol":fixed},"execution_modes":config["execution_modes"],"default_execution_mode":config["default_execution_mode"],"id":id,"name":owned["name"],
         "compaction_thresholds":{"trigger_tokens":effective.trigger_tokens,"tail_tokens":effective.tail_tokens},
         "compaction_defaults":{"trigger_tokens":defaults.trigger_tokens,"tail_tokens":defaults.tail_tokens,"summary_tokens":defaults.summary_tokens},
         "tool_result_deduplication":crate::tool_output::dedup_policy(&store,&id).await?,"tool_output_policy":tool_output_policy,"tool_output_defaults":tool_output_defaults,
@@ -178,6 +190,7 @@ struct IdentityUpdate {
     default_execution_mode: Option<String>,
     message_visibility: Option<crate::gate_controls::AgentVisibility>,
     closing_message: Option<crate::gate_controls::AgentClosing>,
+    voice_output: Option<Value>,
     compaction_thresholds: Option<crate::context_compaction::AgentThresholds>,
     manager_incoming_message: Option<crate::manager::config::IncomingMessage>,
     tool_output_policy: Option<crate::tool_output::Policy>,
@@ -204,6 +217,7 @@ async fn identity_put(
             && body.default_execution_mode.is_none()
             && body.message_visibility.is_none()
             && body.closing_message.is_none()
+            && body.voice_output.is_none()
             && body.compaction_thresholds.is_none()
             && body.manager_incoming_message.is_none()
             && body.tool_output_policy.is_none()
@@ -289,6 +303,11 @@ async fn identity_put(
             .map_err(|e| crate::bad(&e.to_string()))?;
         metadata["closing_message"] =
             serde_json::to_value(settings).map_err(anyhow::Error::from)?;
+    }
+    if let Some(settings) = body.voice_output.as_ref() {
+        let settings = webagent_media::speech::VoiceOutput::from_value(settings)
+            .map_err(|e| crate::bad(&e.to_string()))?;
+        metadata["voice_output"] = settings.to_value();
     }
     let manager_prompt = body
         .manager_incoming_message
@@ -481,26 +500,24 @@ async fn change(app: &App, identity: &Value, id: &str, expected: u64, change: Ch
         Change::Delete => service.delete(id, expected).await,
     }
     .map(Json)
-        .map_err(|error| {
-            let message = error.to_string();
-            match message.as_str() {
-                "Agent revision changed" => crate::conflict("Agent changed; reload and try again"),
-                "Agent is already archived"
-                | "Agent is not archived"
-                | "Archive the agent before deleting it" => crate::conflict(&message),
-                "The default agent cannot be archived"
-                | "The default agent cannot be removed"
-                | "The default agent cannot be deleted"
-                | "Invalid agent status" => crate::bad(&message),
-                "Only the agent owner can delete it permanently"
-                | "Only the agent owner can archive it" => {
-                    ApiError(StatusCode::FORBIDDEN, message)
-                }
-                "Agent not found" => ApiError(StatusCode::NOT_FOUND, message),
-                _ if message.ends_with("administration unavailable") => denied(),
-                _ => error.into(),
-            }
-        })
+    .map_err(|error| {
+        let message = error.to_string();
+        match message.as_str() {
+            "Agent revision changed" => crate::conflict("Agent changed; reload and try again"),
+            "Agent is already archived"
+            | "Agent is not archived"
+            | "Archive the agent before deleting it" => crate::conflict(&message),
+            "The default agent cannot be archived"
+            | "The default agent cannot be removed"
+            | "The default agent cannot be deleted"
+            | "Invalid agent status" => crate::bad(&message),
+            "Only the agent owner can delete it permanently"
+            | "Only the agent owner can archive it" => ApiError(StatusCode::FORBIDDEN, message),
+            "Agent not found" => ApiError(StatusCode::NOT_FOUND, message),
+            _ if message.ends_with("administration unavailable") => denied(),
+            _ => error.into(),
+        }
+    })
 }
 // AGENT-REMOVE: the owner's Remove archives the agent; anyone else's leaves it and its members.
 // Chat admits only active agents.
@@ -518,7 +535,14 @@ async fn unarchive_agent(
     Path(id): Path<String>,
     Json(body): Json<ArchiveChange>,
 ) -> Api {
-    change(&app, &identity, &id, body.expected_revision, Change::Unarchive).await
+    change(
+        &app,
+        &identity,
+        &id,
+        body.expected_revision,
+        Change::Unarchive,
+    )
+    .await
 }
 // AGENT-DELETE: the owner permanently erases an archived agent, its sessions and its data.
 async fn delete_agent(
@@ -642,10 +666,13 @@ mod tests {
         let roster = |archived: bool| {
             let (app, owner) = (app.clone(), owner.clone());
             async move {
-                let Json(value) =
-                    agents(State(app), Extension(owner), Query(RosterQuery { archived }))
-                        .await
-                        .unwrap();
+                let Json(value) = agents(
+                    State(app),
+                    Extension(owner),
+                    Query(RosterQuery { archived }),
+                )
+                .await
+                .unwrap();
                 value["agents"]
                     .as_array()
                     .unwrap()
@@ -677,18 +704,32 @@ mod tests {
         // Anyone but the owner leaves: off their list and the member list, agent untouched.
         let leaver_id = tenant_user(&app, "archive-leaver").await;
         view.access_repository()
-            .manage_agent_member(owner["_user_id"].as_str().unwrap(), &leaver_id, &id, Some("member"), false, 0)
+            .manage_agent_member(
+                owner["_user_id"].as_str().unwrap(),
+                &leaver_id,
+                &id,
+                Some("member"),
+                false,
+                0,
+            )
             .await
             .unwrap();
         let leaver = json!({"_user_id":leaver_id});
         let sees = |identity: Value| {
             let (app, id) = (app.clone(), id.clone());
             async move {
-                let Json(value) =
-                    agents(State(app), Extension(identity), Query(RosterQuery::default()))
-                        .await
-                        .unwrap();
-                value["agents"].as_array().unwrap().iter().any(|agent| agent["id"] == id.as_str())
+                let Json(value) = agents(
+                    State(app),
+                    Extension(identity),
+                    Query(RosterQuery::default()),
+                )
+                .await
+                .unwrap();
+                value["agents"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|agent| agent["id"] == id.as_str())
             }
         };
         assert!(sees(leaver.clone()).await);
@@ -696,7 +737,9 @@ mod tests {
             State(app.clone()),
             Extension(leaver.clone()),
             Path(id.clone()),
-            Json(ArchiveChange { expected_revision: revision }),
+            Json(ArchiveChange {
+                expected_revision: revision,
+            }),
         )
         .await
         .unwrap();
@@ -710,7 +753,9 @@ mod tests {
                 State(app.clone()),
                 Extension(outsider.clone()),
                 Path(id.clone()),
-                Json(ArchiveChange { expected_revision: revision }),
+                Json(ArchiveChange {
+                    expected_revision: revision,
+                }),
             )
             .await
             .unwrap();
@@ -852,6 +897,7 @@ mod tests {
                 guidance: guidance.into(),
             }),
             closing_message: None,
+            voice_output: None,
             manager_incoming_message: None,
             compaction_thresholds: None,
             tool_output_policy: None,
@@ -1085,6 +1131,7 @@ mod tests {
             default_execution_mode: None,
             message_visibility: None,
             closing_message: None,
+            voice_output: None,
             manager_incoming_message: None,
             compaction_thresholds: Some(crate::context_compaction::AgentThresholds {
                 trigger_tokens: trigger,
@@ -1183,6 +1230,7 @@ mod tests {
             default_execution_mode: None,
             message_visibility: None,
             closing_message: None,
+            voice_output: None,
             compaction_thresholds: None,
             manager_incoming_message: None,
             tool_output_policy: None,
@@ -1260,6 +1308,7 @@ mod tests {
             default_execution_mode: None,
             message_visibility: None,
             closing_message: None,
+            voice_output: None,
             compaction_thresholds: None,
             manager_incoming_message: None,
             tool_output_policy,
@@ -1400,6 +1449,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn voice_output_roundtrips_and_rejects_unlisted_voices() {
+        let (_root, app) = fixture().await;
+        let identity = json!({"_user_id":"admin"});
+        let get = || {
+            identity_get(
+                State(app.clone()),
+                Extension(identity.clone()),
+                Path("shared_default".into()),
+            )
+        };
+        let Json(before) = get().await.unwrap();
+        assert_eq!(
+            before["voice_output"],
+            json!({"enabled":false,"voice":"af_sarah"})
+        );
+        assert!(before["voice_catalog"].as_array().unwrap().len() >= 28);
+        let put = |body: Value| {
+            identity_put(
+                State(app.clone()),
+                Extension(identity.clone()),
+                Path("shared_default".into()),
+                Json(serde_json::from_value::<IdentityUpdate>(body).unwrap()),
+            )
+        };
+        let revision = before["revision"].clone();
+        let rejected = put(json!({"revision":revision,
+            "voice_output":{"enabled":true,"voice":"zf_xiaobei"}}))
+        .await;
+        assert_eq!(rejected.err().unwrap().0, StatusCode::BAD_REQUEST);
+        let Json(saved) = put(json!({"revision":revision,
+            "voice_output":{"enabled":true,"voice":"bm_george"}}))
+        .await
+        .unwrap();
+        assert_eq!(
+            saved["voice_output"],
+            json!({"enabled":true,"voice":"bm_george"})
+        );
+        let Json(reloaded) = get().await.unwrap();
+        assert_eq!(reloaded["voice_output"], saved["voice_output"]);
+        let output = voice_output(&app.store, "shared_default").await.unwrap();
+        assert!(output.enabled);
+        assert_eq!(output.voice, "bm_george");
+    }
+
+    #[tokio::test]
     async fn notification_guidance_roundtrips_with_identity_revision() {
         let (_root, app) = fixture().await;
         let identity = json!({"_user_id":"admin"});
@@ -1427,6 +1521,7 @@ mod tests {
                 notification_guidance: guidance.into(),
                 ..Default::default()
             }),
+            voice_output: None,
             manager_incoming_message: None,
             compaction_thresholds: None,
             tool_output_policy: None,
@@ -1492,7 +1587,7 @@ mod tests {
         let Json(saved)=identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(IdentityUpdate { member_access:None, tool_result_deduplication:None, shared_chat:None,
             revision:before["revision"].as_i64().unwrap(),name:None,description:None,
             execution_modes:Some(json!([{"id":"review","label":"Review","permission_policy":"read_only","prompt":"Inspect only"}])),
-            default_execution_mode:Some("review".into()),message_visibility:None,closing_message:None,manager_incoming_message:None,compaction_thresholds:None, tool_output_policy:None,reset_tool_output_policy:None})).await.unwrap();
+            default_execution_mode:Some("review".into()),message_visibility:None,closing_message:None,voice_output:None,manager_incoming_message:None,compaction_thresholds:None, tool_output_policy:None,reset_tool_output_policy:None})).await.unwrap();
         let Json(reloaded) = identity_get(
             State(app.clone()),
             Extension(identity.clone()),
@@ -1529,6 +1624,7 @@ mod tests {
                 default_execution_mode: None,
                 message_visibility: None,
                 closing_message: None,
+                voice_output: None,
                 manager_incoming_message: None,
                 compaction_thresholds: None,
                 tool_output_policy: None,
@@ -1578,6 +1674,7 @@ mod tests {
                 default_execution_mode: None,
                 message_visibility: None,
                 closing_message: None,
+                voice_output: None,
                 manager_incoming_message: None,
                 compaction_thresholds: None,
                 tool_output_policy: None,
@@ -1603,6 +1700,7 @@ mod tests {
                 default_execution_mode: None,
                 message_visibility: None,
                 closing_message: None,
+                voice_output: None,
                 manager_incoming_message: None,
                 compaction_thresholds: None,
                 tool_output_policy: None,
@@ -1626,6 +1724,7 @@ mod tests {
                 default_execution_mode: None,
                 message_visibility: None,
                 closing_message: None,
+                voice_output: None,
                 manager_incoming_message: None,
                 compaction_thresholds: None,
                 tool_output_policy: None,
@@ -1650,6 +1749,7 @@ mod tests {
                 default_execution_mode: None,
                 message_visibility: None,
                 closing_message: None,
+                voice_output: None,
                 manager_incoming_message: None,
                 compaction_thresholds: None,
                 tool_output_policy: None,

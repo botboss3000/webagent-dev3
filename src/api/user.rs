@@ -160,6 +160,7 @@ macro_rules! path_json {
                     | "voice_control"
                     | "voice_audio"
                     | "voice_speech"
+                    | "voice_reply"
                     | "undo_session_api"
                     | "fork_session_api"
             );
@@ -379,6 +380,13 @@ path_json!(voice_control => voice_control, String, Value);
 path_json!(voice_audio => voice_audio, String, Value);
 path_arg!(voice_capabilities => voice_capabilities,String);
 path_json!(voice_speech => voice_speech,String,Value);
+path_json!(voice_reply => voice_reply, String, Value);
+/// Identity's voice picker samples; any signed-in user may hear the fixed introductions.
+async fn voice_sample(Extension(app): Extension<App>, Path(voice): Path<String>) -> Response {
+    crate::voice_sample(State(app), Path(voice))
+        .await
+        .into_response()
+}
 path_arg!(attachment => attachment_get, (String, String));
 async fn upload(
     Extension(app): Extension<App>,
@@ -781,6 +789,11 @@ pub(crate) fn router() -> Router<App> {
             "/sessions/{id}/voice/speech",
             post(voice_speech).layer(axum::middleware::from_fn(crate::api::media_lane::limit)),
         )
+        .route(
+            "/sessions/{id}/voice/reply",
+            post(voice_reply).layer(axum::middleware::from_fn(crate::api::media_lane::limit)),
+        )
+        .route("/voice/samples/{voice}", get(voice_sample))
         .route("/sessions/{id}/voice/control", post(voice_control))
         .route(
             "/sessions/{id}/voice/audio",
