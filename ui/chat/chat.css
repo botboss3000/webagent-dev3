@@ -203,6 +203,38 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 :is(#chat-header,#chat-footer-row) .chat-header-zone > * {
   margin:0!important;
 }
+/* Control rows scroll sideways like a carousel when their controls do not fit. Each zone
+   scrolls on its own; the zone holding the session dropdown is left alone because a scroller
+   would clip its menu. Zones align from the start with an auto margin on the first control, so
+   they still sit right (or centered) when they fit and start at the left edge when they don't,
+   where every control can be scrolled to. Vertical padding keeps corner badges unclipped. */
+:is(#chat-header,#chat-footer-row) .chat-header-row {
+  min-width:0;
+  max-width:100%;
+}
+:is(#chat-header,#chat-footer-row) .chat-header-zone:not(:has(.session-dropdown-menu)) {
+  flex-shrink:1;
+  min-width:0;
+  justify-content:flex-start;
+  overflow-x:auto;
+  overflow-y:hidden;
+  overscroll-behavior-x:contain;
+  scrollbar-width:none;
+  padding-block:6px;
+  margin-block:-6px;
+}
+:is(#chat-header,#chat-footer-row) .chat-header-zone:not(:has(.session-dropdown-menu))::-webkit-scrollbar {
+  display:none;
+}
+:is(#chat-header,#chat-footer-row) .chat-header-zone > * {
+  flex-shrink:0;
+}
+:is(#chat-header,#chat-footer-row) :is(.chat-header-zone-right,.chat-header-zone-center):not(:has(.session-dropdown-menu)) > :first-child {
+  margin-inline-start:auto!important;
+}
+:is(#chat-header,#chat-footer-row) .chat-header-zone-center:not(:has(.session-dropdown-menu)) > :last-child {
+  margin-inline-end:auto!important;
+}
 /* Voice reply toggle: brand color while new replies are read aloud. */
 .chat-voice-reply-btn{-webkit-tap-highlight-color:transparent}
 .chat-voice-reply-btn.active{color:var(--brand)}
