@@ -501,7 +501,7 @@ impl<
                         }
                         Err(_) => true,
                     };
-                if interrupted && !A::is_read(&name) {
+                if interrupted && !tool_execution::settles_on_interrupt::<A>(&name) {
                     current["batch"][idx]["state"] = json!("uncertain");
                     current["uncertain"] = json!(true);
                     current["status"] = json!("recovery");
@@ -517,7 +517,7 @@ impl<
                             .as_ref()
                             .map(tools::failure::refused_result)
                             .unwrap_or_else(
-                                || json!({"status":"error","output":"Read tool interrupted"}),
+                                || json!({"status":"error","output":"Tool interrupted"}),
                             ),
                     };
                     current["batch"][idx]["state"] = json!("done");

@@ -211,6 +211,9 @@ pub async fn execute(
             forwarded["limit"] = json!(limit);
         }
     }
+    if let Some(live) = published_read(crate::is_read(name), &forwarded) {
+        return host.worker(operation, &live, call.sid, cancel).await;
+    }
     if !crate::is_read(name) {
         forwarded["request_id"] = json!(format!(
             "ui-{}",
@@ -220,9 +223,32 @@ pub async fn execute(
     host.ui_admin(call.sid, call.run_id, name, operation, &forwarded, cancel)
         .await
 }
+/// A read without a Broker ID sees published source in the live checkout, as Codebase
+/// Admin reads do; only a returned Broker ID selects a private draft.
+fn published_read(read: bool, forwarded: &Value) -> Option<Value> {
+    if !read || !forwarded["broker_id"].is_null() {
+        return None;
+    }
+    let mut live = forwarded.clone();
+    live["path"] = json!(format!(
+        "/live-checkout/{}",
+        forwarded["path"].as_str().unwrap_or("ui")
+    ));
+    Some(live)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reads_without_broker_id_use_published_source() {
+        let read = json!({"path":"ui/chat","query":"scrollbar"});
+        assert_eq!(
+            published_read(true, &read).unwrap()["path"],
+            "/live-checkout/ui/chat"
+        );
+        assert!(published_read(true, &json!({"path":"ui","broker_id":"b"})).is_none());
+        assert!(published_read(false, &read).is_none());
+    }
     #[test]
     fn frontend_confinement_rejects_backend_and_mixed_patches() {
         for value in [

@@ -50,6 +50,19 @@ pub fn advanced_policies<C: ActionCatalog>(name: &str) -> Value {
     })
 }
 
+/// Whether a timeout or cancellation this tool reports has no outcome to review: shell and
+/// Python write only the session's own workspace, so it is an ordinary failure the model
+/// can act on. A call cut off by a restart still goes to review; whether it finished is
+/// unknown and re-running it is not safe.
+pub fn workspace_confined(name: &str) -> bool {
+    matches!(name, "shell" | "python")
+}
+
+/// Whether a reported interruption settles as a plain failure instead of recovery review.
+pub fn settles_on_interrupt<C: ActionCatalog>(name: &str) -> bool {
+    C::is_read(name) || workspace_confined(name)
+}
+
 pub fn background_capable(name: &str) -> bool {
     matches!(
         name,
@@ -342,6 +355,14 @@ mod tests {
         }
     }
     type Settings = super::Settings<TestCatalog>;
+
+    #[test]
+    fn only_reads_and_workspace_tools_settle_on_interrupt() {
+        assert!(settles_on_interrupt::<TestCatalog>("shell"));
+        assert!(settles_on_interrupt::<TestCatalog>("python"));
+        assert!(!settles_on_interrupt::<TestCatalog>("file_write"));
+        assert!(!settles_on_interrupt::<TestCatalog>("build_work"));
+    }
     fn resolve(value: &Value, name: &str) -> Result<Settings> {
         super::resolve::<TestCatalog>(value, name)
     }

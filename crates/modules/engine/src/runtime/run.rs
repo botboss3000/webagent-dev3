@@ -1296,7 +1296,7 @@ impl<
                         value["status"].as_str(),
                         Some("cancelled" | "timeout" | "uncertain")
                     );
-                if uncertain && !A::is_read(&name) {
+                if uncertain && !tool_execution::settles_on_interrupt::<A>(&name) {
                     Self::record_tool_interruption(
                         &mut run,
                         value["status"].as_str().unwrap_or("uncertain"),

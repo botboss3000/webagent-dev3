@@ -4,6 +4,8 @@ fn successor_id(app: &App, sid: &str, entry: &Value) -> Result<String> {
     webagent_engine::runtime::followup::successor_id(app.store.current_user_id(), sid, entry)
 }
 pub(crate) use webagent_chat::followup::{public, public_entry};
+/// Why a chat's queue waits while one of its runs has an uncertain write to review.
+pub(crate) const RECOVERY_HOLD: &str = "Existing write outcome requires recovery";
 pub(crate) async fn should_queue(app: &App, s: &str) -> Result<bool> {
     let q = app.store.followup_queue(s).await?;
     Ok(q["held"] == true
@@ -213,7 +215,7 @@ pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
                     .followup_hold(
                         &s,
                         if r["uncertain"] == true {
-                            "Existing write outcome requires recovery"
+                            RECOVERY_HOLD
                         } else {
                             "Existing work must be resolved before queue delivery"
                         },

@@ -346,6 +346,20 @@ impl Store {
         t.commit().await?;
         Ok(())
     }
+    /// Lift a hold only if `reason` still explains it; a later, different hold stays.
+    pub(crate) async fn followup_release_hold(&self, s: &str, reason: &str) -> Result<()> {
+        let mut t = self.pool.begin().await?;
+        self.queue_reserve(&mut t, s).await?;
+        let mut q = self.queue_read_tx(&mut t, s).await?;
+        if q["held"] != true || q["reason"] != reason {
+            return Ok(());
+        }
+        q["held"] = json!(false);
+        q["reason"] = Value::Null;
+        self.queue_write_tx(&mut t, &mut q).await?;
+        t.commit().await?;
+        Ok(())
+    }
     pub(crate) async fn followup_publication_guard(
         &self,
         t: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -827,6 +841,19 @@ mod tests {
             )
             .await
             .is_err());
+    }
+    #[tokio::test]
+    async fn releasing_a_hold_needs_its_own_reason() {
+        let (_root, s) = fixture().await;
+        s.followup_hold("s", "Recovery").await.unwrap();
+        s.followup_release_hold("s", "Other").await.unwrap();
+        assert_eq!(s.followup_queue("s").await.unwrap()["held"], true);
+        s.followup_release_hold("s", "Recovery").await.unwrap();
+        let q = s.followup_queue("s").await.unwrap();
+        assert_eq!(
+            (q["held"].clone(), q["reason"].clone()),
+            (json!(false), Value::Null)
+        );
     }
     #[tokio::test]
     async fn review_cancellation_wins_and_queue_is_encrypted() {

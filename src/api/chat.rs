@@ -1208,6 +1208,7 @@ pub(crate) async fn command(
         });
     }
     let result = public_run(&run);
+    let resolved = action == "recovery" && status(&run) != "recovery";
     app.store
         .atomic_docs_event(
             vec![
@@ -1221,6 +1222,14 @@ pub(crate) async fn command(
             &result,
         )
         .await?;
+    if resolved {
+        // The reviewer's decision resolves the uncertain write that held the queue.
+        if let Some(sid) = result["session_id"].as_str() {
+            app.store
+                .followup_release_hold(sid, crate::followup_queue::RECOVERY_HOLD)
+                .await?;
+        }
+    }
     let mut views = vec![result];
     crate::shared_projection::runs(&app, &mut views).await?;
     Ok(Json(views.remove(0)))
