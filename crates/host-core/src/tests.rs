@@ -63,7 +63,10 @@ async fn documents_round_trip_and_run_writes_need_the_run_index() {
     let store = core(root.path(), "user-1").await;
     let value = json!({"enabled": true});
     store.put("preference:a", &value).await.unwrap();
-    store.put("preference:b", &json!({"enabled": false})).await.unwrap();
+    store
+        .put("preference:b", &json!({"enabled": false}))
+        .await
+        .unwrap();
     assert_eq!(store.get("preference:a").await.unwrap(), Some(value));
     assert_eq!(store.list("preference:").await.unwrap().len(), 2);
     store.delete("preference:a").await.unwrap();
@@ -78,4 +81,24 @@ async fn documents_round_trip_and_run_writes_need_the_run_index() {
     let run = json!({"id": "r1", "session_id": "s1", "status": "completed"});
     assert!(store.put("run:r1", &run).await.is_err());
     assert_eq!(store.get("run:r1").await.unwrap(), None);
+}
+
+#[test]
+fn storage_causes_are_logged_without_other_error_text() {
+    let busy = std::io::Error::from_raw_os_error(11);
+    let error = anyhow::Error::from(sqlx::Error::Io(busy)).context("Save run");
+    assert_eq!(
+        crate::error::storage_cause(&error),
+        "error communicating with database: Resource temporarily unavailable (os error 11)"
+    );
+    let io = anyhow::Error::from(std::io::Error::from_raw_os_error(11));
+    assert_eq!(
+        crate::error::storage_cause(&io),
+        "I/O WouldBlock (os error Some(11))"
+    );
+    let private = anyhow::anyhow!("Message text: my secret plan");
+    assert_eq!(
+        crate::error::storage_cause(&private),
+        "not a database or I/O error"
+    );
 }

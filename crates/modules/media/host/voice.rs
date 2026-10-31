@@ -280,16 +280,20 @@ pub(crate) async fn voice_route(
     if lane.busy {
         return Err(conflict("Voice is still answering"));
     }
-    if utterance::yes(&text) || utterance::no(&text) {
-        let proposal = lane
-            .proposal
-            .as_mut()
-            .filter(|p| {
-                p["expires"].as_u64().unwrap_or(0) > now()
-                    && p["state"] == "pending"
-                    && body["proposal_id"] == p["id"]
-            })
-            .ok_or_else(|| conflict("No matching pending voice proposal; nothing was changed"))?;
+    // "Cancel" both rejects a pending proposal and stops a run; with no proposal waiting it
+    // is a run control.
+    let awaiting = lane.proposal.as_ref().is_some_and(|p| {
+        p["expires"].as_u64().unwrap_or(0) > now()
+            && p["state"] == "pending"
+            && body["proposal_id"] == p["id"]
+    });
+    if utterance::yes(&text)
+        || (utterance::no(&text) && (awaiting || utterance::control(&text).is_none()))
+    {
+        let proposal =
+            lane.proposal.as_mut().filter(|_| awaiting).ok_or_else(|| {
+                conflict("No matching pending voice proposal; nothing was changed")
+            })?;
         if utterance::no(&text) {
             proposal["state"] = json!("rejected");
             return Ok(Json(json!({
@@ -532,7 +536,7 @@ pub(crate) async fn voice_control(
             }
             if let Some(action) = action {
                 return Ok(Json(json!({
-                    "message": format!("Run {action}."),
+                    "message": if action == "resume" { "Run resumed." } else { "Run cancelled." },
                     "run": result,
                     "ephemeral": true,
                 })));

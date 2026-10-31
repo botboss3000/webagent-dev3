@@ -25,12 +25,40 @@ impl From<anyhow::Error> for ApiError {
         {
             return ApiError(StatusCode::NOT_FOUND, "Session not found".into());
         }
-        tracing::error!("Request storage or execution operation failed");
+        tracing::error!(
+            cause = %storage_cause(&error),
+            "Request storage or execution operation failed"
+        );
         Self(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Operation failed; check development logs".into(),
         )
     }
+}
+
+/// The database or I/O cause in `error`'s chain, which names no user data. Other causes can
+/// quote request content, so only their absence is logged.
+pub(crate) fn storage_cause(error: &anyhow::Error) -> String {
+    for cause in error.chain() {
+        if let Some(error) = cause.downcast_ref::<sqlx::Error>() {
+            return match error {
+                sqlx::Error::Database(_)
+                | sqlx::Error::Io(_)
+                | sqlx::Error::PoolTimedOut
+                | sqlx::Error::PoolClosed
+                | sqlx::Error::WorkerCrashed => error.to_string(),
+                _ => "other database error".into(),
+            };
+        }
+        if let Some(error) = cause.downcast_ref::<std::io::Error>() {
+            return format!(
+                "I/O {:?} (os error {:?})",
+                error.kind(),
+                error.raw_os_error()
+            );
+        }
+    }
+    "not a database or I/O error".into()
 }
 
 // Module error conversions live here: the orphan rule allows them only in the

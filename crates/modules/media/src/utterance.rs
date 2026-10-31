@@ -1,12 +1,16 @@
 //! Rules that route a spoken utterance: confirmations, run controls, status questions, work
 //! requests and quick questions. Every classifier takes text already passed through [`words`].
 
-/// Lower-case `utterance` and strip surrounding space and trailing sentence punctuation.
+/// Lower-case `utterance`, keep letters, digits and apostrophes, and join the words with single
+/// spaces, so "OK, stop." reads as "ok stop".
 pub fn words(utterance: &str) -> String {
     utterance
-        .trim()
-        .trim_end_matches(['.', '!', '?'])
-        .to_ascii_lowercase()
+        .to_lowercase()
+        .replace('\u{2019}', "'")
+        .split(|c: char| !(c.is_alphanumeric() || c == '\''))
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// A spoken confirmation.
@@ -102,14 +106,30 @@ impl Control {
     }
 }
 
-/// A run control addressed at the current run, if `text` is one.
+/// A run control addressed at the current run, if `text` is one. Courtesy words around the
+/// command ("ok, stop please") are ignored; anything else ("don't stop", "stop the music") is not
+/// a control.
 pub fn control(text: &str) -> Option<Control> {
-    let text = text.strip_prefix("please ").unwrap_or(text);
-    let mut split = text.split_whitespace();
-    let verb = split.next()?;
-    let tail = split.collect::<Vec<_>>().join(" ");
+    let mut words = text.split_whitespace().collect::<Vec<_>>();
+    while let Some(first) = words.first() {
+        if !matches!(*first, "please" | "ok" | "okay" | "hey" | "just" | "now") {
+            break;
+        }
+        words.remove(0);
+    }
+    while let Some(last) = words.last() {
+        if !matches!(*last, "please" | "now" | "thanks") {
+            break;
+        }
+        words.pop();
+    }
+    let (verb, tail) = words.split_first()?;
+    let tail = tail.join(" ");
     if [
         "",
+        "it",
+        "that",
+        "everything",
         "run",
         "task",
         "work",
@@ -121,23 +141,35 @@ pub fn control(text: &str) -> Option<Control> {
         "the job",
         "the agent",
         "this",
+        "this run",
+        "this task",
         "what you're doing",
         "what you are doing",
     ]
     .contains(&tail.as_str())
     {
-        match verb {
+        match *verb {
             // A spoken pause is a stop; the next message carries the work forward.
-            "stop" | "cancel" | "abort" | "pause" => return Some(Control::Cancel),
+            "stop" | "cancel" | "abort" | "halt" | "pause" => return Some(Control::Cancel),
             "resume" | "continue" => return Some(Control::Resume),
             _ => {}
         }
     }
-    if matches!(text, "hold on" | "wait a moment" | "wait a second") {
-        Some(Control::Cancel)
-    } else {
-        None
-    }
+    // "hold on" may stand alone; "wait" needs a duration so a hesitant "wait" is not a stop.
+    let pause = match *verb {
+        "hold" if tail == "on" => return Some(Control::Cancel),
+        "hold" => tail.strip_prefix("on "),
+        "wait" => Some(tail.as_str()),
+        _ => None,
+    };
+    pause
+        .filter(|rest| {
+            matches!(
+                *rest,
+                "a second" | "a sec" | "a moment" | "a minute" | "one second" | "one moment"
+            )
+        })
+        .map(|_| Control::Cancel)
 }
 
 /// A question about the current run's progress.

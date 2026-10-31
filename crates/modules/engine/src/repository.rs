@@ -797,7 +797,18 @@ impl<
     }
 
     pub async fn acknowledge_loop_commands(&self) -> Result<usize> {
-        let mut tx = self.pool.begin().await?;
+        // Every scan visits every busy account; most have nothing to acknowledge.
+        let pending: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM loop_commands WHERE acknowledged_at IS NULL)",
+        )
+        .fetch_one(self.pool)
+        .await?;
+        if !pending {
+            return Ok(0);
+        }
+        // Take the write lock first: a deferred read that later writes fails at once with
+        // "database is locked" when another writer commits in between; busy_timeout never applies.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let rows=sqlx::query("SELECT seq,run_id,schema_version,kind,payload FROM loop_commands WHERE acknowledged_at IS NULL ORDER BY seq LIMIT 128")
             .fetch_all(&mut *tx).await?;
         for row in &rows {

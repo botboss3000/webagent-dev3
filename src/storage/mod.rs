@@ -1190,7 +1190,9 @@ impl Store {
         } else {
             None
         };
-        let mut tx = destination.begin().await?;
+        // Write lock first, as the loop's command acknowledgement does, so concurrent admissions
+        // wait for busy_timeout instead of failing their deferred read-to-write upgrade.
+        let mut tx = destination.begin_with("BEGIN IMMEDIATE").await?;
         if let Some(created) = created {
             let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM docs WHERE key=?")
                 .bind(format!("session:{sid}"))

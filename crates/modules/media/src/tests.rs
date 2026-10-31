@@ -200,6 +200,41 @@ fn utterances_classify_confirmations_controls_and_requests() {
     assert_eq!(utterance::control("hold on"), Some(Control::Cancel));
     assert_eq!(utterance::control("stop the music"), None);
     assert_eq!(utterance::control(""), None);
+    for spoken in [
+        "Cancel.",
+        "Please, cancel the task.",
+        "Stop, please.",
+        "OK, stop.",
+        "stop it",
+        "Hold on a second.",
+        "Wait a second.",
+        "Stop\u{2026}",
+    ] {
+        let text = utterance::words(spoken);
+        assert_eq!(utterance::control(&text), Some(Control::Cancel), "{spoken}");
+    }
+    assert_eq!(
+        utterance::control(&utterance::words("Okay, continue the run!")),
+        Some(Control::Resume)
+    );
+    for spoken in [
+        "don't stop",
+        "Don\u{2019}t stop.",
+        "stop the music in the song lyrics you wrote",
+        "wait",
+        "ok",
+        "hold onto it",
+    ] {
+        assert_eq!(
+            utterance::control(&utterance::words(spoken)),
+            None,
+            "{spoken}"
+        );
+    }
+    // A lone "cancel" is also a rejection; voice_route lets a pending proposal take it first.
+    assert!(utterance::no(&utterance::words("Cancel.")));
+    assert_eq!(utterance::words("OK, stop."), "ok stop");
+    assert!(utterance::yes(&utterance::words("OK!")));
     assert_eq!(Control::Resume.as_str(), "resume");
 
     assert!(utterance::work("please build a page"));
@@ -229,6 +264,17 @@ fn speech_text_omits_code_links_and_secrets() {
          [redacted] [redacted] sk-short"
     );
     assert_eq!(speech_text("  a \n b  "), "a b");
+    let tick = "\u{60}";
+    let markdown = format!(
+        "# Results\n\n## **Bold** heading\n- Run {tick}cargo test{tick} first\n\
+         > quoted [the docs](https://example.test/a) and <https://example.test/x>\n\
+         * keep [brackets] and a < b"
+    );
+    assert_eq!(
+        speech_text(&markdown),
+        "Results Bold heading Run cargo test first quoted the docs and link omitted \
+         keep [brackets] and a < b"
+    );
     assert_eq!(speech_text(&"x".repeat(5000)).chars().count(), 1800);
 }
 
