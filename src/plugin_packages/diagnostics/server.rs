@@ -56,6 +56,7 @@ async fn handle(mut stream: UnixStream, pool: SqlitePool, settings: &Path) -> Re
                 Some("tool") => c.categories.tool,
                 Some("recovery") => c.categories.recovery,
                 Some("app_background") => c.background_issues.enabled,
+                Some("ui_trace") => c.ui_traces.enabled,
                 _ => false,
             };
             if !allowed {

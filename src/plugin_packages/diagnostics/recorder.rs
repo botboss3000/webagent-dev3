@@ -124,6 +124,11 @@ pub fn permits(settings: &Settings, category: &str) -> bool {
             && settings.config.active()
             && settings.config.background_issues.enabled;
     }
+    if category == "ui_trace" {
+        return settings.error.is_none()
+            && settings.config.active()
+            && settings.config.ui_traces.enabled;
+    }
     settings.error.is_none()
         && settings.config.active()
         && match category {
@@ -797,7 +802,13 @@ pub async fn read<S: SnapshotStore>(
     if filter.category.as_deref().is_some_and(|c| {
         !matches!(
             c,
-            "provider" | "context_assembly" | "run" | "tool" | "recovery" | "app_background"
+            "provider"
+                | "context_assembly"
+                | "run"
+                | "tool"
+                | "recovery"
+                | "app_background"
+                | "ui_trace"
         )
     }) || filter
         .level

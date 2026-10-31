@@ -14,6 +14,14 @@ pub struct Config {
     pub full_context: FullContext,
     #[serde(default)]
     pub background_issues: BackgroundIssues,
+    #[serde(default)]
+    pub ui_traces: UiTraces,
+}
+/// Development-only browser UI timelines; off unless explicitly enabled.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiTraces {
+    pub enabled: bool,
 }
 /// Background capture is independently selectable; toast visibility never disables logging.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -100,6 +108,7 @@ impl Config {
                 max_retained_bytes: 268435456,
             },
             background_issues: BackgroundIssues::default(),
+            ui_traces: UiTraces::default(),
         }
     }
     /// The live settings file (`live-files.json`), relative to the checkout: a broken
