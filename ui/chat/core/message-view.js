@@ -25,8 +25,10 @@ export function updateAdmission(bubble, admission) {
   if(!admission){status?.remove();delete bubble.dataset.admissionStatus;return;}
   if(!status){status=document.createElement('p');status.className='ac-hint message-admission-status';status.setAttribute('role','status');status.setAttribute('aria-live','polite');bubble.append(status);}
   bubble.dataset.admissionStatus=admission.status;
+  // A message the agent never received gets a prominent notice, not a quiet hint.
+  status.classList.toggle('is-blocked',['unacceptable','review_error'].includes(admission.status));
   status.textContent=({pending_review:'Awaiting manager review…',reviewing:'Manager is reviewing this message…',
-    acceptable:'Accepted by the manager',unacceptable:'Not sent to the agent: this message does not meet its acceptance criteria.',
+    acceptable:'Accepted by the manager',unacceptable:'Not sent: this is outside the topics this assistant can help with. Try asking about its services instead.',
     review_error:admission.error||'Review failed. This message was not sent to the agent.'})[admission.status]||'';
 }
 /** Builds one published bubble; rejects malformed identity data and wires attachments, actions and user-text expansion. */

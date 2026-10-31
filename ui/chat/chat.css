@@ -225,3 +225,6 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 .v3-reply-choices button{font:inherit;color:var(--fg-1);background:var(--bg-elev);border:1px solid var(--border);border-radius:999px;padding:6px 12px;min-height:34px;cursor:pointer;-webkit-tap-highlight-color:transparent}
 .v3-reply-choices button:hover:not(:disabled){border-color:color-mix(in oklab,var(--fg-1) 35%,transparent)}
 .v3-reply-choices button:disabled{opacity:.55;cursor:default}
+/* Admission review blocked this message: the agent never saw it. */
+.message-admission-status.is-blocked{display:block;margin:8px 0 0;padding:8px 10px;border-radius:8px;border:1px solid rgba(var(--warning-rgb),.55);background:var(--warning-soft);color:var(--fg-1);font-size:13px;font-weight:600;line-height:1.35;opacity:1}
+.message-admission-status.is-blocked::before{content:'⚠ ';color:var(--warning)}
