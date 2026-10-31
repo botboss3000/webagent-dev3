@@ -4,6 +4,8 @@
 //! skipped; every idle account is still revisited every 5-10 minutes.
 use super::Store;
 use anyhow::{anyhow, Result};
+use serde_json::Value;
+use sqlx::Row;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -16,19 +18,70 @@ const WINDOW: Duration = Duration::from_secs(15);
 /// File times are coarse; a write this close before a check counts as after it.
 const CLOCK_MARGIN: Duration = Duration::from_millis(50);
 
-/// Work a periodic scan acts on without a new write: unfinished runs, leases, deadlines,
-/// schedules, held queues, unacknowledged loop commands and unrelayed notifications.
+/// Work a periodic scan acts on without a new write, by row presence: unfinished runs,
+/// unacknowledged loop commands, unrelayed notifications, background tasks, host leases,
+/// held follow-ups and naming jobs.
 const PENDING: &str =
     "SELECT EXISTS(SELECT 1 FROM run_index WHERE status NOT IN ('completed','cancelled','failed'))
     OR EXISTS(SELECT 1 FROM loop_commands WHERE acknowledged_at IS NULL)
     OR EXISTS(SELECT 1 FROM notification_stage)
     OR EXISTS(SELECT 1 FROM docs WHERE (key>='background_task:' AND key<'background_task;')
         OR (key>='administrator_host:' AND key<'administrator_host;')
-        OR (key>='followup_queue:' AND key<'followup_queue;')
-        OR (key>='manager_review:' AND key<'manager_review;')
         OR (key>='manager_pending:' AND key<'manager_pending;')
-        OR (key>='module_state:' AND key<'module_state;')
         OR (key>='session_naming:' AND key<'session_naming;'))";
+/// Records kept after their work finishes, so their status decides.
+const RECORDS: &str =
+    "SELECT key,value FROM docs WHERE (key>='followup_queue:' AND key<'followup_queue;')
+    OR (key>='manager_review:' AND key<'manager_review;')
+    OR (key>='module_state:' AND key<'module_state;')";
+
+/// Whether a kept record still has work: an unreviewed follow-up, an open manager review
+/// (deadlines run on the clock), or a package with pending input or live schedules.
+fn record_pending(key: &str, value: &Value) -> bool {
+    if key.starts_with("followup_queue:") {
+        value["entries"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|entry| {
+                !matches!(
+                    entry["review_status"].as_str(),
+                    Some("acceptable" | "unacceptable" | "review_error" | "cancelled")
+                ) && !matches!(
+                    entry["status"].as_str(),
+                    Some("cancelled" | "rejected" | "delivered")
+                )
+            })
+    } else if key.starts_with("manager_review:") {
+        !matches!(
+            value["status"].as_str(),
+            Some("acceptable" | "unacceptable" | "review_error" | "cancelled")
+        )
+    } else {
+        let busy = |field: &Value| {
+            field.as_array().is_some_and(|v| !v.is_empty())
+                || field.as_object().is_some_and(|v| !v.is_empty())
+        };
+        let state = &value["state"];
+        busy(&value["pending"])
+            || busy(&value["admission_results"])
+            || state["definitions"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .any(|(_, d)| d["status"] == "active")
+            || state["occurrences"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .any(|(_, o)| {
+                    !matches!(
+                        o["status"].as_str(),
+                        Some("completed" | "failed" | "cancelled" | "skipped")
+                    )
+                })
+    }
+}
 
 struct Idle {
     since: SystemTime,
@@ -94,6 +147,23 @@ impl Store {
             .is_ok_and(|m| m.len() > 0 && m.modified().is_ok_and(|t| t + CLOCK_MARGIN > since))
     }
 
+    /// Whether this account handle holds work a periodic scan must act on.
+    async fn pending_work(&self) -> Result<bool> {
+        if sqlx::query_scalar::<_, bool>(PENDING)
+            .fetch_one(&self.pool)
+            .await?
+        {
+            return Ok(true);
+        }
+        for row in sqlx::query(RECORDS).fetch_all(&self.pool).await? {
+            let key: String = row.get("key");
+            if record_pending(&key, &self.unseal(&row.get::<Vec<u8>, _>("value"))?) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Accounts a periodic scan must visit now. The administrator is always visited; an
     /// account is skipped while it has not been written since it was found to hold no
     /// pending work, until its periodic revisit.
@@ -114,14 +184,11 @@ impl Store {
                 Decision::Skip => false,
                 Decision::Visit => true,
                 Decision::Evaluate { visit } => {
-                    let pool = self.for_user(&user).await?.pool.clone();
+                    let account = self.for_user(&user).await?;
                     // Taken after opening, so the open's own schema writes are not "new".
                     let since = SystemTime::now();
                     // An unreadable account counts as busy rather than silently skipped.
-                    let pending = sqlx::query_scalar::<_, bool>(PENDING)
-                        .fetch_one(&pool)
-                        .await
-                        .unwrap_or(true);
+                    let pending = account.pending_work().await.unwrap_or(true);
                     let mut idle = IDLE.lock().map_err(registry_error)?;
                     if pending {
                         idle.remove(&user);
@@ -263,6 +330,34 @@ mod tests {
             .unwrap()
             .iter()
             .any(|(u, _)| *u == id));
+    }
+
+    #[test]
+    fn finished_records_do_not_keep_an_account_busy() {
+        use serde_json::json;
+        assert!(!record_pending(
+            "manager_review:r",
+            &json!({"status":"acceptable"})
+        ));
+        assert!(record_pending(
+            "manager_review:r",
+            &json!({"status":"reviewing"})
+        ));
+        let done = json!({"entries":[{"status":"delivered"},{"review_status":"cancelled"}]});
+        assert!(!record_pending("followup_queue:s", &done));
+        assert!(record_pending(
+            "followup_queue:s",
+            &json!({"entries":[{"status":"queued"}]})
+        ));
+        let quiet = json!({"pending":[],"admission_results":{},"state":{
+            "definitions":{"a":{"status":"paused"}},"occurrences":{"o":{"status":"completed"}}}});
+        assert!(!record_pending("module_state:automation", &quiet));
+        let scheduled = json!({"pending":[],"state":{"definitions":{"a":{"status":"active"}}}});
+        assert!(record_pending("module_state:automation", &scheduled));
+        assert!(record_pending(
+            "module_state:x",
+            &json!({"pending":[{"id":1}]})
+        ));
     }
 
     #[test]
