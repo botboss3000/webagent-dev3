@@ -1046,12 +1046,8 @@
             "center": [],
             "left": [],
             "right": [
-              "changes",
-              "mode",
               "model_changer",
-              "abilities",
-              "voice_reply",
-              "browser_notifications"
+              "voice_reply"
             ]
           }
         ]
