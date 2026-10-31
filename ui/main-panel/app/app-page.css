@@ -19,7 +19,7 @@
 #tab-app .agent-config-star{align-self:center;margin-right:18px;padding:0;border:0;background:transparent;color:var(--agent-config-icon);cursor:pointer}
 #tab-app .agent-config-star:focus-visible{outline:2px solid var(--agent-config-icon);outline-offset:2px}
 #tab-app .agent-card-tabs{display:flex;gap:7px;overflow-x:auto}
-#tab-app .agent-card-tabs [role=tab]{touch-action:none;user-select:none;cursor:grab;border:0;background:transparent;color:var(--fg-2);padding:8px 14px;white-space:nowrap}
+#tab-app .agent-card-tabs [role=tab]{touch-action:pan-x;user-select:none;cursor:grab;border:0;background:transparent;color:var(--fg-2);padding:8px 14px;white-space:nowrap;flex-shrink:0}
 #tab-app .agent-card-tabs [aria-selected=true]{color:var(--accent);border-bottom:2px solid var(--accent)}
 #tab-app .agent-card-tabs .dragging{cursor:grabbing;background:var(--accent-soft);outline:2px solid var(--accent)}
 /* Match V2's embedded File Manager: tabs stay above a workspace that fills
@@ -57,4 +57,4 @@
 #app-functions-page th,#app-functions-page td{text-align:left;vertical-align:top;padding:10px;border-bottom:1px solid var(--border);overflow-wrap:anywhere;min-width:140px}
 #app-functions-page th{color:var(--fg-1)}
 
-#tab-app .agent-card-tabs button,#tab-app .agent-config-topic-heading,#tab-app .agent-config-star{-webkit-tap-highlight-color:transparent}
+#tab-app .agent-card-tabs-chev,#tab-app .agent-card-tabs button,#tab-app .agent-config-topic-heading,#tab-app .agent-config-star{-webkit-tap-highlight-color:transparent}

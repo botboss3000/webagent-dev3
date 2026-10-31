@@ -153,7 +153,8 @@ body.chat-resizing,body.chat-resizing *{cursor:col-resize!important;user-select:
 #agents-grid .agent-detail-panel{display:block}
 #agents-grid .agent-detail-content{min-height:0}
 #agents-grid .agent-card-tabs{display:flex;gap:7px}
-#agents-grid .agent-card-tabs [role=tab]{touch-action:none;user-select:none;cursor:grab}
+#agents-grid .agent-card-tabs [role=tab]{touch-action:pan-x;user-select:none;cursor:grab;white-space:nowrap;flex-shrink:0}
+#agents-grid .agent-card-tabs-chev{-webkit-tap-highlight-color:transparent}
 #agents-grid .agent-card-tabs [role=tab].dragging{cursor:grabbing;background:var(--accent-soft);outline:2px solid var(--accent)}
 #agents-grid .agent-card-tabs button{border:none;background:transparent;color:var(--fg-2);padding:8px 14px}
 #agents-grid .agent-card-tabs button[aria-selected=true]{color:var(--accent);border-bottom:2px solid var(--accent)}

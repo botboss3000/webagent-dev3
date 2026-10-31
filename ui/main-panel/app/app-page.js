@@ -10,7 +10,7 @@ import { mountAppSettings } from './pages/settings/page.js';
 import { mountFunctions } from './pages/functions/page.js';
 import { mountModules } from './pages/modules/page.js';
 import { mountAppModels } from './pages/models/page.js';
-import { wirePageTabDrag } from '../../shared/page-tabs.js';
+import { wirePageTabCarousel, wirePageTabDrag } from '../../shared/page-tabs.js';
 import { startView as startFiles, stopView as stopFiles, resetExplorerForRemount } from './pages/files/page.js';
 
 export async function start(mount) {
@@ -159,5 +159,6 @@ export async function start(mount) {
     const panel=mount.querySelector('#'+page.panelId);panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',tab.id);
   }
   sync();
+  wirePageTabCarousel(strip);
   wirePageTabDrag(strip,{getOrder:()=>order,save,prefix:'app-tab-'});
 }

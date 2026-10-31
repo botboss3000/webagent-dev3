@@ -11,7 +11,7 @@ privateReveal.onclick=()=>{privateHost.hidden=false;privateReveal.hidden=true;pr
 function privateVisible(visible){document.body.classList.toggle('app-restricted',visible);document.getElementById('app-restricted-overlay').setAttribute('aria-hidden',String(!visible));privateHost.hidden=true;privateReveal.hidden=false;privateReveal.setAttribute('aria-expanded','false');}
 import { initHeaderCarousel } from './shared/header-carousel.js';
 initHeaderCarousel();
-import { wirePageTabDrag } from './shared/page-tabs.js';
+import { wirePageTabCarousel, wirePageTabDrag } from './shared/page-tabs.js';
 import { purgeAllBrowserData } from './browser-data-reset.js';
 import { createFloatingChat,createChatLauncher } from './chat/widget/window.js';
 import { mountNativeWidget } from './chat/widget/native.js';
@@ -434,6 +434,7 @@ function saveAgentTabs(){
 }
 
 syncAgentTabs();
+wirePageTabCarousel(document.querySelector('#agents-detail-region .agent-card-tabs'));
 wirePageTabDrag(document.querySelector('#agents-detail-region .agent-card-tabs'), { getOrder: () => agentTabOrder, save: saveAgentTabs, prefix: 'agent-tab-' });
 async function loadGuestPolicy(){const approval=document.querySelector('.private-access-approval');approval.hidden=true;try{const policy=await api('/auth/access-mode');$('guest-login').hidden=!policy.guest_access;approval.hidden=policy.access_mode!=='admin_approval';}catch{$('guest-login').hidden=true;}}
 $('guest-login').onclick=async()=>{const btn=$('guest-login');btn.disabled=true;try{const result=await api('/auth/guest-login','POST',{});csrf=result.csrf_token;await boot();}catch(error){$('registration-status').textContent=error.message;}finally{btn.disabled=false;}};
