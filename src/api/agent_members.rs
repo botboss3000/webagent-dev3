@@ -63,10 +63,12 @@ async fn read(
         if let Some(user) = member["user_id"].as_str().map(str::to_owned) {
             if let Some(account) = store.account_by_id(&user).await? {
                 member["username"] = account["username"].clone();
-                let (sessions, messages, last_login) = activity(&app, &user, &id).await?;
+                let (sessions, messages, profile) = activity(&app, &user, &id).await?;
                 member["session_count"] = json!(sessions);
                 member["message_count"] = json!(messages);
-                member["last_login_at"] = last_login;
+                for key in ["last_login_at", "display_name", "source_channel"] {
+                    member[key] = profile[key].clone();
+                }
             }
         }
         page.push(member);
@@ -301,7 +303,8 @@ async fn summary(
     ))
 }
 /// This agent's public sessions (active and archived) and messages for one user,
-/// plus the account's last login; other agents' activity is excluded.
+/// plus the account profile (last login, display name, sign-up channel);
+/// other agents' activity is excluded.
 async fn activity(app: &App, user: &str, agent: &str) -> anyhow::Result<(usize, i64, Value)> {
     let view = app.store.for_user(user).await?;
     let mut sessions = std::collections::HashSet::new();
@@ -323,12 +326,8 @@ async fn activity(app: &App, user: &str, agent: &str) -> anyhow::Result<(usize, 
         .filter(|(session, _)| sessions.contains(session))
         .map(|(_, count)| count)
         .sum();
-    let last_login = app
-        .store
-        .user_profile(user)
-        .await?
-        .map_or(Value::Null, |profile| profile["last_login_at"].clone());
-    Ok((sessions.len(), messages, last_login))
+    let profile = app.store.user_profile(user).await?.unwrap_or(Value::Null);
+    Ok((sessions.len(), messages, profile))
 }
 pub fn router() -> Router<App> {
     Router::new()

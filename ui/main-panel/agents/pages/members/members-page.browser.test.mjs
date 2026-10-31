@@ -47,6 +47,9 @@ try{
   assert.equal(await help.locator('tbody tr').count(),0);
   assert.equal(await help.locator('.members-empty').textContent(),'Help requests unavailable: No access');
   assert.equal(await sections.nth(1).locator('tbody tr').count(),1);
+  // V2-style level summary counts loaded members; the loading skeleton is gone.
+  assert.equal(await page.locator('.members-level-card .members-level-meta').textContent(),'1 member');
+  assert.equal(await page.locator('.members-skeleton').count(),0);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   assert.deepEqual(errors,[]);await context.close();
  }
