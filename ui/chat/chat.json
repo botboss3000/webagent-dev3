@@ -843,7 +843,7 @@
         "snap_enabled": true,
         "snap_rearm_distance_px": 500
       },
-      "enabled": false,
+      "enabled": true,
       "focus_hold_ms": 6000,
       "header_clearance_px": 8,
       "landing_gap_px": 62,
