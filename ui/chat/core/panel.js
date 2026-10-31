@@ -61,6 +61,11 @@ export async function mountChatPanel({root = document.getElementById('chat-panel
   function privacyNotice(mode,toolsNotice){privacyMode=mode;const notice=$('chat-privacy-notice');if(!notice)return;
     const privacy=mode==='private'?'':mode==='operator_reviewable'?'Agent Operators can read this conversation and join to reply.':'Conversation privacy is loading…';
     notice.textContent=[toolsNotice,privacy].filter(Boolean).join(' ');notice.hidden=!notice.textContent;}
+  // Remaining messages under the caller's level limits for this agent; hidden when unlimited.
+  async function loadAllowance(){const hint=$('chat-allowance-hint');if(!hint)return;
+    try{const {limits}=await request('/agents/'+encodeURIComponent(getAgentId())+'/allowance');
+      const text=limits.map(item=>Math.max(0,item.limit-item.used)+' of '+item.limit+' message'+(item.limit===1?'':'s')+' left (rolling '+item.window+')').join(' · ');
+      hint.textContent=text;hint.hidden=!text;}catch{hint.hidden=true;}}
   async function loadAgentPrivacy(){if(session)return;void setChatConfigAgent(getAgentId());privacyNotice(null);try{const data=await request('/agents/'+encodeURIComponent(getAgentId())+'/access-summary');if(!session)privacyNotice(data.conversation_privacy,data.tools_notice);}catch(error){if(!session){privacyNotice(null);const notice=$('chat-privacy-notice');if(notice)notice.textContent='Conversation privacy unavailable. Retry before sending.';}}}
 /** Fetches, validates, and mounts the required V3 chat partial into the supplied root. */
 async function mountChat(){
@@ -409,7 +414,7 @@ async function submit(text,clearInput=false){
     // Fallback after automatic retries: the draft stays in the composer and Retry resubmits it.
     chatActions.showSendError({message:error.message||'Message was not sent.',retry:()=>submit(text,clearInput)});
     throw error;
-  }finally{submitting=false;await refresh();}
+  }finally{submitting=false;await refresh();void loadAllowance();}
 }
 // Sends the current composer draft on form submission.
 // A host that supports sign-in handles "/login" itself; it is never sent to the agent.
@@ -463,7 +468,7 @@ $('chat-stop-btn').onclick=guard(()=>$('chat-stop-btn').dataset.run?cancel($('ch
   };
   // One capture owner also covers chat portals and the shell Chat/Float buttons.
   const disposeFeedback=mountChatControlFeedback(root,{portals:true,shell:true});
-  await loadAgentPrivacy();
+  await loadAgentPrivacy();void loadAllowance();
   mountedPanels.set(root, panel);
   return panel;
 }

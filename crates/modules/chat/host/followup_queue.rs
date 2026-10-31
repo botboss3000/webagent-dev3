@@ -1,7 +1,7 @@
 //! Durable followup admission and safe delivery at Rust execution boundaries.
 use crate::*;
 fn successor_id(app: &App, sid: &str, entry: &Value) -> Result<String> {
-    webagent_engine::runtime::followup::successor_id(app.store.current_user_id(),sid,entry)
+    webagent_engine::runtime::followup::successor_id(app.store.current_user_id(), sid, entry)
 }
 pub(crate) use webagent_chat::followup::{public, public_entry};
 pub(crate) async fn should_queue(app: &App, s: &str) -> Result<bool> {
@@ -24,7 +24,10 @@ pub(crate) async fn should_queue(app: &App, s: &str) -> Result<bool> {
             .iter()
             .any(|r| r["session_id"] == s && !terminal(status(r))))
 }
-pub(crate) fn prepared_entry(prepared:api::chat::PreparedMessage,choice:&str)->(Value,Vec<(String,Value)>) {
+pub(crate) fn prepared_entry(
+    prepared: api::chat::PreparedMessage,
+    choice: &str,
+) -> (Value, Vec<(String, Value)>) {
     let id = prepared.message["run_id"].as_str().unwrap().to_owned();
     let mut template = Value::Null;
     let mut review = Value::Null;
@@ -40,19 +43,26 @@ pub(crate) fn prepared_entry(prepared:api::chat::PreparedMessage,choice:&str)->(
         }
     }
     let e = json!({"id":id,"message_id":format!("user:{id}"),"session_id":template["session_id"],"agent_id":template["agent_id"],"revision":0,"choice":choice,"status":if review.is_null(){"pending"}else{"reviewing"},"content":prepared.message["content"],"context_content":prepared.message.get("context_content").unwrap_or(&prepared.message["content"]),"attachments":prepared.result["attachments"],"agent_message":prepared.message["agent_message"],"template":template,"review":review,"review_status":if review.is_null(){"acceptable"}else{"pending_review"},"created_at":now(),"consuming_run_id":null});
-    (e,docs)
+    (e, docs)
 }
 pub(crate) async fn submit(
     app: &App,
     s: &str,
     body: &Value,
 ) -> std::result::Result<Value, ApiError> {
-    if crate::shared_chat::actor(app)!=app.store.current_user_id(){return Err(ApiError(StatusCode::FORBIDDEN,"Private delivery controls belong to the conversation owner".into()));}
+    if crate::shared_chat::actor(app) != app.store.current_user_id() {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Private delivery controls belong to the conversation owner".into(),
+        ));
+    }
     let prepared = api::chat::prepare_followup(app, s, body).await?;
-    let (e,docs)=prepared_entry(prepared,"queue");
-    let id=e["id"].as_str().unwrap().to_owned();
+    let (e, docs) = prepared_entry(prepared, "queue");
+    let id = e["id"].as_str().unwrap().to_owned();
     let result = json!({"run_id":null,"submission_id":id,"message_id":e["message_id"],"delivery_state":"queued","queue_entry":public_entry(&e),"attachments":e["attachments"]});
-    app.store
+    let message_id = e["message_id"].clone();
+    let result = app
+        .store
         .followup_submit(
             s,
             e,
@@ -62,7 +72,10 @@ pub(crate) async fn submit(
             &result,
         )
         .await
-        .map_err(|e| conflict(&e.to_string()))
+        .map_err(|e| conflict(&e.to_string()))?;
+    let agent = session_agent_id(app, s).await?;
+    api::chat::record_admitted_turn(app, &agent, &message_id).await;
+    Ok(result)
 }
 pub(crate) async fn interrupt_requested(app: &App, rid: &str) -> Result<bool> {
     app.engine().interrupt_requested(rid).await
@@ -80,18 +93,30 @@ async fn review_entry(app: App, s: String, e: Value) -> Result<()> {
     };
     let id = e["id"].as_str().unwrap();
     let revision = e["revision"].as_u64().unwrap_or(0);
-    if e["template"]["requester_user_id"].as_str().is_some_and(|actor|actor!=app.store.current_user_id()){return Ok(());}
-    if !app.store.participation_allows_run(&e["template"]).await? {return Ok(());}
-    let mut quota=e["template"].clone();quota["id"]=json!(format!("followup-review:{}:{}:{id}",app.store.current_user_id(),s));
+    if e["template"]["requester_user_id"]
+        .as_str()
+        .is_some_and(|actor| actor != app.store.current_user_id())
+    {
+        return Ok(());
+    }
+    if !app.store.participation_allows_run(&e["template"]).await? {
+        return Ok(());
+    }
+    let mut quota = e["template"].clone();
+    quota["id"] = json!(format!(
+        "followup-review:{}:{}:{id}",
+        app.store.current_user_id(),
+        s
+    ));
     match app.store.requester_claim_ready(&quota).await {
-        Ok(true)=>{},
-        Ok(false)=>return Ok(()),
-        Err(error) if error.to_string()=="Account run limit reached"=>return Ok(()),
-        Err(error)=>return Err(error),
+        Ok(true) => {}
+        Ok(false) => return Ok(()),
+        Err(error) if error.to_string() == "Account run limit reached" => return Ok(()),
+        Err(error) => return Err(error),
     }
     let mut r = e["review"].clone();
-    r["run"]["id"]=quota["id"].clone();
-    r["run"]["requester_user_id"]=json!(app.store.current_user_id());
+    r["run"]["id"] = quota["id"].clone();
+    r["run"]["requester_user_id"] = json!(app.store.current_user_id());
     r["status"] = json!("reviewing");
     r["deadline"] = json!(now() + 50);
     if !app
@@ -146,10 +171,12 @@ pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
         let Some(session) = app.store.get(&format!("session:{s}")).await? else {
             continue;
         };
-        if session["status"].as_str().unwrap_or("active") != "active" || app.store.participation_state(&s).await?["active"]!=true {
+        if session["status"].as_str().unwrap_or("active") != "active"
+            || app.store.participation_state(&s).await?["active"] != true
+        {
             continue;
         }
-        crate::session_messaging::revalidate(app,&s).await?;
+        crate::session_messaging::revalidate(app, &s).await?;
         let q = app.store.followup_queue(&s).await?;
         for e in q["entries"].as_array().unwrap() {
             if e["review_status"] == "pending_review" {
@@ -296,7 +323,7 @@ pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
                 .await?;
             continue;
         }
-        next["id"] = json!(successor_id(app,&s,&e)?);
+        next["id"] = json!(successor_id(app, &s, &e)?);
         next["created_at"] = json!(now());
         next["updated_at"] = json!(now());
         // An interrupt selected just as its original run completed becomes the next

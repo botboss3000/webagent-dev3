@@ -16,7 +16,7 @@ mod ability_drift;
 #[path = "../../crates/modules/models/host/api/account_catalog.rs"]
 mod account_models;
 mod administrator;
-mod agent_members;
+pub(crate) mod agent_members;
 #[path = "../../crates/modules/webapp/host/agent_pages.rs"]
 mod agent_pages;
 #[path = "../../crates/modules/webapp/host/app_pages.rs"]

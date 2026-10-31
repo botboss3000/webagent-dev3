@@ -25,7 +25,7 @@ import { showLeftOverlay } from './chat/controls/login-hook.js';
 // v2 dom-utils imports v1 auth and uploads; v3 uses text nodes and its own transport.
 import { renderIdentity } from './main-panel/agents/pages/identity/page.js';
 import {renderMembers} from './main-panel/agents/pages/members/page.js';
-import {offerAccessRequest} from './main-panel/agents/request-access.js';
+import {offerAccessRequest,showAccessNotices} from './main-panel/agents/request-access.js';
 import {renderCreateAgent} from './main-panel/agents/pages/create/page.js';
 import {createAgentArchive} from './main-panel/agents/agent-archive.js';
 import { renderAbilities } from './main-panel/agents/pages/abilities/page.js';
@@ -48,6 +48,7 @@ let createDescriptor;
 const $=id=>document.getElementById(id);
 let agentId=new URL(location.href).searchParams.get('agent')||'shared_default';
 let agentRoster=[];
+let accessNoticePoll=null;
 let agentArchive=null;
 let explicitAssignment=false;
 const initialTab=new URL(location.href).searchParams.get('tab');
@@ -192,7 +193,7 @@ async function loadAgentRoster(){
   if(!Array.isArray(data.agents))throw Error('Agent list unavailable');
   agentRoster=data.agents;
   // An explicit link to an agent this account cannot use offers an access request.
-  if(new URL(location.href).searchParams.has('agent')&&!agentRoster.some(agent=>agent.id===agentId)&&accountMe&&accountMe.role!=='guest')void offerAccessRequest(api,agentId);
+  if(new URL(location.href).searchParams.has('agent')&&!agentRoster.some(agent=>agent.id===agentId)&&accountMe)void offerAccessRequest(api,agentId,{guest:accountMe.role==='guest'});
   if(agentRoster.length&&!agentRoster.some(agent=>agent.id===agentId)){
     agentId=(agentRoster.find(agent=>agent.id==='shared_default')||agentRoster[0]).id;
     const route=new URL(location.href);route.searchParams.set('agent',agentId);history.replaceState({},'',route);
@@ -452,7 +453,7 @@ function abilityDriftFor(me){
   document.getElementById('ability-drift')?.remove();document.body.append(view.element);
   abilityDrift=createAbilityDrift({request:api,render:view.render});abilityDrift.start();
 }
-function out(){if(document.body.classList.contains('app-restricted'))return;abilityDriftFor(null);issues.stop();disposeSessionsPage();widget?.hide();accountMe=null;agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
+function out(){if(document.body.classList.contains('app-restricted'))return;abilityDriftFor(null);issues.stop();disposeSessionsPage();widget?.hide();accountMe=null;agentTabsGeneration++;agentTabsReady=false;agentTabOrder=['config'];syncAgentTabs();availableModelsDispose?.();availableModelsDispose=null;window.dispatchEvent(new Event('v3-identity-changed'));loadGuestPolicy();csrf='';chat.disconnect();clearInterval(poll);clearInterval(accessNoticePoll);closeMobileNav();closeAccountMenu();$('app').hidden=true;privateVisible(true);window.__boot?.reveal();}
 async function refresh(){if(accountMe&&!accountMe.is_admin){state=await api('/user/status');$('shutoff').hidden=true;chat.runs(state.runs||[]);return;}state=await api('/status');agentModel=state.model||agentModel;$('shutoff').querySelector('span').textContent=state.shutoff?'Execution shut off — enable':'Shut off execution';$('connection').textContent=state.provider?.connected?'Connected':'Connection required';$('connect').hidden=!!state.provider?.connected;$('disconnect').hidden=!state.provider?.connected;if(document.activeElement!==$('model'))$('model').value=agentModel||state.model||'';$('device').replaceChildren();const login=state.provider?.login;if(login?.verification_url){const link=document.createElement('a');link.href=login.verification_url;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open ChatGPT authorization';const code=document.createElement('p');code.textContent='Code: '+login.user_code+' — '+(login.status||'Waiting');$('device').append(link,code);}if(!$('rules').children.length)for(const [tool,rule]of Object.entries(state.policy?.rules||{})){const label=document.createElement('label');label.textContent=tool;const select=document.createElement('select');select.name=tool;for(const value of ['allow','deny','require_approval']){const option=document.createElement('option');option.value=value;option.textContent=value.replaceAll('_',' ');select.append(option);}select.value=rule;label.append(select);$('rules').append(label);}chat.runs(state.runs||[]);}
 // Explicit role administration replaces the legacy default-model form for every agent.
 // app-settings ui.mobile_mode.full_height toggles the mobile edge-to-edge shell (app.css).
@@ -481,6 +482,8 @@ async function boot(){
   await agentTabsQueue;
   await loadAgentTabs();
   await loadAgentRoster();
+  // Operator decisions on this account's access requests: now, then every minute.
+  if(accountMe?.role!=='guest'){void showAccessNotices(api,agentRoster);clearInterval(accessNoticePoll);accessNoticePoll=setInterval(()=>void showAccessNotices(api,agentRoster),60000);}
   const inviteToken=new URL(location.href).searchParams.get('chat_invite');
   if(inviteToken){
     try{const redeemed=await api('/chat-invitations/redeem','POST',{token:inviteToken,client_request_id:keyId('invite:'+inviteToken)});const route=new URL(location.href);route.searchParams.delete('chat_invite');route.searchParams.set('session_id',redeemed.session_id);history.replaceState({},'',route);ids.delete('invite:'+inviteToken);}

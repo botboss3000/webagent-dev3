@@ -49,6 +49,7 @@ export async function renderMembers(host,request,{agentId}) {
         user.append(node('div',shown,'members-user-name'));if(name!==shown)user.append(node('div',name,'members-user-sub'));
         const act=(text,tone,run)=>{const button=node('button',text,'members-btn '+tone);button.type='button';button.style.webkitTapHighlightColor='transparent';button.onclick=async event=>{requestTouchVibration(event);button.disabled=true;await run();button.disabled=false;};actions.append(button);};
         act('Authorize','authorize',()=>update({user_id:item.user_id,level_id:'member',blocked:false,expected_revision:item.revision}));
+        act('Deny & block','restrict',async()=>{if(!window.confirm('Decline and block '+name+' from this agent? They cannot request again until unblocked.'))return;await update({user_id:item.user_id,level_id:null,blocked:true,expected_revision:item.revision});});
         act('Deny','restrict',async()=>{if(!window.confirm('Decline the access request from '+name+'?'))return;try{await request('/agents/'+encodeURIComponent(agentId)+'/access-requests/'+encodeURIComponent(item.user_id),'DELETE');await renderMembers(host,request,{agentId});}catch(error){statusText(error.message);}});
         row.append(user,node('td',new Date(item.requested_at*1000).toLocaleString()),actions);boxBody.append(row);
       }
@@ -57,12 +58,14 @@ export async function renderMembers(host,request,{agentId}) {
     const levelPanel=node('details','','members-levels'),levelSummary=node('summary','Member levels '),levelBody=node('div','','members-levels-body');
     levelSummary.append(node('span',String(levels.order.length),'members-levels-count'));levelPanel.append(levelSummary,levelBody);host.append(levelPanel);
     const loaded=[];
-    const renderLevels=()=>{const counts=new Map();for(const member of loaded)if(member.relationship!=='revoked'){const id=member.effective_level_id||member.capability_level_id;counts.set(id,(counts.get(id)||0)+1);}
+    const renderLevels=()=>{const counts=new Map();for(const member of loaded)if(member.relationship!=='revoked'&&member.access_origin!=='none'){const id=member.effective_level_id||member.capability_level_id;counts.set(id,(counts.get(id)||0)+1);}
       levelBody.replaceChildren(...levels.order.map(id=>{const card=node('article','','members-level-card'),meta=node('div','','members-level-meta'),total=counts.get(id)||0;
         meta.append(node('span',total+' member'+(total===1?'':'s')));card.append(node('div',levels.levels[id].name,'members-level-name'),meta);return card;}),
         node('p','Edit levels and their permissions on the Identity page.','ac-hint'));};
     const section=node('div','','members-section'),header=node('div','','members-section-header'),count=node('span','0','members-section-count');
-    header.append(node('span','All members','members-section-title'),count);section.append(header);host.append(section);
+    // Removed assignments and disabled accounts stay hidden unless asked for.
+    let showInactive=false;const inactiveToggle=node('button','','members-btn');inactiveToggle.type='button';inactiveToggle.style.webkitTapHighlightColor='transparent';inactiveToggle.style.marginLeft='auto';
+    header.append(node('span','All members','members-section-title'),count,inactiveToggle);section.append(header);host.append(section);
     const wrap=node('div','','members-table-wrap'),table=node('table','','members-table'),tbody=node('tbody');
     const head=node('tr');for(const [label,cls] of [['User'],['Level'],['Access'],['Channel'],['Sessions','members-num'],['Messages','members-num'],['Last login'],['']])head.append(node('th',label,cls||''));
     table.append(node('thead'),tbody);table.tHead.append(head);wrap.append(table);section.append(wrap);
@@ -75,7 +78,8 @@ export async function renderMembers(host,request,{agentId}) {
       return member.access_origin==='app_login'?['App login','ok']:member.access_origin==='visitor'?['Visitor','pending']:member.access_origin==='none'?['No access','pending']:['Assigned','ok'];};
     const append=member=>{
       const blocked=blockedOf(member),owner=member.user_id===data.owner_id,operator=member.agent_operator===true,name=member.username||member.user_id,shown=member.display_name||name;
-      const row=node('tr'),user=node('td'),levelCell=node('td'),accessCell=node('td'),actions=node('td','','members-actions');
+      const row=node('tr');row.dataset.inactive=String(!blocked&&!owner&&(member.access_origin==='none'||['disabled','suspended'].includes(member.account_status)));row.hidden=row.dataset.inactive==='true'&&!showInactive;
+      const user=node('td'),levelCell=node('td'),accessCell=node('td'),actions=node('td','','members-actions');
       user.append(node('div',shown,'members-user-name'));if(name!==shown)user.append(node('div',name,'members-user-sub'));
       const select=choices(member.effective_level_id||member.capability_level_id);select.disabled=owner||blocked;select.style.width='auto';levelCell.append(select);
       select.onchange=()=>{if((select.value==='operator'||operator)&&!window.confirm('Change Operator appointment for '+name+'?')){select.value=member.capability_level_id;return;}
@@ -85,7 +89,11 @@ export async function renderMembers(host,request,{agentId}) {
       if(blocked)action('Unblock',null,false,'authorize');else{action('Remove',null,false,'');action('Block',null,true,'restrict');}
       row.append(user,levelCell,accessCell,node('td',(member.source_channel||'web').replace(/_/g,' ')),node('td',String(member.session_count??'—'),'members-num'),node('td',String(member.message_count??'—'),'members-num'),node('td',_fmtTime(member.last_login_at)),actions);tbody.append(row);
     };
-    const show=(members,more)=>{loaded.push(...members);renderLevels();for(const member of [...members].sort((a,b)=>rank(a)-rank(b)))append(member);count.textContent=tbody.rows.length+(more?'+':'');empty.hidden=tbody.rows.length>0;wrap.hidden=!tbody.rows.length;};
+    const show=(members,more)=>{loaded.push(...members);renderLevels();for(const member of [...members].sort((a,b)=>rank(a)-rank(b)))append(member);paintInactive(more);};
+    const paintInactive=more=>{const rows=[...tbody.rows],inactive=rows.filter(row=>row.dataset.inactive==='true').length,shown=rows.filter(row=>!row.hidden).length;
+      count.textContent=(rows.length-inactive)+(more?'+':'');inactiveToggle.hidden=!inactive;inactiveToggle.textContent=showInactive?'Hide inactive':'Show inactive ('+inactive+')';
+      empty.hidden=shown>0;wrap.hidden=!shown;};
+    inactiveToggle.onclick=event=>{requestTouchVibration(event);showInactive=!showInactive;for(const row of tbody.rows)row.hidden=row.dataset.inactive==='true'&&!showInactive;paintInactive(count.textContent.endsWith('+'));};
     show(data.members||[],data.next_offset!=null);
     if(data.next_offset!=null){const more=node('button','Load more members','ac-btn');more.type='button';let offset=data.next_offset;more.onclick=async()=>{more.disabled=true;try{const next=await request(path+'?offset='+offset);if(host._membersGeneration!==generation)return;offset=next.next_offset;show(next.members||[],offset!=null);more.hidden=offset==null;}catch(error){statusText(error.message);}finally{more.disabled=false;}};host.append(more);}
     statusText('Members configuration ready.');

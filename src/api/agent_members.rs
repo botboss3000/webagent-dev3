@@ -64,6 +64,7 @@ async fn read(
         if let Some(user) = member["user_id"].as_str().map(str::to_owned) {
             if let Some(account) = store.account_by_id(&user).await? {
                 member["username"] = account["username"].clone();
+                member["account_status"] = account["status"].clone();
                 let (sessions, messages, profile) = activity(&app, &user, &id).await?;
                 member["session_count"] = json!(sessions);
                 member["message_count"] = json!(messages);
@@ -124,7 +125,10 @@ async fn update(
         .map_err(|_| {
             conflict("Membership changed or appointment rejected; reload before retrying")
         })?;
-    drop_access_request(&store, &id, &body.user_id).await?;
+    if drop_access_request(&store, &id, &body.user_id).await? {
+        let approved = !body.blocked && body.level_id.is_some();
+        notify_access_decision(&app, &id, &body.user_id, approved).await?;
+    }
     crate::phase3_api::quiesce_user(&app, &body.user_id, Some(&id)).await?;
     Ok(Json(json!({"member":member})))
 }
@@ -333,18 +337,12 @@ async fn agent_sessions(view: &Store, agent: &str) -> anyhow::Result<HashSet<Str
     Ok(sessions)
 }
 
-/// Messages in `sessions`; with `user_turns_since`, only user turns from that time.
-async fn session_messages(
-    view: &Store,
-    sessions: &HashSet<String>,
-    user_turns_since: Option<i64>,
-) -> anyhow::Result<i64> {
-    let counts: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT session_id,COUNT(*) FROM chat WHERE (?1 IS NULL OR (role='user' AND created_at>=?1)) GROUP BY session_id",
-    )
-    .bind(user_turns_since)
-    .fetch_all(&view.pool)
-    .await?;
+/// Messages in `sessions`.
+async fn session_messages(view: &Store, sessions: &HashSet<String>) -> anyhow::Result<i64> {
+    let counts: Vec<(String, i64)> =
+        sqlx::query_as("SELECT session_id,COUNT(*) FROM chat GROUP BY session_id")
+            .fetch_all(&view.pool)
+            .await?;
     Ok(counts
         .into_iter()
         .filter(|(session, _)| sessions.contains(session))
@@ -358,7 +356,7 @@ async fn session_messages(
 async fn activity(app: &App, user: &str, agent: &str) -> anyhow::Result<(usize, i64, Value)> {
     let view = app.store.for_user(user).await?;
     let sessions = agent_sessions(&view, agent).await?;
-    let messages = session_messages(&view, &sessions, None).await?;
+    let messages = session_messages(&view, &sessions).await?;
     let profile = app.store.user_profile(user).await?.unwrap_or(Value::Null);
     Ok((sessions.len(), messages, profile))
 }
@@ -371,39 +369,138 @@ fn unix_now() -> i64 {
         })
 }
 
+/// Each admitted user message is logged in the sender's own records, so limits
+/// also count messages posted in other users' shared conversations.
+fn turn_prefix(agent: &str) -> String {
+    format!("turn:{agent}:")
+}
+async fn turns_since(view: &Store, agent: &str, since: i64) -> anyhow::Result<i64> {
+    // `;` sorts right after `:`, closing this agent's key range.
+    Ok(
+        sqlx::query_scalar("SELECT COUNT(*) FROM docs WHERE key>=? AND key<?")
+            .bind(format!("{}{since:012}", turn_prefix(agent)))
+            .bind(format!("turn:{agent};"))
+            .fetch_one(&view.pool)
+            .await?,
+    )
+}
+/// Records one admitted message for the acting user; a replayed message id is
+/// recorded once, and entries older than the longest window are pruned.
+pub(crate) async fn record_turn(app: &App, agent: &str, message_id: &str) -> anyhow::Result<()> {
+    let view = app.store.for_user(crate::shared_chat::actor(app)).await?;
+    let prefix = turn_prefix(agent);
+    let seen: Option<i64> = sqlx::query_scalar("SELECT 1 FROM docs WHERE key LIKE ? LIMIT 1")
+        .bind(format!("{prefix}%:{message_id}"))
+        .fetch_optional(&view.pool)
+        .await?;
+    if seen.is_some() {
+        return Ok(());
+    }
+    let now = unix_now();
+    view.put(&format!("{prefix}{now:012}:{message_id}"), &json!(now))
+        .await?;
+    sqlx::query("DELETE FROM docs WHERE key>=? AND key<?")
+        .bind(&prefix)
+        .bind(format!("{prefix}{:012}", now - 31 * 86_400))
+        .execute(&view.pool)
+        .await?;
+    Ok(())
+}
+fn limit_windows(
+    level: &crate::capabilities::CapabilityLevel,
+) -> [(Option<u32>, i64, &'static str); 2] {
+    [
+        (level.daily_turns, 86_400, "24 hours"),
+        (level.monthly_turns, 30 * 86_400, "30 days"),
+    ]
+}
+
 /// Refuses a new user message once the user's level cap for this agent is
 /// reached over the last 24 hours or 30 days. Operators are never limited.
-/// shortcut: counts turns in the user's own sessions only, not turns they post
-/// in other users' shared sessions; add an author index if that matters.
 pub(crate) async fn enforce_turn_limits(
     app: &App,
     user: &str,
     agent: &str,
     level: &crate::capabilities::CapabilityLevel,
 ) -> Result<(), ApiError> {
-    let windows = [
-        (level.daily_turns, 86_400, "24 hours"),
-        (level.monthly_turns, 30 * 86_400, "30 days"),
-    ];
+    let windows = limit_windows(level);
     if level.id == "operator" || windows.iter().all(|(limit, _, _)| limit.is_none()) {
         return Ok(());
     }
     let view = app.store.for_user(user).await?;
-    let sessions = agent_sessions(&view, agent).await?;
     for (limit, span, label) in windows {
         let Some(limit) = limit else { continue };
-        let used = session_messages(&view, &sessions, Some(unix_now() - span)).await?;
+        let used = turns_since(&view, agent, unix_now() - span).await?;
         if used >= i64::from(limit) {
             return Err(ApiError(
                 StatusCode::FORBIDDEN,
                 format!(
-                    "Message limit reached: {} allows {limit} messages per {label} with this agent. Try again later.",
-                    level.name
+                    "Message limit reached: {} allows {limit} message{} per {label} with this agent. Try again later.",
+                    level.name,
+                    if limit == 1 { "" } else { "s" }
                 ),
             ));
         }
     }
     Ok(())
+}
+
+/// The caller's remaining messages under their level's limits for this agent.
+async fn allowance(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Path(id): Path<String>,
+) -> Api {
+    let user = identity["_user_id"].as_str().unwrap_or("");
+    let access = app
+        .store
+        .live_access(user, &id)
+        .await
+        .ok()
+        .filter(|access| access.admitted())
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Agent unavailable".into()))?;
+    let mut limits = Vec::new();
+    if access.capability_level.id != "operator" {
+        let view = app.store.for_user(user).await?;
+        for (limit, span, label) in limit_windows(&access.capability_level) {
+            let Some(limit) = limit else { continue };
+            let used = turns_since(&view, &id, unix_now() - span).await?;
+            limits.push(json!({"limit":limit,"used":used,"window":label}));
+        }
+    }
+    Ok(Json(json!({"limits":limits})))
+}
+
+/// One-time notice to a requester once an Operator decides their request.
+async fn notify_access_decision(
+    app: &App,
+    agent: &str,
+    user: &str,
+    approved: bool,
+) -> anyhow::Result<()> {
+    app.store
+        .for_user(user)
+        .await?
+        .put(
+            &format!("access_notice:{agent}"),
+            &json!({"agent_id":agent,"decision":if approved {"approved"} else {"declined"},"at":unix_now()}),
+        )
+        .await
+}
+
+/// Returns and clears the caller's pending access-decision notices.
+async fn take_access_notices(State(app): State<App>, Extension(identity): Extension<Value>) -> Api {
+    let user = identity["_user_id"]
+        .as_str()
+        .ok_or_else(|| bad("Sign in required"))?;
+    let view = app.store.for_user(user).await?;
+    let notices = view.list("access_notice:").await?;
+    for notice in &notices {
+        if let Some(agent) = notice["agent_id"].as_str() {
+            view.delete(&format!("access_notice:{agent}")).await?;
+        }
+    }
+    Ok(Json(json!({"notices":notices})))
 }
 
 /// Pending access requests (user id -> requested_at) live in the agent store,
@@ -419,14 +516,15 @@ async fn access_requests(store: &Store, agent: &str) -> anyhow::Result<Map<Strin
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default())
 }
-async fn drop_access_request(store: &Store, agent: &str, user: &str) -> anyhow::Result<()> {
+async fn drop_access_request(store: &Store, agent: &str, user: &str) -> anyhow::Result<bool> {
     let mut requests = access_requests(store, agent).await?;
-    if requests.remove(user).is_some() {
+    let existed = requests.remove(user).is_some();
+    if existed {
         store
             .put(&requests_key(agent), &Value::Object(requests))
             .await?;
     }
-    Ok(())
+    Ok(existed)
 }
 
 /// The caller's own request state for an agent they cannot use yet.
@@ -507,7 +605,9 @@ async fn dismiss_access_request(
 ) -> Api {
     let _guard = app.gate.lock().await;
     let store = operator(&app, &identity, &id).await?;
-    drop_access_request(&store, &id, &user).await?;
+    if drop_access_request(&store, &id, &user).await? {
+        notify_access_decision(&app, &id, &user, false).await?;
+    }
     Ok(Json(json!({"requested":false})))
 }
 
@@ -520,6 +620,8 @@ pub fn router() -> Router<App> {
             "/agents/{id}/access-request",
             get(access_request_status).post(request_access),
         )
+        .route("/agents/{id}/allowance", get(allowance))
+        .route("/access-notices", axum::routing::post(take_access_notices))
         .route(
             "/agents/{id}/access-requests/{user}",
             axum::routing::delete(dismiss_access_request),
@@ -540,25 +642,19 @@ mod reassignment_tests {
             .unwrap();
         let user = account["user_id"].as_str().unwrap().to_owned();
         let view = app.store.for_user(&user).await.unwrap();
-        view.put(
-            "session:limited",
-            &json!({"id":"limited","title":"t","agent_id":agent}),
-        )
-        .await
-        .unwrap();
-        // Two recent user turns, one assistant reply and one turn outside both windows.
-        for (index, (role, at)) in [
-            ("user", unix_now()),
-            ("user", unix_now()),
-            ("assistant", unix_now()),
-            ("user", 1),
+        // Two recent turns, one outside both windows and one with another agent.
+        for (index, (target, at)) in [
+            (agent, unix_now()),
+            (agent, unix_now()),
+            (agent, 1),
+            ("other", unix_now()),
         ]
         .into_iter()
         .enumerate()
         {
-            sqlx::query("INSERT INTO chat(id,session_id,run_id,role,content,created_at) VALUES(?,?,?,?,?,?)")
-                .bind(format!("m{index}")).bind("limited").bind("run-test").bind(role)
-                .bind(view.seal(&json!("hi")).unwrap()).bind(at).execute(&view.pool).await.unwrap();
+            view.put(&format!("turn:{target}:{at:012}:m{index}"), &json!(at))
+                .await
+                .unwrap();
         }
         let mut level = app.store.capability_levels(agent).await.unwrap().levels["member"].clone();
         level.monthly_turns = Some(3);
@@ -571,10 +667,20 @@ mod reassignment_tests {
             .unwrap_err();
         assert_eq!(error.0, StatusCode::FORBIDDEN);
         assert!(error.1.contains("2 messages per 24 hours"));
+        level.daily_turns = Some(1);
+        let error = enforce_turn_limits(&app, &user, agent, &level)
+            .await
+            .unwrap_err();
+        assert!(error.1.contains("allows 1 message per 24 hours"));
         level.id = "operator".into();
         assert!(enforce_turn_limits(&app, &user, agent, &level)
             .await
             .is_ok());
+        // A replayed message id is logged once for the acting user.
+        record_turn(&app, agent, "replayed").await.unwrap();
+        record_turn(&app, agent, "replayed").await.unwrap();
+        let admin = app.store.for_user("admin").await.unwrap();
+        assert_eq!(turns_since(&admin, agent, 0).await.unwrap(), 1);
     }
     #[tokio::test]
     async fn access_requests_are_recorded_listed_and_resolved_by_an_operator_decision() {

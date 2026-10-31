@@ -43,7 +43,7 @@ pub(crate) async fn send(
         return Ok((StatusCode::ACCEPTED, Json(stopped)));
     }
     let _guard = app.gate.lock().await;
-    session_agent_id(&app, &id).await?;
+    let agent_id = session_agent_id(&app, &id).await?;
     let receipt_key = format!(
         "receipt:message:{id}:{}:{request_id}",
         crate::shared_chat::actor(&app)
@@ -108,6 +108,7 @@ pub(crate) async fn send(
         .admit_shared_message(docs, &id, prepared.kind, &prepared.message)
         .await
         .map_err(admission_error)?;
+    record_admitted_turn(&app, &agent_id, &prepared.message["run_id"]).await;
     crate::wake::notify(&app).await;
     Ok((StatusCode::ACCEPTED, Json(result)))
 }
@@ -1473,4 +1474,15 @@ async fn opening_main_owner(app: &App, sid: &str, user: &str) -> bool {
             .ok()
             .flatten()
             .is_some_and(|s| s["main_chat"] == true)
+}
+
+/// Logs an admitted user message for per-level limits. The message is already
+/// durable, so a logging failure is reported rather than failing the send.
+pub(crate) async fn record_admitted_turn(app: &App, agent: &str, message_id: &Value) {
+    let Some(message_id) = message_id.as_str() else {
+        return;
+    };
+    if let Err(error) = super::agent_members::record_turn(app, agent, message_id).await {
+        tracing::warn!("Message limit log unavailable: {error:#}");
+    }
 }

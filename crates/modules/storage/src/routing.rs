@@ -32,6 +32,8 @@ pub fn plane_for(key: &str) -> Plane {
         || key.starts_with("receipt:core_image:")
         || key.starts_with("receipt:module:")
         || key.starts_with("session:")
+        || key.starts_with("turn:")
+        || key.starts_with("access_notice:")
         || key.starts_with("manager_review:")
         || key.starts_with("manager_pending:")
         || key.starts_with("followup_queue:")

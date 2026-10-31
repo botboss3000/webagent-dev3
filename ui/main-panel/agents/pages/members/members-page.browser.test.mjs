@@ -25,7 +25,7 @@ try{
    const {renderMembers}=await import('/ui/main-panel/agents/pages/members/page.js');
    window.fixture={sessions:[{id:'quiet',title:'Quiet chat',can_join:true,help_pending:false},{id:'help',title:'Needs staff',can_join:true,help_pending:true,help_requested_at:1793440000}],joins:[],denied:false};
    const request=async(url,method='GET',body)=>{
-    if(url==='/agents/one/members')return {capability_levels:{order:['member'],levels:{member:{name:'Member'}}},owner_id:'owner',members:[{user_id:'owner',username:'owner',capability_level_id:'member',relationship:'owner'}]};
+    if(url==='/agents/one/members')return {capability_levels:{order:['member'],levels:{member:{name:'Member'}}},owner_id:'owner',members:[{user_id:'owner',username:'owner',capability_level_id:'member',relationship:'owner'},{user_id:'gone',username:'gone',capability_level_id:'member',relationship:'caller',access_origin:'none'}]};
     if(url==='/agents/one/shared-sessions'){if(fixture.denied)throw Error('No access');return {sessions:fixture.sessions};}
     if(url==='/sessions/help/join'&&method==='POST'){fixture.joins.push(body);throw Error('fixture join stop');}
     throw Error('Unscoped route '+url);
@@ -46,7 +46,12 @@ try{
   await page.evaluate(async()=>{fixture.denied=true;await remount();});
   assert.equal(await help.locator('tbody tr').count(),0);
   assert.equal(await help.locator('.members-empty').textContent(),'Help requests unavailable: No access');
-  assert.equal(await sections.nth(1).locator('tbody tr').count(),1);
+  assert.equal(await sections.nth(1).locator('tbody tr:visible').count(),1);
+  // Users without access are hidden until asked for, and left out of level counts.
+  const toggle=sections.nth(1).getByRole('button',{name:'Show inactive (1)'});await toggle.click();
+  assert.equal(await sections.nth(1).locator('tbody tr:visible').count(),2);
+  await sections.nth(1).getByRole('button',{name:'Hide inactive'}).click();
+  assert.equal(await sections.nth(1).locator('tbody tr:visible').count(),1);
   // V2-style level summary counts loaded members; the loading skeleton is gone.
   assert.equal(await page.locator('.members-level-card .members-level-meta').textContent(),'1 member');
   assert.equal(await page.locator('.members-skeleton').count(),0);

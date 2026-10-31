@@ -79,6 +79,7 @@ pub(crate) async fn send(
         .atomic_first_message(docs, sid, prepared.kind, &prepared.message, &session.result)
         .await
         .map_err(super::chat::admission_error)?;
+    super::chat::record_admitted_turn(&app, agent, &prepared.message["run_id"]).await;
     app.store
         .register_shared_session(app.store.current_user_id(), sid, agent)
         .await?;
