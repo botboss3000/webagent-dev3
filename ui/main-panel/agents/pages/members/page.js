@@ -1,4 +1,5 @@
 import {requestTouchVibration} from '../../../../shared/vibrate.js';
+import {_fmtTime} from '../sessions/js/adapter.js';
 const node=(tag,text='',cls='')=>{const el=document.createElement(tag);el.textContent=text;el.className=cls;return el;};
 /** Explicit assignments are distinct from automatic Member access and blocks. One V2-style table lists everyone. */
 export async function renderMembers(host,request,{agentId}) {
@@ -38,7 +39,7 @@ export async function renderMembers(host,request,{agentId}) {
     const section=node('div','','members-section'),header=node('div','','members-section-header'),count=node('span','0','members-section-count');
     header.append(node('span','All members','members-section-title'),count);section.append(header);host.append(section);
     const wrap=node('div','','members-table-wrap'),table=node('table','','members-table'),tbody=node('tbody');
-    const head=node('tr');for(const [label,cls] of [['User'],['Level'],['Access'],['Sessions','members-num'],['Messages','members-num'],['']])head.append(node('th',label,cls||''));
+    const head=node('tr');for(const [label,cls] of [['User'],['Level'],['Access'],['Sessions','members-num'],['Messages','members-num'],['Last login'],['']])head.append(node('th',label,cls||''));
     table.append(node('thead'),tbody);table.tHead.append(head);wrap.append(table);section.append(wrap);
     const empty=node('div','No members have been assigned to this agent yet.','members-empty');section.append(empty);
     const blockedOf=member=>member.relationship==='revoked';
@@ -57,7 +58,7 @@ export async function renderMembers(host,request,{agentId}) {
       const [label,tone]=access(member);accessCell.append(node('span',label,'members-status '+tone));
       const action=(text,level_id,block,tone)=>{const button=node('button',text,'members-btn '+tone);button.type='button';button.disabled=owner;button.style.webkitTapHighlightColor='transparent';button.onclick=event=>{requestTouchVibration(event);if(window.confirm(text+' for '+name+'?'))void update({user_id:member.user_id,level_id,blocked:block,expected_revision:member.revision});};actions.append(button);};
       if(blocked)action('Unblock',null,false,'authorize');else{action('Remove',null,false,'');action('Block',null,true,'restrict');}
-      row.append(user,levelCell,accessCell,node('td',String(member.session_count??'—'),'members-num'),node('td',String(member.message_count??'—'),'members-num'),actions);tbody.append(row);
+      row.append(user,levelCell,accessCell,node('td',String(member.session_count??'—'),'members-num'),node('td',String(member.message_count??'—'),'members-num'),node('td',_fmtTime(member.last_login_at)),actions);tbody.append(row);
     };
     const show=(members,more)=>{for(const member of [...members].sort((a,b)=>rank(a)-rank(b)))append(member);count.textContent=tbody.rows.length+(more?'+':'');empty.hidden=tbody.rows.length>0;wrap.hidden=!tbody.rows.length;};
     show(data.members||[],data.next_offset!=null);
