@@ -132,6 +132,10 @@ class EngineTests(unittest.TestCase):
             unrelated="Diff in /build/src/other.rs:3:\n-a\n+b\n"
             self.assertIn("No fmt findings",run("fmt",Mock(side_effect=failure(unrelated))))
             self.assertEqual(worker.phase.call_args.args[5],["rustfmt","--edition","2021","--check","src/mine.rs"])
+            # The protected resource helper refuses phase names outside its fixed list.
+            import importlib.util;spec=importlib.util.spec_from_file_location("resource_control_phases",Path(executor.__file__).with_name("resource_control.py"))
+            control=importlib.util.module_from_spec(spec);spec.loader.exec_module(control)
+            self.assertIn(worker.phase.call_args.args[1],control.PHASES)
             with self.assertRaisesRegex(ValueError,"src/mine.rs:7"):run("fmt",Mock(side_effect=failure(unrelated+"Diff in /build/src/mine.rs:7:\n-x\n+y\n")))
             with self.assertRaises(RuntimeError):run("fmt",Mock(side_effect=failure("error: expected item, found `}`\n")))
             self.assertIn("nothing to fmt",run("fmt",Mock(),paths=()))
