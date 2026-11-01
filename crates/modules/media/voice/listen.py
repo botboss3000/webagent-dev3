@@ -17,8 +17,9 @@ MODEL = "/opt/voice/models/kroko"
 RATE = 16000
 # A dictation that stops sending audio this long has been abandoned by its client.
 IDLE_SECONDS = 60
-# Silence appended at end of input so the model emits the last word.
-TAIL = numpy.zeros(RATE * 2 // 3, dtype=numpy.float32)
+# Silence appended at end of input so the model emits the last word; under about 1.2 s it
+# drops a word that ends right as the user taps stop.
+TAIL = numpy.zeros(RATE * 3 // 2, dtype=numpy.float32)
 
 recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
     tokens=f"{MODEL}/tokens.txt",
