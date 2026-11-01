@@ -315,3 +315,7 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 /* Admission review blocked this message: the agent never saw it. */
 .message-admission-status.is-blocked{display:block;margin:8px 0 0;padding:8px 10px;border-radius:8px;border:1px solid rgba(var(--warning-rgb),.55);background:var(--warning-soft);color:var(--fg-1);font-size:13px;font-weight:600;line-height:1.35;opacity:1}
 .message-admission-status.is-blocked::before{content:'⚠ ';color:var(--warning)}
+
+/* Leave a deliberate gutter at both transcript edges; mobile hides the
+   scrollbar, so without this bubbles sit flush against the view. */
+#chat-messages-inner{padding-inline:8px!important}
