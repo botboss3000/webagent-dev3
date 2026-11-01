@@ -519,6 +519,8 @@ class CodebasePublicationMetadataTests(unittest.TestCase):
    args=runner.command.call_args_list[0].args[0]
    self.assertIn("sha256:retained-runtime",args)
    self.assertEqual(args[-1],"--validate-assets=/candidate/v3")
+   # Relative live-file reads (gate manifests, providers) resolve to the candidate.
+   self.assertIn("type=bind,src="+str(root/"releases"/job/"v3")+",dst=/live-checkout,readonly",args)
 
 
 class CodebaseRegisteredGuidanceTests(unittest.TestCase):

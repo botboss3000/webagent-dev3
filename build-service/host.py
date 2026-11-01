@@ -1132,7 +1132,9 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 if target=="/opt/v3/assets":source=view
                 elif not source.resolve().is_relative_to(root.resolve()):raise ValueError("Runtime source mount outside exact publication")
                 mounts.append((str(source),target))
-            mounts.extend([(str(root),"/opt/v3/assets/releases/"+selected),(str(ASSET_ROOT/"artifacts"),"/opt/v3/assets/artifacts")]);plans.append({"role":role,"mounts":mounts})
+            mounts.extend([(str(root),"/opt/v3/assets/releases/"+selected),(str(ASSET_ROOT/"artifacts"),"/opt/v3/assets/artifacts")])
+            # Validators read live files relative to /live-checkout, as the consumers do from the checkout.
+            mounts.append((str(root/"v3"),"/live-checkout"));plans.append({"role":role,"mounts":mounts})
             checks=[("application",CONFIG["app_uid"],CONFIG["app_gid"],images[role],"/usr/local/bin/webagent-v3",["--validate-assets=/opt/v3/assets/current/v3"])]
             if role=="api":
                 checks.append(("worker_catalog",CONFIG["worker_uid"],CONFIG["worker_gid"],images[role],"/usr/local/bin/webagent-v3",["--validate-assets=/opt/v3/assets/current/v3"]))
@@ -1996,6 +1998,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 "--user",str(CONFIG["app_uid"])+":"+str(CONFIG["app_gid"]),
                 "--pids-limit","64","--memory","256m","--tmpfs","/tmp:rw,size=64m,mode=1777",
                 "--mount","type=bind,src="+str(root)+",dst=/candidate,readonly",
+                "--mount","type=bind,src="+str(root/"v3")+",dst=/live-checkout,readonly",
                 "--mount","type=bind,src="+str(ASSET_ROOT/"artifacts")+",dst=/opt/v3/assets/artifacts,readonly",
                 "--entrypoint","/usr/local/bin/webagent-v3",image,"--validate-assets=/candidate/v3"],timeout=30)
             receipt=json.loads(result)

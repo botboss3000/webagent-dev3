@@ -299,7 +299,9 @@ admission and stops promotion, so it is never overwritten; reopen the task to ta
 A task that changes only listed files (plus other hot-lane paths) publishes as
 `plugin_deploy` without a core build, when installed compiler evidence excludes each
 file, refuses a listed `.json` that does not parse, and runs the retained app image's
-`--validate-assets` over the candidate, as a full release does before activation. A listed file the compiler reads, or unavailable evidence, takes
+`--validate-assets` over the candidate, as a full release does before activation. Both
+validation containers mount the candidate's `v3` tree read-only at `/live-checkout`, so
+relative live-file reads (gate manifests, provider files) see the candidate. A listed file the compiler reads, or unavailable evidence, takes
 `build_deploy`, as does a task that also changes code. A new task's tree takes listed files from the checkout, so it starts from their current
 bytes. Creating a file and listing it in the same task is an ordinary change. A rebuild keeps
 the released bytes of listed files. The broker's 60-second maintenance loop commits settled edits (no
