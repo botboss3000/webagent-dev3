@@ -6,6 +6,11 @@ export function formatCount(value) {
   return value >= 1000000 ? (value / 1000000).toFixed(2) + 'M'
     : value >= 1000 ? (value / 1000).toFixed(1) + 'k' : String(value);
 }
+/** Purpose: Convert measured request bytes to tokens with the run's per-call bytes-per-token ratio (measured from reported usage, else the model's or app's estimate). */
+export function contextTokens(bytes, run) {
+  const controls = run?.context_controls || {};
+  return Math.round(bytes / (controls.bytes_per_token || controls.characters_per_token || 4));
+}
 /** Purpose: Mount the stats strip and context panel from server-reported usage and measured dispatch data. Generation checks prevent stale session responses from replacing current values. panel.js drives open/refresh/show/disconnect/destroy; this module reads client.usage/contextConfig and writes saveContextConfig. */
 export function mountUsageStats({root,client,note,issues}) {
     // Resolve statistics controls inside the supplied chat root.
@@ -37,20 +42,23 @@ export function mountUsageStats({root,client,note,issues}) {
     if(selectedRun)row(content,'Run',selectedRun.id);
     if(run?.status==='paused')row(content,'Paused',run?.error || 'Context review required');
     row(content,'Model',run?.model?.model || 'No model call yet');
-    row(content,'Last dispatched context',ctx ? num(ctx.envelope_bytes)+' bytes / '+num(ctx.max_bytes)+' byte budget' : 'Not measured yet');
+    const tokens=bytes=>num(contextTokens(bytes,run))+' tokens';
+    row(content,'Last dispatched context',ctx ? tokens(ctx.envelope_bytes)+' / '+tokens(ctx.max_bytes)+' budget' : 'Not measured yet');
     if(ctx) {
       const bar=document.createElement('div'); bar.className='cmp-cx-bar';
       for(const [label,field,kind] of [['Instructions','instruction_json_bytes','prompt'],['Tools','schemas_json_bytes','runtime'],['History','history_json_bytes','compactable']]) {
         const segment=document.createElement('span'); segment.className='cmp-cx-seg cmp-cx-'+kind;
         segment.style.width=(Math.min(100,ctx[field]/Math.max(1,ctx.envelope_bytes)*100))+'%';
-        segment.title=label+': '+num(ctx[field])+' bytes'; bar.append(segment);
-        row(content,label,num(ctx[field])+' bytes');
+        segment.title=label+': '+tokens(ctx[field]); bar.append(segment);
+        row(content,label,tokens(ctx[field]));
       }
       content.insertBefore(bar,title.nextSibling);
       row(content,'Call / turn',num(ctx.call)+' / '+num(ctx.turn));
+      const ratio=run?.context_controls?.bytes_per_token;
+      row(content,'Bytes per token',Number.isFinite(ratio) ? ratio.toFixed(2) : num(run?.context_controls?.characters_per_token)+' (default)');
     }
     const caption=document.createElement('p'); caption.className='cmp-cx-hint';
-    caption.textContent='Context composition is measured serialized JSON bytes at dispatch. Provider token usage is reported separately; this is not a tokenizer estimate. Totals cover recorded calls; usage from older, unrecorded calls cannot be recovered.';
+    caption.textContent='Context sizes are estimated tokens: the request bytes measured at dispatch, divided by bytes per token. That ratio comes from the previous call’s provider-reported usage when there is one, otherwise from the model’s estimate. Totals cover recorded calls; usage from older, unrecorded calls cannot be recovered.';
     content.append(caption);
     row(content,'Recorded session input / output tokens',usage?.reported_calls ? num(usage.input_tokens)+' / '+num(usage.output_tokens) : 'Not reported yet');
     row(content,'Cached input tokens',usage?.reported_calls && !usage.unknown_cache_calls ? num(usage.cached_input_tokens) : 'Not fully reported');
@@ -61,7 +69,7 @@ export function mountUsageStats({root,client,note,issues}) {
     row(content,'Compactions this run',num(run?.compactions));
     const head=document.createElement('div'); head.className='cmp-cc-head'; head.textContent='Context compaction'; content.append(head);
     for(const [label,key] of [['Whole request trigger','trigger_tokens'],['Keep verbatim','tail_tokens']]) {
-      row(content,label,Number.isFinite(run?.context_controls?.[key]) ? num(run.context_controls[key])+' estimated tokens' : 'Not measured yet');
+      row(content,label,Number.isFinite(run?.context_controls?.[key]) ? num(run.context_controls[key])+' tokens' : 'Not measured yet');
     }
     const location=document.createElement('p');location.className='cmp-cx-hint';
     location.textContent='The trigger counts the whole model request: instructions, tool definitions, history and the verbatim tail. Only eligible older history is summarized. At 150,000 total tokens, 50,000 fixed and retained tokens leave about 100,000 eligible for compaction. A lower System input budget triggers compaction earlier. Set this agent’s thresholds on Identity.';content.append(location);
@@ -112,8 +120,9 @@ export function mountUsageStats({root,client,note,issues}) {
     $('chat-tokens-in').textContent=totals?.reported_calls ? formatCount(totals.input_tokens) : '—';
     $('chat-tokens-out').textContent=totals?.reported_calls ? formatCount(totals.output_tokens) : '—';
     $('chat-token-bar').title=totals?.reported_calls ? 'Recorded provider-reported session tokens; older unrecorded calls are unavailable. '+(totals.unreported_calls||0)+' calls did not report usage.' : 'Provider token usage has not been reported';
-    const context=$('chat-model-ctx');context.textContent=ctx ? 'ctx '+formatCount(ctx.envelope_bytes)+'B / '+formatCount(ctx.max_bytes)+'B' : 'ctx —';
-    context.title='Last dispatched context in measured JSON bytes — click for breakdown';
+    const run=data?.latest;
+    const context=$('chat-model-ctx');context.textContent=ctx ? 'ctx '+formatCount(contextTokens(ctx.envelope_bytes,run))+' / '+formatCount(contextTokens(ctx.max_bytes,run)) : 'ctx —';
+    context.title='Last dispatched context in estimated tokens — click for breakdown';
     const cost=$('chat-cost');cost.textContent=totals && !totals.unknown_cost_calls ? '$'+Number(totals.known_cost_usd||0).toFixed(4) : 'cost —';
     cost.title='Provider-reported cost; unavailable prices are not invented';
     cost.classList.toggle('v3-backend-pending',!totals || !!totals.unknown_cost_calls);

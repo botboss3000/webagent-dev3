@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 pub const EFFORTS: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 const FILE_LIMIT: u64 = 64 * 1024;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Model {
     pub id: String,
@@ -27,9 +27,13 @@ pub struct Model {
     pub efforts: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_effort: Option<String>,
+    /// Serialized request bytes per provider token, measured for this model. Compaction
+    /// uses it until a call in the run reports real usage; absent uses the app default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub characters_per_token: Option<f64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Provider {
     pub provider: ProviderId,
@@ -86,6 +90,15 @@ impl Provider {
                 .is_some_and(|name| name.trim().is_empty() || name.len() > 120)
             {
                 bail!("Invalid name for model {}", model.id);
+            }
+            if model
+                .characters_per_token
+                .is_some_and(|ratio| !(1.0..=16.0).contains(&ratio))
+            {
+                bail!(
+                    "Characters per token for model {} must be 1 to 16",
+                    model.id
+                );
             }
             match &model.efforts {
                 Some(levels) => scale(levels, model.default_effort.as_deref())?,
@@ -181,6 +194,16 @@ pub fn efforts(provider: ProviderId, model: &str) -> Result<Efforts> {
         .unwrap_or_default())
 }
 
+/// The model's measured bytes per token from its provider file, if one is set.
+pub fn characters_per_token(provider: ProviderId, model: &str) -> Result<Option<f64>> {
+    Ok(load(provider)?.and_then(|file| {
+        file.models
+            .iter()
+            .find(|row| row.id == model)
+            .and_then(|row| row.characters_per_token)
+    }))
+}
+
 /// Keep a requested level only if the model currently supports it, so an edited
 /// file degrades a saved preference to the provider default instead of failing a call.
 pub fn supported(provider: ProviderId, model: &str, effort: Option<&str>) -> Option<String> {
@@ -263,6 +286,9 @@ mod tests {
         assert!(parse(&base(r#"{"id":"m","default_effort":"high"}"#)).is_err());
         assert!(parse(&base(r#"{"id":"m"},{"id":"m"}"#)).is_err());
         assert!(parse(&base(r#"{"id":"m","unknown":1}"#)).is_err());
+        assert!(parse(&base(r#"{"id":"m","characters_per_token":2.5}"#)).is_ok());
+        assert!(parse(&base(r#"{"id":"m","characters_per_token":0.5}"#)).is_err());
+        assert!(parse(&base(r#"{"id":"m","characters_per_token":17}"#)).is_err());
         assert!(parse(&base("").replace("deepseek\",\"name", "openrouter\",\"name")).is_err());
     }
 }

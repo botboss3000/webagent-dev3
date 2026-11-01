@@ -175,6 +175,27 @@ pub fn pair_unresolved_calls(input: &mut Vec<Value>) {
 /// looped on the closer for the whole turn budget without ever replying.
 const CLOSER_REPEAT_LIMIT: u64 = 2;
 /// Consecutive repeats of the same closing status; any other tool clears `closing`.
+/// Serialized request bytes per provider token for this call. A previous call in the run
+/// that reported usage for the same model gives the measured ratio; otherwise the model's
+/// provider file may set one. `None` keeps the app-wide `characters_per_token`.
+fn bytes_per_token(run: &Value, selection: &provider::ProviderSelection) -> Option<f64> {
+    let last = &run["token_calibration"];
+    let reported = run["usage"]["reported_calls"].as_u64();
+    let measured = last["model"].as_str() == Some(selection.model.as_str())
+        && reported.is_some()
+        && reported == last["reported_calls"].as_u64().map(|calls| calls + 1);
+    let bytes = last["envelope_bytes"].as_u64();
+    let tokens = run["usage"]["latest"]["input_tokens"]
+        .as_u64()
+        .filter(|tokens| *tokens > 0);
+    if let (true, Some(bytes), Some(tokens)) = (measured, bytes, tokens) {
+        return Some((bytes as f64 / tokens as f64).clamp(1.0, 16.0));
+    }
+    webagent_models::providers::characters_per_token(selection.provider, &selection.model)
+        .ok()
+        .flatten()
+}
+
 /// Content-free outline of a history for the operator log: each item's kind, and the
 /// call id of tool calls and results so an unpaired one can be spotted.
 fn history_shape(history: &[Value]) -> String {
@@ -2182,6 +2203,8 @@ impl<
                             return Ok(());
                         }
                     };
+                // Thresholds count provider tokens: convert them with this model's measured ratio.
+                compaction_config.bytes_per_token = bytes_per_token(&run, &selection);
                 // SYSTEM-COMPACTION-BUDGET: cap automatic/manual folds by the
                 // current pinned System candidate, including after backup selection.
                 // Missing System still pauses only when compaction is needed.
@@ -2826,6 +2849,7 @@ impl<
                     unreachable!("compaction path continues before model dispatch")
                 };
                 let report = serde_json::to_value(&envelope.report)?;
+                let envelope_bytes = envelope.report.envelope_bytes;
                 let instructions = envelope.instructions;
                 // DISPATCH-HISTORY-TRANSFER: fingerprint the borrowed history before
                 // metadata mutation, then transfer its allocation only after saves.
@@ -2839,7 +2863,10 @@ impl<
                     json!(run["attempt"].as_u64().expect("run counters are numbers") + 1);
                 run["context_assembly_report"] = report;
                 run["dispatch_mode"] = json!({"execution_mode":mode["execution_mode"],"mode":mode["mode"],"revision":mode["revision"]});
-                run["context_controls"] = json!({"trigger_tokens":compaction_config.trigger_tokens,"tail_tokens":compaction_config.tail_tokens,"characters_per_token":compaction_config.characters_per_token});
+                run["context_controls"] = json!({"trigger_tokens":compaction_config.trigger_tokens,"tail_tokens":compaction_config.tail_tokens,"characters_per_token":compaction_config.characters_per_token,"bytes_per_token":compaction_config.bytes_per_token});
+                // Pair this request's size with the usage its reply reports (see bytes_per_token).
+                run["token_calibration"] = json!({"model":selection.model,"envelope_bytes":envelope_bytes,
+                    "reported_calls":run["usage"]["reported_calls"].as_u64().unwrap_or(0)});
                 app.save(&mut run).await?;
                 let snapshot = workflow::ModelSnapshot {
                     input_digest,

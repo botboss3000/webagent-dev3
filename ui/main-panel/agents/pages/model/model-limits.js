@@ -1,7 +1,7 @@
 'use strict';
 // Agent-local budgets use the roster revision fence and are pinned by new runs.
 // The expanded model rows edit them in place; this owns their data, defaults and save rules.
-const USAGE='Input budget controls estimated space for the complete model request, including instructions, history and tools. The compaction trigger counts the whole request, including instructions, tool definitions, history and the verbatim tail; only eligible older history is summarized. Automatic compaction starts at the earlier of the agent’s trigger or the effective System model input budget. Summary chunks must also fit that budget. Planning estimates four request bytes per token; actual provider token counts can differ.';
+const USAGE='Input budget controls estimated space for the complete model request, including instructions, history and tools. The compaction trigger counts the whole request, including instructions, tool definitions, history and the verbatim tail; only eligible older history is summarized. Automatic compaction starts at the earlier of the agent’s trigger or the effective System model input budget. Summary chunks must also fit that budget. Thresholds and budgets are in provider tokens. Each model call converts them with the bytes per token measured from the previous call’s reported usage; before any call has reported usage, it uses this model’s token estimate.';
 const SCOPE='Maximum output tokens is sent as a cap on generated output. Input plus output must fit this connection’s context window. These agent-local settings are pinned for new runs and apply to chat, summaries, naming and review calls. Defaults reserve 8,192 tokens for output. Clear a value to restore its default.';
 export async function mountModelLimits(adapter) {
   let data;
@@ -11,6 +11,7 @@ export async function mountModelLimits(adapter) {
   function budget(id){
     const m=find(id);if(!m)return null;const d=defaults(m);
     return {input:m.limits?.input_tokens??d.input,output:m.limits?.output_tokens??d.output,
+      ratio:m.characters_per_token?m.characters_per_token+' bytes per token':'4 bytes per token (default)',
       help:{wide:true,html:[providerText(m),USAGE,SCOPE].map(t=>'<p>'+t+'</p>').join('')}};
   }
   async function reload(){data=await adapter.loadModelLimits();}

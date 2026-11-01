@@ -172,7 +172,7 @@ export function createModelAdapter(request, agentId, onAssignment) {
     fetchModelUsage:async args=>request('/usage/models/totals?'+usageQuery(args,{agent_id:agentId})).catch(()=>null),
     loadModelLimits:async()=>{
       await read();
-      const cfg=catalog.agent_models?.[agentId];
+      const cfg=catalog.agent_models?.[agentId],files=await presets();
       return {can_manage:data.can_manage,models:(cfg?.entry_ids||[]).map(id=>{
         const entry=catalog.entries[id];
         const transport=catalog.connections[entry.connection_id]?.transport;
@@ -180,7 +180,9 @@ export function createModelAdapter(request, agentId, onAssignment) {
         return {id,name:data.adoptions?.[id]?.alias||entry.display_name,model:entry.upstream_model,
           transport,context_tokens:known?(transport==='openai_subscription'?272000:1050000):null,
           published_context_tokens:known?1050000:null,max_output_tokens:known?128000:null,
-          default_output_tokens:8192,limits:cfg.limits?.[id]||null};
+          default_output_tokens:8192,limits:cfg.limits?.[id]||null,
+          // The provider file's measured request bytes per token; null uses the app default.
+          characters_per_token:files[transport]?.models.find(m=>m.id===entry.upstream_model)?.characters_per_token??null};
       })};
     },
     saveModelLimits:(id,limits)=>{

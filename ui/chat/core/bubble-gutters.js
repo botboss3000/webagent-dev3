@@ -2,6 +2,7 @@
 import {currentChatProfile} from '../controls/chat-config.js';
 import {copyText} from '../../shared/models/clipboard.js';
 import {openChatElementFullView} from './full-view.js';
+import {contextTokens} from '../controls/usage-stats.js';
 let overlay=null, playback=null;
 /** Formats a creation timestamp as a nonnegative short age, or reports unavailable for invalid input. */
 export function formatRelativeTime(createdAtMs,now=Date.now()) {
@@ -115,7 +116,7 @@ export function createBubbleGutter({item,body,bubble,getText,getRun=()=>null,sho
       const text=document.createElement('span');text.textContent=label;left.append(text);
       const value=document.createElement('span');value.className='bubble-more-value';
       row.append(left,value);menu.append(row);
-      if(name==='context'){value.textContent=ctx?ctx.envelope_bytes.toLocaleString()+' / '+ctx.max_bytes.toLocaleString()+' bytes':'Not measured';row.onclick=/* Open this run measured context details from the More menu. */event=>{event.stopPropagation();close();showContext(run);};}
+      if(name==='context'){value.textContent=ctx?contextTokens(ctx.envelope_bytes,run).toLocaleString()+' / '+contextTokens(ctx.max_bytes,run).toLocaleString()+' tokens':'Not measured';row.onclick=/* Open this run measured context details from the More menu. */event=>{event.stopPropagation();close();showContext(run);};}
       if(name==='cost'){value.textContent=usage&&!usage.unknown_cost_calls?'$'+Number(usage.known_cost_usd||0).toFixed(4):'Not reported';row.disabled=true;if(!usage||usage.unknown_cost_calls)row.classList.add('v3-backend-pending');}
       if(name==='model'){value.textContent=run?.model?.model||'Not recorded';row.disabled=true;}
       if(name==='message_id'){value.textContent=item.id.slice(0,12)+'…';row.title='Copy message ID';row.onclick=/* Copy the visible message identifier to the clipboard. */()=>copy(row,item.id);}

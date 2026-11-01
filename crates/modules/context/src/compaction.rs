@@ -58,6 +58,8 @@ impl<'de> serde::Deserialize<'de> for Config {
         let mut policy=<webagent_context_contracts::context_compaction::Config as serde::Deserialize>::deserialize(deserializer)?;
         policy.summary_instructions =
             webagent_context_contracts::compatibility::ENGINE_INSTRUCTION_SEED.to_owned();
+        // The measured token ratio is resolved per model call, never read from the file.
+        policy.bytes_per_token = None;
         Ok(Self(policy))
     }
 }
@@ -403,6 +405,26 @@ mod tests {
         let mut raised = c.clone();
         raised.trigger_tokens = 500;
         assert!(plan_rolling(&input, 4096, &raised).unwrap().is_none());
+    }
+    #[test]
+    fn measured_bytes_per_token_moves_the_trigger_and_stays_out_of_the_file() {
+        let input = vec![user(&"old".repeat(250)), assistant("done"), user("latest")];
+        let mut c = rolling_config();
+        // 500 tokens are 2,000 bytes at the default 4 bytes per token: no fold yet.
+        c.trigger_tokens = 500;
+        assert!(plan_rolling(&input, 4096, &c).unwrap().is_none());
+        // At a measured 1.5 bytes per token the same 500 tokens are 750 bytes.
+        c.bytes_per_token = Some(1.5);
+        assert!(plan_rolling(&input, 4096, &c).unwrap().is_some());
+        c.bytes_per_token = Some(0.5);
+        assert!(c.validate().is_err());
+        // The ratio is per call: the policy file cannot set it.
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("context-compaction.json");
+        let mut value = serde_json::to_value(Config::configured().unwrap()).unwrap();
+        value["bytes_per_token"] = json!(2.0);
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(Config::read(&path).unwrap().bytes_per_token, None);
     }
     #[test]
     fn second_fold_includes_previous_checkpoint_without_stacking_summaries() {

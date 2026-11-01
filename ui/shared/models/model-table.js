@@ -2113,6 +2113,7 @@ export function mountModelTable(host, opts = {}) {
     const specHtml = [
       (ctx || opts.onLimitEdit) ? metaLine(opts.onLimitEdit ? 'Input budget:' : 'Context:', limitValue(ctx, 'input')) : '',
       (out || opts.onLimitEdit) ? metaLine('Max output:', limitValue(out, 'output')) : '',
+      budget?.ratio ? metaLine('Token estimate:', metaValue(budget.ratio)) : '',
       priceHtml,
     ].filter(Boolean).join('');
     // Usage is a plain summary value. The per-row cost-trend chart that used to

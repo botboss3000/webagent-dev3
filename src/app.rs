@@ -224,7 +224,7 @@ fn public_run(run: &Value) -> Value {
         "model":public_run_model(run),
         "usage":usage::public(&run["usage"]),
         "compactions":run["compactions"].as_u64().unwrap_or(0),
-        "context_controls":{"trigger_tokens":run["context_controls"]["trigger_tokens"].as_u64(),"tail_tokens":run["context_controls"]["tail_tokens"].as_u64(),"characters_per_token":run["context_controls"]["characters_per_token"].as_u64()},
+        "context_controls":{"trigger_tokens":run["context_controls"]["trigger_tokens"].as_u64(),"tail_tokens":run["context_controls"]["tail_tokens"].as_u64(),"characters_per_token":run["context_controls"]["characters_per_token"].as_u64(),"bytes_per_token":run["context_controls"]["bytes_per_token"].as_f64()},
         "mode":run["dispatch_mode"],
         "chat_model_revision":run["chat_model_revision"].as_u64(),
         "context_summary":public_context_summary(run)})
