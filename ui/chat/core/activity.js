@@ -71,7 +71,7 @@ export function activityGroups(activity, runs) {
   const covered=new Set(activity.events.filter(e=>activity.segments.some(s=>owns(s,e))).map(e=>e.seq));
   const lastByRun=new Map(activity.segments.map(s=>[s.run_id,s.id]));
   const terminal=new Set(['completed','failed','cancelled']);
-  return activity.segments.map(segment => {
+  return activity.segments.map((segment,index) => {
     // In-range events attach to their segment; uncovered same-run events fall back to the latest segment, even if it is closed.
     const events=activity.events.filter(e=>owns(segment,e) ||
       (!covered.has(e.seq) && e.run_id===segment.run_id && lastByRun.get(e.run_id)===segment.id));
@@ -80,9 +80,11 @@ export function activityGroups(activity, runs) {
     for (const row of rows) counts[row.category]++;
     const run=runs.find(r=>r.id===segment.run_id);
     const finalOutcome=lastByRun.get(segment.run_id)===segment.id && terminal.has(run?.state);
+    // A stop is superseded once the conversation resumes in any later segment.
+    const resumed=run?.state==='cancelled' && index<activity.segments.length-1;
     // Closed segments display as finished except for a latest segment with a terminal run outcome.
     return {...segment,events,rows,counts,kind:run?.kind,
-      state:segment.closed && !finalOutcome?'finished':run?.state || 'queued'};
+      state:resumed || (segment.closed && !finalOutcome)?'finished':run?.state || 'queued'};
   });
 }
 

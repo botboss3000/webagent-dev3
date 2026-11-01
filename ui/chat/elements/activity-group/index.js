@@ -21,8 +21,11 @@ export function createActivityGroup({transcript}) {
       ? (group.state==='queued' ? 'Compaction queued…' : 'Compacting…') : phase;
     // Normal completion needs no status suffix; retain active and exceptional states.
     const status=error || (['completed','finished'].includes(group.state)?'':progress);
-    node.firstElementChild.textContent=[...parts,status,
+    const label=[...parts,status,
       group.boundary_quality==='legacy_unverified'?'Legacy boundary unverified':''].filter(Boolean).join(' · ');
+    node.firstElementChild.textContent=label;
+    // A finished group with no rows and no status has nothing to disclose, such as a superseded stop.
+    node.hidden=!label;
     node.setAttribute('aria-label','Activity group');
     node.classList.toggle('v2-activity-group-glimmer',active);
     transcript.update(group);
