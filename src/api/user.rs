@@ -798,7 +798,7 @@ pub(crate) fn router() -> Router<App> {
         .route(
             "/sessions/{id}/voice/audio",
             post(voice_audio)
-                .layer(axum::extract::DefaultBodyLimit::max(15 * 1024 * 1024))
+                .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
                 .layer(axum::middleware::from_fn(crate::api::media_lane::limit)),
         )
         .route(

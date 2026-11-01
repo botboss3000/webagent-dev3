@@ -155,16 +155,10 @@ export function createChatClient({request, note, issues, clearNoticeFrom = () =>
     describeUpload:(id,aid)=>request('/sessions/'+encodeURIComponent(id)+'/attachments/'+encodeURIComponent(aid)+'/describe','POST',{}),
     /** Removes a staged attachment from a session. */
     removeUpload:(id,aid)=>request('/sessions/'+encodeURIComponent(id)+'/attachments/'+encodeURIComponent(aid),'DELETE'),
-    /** Sends a voice audio frame for the selected session. */
+    /** Sends a dictation audio frame for the selected session. */
     voiceAudio:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/voice/audio','POST',body),
-    /** Routes a voice utterance to the supported session action. */
-    voiceRoute:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/voice/route','POST',body),
-    /** Updates voice conversation controls for a session. */
-    voiceControl:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/voice/control','POST',body),
     /** Reads the runtime's voice capabilities for one session. */
     voiceCapabilities:id=>request('/sessions/'+encodeURIComponent(id)+'/voice/capabilities'),
-    /** Requests speech audio for text in the selected session. */
-    voiceSpeech:(id,body)=>request('/sessions/'+encodeURIComponent(id)+'/voice/speech','POST',body),
     /** Reads session-specific mode/model and composer capability state. */
     controls: id => request('/sessions/' + encodeURIComponent(id) + '/controls'),
     /** Saves a session's execution-mode selection with PUT. */

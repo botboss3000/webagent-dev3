@@ -1,5 +1,5 @@
 //! Media: application voice and image workflows. Owns the transient voice lanes (generation,
-//! expiry, capacity and capture state), PCM framing, spoken-utterance routing rules, speech
+//! expiry and capacity), dictation PCM sequencing, spoken-utterance routing rules, speech
 //! formatting, the agent voice output catalog/setting and the Image Out receipt rules. Chat owns
 //! voice/media preferences, Agents stores each agent's voice output setting and Models owns role
 //! selections and provider wire formats; no `media.json` exists.

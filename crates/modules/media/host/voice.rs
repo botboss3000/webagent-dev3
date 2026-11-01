@@ -1,11 +1,13 @@
-//! Parallel voice conversation: transient recordings/questions, explicit durable work admission.
+//! Composer dictation with a local recognizer, and parallel voice conversation: transient
+//! questions and explicit durable work admission.
 //! Lane, capture, routing and speech rules live in `webagent_media`; this root-bound adapter
 //! supplies the HTTP handlers, App/Store, the session gate, model lanes and run commands.
-//! Agent voice output runs local Kokoro speech (`/opt/voice`, see `crates/modules/media/voice`).
+//! Dictation runs local Kroko recognition and agent voice output local Kokoro speech (`/opt/voice`,
+//! see `crates/modules/media/voice`).
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::Path;
@@ -17,11 +19,12 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use futures_util::stream;
 use serde_json::{json, Value};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::process::{Child, ChildStdout, Command};
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::sync::{watch, Mutex, OwnedSemaphorePermit, Semaphore};
+use tokio::task::JoinHandle;
 use webagent_media::capture::{self, Capture, Chunk};
-use webagent_media::lanes::{self, Completed, Lane, LaneError, Lanes};
+use webagent_media::lanes::{self, Lane, LaneError, Lanes};
 use webagent_media::speech::{sample_text, speech_text};
 use webagent_media::utterance;
 
@@ -39,9 +42,11 @@ fn lane_error(error: LaneError) -> ApiError {
         LaneError::Gone => ApiError(StatusCode::NOT_FOUND, error.message().into()),
     }
 }
-/// Drop this caller's lane for `sid`; a result still in flight can no longer land in it.
+/// Drop this caller's lane and dictation for `sid`; a result still in flight can no longer land
+/// in it.
 pub(crate) async fn quiesce(app: &App, sid: &str) {
     lanes::registry().lock().await.remove(&lane_key(app, sid));
+    dictations().lock().await.remove(&lane_key(app, sid));
 }
 fn lane_key(app: &App, sid: &str) -> String {
     lanes::lane_key(app.store.current_user_id(), sid)
@@ -56,32 +61,125 @@ fn existing_lane<'a>(
 ) -> Result<&'a mut Lane, ApiError> {
     lanes::existing_lane(all, key, generation).map_err(lane_error)
 }
-async fn transcribe(app: &App, run: &Value, bytes: &[u8], mime: &str) -> Result<String, ApiError> {
-    let (selection, tokens) = media_lane::lane_selection(app, run).await?;
-    let cancel = app.stop.child_token();
-    let text = app
-        .session_operation(
-            run["session_id"].as_str().unwrap_or(""),
-            cancel.clone(),
-            app.provider
-                .transcribe(&selection, &tokens, bytes, mime, cancel),
-        )
-        .await
-        .map_err(|error| {
-            if error
-                .downcast_ref::<crate::store::session::ArchivedSession>()
-                .is_some()
-            {
-                return ApiError::from(error);
-            }
-            ApiError(
-                StatusCode::BAD_GATEWAY,
-                "Recording could not be transcribed by the configured Voice model".into(),
-            )
-        })?;
-    media_lane::lane_selection(app, run).await?;
-    Ok(text)
+/// One composer dictation: frame sequencing and its local recognizer. Dropping it kills the
+/// recognizer and frees its slot.
+struct Dictation {
+    capture: Capture,
+    listener: Option<Listener>,
+    /// The latest transcript so far, written by the listener's output reader.
+    text: watch::Receiver<String>,
+    reader: Option<JoinHandle<()>>,
+    used: Instant,
+    /// The final transcript, kept so a retried finish replays it.
+    done: Option<String>,
+    /// Held while the recognizer runs; released at finish.
+    slot: Option<OwnedSemaphorePermit>,
 }
+
+/// A recognizer process waiting for or receiving audio.
+struct Listener {
+    child: Child,
+    stdin: ChildStdin,
+    /// Taken by the transcript reader when the dictation starts.
+    stdout: Option<ChildStdout>,
+}
+
+type Dictations = HashMap<String, Arc<Mutex<Dictation>>>;
+
+fn dictations() -> &'static Mutex<Dictations> {
+    static ALL: OnceLock<Mutex<Dictations>> = OnceLock::new();
+    ALL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The local Kroko recognizer; its packaging is the `voice` stage of the Dockerfile.
+#[cfg(not(test))]
+const LISTENER: [&str; 3] = ["/opt/voice/venv/bin/python", "-I", "/opt/voice/listen.py"];
+/// Stands in for the recognizer: reads the whole dictation, then prints one transcript line.
+#[cfg(test)]
+const LISTENER: [&str; 3] = [
+    "/bin/sh",
+    "-c",
+    r#"cat >/dev/null; echo '{"text":"Hello there."}'"#,
+];
+/// Recognizers decoding at once; each uses one core, and builds share the host.
+const MAX_DICTATIONS: usize = 2;
+/// A dictation with no frames for this long was abandoned; its recognizer has exited.
+const DICTATION_IDLE: Duration = Duration::from_secs(90);
+const DICTATION_STOPPED: &str = "Dictation stopped; start it again";
+
+fn dictation_slots() -> Arc<Semaphore> {
+    static SLOTS: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    SLOTS
+        .get_or_init(|| Arc::new(Semaphore::new(MAX_DICTATIONS)))
+        .clone()
+}
+
+fn spawn_listener() -> std::io::Result<Listener> {
+    let mut child = Command::new(LISTENER[0])
+        .args(&LISTENER[1..])
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
+    let missing = || std::io::Error::other("listener pipes unavailable");
+    let stdin = child.stdin.take().ok_or_else(missing)?;
+    let stdout = child.stdout.take().ok_or_else(missing)?;
+    Ok(Listener {
+        child,
+        stdin,
+        stdout: Some(stdout),
+    })
+}
+
+/// A recognizer for a new dictation. The model takes seconds to load, so one spare is kept
+/// loaded and waiting; it is handed out and replaced in the background.
+async fn take_listener() -> std::io::Result<Listener> {
+    static SPARE: OnceLock<Mutex<Option<Listener>>> = OnceLock::new();
+    let spare = SPARE.get_or_init(|| Mutex::new(None));
+    let warm = spare.lock().await.take();
+    let listener = match warm {
+        Some(mut l) => match l.child.try_wait() {
+            Ok(None) => l,
+            _ => spawn_listener()?,
+        },
+        None => spawn_listener()?,
+    };
+    tokio::spawn(async move {
+        let mut slot = spare.lock().await;
+        if slot.is_none() {
+            *slot = spawn_listener().ok();
+        }
+    });
+    Ok(listener)
+}
+
+/// Publish each transcript line the recognizer writes until it closes its output.
+fn read_transcripts(stdout: ChildStdout, text: watch::Sender<String>) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stdout).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            if let Some(latest) = serde_json::from_str::<Value>(&line)
+                .ok()
+                .and_then(|v| v["text"].as_str().map(str::to_owned))
+            {
+                text.send_replace(latest);
+            }
+        }
+    })
+}
+
+fn dictation_unavailable() -> ApiError {
+    ApiError(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Dictation is unavailable".into(),
+    )
+}
+
+/// Composer dictation: `start` opens a capture with a local recognizer, each `chunk` streams a
+/// PCM frame and returns the transcript so far, `finish` returns the final transcript and
+/// `cancel` discards it. Nothing is stored; the client types the text into the composer.
 pub(crate) async fn voice_audio(
     State(app): State<App>,
     Path(sid): Path<String>,
@@ -91,33 +189,63 @@ pub(crate) async fn voice_audio(
     let op = required(&body, "op", 16)?;
     let k = lane_key(&app, &sid);
     if op == "start" {
-        let run = media_lane::lane_run(&app, &sid, model_selection::ModelRole::Voice).await?;
-        media_lane::lane_selection(&app, &run).await?;
-        if run["selection_plan"]["candidates"][0]["transport"] == "openai_subscription" {
-            return Err(conflict(
-                "Voice recording requires an audio-capable API model connection",
-            ));
+        let mut all = dictations().lock().await;
+        // A new start replaces this caller's previous dictation in the conversation.
+        all.remove(&k);
+        let now = Instant::now();
+        let mut stale = vec![];
+        for (key, entry) in all.iter() {
+            if entry
+                .try_lock()
+                .is_ok_and(|d| now.duration_since(d.used) > DICTATION_IDLE)
+            {
+                stale.push(key.clone());
+            }
         }
-        let mut all = lanes::registry().lock().await;
-        let lane = get_lane(&mut all, &k)?;
-        if lane.busy || lane.capture.is_some() {
-            return Err(conflict("A voice turn is already active"));
+        for key in stale {
+            all.remove(&key);
         }
+        let slot = dictation_slots().try_acquire_owned().map_err(|_| {
+            ApiError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Dictation is busy; try again shortly".into(),
+            )
+        })?;
+        let mut listener = take_listener().await.map_err(|_| dictation_unavailable())?;
+        let (sender, text) = watch::channel(String::new());
+        let stdout = listener.stdout.take().ok_or_else(dictation_unavailable)?;
+        let reader = read_transcripts(stdout, sender);
         let id = uuid();
-        lane.completed = None;
-        lane.capture = Some(Capture::new(id.clone(), run));
+        all.insert(
+            k,
+            Arc::new(Mutex::new(Dictation {
+                capture: Capture::new(id.clone()),
+                listener: Some(listener),
+                text,
+                reader: Some(reader),
+                used: now,
+                done: None,
+                slot: Some(slot),
+            })),
+        );
         return Ok(Json(
             json!({"capture_id": id, "sample_rate": capture::SAMPLE_RATE, "ephemeral": true}),
         ));
     }
     let id = required(&body, "capture_id", 64)?;
+    let entry = dictations().lock().await.get(&k).cloned();
     if op == "cancel" {
-        let mut all = lanes::registry().lock().await;
-        let lane = get_lane(&mut all, &k)?;
-        if lane.capture.as_ref().is_some_and(|c| c.id == id) {
-            lane.capture = None;
+        if let Some(entry) = entry {
+            if entry.lock().await.capture.id == id {
+                dictations().lock().await.remove(&k);
+            }
         }
         return Ok(Json(json!({"cancelled": true, "ephemeral": true})));
+    }
+    let entry = entry.ok_or_else(|| conflict("Dictation expired; start it again"))?;
+    let mut d = entry.lock().await;
+    if d.capture.id != id {
+        return Err(conflict("Dictation expired; start it again"));
     }
     if op == "chunk" {
         let data = required(&body, "data", 128 * 1024)?;
@@ -130,116 +258,69 @@ pub(crate) async fn voice_audio(
         let sequence = body["seq"]
             .as_u64()
             .ok_or_else(|| bad("PCM sequence required"))?;
-        let mut all = lanes::registry().lock().await;
-        let lane = get_lane(&mut all, &k)?;
-        let c = lane
-            .capture
-            .as_mut()
-            .filter(|c| c.id == id)
-            .ok_or_else(|| conflict("Recording expired; start a new voice turn"))?;
-        let (speaking, end, partial) = match c.accept(sequence, bytes) {
-            Ok(Chunk::Replayed { seq }) => {
-                return Ok(Json(
-                    json!({"seq": seq, "replayed": true, "ephemeral": true}),
+        if d.done.is_some() {
+            return Err(conflict("Dictation already finished"));
+        }
+        let replayed = match d.capture.accept(sequence, &bytes) {
+            Ok(Chunk::Replayed { .. }) => true,
+            Ok(Chunk::Accepted) => false,
+            Err(_) => return Err(bad("PCM sequence or dictation length limit exceeded")),
+        };
+        if !replayed {
+            let listener = d.listener.as_mut().ok_or_else(dictation_unavailable)?;
+            if listener.stdin.write_all(&bytes).await.is_err() {
+                drop(d);
+                dictations().lock().await.remove(&k);
+                return Err(ApiError(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    DICTATION_STOPPED.into(),
                 ));
             }
-            Ok(Chunk::Accepted {
-                speaking,
-                turn_end,
-                partial,
-            }) => (speaking, turn_end, partial.map(|wav| (c.run.clone(), wav))),
-            Err(_) => return Err(bad("PCM sequence or recording limit exceeded")),
-        };
-        drop(all);
-        let partial_text = if let Some((run, bytes)) = partial {
-            match transcribe(&app, &run, &bytes, "audio/wav").await {
-                Ok(text) => Some(text),
-                Err(error) if error.0 == StatusCode::NOT_FOUND => return Err(error),
-                Err(_) => None,
-            }
-        } else {
-            None
-        };
+            d.used = Instant::now();
+        }
+        let text = d.text.borrow().clone();
         return Ok(Json(json!({
             "seq": sequence,
-            "speaking": speaking,
-            "turn_end": end,
-            "partial": partial_text,
+            "replayed": replayed,
+            "text": text,
             "ephemeral": true,
         })));
     }
-    if !matches!(op, "finish" | "recording") {
+    if op != "finish" {
         return Err(bad("Unknown voice audio operation"));
     }
-    let mut all = lanes::registry().lock().await;
-    let lane = get_lane(&mut all, &k)?;
-    if let Some(done) = &lane.completed {
-        if done.capture_id == id {
-            return Ok(Json(json!({
-                "text": done.text,
-                "capture_id": id,
-                "ephemeral": true,
-                "replayed": true,
-            })));
-        }
+    if let Some(text) = &d.done {
+        return Ok(Json(json!({
+            "text": text,
+            "capture_id": id,
+            "ephemeral": true,
+            "replayed": true,
+        })));
     }
-    if lane.busy {
-        return Err(conflict("Voice is still transcribing"));
-    }
-    let Some(c) = lane.capture.take_if(|c| c.id == id) else {
-        return Err(conflict("Recording expired; start a new voice turn"));
+    // Closing the recognizer's input flushes the model; it writes the final line and exits.
+    let mut listener = d.listener.take().ok_or_else(dictation_unavailable)?;
+    drop(listener.stdin);
+    let flushed = match d.reader.take() {
+        Some(reader) => tokio::time::timeout(Duration::from_secs(15), reader)
+            .await
+            .is_ok_and(|joined| joined.is_ok()),
+        None => false,
     };
-    if op == "finish" && !c.speaking() {
-        lane.completed = Some(Completed {
-            capture_id: id.to_owned(),
-            text: String::new(),
-        });
-        return Ok(Json(
-            json!({"text": "", "capture_id": id, "ephemeral": true}),
+    let _ = listener.child.start_kill();
+    d.slot = None;
+    if !flushed {
+        drop(d);
+        dictations().lock().await.remove(&k);
+        return Err(ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            DICTATION_STOPPED.into(),
         ));
     }
-    lane.busy = true;
-    let generation = lane.generation.clone();
-    let recording = if op == "recording" {
-        let data = body["data"].as_str().unwrap_or("");
-        if data.len() > 14 * 1024 * 1024 {
-            lane.busy = false;
-            return Err(bad("Recording exceeds 10 MB"));
-        }
-        let bytes = STANDARD.decode(data).map_err(|_| {
-            lane.busy = false;
-            bad("Invalid recording")
-        })?;
-        (
-            bytes,
-            body["media_type"]
-                .as_str()
-                .unwrap_or("")
-                .split(';')
-                .next()
-                .unwrap_or("")
-                .to_owned(),
-        )
-    } else {
-        (c.wav(), "audio/wav".to_owned())
-    };
-    drop(all);
-    let result = transcribe(&app, &c.run, &recording.0, &recording.1).await;
-    let mut all = lanes::registry().lock().await;
-    let lane = existing_lane(&mut all, &k, &generation)?;
-    lane.busy = false;
-    match result {
-        Ok(text) => {
-            lane.completed = Some(Completed {
-                capture_id: id.to_owned(),
-                text: text.clone(),
-            });
-            Ok(Json(
-                json!({"text": text, "capture_id": id, "ephemeral": true}),
-            ))
-        }
-        Err(error) => Err(error),
-    }
+    let text = d.text.borrow().clone();
+    d.done = Some(text.clone());
+    Ok(Json(
+        json!({"text": text, "capture_id": id, "ephemeral": true}),
+    ))
 }
 async fn voice_target(app: &App, sid: &str) -> Result<Option<Value>, ApiError> {
     let view = app

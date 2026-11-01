@@ -331,7 +331,6 @@ async fn voice_composer_audio_and_quick_answers_remain_ephemeral() {
     let capture = captured.clone();
     let mock=Router::new().route("/provider",post(move|headers:HeaderMap,body:axum::body::Bytes|{let capture=capture.clone();async move{
   assert_eq!(headers["authorization"],"Bearer fixture-audio-key");
-  if headers["content-type"].to_str().unwrap().starts_with("multipart/"){return Json(json!({"text":"What is the weather?"})).into_response();}
   let value:Value=serde_json::from_slice(&body).unwrap();capture.lock().await.push(value);
   ([("content-type","text/event-stream")],format!("data: {}\n\n",json!({"choices":[{"delta":{"content":"A quick answer."},"finish_reason":"stop"}]}))).into_response()
  }}));
@@ -348,14 +347,14 @@ async fn voice_composer_audio_and_quick_answers_remain_ephemeral() {
     .await
     .unwrap();
     let id = start["capture_id"].clone();
-    let frame: Vec<u8> = (0..8000).flat_map(|_| 10000i16.to_le_bytes()).collect();
+    let frame: Vec<u8> = (0..3200).flat_map(|_| 10000i16.to_le_bytes()).collect();
     let chunk = json!({"op":"chunk","capture_id":id,"seq":1,"data":STANDARD.encode(&frame)});
     assert_eq!(
         voice_audio(State(app.clone()), Path(sid.clone()), Json(chunk.clone()))
             .await
             .unwrap()
-            .0["speaking"],
-        true
+            .0["replayed"],
+        false
     );
     assert_eq!(
         voice_audio(State(app.clone()), Path(sid.clone()), Json(chunk))
@@ -371,6 +370,7 @@ async fn voice_composer_audio_and_quick_answers_remain_ephemeral() {
     )
     .await
     .is_err());
+    // The stand-in recognizer prints its transcript once the dictation input closes.
     let Json(final_text) = voice_audio(
         State(app.clone()),
         Path(sid.clone()),
@@ -378,7 +378,7 @@ async fn voice_composer_audio_and_quick_answers_remain_ephemeral() {
     )
     .await
     .unwrap();
-    assert_eq!(final_text["text"], "What is the weather?");
+    assert_eq!(final_text["text"], "Hello there.");
     assert_eq!(
         voice_audio(
             State(app.clone()),
@@ -390,6 +390,7 @@ async fn voice_composer_audio_and_quick_answers_remain_ephemeral() {
         .0["replayed"],
         true
     );
+    assert!(app.store.chat_snapshot(&sid).await.unwrap().0.is_empty());
     let Json(answer) = voice_route(
         State(app.clone()),
         Path(sid.clone()),

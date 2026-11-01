@@ -80,20 +80,6 @@ fn lane_keys_separate_users_and_history_keeps_the_newest_messages() {
 }
 
 #[test]
-fn wav_header_describes_sixteen_khz_mono_pcm() {
-    let out = capture::wav(&[1, 2, 3, 4]);
-    assert_eq!(out.len(), 48);
-    assert_eq!(&out[..4], b"RIFF");
-    assert_eq!(u32::from_le_bytes(out[4..8].try_into().unwrap()), 40);
-    assert_eq!(&out[8..16], b"WAVEfmt ");
-    assert_eq!(u32::from_le_bytes(out[24..28].try_into().unwrap()), 16000);
-    assert_eq!(u32::from_le_bytes(out[28..32].try_into().unwrap()), 32000);
-    assert_eq!(&out[36..40], b"data");
-    assert_eq!(u32::from_le_bytes(out[40..44].try_into().unwrap()), 4);
-    assert_eq!(&out[44..], &[1, 2, 3, 4]);
-}
-
-#[test]
 fn frames_must_be_whole_samples_within_bounds() {
     assert!(!capture::valid_frame(&[]));
     assert!(!capture::valid_frame(&[0; 3]));
@@ -104,80 +90,28 @@ fn frames_must_be_whole_samples_within_bounds() {
 
 #[test]
 fn capture_replays_identical_retries_and_rejects_gaps() {
-    let mut capture = Capture::new("c".into(), json!({}));
-    assert_eq!(capture.accept(2, pcm(0, 16)), Err(SequenceRejected));
-    let first = capture.accept(1, pcm(0, 16)).unwrap();
-    assert!(matches!(
-        first,
-        Chunk::Accepted {
-            speaking: false,
-            turn_end: false,
-            partial: None
-        }
-    ));
+    let mut capture = Capture::new("c".into());
+    assert_eq!(capture.accept(2, &pcm(0, 16)), Err(SequenceRejected));
+    assert_eq!(capture.accept(1, &pcm(0, 16)), Ok(Chunk::Accepted));
     assert_eq!(
-        capture.accept(1, pcm(0, 16)),
+        capture.accept(1, &pcm(0, 16)),
         Ok(Chunk::Replayed { seq: 1 })
     );
     // Same number, different bytes is not a replay.
-    assert_eq!(capture.accept(1, pcm(5, 16)), Err(SequenceRejected));
-    assert!(capture.accept(2, pcm(0, 16)).is_ok());
+    assert_eq!(capture.accept(1, &pcm(5, 16)), Err(SequenceRejected));
+    assert_eq!(capture.accept(2, &pcm(0, 16)), Ok(Chunk::Accepted));
 }
 
 #[test]
-fn speech_starts_on_voiced_audio_and_the_turn_ends_after_silence() {
-    let mut capture = Capture::new("c".into(), json!({}));
-    // 4000 bytes is 125 ms, enough voiced time to start speech.
-    let chunk = capture.accept(1, pcm(8000, 2000)).unwrap();
-    assert!(matches!(
-        chunk,
-        Chunk::Accepted {
-            speaking: true,
-            turn_end: false,
-            ..
-        }
-    ));
-    assert!(capture.speaking());
-    let mut seq = 1;
-    let mut ended = false;
-    // 1024-byte frames are 32 ms; 700 ms of silence takes 22 of them.
-    for _ in 0..22 {
-        seq += 1;
-        let Chunk::Accepted { turn_end, .. } = capture.accept(seq, pcm(0, 512)).unwrap() else {
-            panic!("a new frame is accepted");
-        };
-        ended = turn_end;
-    }
-    assert!(ended);
-}
-
-#[test]
-fn partials_arrive_every_three_seconds_and_the_length_limit_ends_the_turn() {
-    let mut capture = Capture::new("c".into(), json!({}));
+fn a_dictation_stops_at_the_length_limit() {
+    let mut capture = Capture::new("c".into());
     let frame = pcm(8000, 16000);
-    let mut partials = 0;
     let mut seq = 0;
-    loop {
+    while capture.accept(seq + 1, &frame).is_ok() {
         seq += 1;
-        match capture.accept(seq, frame.clone()) {
-            Ok(Chunk::Accepted {
-                turn_end, partial, ..
-            }) => {
-                if let Some(wav) = partial {
-                    assert_eq!(wav.len(), seq as usize * frame.len() + 44);
-                    partials += 1;
-                }
-                if turn_end {
-                    break;
-                }
-            }
-            other => panic!("unexpected {other:?}"),
-        }
     }
     assert_eq!(seq as usize * frame.len(), capture::MAX_RECORDING_BYTES);
-    assert_eq!(partials, 9);
-    assert_eq!(capture.accept(seq + 1, pcm(0, 1)), Err(SequenceRejected));
-    assert_eq!(capture.wav().len(), capture::MAX_RECORDING_BYTES + 44);
+    assert_eq!(capture.accept(seq + 1, &pcm(0, 1)), Err(SequenceRejected));
 }
 
 #[test]

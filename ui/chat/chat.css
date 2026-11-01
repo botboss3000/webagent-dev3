@@ -95,10 +95,10 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 #chat-preview-bar button {border:0;background:transparent;color:inherit;cursor:pointer;}
 .chat-attachments {display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;}
 .chat-attachments a {display:flex;gap:6px;align-items:center;color:inherit;}
-.voice-conversation-caption {padding:8px 12px;text-align:center;font-size:13px;}
-.voice-conversation-controls {display:flex;gap:8px;justify-content:center;margin-bottom:8px;}
-.voice-conversation-controls[hidden],.voice-conversation-caption[hidden] {display:none;}
-.voice-conversation-control {border:1px solid var(--border);border-radius:10px;background:var(--surface);color:inherit;padding:4px 10px;}
+/* While dictating, the microphone becomes a stop square. */
+#chat-voice-btn.recording {align-items:center;justify-content:center;}
+#chat-voice-btn.recording svg {display:none !important;}
+#chat-voice-btn.recording::after {content:'';width:14px;height:14px;border-radius:3px;background:currentColor;}
 .v3-message.system{align-items:center}
 .v3-message.system .message-content{max-width:min(90%,680px);font-size:13px;color:var(--fg-2);background:var(--bg-elev);text-align:center}
 

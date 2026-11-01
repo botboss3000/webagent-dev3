@@ -1,13 +1,11 @@
-//! Transient per-caller voice lanes. A lane holds one capture, the last completed transcript,
-//! the pending voice proposal and a short quick-answer history; nothing here is durable.
+//! Transient per-caller voice lanes. A lane holds the pending voice proposal and a short
+//! quick-answer history; nothing here is durable.
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::OnceLock;
 
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
-
-use crate::capture::Capture;
 
 /// Most lanes held at once across all callers; a new lane beyond this is refused.
 pub const MAX_LANES: usize = 64;
@@ -26,15 +24,11 @@ pub struct Lane {
     pub generation: String,
     /// Unix time after which an idle lane may be dropped.
     pub expires: u64,
-    /// The recording in progress, if any.
-    pub capture: Option<Capture>,
-    /// The last finished transcript, kept so a retried finish replays it.
-    pub completed: Option<Completed>,
     /// The pending or ready voice proposal.
     pub proposal: Option<Value>,
     /// Recent quick-answer exchange, oldest first.
     pub history: Vec<Value>,
-    /// True while a transcription, answer or action runs outside the registry lock.
+    /// True while an answer or action runs outside the registry lock.
     pub busy: bool,
 }
 
@@ -50,14 +44,6 @@ impl Lane {
             self.history.drain(..excess);
         }
     }
-}
-
-/// A finished recording's transcript.
-pub struct Completed {
-    /// The capture the transcript belongs to.
-    pub capture_id: String,
-    /// The transcript text (empty when no speech was heard).
-    pub text: String,
 }
 
 /// Why a lane could not be used.

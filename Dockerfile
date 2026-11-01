@@ -74,6 +74,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 python3
     && printf '%s  %s\n' 6e742170d309016e5891a994e1ce1559c702a2ccd0075e67ef7157974f6406cb kokoro-v1.0.int8.onnx \
         bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d voices-v1.0.bin | sha256sum -c - \
     && chmod -R a+rX /opt/voice
+# Composer dictation: sherpa-onnx with the Kroko streaming English model (CC-BY-SA community model).
+RUN /opt/voice/venv/bin/pip install --no-cache-dir sherpa-onnx==2.0.1 \
+    && cd /tmp && curl -fsSLo kroko.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06.tar.bz2 \
+    && printf '%s  %s\n' c8676e5ff9ac2a85296e53ee0fd4d5fb1db6770e7a7647166eeafe349ade6834 kroko.tar.bz2 | sha256sum -c - \
+    && /opt/voice/venv/bin/python -c "import tarfile; tarfile.open('kroko.tar.bz2').extractall()" && mkdir /opt/voice/models/kroko \
+    && cd sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06 && mv encoder.onnx decoder.onnx joiner.onnx tokens.txt README.md /opt/voice/models/kroko/ \
+    && cd /tmp && rm -rf kroko.tar.bz2 sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06 \
+    && chmod -R a+rX /opt/voice
 
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS api
 RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates curl tini git ripgrep build-essential pkg-config chromium chromium-driver python3-selenium valgrind heaptrack linux-perf \
@@ -109,10 +117,10 @@ COPY --from=tested_builder /out/webagent-assets-service /usr/local/lib/webagent/
 COPY --from=tested_builder /out/webagent-capability-service /usr/local/lib/webagent/engine/capability-context/webagent-capability-service
 COPY --from=tested_builder /out/webagent-provider-service /usr/local/lib/webagent/engine/provider-projection/webagent-provider-service
 COPY v3/plugins/gates /opt/v3/plugins/gates
-# Agent voice output (crates/modules/media/host/voice.rs): the pinned Kokoro venv and checked
-# models come from the `voice` stage, prepared once as a dependency base.
+# Agent voice output and composer dictation (crates/modules/media/host/voice.rs): the pinned
+# Kokoro/Kroko venv and checked models come from the `voice` stage, prepared once as a dependency base.
 COPY --from=voice /opt/voice /opt/voice
-COPY --chmod=0644 v3/crates/modules/media/voice/speak.py /opt/voice/speak.py
+COPY --chmod=0644 v3/crates/modules/media/voice/speak.py v3/crates/modules/media/voice/listen.py /opt/voice/
 RUN chmod -R a+rX /opt/v3/plugins
 RUN chmod 0755 /opt/v3 /opt/v3/plugins /opt/v3/plugins/gates /opt/v3/plugins/gates/publication_size_guard_v1 && chmod 0444 /opt/v3/plugins/gates/publication_size_guard_v1/gate.json
 RUN chmod a+r /opt/v3/*.py && python3 -c "import os,pathlib; os.setgid(1100); os.setuid(1101); files=[pathlib.Path('/opt/v3/plugins/abilities/Core/create_tools/runtime.py'),pathlib.Path('/opt/v3/plugins/abilities/Core/visualizer/capture.py')]; [compile(p.read_text(),str(p),'exec') for p in files]"

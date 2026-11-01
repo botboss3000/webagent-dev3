@@ -2,7 +2,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),fs=requir
 const tick=()=>new Promise(setImmediate);
 class Element{
  constructor(tag='div'){this.tag=tag;this.children=[];this.listeners={};this.dataset={};this.style={};this.hidden=false;this.classes=new Set();this.classList={add:n=>this.classes.add(n),remove:n=>this.classes.delete(n),toggle:(n,on)=>on?this.classes.add(n):this.classes.delete(n)};}
- append(...nodes){for(const n of nodes){this.children.push(n);n.parent=this;}}replaceChildren(...nodes){this.children=[];this.append(...nodes);}before(){}setAttribute(k,v){this[k]=v;}addEventListener(k,fn){(this.listeners[k]??=[]).push(fn);}querySelectorAll(selector){return this.children.filter(c=>selector==='[data-proposal]'&&c.dataset.proposal!==undefined);}remove(){if(this.parent)this.parent.children=this.parent.children.filter(c=>c!==this);}click(){return this.onclick?.();}
+ append(...nodes){for(const n of nodes){this.children.push(n);n.parent=this;}}replaceChildren(...nodes){this.children=[];this.append(...nodes);}before(){}setAttribute(k,v){this[k]=v;}addEventListener(k,fn){(this.listeners[k]??=[]).push(fn);}querySelectorAll(selector){return this.children.filter(c=>selector==='[data-proposal]'&&c.dataset.proposal!==undefined);}remove(){if(this.parent)this.parent.children=this.parent.children.filter(c=>c!==this);}click(){return this.onclick?.();}setSelectionRange(a,b){this.selectionStart=a;this.selectionEnd=b;}dispatchEvent(e){for(const fn of this.listeners[e.type]||[])fn(e);}focus(){}
 }
 async function modules(extra={}){
  const context=vm.createContext({AbortController,Uint8Array,Int16Array,Float32Array,ArrayBuffer,Blob,setTimeout,clearTimeout,btoa:s=>Buffer.from(s,'binary').toString('base64'),crypto:require('node:crypto').webcrypto,...extra});
@@ -10,21 +10,22 @@ async function modules(extra={}){
  const media=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'../ui/chat/controls/composer-media.js'),'utf8'),{context});
  await audio.link(()=>{});await audio.evaluate();await media.link(()=>audio);await media.evaluate();return{audio:audio.namespace,media:media.namespace};
 }
-test('PCM capture clamps samples, obeys server turn-end, and cancels delayed microphone acquisition',async()=>{
- let process,stopped=0,sent=[],completed=[];
+test('PCM capture clamps samples, streams 0.2 s frames until finish, and cancels delayed microphone acquisition',async()=>{
+ let process,stopped=0,sent=[],completed=[],texts=[];
  class Context{constructor(){this.sampleRate=16000;}async resume(){}async close(){}createMediaStreamSource(){return {connect(){},disconnect(){}};}createGain(){return {gain:{value:0},connect(){},disconnect(){}};}createScriptProcessor(){process={connect(){},disconnect(){}};return process;}}
  const stream={getTracks:()=>[{stop(){stopped++;}}]};
  const navigator={mediaDevices:{getUserMedia:async()=>stream}};
  const {audio}=await modules({window:{isSecureContext:true,AudioContext:Context},navigator});
  const samples=new Int16Array(audio.downsampleToPcm16(new Float32Array([-2,0,2]),16000));assert.deepEqual([...samples],[-32768,0,32767]);
- const c=audio.createAudioCapture({send:async(sid,body)=>{sent.push([sid,body]);if(body.op==='start')return{capture_id:'capture'};if(body.op==='chunk')return{speaking:true,turn_end:true};if(body.op==='finish')return{text:'Quick question?'};return{};},onState(){},onPartial(){},onComplete:(text,sid)=>completed.push([text,sid]),onError:e=>{throw e;}});
+ const c=audio.createAudioCapture({send:async(sid,body)=>{sent.push([sid,body]);if(body.op==='start')return{capture_id:'capture'};if(body.op==='chunk')return{text:'Quick'};if(body.op==='finish')return{text:'Quick question?'};return{};},onState(){},onText:t=>texts.push(t),onComplete:(text,sid)=>completed.push([text,sid]),onError:e=>{throw e;}});
  await c.start('session-a');process.onaudioprocess({inputBuffer:{getChannelData:()=>new Float32Array(16000).fill(.1)}});await tick();await tick();
- assert.deepEqual(completed,[['Quick question?','session-a']]);assert.equal(c.active,false);assert.equal(stopped,1);assert.deepEqual(sent.map(x=>x[1].op),['start','chunk','finish']);
+ assert.equal(c.active,true);assert.equal(completed.length,0);await c.finish();
+ assert.deepEqual(completed,[['Quick question?','session-a']]);assert.equal(c.active,false);assert.equal(stopped,1);assert.deepEqual(sent.map(x=>x[1].op),['start','chunk','chunk','chunk','chunk','chunk','finish']);assert.deepEqual(texts,Array(5).fill('Quick'));
  let resolve;navigator.mediaDevices.getUserMedia=()=>new Promise(r=>resolve=r);const pending=c.start('old');c.cancel();resolve(stream);await pending;
  assert.equal(stopped,2);assert.equal(sent.filter(x=>x[0]==='old').length,0);
 });
 test('staged upload completion is fenced by session, restores on return, and survives upload retry',async()=>{
- const nodes=new Map(['chat-input-row','chat-preview-bar','chat-voice-btn','chat-attach-btn','chat-file-input'].map(id=>[id,new Element()]));
+ const nodes=new Map(['chat-input-row','chat-preview-bar','chat-voice-btn','chat-attach-btn','chat-file-input','chat-input'].map(id=>[id,new Element()]));
  const document={createElement:tag=>new Element(tag)},storage=new Map();let active='a',finishUpload,calls=[],changed=0,errors=[];
  const {media}=await modules({document,window:{speechSynthesis:{cancel(){}}},navigator:{},localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},URL:{createObjectURL:()=>'',revokeObjectURL(){}}});
  const client={upload:async(sid,body)=>{calls.push(['upload',sid,body]);return new Promise(r=>finishUpload=r);},removeUpload:async(sid,id)=>calls.push(['delete',sid,id])};
@@ -48,7 +49,7 @@ test('v2 structured-text/media formats and speech redaction retain their behavio
 });
 
 test('composer uses advertised attachment size/count limits instead of 25 MB and 10',async()=>{
- const nodes=new Map(['chat-input-row','chat-preview-bar','chat-voice-btn','chat-attach-btn','chat-file-input'].map(id=>[id,new Element()]));
+ const nodes=new Map(['chat-input-row','chat-preview-bar','chat-voice-btn','chat-attach-btn','chat-file-input','chat-input'].map(id=>[id,new Element()]));
  const errors=[],uploads=[];
  const {media}=await modules({document:{createElement:tag=>new Element(tag)},window:{speechSynthesis:{cancel(){}}},navigator:{},localStorage:{getItem:()=>null,setItem(){}},URL:{createObjectURL:()=>'',revokeObjectURL(){}}});
  const controls=media.mountComposerMedia({root:{querySelector:s=>nodes.get(s.slice(1))},client:{upload:async(sid,body)=>{uploads.push(body);return{preview:false};},removeUpload:async()=>{}},ensureSession:async()=>'limits',note:t=>errors.push(t),changed(){},refresh:async()=>{},guard:fn=>fn,getState:()=>({shutoff:false})});
@@ -65,7 +66,7 @@ test('composer uses advertised attachment size/count limits instead of 25 MB and
 });
 
 test('missing and null limits allow file sizes and counts beyond former caps',async()=>{
- const nodes=new Map(['chat-input-row','chat-preview-bar','chat-voice-btn','chat-attach-btn','chat-file-input'].map(id=>[id,new Element()]));
+ const nodes=new Map(['chat-input-row','chat-preview-bar','chat-voice-btn','chat-attach-btn','chat-file-input','chat-input'].map(id=>[id,new Element()]));
  const errors=[],uploads=[];
  const {media}=await modules({document:{createElement:tag=>new Element(tag)},window:{speechSynthesis:{cancel(){}}},navigator:{},localStorage:{getItem:()=>null,setItem(){}},URL:{createObjectURL:()=>'',revokeObjectURL(){}}});
  const controls=media.mountComposerMedia({root:{querySelector:s=>nodes.get(s.slice(1))},client:{upload:async(sid,body)=>{uploads.push(body);return{preview:false};},removeUpload:async()=>{}},ensureSession:async()=>'unrestricted',note:t=>errors.push(t),changed(){},refresh:async()=>{},guard:fn=>fn,getState:()=>({shutoff:false})});
@@ -76,4 +77,22 @@ test('missing and null limits allow file sizes and counts beyond former caps',as
  controls.setAvailable(true,{max_file_size_mb:null,max_per_message:null});
  nodes.get('chat-file-input').files=[file()];await nodes.get('chat-file-input').onchange();
  assert.equal(uploads.length,13);assert.equal(errors.length,0);controls.destroy();
+});
+
+test('dictation types at the cursor, shows a stop square while listening, and hands the composer back',async()=>{
+ const nodes=new Map(['chat-input-row','chat-preview-bar','chat-voice-btn','chat-attach-btn','chat-file-input','chat-input'].map(id=>[id,new Element()]));
+ const input=nodes.get('chat-input'),mic=nodes.get('chat-voice-btn');input.value='Hello world';input.selectionStart=input.selectionEnd=5;
+ let process,inputs=0;input.addEventListener('input',()=>inputs++);
+ class Context{constructor(){this.sampleRate=16000;}async resume(){}async close(){}createMediaStreamSource(){return {connect(){},disconnect(){}};}createGain(){return {gain:{value:0},connect(){},disconnect(){}};}createScriptProcessor(){process={connect(){},disconnect(){}};return process;}}
+ const {media}=await modules({document:{createElement:tag=>new Element(tag)},window:{isSecureContext:true,AudioContext:Context},navigator:{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[{stop(){}}]})}},Event:class{constructor(type){this.type=type;}},URL:{createObjectURL:()=>'',revokeObjectURL(){}}});
+ const client={voiceAudio:async(sid,body)=>body.op==='start'?{capture_id:'c'}:body.op==='chunk'?{text:'big'}:body.op==='finish'?{text:'big, wide'}:{}};
+ const errors=[],controls=media.mountComposerMedia({root:{querySelector:s=>nodes.get(s.slice(1))},client,ensureSession:async()=>'s',note:t=>errors.push(t),changed(){},refresh:async()=>{},guard:fn=>fn,getState:()=>({shutoff:false})});
+ controls.setAvailable(true);controls.open('s');
+ await mic.click();assert(mic.classes.has('recording'));assert.equal(mic.title,'Stop dictation');assert.equal(input.readOnly,true);
+ process.onaudioprocess({inputBuffer:{getChannelData:()=>new Float32Array(3200).fill(.1)}});await tick();await tick();
+ assert.equal(input.value,'Hello big world');
+ await mic.click();
+ assert.equal(input.value,'Hello big, wide world');assert.equal(input.selectionStart,'Hello big, wide'.length);
+ assert.equal(input.readOnly,false);assert(!mic.classes.has('recording'));assert(inputs>=2);assert.deepEqual(errors,[]);
+ controls.destroy();
 });
