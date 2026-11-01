@@ -9837,10 +9837,21 @@ async fn background_auto_reads_reauthorize_live_grants_without_inheriting_approv
 
 type BackgroundJourneyRequest = (Value, tokio::sync::oneshot::Sender<Value>);
 
+/// Cooperative handshake budget for the background journey.
+///
+/// A queued read is normally started by the service's wake hint, but the service
+/// still falls back to the scheduler poll (`background_rescan_interval_ms`, 5s
+/// by default) when a hint lands while it is scanning. The previous 5s stage
+/// deadlines raced that fallback exactly, so ordinary scheduling delay on a
+/// loaded build host could push a stage past its deadline and fail the build
+/// even though the journey was healthy. These deadlines exist only to bound a
+/// genuine hang; none of them is part of what the journey asserts.
+const BACKGROUND_JOURNEY_STAGE: Duration = Duration::from_secs(30);
+
 async fn background_journey_request(
     requests: &mut tokio::sync::mpsc::UnboundedReceiver<BackgroundJourneyRequest>,
 ) -> BackgroundJourneyRequest {
-    tokio::time::timeout(Duration::from_secs(20), requests.recv())
+    tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, requests.recv())
         .await
         .unwrap()
         .expect("mock provider request")
@@ -9853,7 +9864,7 @@ async fn background_journey_task(
     field: &str,
     expected: Value,
 ) -> Value {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, async {
         loop {
             let tasks = if let Some(task_id) = task_id {
                 app.store
@@ -9920,7 +9931,9 @@ async fn background_execution_journey(behavior: &str) {
          Json(body):Json<Value>| async move {
             let (reply_sender,reply_receiver)=tokio::sync::oneshot::channel();
             sender.send((body,reply_sender)).unwrap();
-            let output=tokio::time::timeout(Duration::from_secs(20),reply_receiver).await.unwrap().unwrap();
+            // Deadlock guard only: the driver may legitimately hold a mock reply while a
+            // cooperative stage above runs to its (larger) deadline, so this must not fire first.
+            let output=tokio::time::timeout(Duration::from_secs(120),reply_receiver).await.unwrap().unwrap();
             let event=json!({"type":"response.completed","response":{"status":"completed","output":output}});
             ([("content-type","text/event-stream")],format!("data: {event}\n\n"))
         }
@@ -9958,13 +9971,13 @@ async fn background_execution_journey(behavior: &str) {
     // Start the worker-stage deadline only after the first model has been admitted.
     let worker = tokio::spawn(async move {
         // Bound each socket stage; the driver explicitly releases the held read between stages.
-        let (stream, _) = tokio::time::timeout(Duration::from_secs(20), listener.accept())
+        let (stream, _) = tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, listener.accept())
             .await
             .unwrap()
             .unwrap();
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
-        tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut line))
+        tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, reader.read_line(&mut line))
             .await
             .unwrap()
             .unwrap();
@@ -9984,7 +9997,7 @@ async fn background_execution_journey(behavior: &str) {
             json!({"id":request["id"],"status":"success","output":"BACKGROUND_JOURNEY_EVIDENCE"});
         let reply = test_rpc_reply(&request, reply);
         tokio::time::timeout(
-            Duration::from_secs(5),
+            BACKGROUND_JOURNEY_STAGE,
             reader.get_mut().write_all(format!("{reply}\n").as_bytes()),
         )
         .await
@@ -9992,13 +10005,13 @@ async fn background_execution_journey(behavior: &str) {
         .unwrap();
         drop(reader);
         if wake {
-            let (stream, _) = tokio::time::timeout(Duration::from_secs(20), listener.accept())
+            let (stream, _) = tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, listener.accept())
                 .await
                 .unwrap()
                 .unwrap();
             let mut reader = BufReader::new(stream);
             let mut line = String::new();
-            tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut line))
+            tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, reader.read_line(&mut line))
                 .await
                 .unwrap()
                 .unwrap();
@@ -10009,7 +10022,7 @@ async fn background_execution_journey(behavior: &str) {
                 json!({"id":request["id"],"status":"success","output":"FOLLOWUP_READ_EVIDENCE"});
             let reply = test_rpc_reply(&request, reply);
             tokio::time::timeout(
-                Duration::from_secs(5),
+                BACKGROUND_JOURNEY_STAGE,
                 reader.get_mut().write_all(format!("{reply}\n").as_bytes()),
             )
             .await
@@ -10026,7 +10039,7 @@ async fn background_execution_journey(behavior: &str) {
         )
         .unwrap();
     let (advanced, reply) = background_journey_request(&mut requests).await;
-    tokio::time::timeout(Duration::from_secs(5), arrived_receiver)
+    tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, arrived_receiver)
         .await
         .unwrap()
         .unwrap();
@@ -10085,12 +10098,12 @@ async fn background_execution_journey(behavior: &str) {
         reply
             .send(background_journey_final("Overlap completed."))
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(5), origin)
+        tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, origin)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(
-            tokio::time::timeout(Duration::from_secs(5), worker)
+            tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, worker)
                 .await
                 .unwrap()
                 .unwrap(),
@@ -10106,7 +10119,7 @@ async fn background_execution_journey(behavior: &str) {
         reply
             .send(background_journey_final("Origin completed."))
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(5), origin)
+        tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, origin)
             .await
             .unwrap()
             .unwrap();
@@ -10114,7 +10127,7 @@ async fn background_execution_journey(behavior: &str) {
         if behavior == "stop" {
             background_journey_task(&app, &sid, Some(&task_id), "status", json!("cancelled")).await;
             assert_eq!(
-                tokio::time::timeout(Duration::from_secs(5), worker)
+                tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, worker)
                     .await
                     .unwrap()
                     .unwrap(),
@@ -10146,7 +10159,7 @@ async fn background_execution_journey(behavior: &str) {
                     "silent completion must not call the provider"
                 );
                 assert_eq!(
-                    tokio::time::timeout(Duration::from_secs(5), worker)
+                    tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, worker)
                         .await
                         .unwrap()
                         .unwrap(),
@@ -10178,7 +10191,7 @@ async fn background_execution_journey(behavior: &str) {
                 reply
                     .send(background_journey_final("Silent result acknowledged."))
                     .unwrap();
-                tokio::time::timeout(Duration::from_secs(5), next_run)
+                tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, next_run)
                     .await
                     .unwrap()
                     .unwrap();
@@ -10188,7 +10201,7 @@ async fn background_execution_journey(behavior: &str) {
                     .await
                     .unwrap());
             } else {
-                let task = tokio::time::timeout(Duration::from_secs(5), async {
+                let task = tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, async {
                     loop {
                         let task = app.store.background_get(&task_id).await.unwrap().unwrap();
                         if task["wake_run_id"].is_string() {
@@ -10262,12 +10275,12 @@ async fn background_execution_journey(behavior: &str) {
                 reply
                     .send(background_journey_final("Wake result acknowledged."))
                     .unwrap();
-                tokio::time::timeout(Duration::from_secs(5), follow_run)
+                tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, follow_run)
                     .await
                     .unwrap()
                     .unwrap();
                 assert_eq!(
-                    tokio::time::timeout(Duration::from_secs(5), worker)
+                    tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, worker)
                         .await
                         .unwrap()
                         .unwrap(),
@@ -10316,7 +10329,7 @@ async fn background_execution_journey(behavior: &str) {
         "unexpected extra provider request"
     );
     app.stop.cancel();
-    tokio::time::timeout(Duration::from_secs(5), service)
+    tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, service)
         .await
         .unwrap()
         .unwrap();
