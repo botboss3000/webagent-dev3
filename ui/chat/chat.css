@@ -235,6 +235,12 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 :is(#chat-header,#chat-footer-row) .chat-header-zone-center:not(:has(.session-dropdown-menu)) > :last-child {
   margin-inline-end:auto!important;
 }
+/* A long session title truncates inside its selector; the other zone in that row keeps
+   every control at full size. Otherwise both zones shrink and the trailing + is clipped. */
+#chat-header .chat-header-row:has(.session-dropdown-menu) .chat-header-zone:not(:has(.session-dropdown-menu)) {
+  flex-shrink:0;
+  overflow:visible;
+}
 /* Voice reply toggle: brand color while new replies are read aloud. */
 .chat-voice-reply-btn{-webkit-tap-highlight-color:transparent}
 .chat-voice-reply-btn.active{color:var(--brand)}
