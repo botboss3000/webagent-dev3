@@ -124,7 +124,7 @@ class EngineTests(unittest.TestCase):
                 resources=types.SimpleNamespace(enabled=True,enter=Mock(),attached=Mock(),lock=threading.RLock(),rows=defaultdict(dict),diagnostic_check=lambda _:False)
                 runner=types.SimpleNamespace(compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64},command=Mock(side_effect=["a"*64,"started","compiler succeeded"]),job_context=types.SimpleNamespace(),resource_progress=Mock())
                 observed={"container_id":"a"*64,"memory_max":cap if scenario!="unenforced"else None,"swap_max":0,"oom_events":0,"oom_kills":0,"peak_memory":1024}
-                runner.resource_request=Mock(side_effect=[{"container_id":"a"*64,"state":"created","phase":"compile_test"},observed,{**observed,"oom_events":1 if scenario=="oom"else 0,"oom_kills":1 if scenario=="oom"else 0}])
+                runner.resource_request=Mock(side_effect=[{"container_id":"a"*64,"state":"created","phase":"compile_test"},{"sealed":True},observed,{**observed,"oom_events":1 if scenario=="oom"else 0,"oom_kills":1 if scenario=="oom"else 0}])
                 worker=executor.Executor(runner,resources,{"instance":"development","service_uid":1000,"service_gid":1000});worker.finish_phase=Mock();job={"job_id":str(uuid.uuid4()),"compiler_memory_cap":cap}
                 args=(job,"compile_test","engine",Path(temporary),Path(temporary)/"output",["cargo","check"],"engine:rust1.90:check",10)
                 if scenario=="success":self.assertEqual(worker.phase(*args),"compiler succeeded")

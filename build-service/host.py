@@ -2484,8 +2484,11 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         if release_root is not None:
             # Image releases adopt the protected operator budget; retained-image
             # reconfiguration already carries its explicitly selected HostConfig.
-            if name == TARGETS[0]:
+            if name in TARGETS:
+                # Both app roles share the operator task budget: the loop's startup
+                # database burst overran a fixed 256 and deferred its queue drains.
                 host["PidsLimit"]=CONFIG["api_pids_limit"]
+            if name == TARGETS[0]:
                 # The Codebase Admin worker reads every file through this ambient capability.
                 host["CapAdd"]=sorted(set(host.get("CapAdd")or[])|{"CAP_DAC_READ_SEARCH"})
             host = release.release_mounts(host, self.published_runtime_source(release_root), ASSET_ROOT)
