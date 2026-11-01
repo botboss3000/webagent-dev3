@@ -81,14 +81,16 @@ class SchedulerBrokerTests(unittest.TestCase):
         self.assertEqual(git("show","HEAD:README.md"),"rebuilt");self.assertIn(job_id,git("log","-1","--format=%s"))
         self.assertEqual(self.broker.scheduler.store.get(item["key"])["scopes"],[])
         self.assertEqual(self.broker._view(job)["rebuild_closeout"]["status"],"complete")
-        return git("log","-1","--format=%s")
+        return git("log","-1","--format=%B")
     def test_rebuild_closeout_commits_released_paths_and_releases_claims(self):
         """A completed rebuild commits exactly its released bytes; the broker's verification then frees the task."""
         subject=self.closeout("rebuild-closeout-task",rebuild={"request_id":"rebuild-closeout","mode":"dev","requested_by":"local-operator"})
         self.assertTrue(subject.startswith("Rebuild current checkout (dev)"),subject)
     def test_finished_release_closeout_commits_with_the_task_summary(self):
         """A non-rebuild release is committed under its task summary and freed the same way."""
-        self.assertTrue(self.closeout("release-closeout-task").startswith("Scheduler fixture (broker job "))
+        message=self.closeout("release-closeout-task")
+        self.assertTrue(message.startswith("Scheduler fixture (broker job "),message)
+        self.assertIn("\n\nReleased files (1):\n- README.md",message)
     def test_following_job_progress_keeps_its_task_alive(self):
         item=self.begin("progress-liveness-task");self.write(item,"README.md","followed\n")
         store=self.broker.scheduler.store

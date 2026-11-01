@@ -4021,6 +4021,10 @@ class Broker:
                            + job["rebuild"].get("requested_by", "an administrator") + " (broker job " + job["job_id"] + ")")
             else:
                 message = (item.get("summary") or item["task_id"]) + " (broker job " + job["job_id"] + ")"
+            # The summary is written before the work and cannot be corrected later, so the
+            # body records what the release actually changed.
+            listed = paths[:50] + ([f"... and {len(paths) - 50} more"] if len(paths) > 50 else [])
+            message += f"\n\nReleased files ({len(paths)}):\n" + "\n".join("- " + p for p in listed)
             commit = self.runner.commit_release(paths, message)
             # The broker renews the owner's own identity briefly to close its task; no new authority.
             local = job["user_id"] == "codex-local"
