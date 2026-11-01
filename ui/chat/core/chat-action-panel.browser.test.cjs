@@ -30,7 +30,11 @@ for(const mobile of [false,true])for(const light of [false,true])test(`shared no
  assert.equal(await p.locator('body').innerText().then(x=>x.includes('PRIVATE_ARGUMENT')),false);
  assert.equal(await p.getByRole('button',{name:'Resume run',exact:true}).count(),0);
  const styles=await p.locator('.chat-action:not([hidden])').evaluateAll(nodes=>nodes.map(n=>{const s=getComputedStyle(n);return [s.border,s.borderRadius,s.backgroundColor,s.padding,s.fontSize];}));assert.ok(styles.length>=6);for(const style of styles)assert.deepEqual(style,styles[0]);
- assert.equal(await p.locator('#chat-action-panel button:not(.chat-action-action):not(.chat-action-detail-toggle)').count(),0);
+ assert.equal(await p.locator('#chat-action-panel button:not(.chat-action-action):not(.chat-action-detail-toggle):not(.chat-action-copy)').count(),0);
+ // The expanded recovery arguments carry a Copy control pinned inside the top-right of their code block.
+ const code=p.locator('.recovery-details .chat-action-code').first();assert.equal(await code.locator('.chat-action-copy').count(),1);
+ const [box,btn]=await Promise.all([code.boundingBox(),code.locator('.chat-action-copy').boundingBox()]);
+ assert.ok(btn.x+btn.width<=box.x+box.width+1&&btn.y>=box.y-1&&btn.y<box.y+box.height/2,'Copy sits in the top-right corner');
  assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  if(process.env.EVIDENCE_DIR)await p.screenshot({path:path.join(process.env.EVIDENCE_DIR,`shared-${mobile?'mobile':'desktop'}-${light?'light':'dark'}.png`),fullPage:true});
  await p.getByRole('textbox',{name:'Known action result'}).fill('Confirmed result');await p.getByRole('button',{name:'Accept known result'}).click();assert.deepEqual(await p.evaluate(()=>calls.find(x=>x[0]==='recover')),['recover','accept','Confirmed result']);

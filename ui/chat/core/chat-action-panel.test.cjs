@@ -6,7 +6,11 @@ class E {
  append(...items){for(const item of items){item.parent=this;this.children.push(item);}}
  replaceChildren(...items){this.children=[];this.append(...items);}
  get lastChild(){return this.children.at(-1);}
- insertBefore(node,before){node.parent=this;const i=this.children.indexOf(before);if(i<0)this.append(node);else this.children.splice(i,0,node);}
+ get firstChild(){return this.children[0]||null;}
+ get nextSibling(){const c=this.parent?.children||[];return c[c.indexOf(this)+1]||null;}
+ insertBefore(node,before){if(node.parent)node.parent.children=node.parent.children.filter(c=>c!==node);node.parent=this;node.isConnected=true;const i=this.children.indexOf(before);if(i<0)this.children.push(node);else this.children.splice(i,0,node);}
+ replaceWith(node){const c=this.parent.children,i=c.indexOf(this);node.parent=this.parent;node.isConnected=true;c.splice(i,1,node);this.isConnected=false;}
+ querySelectorAll(s){return [...(this.tag===s?[this]:[]),...this.children.flatMap(c=>c.querySelectorAll(s))].filter(n=>n!==this||this.tag===s);}
  setAttribute(k,v){this.attributes[k]=v;}
  addEventListener(name,fn){this.listeners[name]=fn;}
  querySelector(s){return this.children.find(c=>s.startsWith('.')?(c.className||'').split(' ').includes(s.slice(1)):c.tag===s)||this.children.map(c=>c.querySelector(s)).find(Boolean)||null;}
@@ -127,4 +131,21 @@ test('shared notices float without a visible composer, replace by key and close 
  await undo.onclick();assert.equal(card.querySelector('.chat-action-message').textContent,'Nothing to undo');assert.equal(stack.children.length,1);
  fail=false;await undo.onclick();assert.equal(undone,1);assert.equal(stack.children.length,0);
  context.showNotification({title:'Other',timeout:0});dismiss.onclick();stack.children[0].querySelector('.chat-action-actions').children[0].onclick();assert.equal(stack.children.length,0);
+});
+test('refreshes keep unchanged cards, carry typed input across changes, defer during selection and remove finished runs',async()=>{
+ const host=new E(),{api,root}=await moduleAt('chat-action-panel.js',host);
+ const ui=api.mountChatActionPanel({root,guard:fn=>fn,request:async()=>({routes:[]}),note:()=>{}});
+ const tools=host.children[1],runsSlot=host.children[3];
+ const renderRecovery=(run,{code})=>{const body=new E();body.append(new E('textarea'),code('{"command":"echo"}'));return body;};
+ const paint=(error='')=>{ui.beginRuns();ui.showRun({run:{id:'r1',status:'recovery',uncertain:true,error,pending:{name:'shell',arguments:{command:'echo'}}},canControl:true,expanded:new Set(),renderRecovery,recover:()=>{}});ui.showTool({approval:{id:'a1',name:'file_write',arguments:{path:'x'}},run:{id:'r2'},expanded:new Set(),decide:()=>{}});ui.endRuns();};
+ paint();const card=runsSlot.children[0],approval=tools.children[0];
+ assert.ok(card.querySelector('.chat-action-copy'),'recovery code has a Copy control');assert.ok(approval.querySelector('.chat-action-copy'),'approval code has a Copy control');
+ paint();assert.equal(runsSlot.children.length,1);assert.equal(runsSlot.children[0],card,'an unchanged refresh keeps the node');assert.equal(tools.children[0],approval);
+ card.querySelectorAll('textarea')[0].value='typed';
+ paint('changed');const next=runsSlot.children[0];assert.notEqual(next,card);assert.equal(next.querySelectorAll('textarea')[0].value,'typed','typed recovery input survives a rebuild');
+ next.contains=()=>true;api.getSelection=()=>({isCollapsed:false,rangeCount:1,anchorNode:next,focusNode:next});
+ paint('again');assert.equal(runsSlot.children[0],next,'an active selection defers the rebuild');
+ api.getSelection=()=>({isCollapsed:true,rangeCount:0});paint('again');assert.notEqual(runsSlot.children[0],next,'the deferred change applies after the selection ends');
+ ui.beginRuns();ui.endRuns();assert.equal(runsSlot.children.length,0);assert.equal(tools.children.length,0);
+ ui.destroy();
 });

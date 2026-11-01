@@ -32,6 +32,18 @@ body.light-mode .chat-action{background:var(--chat-pill-bg,color-mix(in oklab,va
 .chat-action-detail-toggle:focus-visible,.chat-action-action:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
 .chat-action pre{box-sizing:border-box;max-width:100%;max-height:120px;margin:8px 0;padding:8px 10px;border:var(--border-width) solid var(--border);border-radius:12px;background:var(--bg-1);color:var(--fg-1);font-size:12px;line-height:1.45;white-space:pre-wrap;overflow:auto;text-align:left}
 .chat-action pre[hidden]{display:none}
+/* While an action card shows, the above-pill band is the single scroller, capped at the tighter of 35dvh and the
+   measured room between the chat header and the pill (--chat-action-room, set by chat-action-panel.js).
+   This overrides the shared idle-mode and .expanded uncaps, which are kept for the compact progress note only. */
+#chat-panel #chat-input-area #chat-above-pill:has(.chat-action:not([hidden])){max-height:min(35dvh,var(--chat-action-room,35dvh))!important;overflow-x:hidden!important;overflow-y:auto!important;overscroll-behavior:contain;scrollbar-gutter:stable;opacity:1;pointer-events:auto}
+#chat-action-panel .chat-action{user-select:text;-webkit-user-select:text}
+/* Raw code surface: capped, internally scrolling, selectable, with a Copy control pinned top-right. */
+.chat-action-code{position:relative;box-sizing:border-box;max-width:100%;margin:8px 0;text-align:left}
+.chat-action-code[hidden]{display:none}
+#chat-action-panel .chat-action .chat-action-code pre{box-sizing:border-box;max-width:100%;max-height:160px;margin:0;padding:8px 64px 8px 10px;overflow:auto;overscroll-behavior:contain;user-select:text;-webkit-user-select:text;white-space:pre-wrap;text-align:left}
+.chat-action-copy{position:absolute;top:6px;right:6px;z-index:1;margin:0;padding:2px 8px;min-height:22px;border:var(--border-width) solid var(--border);border-radius:999px;background:color-mix(in oklab,var(--bg-elev) 88%,transparent);color:var(--fg-2);font:inherit;font-size:11px;font-weight:600;line-height:1.4;cursor:pointer;user-select:none;-webkit-user-select:none;-webkit-tap-highlight-color:transparent}
+.chat-action-copy:hover{color:var(--fg-1);background:color-mix(in oklab,var(--bg-elev) 70%,var(--fg-1) 8%)}
+.chat-action-copy:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 #app-notifications{position:fixed;left:50%;bottom:16px;z-index:1000;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;width:max-content;max-width:calc(100vw - 32px)}
 #app-notifications .chat-action{box-shadow:0 8px 24px color-mix(in oklab,black 25%,transparent)}
 .v3-message{display:flex;flex-direction:column;align-items:flex-start;margin:16px 0}
