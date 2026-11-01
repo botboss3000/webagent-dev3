@@ -9,3 +9,5 @@
 #session-dropdown-menu .session-row { -webkit-touch-callout:none; user-select:none; }
 #session-dropdown-menu input { user-select:text; }
 #session-dropdown [hidden], #session-dropdown-menu [hidden] { display:none!important; }
+/* The sub-agent tab row collapses until the open session has a family (list.js renderTabs). */
+#chat-header .chat-header-row:has(#chat-sub-header[data-empty]) { display:none; }

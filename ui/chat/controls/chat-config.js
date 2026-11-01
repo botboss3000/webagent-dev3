@@ -142,6 +142,7 @@ function headerControl(name) {
       agent_name: byId('chat-header-agent-name').closest('.chat-header-name-row'),
       session_dropdown: byId('session-dropdown'),
       new_session: byId('new'),
+      sub_agent_tabs: byId('chat-sub-header'),
     };
     for (const [name, delta, label, symbol] of [
       ['session_prev', -1, 'Previous conversation', 'arrow-big-left'],
@@ -197,7 +198,8 @@ function applyHeader(profile) {
       zone.className = 'chat-header-zone chat-header-zone-' + zoneName;
       for (const name of row[zoneName] || []) {
         const node = headerControl(name);
-        const controlConfig = { ...config.row_sizes?.primary, ...config.controls?.[name] };
+        // The tab strip is a full-width container, not a button, so primary button sizing skips it (as in v2).
+        const controlConfig = name === 'sub_agent_tabs' ? { ...config.controls?.[name] } : { ...config.row_sizes?.primary, ...config.controls?.[name] };
         if (name === 'agent_name') controlConfig.square = false;
         if (!node || controlConfig.enabled === false) continue;
         node.hidden = false;

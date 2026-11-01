@@ -7,8 +7,10 @@ export function createSessionList(root, {guard, refresh, select, client, archive
   let hits = [], continuation = null, searchInfo = '', searching = false, epoch = 0, timer = 0, destroyed = false;
   let editing = null, checkboxMode = false, batchBusy = false;
   let hold = null, suppressClickUntil = 0;
-  const checked = new Set();
+  const checked = new Set(), expanded = new Set();
   const menu = root.querySelector('.session-dropdown-menu');
+  // Header sub-agent tabs (chat.html #chat-sub-header); cached because header rows are rebuilt around it.
+  const tabs = document.getElementById('chat-sub-header');
   const abort = new AbortController(), timers = new Set(), receipts = new Map();
   // Lucide markup shared by the trigger-compatible row controls.
   const icon = name => `<i data-lucide="${name}" style="width:14px;height:14px"></i>`;
@@ -21,6 +23,62 @@ export function createSessionList(root, {guard, refresh, select, client, archive
   };
   /** Tracks delayed UI work so teardown can cancel every pending callback. */
   function delay(fn, ms) { const t = setTimeout(() => { timers.delete(t); if (!destroyed) fn(); }, ms); timers.add(t); return t; }
+  /** Sub-agent sessions of each loaded parent, keyed by parent session ID. */
+  function childrenOf() {
+    const ids = new Set(items.map(item => item.id)), map = new Map();
+    for (const item of items) if (item.parent_session_id && ids.has(item.parent_session_id)) {
+      if (!map.has(item.parent_session_id)) map.set(item.parent_session_id, []);
+      map.get(item.parent_session_id).push(item);
+    }
+    return map;
+  }
+  /** Loaded ancestors of `id`, nearest first; a cycle stops the walk. */
+  function ancestors(id) {
+    const out = []; let item = items.find(s => s.id === id);
+    while (item?.parent_session_id && !out.includes(item.parent_session_id)) {
+      item = items.find(s => s.id === item.parent_session_id); if (!item) break; out.push(item.id);
+    }
+    return out;
+  }
+  /** Shows the selected session's family as one Spawns (n) header chip; its menu lists Main, then every sub-agent. */
+  function renderTabs() {
+    if (!tabs) return;
+    const kids = childrenOf(), rootId = ancestors(selected).at(-1) || selected;
+    const members = [], walk = id => { for (const child of kids.get(id) || []) { members.push(child); walk(child.id); } };
+    walk(rootId);
+    const wrap = tabs.querySelector('#chat-sub-scroll-wrap');
+    wrap.replaceChildren();
+    tabs.toggleAttribute('data-empty', !members.length);
+    if (!members.length) return;
+    const chip = button(`${members.length} sub-agent session${members.length === 1 ? '' : 's'}`,'git-branch',() => familyMenu(chip,items.find(s => s.id === rootId),members),'sub-chip chip-spawn-menu');
+    chip.firstChild.replaceWith(Object.assign(document.createElement('span'),{className:'chip-status',innerHTML:icon('git-branch')}));
+    chip.append(`Spawns (${members.length})`);
+    chip.setAttribute('aria-haspopup','menu'); chip.setAttribute('aria-expanded','false');
+    wrap.append(chip); window.lucide?.createIcons();
+  }
+  /** Opens the family menu under its chip; choosing a row opens that session. */
+  function familyMenu(chip, main, members) {
+    if (chip.getAttribute('aria-expanded') === 'true') { root._sessionDropdownController.setPopup(null); return; }
+    const popup = document.createElement('div'); popup.className = 'family-spawn-menu sub-chip-menu';
+    popup.setAttribute('role','menu'); popup.setAttribute('aria-label','Sub-agent sessions');
+    for (const [item,labelText,i] of [[main,'Main',-1],...members.map((m,i) => [m,`Spawn ${i+1}`,i])]) {
+      const row = button(item.title || labelText,i < 0 ? 'layout-dashboard' : 'git-branch',() => { root._sessionDropdownController.setPopup(null); if (item.id !== selected) return select(item.id); },'family-menu-item' + (i < 0 ? ' family-menu-root' : '') + (item.id === selected ? ' selected' : ''));
+      row.setAttribute('role','menuitem');
+      row.firstChild.replaceWith(Object.assign(document.createElement('span'),{className:'chip-status',innerHTML:icon(i < 0 ? 'layout-dashboard' : 'git-branch')}));
+      const text = document.createElement('span'); text.className = 'family-menu-text';
+      text.append(Object.assign(document.createElement('span'),{textContent:labelText}),Object.assign(document.createElement('small'),{textContent:i < 0 ? (item.title || 'Main chat') : (item.title || 'New Session')}));
+      row.append(text); popup.append(row);
+    }
+    root._sessionDropdownController.setPopup(popup); document.body.append(popup); chip.setAttribute('aria-expanded','true');
+    const r = chip.getBoundingClientRect();
+    popup.style.position = 'fixed'; popup.style.top = (r.bottom + 4) + 'px';
+    popup.style.left = Math.max(4,Math.min(r.left,innerWidth - popup.offsetWidth - 8)) + 'px';
+    // Any other press closes the menu; the chip itself toggles it.
+    const close = e => { if (popup.isConnected && (popup.contains(e.target) || chip.contains(e.target))) return; document.removeEventListener('pointerdown',close,true); chip.setAttribute('aria-expanded','false'); if (popup.isConnected) root._sessionDropdownController.setPopup(null); };
+    document.addEventListener('pointerdown',close,{capture:true,signal:abort.signal});
+    new MutationObserver((_,observer) => { if (!popup.isConnected) { observer.disconnect(); chip.setAttribute('aria-expanded','false'); document.removeEventListener('pointerdown',close,true); } }).observe(document.body,{childList:true});
+    window.lucide?.createIcons(); popup.querySelector('button')?.focus({preventScroll:true});
+  }
   /** Formats activity timestamps for row labels without changing stored values. */
   function elapsed(ts) {
     if (!ts) return '';
@@ -287,8 +345,14 @@ export function createSessionList(root, {guard, refresh, select, client, archive
       if(am!==bm)return am?-1:1;
       return am?(b.item.last_active_at||0)-(a.item.last_active_at||0)||String(a.item.id).localeCompare(String(b.item.id)):0;
     });
-    for (const {item,hit} of rows) {
-      const row = document.createElement('div'); row.className = 'session-row' + (item.id === selected ? ' selected' : '') + (item.pinned ? ' pinned' : '') + (status === 'archived' ? ' archived' : '');
+    // Sub-agent sessions nest under their parent row in the unfiltered active list (v2 group tree).
+    const nest = status === 'active' && !query.trim(), kids = nest ? childrenOf() : new Map();
+    const nested = new Set([...kids.values()].flat().map(item => item.id));
+    const tree = [], add = (entry,depth) => { tree.push({...entry,depth}); if (expanded.has(entry.item.id)) for (const item of kids.get(entry.item.id) || []) add({item},depth+1); };
+    for (const entry of rows) if (!nested.has(entry.item.id)) add(entry,0);
+    for (const {item,hit,depth} of tree) {
+      const row = document.createElement('div'); row.className = 'session-row' + (depth ? ' session-child-row' : '') + (item.id === selected ? ' selected' : '') + (item.pinned ? ' pinned' : '') + (status === 'archived' ? ' archived' : '');
+      if (depth > 1) row.style.paddingLeft = (22 * depth) + 'px';
       row.dataset.id = item.id; row.dataset.agent = item.agent_id; row.tabIndex = 0;
       if (checkboxMode && status === 'active') {
         const b = button('Select ' + (item.title || 'New Session'),checked.has(item.id) ? 'check-square' : 'square',() => toggleChecked(item.id),'session-row-checkbox');
@@ -296,8 +360,17 @@ export function createSessionList(root, {guard, refresh, select, client, archive
         row.append(b);
       }
       const title = document.createElement('span'); title.className = 'session-row-title';
-      if (config.menu?.agent_icons !== false) { const avatar = document.createElement('span'); avatar.className = 'session-row-agent-icon' + (item.main_chat === true ? ' session-row-agent-main' : item.pinned ? ' session-row-agent-warning' : ''); avatar.innerHTML = icon('bot'); title.append(avatar); }
-      const text = document.createElement('span'); text.className = 'session-row-title-label'; text.textContent = item.title || 'New Session'; text.hidden = config.menu?.session_name === false; title.append(text); row.append(title);
+      if (depth) { const branch = document.createElement('span'); branch.className = 'session-row-child-icon'; branch.innerHTML = icon('git-branch'); title.append(branch); }
+      const children = kids.get(item.id)?.length || 0;
+      if (config.menu?.agent_icons !== false) {
+        // A parent's avatar is its family disclosure control, as in v2.
+        const open = expanded.has(item.id);
+        const avatar = children ? button(`${open ? 'Hide' : 'Show'} ${children} sub-agent session${children === 1 ? '' : 's'}`,'bot',() => { if (open) expanded.delete(item.id); else expanded.add(item.id); render(); }) : document.createElement('span');
+        avatar.className = 'session-row-agent-icon' + (children ? ' sess-title-agent-toggle' : '') + (item.main_chat === true ? ' session-row-agent-main' : item.pinned ? ' session-row-agent-warning' : '');
+        if (children) avatar.setAttribute('aria-expanded',String(open)); else avatar.innerHTML = icon('bot');
+        title.append(avatar);
+      }
+      const text = document.createElement('span'); text.className = 'session-row-title-label'; text.textContent = (item.title || 'New Session') + (children ? ` (${children})` : ''); text.hidden = config.menu?.session_name === false; title.append(text); row.append(title);
       if (hit) { const snippet = document.createElement('span'); snippet.className = 'session-row-msg-hit'; snippet.textContent = hit.snippet; snippet.title = hit.snippet; row.append(snippet); }
       if (config.menu?.status !== false) row.append(statusNode(item));
       if (status === 'archived') {
@@ -308,7 +381,7 @@ export function createSessionList(root, {guard, refresh, select, client, archive
       } else if (!checkboxMode && config.menu?.row_actions === true) row.append(button('More…','more-vertical',() => actions(item,row.querySelector('.session-row-kebab')),'session-row-kebab'));
       rowList.append(row);
     }
-    if (!rows.length) { const empty = document.createElement('div'); empty.className = 'session-dropdown-empty'; empty.textContent = searching ? 'Searching…' : searchInfo.startsWith('Search failed:') ? 'Search unavailable; no results verified' : query ? 'No matches in this page' : status === 'archived' ? 'No archived sessions' : 'No sessions yet'; menu.append(empty); }
+    if (!tree.length) { const empty = document.createElement('div'); empty.className = 'session-dropdown-empty'; empty.textContent = searching ? 'Searching…' : searchInfo.startsWith('Search failed:') ? 'Search unavailable; no results verified' : query ? 'No matches in this page' : status === 'archived' ? 'No archived sessions' : 'No sessions yet'; menu.append(empty); }
     if (searchInfo) { const info = document.createElement('div'); info.className = 'session-dropdown-sync'; info.setAttribute('role','status'); info.textContent = searchInfo; menu.append(info); }
     if (continuation) { const more = button('Continue private search','search',() => search(true),'session-row-action'); more.textContent = 'Continue search'; more.disabled = searching; menu.append(more); }
     const bar = document.createElement('div'); bar.className = 'session-manage-row';
@@ -345,7 +418,7 @@ export function createSessionList(root, {guard, refresh, select, client, archive
   // Public lifecycle API keeps selected rows, configuration, search state and timers in sync.
   return {
     // Replace authoritative rows/selection and drop checkbox IDs no longer present.
-    update(rows,id) { items = rows; selected = id; for (const id of checked) if (!items.some(item => item.id === id)) checked.delete(id); label(); render(); },
+    update(rows,id) { items = rows; if (id !== selected) for (const parent of ancestors(id)) expanded.add(parent); selected = id; for (const id of checked) if (!items.some(item => item.id === id)) checked.delete(id); label(); renderTabs(); render(); },
     // Reapply menu options; disabling batch delete also clears its transient selection.
     configure(cfg) { cancelHold(); config = cfg || {}; root._sessionDropdownController.setPopup(null); if (config.footer?.enabled === false || config.footer?.batch_archive === false) { checkboxMode = false; checked.clear(); } if (config.footer?.enabled === false || config.footer?.archived === false) status = 'active'; if (config.footer?.enabled === false || config.footer?.search === false) { ++epoch; clearTimeout(timer); query = ''; hits = []; continuation = null; searching = false; searchInfo = ''; } menu.style.setProperty('--session-dropdown-max-height',config.menu?.max_height || 'none'); label(); render(); },
     // Invalidate in-flight search and restore the default active, unfiltered list.

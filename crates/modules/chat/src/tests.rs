@@ -179,17 +179,31 @@ mod configuration {
     #[test]
     fn main_chat_guidance_comes_from_the_prompt_files_of_the_source() {
         let source = tempfile::tempdir().unwrap();
-        let skills = source.path().join(webagent_configuration::prompts::PROMPTS).join("main_chat_skills");
+        let skills = source
+            .path()
+            .join(webagent_configuration::prompts::PROMPTS)
+            .join("main_chat_skills");
         std::fs::create_dir_all(&skills).unwrap();
         std::fs::write(skills.join("review.md"), "Packaged review\n").unwrap();
-        let read = || main_chat_prompts_at(std::path::Path::new("/unused"), Some(source.path()), source.path());
+        let read = || {
+            main_chat_prompts_at(
+                std::path::Path::new("/unused"),
+                Some(source.path()),
+                source.path(),
+            )
+        };
         assert_eq!(read().unwrap()["review"], "Packaged review");
         std::fs::write(skills.join("review.md"), "Edited live\n").unwrap();
         assert_eq!(read().unwrap()["review"], "Edited live");
         std::fs::remove_dir_all(&skills).unwrap();
         assert!(read().unwrap().is_null());
         // The shipped files carry both skills.
-        let shipped = main_chat_prompts_at(std::path::Path::new("/unused"), None, std::path::Path::new("/unused")).unwrap();
+        let shipped = main_chat_prompts_at(
+            std::path::Path::new("/unused"),
+            None,
+            std::path::Path::new("/unused"),
+        )
+        .unwrap();
         assert!(shipped["review"].is_string() && shipped["contribute"].is_string());
     }
 }
@@ -220,33 +234,68 @@ mod naming {
         let defaults = defaults_dir();
         let source = Some(defaults.path());
         let state = tempfile::tempdir().unwrap();
-        assert_eq!(Config::load_at(state.path(), source, defaults.path()).unwrap().prompt, "Name it");
-        let path = defaults.path().join(webagent_configuration::prompts::PROMPTS).join("session_naming/prompt.md");
+        assert_eq!(
+            Config::load_at(state.path(), source, defaults.path())
+                .unwrap()
+                .prompt,
+            "Name it"
+        );
+        let path = defaults
+            .path()
+            .join(webagent_configuration::prompts::PROMPTS)
+            .join("session_naming/prompt.md");
         std::fs::write(&path, "Edited live\n").unwrap();
-        assert_eq!(Config::load_at(state.path(), source, defaults.path()).unwrap().prompt, "Edited live");
-        std::fs::write(defaults.path().join(webagent_configuration::prompts::PROMPTS).join("session_naming.json"), b"malformed").unwrap();
+        assert_eq!(
+            Config::load_at(state.path(), source, defaults.path())
+                .unwrap()
+                .prompt,
+            "Edited live"
+        );
+        std::fs::write(
+            defaults
+                .path()
+                .join(webagent_configuration::prompts::PROMPTS)
+                .join("session_naming.json"),
+            b"malformed",
+        )
+        .unwrap();
         // A broken edit keeps serving the last good settings.
-        assert_eq!(Config::load_at(state.path(), source, defaults.path()).unwrap().prompt, "Edited live");
+        assert_eq!(
+            Config::load_at(state.path(), source, defaults.path())
+                .unwrap()
+                .prompt,
+            "Edited live"
+        );
     }
 
     #[test]
     fn partial_saved_sections_inherit_but_source_sections_must_be_complete() {
         let defaults = defaults_dir();
-        let partial =
-            Config::parse_at(&json!({"max_job_attempts":5}), Some(defaults.path()), defaults.path()).unwrap();
+        let partial = Config::parse_at(
+            &json!({"max_job_attempts":5}),
+            Some(defaults.path()),
+            defaults.path(),
+        )
+        .unwrap();
         assert_eq!(
             (partial.max_job_attempts, partial.prompt.as_str()),
             (5, "Name it")
         );
         assert_eq!(
-            Config::parse_at(&json!("Prompt only"), Some(defaults.path()), defaults.path())
-                .unwrap()
-                .prompt,
+            Config::parse_at(
+                &json!("Prompt only"),
+                Some(defaults.path()),
+                defaults.path()
+            )
+            .unwrap()
+            .prompt,
             "Prompt only"
         );
         assert!(validate_source_settings(&json!({"prompt":"Missing fields"})).is_err());
-        let complete =
-            serde_json::to_value(Config::defaults_at(Some(defaults.path()), defaults.path()).unwrap()).unwrap();
+        let complete = serde_json::to_value(
+            Config::defaults_at(Some(defaults.path()), defaults.path()).unwrap(),
+        )
+        .unwrap();
         validate_source_settings(&complete).unwrap();
         for (key, value) in [
             ("prompt", json!("")),
@@ -442,6 +491,10 @@ mod session {
         let public = public_session(&filled).unwrap();
         assert!(public.get("checkpoint_input").is_none());
         assert_eq!(public["can_delete"], true);
+        assert!(public.get("parent_session_id").is_none());
+        let mut child = filled.clone();
+        child["parent_session_id"] = json!("p");
+        assert_eq!(public_session(&child).unwrap()["parent_session_id"], "p");
     }
 
     #[tokio::test]
@@ -449,7 +502,7 @@ mod session {
         let dir = tempfile::tempdir().unwrap();
         let pool = pool(dir.path()).await;
         put(&pool, "session:s", &json!({"id":"s","title":"Renamed","metadata_revision":3,"status":"active",
-            "participation":{"active":false,"revision":4,"generation":1},"read_through_seq":9,"main_chat":true})).await;
+            "participation":{"active":false,"revision":4,"generation":1},"read_through_seq":9,"main_chat":true,"parent_session_id":"p"})).await;
         let mut tx = pool.begin().await.unwrap();
         let stale = json!({"id":"s","title":"Old","metadata_revision":1,"status":"active",
             "participation":{"active":true,"revision":0,"generation":0},"checkpoint_through":7});
@@ -461,6 +514,7 @@ mod session {
         assert_eq!(merged["read_through_seq"], 9);
         assert_eq!(merged["checkpoint_through"], 7);
         assert_eq!(merged["main_chat"], true);
+        assert_eq!(merged["parent_session_id"], "p");
         let fresh = prepare_session_document(
             &TaggedCodec,
             &mut tx,

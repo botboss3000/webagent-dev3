@@ -128,6 +128,9 @@ pub fn public_session(value: &Value) -> Result<Value> {
         json!(!(value["main_chat"] == true && value["main_chat_agent_id"] == value["agent_id"]));
     summary["history_revision"] = json!(value["history_revision"].as_u64().unwrap_or(0));
     summary["agent_id"] = json!(value["agent_id"].as_str().unwrap_or("shared_default"));
+    if let Some(parent) = value["parent_session_id"].as_str() {
+        summary["parent_session_id"] = json!(parent);
+    }
     Ok(summary)
 }
 
@@ -315,6 +318,7 @@ pub async fn prepare_session_document<C: RecordCodec>(
             "metadata_revision",
             "metadata_schema_version",
             "auto_naming",
+            "parent_session_id",
         ] {
             if let Some(value) = previous.get(field) {
                 if stale {

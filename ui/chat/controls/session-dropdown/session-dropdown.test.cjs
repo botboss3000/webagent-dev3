@@ -108,3 +108,20 @@ for (const mobile of [false,true]) test(`Main Chat outranks pins and keeps a wav
  assert.equal(await p.locator('[data-id="main"] .session-row-agent-main').count(),1);
  await p.evaluate(()=>list.update(items,'pin'));assert.equal(await p.locator('#session-dropdown-icon.session-row-agent-main').count(),0);assert.equal(await p.locator('#session-dropdown-icon.session-row-agent-warning').count(),1);
 });
+test('sub-agent sessions nest under their parent and the header chip lists the family',async t=>{
+ const p=await fixture(t);
+ assert.equal(await p.locator('#chat-sub-header').evaluate(e=>e.hasAttribute('data-empty')),true);
+ await p.evaluate(()=>{items[1].parent_session_id='s0';items[2].parent_session_id='s1';window.fixtureSelected='s2';list.update(items,'s2');});
+ assert.equal(await p.locator('#chat-sub-header .chip-spawn-menu').textContent(),'Spawns (2)');
+ await openList(p);
+ assert.deepEqual(await p.locator('.session-child-row').evaluateAll(rows=>rows.map(r=>r.dataset.id)),['s1','s2'],'the selected grandchild opens its ancestors');
+ await p.locator('.session-row[data-id="s0"] .sess-title-agent-toggle').click();
+ assert.equal(await p.locator('.session-child-row').count(),0);assert(await p.locator('#session-dropdown-menu').isVisible());assert.equal(await p.evaluate(()=>selectedCalls.length),0);
+ await p.keyboard.press('Escape');
+ await p.locator('#chat-sub-header .chip-spawn-menu').click();
+ assert.deepEqual(await p.locator('.family-spawn-menu .family-menu-item').evaluateAll(rows=>rows.map(r=>r.querySelector('.family-menu-text span').textContent)),['Main','Spawn 1','Spawn 2']);
+ await p.locator('.family-spawn-menu .family-menu-root').click();
+ assert.deepEqual(await p.evaluate(()=>selectedCalls),['s0']);assert.equal(await p.locator('.family-spawn-menu').count(),0);
+ await p.evaluate(()=>{for(const item of items)delete item.parent_session_id;list.update(items,'s0');});
+ assert.equal(await p.locator('#chat-sub-header').evaluate(e=>e.hasAttribute('data-empty')),true);
+});
