@@ -1128,6 +1128,21 @@ class FeatureProfileBrokerTests(unittest.TestCase):
         item,args=self.request();self.broker.resources.enabled=False
         with self.assertRaisesRegex(PermissionError,"resource admission"):self.call("build_work",{**args,"feature_profile":"live"})
 
+    def test_in_app_filtered_tests_follow_resource_admission(self):
+        import hashlib
+        item,args=self.request();self.trusted.pop("local_caller");self.trusted["lease_until"]=time.time()+30
+        test={**args,"check":"test","test_filter":"startup_requeues_restart_cancelled"}
+        self.broker.resources.enabled=False
+        with self.assertRaisesRegex(PermissionError,"resource admission"):self.call("build_work",test)
+        self.broker.resources.enabled=True
+        with self.assertRaisesRegex(ValueError,"only to test checks"):self.call("build_work",{**args,"test_filter":"startup_requeues_restart_cancelled"})
+        with self.assertRaisesRegex(PermissionError,"compiler cap"):self.call("build_work",{**test,"compiler_memory_cap":4026531840})
+        self.assertFalse(self.broker.jobs)
+        with patch.object(self.broker,"_start_next"):result=self.call("build_work",test)
+        job=self.broker.jobs[result["job_id"]];self.assertEqual(job["test_filter"],"startup_requeues_restart_cancelled")
+        signature=[item["task_id"],"test",args["expected_inputs_sha256"],30,"startup_requeues_restart_cancelled"]
+        self.assertEqual(job["check_signature"],hashlib.sha256(fixtures.host.canonical(signature)).hexdigest())
+
     def test_live_input_race_is_stale_without_publication(self):
         item,args=self.request();self.broker.resources.enabled=True
         with patch.object(self.broker,"_start_next"):

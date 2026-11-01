@@ -5230,7 +5230,9 @@ class Broker:
             if task!="check":raise ValueError("Feature profiles apply only to compile checks")
             if not self.resources.enabled:raise PermissionError("Live feature checks require enforced resource admission")
         selected=executor_module.test_filter(args.get("test_filter"))
-        if selected is not None and (task!="test"or trusted.get("local_caller")is not True):raise PermissionError("Filtered tests require a local operator test request")
+        # The filter is one bounded positional name; enforced admission is what runs it (the legacy runner ignores it).
+        if selected is not None and task!="test":raise ValueError("Test filters apply only to test checks")
+        if selected is not None and not(trusted.get("local_caller")is True or self.resources.enabled):raise PermissionError("Filtered tests require enforced resource admission")
         cap=executor_module.compiler_cap(args.get("compiler_memory_cap"))
         if cap is not None and (trusted.get("local_caller")is not True or not self.resources.enabled):raise PermissionError("Enforced compiler cap requires local operator")
         signature=[task_id,task,expected,timeout]if cap is None else[task_id,task,expected,timeout,cap]
