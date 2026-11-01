@@ -147,8 +147,14 @@ The digest must come from a fresh task read/list/review; timeout is 1-600 second
 
 - check="check" runs cargo check --locked in the pinned Rust image.
 - check="test" runs cargo test --locked -- --test-threads=1 there.
+- check="test" accepts test_filter, a Rust test-name substring matching
+  ^[A-Za-z0-9_:]{1,160}$, to run only matching tests with output shown. The
+  unfiltered suite rarely fits in 600 seconds, so filter to the tests covering
+  the change. The filter is part of the request signature: a different filter
+  needs a new request_id. A filtered pass is recorded as scope "filtered" and is
+  not full-suite evidence; the release build still runs the whole suite.
 - Task source is read-only during these checks and Cargo output is separate.
-- This interface does not offer arbitrary commands, targeted test filters,
+- This interface does not offer arbitrary commands, other Cargo arguments,
   formatting, Clippy, standalone doctest selection, benchmarks or profiling.
   Do not invent actions or unsupported parameters.
 

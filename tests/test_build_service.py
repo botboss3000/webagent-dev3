@@ -1128,6 +1128,53 @@ class FeatureProfileBrokerTests(unittest.TestCase):
         self.assertEqual(call.call_args.args[0]["feature_profile"],"live")
         self.assertEqual(call.call_args.args[0]["request_id"],args["request_id"])
 
+class InAppFilteredTestBrokerTests(unittest.TestCase):
+    """In-app (non-operator) callers may narrow check=test only under enforced resource admission."""
+    from test_scheduler_broker import SchedulerBrokerTests as _base
+    setUp=_base.setUp
+    tearDown=_base.tearDown
+    call=_base.call
+    begin=_base.begin
+    def request(self,**extra):
+        self.trusted={**{key:value for key,value in self.trusted.items()if key!="local_caller"},"lease_until":time.time()+30}
+        item=self.begin("in-app-filter-fixture");tree=Path(item["workspace_path"]).parent
+        return item,{"action":"check","task_id":item["task_id"],"check":"test","expected_inputs_sha256":self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(tree)),
+            "timeout_seconds":30,"request_id":"in-app-filter-request","test_filter":"startup_requeues_restart_cancelled",**extra}
+    def test_enforced_in_app_filter_is_accepted_and_bound_to_request(self):
+        import hashlib
+        item,args=self.request();self.broker.resources.enabled=True
+        self.assertNotIn("local_caller",self.trusted)
+        with patch.object(self.broker,"_start_next"):
+            queued=self.call("build_work",args)
+            job=self.broker.jobs[queued["job_id"]]
+            self.assertEqual(queued["status"],"queued");self.assertEqual(job["test_filter"],"startup_requeues_restart_cancelled")
+            signature=[item["task_id"],"test",args["expected_inputs_sha256"],30,"startup_requeues_restart_cancelled"]
+            self.assertEqual(job["check_signature"],hashlib.sha256(fixtures.host.canonical(signature)).hexdigest())
+            # A lost response recovers the same job; a changed filter under the same ID is refused.
+            self.assertEqual(self.call("build_work",args)["job_id"],queued["job_id"])
+            with self.assertRaisesRegex(ValueError,"different inputs"):self.call("build_work",{**args,"test_filter":"other_name"})
+            with patch.object(self.runner.executor,"check",return_value="1 passed")as run:
+                receipt=self.broker._execute_check(*self.broker.check_runs[queued["job_id"]])
+            self.assertEqual(run.call_args.args[0]["test_filter"],"startup_requeues_restart_cancelled")
+        self.assertEqual(receipt["status"],"completed")
+        self.assertEqual(job["rust_tests"],{"status":"passed","check":"test","feature_profile":"default","test_filter":"startup_requeues_restart_cancelled","scope":"filtered"})
+        self.assertFalse(self.runner.calls);self.assertEqual(item["status"],"open")
+    def test_unenforced_in_app_filter_is_refused(self):
+        item,args=self.request();self.broker.resources.enabled=False
+        with self.assertRaisesRegex(PermissionError,"enforced resource admission"):self.call("build_work",args)
+        self.assertFalse(self.broker.jobs)
+    def test_filter_on_compile_check_is_refused(self):
+        item,args=self.request(check="check");self.broker.resources.enabled=True
+        with self.assertRaisesRegex(PermissionError,"only to check=test"):self.call("build_work",args)
+        self.assertFalse(self.broker.jobs)
+    def test_in_app_compiler_cap_and_probes_remain_operator_only(self):
+        item,args=self.request();self.broker.resources.enabled=True
+        with self.assertRaisesRegex(PermissionError,"compiler cap requires local operator"):self.call("build_work",{**args,"compiler_memory_cap":fixtures.host.executor_module.COMPILER_MEMORY_CAP})
+        args.pop("test_filter")
+        for task in ("resource_probe","execution_probe","dependencies","runtime_readability"):
+            with self.assertRaisesRegex(PermissionError,"operator channel"):self.call("build_work",{**args,"check":task})
+        self.assertFalse(self.broker.jobs)
+
 class SubmissionRecoveryTests(unittest.TestCase):
     """Unchanged source can submit after yielding claims without receipt rewrites."""
     from test_scheduler_broker import SchedulerBrokerTests as _base

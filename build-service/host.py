@@ -5183,7 +5183,11 @@ class Broker:
             if task!="check":raise ValueError("Feature profiles apply only to compile checks")
             if not self.resources.enabled:raise PermissionError("Live feature checks require enforced resource admission")
         selected=executor_module.test_filter(args.get("test_filter"))
-        if selected is not None and (task!="test"or trusted.get("local_caller")is not True):raise PermissionError("Filtered tests require a local operator test request")
+        # A filter only narrows `cargo test`; the bounded name is passed as one argv item in the
+        # same per-job enforced container. Unenforced runners ignore filters, so refuse rather than
+        # silently run (and label) the whole suite. Compiler caps and probes stay operator-only.
+        if selected is not None and task!="test":raise PermissionError("Test filters apply only to check=test")
+        if selected is not None and not(trusted.get("local_caller")is True or self.resources.enabled):raise PermissionError("Filtered tests require enforced resource admission")
         cap=executor_module.compiler_cap(args.get("compiler_memory_cap"))
         if cap is not None and (trusted.get("local_caller")is not True or not self.resources.enabled):raise PermissionError("Enforced compiler cap requires local operator")
         signature=[task_id,task,expected,timeout]if cap is None else[task_id,task,expected,timeout,cap]
@@ -5265,7 +5269,7 @@ class Broker:
             after=context_digest(release.snapshot(root,TASK_CONTEXT,context_digest))[0]
             if after!=before:status="stale"
             job.update(status=status,phase="finished",finished_at=time.time(),log=scrub(log)[-MAX_LOG:],reason=("Inputs unchanged"if status=="completed"else("Task changed during check"if after!=before else scrub(log)[-600:])))
-            job["rust_tests"]={"status":("passed" if status=="completed" else status) if task=="test" else "not_run","check":task,"feature_profile":job.get("feature_profile","default")}
+            job["rust_tests"]={"status":("passed" if status=="completed" else status) if task=="test" else "not_run","check":task,"feature_profile":job.get("feature_profile","default"),**({"test_filter":job["test_filter"],"scope":"filtered"}if job.get("test_filter")else{})}
             job["check_result"]={"task_id":task_id,"job_id":job_id,"task":task,"feature_profile":job.get("feature_profile","default"),"status":status,"inputs_sha256":after,"log_excerpt":scrub(log)[-4096:]}
             job.setdefault("phase_history",[]).append({"phase":"finished","at":job["finished_at"]})
             self._save(job);self.job_cancellations.pop(job_id,None);item["last_activity_at"]=time.time();self._save_work()
