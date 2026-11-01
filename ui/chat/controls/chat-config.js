@@ -76,8 +76,10 @@ function applyComposerState() {
   if (!footerNodes) return;
   const {pill, input, stop, continue: continuation, send, mic} = footerNodes;
   const text = !!input.value.trim() || !!Number(pill.dataset.attachmentCount);
+  const dictating = /\bdictating\b/.test(String(pill?.className||''));
   pill.classList.toggle('has-text', text);
-  send.style.display = text ? '' : 'none'; mic.style.display = text ? 'none' : '';
+  if (dictating) { send.style.display = 'none'; mic.style.display = ''; }
+  else { send.style.display = text ? '' : 'none'; mic.style.display = text ? 'none' : ''; }
   // Stop also stays for background work left running after a conversation stop.
   stop.hidden = !(stop.dataset.run || stop.dataset.background === 'true') || stop.dataset.configEnabled === 'false';
   stop.style.display = stop.hidden ? 'none' : '';
@@ -305,7 +307,7 @@ export function applyChatConfig() {
   const surface = surfaceName();
   const focused = document.activeElement;
   const inComposer = byId('chat-input-area')?.contains(focused) || focused?.closest('.v3-context-panel:not([hidden]), .v3-chat-model-list:not([hidden])');
-  const mode = byId('chat-input').value || focused === byId('chat-input') || (currentFooterMode === 'active' && inComposer) ? 'active' : 'idle';
+  const mode = byId('chat-input').value || focused === byId('chat-input') || /\bdictating\b/.test(String(byId('chat-input-row')?.className||'')) || (currentFooterMode === 'active' && inComposer) ? 'active' : 'idle';
   if (applyingFooter) return;
   if (surface === currentSurface && mode === currentFooterMode) {
     applyComposerState();

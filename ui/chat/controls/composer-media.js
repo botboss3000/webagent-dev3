@@ -29,7 +29,7 @@ export function mountComposerMedia({root,client,ensureSession,note,changed,refre
   // Type the transcript so far between the text that was before and after the cursor, keeping the caret after it.
  function dictate(text){
   if(!around)return;const lead=around.before&&text&&!/\s$/.test(around.before)?' ':'',trail=around.after&&text&&!/^\s/.test(around.after)?' ':'';
-  input.value=around.before+lead+text+trail+around.after;const at=(around.before+lead+text).length;input.setSelectionRange(at,at);input.dispatchEvent(new Event('input',{bubbles:true}));
+  input.value=around.before+lead+text+trail+around.after;const at=(around.before+lead+text).length;input.setSelectionRange(at,at);input.scrollTop=input.scrollHeight;input.dispatchEvent(new Event('input',{bubbles:true}));
  }
   // Rebuild attachment previews from the active session and synchronize composer availability, count, and voice-button state.
  function paint(){
@@ -72,14 +72,15 @@ export function mountComposerMedia({root,client,ensureSession,note,changed,refre
   // Reflect capture state in the microphone (a stop square while listening), its accessibility label, and the composer, which is read-only while text is typed into it.
  function state(value){
   const recording=['listening','reconnecting'].includes(value),busy=value!=='idle'&&!recording;mic.classList.toggle('recording',recording);mic.classList.toggle('transcribing',busy);mic.setAttribute('aria-pressed',String(value!=='idle'));mic.title=recording?'Stop dictation':busy?{requesting_microphone:'Waiting for microphone permission…',reconnecting:'Reconnecting…'}[value]||'Finishing dictation…':'Dictate';mic.setAttribute('aria-label',mic.title);pill.classList.toggle('dictating',value!=='idle');
-  if(value==='idle')input.readOnly=false;
+  if(value==='idle')input.readOnly=false;changed?.();
  }
   // Stop typing into the composer and hand it back to the user with the caret after the dictated text.
- function release(){around=null;input.readOnly=false;if(!disposed)input.focus();}
+ function release(){around=null;input.readOnly=false;if(!disposed&&document.activeElement!==input)input.focus();}
   // Bridge capture frames to client.voiceAudio; each transcript update and the final text are typed at the cursor, and errors leave what was typed.
  const capture=createAudioCapture({send:(id,b)=>client.voiceAudio(id,b),onState:state,onText:dictate,onComplete:text=>{dictate(text);if(around&&!text.trim())note('No speech detected.');release();},onError:e=>{release();note(e.name==='NotAllowedError'?'Microphone permission is blocked. Allow it in the browser site controls and try again.':e.message);}});
   // Toggle: stop the active dictation, or start one at the cursor once availability and session-generation checks pass.
  mic.onclick=guard(async()=>{if(capture.active){await capture.finish();return;}if(!available)return;const epoch=generation,origin=session;const sid=await ensureSession();if(disposed||(origin&&origin!==session)||(epoch!==generation&&session!==sid))return;around={before:input.value.slice(0,input.selectionStart),after:input.value.slice(input.selectionEnd)};input.readOnly=true;try{if(!await capture.start(sid))release();}catch(e){release();throw e;}});
+ input.addEventListener('click',()=>{if(!around)return;const start=input.selectionStart,end=input.selectionEnd;capture.cancel();around=null;input.readOnly=false;input.setSelectionRange(start,end);},{signal:abort.signal});
   // Cancel any dictation before displaying a new session.
  function open(id){capture.cancel();around=null;input.readOnly=false;++generation;session=id;paint();}
   // Return staged upload IDs for submission, refusing while any file is pending, failed, or not uploaded.
