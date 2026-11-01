@@ -1143,6 +1143,20 @@ class FeatureProfileBrokerTests(unittest.TestCase):
         signature=[item["task_id"],"test",args["expected_inputs_sha256"],30,"startup_requeues_restart_cancelled"]
         self.assertEqual(job["check_signature"],hashlib.sha256(fixtures.host.canonical(signature)).hexdigest())
 
+    def test_fmt_and_clippy_bind_the_task_changed_rust_files(self):
+        item=self.begin("lint-paths-fixture");tree=Path(item["workspace_path"]).parent
+        (Path(item["workspace_path"])/"src").mkdir(exist_ok=True);(Path(item["workspace_path"])/"src/lint_fixture.rs").write_text("fn f() {}\n")
+        (Path(item["workspace_path"])/"README.md").write_text("changed, not Rust\n")
+        args={"action":"check","task_id":item["task_id"],"check":"fmt","expected_inputs_sha256":self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(tree)),"timeout_seconds":30,"request_id":"lint-check-request"}
+        self.broker.resources.enabled=False
+        with self.assertRaisesRegex(PermissionError,"resource admission"):self.call("build_work",args)
+        self.broker.resources.enabled=True
+        with patch.object(self.broker,"_start_next"):
+            job=self.broker.jobs[self.call("build_work",args)["job_id"]]
+            clippy=self.broker.jobs[self.call("build_work",{**args,"check":"clippy","request_id":"clippy-check-request"})["job_id"]]
+        self.assertEqual(job["lint_paths"],["src/lint_fixture.rs"]);self.assertEqual(clippy["check_task"],"clippy")
+        with self.assertRaisesRegex(ValueError,"only to compile"):self.call("build_work",{**args,"request_id":"lint-live","feature_profile":"live"})
+
     def test_live_input_race_is_stale_without_publication(self):
         item,args=self.request();self.broker.resources.enabled=True
         with patch.object(self.broker,"_start_next"):

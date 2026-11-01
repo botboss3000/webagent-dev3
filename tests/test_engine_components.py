@@ -115,6 +115,31 @@ class EngineTests(unittest.TestCase):
             self.assertEqual(certificate["binding"]["test_filter"],"engine_components::")
             # A check's own resource component lets it admit beside a release's engine phases.
             self.assertEqual(job["artifact_component"],"engine-check")
+    def test_fmt_and_clippy_report_only_the_task_changed_files(self):
+        import uuid
+        import test_admin_build as fixtures
+        from unittest.mock import Mock
+        def failure(text):
+            error=RuntimeError("fixed command failed: "+text);error.exit_code=1;return error
+        with tempfile.TemporaryDirectory()as temporary:
+            runner=types.SimpleNamespace(**{name:getattr(fixtures.host.Runner,name)for name in ("execution_entries","execution_application_blob","execution_source_digest")},compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64})
+            worker=executor.Executor(runner,None,{"state_root":temporary});worker.dependencies=Mock(return_value="offline ready\n")
+            blob=fixtures.context(extra={"v3/src/main.rs":"fn main() {}"})
+            extract=lambda path,data:fixtures.host.release.extract(path,data,fixtures.host.context_digest)
+            def run(task,phase,paths=("src/mine.rs",)):
+                worker.phase=phase;job={"job_id":str(uuid.uuid4()),"lint_paths":list(paths)}
+                return worker.check(job,blob,task,60,extract)
+            unrelated="Diff in /build/src/other.rs:3:\n-a\n+b\n"
+            self.assertIn("No fmt findings",run("fmt",Mock(side_effect=failure(unrelated))))
+            self.assertEqual(worker.phase.call_args.args[5],["rustfmt","--edition","2021","--check","src/mine.rs"])
+            with self.assertRaisesRegex(ValueError,"src/mine.rs:7"):run("fmt",Mock(side_effect=failure(unrelated+"Diff in /build/src/mine.rs:7:\n-x\n+y\n")))
+            with self.assertRaises(RuntimeError):run("fmt",Mock(side_effect=failure("error: expected item, found `}`\n")))
+            self.assertIn("nothing to fmt",run("fmt",Mock(),paths=()))
+            short="src/other.rs:1:1: warning: unused\n"
+            self.assertIn("No clippy findings",run("clippy",Mock(return_value=short)))
+            self.assertEqual(worker.phase.call_args.args[5][:3],["cargo","clippy","--locked"])
+            with self.assertRaisesRegex(ValueError,"src/mine.rs:4:2: warning"):run("clippy",Mock(return_value=short+"src/mine.rs:4:2: warning: unwrap_used\n"))
+            with self.assertRaises(RuntimeError):run("clippy",Mock(side_effect=failure("error[E0425]: cannot find value\n")))
     # Bind compiler memory evidence to its container and reject unenforced limits or OOM outcomes.
     def test_cap_requires_kernel_enforcement_and_oom_cannot_pass(self):
         import threading,uuid

@@ -8,6 +8,7 @@ def check_profile(value=None):
     if not isinstance(value,str)or value not in FEATURE_PROFILES:raise ValueError("Unsupported compile-check feature profile")
     return value
 
+LINT_TASKS={"fmt","clippy"}
 def check_argv(task,profile=None):
     """Preserve default check/test commands and expose live compilation as a standalone check."""
     selected=check_profile(profile)
@@ -840,7 +841,7 @@ class Executor:
             "identities":{k:self.config.get(k)for k in ("service_uid","service_gid","app_uid","app_gid","worker_uid","worker_gid")}}
 
     def verification_binding(self,job,blob,task,profile):
-        return {**self.test_proof(blob),"task":task,"feature_profile":profile,"test_filter":job.get("test_filter"),
+        return {**self.test_proof(blob),"task":task,"feature_profile":profile,"test_filter":job.get("test_filter"),"lint_paths":job.get("lint_paths"),
             "compiler_memory_cap":job.get("compiler_memory_cap"),"executor_sha256":hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
 
     def cached_check_result(self,binding):
@@ -979,7 +980,7 @@ class Executor:
 
     def check(self,job,blob,task,timeout,extract):
         """Use the same attributable recipes for bounded foreground checks and release compilation."""
-        profile=check_profile(job.get("feature_profile"));argv=None if task=="dependencies"else check_argv(task,profile)
+        profile=check_profile(job.get("feature_profile"));argv=None if task=="dependencies"or task in LINT_TASKS else check_argv(task,profile)
         # Checks own their output folder, so they admit beside a release's engine phases; memory and CPU admission still apply.
         job["artifact_component"]="engine-check"
         root=Path(self.config["state_root"])/"checks"/job["job_id"];source=root/"source";output=root/"output"
@@ -993,6 +994,11 @@ class Executor:
                 job["verification_cache"]["source_job_id"]=cached["job_id"]
                 getattr(self.runner,"resource_progress",lambda _:None)(job)
                 return "Reused completed verification from "+cached["job_id"]+"; no compiler or tests executed for this receipt.\n"+cached["log"]
+        if task in LINT_TASKS:
+            log=self.lint(job,application,output,task,max(1,timeout-int(time.monotonic()-start)))
+            if self.runner.execution_source_digest(source)!=before:raise ValueError("Check changed its captured application inputs")
+            self.record_check_result(job,binding,key,log)
+            return log
         log=self.dependencies(job,application,output,prepare=task=="dependencies",timeout=min(timeout,600))
         if task=="dependencies":return log
         remaining=max(1,timeout-int(time.monotonic()-start))
@@ -1006,6 +1012,30 @@ class Executor:
         self.record_check_result(job,binding,key,log)
         return log
 
+    def lint(self,job,application,output,task,timeout):
+        """Run rustfmt --check or Clippy and report only findings in the task's own changed Rust files."""
+        paths=job.get("lint_paths")or[]
+        if not paths:return "No changed Rust files in this task; nothing to "+task+".\n"
+        start=time.monotonic();log=""
+        if task=="fmt":argv=["rustfmt","--edition","2021","--check",*paths];phase="fmt";recipe="engine:rust1.90:fmt"
+        else:
+            log=self.dependencies(job,application,output,prepare=False,timeout=min(timeout,600))
+            argv=["cargo","clippy","--locked","--offline","--all-targets","--message-format=short"];phase="compile_test";recipe="engine:rust1.90:clippy"
+        try:out=self.phase(job,phase,"engine",application,output,argv,recipe,max(1,timeout-int(time.monotonic()-start)))
+        except RuntimeError as error:
+            # rustfmt exits 1 for differences, including in unedited files it reaches through `mod`; anything else is a failure.
+            if task!="fmt"or getattr(error,"exit_code",None)!=1:raise
+            out=str(error).removeprefix("fixed command failed: ")
+            if any(line.startswith("error")for line in out.splitlines()):raise
+        prefixes=tuple(("Diff in /build/"+p+":")if task=="fmt"else(p+":")for p in paths)
+        mine=[];keep=False
+        for line in out.splitlines():
+            if task=="fmt":
+                if line.startswith("Diff in "):keep=line.startswith(prefixes)
+                if keep:mine.append(line)
+            elif line.startswith(prefixes):mine.append(line)
+        if mine:raise ValueError(task+" findings in this task's changed Rust files:\n"+"\n".join(mine[:400]))
+        return log+"No "+task+" findings in this task's "+str(len(paths))+" changed Rust files.\n"
     @staticmethod
     def artifact_hashes(folder):
         """Bind every packaged output, including descriptors and offline registry, to its exact bytes."""

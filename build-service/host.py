@@ -5230,7 +5230,7 @@ class Broker:
         if set(args)-{"task_id","task","expected_inputs_sha256","timeout_seconds","request_id","compiler_memory_cap","test_filter","feature_profile"}or not{"task_id","task","expected_inputs_sha256"}<=set(args):
             raise ValueError("Task-scoped Cargo check arguments required")
         task_id,task=args["task_id"],args["task"];expected=args["expected_inputs_sha256"];timeout=args.get("timeout_seconds",600)
-        if not isinstance(task_id,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id)or task not in {"check","test","resource_probe","execution_probe","dependencies","runtime_readability"}or not isinstance(expected,str)or not re.fullmatch(r"[a-f0-9]{64}",expected)or type(timeout)is not int or not 1<=timeout<=600:
+        if not isinstance(task_id,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id)or task not in {"check","test","fmt","clippy","resource_probe","execution_probe","dependencies","runtime_readability"}or not isinstance(expected,str)or not re.fullmatch(r"[a-f0-9]{64}",expected)or type(timeout)is not int or not 1<=timeout<=600:
             raise ValueError("Bounded task Cargo request required")
         request_id=args.get("request_id")
         if request_id is not None and (not isinstance(request_id,str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",request_id)):
@@ -5245,6 +5245,7 @@ class Broker:
         # The filter is one bounded positional name; enforced admission is what runs it (the legacy runner ignores it).
         if selected is not None and task!="test":raise ValueError("Test filters apply only to test checks")
         if selected is not None and not(trusted.get("local_caller")is True or self.resources.enabled):raise PermissionError("Filtered tests require enforced resource admission")
+        if task in executor_module.LINT_TASKS and not self.resources.enabled:raise PermissionError("Format and Clippy checks require enforced resource admission")
         cap=executor_module.compiler_cap(args.get("compiler_memory_cap"))
         if cap is not None and (trusted.get("local_caller")is not True or not self.resources.enabled):raise PermissionError("Enforced compiler cap requires local operator")
         signature=[task_id,task,expected,timeout]if cap is None else[task_id,task,expected,timeout,cap]
@@ -5267,6 +5268,11 @@ class Broker:
             if not item or item.get("mode")!="isolated"or item["status"]!="open":raise ValueError("Open isolated task required")
             root=self.work_dir/"trees"/key;blob=release.snapshot(root,TASK_CONTEXT,context_digest);before=context_digest(blob)[0]
             if before!=expected:raise ValueError("Stale task source inputs")
+            lint_paths=None
+            if task in executor_module.LINT_TASKS:
+                # The workspace is not lint-clean, so findings are scoped to the Rust files this task changed.
+                _,changed=release.candidate((root/"baseline.tar").read_bytes(),blob,(root/"baseline.tar").read_bytes(),context_digest,allow_empty=True)
+                lint_paths=[name[3:]for name in changed if name.endswith(".rs")and(root/name).is_file()]
             if any(j.get("task_id")==task_id and self._owned(j,trusted,workspace)and j["status"]in {"running","queued"}and (j["operation"]!="check"or self.scheduler.mode!="enforce"or not request_id)for j in self.jobs.values()):
                 raise ValueError("This task already has pending execution")
             ownership_value=None
@@ -5280,7 +5286,7 @@ class Broker:
             job={"job_id":job_id,"request_key":request_key or "check-"+job_id,"check_signature":request_signature,"task_id":task_id,"user_id":trusted["user_id"],"workspace":workspace,
                 "operation":"check","check_task":task,"status":"queued","phase":"queued_check","created_at":time.time(),"started_at":None if request_id else time.time(),
                 "inputs_sha256":before,"lease_until":time.time()+timeout+120,"access_fingerprint":trusted["access_fingerprint"],
-                "images":{},"log":"","phase_history":[],"summary":"Isolated Cargo "+task,"compiler_memory_cap":cap,"test_filter":selected,"feature_profile":profile}
+                "images":{},"log":"","phase_history":[],"summary":"Isolated Cargo "+task,"compiler_memory_cap":cap,"test_filter":selected,"feature_profile":profile,**({"lint_paths":lint_paths}if lint_paths is not None else{})}
             if ownership_value:
                 job.update(ownership_id=key,ownership_epoch=ownership_value["epoch"],source_generation=ownership_value["generation"])
             self.jobs[job_id]=job;self._save(job)
