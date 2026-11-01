@@ -271,8 +271,18 @@ impl<
                         run["error"] = Value::Null;
                         user_app.save_override(&mut run).await?;
                     }
-                    if !resume || app.shutoff().await? || !user_app.run_model_authorized(&run).await
-                    {
+                    // Following the job only reads its receipt, so a model that is not yet
+                    // authorized (as just after a deploy restarts this loop) does not stop it;
+                    // the scheduler re-checks the model before the run continues.
+                    let stop = if !resume {
+                        Some("startup resume disabled")
+                    } else if app.shutoff().await? {
+                        Some("shutoff")
+                    } else {
+                        None
+                    };
+                    if let Some(reason) = stop {
+                        tracing::warn!(run_id = %id, reason, "Build-waiting run stopped at recovery");
                         run["status"] = json!("stopped");
                         run["error"] = json!("Build result awaits authorized resume");
                         user_app.save_override(&mut run).await?;

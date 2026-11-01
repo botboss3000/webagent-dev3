@@ -29,9 +29,9 @@ struct App {
     message_api_token_hash: Option<[u8; 32]>,
     browser_login_bridge: Option<browser_login::Bridge>,
 }
-pub(crate) use webagent_host_core::{bad, conflict, now, uuid, Api, ApiError};
 use webagent_configuration::digest;
 use webagent_host_core::key;
+pub(crate) use webagent_host_core::{bad, conflict, now, uuid, Api, ApiError};
 fn terminal(status: &str) -> bool {
     webagent_engine::runtime::failure::terminal(status)
 }
@@ -810,7 +810,9 @@ async fn run_process() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("webagent_v3=info".parse()?),
+                .add_directive("webagent_v3=info".parse()?)
+                // Engine warnings say why a run was stopped, refused or deferred.
+                .add_directive("webagent_engine=warn".parse()?),
         )
         .init();
     if let Some(path) = std::env::args()
@@ -820,7 +822,8 @@ async fn run_process() -> Result<()> {
         // Tool schemas come from the candidate's own tool folders.
         webagent_abilities::tool_definitions::use_root(path.join("plugins/abilities"));
         let catalog = abilities::Catalog::load_snapshot(&path.join("plugins/abilities"))?;
-        let administrator = webagent_administration::schemas::load(&path.join("plugins/abilities"))?;
+        let administrator =
+            webagent_administration::schemas::load(&path.join("plugins/abilities"))?;
         anyhow::ensure!(
             administrator.problems.is_empty(),
             "Invalid Administrator tool folders: {}",

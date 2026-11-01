@@ -1402,6 +1402,27 @@ async fn recovery_holds_uncertain_writes_and_requeues_safe_reads() {
 }
 
 #[tokio::test]
+async fn build_waiting_run_survives_restart_while_its_model_is_unauthorized() {
+    // A deploy restarts the loop under a run that is only following its build job;
+    // reading the receipt needs no model, so recovery keeps following it.
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    let id = queued(&app, &sid).await;
+    running(&app, &id, "build-generation").await;
+    let mut run = app.run(&id).await.unwrap();
+    run["phase"] = json!("tools");
+    run["selection_plan"] = Value::Null;
+    run["pending"] = json!({"name":"v3_build_work","state":"executing",
+        "call_id":"unauthorized-build-call","arguments":{"action":"finish",
+            "task_id":"build-unauthorized-test","expected_inputs_sha256":"0".repeat(64)}});
+    app.save(&mut run).await.unwrap();
+    recover(&app, true).await.unwrap();
+    let waiting = app.run(&id).await.unwrap();
+    assert_eq!(waiting["status"], "waiting_external");
+    assert!(waiting["error"].is_null());
+}
+
+#[tokio::test]
 async fn interrupted_build_finish_waits_for_receipt_without_replaying_write() {
     let (_root, app) = fixture().await;
     let sid = conversation(&app).await;

@@ -124,6 +124,32 @@ class TaskFileTests(unittest.TestCase):
             "request_id":"empty-request-02","expected_inputs_sha256":read["workspace_inputs_sha256"]})
         self.assertTrue(result["unchanged"])
 
+    def test_write_delete_removes_task_files_including_empty_ones(self):
+        read=self.read()
+        result=self.call("file_write", {"task_id":read["task_id"],"path":read["path"],"delete":True,"content":None,
+            "request_id":"delete-request-01","expected_inputs_sha256":read["workspace_inputs_sha256"]})
+        self.assertEqual(result["status"],"success")
+        self.assertIn("deleted file mode 100644\n",result["diff"])
+        folder=Path(next(iter(self.broker.work.values()))["workspace_path"])
+        self.assertFalse((folder/"docs/example.md").exists())
+        empty=self.call("file_write", {"task_id":read["task_id"],"path":"docs/empty.md","content":"",
+            "request_id":"delete-request-02","expected_inputs_sha256":result["workspace_inputs_sha256"]})
+        self.call("file_write", {"task_id":read["task_id"],"path":"docs/empty.md","delete":True,
+            "request_id":"delete-request-03","expected_inputs_sha256":empty["workspace_inputs_sha256"]})
+        self.assertFalse((folder/"docs/empty.md").exists())
+        current=self.read(read["task_id"],"src/sample.rs")["workspace_inputs_sha256"]
+        written=self.call("file_write", {"task_id":read["task_id"],"path":"src/sample.rs","content":"fn main() {}\n// kept\n",
+            "delete":None,"request_id":"delete-null-01","expected_inputs_sha256":current})
+        self.assertEqual(written["status"],"success")
+        current=written["workspace_inputs_sha256"]
+        for bad in ({"delete":True,"content":"x"},{"delete":False},{"delete":"yes"}):
+            with self.assertRaisesRegex(ValueError,"delete"):
+                self.call("file_write", {"task_id":read["task_id"],"path":"src/sample.rs","request_id":"delete-bad-01",
+                    "expected_inputs_sha256":current,**bad})
+        with self.assertRaisesRegex(ValueError,"existing task file"):
+            self.call("file_write", {"task_id":read["task_id"],"path":"docs/missing.md","delete":True,
+                "request_id":"delete-bad-02","expected_inputs_sha256":current})
+
     def test_binary_text_guard_and_wrong_task_id(self):
         self.read();item=next(iter(self.broker.work.values()))
         folder=Path(item["workspace_path"])

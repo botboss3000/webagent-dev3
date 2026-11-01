@@ -4190,7 +4190,7 @@ class Broker:
             "file_read": {"task_id", "path", "offset", "limit"},
             "file_search": {"task_id", "path", "query", "regex", "file_glob", "comments_only", "limit"},
             "file_edit": {"task_id", "path", "old_text", "new_text", "expected_sha256", "expected_inputs_sha256", "request_id"},
-            "file_write": {"task_id", "path", "content", "expected_inputs_sha256", "request_id"},
+            "file_write": {"task_id", "path", "content", "delete", "expected_inputs_sha256", "request_id"},
         }
         if set(args) - allowed[name]:
             raise ValueError("unsupported task file argument")
@@ -4266,6 +4266,10 @@ class Broker:
             raise ValueError("stale task inputs; reread the task file")
         if not created and expected is None:
             raise ValueError("existing task writes require expected_inputs_sha256 from a task read or review")
+        # Providers that require every field send null for unused ones.
+        delete = name == "file_write" and args.get("delete") is not None
+        if delete and (args["delete"] is not True or args.get("content") is not None or not exists):
+            raise ValueError("file_write delete requires delete: true, no content and an existing task file")
         if name == "file_edit":
             old, new = args.get("old_text"), args.get("new_text")
             if not exists or not isinstance(old, str) or not old or not isinstance(new, str):
@@ -4274,12 +4278,14 @@ class Broker:
             if args.get("expected_sha256") is not None and args["expected_sha256"] != hashlib.sha256(original).hexdigest():
                 raise ValueError("file changed since inspection")
             after = before.replace(old, new, 1)
+        elif delete:
+            after = ""
         else:
             after = args.get("content")
-            if not isinstance(after, str): raise ValueError("file_write requires content")
+            if not isinstance(after, str): raise ValueError("file_write requires content or delete")
         if len(after.encode()) > 1024 * 1024 or "\0" in after:
             raise ValueError("task write exceeds text bound")
-        if before == after and exists:
+        if before == after and exists and not delete:
             receipt = {"task_id": task_id, "request_id": args["request_id"],
                 "file_request_sha256": fingerprint, "status": "success", "unchanged": True,
                 "workspace_inputs_sha256": current, "paths": [path]}
@@ -4288,8 +4294,9 @@ class Broker:
             return dict(receipt)
         patch = "diff --git a/" + path + " b/" + path + "\n"
         if not exists: patch += "new file mode 100644\n"
+        if delete: patch += "deleted file mode " + ("100755" if source.stat().st_mode & 0o111 else "100644") + "\n"
         for line in difflib.unified_diff(before.splitlines(True), after.splitlines(True),
-                fromfile="a/" + path if exists else "/dev/null", tofile="b/" + path):
+                fromfile="a/" + path if exists else "/dev/null", tofile="/dev/null" if delete else "b/" + path):
             patch += line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
         if not exists and not after:
             patch += "--- /dev/null\n+++ b/" + path + "\n"

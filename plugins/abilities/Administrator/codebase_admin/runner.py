@@ -138,6 +138,8 @@ def file_operation(request, base, args, name):
         if name == "file_write":
             if leaf == ".":
                 raise ValueError("path must name a file")
+            if args.get("delete") is not None or not isinstance(args.get("content"), str):
+                raise ValueError("file_write needs content here; delete applies only to broker task files")
             content = args["content"].encode()
             if len(content) > LIMIT:
                 raise ValueError("file content exceeds limit")
