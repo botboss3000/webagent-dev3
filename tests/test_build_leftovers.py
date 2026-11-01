@@ -70,6 +70,10 @@ class LeftoverTests(unittest.TestCase):
         job["operator_adopted_at"] = time.time()
         self.assertEqual(self.notices()["total"],0)
         job.pop("operator_adopted_at")
+        job.update(status="failed",finished_at=time.time())
+        self.assertEqual(self.notices()["total"],0)
+        job["finished_at"] = time.time()-self.broker.scheduler.failure_grace
+        self.assertEqual(self.notices()["notices"][0]["status"],"failed")
         for status in ("completed","cancelled","running","queued","needs_decision"):
             job["status"] = status
             self.assertEqual(self.notices()["total"],0)

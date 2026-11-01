@@ -137,6 +137,8 @@ class TaskFileTests(unittest.TestCase):
         self.call("file_write", {"task_id":read["task_id"],"path":"docs/empty.md","delete":True,
             "request_id":"delete-request-03","expected_inputs_sha256":empty["workspace_inputs_sha256"]})
         self.assertFalse((folder/"docs/empty.md").exists())
+        review=self.call("build_work", {"action":"review","task_id":read["task_id"]})
+        self.assertIn("diff --git a/v3/docs/example.md b/v3/docs/example.md\ndeleted file mode 100644\n",review["diff"])
         current=self.read(read["task_id"],"src/sample.rs")["workspace_inputs_sha256"]
         written=self.call("file_write", {"task_id":read["task_id"],"path":"src/sample.rs","content":"fn main() {}\n// kept\n",
             "delete":None,"request_id":"delete-null-01","expected_inputs_sha256":current})

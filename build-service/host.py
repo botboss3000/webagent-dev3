@@ -2973,10 +2973,14 @@ class Broker:
             if now - last < policy["stale_after_seconds"]:
                 return None
             return "stale_open", int(last)
+        # The owning session may reopen or retry within the failure grace window,
+        # as an operator would; only an outcome left unhandled after it is noticed.
+        finished = job.get("finished_at", job.get("created_at", now))
         if (item.get("status") == "closed"
                 and job.get("status") in {"failed", "interrupted", "uncertain", "stale"}
-                and not job.get("operator_adopted_at")):
-            return job["status"], int(job.get("finished_at", job.get("created_at", now)))
+                and not job.get("operator_adopted_at")
+                and now - finished >= self.scheduler.failure_grace):
+            return job["status"], int(finished)
         return None
 
     def _reconcile_leftover_state(self, now=None):
@@ -4593,8 +4597,15 @@ class Broker:
             for path in paths:
                 old = baseline.get(path, (0, b""))[1].decode("utf-8", "replace")
                 new = current.get(path, (0, b""))[1].decode("utf-8", "replace")
-                patches.append("".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True),
-                    fromfile="a/" + path, tofile="b/" + path)))
+                # A content diff alone shows nothing for an added or deleted empty file.
+                header = f"diff --git a/{path} b/{path}\n"
+                if path not in current:
+                    header += f"deleted file mode 100{baseline[path][0]:o}\n"
+                elif path not in baseline:
+                    header += f"new file mode 100{current[path][0]:o}\n"
+                patches.append(header + "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True),
+                    fromfile="/dev/null" if path not in baseline else "a/" + path,
+                    tofile="/dev/null" if path not in current else "b/" + path)))
                 if sum(map(len, patches)) > 16000: break
             diff = "".join(patches)
             return {**item, "paths": paths[:64], "paths_truncated": len(paths) > 64,
