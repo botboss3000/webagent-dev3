@@ -1,6 +1,6 @@
 # Controlled V3 builds and source ownership
 
-The protected broker separates source ownership, attributable execution and short serialized publication. Independent isolated ability packages can compile in parallel; the monolithic engine and its actual compiler inputs remain one component. Core image builds share an engine artifact component even when a task edits only packaging or broker code. No manifest may hide a compiled dependency.
+The protected broker separates source ownership, attributable execution and short serialized publication. Independent isolated ability packages can compile in parallel; the monolithic engine and its actual compiler inputs remain one component. Core image builds share an engine artifact component even when a task edits only packaging or broker code. Standalone checks use their own `engine-check` component and `execution:rust-check` token, so one check runs beside one release under the same memory and CPU admission. No manifest may hide a compiled dependency.
 
 ## Source lifecycle
 
