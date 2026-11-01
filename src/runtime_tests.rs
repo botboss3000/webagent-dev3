@@ -1401,6 +1401,43 @@ async fn recovery_holds_uncertain_writes_and_requeues_safe_reads() {
     assert_eq!(durable["workflow"]["receipts"]["pre_tool"], receipt);
 }
 
+// A context pause caused only by restart cancellation resumes at startup; a
+// genuine context fault, a stale pause and uncertain work stay paused.
+#[tokio::test]
+async fn startup_requeues_restart_cancelled_context_pause_only() {
+    let (_root, app) = fixture().await;
+    let pause = |app: App, error: &'static str, uncertain: bool, age: u64| async move {
+        let sid = conversation(&app).await;
+        let id = queued(&app, &sid).await;
+        let mut run = app.run(&id).await.unwrap();
+        run["status"] = json!("paused");
+        run["error"] = json!(error);
+        run["uncertain"] = json!(uncertain);
+        app.save(&mut run).await.unwrap();
+        if age > 0 {
+            let mut run = app.run(&id).await.unwrap();
+            run["updated_at"] = json!(now() - age);
+            app.store
+                .save_run_override(&mut run, "run_status", &json!({"run_id":id}))
+                .await
+                .unwrap();
+        }
+        id
+    };
+    let cancelled = "Context preparation failed at provider_profile: Engine call cancelled";
+    let resumable = pause(app.clone(), cancelled, false, 0).await;
+    let fault = pause(app.clone(), "Context preparation failed at history: invalid", false, 0).await;
+    let uncertain = pause(app.clone(), cancelled, true, 0).await;
+    let stale = pause(app.clone(), cancelled, false, 2 * 24 * 60 * 60).await;
+    recover(&app, true).await.unwrap();
+    let run = app.run(&resumable).await.unwrap();
+    assert_eq!(run["status"], "queued");
+    assert_eq!(run["error"], "Recovered after interruption");
+    for id in [fault, uncertain, stale] {
+        assert_eq!(app.run(&id).await.unwrap()["status"], "paused");
+    }
+}
+
 #[tokio::test]
 async fn interrupted_build_finish_waits_for_receipt_without_replaying_write() {
     let (_root, app) = fixture().await;

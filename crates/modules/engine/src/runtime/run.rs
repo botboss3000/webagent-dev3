@@ -398,15 +398,37 @@ impl<
     }
     /// Invalid host input pauses for review; unavailable pure services retain accepted work.
     /// The stage and error are logged for operators and kept as the run's visible error.
+    ///
+    /// Context preparation precedes every model dispatch and tool effect, so the
+    /// last saved checkpoint is a safe resume point. A failure caused by this
+    /// generation's cancellation (runtime restart, user interrupt or lost lease)
+    /// is not a context fault: the in-flight preparation is discarded and the run
+    /// stays resumable instead of surfacing a manual-continue pause.
     async fn pause_context_preparation(
         app: &Self,
         run: &mut Value,
+        cancel: &CancellationToken,
         stage: &'static str,
         error: &anyhow::Error,
     ) -> Result<()> {
         if let Some(object) = run.as_object_mut() {
             object.remove("_context_assets_write");
             object.remove("_context_assets_operation");
+        }
+        if cancel.is_cancelled() {
+            // Restart: keep `running` so startup recovery requeues it silently.
+            if Self::preserve_restart_interruption(app, run).await? {
+                return Ok(());
+            }
+            // User interrupt: the follow-up handoff owns the transition.
+            if Self::settle_followup_interrupt(app, run).await? {
+                return Ok(());
+            }
+            // Lease loss or a concurrent stop: the new owner or lease recovery
+            // decides. Leave the checkpoint untouched rather than pausing it.
+            tracing::info!(run_id=%run["id"].as_str().unwrap_or("unknown"),
+                "Context preparation at {stage} discarded after cancellation");
+            return Ok(());
         }
         if !crate::components::available(crate::ports::AgentMetadata::root(app.store.records())) {
             return app.component_pause(run).await;
@@ -1408,8 +1430,14 @@ impl<
             match app.asset_catalog() {
                 Ok(catalog) => app.abilities = Arc::new(catalog),
                 Err(error) => {
-                    Self::pause_context_preparation(&app, &mut run, "ability_catalog", &error)
-                        .await?;
+                    Self::pause_context_preparation(
+                        &app,
+                        &mut run,
+                        &cancel,
+                        "ability_catalog",
+                        &error,
+                    )
+                    .await?;
                     return Ok(());
                 }
             }
@@ -1494,8 +1522,14 @@ impl<
             app.abilities = match app.asset_catalog() {
                 Ok(catalog) => Arc::new(catalog),
                 Err(error) => {
-                    Self::pause_context_preparation(&app, &mut run, "ability_catalog", &error)
-                        .await?;
+                    Self::pause_context_preparation(
+                        &app,
+                        &mut run,
+                        &cancel,
+                        "ability_catalog",
+                        &error,
+                    )
+                    .await?;
                     return Ok(());
                 }
             };
@@ -1713,7 +1747,8 @@ impl<
                     return Ok(());
                 }
                 if let Err(error) = app.hydrate_context(&mut run).await {
-                    Self::pause_context_preparation(&app, &mut run, "history", &error).await?;
+                    Self::pause_context_preparation(&app, &mut run, &cancel, "history", &error)
+                        .await?;
                     return Ok(());
                 }
                 let prepared_source_fence = match app.source_fence() {
@@ -1872,8 +1907,14 @@ impl<
                 {
                     Ok(blocks) => guidance_blocks.extend(blocks),
                     Err(error) => {
-                        Self::pause_context_preparation(&app, &mut run, "skill_guidance", &error)
-                            .await?;
+                        Self::pause_context_preparation(
+                            &app,
+                            &mut run,
+                            &cancel,
+                            "skill_guidance",
+                            &error,
+                        )
+                        .await?;
                         return Ok(());
                     }
                 }
@@ -1904,6 +1945,7 @@ impl<
                         Self::pause_context_preparation(
                             &app,
                             &mut run,
+                            &cancel,
                             "provider_profile",
                             &anyhow::anyhow!("Unexpected profile result"),
                         )
@@ -1911,8 +1953,14 @@ impl<
                         return Ok(());
                     }
                     Err(error) => {
-                        Self::pause_context_preparation(&app, &mut run, "provider_profile", &error)
-                            .await?;
+                        Self::pause_context_preparation(
+                            &app,
+                            &mut run,
+                            &cancel,
+                            "provider_profile",
+                            &error,
+                        )
+                        .await?;
                         return Ok(());
                     }
                 };
@@ -2158,8 +2206,14 @@ impl<
                 {
                     Ok(value) => value,
                     Err(error) => {
-                        Self::pause_context_preparation(&app, &mut run, "capability", &error)
-                            .await?;
+                        Self::pause_context_preparation(
+                            &app,
+                            &mut run,
+                            &cancel,
+                            "capability",
+                            &error,
+                        )
+                        .await?;
                         return Ok(());
                     }
                 };
@@ -2228,8 +2282,14 @@ impl<
                             run["id"].as_str().unwrap_or("unknown"),
                             history_shape(&placement_history)
                         );
-                        Self::pause_context_preparation(&app, &mut run, "projection", &error)
-                            .await?;
+                        Self::pause_context_preparation(
+                            &app,
+                            &mut run,
+                            &cancel,
+                            "projection",
+                            &error,
+                        )
+                        .await?;
                         return Ok(());
                     }
                 };
@@ -2446,6 +2506,7 @@ impl<
                             Self::pause_context_preparation(
                                 &app,
                                 &mut run,
+                                &cancel,
                                 "summary_request",
                                 &error,
                             )
@@ -2772,8 +2833,14 @@ impl<
                 {
                     Ok(value) => value,
                     Err(error) => {
-                        Self::pause_context_preparation(&app, &mut run, "provider_request", &error)
-                            .await?;
+                        Self::pause_context_preparation(
+                            &app,
+                            &mut run,
+                            &cancel,
+                            "provider_request",
+                            &error,
+                        )
+                        .await?;
                         return Ok(());
                     }
                 };
