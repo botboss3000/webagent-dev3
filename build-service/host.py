@@ -1983,7 +1983,10 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 "--user",str(CONFIG["worker_uid"])+":"+str(CONFIG["worker_gid"]),"--pids-limit","64","--memory","256m",
                 "--tmpfs","/tmp:rw,size=64m,mode=1777","--mount","type=bind,src="+str(root / DIAGNOSTICS_ROOT)+",dst=/package,readonly",
                 "--entrypoint","python3",image,"-I","-B","/package/test_runner.py"],timeout=60)
-        if any(name.startswith(ABILITY_ROOT) or engine_component_source_path(name) or name.startswith("v3/config/") or name=="v3/src/engine/tools/administrator-schemas.json" for name in changed):
+        manifest=root/release.LIVE_MANIFEST
+        live=release.live_patterns({release.LIVE_MANIFEST:(0o644,manifest.read_bytes())})if manifest.is_file()else()
+        # Live files take the app's own configuration validators, as a full release does.
+        if any(name.startswith(ABILITY_ROOT) or engine_component_source_path(name) or name.startswith("v3/config/") or release.is_live(name,live) or name=="v3/src/engine/tools/administrator-schemas.json" for name in changed):
             # A foundation release introduces the validator itself. Validate with
             # its already-tested candidate API image; hot updates use the retained consumer.
             image=(active["images"]["api"] if active is not None

@@ -506,6 +506,20 @@ class CodebasePublicationMetadataTests(unittest.TestCase):
    self.assertEqual(args[-1],"--validate-assets=/candidate/v3")
 
 
+ def test_live_file_release_runs_the_app_configuration_validator(self):
+  from unittest.mock import Mock
+  with tempfile.TemporaryDirectory() as temporary:
+   root=Path(temporary);job=str(uuid.uuid4());(root/"releases"/job/"v3").mkdir(parents=True)
+   (root/"releases"/job/"v3/live-files.json").write_text(json.dumps({"version":1,"files":["crates/modules/context/*.json"]}))
+   runner=fixtures.host.Runner();runner.inspect=Mock(return_value={"Image":"sha256:retained-runtime"})
+   runner.command=Mock(side_effect=[json.dumps({"catalog_version":"f"*64}),"syntax valid"])
+   with patch.object(fixtures.host,"ASSET_ROOT",root):
+    runner.validate_ui(job,["v3/crates/modules/context/policy.json"])
+   args=runner.command.call_args_list[0].args[0]
+   self.assertIn("sha256:retained-runtime",args)
+   self.assertEqual(args[-1],"--validate-assets=/candidate/v3")
+
+
 class CodebaseRegisteredGuidanceTests(unittest.TestCase):
  def test_every_installed_selectable_skill_has_an_independent_lane(self):
   folder=Path(__file__).resolve().parents[1]/"plugins/abilities/Administrator/codebase_admin/skills"

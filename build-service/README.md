@@ -294,8 +294,8 @@ by design): an in-place edit made after the task began shows as a promotion conf
 admission and stops promotion, so it is never overwritten; reopen the task to take it.
 A task that changes only listed files (plus other hot-lane paths) publishes as
 `plugin_deploy` without a core build, when installed compiler evidence excludes each
-file, and refuses a listed `.json` that does not parse; the app's own validators run
-only on read. A listed file the compiler reads, or unavailable evidence, takes
+file, refuses a listed `.json` that does not parse, and runs the retained app image's
+`--validate-assets` over the candidate, as a full release does before activation. A listed file the compiler reads, or unavailable evidence, takes
 `build_deploy`, as does a task that also changes code. A new task's tree takes listed files from the checkout, so it starts from their current
 bytes. Creating a file and listing it in the same task is an ordinary change. A rebuild keeps
 the released bytes of listed files. The broker's 60-second maintenance loop commits settled edits (no
