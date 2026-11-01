@@ -84,6 +84,9 @@ function esc(s) {
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
   ));
 }
+const OPENCODE_BRIDGE_NOTE = "Free models (opencode/…) answer only while OpenCode's own tools stay switched on, "
+  + 'so the bridge client keeps them on but rejects every tool use. OpenCode limits free use and may end it at any time. '
+  + "OpenCode Go models (opencode-go/…) count against your Go plan's usage limits.";
 function makeCheck() {
   const el = document.createElement('span');
   el.className = 'agents-autosave-check';
@@ -571,10 +574,10 @@ export function mountModelTable(host, opts = {}) {
   const credentialSelect = document.createElement('select');
   credentialSelect.className = 'ac-input ac-input-sm'; credentialSelect.setAttribute('aria-label', 'Saved credentials');
   credentialSelect.hidden = true;
-  // Claude Bridge has no provider-issued key: the link token is generated here and given to the bridge client.
+  // Bridge providers have no provider-issued key: the link token is generated here and given to the bridge client.
   const generateLinkBtn = document.createElement('button');
   generateLinkBtn.type = 'button'; generateLinkBtn.className = 'ac-btn ac-btn-ghost ac-btn-sm';
-  generateLinkBtn.textContent = 'Generate link'; generateLinkBtn.title = 'Create a new link token for a Claude Bridge client';
+  generateLinkBtn.textContent = 'Generate link'; generateLinkBtn.title = 'Create a new link token for a bridge client';
   generateLinkBtn.hidden = true;
   generateLinkBtn.addEventListener('click', () => {
     const bytes = crypto.getRandomValues(new Uint8Array(32));
@@ -594,6 +597,14 @@ export function mountModelTable(host, opts = {}) {
   savedKeyCtrl.append(credentialSelect, credentialLabelInput, saveCredentialBtn, loadCredentialBtn, credentialSaveCheck);
   savedKeyRow.appendChild(savedKeyCtrl);
   table.appendChild(savedKeyRow);
+
+  // OpenCode Bridge: free and Go-plan models have different limits.
+  const opencodeNoteRow = document.createElement('div');
+  opencodeNoteRow.className = 'ac-ability-row ac-model-cfg-row ac-row-static';
+  opencodeNoteRow.hidden = true;
+  opencodeNoteRow.innerHTML = '<span class="ac-ability-label"><span class="ac-ability-name">Limits</span></span>'
+    + `<span class="ac-model-cfg-control ac-hint" style="margin:0;">${esc(OPENCODE_BRIDGE_NOTE)}</span>`;
+  table.appendChild(opencodeNoteRow);
 
   // OpenAI subscription account row. Issuing a code never opens a browser;
   // opening OpenAI is a separate, explicit user action.
@@ -2146,7 +2157,9 @@ export function mountModelTable(host, opts = {}) {
     const provName = isCatalogRow(p) ? catalogProviderName() : (S.presets[p.provider]?.name || p.provider || 'custom');
     const automaticRouting = p.routing_mode === 'openrouter_free'
       ? '<div class="ac-hint" style="margin:8px 0 0;"><strong>Automatically routed:</strong> OpenRouter selects a currently available free model for each request. This slot is not pinned to a static model.</div>'
-      : '';
+      : p.provider === 'opencode_bridge'
+        ? `<div class="ac-hint" style="margin:8px 0 0;"><strong>OpenCode Bridge:</strong> ${esc(OPENCODE_BRIDGE_NOTE)}</div>`
+        : '';
     // MODEL-NAME-LEVELS: the Model name line is the model's canonical name — the
     // catalog's alias for a catalog row, the real model id for a BYO row. A catalog
     // row never prints its real upstream id. The Auth line is gone: catalog
@@ -3347,9 +3360,10 @@ export function mountModelTable(host, opts = {}) {
     syncProviderField();
     const saved = S.providerConfigs[S.currentProvider];
     urlInput.value = (saved && saved.base_url) || S.presets[S.currentProvider]?.base_url || '';
-    const bridge = S.currentProvider === 'claude_bridge';
+    const bridge = S.currentProvider === 'claude_bridge' || S.currentProvider === 'opencode_bridge';
     keyInput.value = ''; keyInput.placeholder = bridge ? 'Generate a link token' : 'sk-...';
     generateLinkBtn.hidden = !bridge;
+    opencodeNoteRow.hidden = S.currentProvider !== 'opencode_bridge';
     validatedCredential = ''; clearTimeout(credentialValidationTimer);
     credentialSelect.hidden = true; credentialSelect.replaceChildren(); credentialLabelInput.value = '';
     S.selectedModel = inlineCatalogAdd ? '' : ((saved && saved.model) || '');

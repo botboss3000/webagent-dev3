@@ -717,7 +717,7 @@ pub async fn connection_key<C: RuntimeStorage>(
         .put(&reference, &json!({"api_key":body.api_key}))
         .await?;
     // The bridge client endpoints admit only tokens saved on a bridge connection.
-    if connection.transport == crate::model_selection::Transport::ClaudeBridge {
+    if connection.transport.provider_id().is_bridge() {
         app.store
             .put(
                 &format!(
@@ -771,11 +771,8 @@ pub async fn discover<C: RuntimeStorage>(
         if !key.bytes().all(|b| b.is_ascii_graphic())
             || !(8..=512).contains(&key.len())
             || (provider.chat_endpoint().is_none()
-                && !matches!(
-                    provider,
-                    crate::provider::ProviderId::Typesafe
-                        | crate::provider::ProviderId::ClaudeBridge
-                ))
+                && provider != crate::provider::ProviderId::Typesafe
+                && !provider.is_bridge())
         {
             return Err(super::bad("Invalid discovery credential or provider"));
         }

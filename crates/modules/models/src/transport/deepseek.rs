@@ -130,7 +130,7 @@ impl Completion {
         Ok(json!({"status":"completed","output":output,"usage":self.usage}))
     }
 }
-/// Validate one whole Claude Bridge reply exactly as a finished compatible stream.
+/// Validate one whole bridge reply exactly as a finished compatible stream.
 pub(super) fn bridge_result(reply: &Value) -> Result<Value> {
     let message = &reply["message"];
     let calls: Vec<Value> = message["tool_calls"]
@@ -184,10 +184,10 @@ impl Provider {
             );
         }
         // The bridge has no listing endpoint: its models are the provider file's.
-        if provider == ProviderId::ClaudeBridge {
+        if provider.is_bridge() {
             required(tokens, "api_key")?;
             let file = crate::providers::load(provider)?
-                .ok_or_else(|| anyhow!("Claude Bridge provider file missing"))?;
+                .ok_or_else(|| anyhow!("Bridge provider file missing"))?;
             let models: Vec<Value> = file.models.iter().map(|m| {
                 let name = m.name.clone().unwrap_or_else(|| m.id.clone());
                 json!({"id":m.id,"name":name,"display_name":name,"text_capable":true,"decision_capable":false,

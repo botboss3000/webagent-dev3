@@ -460,11 +460,13 @@ pub enum Transport {
     Perplexity,
     Deepinfra,
     ClaudeBridge,
+    OpencodeBridge,
 }
 
 impl Transport {
     pub fn uses_api_key(&self) -> bool {
-        matches!(self, Self::Typesafe | Self::ClaudeBridge)
+        matches!(self, Self::Typesafe)
+            || self.provider_id().is_bridge()
             || self.provider_id().chat_endpoint().is_some()
     }
     pub fn provider_id(&self) -> crate::provider::ProviderId {
@@ -484,6 +486,7 @@ impl Transport {
             Self::Perplexity => crate::provider::ProviderId::Perplexity,
             Self::Deepinfra => crate::provider::ProviderId::Deepinfra,
             Self::ClaudeBridge => crate::provider::ProviderId::ClaudeBridge,
+            Self::OpencodeBridge => crate::provider::ProviderId::OpencodeBridge,
         }
     }
 }

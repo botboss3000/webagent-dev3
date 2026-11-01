@@ -48,6 +48,7 @@ pub fn projection_id(provider: ProviderId) -> webagent_provider_contracts::Provi
         ProviderId::Deepinfra => P::Deepinfra,
         ProviderId::Typesafe => P::Typesafe,
         ProviderId::ClaudeBridge => P::ClaudeBridge,
+        ProviderId::OpencodeBridge => P::OpencodeBridge,
     }
 }
 /// Sanitized transport error; no provider payload, token or user input escapes.
@@ -183,7 +184,7 @@ fn failure_kind(value: &Value) -> crate::model_selection::FailureKind {
         _ => Protocol,
     }
 }
-/// One Claude Bridge call: the chat-completions body for the client holding `link`.
+/// One bridge call: the chat-completions body for the client holding `link`.
 pub struct BridgeCall {
     pub link: String,
     pub session: String,
@@ -531,7 +532,7 @@ impl Provider {
         }
     }
 
-    /// Attach the host's Claude Bridge queue; without one, bridge calls fail as unavailable.
+    /// Attach the host's bridge queue; without one, bridge calls fail as unavailable.
     pub fn with_bridge(mut self, queue: std::sync::Arc<dyn BridgeQueue>) -> Self {
         self.bridge = Some(queue);
         self

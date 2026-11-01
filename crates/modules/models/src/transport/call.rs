@@ -188,10 +188,9 @@ impl<'a> CallDraft<'a> {
         })?;
         // Shape errors precede the legacy unsupported-transport error; no service
         // or credential work is attempted for a Decision-only model.
-        if !matches!(
-            self.selection.provider,
-            ProviderId::OpenaiSubscription | ProviderId::ClaudeBridge
-        ) && self.selection.provider.chat_endpoint().is_none()
+        if self.selection.provider != ProviderId::OpenaiSubscription
+            && !self.selection.provider.is_bridge()
+            && self.selection.provider.chat_endpoint().is_none()
         {
             return Err(anyhow!("Provider does not use API keys"));
         }
@@ -255,7 +254,7 @@ impl<'a> CallDraft<'a> {
                 })
             }
             webagent_provider_contracts::MaterializedV1::ChatCompletions { messages, tools }
-                if self.selection.provider == ProviderId::ClaudeBridge =>
+                if self.selection.provider.is_bridge() =>
             {
                 let mut body = compatible_body(self.selection, messages, tools);
                 if let Some(effort) = self.reasoning_effort {
@@ -392,7 +391,7 @@ impl Provider {
                     typed_failure(
                         crate::model_selection::FailureKind::ModelUnavailable,
                         false,
-                        "Claude Bridge is unavailable here",
+                        "Bridge is unavailable here",
                     )
                 })?;
                 let reply = queue
