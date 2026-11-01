@@ -4861,7 +4861,7 @@ async fn workflow_policy_is_authenticated_validated_and_live() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert!(
-        workflow_policy_set(State(app.clone()), Json(json!({"max_turns":51})))
+        workflow_policy_set(State(app.clone()), Json(json!({"max_attempts":4})))
             .await
             .is_err()
     );

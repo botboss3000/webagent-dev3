@@ -10,12 +10,21 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Checkpoint {
-    Admission, AttachmentPreparation, ContextAssembly, ModelDispatch,
-    ModelOutput, PreTool, ToolResult, Publication,
+    Admission,
+    AttachmentPreparation,
+    ContextAssembly,
+    ModelDispatch,
+    ModelOutput,
+    PreTool,
+    ToolResult,
+    Publication,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "decision", rename_all = "snake_case")]
-pub enum Decision { Pass, Reject { reason: String } }
+pub enum Decision {
+    Pass,
+    Reject { reason: String },
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -83,19 +92,26 @@ pub struct Policy {
 }
 impl Policy {
     pub fn resolve(overrides: Option<&Value>) -> Result<Self> {
-        let defaults = crate::runtime::config::Config::<crate::runtime::config::UnboundSchemas>::default();
+        let defaults =
+            crate::runtime::config::Config::<crate::runtime::config::UnboundSchemas>::default();
         let mut value = json!({"schema_version":1,"max_turns":defaults.workflow.max_turns,
             "max_attempts":defaults.workflow.max_attempts,"max_context_bytes":defaults.context.max_context_bytes,
             "max_publication_bytes":defaults.workflow.max_publication_bytes,"modules":defaults.workflow.modules});
         if let Some(overrides) = overrides {
-            let fields = overrides.as_object().ok_or_else(|| anyhow::anyhow!("Policy must be an object"))?;
-            for (key, field) in fields { value[key] = field.clone(); }
+            let fields = overrides
+                .as_object()
+                .ok_or_else(|| anyhow::anyhow!("Policy must be an object"))?;
+            for (key, field) in fields {
+                value[key] = field.clone();
+            }
         }
         let policy: Self = serde_json::from_value(value)?;
-        if policy.schema_version != 1 || !(1..=50).contains(&policy.max_turns)
+        // max_turns has no ceiling; 0 means no turn limit.
+        if policy.schema_version != 1
             || !(1..=3).contains(&policy.max_attempts)
             || !(1024..=4_194_304).contains(&policy.max_context_bytes)
-            || !(1..=262144).contains(&policy.max_publication_bytes) {
+            || !(1..=262144).contains(&policy.max_publication_bytes)
+        {
             bail!("Invalid workflow policy or operator ceiling exceeded");
         }
         for checkpoint in policy.modules.keys() {
@@ -107,13 +123,13 @@ impl Policy {
         Ok(policy)
     }
     pub fn revision(&self) -> Result<String> {
-        let mut digest=Sha256::new();
+        let mut digest = Sha256::new();
         digest.update(serde_json::to_vec(self)?);
         // A live JSON gate edit changes the receipt identity even when activation
         // and order stay the same. A run can then re-evaluate at the next boundary.
         for checkpoint in self.modules.keys() {
-            let checkpoint: Checkpoint=serde_json::from_value(json!(checkpoint))?;
-            for selected in crate::gate_registry::selected(self,checkpoint)? {
+            let checkpoint: Checkpoint = serde_json::from_value(json!(checkpoint))?;
+            for selected in crate::gate_registry::selected(self, checkpoint)? {
                 digest.update(serde_json::to_vec(&selected.manifest.config)?);
             }
         }
@@ -126,8 +142,13 @@ impl Policy {
 pub fn record(run: &mut Value, policy: &Policy, input: &Input, decision: Decision) -> Result<()> {
     let checkpoint = input.checkpoint();
     let input_digest = digest_input(input)?;
-    let name = serde_json::to_value(checkpoint)?.as_str().unwrap().to_owned();
-    if run.get("workflow").is_none() { run["workflow"] = json!({"schema_version":1,"receipts":{}}); }
+    let name = serde_json::to_value(checkpoint)?
+        .as_str()
+        .unwrap()
+        .to_owned();
+    if run.get("workflow").is_none() {
+        run["workflow"] = json!({"schema_version":1,"receipts":{}});
+    }
     run["workflow"]["receipts"][&name] = json!({
         "checkpoint": checkpoint, "generation":run["generation"],
         "policy_revision":policy.revision()?, "input_digest":input_digest,
@@ -148,7 +169,9 @@ pub fn record_tool_result(run: &mut Value, result: &Value) -> Result<()> {
         receipt["checkpoint"] = json!(Checkpoint::ToolResult);
         receipt["input_digest"] = json!(digest_input(&input)?);
         receipt["result"] = if result["status"] == "denied" {
-            json!(Decision::Reject { reason: "Tool invocation denied".into() })
+            json!(Decision::Reject {
+                reason: "Tool invocation denied".into()
+            })
         } else {
             json!(Decision::Pass)
         };
@@ -161,43 +184,81 @@ pub fn record_tool_result(run: &mut Value, result: &Value) -> Result<()> {
 mod tests {
     use super::*;
     fn pre_tool(name: &str) -> Input {
-        Input::PreTool(PreToolInput { name:name.into(), arguments_digest:"digest".into(),
-            policy_version:1, mode_revision:0, visibility_revision:0, ability_state_revision:0 })
+        Input::PreTool(PreToolInput {
+            name: name.into(),
+            arguments_digest: "digest".into(),
+            policy_version: 1,
+            mode_revision: 0,
+            visibility_revision: 0,
+            ability_state_revision: 0,
+        })
     }
-    #[test] fn defaults_and_tightening() {
-        assert_eq!(Policy::resolve(None).unwrap().max_turns,50);
-        assert_eq!(Policy::resolve(Some(&json!({"max_turns":2}))).unwrap().max_turns,2);
+    #[test]
+    fn defaults_and_tightening() {
+        assert_eq!(Policy::resolve(None).unwrap().max_turns, 50);
+        assert_eq!(
+            Policy::resolve(Some(&json!({"max_turns":2})))
+                .unwrap()
+                .max_turns,
+            2
+        );
+        // The live file decides the turn budget; 0 means no limit.
+        for turns in [0, 500] {
+            assert_eq!(
+                Policy::resolve(Some(&json!({ "max_turns": turns })))
+                    .unwrap()
+                    .max_turns,
+                turns
+            );
+        }
     }
-    #[test] fn rejects_unsafe_or_unknown_configuration() {
-        for value in [json!({"max_turns":51}),json!({"schema_version":2}),
-            json!({"disable_authorization":true}),json!({"modules":{"pre_tool":["unknown"]}}),
+    #[test]
+    fn rejects_unsafe_or_unknown_configuration() {
+        for value in [
+            json!({"max_attempts":4}),
+            json!({"schema_version":2}),
+            json!({"disable_authorization":true}),
+            json!({"modules":{"pre_tool":["unknown"]}}),
             json!({"modules":{"pre_tool":["publication_size_guard_v1"]}}),
             json!({"modules":{"publication":["unknown"]}}),
             json!({"modules":{"publication":["publication_size_guard_v1","publication_size_guard_v1"]}}),
-            json!({"modules":{"arbitrary_gate":[]}})] {
+            json!({"modules":{"arbitrary_gate":[]}}),
+        ] {
             assert!(Policy::resolve(Some(&value)).is_err());
         }
     }
-    #[test] fn publication_module_modes_are_explicit_and_bounded() {
-        for name in ["publication_size_guard_v1", "optional:publication_size_guard_v1"] {
-            let policy=Policy::resolve(Some(&json!({"modules":{"publication":[name]}}))).unwrap();
-            assert_eq!(policy.modules["publication"],vec![name]);
+    #[test]
+    fn publication_module_modes_are_explicit_and_bounded() {
+        for name in [
+            "publication_size_guard_v1",
+            "optional:publication_size_guard_v1",
+        ] {
+            let policy = Policy::resolve(Some(&json!({"modules":{"publication":[name]}}))).unwrap();
+            assert_eq!(policy.modules["publication"], vec![name]);
         }
     }
-    #[test] fn receipts_bind_policy_generation_and_input() {
-        let p=Policy::resolve(None).unwrap();
-        let mut run=json!({"generation":"g1","turns":1,"call_index":0});
-        record(&mut run,&p,&pre_tool("read"),Decision::Pass).unwrap();
-        let first=run["workflow"]["receipts"]["pre_tool"].clone();
-        run["generation"]=json!("g2");
-        record(&mut run,&p,&pre_tool("write"),Decision::Pass).unwrap();
-        assert_ne!(first["input_digest"],run["workflow"]["receipts"]["pre_tool"]["input_digest"]);
-        assert_eq!(run["workflow"]["receipts"]["pre_tool"]["generation"],"g2");
+    #[test]
+    fn receipts_bind_policy_generation_and_input() {
+        let p = Policy::resolve(None).unwrap();
+        let mut run = json!({"generation":"g1","turns":1,"call_index":0});
+        record(&mut run, &p, &pre_tool("read"), Decision::Pass).unwrap();
+        let first = run["workflow"]["receipts"]["pre_tool"].clone();
+        run["generation"] = json!("g2");
+        record(&mut run, &p, &pre_tool("write"), Decision::Pass).unwrap();
+        assert_ne!(
+            first["input_digest"],
+            run["workflow"]["receipts"]["pre_tool"]["input_digest"]
+        );
+        assert_eq!(run["workflow"]["receipts"]["pre_tool"]["generation"], "g2");
     }
-    #[test] fn gate_inputs_are_typed_and_cannot_be_mislabeled() {
-        let input=Input::Publication { text_digest:"accepted".into() };
-        assert_eq!(input.checkpoint(),Checkpoint::Publication);
+    #[test]
+    fn gate_inputs_are_typed_and_cannot_be_mislabeled() {
+        let input = Input::Publication {
+            text_digest: "accepted".into(),
+        };
+        assert_eq!(input.checkpoint(), Checkpoint::Publication);
         assert!(serde_json::from_value::<Input>(json!({
-            "checkpoint":"publication","facts":{"text":"raw untyped content"}})).is_err());
+            "checkpoint":"publication","facts":{"text":"raw untyped content"}}))
+        .is_err());
     }
 }

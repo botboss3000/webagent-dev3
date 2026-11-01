@@ -136,11 +136,11 @@ pub(crate) async fn host_fingerprint(
         return Err(refused(Code::DeploymentAuthorizationRejected));
     }
     // An Ask finish reaches this host only after explicit approval. Its queued job keeps
-    // that authorization while the scoped policy fingerprint stays valid. A finish can
-    // replace this loop's ability bundle while its broker job is still live: policy,
-    // activation and access stay in the fingerprint, but bundle bytes alone cannot
-    // revoke the job during its own deployment.
-    let bundle = if work_finish {
+    // that authorization while the scoped policy fingerprint stays valid. Any deployment
+    // replaces the ability bundle while broker work (finish or check) is queued or
+    // running: policy, activation and access stay in the fingerprint, but bundle bytes
+    // alone cannot revoke broker work.
+    let bundle = if policy_name == "build_work" {
         Value::Null
     } else {
         json!(scoped.abilities.live_version())

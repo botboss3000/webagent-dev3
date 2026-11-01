@@ -76,9 +76,19 @@ impl<
         ) && run["pending"]["arguments"]["action"] == "finish"
             && run["pending"]["state"] == "executing"
     }
+    /// A pending broker call whose job the run is waiting on: a finish, or a queued check.
+    fn pending_build_job(run: &Value) -> bool {
+        matches!(
+            run["pending"]["name"].as_str(),
+            Some("v3_build_work" | "build_work")
+        ) && matches!(
+            run["pending"]["arguments"]["action"].as_str(),
+            Some("finish" | "check")
+        ) && run["pending"]["state"] == "executing"
+    }
     pub fn attach_external_build_result(run: &mut Value, result: &Value) -> Result<()> {
         if status(run) != "waiting_external"
-            || !Self::pending_build_finish(run)
+            || !Self::pending_build_job(run)
             || run["pending"]["external_job"]["kind"] != "v3_build"
         {
             bail!("No pending external build result");
@@ -94,10 +104,12 @@ impl<
             .ok_or_else(|| anyhow!("Missing session"))?;
         let rid = run["id"].as_str().ok_or_else(|| anyhow!("Missing run"))?;
         let task = finish_task(run);
-        let authority = if run["pending"]["name"] == "build_work" {
-            "build_work_finish"
-        } else {
-            "v3_build_work_finish"
+        let check = run["pending"]["arguments"]["action"] == "check";
+        let authority = match (run["pending"]["name"] == "build_work", check) {
+            (true, true) => "build_work",
+            (true, false) => "build_work_finish",
+            (false, true) => "v3_build_work",
+            (false, false) => "v3_build_work_finish",
         };
         let fingerprint = app
             .native
@@ -188,6 +200,7 @@ impl<
         // The broker commits a completed release and frees its claims right after it
         // finishes; wait briefly so the result carries that commit.
         let closing = state == "completed"
+            && !check
             && job["rebuild_closeout"].is_null()
             && job["finished_at"]
                 .as_f64()
@@ -366,6 +379,20 @@ impl<
     }
 }
 
+/// Whether a broker reply leaves the call waiting on its job: an accepted finish, or a
+/// check that is still queued or running. The run then waits like it does for a finish,
+/// with stage lines, instead of the model polling the job.
+pub(crate) fn awaits_broker_job(action: &Value, output: &Value) -> bool {
+    match action.as_str() {
+        Some("finish") => output["status"] == "closed",
+        Some("check") => {
+            output["job_id"].is_string()
+                && matches!(output["status"].as_str(), Some("queued" | "running"))
+        }
+        _ => false,
+    }
+}
+
 /// The task a pending finish named: the legacy task_id, or a returned Broker ID, which is
 /// the task's label. A finish that continued the current work names neither; its job ID,
 /// recorded when the broker accepted it, is enough to follow it.
@@ -472,6 +499,34 @@ mod tests {
             "stage_index":finished + 1,"stage_count":6,"stage_seconds":125,
             "stage_normal":[300,600],"verdict":verdict,"finished_stages":done,
             "remaining_seconds":[900,3300]})
+    }
+
+    #[test]
+    fn finishes_and_unfinished_checks_wait_for_their_job() {
+        let finish = json!("finish");
+        let check = json!("check");
+        assert!(awaits_broker_job(
+            &finish,
+            &json!({"status":"closed","job_id":"j"})
+        ));
+        assert!(!awaits_broker_job(&finish, &json!({"status":"open"})));
+        assert!(awaits_broker_job(
+            &check,
+            &json!({"status":"queued","job_id":"j"})
+        ));
+        assert!(awaits_broker_job(
+            &check,
+            &json!({"status":"running","job_id":"j"})
+        ));
+        assert!(!awaits_broker_job(
+            &check,
+            &json!({"status":"completed","job_id":"j"})
+        ));
+        assert!(!awaits_broker_job(&check, &json!({"status":"queued"})));
+        assert!(!awaits_broker_job(
+            &json!("status"),
+            &json!({"status":"queued","job_id":"j"})
+        ));
     }
 
     #[test]

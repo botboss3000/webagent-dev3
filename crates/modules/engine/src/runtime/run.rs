@@ -1338,9 +1338,8 @@ impl<
         match result {
             Ok(value) => {
                 if matches!(name.as_str(), "v3_build_work" | "build_work")
-                    && args["action"] == "finish"
                     && value["status"] == "success"
-                    && value["output"]["status"] == "closed"
+                    && super::recovery::awaits_broker_job(&args["action"], &value["output"])
                 {
                     // The broker owns the job across our own container replacement.
                     // Keep this model call pending; recovery reads its receipt and
@@ -1800,12 +1799,15 @@ impl<
                         .unwrap_or(app.store.current_user_id()),
                 )
                 .await?;
-                if run["turns"].as_u64().expect("run counters are numbers")
-                    >= if run["post_run_followup"] == true {
-                        workflow_policy.max_turns.min(3)
-                    } else {
-                        workflow_policy.max_turns
-                    }
+                // max_turns 0 means no limit; a post-run follow-up still stops after three.
+                let turn_limit = match (run["post_run_followup"] == true, workflow_policy.max_turns)
+                {
+                    (true, 0) => 3,
+                    (true, max) => max.min(3),
+                    (false, max) => max,
+                };
+                if (turn_limit != 0
+                    && run["turns"].as_u64().expect("run counters are numbers") >= turn_limit)
                     || run["attempt"].as_u64().expect("run counters are numbers")
                         >= workflow_policy.max_attempts
                 {

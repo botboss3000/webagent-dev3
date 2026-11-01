@@ -87,6 +87,19 @@
         "minimum": 1,
         "maximum": 600
       },
+      "feature_profile": {
+        "type": "string",
+        "enum": [
+          "default",
+          "live"
+        ],
+        "description": "check=check only: default compiles the linked build; live compiles the live host without linked implementation crates."
+      },
+      "test_filter": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_:]{1,160}$",
+        "description": "check=test only: run just the tests whose names contain this text, such as a module path or test name."
+      },
       "paths": {
         "type": "array",
         "minItems": 1,

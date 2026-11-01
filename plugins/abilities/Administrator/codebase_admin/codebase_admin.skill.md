@@ -29,7 +29,7 @@ The default profile follows the workspace's existing default features. The live 
 
 The live profile is supported only for compile checks (check=check), not check=test or resource_probe. Omitting feature_profile retains existing default behavior. Profiles are a fixed allowlist, not arbitrary Cargo flags. Checks retain isolated snapshots, ownership, unchanged-input attestation and enforced resource limits; they do not deploy, promote source or start documentation/index maintenance.
 
-The protected operator CLI and broker API expose feature_profile today. The in-app build_work tool schema does not yet declare it; in-app agents should hand this check to an authorized operator until that tool surface is extended. Ordinary in-app default checks remain available.
+The in-app build_work tool takes feature_profile and test_filter on check; run these checks yourself before finish.
 
 Example operator broker request (replace placeholders with actual task values):
 
@@ -46,6 +46,16 @@ Example operator broker request (replace placeholders with actual task values):
 ~~~
 
 Use another request ID with feature_profile=default for the companion check. For operator CLI syntax and receipt details, see [the broker reference](../../../../build-service/README.md#standalone-rust-feature-checks).
+
+## Before finish: compile and test checks
+
+A full build takes about 25 minutes and fails late, so prove a Rust change first with build_work checks on the same unchanged input digest:
+
+1. check=check with feature_profile=default.
+2. check=check with feature_profile=live when you changed shared host code, engine integration, service wrappers, feature-gated paths or implementation-crate dependencies.
+3. check=test with test_filter for the tests of each module you changed, plus any new or edited test by name.
+
+Each check holds your call until its job ends and returns its status and a log excerpt; do not poll it. On a failure, fix and run the affected checks again on the new digest. check=check skips #[cfg(test)] modules, so a test-only change needs step 3. Finish only after the latest digest passed them. Guidance, JSON, UI and other non-Rust changes need no Rust checks; their release lane runs its own tests.
 
 ## Automatic broker identity and work selection
 
