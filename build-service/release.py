@@ -5,6 +5,7 @@ import importlib.util
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import stat
 import tarfile
@@ -32,6 +33,31 @@ def inspection_path(name):
 # released copy) at admission and promotion, so an in-place edit is never lost.
 LIVE_MANIFEST = "v3/live-files.json"
 LIVE_DENIED = ("build-service/", "tests/", "data/", "build-jobs/", "workspaces/", "runtime/", "target/", ".")
+
+
+# Broker copy of plugins/abilities/Administrator/git_control/adapter.py secret(): the broker
+# never executes task-editable app code; tests keep the two copies in agreement.
+_DUMMY_CREDENTIALS = {
+    b"SECRET_CANARY",
+    b"abcdefghijklmnop12345", b"another-secret", b"discovery-key", b"first-secret",
+    b"fixture-audio-key", b"fixture-no-network-key", b"fixture-only",
+    b"fixture-password", b"fixture-token", b"isolated-key", b"must-not-project",
+    b"never-forward", b"never-leak-key", b"second-secret", b"test-key-no-network",
+    b"test-password-only", b"valid-fixture-secret",
+}
+_DUMMY_URLS = {b"https://u:p@example.test", b"https://user:password@example.invalid", b"https://user:password@deb.debian.org"}
+
+
+def possible_credentials(data):
+    """True when bytes hold a private key, provider token, credential URL or credential-shaped literal."""
+    data = re.sub(rb"sk-1234567890abcdef(?![A-Za-z0-9_-])", b"<public-redaction-fixture>", data)
+    if re.search(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[A-Z0-9]{16}", data, re.I):
+        return True
+    for match in re.finditer(rb"""(?:https?|ssh)://[^\s/@:"\']+:[^\s/@"\']+@[^\s/"']+""", data, re.I):
+        if match.group().lower() not in _DUMMY_URLS:
+            return True
+    pattern = rb"""(?<![A-Za-z0-9_-])(?:api[_-]?key|access[_-]?token|password|secret)["']?\s*[:=]\s*(?:["']([A-Za-z0-9_./+!=-]{12,})["']|([A-Za-z0-9_./+!=-]{12,})(?=[\t ]*(?:\r?$|["'])))"""
+    return any((match.group(1) or match.group(2)) not in _DUMMY_CREDENTIALS for match in re.finditer(pattern, data, re.I | re.M))
 
 
 def live_patterns(files):

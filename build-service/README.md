@@ -38,6 +38,8 @@ may be added or replaced with Git binary hunks from `git diff --binary`. Binary
 hunks elsewhere, data-less `Binary files ... differ` diffs, renames and copies are
 refused. The 1 MiB operator patch bound applies to the encoded patch.
 
+Preflight and finish refuse a release whose changed files hold possible credentials (private keys, provider tokens, credential URLs or credential-shaped literals), naming only the paths. The scanner is `release.possible_credentials`, a broker copy of the git_control commit/push scanner kept in agreement by tests; test fixtures keep their values but avoid credential-shaped literals.
+
 Source changes are compared by bytes and the executable bit only, in task review,
 preflight, finish and acceptance alike. A private-tree mode rewrite (for example
 0664 to 0600) is not a change, so a byte-identical revert leaves the release.

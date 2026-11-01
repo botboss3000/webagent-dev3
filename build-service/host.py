@@ -2613,9 +2613,11 @@ def write_performance(path):
 STAGE_OF = {"dependency": "dependencies", "compile_test": "compile tests", "test": "run tests",
     "compile_linked": "release build", "compile_release": "release build", "live_smoke": "release build",
     "package": "package release", "building_loop": "package release", "preparing_plugins": "package release",
-    "preparing_ui": "UI build and tests", "frontend_tests": "UI build and tests"}
-STAGE_SKIP = {"engine_metadata", "linked_smoke", "start", "finished", "building_api", "admitted", None}
-STAGE_ORDER = ["dependencies", "compile tests", "run tests", "release build", "package release",
+    "preparing_ui": "UI build and tests", "frontend_tests": "UI build and tests", "fmt": "format check"}
+# A standalone check runs its execution steps inside checking_source, as a release does inside building_api.
+STEP_PHASES = {"building_api", "checking_source"}
+STAGE_SKIP = {"engine_metadata", "linked_smoke", "start", "finished", "admitted", "queued_check", None} | STEP_PHASES
+STAGE_ORDER = ["dependencies", "format check", "compile tests", "run tests", "release build", "package release",
     "UI build and tests", "deploy and health checks"]
 
 
@@ -2631,7 +2633,7 @@ def stage_spans(job, now=None):
         before = [p for at, p in history if at <= t]
         return before[-1] if before else None
     def stage(phase, t):
-        if phase_at(t) not in (None, "building_api"):
+        if phase_at(t) is not None and phase_at(t) not in STEP_PHASES:
             return None
         return STAGE_OF.get(phase, None if phase in STAGE_SKIP else "deploy and health checks")
     spans = {}
@@ -4697,6 +4699,7 @@ class Broker:
         broken=sorted(path for path in live_changed if path.endswith(".json")and malformed(path))
         if broken:
             refusal="Live JSON file does not parse: "+broken[0].removeprefix("v3/")
+        leaked=sorted(path for path in changed if path in files and release.possible_credentials(files[path][1]))
         if pins:
             refusal=("Shared UI pinned asset changed without matching v3/ui-baseline.json: "+", ".join(pins)
                      +". Update its sha256 in v3/ui-baseline.json in this task.")
@@ -4705,6 +4708,10 @@ class Broker:
             refusal=("Broker-only change is not installed: build_deploy would rebuild app images and leave the old broker running. "
                      +("Install this task tree while idle (lifecycle.py install --install-tree <task tree hash>), then finish again to publish as host_service_deploy."
                        if trusted.get("local_caller")else"A local operator must install the task tree and publish it."))
+        if leaked:
+            # Paths only: matched bytes never enter receipts or replies.
+            refusal=("Possible credentials in changed files: "+", ".join(p.removeprefix("v3/")for p in leaked[:20])
+                     +". Remove them; for a test fixture keep the value but avoid a credential-shaped literal (for example Rust concat!).")
         return {"operation":operation,"changed_paths":sorted(changed),"ui_only":ui_only,"plugin_only":plugin_only,"index_only":index_only,"host_only":host_only,
                 "refusal":refusal,"broker_install_required":bool(broker_paths)and not host_only,"shared_ui_paths":shared_ui}
 

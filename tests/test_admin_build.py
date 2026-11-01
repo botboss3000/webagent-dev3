@@ -617,6 +617,13 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(spans["dependencies"], [1, 10])
         self.assertEqual(spans["package release"], [100, 300])
         self.assertNotIn("run tests", spans)
+        check = {"job_id": "check", "status": "completed", "operation": "check", "started_at": 0, "finished_at": 100,
+                 "phase_history": [{"phase": "checking_source", "at": 0}, {"phase": "finished", "at": 100}],
+                 "execution_history": [{"phase": "dependency", "started_at": 1, "elapsed_seconds": 4},
+                                       {"phase": "fmt", "started_at": 6, "elapsed_seconds": 2},
+                                       {"phase": "compile_test", "started_at": 10, "elapsed_seconds": 50},
+                                       {"phase": "test", "started_at": 61, "elapsed_seconds": 30}]}
+        self.assertEqual(host.stage_spans(check), {"dependencies": [1, 5], "format check": [6, 8], "compile tests": [10, 60], "run tests": [61, 91]})
 
     def test_pending_journal_scan_sees_new_and_rewritten_records(self):
         scheduler = self.broker.scheduler

@@ -2266,6 +2266,21 @@ class LiveFileRoutingTests(unittest.TestCase):
    result=self.call("v3_build_work",{"action":"preflight","task_id":task["task_id"]})
   self.assertEqual(result["release_plan"]["operation"],"plugin_deploy")
   self.assertEqual(result["synchronization"]["promotion_conflicts"],0)
+ def test_credential_shaped_change_is_refused_by_path_only(self):
+  token="ghp_"+"A"*24
+  plan=self.plan({"crates/modules/context/prompts/summary.md":"token = "+token})
+  self.assertIn("Possible credentials in changed files: crates/modules/context/prompts/summary.md",plan["refusal"])
+  self.assertNotIn(token,json.dumps(plan))
+  self.assertIsNone(self.plan({"crates/modules/context/prompts/summary.md":"new"})["refusal"])
+ def test_broker_credential_scanner_agrees_with_git_control(self):
+  import re
+  source=(Path(fixtures.host.__file__).parents[1]/"plugins/abilities/Administrator/git_control/adapter.py").read_text()
+  app={"re":re};exec(source[source.index("_DUMMY_CREDENTIALS={"):source.index("async def command(")],app)
+  samples=[b"plain text",b"-----BEGIN "+b"PRIVATE KEY-----",b"token = ghp_"+b"A"*24,b"https://user:"+b"hunter2abc@host.example",
+           b"https://u:p@example.test",b'password = "fixture-password"',b'api_key = "'+b"AbCdEfGh123456"+b'"',
+           b"let secret_name = value();",b"sk-1234567890abcdef",b"AKIA"+b"B"*16,b"sk-"+b"x"*20]
+  for sample in samples:
+   with self.subTest(sample=sample[:12]):self.assertEqual(fixtures.host.release.possible_credentials(sample),app["secret"](sample))
  def test_unparseable_live_json_is_refused(self):
   self.assertIn("Live JSON file does not parse: crates/modules/context/policy.json",self.plan({"crates/modules/context/policy.json":"{"})["refusal"])
 
