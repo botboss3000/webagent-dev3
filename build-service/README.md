@@ -288,7 +288,11 @@ task may change a listed file alongside code it depends on, in the same release.
 change is checked against the task's base bytes, not the released copy (which is stale
 by design): an in-place edit made after the task began shows as a promotion conflict at
 admission and stops promotion, so it is never overwritten; reopen the task to take it.
-Creating a file and listing it in the same task is an ordinary change. A rebuild keeps
+A task that changes only listed files (plus other hot-lane paths) publishes as
+`plugin_deploy` without a core build, when installed compiler evidence excludes each
+file, and refuses a listed `.json` that does not parse; the app's own validators run
+only on read. A listed file the compiler reads, or unavailable evidence, takes
+`build_deploy`, as does a task that also changes code. Creating a file and listing it in the same task is an ordinary change. A rebuild keeps
 the released bytes of listed files. The broker's 60-second maintenance loop commits settled edits (no
 change for 10 seconds) to listed files as one `Live config edit: ...` commit with
 `git commit --only`, so other writers' staged work is never included. The same loop

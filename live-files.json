@@ -1,5 +1,5 @@
 {
-  "_instructions": "Files edited in place in this checkout, by hand or by the app, and read live. The broker excludes them from release drift, never lets a task change them, and commits their edits automatically. Paths are relative to this folder; '*' is allowed only in the last segment; only .json and .md files.",
+  "_instructions": "Files edited in place in this checkout, by hand or by the app, and read live. The broker excludes them from release drift and commits their edits automatically. A task may also change them: alone they take the fast plugin_deploy lane, with code the normal release. Paths are relative to this folder; '*' is allowed only in the last segment; only .json and .md files.",
   "version": 1,
   "files": [
     "crates/modules/access/access-policy.json",

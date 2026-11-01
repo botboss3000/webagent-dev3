@@ -3372,7 +3372,8 @@ class Broker:
             task = (folder / "task.tar").read_bytes()
             live = self._current_release_blob()
             candidate, changed = release.candidate(base, task, live, context_digest, allow_empty=True)
-            if not all(hot_source_path(path) for path in changed):
+            patterns = release.live_patterns(release.entries(candidate, context_digest))
+            if not all(hot_source_path(path) or release.is_live(path, patterns) for path in changed):
                 raise ValueError("parallel UI release contains non-UI source")
             if not self._sync_job(job, live, candidate, changed):
                 return
@@ -4651,8 +4652,12 @@ class Broker:
             generic_package_path(path,candidate) or generic_package_path(path,base_blob))]
         docs_changed=any(path.startswith("v3/docs/")and path.endswith(".md")for path in changed)
         external_defaults_changed=any(path in {"v3/config/prompts.json","v3/config/tool-output-retention.json","v3/config/administration/native-tools.json"}for path in changed)
+        # Live files are read from the checkout, so like external defaults they publish
+        # without a core build only when installed compiler evidence excludes them.
+        files=release.entries(candidate,context_digest);patterns=release.live_patterns(files)
+        live_changed={path for path in changed if release.is_live(path,patterns)}
         core_inputs=set();docs_attested=False
-        if package_changed or docs_changed or external_defaults_changed or any(path.startswith("v3/ui/")for path in changed):
+        if package_changed or docs_changed or external_defaults_changed or live_changed or any(path.startswith("v3/ui/")for path in changed):
             try:
                 core_inputs=self.runner.core_compile_inputs()
                 docs_attested=isinstance(core_inputs,set)and "v3/src/main.rs"in core_inputs
@@ -4660,23 +4665,30 @@ class Broker:
             except (AttributeError,OSError,RuntimeError,ValueError,TimeoutError):
                 core_inputs=set()
         # Ordinary notes are assets only when installed compiler evidence excludes them.
-        ui_only = all((hot_source_path(path) or (
+        ui_only = all((hot_source_path(path) or path in live_changed or (
             docs_attested and path.startswith("v3/docs/")and path.endswith(".md")) or (
             (generic_package_path(path,candidate) or generic_package_path(path,base_blob))
             and not native_package_migration(path,base_blob)))
             and path not in core_inputs and not path.startswith(("v3/crates/context-contracts/","v3/crates/background-contracts/","v3/crates/boot-contracts/","v3/crates/assets-contracts/","v3/crates/capability-contracts/","v3/crates/provider-contracts/"))for path in changed)
-        if (package_changed or docs_changed or external_defaults_changed)and not docs_attested:ui_only=False
+        if (package_changed or docs_changed or external_defaults_changed or live_changed)and not docs_attested:ui_only=False
         if CONFIG.get("scheduler",{}).get("concurrent_ui_preparation",False)and any(path.startswith("v3/ui/")for path in changed)and not docs_attested:ui_only=False
         engine_changed=any(engine_component_source_path(path)for path in changed)
         if engine_changed and not self.runner.engine_hot_swappable():ui_only=False
         index_only=ui_only and(not changed or any(path in INDEX_METADATA_FILES for path in changed))
-        plugin_only=ui_only and not monitoring_component.only_paths(changed) and any((path.startswith(ABILITY_ROOT) and path not in INDEX_METADATA_FILES) or generic_package_path(path,candidate) or generic_package_path(path,base_blob) or path.startswith("v3/config/") or path=="v3/src/engine/tools/administrator-schemas.json" for path in changed)
+        plugin_only=ui_only and not monitoring_component.only_paths(changed) and any((path.startswith(ABILITY_ROOT) and path not in INDEX_METADATA_FILES) or generic_package_path(path,candidate) or generic_package_path(path,base_blob) or path.startswith("v3/config/") or path in live_changed or path=="v3/src/engine/tools/administrator-schemas.json" for path in changed)
         host_only = self.host_source_only(current_changed,candidate,trusted)
         operation="host_service_deploy" if host_only else "plugin_deploy" if plugin_only else "index_deploy" if index_only else "ui_deploy" if ui_only else "build_deploy"
         broker_paths=[p for p in current_changed if p.startswith("v3/build-service/")and not p.startswith("v3/build-service/shared-ui/")]
         refusal=None
         shared_ui=sorted(p for p in changed if p.startswith(release.SHARED_UI_SOURCE))
         pins=release.ui_baseline_mismatch(candidate)
+        def malformed(path):
+            try:json.loads(files[path][1]);return False
+            except (KeyError,ValueError):return path in files
+        # The fast lane skips the app's own validators; at least refuse unparseable JSON.
+        broken=sorted(path for path in live_changed if path.endswith(".json")and malformed(path))
+        if broken:
+            refusal="Live JSON file does not parse: "+broken[0].removeprefix("v3/")
         if pins:
             refusal=("Shared UI pinned asset changed without matching v3/ui-baseline.json: "+", ".join(pins)
                      +". Update its sha256 in v3/ui-baseline.json in this task.")
@@ -6360,6 +6372,7 @@ class Broker:
                 (part_dir / "base.tar").read_bytes(),
                 (part_dir / "task.tar").read_bytes(), merged, context_digest, allow_empty=part.get("operation")=="index_deploy")
             changed.update(paths)
+        patterns = release.live_patterns(release.entries(merged, context_digest))
         if tested_runtime:
             old_ui = release.entries(blob, context_digest)
             new_ui = release.entries(merged, context_digest)
@@ -6370,7 +6383,8 @@ class Broker:
             docs_attested=isinstance(core_inputs,set)and "v3/src/main.rs"in core_inputs and (precompile or isinstance(built_inputs,dict)and "v3/src/main.rs"in built_inputs)
             def ordinary_note(name):
                 # Both installed and built compiler evidence must exclude a note.
-                return docs_attested and name.startswith("v3/docs/")and name.endswith(".md")and name not in core_inputs and name not in built_inputs
+                # Live files are read from the checkout, so their released bytes never reach the runtime.
+                return docs_attested and (name.startswith("v3/docs/")and name.endswith(".md") or release.is_live(name,patterns))and name not in core_inputs and name not in built_inputs
             before = {name: item for name, item in old_ui.items()
                       if not hot_source_path(name)and not ordinary_note(name)and not generic_package_path(name,blob,old_ui)}
             after = {name: item for name, item in new_ui.items()
@@ -6390,7 +6404,7 @@ class Broker:
             job["built_inputs_sha256"] = job["inputs_sha256"]
             job["rust_tests"] = {"status": "passed",
                 "summary": "Runtime inputs tested before UI asset rebase; UI assets validated separately"}
-        elif not all(hot_source_path(path)or generic_package_path(path,blob)or generic_package_path(path,merged)for path in changed):
+        elif not all(hot_source_path(path)or release.is_live(path,patterns)or generic_package_path(path,blob)or generic_package_path(path,merged)for path in changed):
             raise ValueError("parallel UI release changed runtime inputs")
         digest = context_digest(merged)[0]
         release_root = folder / ("release-rebased-" + digest[:16])

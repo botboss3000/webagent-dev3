@@ -2214,6 +2214,33 @@ class ExternalDefaultRoutingTests(unittest.TestCase):
     with self.subTest(name=name,evidence=evidence):
      self.assertEqual(self.route_default(name,evidence),"build_deploy")
 
+class LiveFileRoutingTests(unittest.TestCase):
+ """A task that changes only live files takes the fast lane; with code it takes the full release."""
+ setUp=fixtures.BuildTests.setUp
+ tearDown=fixtures.BuildTests.tearDown
+ call=fixtures.BuildTests.call
+ def plan(self,files,evidence={"v3/src/main.rs"}):
+  if getattr(self,"_started",False):self.tearDown();self.setUp()
+  self._started=True
+  manifest=json.dumps({"version":1,"files":["crates/modules/context/*.json","crates/modules/context/prompts/*.md"]})
+  self.runner.blob=fixtures.context(extra={"v3/live-files.json":manifest,"v3/crates/modules/context/policy.json":"{}",
+      "v3/crates/modules/context/prompts/summary.md":"old","v3/crates/modules/context/src/lib.rs":"code"})
+  if evidence is False:self.runner.core_compile_inputs=lambda:(_ for _ in()).throw(ValueError("manifest unavailable"))
+  else:self.runner.core_compile_inputs=lambda:evidence
+  task=self.call("v3_build_work",{"action":"begin","task_id":"live-route-"+uuid.uuid4().hex,"summary":"Live file fixture","mode":"isolated"})
+  for name,body in files.items():Path(task["workspace_path"],name).write_text(body)
+  return self.call("v3_build_work",{"action":"preflight","task_id":task["task_id"]})["release_plan"]
+ def test_live_only_change_publishes_without_core_build(self):
+  plan=self.plan({"crates/modules/context/policy.json":'{"a":1}',"crates/modules/context/prompts/summary.md":"new"})
+  self.assertEqual(plan["operation"],"plugin_deploy");self.assertIsNone(plan["refusal"])
+ def test_code_compiler_read_or_unknown_evidence_takes_full_release(self):
+  self.assertEqual(self.plan({"crates/modules/context/policy.json":'{"a":1}',"crates/modules/context/src/lib.rs":"changed"})["operation"],"build_deploy")
+  self.assertEqual(self.plan({"crates/modules/context/policy.json":'{"a":1}'},{"v3/src/main.rs","v3/crates/modules/context/policy.json"})["operation"],"build_deploy")
+  for evidence in (False,set()):
+   with self.subTest(evidence=evidence):self.assertEqual(self.plan({"crates/modules/context/policy.json":'{"a":1}'},evidence)["operation"],"build_deploy")
+ def test_unparseable_live_json_is_refused(self):
+  self.assertIn("Live JSON file does not parse: crates/modules/context/policy.json",self.plan({"crates/modules/context/policy.json":"{"})["refusal"])
+
 class CommandObservationTests(unittest.TestCase):
  def test_stream_redaction_all_byte_boundaries(self):
   host=fixtures.host
