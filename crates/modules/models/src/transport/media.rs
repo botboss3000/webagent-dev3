@@ -1,6 +1,11 @@
 //! Installation-owned audio routes. Never accept a URL or credentials from a browser payload.
-use super::*;
+use super::{call, required, response_failure, Provider, ProviderId, ProviderSelection};
+use anyhow::{anyhow, bail, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
+use futures_util::StreamExt;
+use serde_json::{json, Value};
+use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 impl Provider {
     async fn media_json(
         &self,
@@ -40,9 +45,9 @@ impl Provider {
             bail!("Invalid speech configuration");
         }
         let fixed = "https://api.openai.com/v1/audio/speech";
-        #[cfg(not(any(test,feature="test-support")))]
+        #[cfg(not(any(test, feature = "test-support")))]
         let endpoint = fixed;
-        #[cfg(any(test,feature="test-support"))]
+        #[cfg(any(test, feature = "test-support"))]
         let endpoint = self.responses_endpoint.as_deref().unwrap_or(fixed);
         let request = self
             .client
@@ -104,17 +109,19 @@ impl Provider {
                     json!({"model":selection.model,"input_audio":audio}),
                 )
             } else {
-                (
-                    format!("{base}chat/completions"),
-                    json!({"model":selection.model,"stream":false,"max_tokens":2048,"messages":[{"role":"user","content":[{"type":"text","text":"Transcribe the attached recording verbatim. Return only the transcript, with no commentary."},{"type":"input_audio","input_audio":audio}]}]}),
-                )
+                let mut body = json!({"model":selection.model,"stream":false,"messages":[{"role":"user","content":[{"type":"text","text":"Transcribe the attached recording verbatim. Return only the transcript, with no commentary."},{"type":"input_audio","input_audio":audio}]}]});
+                // The catalog's output maximum, as for every other call; none sends no cap.
+                if let Some(cap) = call::output_cap(selection) {
+                    body["max_tokens"] = json!(cap);
+                }
+                (format!("{base}chat/completions"), body)
             }
         } else {
             (format!("{base}audio/transcriptions"), Value::Null)
         };
-        #[cfg(not(any(test,feature="test-support")))]
+        #[cfg(not(any(test, feature = "test-support")))]
         let endpoint = fixed.as_str();
-        #[cfg(any(test,feature="test-support"))]
+        #[cfg(any(test, feature = "test-support"))]
         let endpoint = self.responses_endpoint.as_deref().unwrap_or(&fixed);
         let request = self
             .client
@@ -179,7 +186,7 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let task = tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
         let provider = Provider::for_test(format!("http://{address}/audio"));
-        let selection = ProviderSelection { limits:None,
+        let selection = ProviderSelection {
             provider: ProviderId::OpenaiApi,
             model: "whisper-1".into(),
         };

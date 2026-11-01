@@ -238,7 +238,6 @@ pub async fn apply(host: &dyn NativeHost, run: &mut Value) -> Result<bool> {
         run["provider_selection"] = provider::ProviderSelection {
             provider: first.transport.provider_id(),
             model: first.upstream_model.clone(),
-            limits: first.limits.clone(),
         }
         .value();
         run["selection_plan"] = json!(plan);

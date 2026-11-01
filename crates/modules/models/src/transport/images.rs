@@ -1,6 +1,12 @@
 //! Fixed image-output transports. Provider-selected remote URLs are never fetched.
-use super::*;
+use super::{call, response_failure, Provider, ProviderId, ProviderSelection};
+use anyhow::{anyhow, bail, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
+use futures_util::StreamExt;
+use serde_json::{json, Value};
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 pub struct GeneratedImage {
     pub media_type: String,
     pub data: String,
@@ -90,7 +96,7 @@ impl Provider {
         }
         let value = if selection.provider == ProviderId::OpenaiSubscription {
             let request = call::SubscriptionRequest {
-                max_output_tokens: selection.limits.as_ref().map(|v| v.output_tokens),
+                max_output_tokens: call::output_cap(selection),
                 reasoning_effort: None,
                 model: &selection.model,
                 input: vec![json!({"role":"user","content":[{"type":"input_text","text":prompt}]})],

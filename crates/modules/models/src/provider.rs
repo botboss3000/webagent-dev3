@@ -23,7 +23,6 @@ pub enum ProviderId {
     ClaudeBridge,
 }
 
-
 impl ProviderId {
     /// Installation-owned endpoints only. Client catalog payloads cannot override these.
     pub fn chat_endpoint(self) -> Option<&'static str> {
@@ -33,7 +32,9 @@ impl ProviderId {
             Self::OpenaiApi => Some("https://api.openai.com/v1/chat/completions"),
             Self::Openrouter => Some("https://openrouter.ai/api/v1/chat/completions"),
             Self::Abacus => Some("https://routellm.abacus.ai/v1/chat/completions"),
-            Self::Gemini => Some("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"),
+            Self::Gemini => {
+                Some("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
+            }
             Self::Groq => Some("https://api.groq.com/openai/v1/chat/completions"),
             Self::Together => Some("https://api.together.xyz/v1/chat/completions"),
             Self::Mistral => Some("https://api.mistral.ai/v1/chat/completions"),
@@ -46,9 +47,8 @@ impl ProviderId {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// Saved selections may still carry the retired `limits` key; it is ignored.
 pub struct ProviderSelection {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limits: Option<crate::limits::ModelLimits>,
     pub provider: ProviderId,
     pub model: String,
 }
@@ -72,29 +72,27 @@ impl ProviderSelection {
         if !crate::valid_model(model) {
             bail!("Invalid model");
         }
-        let limits: Option<crate::limits::ModelLimits> = value.get("limits")
-            .filter(|v| !v.is_null()).map(|v| serde_json::from_value(v.clone())).transpose()?;
-        if let Some(limits) = &limits { limits.validate_for(provider, model)?; }
         Ok(Self {
-            limits,
             provider,
             model: model.to_owned(),
         })
     }
 
-    /// Convert validated model input tokens to the existing four-byte estimate, rejecting overflow; this is not provider tokenization.
+    /// Compaction budget in the four-byte estimate: the provider catalog's context window
+    /// less an 8,192-token output reserve. `None` when the catalog lists no context.
+    /// This sizes compaction only; calls are not rejected by it (the provider decides).
     pub fn input_budget_bytes(&self) -> Result<Option<usize>> {
-        let input = if let Some(limits) = &self.limits {
-            limits.validate_for(self.provider, &self.model)?;
-            Some(limits.input_tokens)
-        } else if matches!(self.provider, ProviderId::OpenaiSubscription | ProviderId::OpenaiApi) {
-            crate::limits::effective_limits(self.provider, &self.model).map(|(context, _)| context-8_192)
-        } else { None };
-        // Match the existing compaction estimate. This is not a provider tokenizer.
-        input.map(|n| n.checked_mul(4).ok_or_else(|| anyhow!("Model input budget overflow"))).transpose()
+        crate::providers::context(self.provider, &self.model)
+            .map(|context| {
+                context
+                    .saturating_sub(8_192)
+                    .checked_mul(4)
+                    .ok_or_else(|| anyhow!("Model input budget overflow"))
+            })
+            .transpose()
     }
 
-    /// Serialize the pinned provider/model/limits identity for durable selection plans.
+    /// Serialize the pinned provider/model identity for durable selection plans.
     pub fn value(&self) -> Value {
         serde_json::to_value(self).expect("Provider selection serialization")
     }
@@ -120,6 +118,19 @@ mod selection_tests {
                 .model,
             "default"
         );
+        // Selections saved before per-agent limits were retired still load.
+        let saved: ProviderSelection = serde_json::from_value(
+            json!({"provider":"deepseek","model":"m","limits":{"input_tokens":1,"output_tokens":1}}),
+        )
+        .unwrap();
+        assert_eq!(saved.value(), json!({"provider":"deepseek","model":"m"}));
+        let parsed =
+            ProviderSelection::parse(&json!({"model":"m","limits":null}), "default").unwrap();
+        assert_eq!(parsed.model, "m");
+        // The compaction budget follows the catalog context window, less the output reserve.
+        let luna = ProviderSelection::parse(&json!({"model":"gpt-6-luna"}), "default").unwrap();
+        assert_eq!(luna.input_budget_bytes().unwrap(), Some(263_808 * 4));
+        assert_eq!(parsed.input_budget_bytes().unwrap(), None);
         for provider in [json!("other"), json!(null), json!(7), json!("")] {
             assert!(ProviderSelection::parse(
                 &json!({"provider":provider,"model":"valid"}),
@@ -137,13 +148,22 @@ mod upstream_id_tests {
     fn selection_accepts_namespaced_models_without_accepting_controls() {
         use super::ProviderSelection;
         use serde_json::json;
-        assert!(ProviderSelection::parse(&json!({"provider":"deepseek","model":"organization/model-name"}), "default").is_ok());
+        assert!(ProviderSelection::parse(
+            &json!({"provider":"deepseek","model":"organization/model-name"}),
+            "default"
+        )
+        .is_ok());
         for model in ["model\n", "model name", "model?token=x"] {
-            assert!(ProviderSelection::parse(&json!({"provider":"deepseek","model":model}), "default").is_err());
+            assert!(ProviderSelection::parse(
+                &json!({"provider":"deepseek","model":model}),
+                "default"
+            )
+            .is_err());
         }
     }
 }
 
-pub use crate::transport::{Provider,ProviderFailure,CallDraft,typed_failure,projection_id};
+pub use crate::transport::{projection_id, typed_failure, CallDraft, Provider, ProviderFailure};
 
-#[cfg(test)] pub use crate::transport::DEFAULT_INSTRUCTIONS;
+#[cfg(test)]
+pub use crate::transport::DEFAULT_INSTRUCTIONS;

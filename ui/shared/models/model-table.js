@@ -2106,14 +2106,12 @@ export function mountModelTable(host, opts = {}) {
     }
     // The old spec pills became labelled lines: the label now carries the meaning
     // ("Max output"), the value only the number — the same shape as the trio above.
-    const budget = opts.modelBudget?.(p.entry_id);
-    const limitValue = (text, field) => opts.onLimitEdit
-      ? '<span class="ac-model-meta-v ac-model-meta-editable ac-limit-edit" role="button" tabindex="0" data-limit-field="'+field+'" title="Click to change this model’s token budget">'+esc(budget?.[field]?.toLocaleString() || 'Set limit')+'</span>'
-      : metaValue(text);
+    // Context and output maximums are the provider's own; the app never overrides them.
+    const ratio = typeof meta.characters_per_token === 'number' ? meta.characters_per_token + ' bytes per token' : '';
     const specHtml = [
-      (ctx || opts.onLimitEdit) ? metaLine(opts.onLimitEdit ? 'Input budget:' : 'Context:', limitValue(ctx, 'input')) : '',
-      (out || opts.onLimitEdit) ? metaLine('Max output:', limitValue(out, 'output')) : '',
-      budget?.ratio ? metaLine('Token estimate:', metaValue(budget.ratio)) : '',
+      ctx ? metaLine('Context:', metaValue(ctx)) : '',
+      out ? metaLine('Max output:', metaValue(out)) : '',
+      ratio ? metaLine('Token estimate:', metaValue(ratio)) : '',
       priceHtml,
     ].filter(Boolean).join('');
     // Usage is a plain summary value. The per-row cost-trend chart that used to
@@ -2245,61 +2243,6 @@ export function mountModelTable(host, opts = {}) {
     body.appendChild(aliasRegion);
     aliasAdd.addEventListener('click', () => openAliasForm(p, aliasRegion, aliasAdd));
 
-    // ── MODEL-LIMIT-EDIT: token budgets are click-to-edit in place ──────────
-    // RENAME-FIELD PATTERN (Enter commits, Escape cancels, blur commits, `done`
-    // guard). An empty value restores that field's default; the mounting page
-    // owns the save rules and the provider-limits help shown on the input line.
-    for (const limitEl of body.querySelectorAll('.ac-limit-edit')) {
-      const line = limitEl.closest('.ac-model-meta-line');
-      const field = limitEl.dataset.limitField;
-      const limitTip = field === 'input' && tipBadge(opts.modelBudget?.(p.entry_id)?.help);
-      if (limitTip) line.querySelector('.ac-model-meta-k').appendChild(limitTip);
-      const startLimitEdit = () => {
-        if (line.querySelector('.ac-model-meta-edit-input')) return;   // already editing
-        const current = opts.modelBudget?.(p.entry_id)?.[field] ?? null;
-        const limitInput = document.createElement('input');
-        limitInput.type = 'number'; limitInput.min = '1'; limitInput.step = '1';
-        limitInput.className = 'ac-input ac-model-meta-edit-input';
-        limitInput.placeholder = 'Default';
-        limitInput.autocomplete = 'off';
-        limitInput.setAttribute('aria-label', field === 'output' ? 'Maximum output tokens' : 'Input token budget');
-        limitInput.value = current == null ? '' : String(current);
-        limitEl.replaceWith(limitInput);
-        limitInput.focus();
-        limitInput.select();
-        let done = false;
-        const finish = async (commit) => {
-          if (done) return;                      // Escape, then the trailing blur
-          done = true;
-          const raw = limitInput.value.trim();
-          const next = raw === '' ? null : Number(raw);
-          limitInput.replaceWith(limitEl);
-          if (!commit || next === current) return;
-          if (next !== null && !(Number.isInteger(next) && next >= 1)) {
-            _flashSaveCheck(line, false, 'Enter a whole number of tokens');
-            return;
-          }
-          _markSaving(line);
-          try {
-            await opts.onLimitEdit(p.entry_id, field, next);
-            limitEl.textContent = opts.modelBudget?.(p.entry_id)?.[field]?.toLocaleString() || 'Set limit';
-            _flashSaveCheck(line, true);
-          } catch (error) {
-            _flashSaveCheck(line, false, error?.message || 'Save failed');
-          }
-        };
-        limitInput.addEventListener('keydown', (event) => {
-          if (event.key === 'Enter') { event.preventDefault(); finish(true); }
-          else if (event.key === 'Escape') { event.preventDefault(); finish(false); }
-        });
-        limitInput.addEventListener('blur', () => finish(true));
-        limitInput.addEventListener('click', (event) => event.stopPropagation());
-      };
-      limitEl.addEventListener('click', (event) => { event.stopPropagation(); startLimitEdit(); });
-      limitEl.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); startLimitEdit(); }
-      });
-    }
     // ── MODEL-PRICE-EDIT: the BYO price is click-to-edit ────────────────────
     // One click swaps the value for a PAIR of rate fields, because a price is a pair
     // (RENAME-FIELD PATTERN: Enter commits, Escape cancels, blur commits, and a `done`

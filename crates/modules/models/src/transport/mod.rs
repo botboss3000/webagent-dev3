@@ -8,13 +8,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-mod deepseek;
 pub mod call;
+mod deepseek;
 pub use call::CallDraft;
 mod capabilities;
-mod media;
 mod images;
-pub use images::{GeneratedImage,image_transport};
+mod media;
+pub use images::{image_transport, GeneratedImage};
 
 const ISSUER: &str = "https://auth.openai.com";
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -24,8 +24,6 @@ const SUBSCRIPTION_MODELS: &str = "https://chatgpt.com/backend-api/codex/models"
 const CODEX_MODEL_CLIENT_VERSION: &str = "0.160.1";
 const MAX_FRAME: usize = 16 * 1024 * 1024;
 // Exact prior bootstrap prefix for admitted-run compatibility.
-
-
 
 pub use crate::provider::{ProviderId, ProviderSelection};
 
@@ -63,47 +61,92 @@ pub struct ProviderFailure {
 }
 impl std::fmt::Display for ProviderFailure {
     /// Expose only the sanitized failure label through the standard error display.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.detail) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.detail)
+    }
 }
 impl std::error::Error for ProviderFailure {}
 /// Construct a classified provider failure without retaining an upstream payload or transport error.
-pub fn typed_failure(kind: crate::model_selection::FailureKind, started: bool, detail: impl Into<String>) -> anyhow::Error {
-    ProviderFailure { kind, response_started: started, detail: detail.into(), transport: None, http_status: None }.into()
+pub fn typed_failure(
+    kind: crate::model_selection::FailureKind,
+    started: bool,
+    detail: impl Into<String>,
+) -> anyhow::Error {
+    ProviderFailure {
+        kind,
+        response_started: started,
+        detail: detail.into(),
+        transport: None,
+        http_status: None,
+    }
+    .into()
 }
 /// Allowlisted transport facts, never reqwest Display/Debug (which may contain URLs).
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct TransportDiagnostic {
-    pub timeout: bool, pub connect: bool, pub body: bool, pub decode: bool,
-    pub request: bool, pub status: Option<u16>, pub io_kind: Option<String>,
+    pub timeout: bool,
+    pub connect: bool,
+    pub body: bool,
+    pub decode: bool,
+    pub request: bool,
+    pub status: Option<u16>,
+    pub io_kind: Option<String>,
 }
 /// Extract allowlisted reqwest and nested I/O facts while keeping URLs and provider text out of diagnostics.
-fn transport_failure(error:reqwest::Error,started:bool,detail:&str)->anyhow::Error {
+fn transport_failure(error: reqwest::Error, started: bool, detail: &str) -> anyhow::Error {
     use std::error::Error;
-    let mut source=error.source(); let mut io_kind=None;
-    while let Some(cause)=source {
-        if let Some(io)=cause.downcast_ref::<std::io::Error>() {io_kind=Some(format!("{:?}",io.kind()));break;}
-        source=cause.source();
+    let mut source = error.source();
+    let mut io_kind = None;
+    while let Some(cause) = source {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            io_kind = Some(format!("{:?}", io.kind()));
+            break;
+        }
+        source = cause.source();
     }
-    ProviderFailure {kind:crate::model_selection::FailureKind::Transient,response_started:started,
-        detail:detail.into(),http_status:error.status().map(|s|s.as_u16()),transport:Some(TransportDiagnostic {timeout:error.is_timeout(),connect:error.is_connect(),
-        body:error.is_body(),decode:error.is_decode(),request:error.is_request(),status:error.status().map(|s|s.as_u16()),io_kind})}.into()
+    ProviderFailure {
+        kind: crate::model_selection::FailureKind::Transient,
+        response_started: started,
+        detail: detail.into(),
+        http_status: error.status().map(|s| s.as_u16()),
+        transport: Some(TransportDiagnostic {
+            timeout: error.is_timeout(),
+            connect: error.is_connect(),
+            body: error.is_body(),
+            decode: error.is_decode(),
+            request: error.is_request(),
+            status: error.status().map(|s| s.as_u16()),
+            io_kind,
+        }),
+    }
+    .into()
 }
 // Classify provider-declared failure events separately from invalid stream frames.
 // Unknown upstream failures may be transient, but deterministic contracts and
 // incomplete output limits must never replay the same request automatically.
 fn event_failure_kind(value: &Value) -> crate::model_selection::FailureKind {
     use crate::model_selection::FailureKind::*;
-    let error = value.get("error")
+    let error = value
+        .get("error")
         .or_else(|| value.get("response").and_then(|r| r.get("error")))
         .unwrap_or(value);
     let code = error["code"].as_str().unwrap_or("");
     let error_type = error["type"].as_str().unwrap_or("");
     if matches!(code, "content_filter" | "policy_violation")
-        || matches!(error_type, "permission_error" | "authentication_error") {
-        return if error_type == "authentication_error" { InvalidCredentials } else { PolicyRejected };
+        || matches!(error_type, "permission_error" | "authentication_error")
+    {
+        return if error_type == "authentication_error" {
+            InvalidCredentials
+        } else {
+            PolicyRejected
+        };
     }
-    if error_type == "invalid_request_error" || matches!(code,
-        "invalid_encrypted_content" | "invalid_argument" | "invalid_request") {
+    if error_type == "invalid_request_error"
+        || matches!(
+            code,
+            "invalid_encrypted_content" | "invalid_argument" | "invalid_request"
+        )
+    {
         return MalformedRequest;
     }
     if value["response"]["incomplete_details"]["reason"] == "content_filter" {
@@ -112,13 +155,15 @@ fn event_failure_kind(value: &Value) -> crate::model_selection::FailureKind {
     if value["response"]["incomplete_details"]["reason"] == "max_output_tokens" {
         return Protocol;
     }
-    let status = error["status"].as_u64().or_else(|| error["status_code"].as_u64());
+    let status = error["status"]
+        .as_u64()
+        .or_else(|| error["status_code"].as_u64());
     match status {
         Some(401) => return InvalidCredentials,
         Some(403) => return PolicyRejected,
-        Some(408 | 429 | 500..=599) => {},
+        Some(408 | 429 | 500..=599) => {}
         Some(400..=499) => return MalformedRequest,
-        _ => {},
+        _ => {}
     }
     match failure_kind(value) {
         Protocol => Transient,
@@ -133,7 +178,8 @@ fn failure_kind(value: &Value) -> crate::model_selection::FailureKind {
         "Provider authorization is invalid or expired; reconnect ChatGPT" => InvalidCredentials,
         "Provider rate limit exceeded" | "Provider internal error" => Transient,
         "Provider usage limit exceeded" => QuotaExhausted,
-        "Provider context limit exceeded" | "Provider rejected the request format or parameters" => MalformedRequest,
+        "Provider context limit exceeded"
+        | "Provider rejected the request format or parameters" => MalformedRequest,
         _ => Protocol,
     }
 }
@@ -151,14 +197,17 @@ pub fn bridge_link_id(token: &str) -> String {
 /// Host-owned queue that hands a call to a linked client and returns its reply:
 /// `{"message": <chat-completions assistant message>, "usage": <optional usage>}`.
 pub trait BridgeQueue: Send + Sync {
-    fn exchange(&self, call: BridgeCall) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>>;
+    fn exchange(
+        &self,
+        call: BridgeCall,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>>;
 }
 
 #[derive(Clone)]
 pub struct Provider {
     client: reqwest::Client,
     bridge: Option<std::sync::Arc<dyn BridgeQueue>>,
-    #[cfg(any(test,feature="test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     responses_endpoint: Option<String>,
 }
 
@@ -182,18 +231,24 @@ fn required<'a>(value: &'a Value, name: &str) -> Result<&'a str> {
 // Only fixed diagnostic labels leave the transport: provider bodies can echo
 // credentials, account identifiers, or user input. Never persist their text.
 fn failure_detail(value: &Value) -> &'static str {
-    let error = value.get("error")
+    let error = value
+        .get("error")
         .or_else(|| value.get("response").and_then(|r| r.get("error")))
         .unwrap_or(value);
     let code = error["code"].as_str().unwrap_or("");
     let message = error["message"].as_str().unwrap_or("").to_ascii_lowercase();
     if code == "model_not_found"
-        || (message.contains("model") && (message.contains("not supported")
-            || message.contains("unsupported") || message.contains("does not exist")
-            || message.contains("not available"))) {
+        || (message.contains("model")
+            && (message.contains("not supported")
+                || message.contains("unsupported")
+                || message.contains("does not exist")
+                || message.contains("not available")))
+    {
         "Selected model is unavailable or unsupported for this account"
     } else if matches!(code, "invalid_api_key" | "token_expired" | "invalid_token")
-        || message.contains("token expired") || message.contains("token has expired") {
+        || message.contains("token expired")
+        || message.contains("token has expired")
+    {
         "Provider authorization is invalid or expired; reconnect ChatGPT"
     } else if code == "rate_limit_exceeded" || message.contains("rate limit") {
         "Provider rate limit exceeded"
@@ -213,7 +268,10 @@ fn failure_detail(value: &Value) -> &'static str {
 }
 
 /// Read at most 16 KiB of an HTTP error within five seconds, honoring cancellation and returning only sanitized categories.
-async fn response_failure(response: reqwest::Response, cancel: &CancellationToken) -> anyhow::Error {
+async fn response_failure(
+    response: reqwest::Response,
+    cancel: &CancellationToken,
+) -> anyhow::Error {
     let status = response.status().as_u16();
     // Bound time and bytes even when an error endpoint sends an endless body.
     let mut stream = response.bytes_stream();
@@ -221,7 +279,9 @@ async fn response_failure(response: reqwest::Response, cancel: &CancellationToke
         let mut body = Vec::new();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.ok()?;
-            if body.len() + chunk.len() > 16 * 1024 { return None; }
+            if body.len() + chunk.len() > 16 * 1024 {
+                return None;
+            }
             body.extend_from_slice(&chunk);
         }
         serde_json::from_slice::<Value>(&body).ok()
@@ -235,18 +295,32 @@ async fn response_failure(response: reqwest::Response, cancel: &CancellationToke
         401 => "Provider authorization is invalid or expired; reconnect ChatGPT",
         403 => "Provider denied access to this account or model",
         429 => "Provider rate or usage limit exceeded",
-        _ => value.as_ref().map(failure_detail).unwrap_or("Provider rejected the request (details withheld)"),
+        _ => value
+            .as_ref()
+            .map(failure_detail)
+            .unwrap_or("Provider rejected the request (details withheld)"),
     };
     use crate::model_selection::FailureKind::*;
     let kind = match status {
         401 => InvalidCredentials,
         403 => PolicyRejected,
-        429 if value.as_ref().is_some_and(|v| failure_kind(v) == QuotaExhausted) => QuotaExhausted,
+        429 if value
+            .as_ref()
+            .is_some_and(|v| failure_kind(v) == QuotaExhausted) =>
+        {
+            QuotaExhausted
+        }
         408 | 429 | 500..=599 => Transient,
         _ => value.as_ref().map(failure_kind).unwrap_or(MalformedRequest),
     };
-    ProviderFailure {kind,response_started:false,detail:format!("Provider HTTP {status}: {detail}"),
-        transport:None,http_status:Some(status)}.into()
+    ProviderFailure {
+        kind,
+        response_started: false,
+        detail: format!("Provider HTTP {status}: {detail}"),
+        transport: None,
+        http_status: Some(status),
+    }
+    .into()
 }
 
 /// Require a successful authorization response containing a JSON object; withhold upstream error bodies.
@@ -352,11 +426,28 @@ struct RequestBody<'a> {
     tool_choice: Option<&'static str>,
 }
 /// Borrow the host-selected Responses input and schemas into the stateless body with the session cache key and opaque reasoning replay.
-fn request_body<'a>(model: &'a str, input: &'a [Value], tools: &'a [Value], session: &'a str, instructions: &'a str) -> RequestBody<'a> {
-    RequestBody { reasoning: None, max_tool_calls:None, max_output_tokens: None, model, input, instructions, stream: true, store: false,
-        include: ["reasoning.encrypted_content"], prompt_cache_key: session,
-        parallel_tool_calls: true, tools: (!tools.is_empty()).then_some(tools),
-        tool_choice: (!tools.is_empty()).then_some("auto") }
+fn request_body<'a>(
+    model: &'a str,
+    input: &'a [Value],
+    tools: &'a [Value],
+    session: &'a str,
+    instructions: &'a str,
+) -> RequestBody<'a> {
+    RequestBody {
+        reasoning: None,
+        max_tool_calls: None,
+        max_output_tokens: None,
+        model,
+        input,
+        instructions,
+        stream: true,
+        store: false,
+        include: ["reasoning.encrypted_content"],
+        prompt_cache_key: session,
+        parallel_tool_calls: true,
+        tools: (!tools.is_empty()).then_some(tools),
+        tool_choice: (!tools.is_empty()).then_some("auto"),
+    }
 }
 
 // Parse bytes rather than UTF-8 chunks: a network boundary may split a character.
@@ -396,7 +487,9 @@ impl Frames {
                 .filter_map(|l| l.strip_prefix("data:").map(str::trim_start))
                 .collect::<Vec<_>>()
                 .join("\n");
-            if data == "[DONE]" {self.done=true;}
+            if data == "[DONE]" {
+                self.done = true;
+            }
             if data.is_empty() || data == "[DONE]" {
                 continue;
             }
@@ -423,7 +516,6 @@ impl Provider {
 
     /// Retain the last valid composed base on read/parse failure; strict dispatch uses instructions_for_snapshot instead.
 
-
     /// Create a redirect-disabled HTTP client with a bounded connection timeout and installation-owned routes.
     pub fn new() -> Self {
         Self {
@@ -434,7 +526,7 @@ impl Provider {
                 .build()
                 .expect("HTTP client initialization"),
             bridge: None,
-            #[cfg(any(test,feature="test-support"))]
+            #[cfg(any(test, feature = "test-support"))]
             responses_endpoint: None,
         }
     }
@@ -446,7 +538,7 @@ impl Provider {
     }
 
     /// Override the Responses/compatible endpoint only in test builds so local fixtures can observe exact wire behavior.
-    #[cfg(any(test,feature="test-support"))]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn for_test(endpoint: String) -> Self {
         let mut provider = Self::new();
         provider.responses_endpoint = Some(endpoint);
@@ -455,7 +547,7 @@ impl Provider {
 
     /// Select the fixed subscription endpoint, allowing a local override only under cfg(test).
     fn responses_endpoint(&self) -> &str {
-        #[cfg(any(test,feature="test-support"))]
+        #[cfg(any(test, feature = "test-support"))]
         if let Some(endpoint) = self.responses_endpoint.as_deref() {
             return endpoint;
         }
@@ -550,8 +642,14 @@ impl Provider {
     /// Query the account-scoped Codex catalog used by the subscription transport;
     /// `discovery` projects its visible models without seeing the token.
     /// Never return a token or provider error body to the UI.
-    pub async fn subscription_models(&self, tokens: &Value, discovery: &impl crate::discovery::ModelDiscovery) -> Result<Value> {
-        let mut request = self.client.get(SUBSCRIPTION_MODELS)
+    pub async fn subscription_models(
+        &self,
+        tokens: &Value,
+        discovery: &impl crate::discovery::ModelDiscovery,
+    ) -> Result<Value> {
+        let mut request = self
+            .client
+            .get(SUBSCRIPTION_MODELS)
             .query(&[("client_version", CODEX_MODEL_CLIENT_VERSION)])
             .bearer_auth(required(tokens, "access_token")?)
             .header("originator", "webagent")
@@ -559,7 +657,10 @@ impl Provider {
         if let Some(account_id) = tokens["account_id"].as_str().filter(|id| !id.is_empty()) {
             request = request.header("ChatGPT-Account-Id", account_id);
         }
-        let response = request.send().await.map_err(|_| anyhow!("Subscription model catalog unavailable"))?;
+        let response = request
+            .send()
+            .await
+            .map_err(|_| anyhow!("Subscription model catalog unavailable"))?;
         if !response.status().is_success() {
             bail!("Subscription model catalog unavailable");
         }
@@ -585,15 +686,30 @@ impl Provider {
         delta: mpsc::Sender<String>,
         cancel: CancellationToken,
     ) -> Result<Value> {
-        let call::SubscriptionRequest { max_output_tokens, reasoning_effort, model, input, tools, session, instructions } = request;
+        let call::SubscriptionRequest {
+            max_output_tokens,
+            reasoning_effort,
+            model,
+            input,
+            tools,
+            session,
+            instructions,
+        } = request;
         let mut response_started = false;
         if cancel.is_cancelled() {
-            return Err(typed_failure(crate::model_selection::FailureKind::Cancelled, response_started, "Provider request cancelled"));
+            return Err(typed_failure(
+                crate::model_selection::FailureKind::Cancelled,
+                response_started,
+                "Provider request cancelled",
+            ));
         }
         let mut body = request_body(model, &input, &tools, session, instructions);
         body.max_output_tokens = max_output_tokens;
-        body.reasoning = reasoning_effort.map(|effort|Reasoning{effort});
-        body.max_tool_calls=tools.iter().any(|t|t["type"]=="image_generation").then_some(1);
+        body.reasoning = reasoning_effort.map(|effort| Reasoning { effort });
+        body.max_tool_calls = tools
+            .iter()
+            .any(|t| t["type"] == "image_generation")
+            .then_some(1);
         let mut request = self
             .client
             .post(self.responses_endpoint())
@@ -636,16 +752,32 @@ impl Provider {
                     chunk.map_err(|_| typed_failure(crate::model_selection::FailureKind::Transient, response_started, "Provider stream stalled"))?
             };
             let Some(chunk) = chunk else {
-                return Err(typed_failure(crate::model_selection::FailureKind::Transient, response_started, "Provider stream ended before completion"));
+                return Err(typed_failure(
+                    crate::model_selection::FailureKind::Transient,
+                    response_started,
+                    "Provider stream ended before completion",
+                ));
             };
-            let chunk = chunk.map_err(|e| transport_failure(e, response_started, "Provider stream interrupted"))?;
-            for event in frames.push(&chunk).map_err(|e| typed_failure(crate::model_selection::FailureKind::Protocol, response_started, e.to_string()))? {
+            let chunk = chunk.map_err(|e| {
+                transport_failure(e, response_started, "Provider stream interrupted")
+            })?;
+            for event in frames.push(&chunk).map_err(|e| {
+                typed_failure(
+                    crate::model_selection::FailureKind::Protocol,
+                    response_started,
+                    e.to_string(),
+                )
+            })? {
                 let event_type = event["type"].as_str().unwrap_or("unknown");
-                if event_type.len() <= 128 && (event_kinds.contains_key(event_type) || event_kinds.len() < 64) {
+                if event_type.len() <= 128
+                    && (event_kinds.contains_key(event_type) || event_kinds.len() < 64)
+                {
                     *event_kinds.entry(event_type.to_owned()).or_default() += 1;
                 }
-                if event["type"].as_str().is_some_and(|t| t.starts_with("response.")
-                    && !matches!(t, "response.failed" | "response.incomplete")) {
+                if event["type"].as_str().is_some_and(|t| {
+                    t.starts_with("response.")
+                        && !matches!(t, "response.failed" | "response.incomplete")
+                }) {
                     response_started = true;
                 }
                 match event["type"].as_str().unwrap_or("") {
@@ -660,9 +792,15 @@ impl Provider {
                     }
                     "response.output_item.done" => {
                         if let Some(item) = event.get("item").filter(|item| item.is_object()) {
-                            completed_bytes = completed_bytes.saturating_add(webagent_context_contracts::context_accounting::json_size(item)?);
+                            completed_bytes = completed_bytes.saturating_add(
+                                webagent_context_contracts::context_accounting::json_size(item)?,
+                            );
                             if completed_items.len() >= 4096 || completed_bytes > MAX_FRAME {
-                                return Err(typed_failure(crate::model_selection::FailureKind::Protocol, response_started, "Provider retained output exceeded limit"));
+                                return Err(typed_failure(
+                                    crate::model_selection::FailureKind::Protocol,
+                                    response_started,
+                                    "Provider retained output exceeded limit",
+                                ));
                             }
                             completed_items.push(item.clone());
                         }
@@ -670,9 +808,15 @@ impl Provider {
                     "response.completed" => {
                         let mut response = event["response"].clone();
                         if !response["output"].is_array() || response["status"] != "completed" {
-                            return Err(typed_failure(crate::model_selection::FailureKind::Protocol, response_started, "Invalid provider completion"));
+                            return Err(typed_failure(
+                                crate::model_selection::FailureKind::Protocol,
+                                response_started,
+                                "Invalid provider completion",
+                            ));
                         }
-                        if response["output"].as_array().is_some_and(Vec::is_empty) && !completed_items.is_empty() {
+                        if response["output"].as_array().is_some_and(Vec::is_empty)
+                            && !completed_items.is_empty()
+                        {
                             response["output"] = json!(completed_items);
                         }
                         if response["output"].as_array().is_some_and(Vec::is_empty) {
@@ -683,10 +827,18 @@ impl Provider {
                     "response.failed" | "response.incomplete" | "error" => {
                         return Err(ProviderFailure {
                             kind: event_failure_kind(&event),
-                            response_started: response_started || event["response"]["output"].as_array().is_some_and(|items| !items.is_empty()),
-                            detail: format!("Provider did not complete response: {}", failure_detail(&event)),
-                            transport: None, http_status: Some(http_status),
-                        }.into())
+                            response_started: response_started
+                                || event["response"]["output"]
+                                    .as_array()
+                                    .is_some_and(|items| !items.is_empty()),
+                            detail: format!(
+                                "Provider did not complete response: {}",
+                                failure_detail(&event)
+                            ),
+                            transport: None,
+                            http_status: Some(http_status),
+                        }
+                        .into())
                     }
                     _ => {}
                 }
@@ -706,7 +858,10 @@ mod tests {
             assert_eq!(event_failure_kind(&json!({"type":event_type})), Transient);
         }
         for (error, expected) in [
-            (json!({"code":"invalid_encrypted_content"}), MalformedRequest),
+            (
+                json!({"code":"invalid_encrypted_content"}),
+                MalformedRequest,
+            ),
             (json!({"type":"invalid_request_error"}), MalformedRequest),
             (json!({"type":"authentication_error"}), InvalidCredentials),
             (json!({"type":"permission_error"}), PolicyRejected),
@@ -717,10 +872,23 @@ mod tests {
             (json!({"status":403}), PolicyRejected),
             (json!({"status":503}), Transient),
         ] {
-            assert_eq!(event_failure_kind(&json!({"response":{"error":error}})), expected);
+            assert_eq!(
+                event_failure_kind(&json!({"response":{"error":error}})),
+                expected
+            );
         }
-        assert_eq!(event_failure_kind(&json!({"response":{"incomplete_details":{"reason":"max_output_tokens"}}})), Protocol);
-        assert_eq!(event_failure_kind(&json!({"response":{"incomplete_details":{"reason":"content_filter"}}})), PolicyRejected);
+        assert_eq!(
+            event_failure_kind(
+                &json!({"response":{"incomplete_details":{"reason":"max_output_tokens"}}})
+            ),
+            Protocol
+        );
+        assert_eq!(
+            event_failure_kind(
+                &json!({"response":{"incomplete_details":{"reason":"content_filter"}}})
+            ),
+            PolicyRejected
+        );
     }
 
     /// Verify legacy prompt loading retains its last good composition across malformed/missing files and restores the shared fixture.
@@ -728,31 +896,50 @@ mod tests {
     /// Verify upstream account/token text cannot escape through fixed failure labels.
     #[test]
     fn provider_failures_use_fixed_labels_without_echoing_secrets() {
-        assert_eq!(failure_detail(&json!({"error":{"code":"model_not_found","message":"secret account model"}})),
-            "Selected model is unavailable or unsupported for this account");
-        assert_eq!(failure_detail(&json!({"response":{"error":{"code":"rate_limit_exceeded"}}})),
-            "Provider rate limit exceeded");
-        let label = failure_detail(&json!({"error":{"message":"Bearer secret-token user@example.com"}}));
+        assert_eq!(
+            failure_detail(
+                &json!({"error":{"code":"model_not_found","message":"secret account model"}})
+            ),
+            "Selected model is unavailable or unsupported for this account"
+        );
+        assert_eq!(
+            failure_detail(&json!({"response":{"error":{"code":"rate_limit_exceeded"}}})),
+            "Provider rate limit exceeded"
+        );
+        let label =
+            failure_detail(&json!({"error":{"message":"Bearer secret-token user@example.com"}}));
         assert!(!label.contains("secret-token"));
         assert!(!label.contains("user@example.com"));
-        assert_eq!(failure_detail(&json!({"response":{"incomplete_details":{"reason":"max_output_tokens"}}})),
-            "Provider output limit reached");
+        assert_eq!(
+            failure_detail(
+                &json!({"response":{"incomplete_details":{"reason":"max_output_tokens"}}})
+            ),
+            "Provider output limit reached"
+        );
     }
 
     /// Exercise HTTP rejection through the real transport and assert its safe status/category omit private provider text.
     #[tokio::test]
     async fn http_failure_reports_status_and_safe_category() {
         use axum::{http::StatusCode, routing::post, Json, Router};
-        let app = Router::new().route("/responses", post(|| async {
-            (StatusCode::BAD_REQUEST, Json(json!({"error":{"code":"model_not_found","message":"private-token"}})))
-        }));
+        let app = Router::new().route(
+            "/responses",
+            post(|| async {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error":{"code":"model_not_found","message":"private-token"}})),
+                )
+            }),
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         let provider = Provider::for_test(format!("http://{address}/responses"));
         let (sender, _receiver) = mpsc::channel(1);
         let error = async {
-            let legacy_selection = crate::provider::ProviderSelection { limits:None,
+            let legacy_selection = crate::provider::ProviderSelection {
                 provider: crate::provider::ProviderId::OpenaiSubscription,
                 model: ("fixture").to_owned(),
             };
@@ -770,13 +957,15 @@ mod tests {
             .validate()?
             .bind_credentials(tokens, &cancel)?;
             provider.dispatch(ready, sender, cancel).await
-        }.await.unwrap_err().to_string();
+        }
+        .await
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("HTTP 400"));
         assert!(error.contains("model is unavailable"));
         assert!(!error.contains("private-token"));
         server.abort();
     }
-
 
     /// Exercise bytewise Unicode and CRLF framing so network chunk boundaries cannot corrupt an SSE event.
     #[test]
@@ -798,8 +987,13 @@ mod tests {
         let input = vec![reasoning.clone()];
         let tools = vec![json!({"type":"function","name":"read"})];
         let body = serde_json::to_value(request_body(
-            "test", &input, &tools, "session", DEFAULT_INSTRUCTIONS,
-        )).unwrap();
+            "test",
+            &input,
+            &tools,
+            "session",
+            DEFAULT_INSTRUCTIONS,
+        ))
+        .unwrap();
         assert_eq!(body["input"][0], reasoning);
         assert_eq!(body["instructions"], DEFAULT_INSTRUCTIONS);
         assert_eq!(body["prompt_cache_key"], "session");
@@ -812,15 +1006,26 @@ mod tests {
     // and exact values, including escaped Unicode and complete tool arguments.
     #[test]
     fn borrowed_request_matches_owned_wire_contract() {
-        for tools in [vec![], vec![json!({"type":"function","name":"read","parameters":{"type":"object"}})]] {
-            let input = vec![json!({"role":"user","content":"é\n\"text\""}),
-                json!({"type":"function_call","call_id":"c","name":"read","arguments":"{\"path\":\"a\"}"})];
+        for tools in [
+            vec![],
+            vec![json!({"type":"function","name":"read","parameters":{"type":"object"}})],
+        ] {
+            let input = vec![
+                json!({"role":"user","content":"é\n\"text\""}),
+                json!({"type":"function_call","call_id":"c","name":"read","arguments":"{\"path\":\"a\"}"}),
+            ];
             let mut expected = json!({"model":"test","input":input,"instructions":"guide",
                 "stream":true,"store":false,"include":["reasoning.encrypted_content"],
                 "prompt_cache_key":"session","parallel_tool_calls":true});
-            if !tools.is_empty() { expected["tools"] = json!(tools); expected["tool_choice"] = json!("auto"); }
-            let actual: Value = serde_json::from_slice(&serde_json::to_vec(
-                &request_body("test", &input, &tools, "session", "guide")).unwrap()).unwrap();
+            if !tools.is_empty() {
+                expected["tools"] = json!(tools);
+                expected["tool_choice"] = json!("auto");
+            }
+            let actual: Value = serde_json::from_slice(
+                &serde_json::to_vec(&request_body("test", &input, &tools, "session", "guide"))
+                    .unwrap(),
+            )
+            .unwrap();
             assert_eq!(actual, expected);
         }
     }
@@ -864,7 +1069,8 @@ mod tests {
         let selection = ProviderSelection::parse(&json!({"model":"fixture"}), "unused").unwrap();
         let output = async {
             let selection = &selection;
-            let tokens = &json!({"access_token":"test-only","account_id":"account","residency":"eu"});
+            let tokens =
+                &json!({"access_token":"test-only","account_id":"account","residency":"eu"});
             let cancel = CancellationToken::new();
             let ready = crate::provider::CallDraft::new(
                 selection,
@@ -877,8 +1083,8 @@ mod tests {
             .bind_credentials(tokens, &cancel)?;
             provider.dispatch(ready, sender, cancel).await
         }
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         assert_eq!(output["output"][0]["encrypted_content"], "opaque");
         assert_eq!(output["output"][1]["call_id"], "call");
         let captured = captured.lock().await;
@@ -888,12 +1094,15 @@ mod tests {
         assert_eq!(headers["session-id"], "session");
         assert_eq!(headers["chatgpt-account-id"], "account");
         assert_eq!(headers["x-openai-internal-codex-residency"], "eu");
-        assert_eq!(*body, json!({
-            "model":"fixture", "input":[{"role":"user","content":"hello"}],
-            "instructions":"Pinned instructions for this run.",
-            "stream":true, "store":false, "include":["reasoning.encrypted_content"],
-            "prompt_cache_key":"session", "parallel_tool_calls":true
-        }));
+        assert_eq!(
+            *body,
+            json!({
+                "model":"fixture", "input":[{"role":"user","content":"hello"}],
+                "instructions":"Pinned instructions for this run.",
+                "stream":true, "store":false, "include":["reasoning.encrypted_content"],
+                "prompt_cache_key":"session", "parallel_tool_calls":true
+            })
+        );
         assert_eq!(body["store"], false);
         assert_eq!(body["instructions"], "Pinned instructions for this run.");
         assert_eq!(body["prompt_cache_key"], "session");
@@ -912,11 +1121,13 @@ mod tests {
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         let provider = Provider::for_test(format!("http://{address}/responses"));
         let (sender, _receiver) = mpsc::channel(1);
         let output = async {
-            let legacy_selection = crate::provider::ProviderSelection { limits:None,
+            let legacy_selection = crate::provider::ProviderSelection {
                 provider: crate::provider::ProviderId::OpenaiSubscription,
                 model: ("fixture").to_owned(),
             };
@@ -934,7 +1145,9 @@ mod tests {
             .validate()?
             .bind_credentials(tokens, &cancel)?;
             provider.dispatch(ready, sender, cancel).await
-        }.await.unwrap();
+        }
+        .await
+        .unwrap();
         assert_eq!(output["output"][0]["content"][0]["text"], "hello");
         server.abort();
     }
@@ -951,7 +1164,7 @@ mod tests {
         cancel.cancel();
         let (sender, _receiver) = mpsc::channel(1);
         let result = async {
-            let legacy_selection = crate::provider::ProviderSelection { limits:None,
+            let legacy_selection = crate::provider::ProviderSelection {
                 provider: crate::provider::ProviderId::OpenaiSubscription,
                 model: ("fixture").to_owned(),
             };
@@ -970,7 +1183,7 @@ mod tests {
             .bind_credentials(tokens, &cancel)?;
             provider.dispatch(ready, sender, cancel).await
         }
-            .await;
+        .await;
         assert!(result.is_err());
         assert!(
             tokio::time::timeout(Duration::from_millis(30), listener.accept())
@@ -978,7 +1191,6 @@ mod tests {
                 .is_err()
         );
     }
-
 }
 
 #[cfg(test)]
@@ -986,17 +1198,30 @@ pub const DEFAULT_INSTRUCTIONS: &str = "You are WebAgent, a helpful assistant. U
 
 /// Existing Engine-owned projection operation, statically dispatched and borrowing the request.
 pub trait Projection: Sync {
-    fn project<'a>(&'a self,input:&'a webagent_provider_contracts::RequestV1,
-        cancel:&'a CancellationToken)->impl std::future::Future<Output=Result<webagent_provider_contracts::ResultV1>>+Send+'a;
+    fn project<'a>(
+        &'a self,
+        input: &'a webagent_provider_contracts::RequestV1,
+        cancel: &'a CancellationToken,
+    ) -> impl std::future::Future<Output = Result<webagent_provider_contracts::ResultV1>> + Send + 'a;
 }
 
 #[derive(serde::Serialize)]
-struct Reasoning<'a> {effort:&'a str}
+struct Reasoning<'a> {
+    effort: &'a str,
+}
 /// Host-selected effort is never supplied by a projection or credential payload.
 /// Supported levels come from the model's provider file (`providers/*.json`).
-pub fn validate_reasoning_effort(provider:ProviderId,model:&str,effort:Option<&str>)->Result<()> {
-    if let Some(effort)=effort {
-        if !crate::providers::efforts(provider,model)?.levels.iter().any(|level|level==effort) {
+pub fn validate_reasoning_effort(
+    provider: ProviderId,
+    model: &str,
+    effort: Option<&str>,
+) -> Result<()> {
+    if let Some(effort) = effort {
+        if !crate::providers::efforts(provider, model)?
+            .levels
+            .iter()
+            .any(|level| level == effort)
+        {
             bail!("Reasoning effort is unsupported for this model");
         }
     }
@@ -1004,13 +1229,33 @@ pub fn validate_reasoning_effort(provider:ProviderId,model:&str,effort:Option<&s
 }
 #[cfg(test)]
 mod core_effort_tests {
- use super::*;
- #[test]fn effort_is_bounded_per_model_and_not_silently_ignored() {
-  for e in ["none","low","medium","high","xhigh","max"] {assert!(validate_reasoning_effort(ProviderId::OpenaiSubscription,"gpt-6-luna",Some(e)).is_ok());}
-  assert!(validate_reasoning_effort(ProviderId::OpenaiSubscription,"gpt-6-astra",Some("none")).is_err());
-  assert!(validate_reasoning_effort(ProviderId::Deepseek,"deepseek-flash",Some("max")).is_ok());
-  assert!(validate_reasoning_effort(ProviderId::Deepseek,"deepseek-flash",Some("medium")).is_err());
-  assert!(validate_reasoning_effort(ProviderId::OpenaiApi,"gpt-6-luna",Some("high")).is_err());
-  assert!(validate_reasoning_effort(ProviderId::Deepseek,"deepseek-flash",None).is_ok());
- }
+    use super::*;
+    #[test]
+    fn effort_is_bounded_per_model_and_not_silently_ignored() {
+        for e in ["none", "low", "medium", "high", "xhigh", "max"] {
+            assert!(validate_reasoning_effort(
+                ProviderId::OpenaiSubscription,
+                "gpt-6-luna",
+                Some(e)
+            )
+            .is_ok());
+        }
+        assert!(validate_reasoning_effort(
+            ProviderId::OpenaiSubscription,
+            "gpt-6-astra",
+            Some("none")
+        )
+        .is_err());
+        assert!(
+            validate_reasoning_effort(ProviderId::Deepseek, "deepseek-flash", Some("max")).is_ok()
+        );
+        assert!(
+            validate_reasoning_effort(ProviderId::Deepseek, "deepseek-flash", Some("medium"))
+                .is_err()
+        );
+        assert!(
+            validate_reasoning_effort(ProviderId::OpenaiApi, "gpt-6-luna", Some("high")).is_err()
+        );
+        assert!(validate_reasoning_effort(ProviderId::Deepseek, "deepseek-flash", None).is_ok());
+    }
 }

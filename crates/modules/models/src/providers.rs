@@ -204,6 +204,30 @@ pub fn characters_per_token(provider: ProviderId, model: &str) -> Result<Option<
     }))
 }
 
+/// The provider's published output maximum for a model, from its live catalog row.
+/// `None` (no or unreadable file, unlisted model, no `max_output`) means no cap is sent.
+pub fn max_output(provider: ProviderId, model: &str) -> Option<usize> {
+    listed(provider, model)?
+        .max_output
+        .and_then(|n| usize::try_from(n).ok())
+}
+
+/// The provider's published context window (input plus output) for a model.
+pub fn context(provider: ProviderId, model: &str) -> Option<usize> {
+    listed(provider, model)?
+        .context
+        .and_then(|n| usize::try_from(n).ok())
+}
+
+fn listed(provider: ProviderId, model: &str) -> Option<Model> {
+    load(provider)
+        .ok()
+        .flatten()?
+        .models
+        .into_iter()
+        .find(|row| row.id == model)
+}
+
 /// Keep a requested level only if the model currently supports it, so an edited
 /// file degrades a saved preference to the provider default instead of failing a call.
 pub fn supported(provider: ProviderId, model: &str, effort: Option<&str>) -> Option<String> {
@@ -260,6 +284,30 @@ mod tests {
             supported(ProviderId::Deepseek, "deepseek-flash", None),
             None
         );
+    }
+    #[test]
+    fn catalog_maximums_come_only_from_listed_models() {
+        let deepseek = load(ProviderId::Deepseek).unwrap().unwrap();
+        let row = deepseek
+            .models
+            .iter()
+            .find(|m| m.max_output.is_some())
+            .unwrap();
+        assert_eq!(
+            max_output(ProviderId::Deepseek, &row.id),
+            row.max_output.and_then(|n| usize::try_from(n).ok())
+        );
+        assert_eq!(max_output(ProviderId::Deepseek, "unlisted-model"), None);
+        // Listed, but the catalog gives no output maximum.
+        assert_eq!(
+            max_output(ProviderId::OpenaiSubscription, "gpt-6-luna"),
+            None
+        );
+        assert_eq!(
+            context(ProviderId::OpenaiSubscription, "gpt-6-luna"),
+            Some(272_000)
+        );
+        assert_eq!(max_output(ProviderId::Openrouter, "any"), None);
     }
     #[test]
     fn invalid_files_are_rejected() {

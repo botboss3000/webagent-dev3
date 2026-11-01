@@ -564,12 +564,10 @@ mod system_budget_tests {
     fn compaction_uses_system_profile_and_counts_escaped_envelope() {
         let mut context = loop_runtime::Config::default().context;
         let standard = provider::ProviderSelection {
-            limits: None,
             provider: provider::ProviderId::OpenaiSubscription,
             model: "standard".into(),
         };
         let system = provider::ProviderSelection {
-            limits: None,
             provider: provider::ProviderId::OpenaiSubscription,
             model: "system".into(),
         };

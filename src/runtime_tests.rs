@@ -1426,7 +1426,13 @@ async fn startup_requeues_restart_cancelled_context_pause_only() {
     };
     let cancelled = "Context preparation failed at provider_profile: Engine call cancelled";
     let resumable = pause(app.clone(), cancelled, false, 0).await;
-    let fault = pause(app.clone(), "Context preparation failed at history: invalid", false, 0).await;
+    let fault = pause(
+        app.clone(),
+        "Context preparation failed at history: invalid",
+        false,
+        0,
+    )
+    .await;
     let uncertain = pause(app.clone(), cancelled, true, 0).await;
     let stale = pause(app.clone(), cancelled, false, 2 * 24 * 60 * 60).await;
     recover(&app, true).await.unwrap();
@@ -5910,7 +5916,7 @@ pub(crate) async fn selection_fixture(app: &App) -> model_selection::Catalog {
         catalog.agent_models.insert(
             agent.into(),
             AgentModels {
-                limits: std::collections::BTreeMap::new(),
+                retired_limits: Default::default(),
                 efforts: std::collections::BTreeMap::new(),
                 agent_id: agent.into(),
                 owner_id: "admin".into(),
@@ -6497,7 +6503,6 @@ async fn deepseek_pins_transport_and_mixed_provider_backup() {
         "test-key-no-network"
     );
     let wrong = provider::ProviderSelection {
-        limits: None,
         provider: provider::ProviderId::OpenaiSubscription,
         model: "deepseek-chat".into(),
     };
@@ -9317,7 +9322,6 @@ async fn platform_adoption_pins_independent_credentials_and_denies_rotation() {
     caller.pin_model_plan(&mut plan).await.unwrap();
     let run = json!({"agent_id":"shared_default","selection_plan":plan,"failover_state":model_selection::FailoverState::default()});
     let selection = provider::ProviderSelection {
-        limits: None,
         provider: provider::ProviderId::Deepseek,
         model: "fixture".into(),
     };

@@ -129,12 +129,10 @@ mod luna_budget_tests {
     #[test]
     fn published_luna_context_and_operator_ceiling_are_independent() {
         let luna = crate::provider::ProviderSelection {
-            limits: None,
             provider: crate::provider::ProviderId::OpenaiSubscription,
             model: "gpt-6-luna".into(),
         };
         let other = crate::provider::ProviderSelection {
-            limits: None,
             provider: crate::provider::ProviderId::OpenaiSubscription,
             model: "fixture".into(),
         };

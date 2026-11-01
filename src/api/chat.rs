@@ -494,7 +494,6 @@ async fn prepare_message_inner(
     }
     let selection = match &plan {
         Some(plan) => provider::ProviderSelection {
-            limits: plan.candidates[0].limits.clone(),
             provider: plan.candidates[0].transport.provider_id(),
             model: plan.candidates[0].upstream_model.clone(),
         },

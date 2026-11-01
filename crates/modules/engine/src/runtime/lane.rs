@@ -69,11 +69,14 @@ impl<
                 "Global shutoff is active",
             ));
         }
-        let session = self
-            .store
-            .get(&format!("session:{sid}"))
-            .await?
-            .ok_or(LaneError::Rejected(LaneStatus::BadRequest, SESSION_NOT_FOUND))?;
+        let session =
+            self.store
+                .get(&format!("session:{sid}"))
+                .await?
+                .ok_or(LaneError::Rejected(
+                    LaneStatus::BadRequest,
+                    SESSION_NOT_FOUND,
+                ))?;
         if session["status"] != "active" {
             return Err(LaneError::Rejected(LaneStatus::NotFound, SESSION_NOT_FOUND));
         }
@@ -119,9 +122,11 @@ impl<
             .run_candidate(run)
             .await
             .map_err(|_| LaneError::Rejected(LaneStatus::Conflict, "Model access changed"))?
-            .ok_or(LaneError::Rejected(LaneStatus::Conflict, "Model unavailable"))?;
+            .ok_or(LaneError::Rejected(
+                LaneStatus::Conflict,
+                "Model unavailable",
+            ))?;
         let selection = ProviderSelection {
-            limits: candidate.limits.clone(),
             provider: candidate.transport.provider_id(),
             model: candidate.upstream_model,
         };
@@ -174,10 +179,7 @@ impl<
                 if cancel.is_cancelled()
                     || crate::components::catalog()?.revision != engine_revision
                     || crate::components::controls(root)?.revision != engine_controls
-                    || !crate::components::component_available(
-                        root,
-                        crate::components::PROJECTION,
-                    )
+                    || !crate::components::component_available(root, crate::components::PROJECTION)
                 {
                     return Err(anyhow!("Provider component or authority changed"));
                 }
@@ -202,11 +204,9 @@ impl<
                     None => completion.await,
                 }
             };
-            let result = tokio::time::timeout(
-                DEADLINE,
-                self.session_operation(sid, cancel.clone(), call),
-            )
-            .await;
+            let result =
+                tokio::time::timeout(DEADLINE, self.session_operation(sid, cancel.clone(), call))
+                    .await;
             cancel.cancel();
             drain.abort();
             let result = result

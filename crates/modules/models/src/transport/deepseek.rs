@@ -1,57 +1,114 @@
 //! Shared fixed-endpoint OpenAI-compatible transport, including DeepSeek.
-use super::*;
+use super::{
+    required, response_failure, transport_failure, typed_failure, Frames, Provider, ProviderId,
+    MAX_FRAME,
+};
 use crate::model_selection::FailureKind;
+use anyhow::{anyhow, bail, Result};
+use futures_util::StreamExt;
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 // @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Linked compatibility fixture delegates projection to the same planner and materializer as the registered service; the host retains compatible transport execution.","span_lines":20,"configuration":{"status":"not_applicable","rationale":"Provider identity and compatibility reconstruction are fixed protocol invariants."}}
 /// Compatibility fixture for the linked planner; production translation is a registered component.
 /// Calls provider-projection::project, shared materialize_owned and host compatible_body; starts no network request.
 #[cfg(test)]
-pub(super) fn request_body(model: &str, input: Vec<Value>, tools: Vec<Value>, instructions: &str) -> Result<Value> {
+pub(super) fn request_body(
+    model: &str,
+    input: Vec<Value>,
+    tools: Vec<Value>,
+    instructions: &str,
+) -> Result<Value> {
     let request = webagent_provider_contracts::RequestV1::Project {
-        version:webagent_provider_contracts::CONTRACT_VERSION,
-        provider:webagent_provider_contracts::ProviderIdV1::Deepseek,
-        model:model.to_owned(), instructions:instructions.to_owned(), input, tools,
+        version: webagent_provider_contracts::CONTRACT_VERSION,
+        provider: webagent_provider_contracts::ProviderIdV1::Deepseek,
+        model: model.to_owned(),
+        instructions: instructions.to_owned(),
+        input,
+        tools,
     };
     let projection = webagent_provider_projection::project(&request)?;
     let webagent_provider_contracts::MaterializedV1::ChatCompletions { messages, tools } =
         webagent_provider_contracts::materialize_owned(request, &projection)?
-        else { bail!("Compatible provider fixture expected"); };
-    let selection = ProviderSelection { limits:None, provider:ProviderId::Deepseek, model:model.to_owned() };
+    else {
+        bail!("Compatible provider fixture expected");
+    };
+    let selection = crate::provider::ProviderSelection {
+        provider: ProviderId::Deepseek,
+        model: model.to_owned(),
+    };
     Ok(super::call::compatible_body(&selection, messages, tools))
 }
 
 #[derive(Default)]
-struct Completion { content: String, reasoning: String, calls: BTreeMap<u64,Value>, usage:Value, finished:bool }
+struct Completion {
+    content: String,
+    reasoning: String,
+    calls: BTreeMap<u64, Value>,
+    usage: Value,
+    finished: bool,
+}
 impl Completion {
     /// Accumulate bounded compatible text, reasoning and indexed tool fragments; retain trailing usage and reject unsuccessful finish reasons.
     fn push(&mut self, event: &Value) -> Result<(String, bool)> {
-        if event["usage"].is_object(){self.usage=event["usage"].clone();}
-        if event.get("error").is_some() { bail!("Provider stream reported an error"); }
-        let Some(choice) = event["choices"].as_array().and_then(|v| v.first()) else { return Ok((String::new(),false)); };
+        if event["usage"].is_object() {
+            self.usage = event["usage"].clone();
+        }
+        if event.get("error").is_some() {
+            bail!("Provider stream reported an error");
+        }
+        let Some(choice) = event["choices"].as_array().and_then(|v| v.first()) else {
+            return Ok((String::new(), false));
+        };
         let delta = &choice["delta"];
         let content = delta["content"].as_str().unwrap_or("").to_owned();
         self.content.push_str(&content);
-        self.reasoning.push_str(delta["reasoning_content"].as_str().unwrap_or(""));
+        self.reasoning
+            .push_str(delta["reasoning_content"].as_str().unwrap_or(""));
         if let Some(calls) = delta["tool_calls"].as_array() {
             for part in calls {
-                let index = part["index"].as_u64().ok_or_else(|| anyhow!("Invalid Provider tool index"))?;
-                if index > 127 { bail!("Provider tool-call limit exceeded"); }
-                let call = self.calls.entry(index).or_insert_with(||json!({"type":"function_call","call_id":"","name":"","arguments":""}));
-                for (target, source) in [("call_id",&part["id"]),("name",&part["function"]["name"]),("arguments",&part["function"]["arguments"])] {
-                    if let Some(s) = source.as_str() { call[target] = json!(format!("{}{s}",call[target].as_str().unwrap_or(""))); }
+                let index = part["index"]
+                    .as_u64()
+                    .ok_or_else(|| anyhow!("Invalid Provider tool index"))?;
+                if index > 127 {
+                    bail!("Provider tool-call limit exceeded");
+                }
+                let call = self.calls.entry(index).or_insert_with(
+                    || json!({"type":"function_call","call_id":"","name":"","arguments":""}),
+                );
+                for (target, source) in [
+                    ("call_id", &part["id"]),
+                    ("name", &part["function"]["name"]),
+                    ("arguments", &part["function"]["arguments"]),
+                ] {
+                    if let Some(s) = source.as_str() {
+                        call[target] = json!(format!("{}{s}", call[target].as_str().unwrap_or("")));
+                    }
                 }
             }
         }
-        if self.content.len()+self.reasoning.len()+self.calls.values().map(|c|c.to_string().len()).sum::<usize>() > MAX_FRAME { bail!("Provider completion exceeded limit"); }
+        if self.content.len()
+            + self.reasoning.len()
+            + self
+                .calls
+                .values()
+                .map(|c| c.to_string().len())
+                .sum::<usize>()
+            > MAX_FRAME
+        {
+            bail!("Provider completion exceeded limit");
+        }
         let finished = match choice["finish_reason"].as_str() {
             None => false,
-            Some("stop"|"tool_calls") => true,
+            Some("stop" | "tool_calls") => true,
             Some("length") => bail!("Provider response reached token limit"),
             Some(_) => bail!("Provider completion was not successful"),
         };
         self.finished |= finished;
-        Ok((content,finished))
+        Ok((content, finished))
     }
     /// Package validated tool arguments and collected reasoning into Responses-shaped output; the transport enforces successful stream completion.
     fn result(self) -> Result<Value> {
@@ -63,8 +120,10 @@ impl Completion {
             output.push(json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":self.content}],"deepseek_reasoning":self.reasoning}));
         }
         for mut call in self.calls.into_values() {
-            required(&call,"call_id")?; required(&call,"name")?;
-            serde_json::from_str::<Value>(required(&call,"arguments")?).map_err(|_|anyhow!("Invalid Provider tool arguments"))?;
+            required(&call, "call_id")?;
+            required(&call, "name")?;
+            serde_json::from_str::<Value>(required(&call, "arguments")?)
+                .map_err(|_| anyhow!("Invalid Provider tool arguments"))?;
             call["deepseek_reasoning"] = json!(self.reasoning);
             output.push(call);
         }
@@ -74,29 +133,61 @@ impl Completion {
 /// Validate one whole Claude Bridge reply exactly as a finished compatible stream.
 pub(super) fn bridge_result(reply: &Value) -> Result<Value> {
     let message = &reply["message"];
-    let calls: Vec<Value> = message["tool_calls"].as_array().map(|calls| calls.iter().enumerate()
-        .map(|(index, call)| { let mut call = call.clone(); call["index"] = json!(index); call }).collect())
+    let calls: Vec<Value> = message["tool_calls"]
+        .as_array()
+        .map(|calls| {
+            calls
+                .iter()
+                .enumerate()
+                .map(|(index, call)| {
+                    let mut call = call.clone();
+                    call["index"] = json!(index);
+                    call
+                })
+                .collect()
+        })
         .unwrap_or_default();
-    let finish = if calls.is_empty() { "stop" } else { "tool_calls" };
+    let finish = if calls.is_empty() {
+        "stop"
+    } else {
+        "tool_calls"
+    };
     let mut completion = Completion::default();
     completion.push(&json!({"choices":[{"delta":{"content":message["content"],"tool_calls":calls},"finish_reason":finish}],"usage":reply["usage"]}))
         .map_err(|e| typed_failure(FailureKind::Protocol, true, e.to_string()))?;
-    completion.result().map_err(|e| typed_failure(FailureKind::Protocol, true, e.to_string()))
+    completion
+        .result()
+        .map_err(|e| typed_failure(FailureKind::Protocol, true, e.to_string()))
 }
 impl Provider {
     /// Fixed installation endpoints, bounded bytes/time, and no secrets in query strings.
     /// `discovery` normalizes the fetched listing; it receives no credential.
-    pub async fn discover_models(&self, provider:ProviderId, tokens:&Value, cancel:CancellationToken, discovery:&impl crate::discovery::ModelDiscovery)->Result<Value> {
+    pub async fn discover_models(
+        &self,
+        provider: ProviderId,
+        tokens: &Value,
+        cancel: CancellationToken,
+        discovery: &impl crate::discovery::ModelDiscovery,
+    ) -> Result<Value> {
         // Jev is a decision model, not an OpenAI-compatible chat transport.
         if provider == ProviderId::Typesafe {
-            if cancel.is_cancelled() { return Err(typed_failure(FailureKind::Cancelled,false,"Provider discovery cancelled")); }
-            required(tokens,"api_key")?;
-            return Ok(json!({"models":[{"id":"jev-latest","name":"Jev","display_name":"Jev","text_capable":false,"decision_capable":true,"image_capable":false,"image_out_capable":false,"voice_capable":false,"video_capable":false}],"provider_acceptance_verified":false}));
+            if cancel.is_cancelled() {
+                return Err(typed_failure(
+                    FailureKind::Cancelled,
+                    false,
+                    "Provider discovery cancelled",
+                ));
+            }
+            required(tokens, "api_key")?;
+            return Ok(
+                json!({"models":[{"id":"jev-latest","name":"Jev","display_name":"Jev","text_capable":false,"decision_capable":true,"image_capable":false,"image_out_capable":false,"voice_capable":false,"video_capable":false}],"provider_acceptance_verified":false}),
+            );
         }
         // The bridge has no listing endpoint: its models are the provider file's.
         if provider == ProviderId::ClaudeBridge {
-            required(tokens,"api_key")?;
-            let file = crate::providers::load(provider)?.ok_or_else(|| anyhow!("Claude Bridge provider file missing"))?;
+            required(tokens, "api_key")?;
+            let file = crate::providers::load(provider)?
+                .ok_or_else(|| anyhow!("Claude Bridge provider file missing"))?;
             let models: Vec<Value> = file.models.iter().map(|m| {
                 let name = m.name.clone().unwrap_or_else(|| m.id.clone());
                 json!({"id":m.id,"name":name,"display_name":name,"text_capable":true,"decision_capable":false,
@@ -104,28 +195,80 @@ impl Provider {
             }).collect();
             return Ok(json!({"models":models,"provider_acceptance_verified":false}));
         }
-        let base=provider.chat_endpoint().ok_or_else(||anyhow!("Subscription discovery is unavailable"))?;
-        let fixed=base.strip_suffix("chat/completions").ok_or_else(||anyhow!("Discovery unavailable"))?.to_owned()+"models";
-        #[cfg(not(any(test,feature="test-support")))]
-        let endpoint=fixed.as_str();
-        #[cfg(any(test,feature="test-support"))]
-        let endpoint=self.responses_endpoint.as_deref().unwrap_or(&fixed);
-        let read=async {
-            let response=self.client.get(endpoint).bearer_auth(required(tokens,"api_key")?)
-                .header("Accept","application/json").send().await
-                .map_err(|_|typed_failure(FailureKind::Transient,false,"Provider discovery connection failed"))?;
-            if !response.status().is_success(){return Err(response_failure(response,&cancel).await);}
-            let mut stream=response.bytes_stream();let mut bytes=Vec::new();
-            while let Some(chunk)=stream.next().await {
-                let chunk=chunk.map_err(|_|typed_failure(FailureKind::Transient,false,"Provider discovery interrupted"))?;
-                if bytes.len()+chunk.len()>1024*1024 {return Err(typed_failure(FailureKind::Protocol,false,"Provider discovery exceeded limit"));}
+        let base = provider
+            .chat_endpoint()
+            .ok_or_else(|| anyhow!("Subscription discovery is unavailable"))?;
+        let fixed = base
+            .strip_suffix("chat/completions")
+            .ok_or_else(|| anyhow!("Discovery unavailable"))?
+            .to_owned()
+            + "models";
+        #[cfg(not(any(test, feature = "test-support")))]
+        let endpoint = fixed.as_str();
+        #[cfg(any(test, feature = "test-support"))]
+        let endpoint = self.responses_endpoint.as_deref().unwrap_or(&fixed);
+        let read = async {
+            let response = self
+                .client
+                .get(endpoint)
+                .bearer_auth(required(tokens, "api_key")?)
+                .header("Accept", "application/json")
+                .send()
+                .await
+                .map_err(|_| {
+                    typed_failure(
+                        FailureKind::Transient,
+                        false,
+                        "Provider discovery connection failed",
+                    )
+                })?;
+            if !response.status().is_success() {
+                return Err(response_failure(response, &cancel).await);
+            }
+            let mut stream = response.bytes_stream();
+            let mut bytes = Vec::new();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|_| {
+                    typed_failure(
+                        FailureKind::Transient,
+                        false,
+                        "Provider discovery interrupted",
+                    )
+                })?;
+                if bytes.len() + chunk.len() > 1024 * 1024 {
+                    return Err(typed_failure(
+                        FailureKind::Protocol,
+                        false,
+                        "Provider discovery exceeded limit",
+                    ));
+                }
                 bytes.extend_from_slice(&chunk);
             }
-            let data:Value=serde_json::from_slice(&bytes).map_err(|_|typed_failure(FailureKind::Protocol,false,"Invalid provider discovery response"))?;
-            let rows=data["data"].as_array().ok_or_else(||typed_failure(FailureKind::Protocol,false,"Provider discovery listing unavailable"))?;
-            let (models_dev,openrouter)=super::capabilities::metadata(&self.client).await;
-            let models=discovery.provider_models(provider,rows,&models_dev,&openrouter).await
-                .map_err(|_|typed_failure(FailureKind::Protocol,false,"Provider discovery normalization unavailable"))?;
+            let data: Value = serde_json::from_slice(&bytes).map_err(|_| {
+                typed_failure(
+                    FailureKind::Protocol,
+                    false,
+                    "Invalid provider discovery response",
+                )
+            })?;
+            let rows = data["data"].as_array().ok_or_else(|| {
+                typed_failure(
+                    FailureKind::Protocol,
+                    false,
+                    "Provider discovery listing unavailable",
+                )
+            })?;
+            let (models_dev, openrouter) = super::capabilities::metadata(&self.client).await;
+            let models = discovery
+                .provider_models(provider, rows, &models_dev, &openrouter)
+                .await
+                .map_err(|_| {
+                    typed_failure(
+                        FailureKind::Protocol,
+                        false,
+                        "Provider discovery normalization unavailable",
+                    )
+                })?;
             Ok(json!({"models":models,"provider_acceptance_verified":false}))
         };
         tokio::select! {
@@ -143,11 +286,16 @@ impl Provider {
         delta: mpsc::Sender<String>,
         cancel: CancellationToken,
     ) -> Result<Value> {
-        #[cfg(not(any(test,feature="test-support")))]
+        #[cfg(not(any(test, feature = "test-support")))]
         let endpoint = fixed_endpoint;
-        #[cfg(any(test,feature="test-support"))]
+        #[cfg(any(test, feature = "test-support"))]
         let endpoint = self.responses_endpoint.as_deref().unwrap_or(fixed_endpoint);
-        let request = self.client.post(endpoint).bearer_auth(api_key).header("Accept","text/event-stream").json(&body);
+        let request = self
+            .client
+            .post(endpoint)
+            .bearer_auth(api_key)
+            .header("Accept", "text/event-stream")
+            .json(&body);
         let response = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Err(typed_failure(FailureKind::Cancelled,false,"Provider request cancelled")),
@@ -155,9 +303,13 @@ impl Provider {
                 .map_err(|_|typed_failure(FailureKind::Transient,false,"Provider connection timed out"))?
                 .map_err(|e|transport_failure(e,false,"Provider connection failed"))?
         };
-        if !response.status().is_success() { return Err(response_failure(response,&cancel).await); }
+        if !response.status().is_success() {
+            return Err(response_failure(response, &cancel).await);
+        }
         let mut stream = response.bytes_stream();
-        let mut frames = Frames::default(); let mut completion = Completion::default(); let mut started = false;
+        let mut frames = Frames::default();
+        let mut completion = Completion::default();
+        let mut started = false;
         loop {
             let chunk = tokio::select! {
                 biased;
@@ -167,14 +319,31 @@ impl Provider {
             // Usage is often a final empty-choice frame after finish_reason.
             // Preserve providers which close a finished stream without [DONE].
             if chunk.is_none() && completion.finished {
-                return completion.result().map_err(|e|typed_failure(FailureKind::Protocol,started,e.to_string()));
+                return completion
+                    .result()
+                    .map_err(|e| typed_failure(FailureKind::Protocol, started, e.to_string()));
             }
-            let chunk = chunk.ok_or_else(||typed_failure(FailureKind::Transient,started,"Provider stream ended before completion"))?
-                .map_err(|e|transport_failure(e,started,"Provider stream interrupted"))?;
-            for event in frames.push(&chunk).map_err(|_|typed_failure(FailureKind::Protocol,started,"Invalid Provider stream event"))? {
+            let chunk = chunk
+                .ok_or_else(|| {
+                    typed_failure(
+                        FailureKind::Transient,
+                        started,
+                        "Provider stream ended before completion",
+                    )
+                })?
+                .map_err(|e| transport_failure(e, started, "Provider stream interrupted"))?;
+            for event in frames.push(&chunk).map_err(|_| {
+                typed_failure(
+                    FailureKind::Protocol,
+                    started,
+                    "Invalid Provider stream event",
+                )
+            })? {
                 // Any choice means generation began, even if only reasoning arrived.
-                started |= event["choices"].as_array().is_some_and(|v|!v.is_empty());
-                let (content,finished) = completion.push(&event).map_err(|e|typed_failure(FailureKind::Protocol,started,e.to_string()))?;
+                started |= event["choices"].as_array().is_some_and(|v| !v.is_empty());
+                let (content, finished) = completion
+                    .push(&event)
+                    .map_err(|e| typed_failure(FailureKind::Protocol, started, e.to_string()))?;
                 if !content.is_empty() {
                     tokio::select! {
                         biased;
@@ -182,10 +351,12 @@ impl Provider {
                         sent = delta.send(content) => sent.map_err(|_|typed_failure(FailureKind::Protocol,started,"Stream consumer disconnected"))?
                     }
                 }
-                let _=finished;
+                let _ = finished;
             }
             if frames.done && completion.finished {
-                return completion.result().map_err(|e|typed_failure(FailureKind::Protocol,started,e.to_string()));
+                return completion
+                    .result()
+                    .map_err(|e| typed_failure(FailureKind::Protocol, started, e.to_string()));
             }
         }
     }
@@ -194,22 +365,30 @@ impl Provider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::ProviderSelection;
     /// Capture a local compatible call and verify text deltas use its API key without forwarding subscription account headers.
     #[tokio::test]
     async fn streams_text_with_the_deepseek_key_not_subscription_headers() {
-        use axum::{extract::State,http::HeaderMap,routing::post,Json,Router};
+        use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
         use std::sync::Arc;
         use tokio::sync::Mutex;
-        let captured=Arc::new(Mutex::new(None::<(HeaderMap,Value)>));
+        let captured = Arc::new(Mutex::new(None::<(HeaderMap, Value)>));
         let app=Router::new().route("/chat",post(|State(state):State<Arc<Mutex<Option<(HeaderMap,Value)>>>>,headers:HeaderMap,Json(body):Json<Value>| async move {
             *state.lock().await=Some((headers,body));
             ([("content-type","text/event-stream")], "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\" world\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
         })).with_state(captured.clone());
-        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let addr=listener.local_addr().unwrap();
-        let server=tokio::spawn(async move {axum::serve(listener,app).await.unwrap();});
-        let provider=Provider::for_test(format!("http://{addr}/chat"));
-        let (sender,mut receiver)=mpsc::channel(8);
-        let selection=ProviderSelection::parse(&json!({"provider":"deepseek","model":"deepseek-chat"}),"unused").unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let provider = Provider::for_test(format!("http://{addr}/chat"));
+        let (sender, mut receiver) = mpsc::channel(8);
+        let selection = ProviderSelection::parse(
+            &json!({"provider":"deepseek","model":"deepseek-chat"}),
+            "unused",
+        )
+        .unwrap();
         let result=async {
             let selection = &selection;
             let tokens =
@@ -226,16 +405,20 @@ mod tests {
             .bind_credentials(tokens, &cancel)?;
             provider.dispatch(ready, sender, cancel).await
         }.await.unwrap();
-        assert_eq!(result["output"][0]["content"][0]["text"],"Hello world");
-        assert_eq!(receiver.recv().await.unwrap(),"Hello");assert_eq!(receiver.recv().await.unwrap()," world");
-        let captured=captured.lock().await;let (headers,body)=captured.as_ref().unwrap();
-        assert_eq!(headers["authorization"],"Bearer test-key");assert!(!headers.contains_key("chatgpt-account-id"));assert_eq!(body["model"],"deepseek-chat");
+        assert_eq!(result["output"][0]["content"][0]["text"], "Hello world");
+        assert_eq!(receiver.recv().await.unwrap(), "Hello");
+        assert_eq!(receiver.recv().await.unwrap(), " world");
+        let captured = captured.lock().await;
+        let (headers, body) = captured.as_ref().unwrap();
+        assert_eq!(headers["authorization"], "Bearer test-key");
+        assert!(!headers.contains_key("chatgpt-account-id"));
+        assert_eq!(body["model"], "deepseek-chat");
         server.abort();
     }
     /// Verify empty-choice usage frames after finish_reason remain attached to the completed response.
     #[tokio::test]
-    async fn usage_after_finish_reason_is_retained(){
-        use axum::{routing::post,Router};
+    async fn usage_after_finish_reason_is_retained() {
+        use axum::{routing::post, Router};
         let app=Router::new().route("/chat",post(||async{
             ([("content-type","text/event-stream")],r#"data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}
 
@@ -245,12 +428,18 @@ data: [DONE]
 
 "#)
         }));
-        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let addr=listener.local_addr().unwrap();
-        let server=tokio::spawn(async move{axum::serve(listener,app).await.unwrap();});
-        let provider=Provider::for_test(format!("http://{addr}/chat"));
-        let (tx,_rx)=mpsc::channel(8);
-        let selection=ProviderSelection{limits:None,provider:ProviderId::Deepseek,model:"fixture".into()};
-        let result=async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let provider = Provider::for_test(format!("http://{addr}/chat"));
+        let (tx, _rx) = mpsc::channel(8);
+        let selection = ProviderSelection {
+            provider: ProviderId::Deepseek,
+            model: "fixture".into(),
+        };
+        let result = async {
             let selection = &selection;
             let tokens = &json!({"api_key":"fixture"});
             let cancel = CancellationToken::new();
@@ -258,68 +447,131 @@ data: [DONE]
                 .validate()?
                 .bind_credentials(tokens, &cancel)?;
             provider.dispatch(ready, tx, cancel).await
-        }.await.unwrap();
-        assert_eq!(result["usage"]["prompt_tokens"],42);assert_eq!(result["usage"]["completion_tokens"],3);
+        }
+        .await
+        .unwrap();
+        assert_eq!(result["usage"]["prompt_tokens"], 42);
+        assert_eq!(result["usage"]["completion_tokens"], 3);
         server.abort();
     }
     /// Echo listing rows so transport tests see exactly what the discovery service would receive.
     struct Rows;
     impl crate::discovery::ModelDiscovery for Rows {
-        async fn provider_models(&self,_:ProviderId,rows:&[Value],_:&Value,_:&Value)->Result<Vec<Value>> {Ok(rows.to_vec())}
-        async fn subscription_models(&self,catalog:&Value)->Result<Value> {Ok(catalog.clone())}
+        async fn provider_models(
+            &self,
+            _: ProviderId,
+            rows: &[Value],
+            _: &Value,
+            _: &Value,
+        ) -> Result<Vec<Value>> {
+            Ok(rows.to_vec())
+        }
+        async fn subscription_models(&self, catalog: &Value) -> Result<Value> {
+            Ok(catalog.clone())
+        }
     }
     /// Verify discovery hands the bounded listing rows, not the key, to normalization and keeps credentials out of query strings.
     /// Deduplication, id validation and field projection are covered in `webagent-model-discovery`.
     #[tokio::test]
     async fn discovery_forwards_listing_rows_and_never_sends_keys_in_urls() {
-        use axum::{routing::get,Router};
+        use axum::{routing::get, Router};
         let app=Router::new().route("/models",get(|headers:axum::http::HeaderMap,uri:axum::http::Uri|async move {
             assert_eq!(headers["authorization"],"Bearer discovery-key");assert!(uri.query().is_none());
             axum::Json(json!({"data":[{"id":"vendor/model","api_key":"must-not-project"},{"id":"vendor/model"},{"id":"bad\nmodel"},{"id":"valid"}]}))
         }));
-        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let addr=listener.local_addr().unwrap();
-        let server=tokio::spawn(async move {axum::serve(listener,app).await.unwrap();});
-        let provider=Provider::for_test(format!("http://{addr}/models"));
-        let result=provider.discover_models(ProviderId::Openrouter,&json!({"api_key":"discovery-key"}),CancellationToken::new(),&Rows).await.unwrap();
-        assert_eq!(result["models"].as_array().unwrap().len(),4);
-        assert_eq!(result["models"][0]["id"],"vendor/model");assert!(!result.to_string().contains("discovery-key"));
-        assert_eq!(result["provider_acceptance_verified"],false);
-        let cancel=CancellationToken::new();cancel.cancel();
-        assert!(provider.discover_models(ProviderId::Openrouter,&json!({"api_key":"discovery-key"}),cancel,&Rows).await.is_err());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let provider = Provider::for_test(format!("http://{addr}/models"));
+        let result = provider
+            .discover_models(
+                ProviderId::Openrouter,
+                &json!({"api_key":"discovery-key"}),
+                CancellationToken::new(),
+                &Rows,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["models"].as_array().unwrap().len(), 4);
+        assert_eq!(result["models"][0]["id"], "vendor/model");
+        assert!(!result.to_string().contains("discovery-key"));
+        assert_eq!(result["provider_acceptance_verified"], false);
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        assert!(provider
+            .discover_models(
+                ProviderId::Openrouter,
+                &json!({"api_key":"discovery-key"}),
+                cancel,
+                &Rows
+            )
+            .await
+            .is_err());
         server.abort();
     }
     /// Exercise the one-MiB compatible discovery body limit through a real local response.
     #[tokio::test]
     async fn discovery_rejects_oversized_response() {
-        use axum::{routing::get,Router};
-        let app=Router::new().route("/models",get(||async {"x".repeat(1024*1024+1)}));
-        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let addr=listener.local_addr().unwrap();
-        let server=tokio::spawn(async move {axum::serve(listener,app).await.unwrap();});
-        let provider=Provider::for_test(format!("http://{addr}/models"));
-        let error=provider.discover_models(ProviderId::Openrouter,&json!({"api_key":"discovery-key"}),CancellationToken::new(),&Rows).await.unwrap_err();
-        assert!(error.to_string().contains("exceeded limit"));server.abort();
+        use axum::{routing::get, Router};
+        let app = Router::new().route("/models", get(|| async { "x".repeat(1024 * 1024 + 1) }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let provider = Provider::for_test(format!("http://{addr}/models"));
+        let error = provider
+            .discover_models(
+                ProviderId::Openrouter,
+                &json!({"api_key":"discovery-key"}),
+                CancellationToken::new(),
+                &Rows,
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("exceeded limit"));
+        server.abort();
     }
     /// Verify every fixed compatible route uses only its API key and excludes subscription identity and foreign reasoning.
     #[tokio::test]
     async fn fixed_providers_execute_with_isolated_api_credentials() {
-        use axum::{extract::State,http::HeaderMap,routing::post,Json,Router};
+        use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
         use std::sync::Arc;
         use tokio::sync::Mutex;
-        let captured=Arc::new(Mutex::new(None::<(HeaderMap,Value)>));
+        let captured = Arc::new(Mutex::new(None::<(HeaderMap, Value)>));
         let app=Router::new().route("/chat",post(|State(state):State<Arc<Mutex<Option<(HeaderMap,Value)>>>>,headers:HeaderMap,Json(body):Json<Value>| async move {
             *state.lock().await=Some((headers,body));
             ([("content-type","text/event-stream")], "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n")
         })).with_state(captured.clone());
-        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let addr=listener.local_addr().unwrap();
-        let server=tokio::spawn(async move {axum::serve(listener,app).await.unwrap();});
-        let provider=Provider::for_test(format!("http://{addr}/chat"));
-        for id in [ProviderId::OpenaiApi,ProviderId::Openrouter,ProviderId::Abacus,ProviderId::Gemini,
-            ProviderId::Groq,ProviderId::Together,ProviderId::Mistral,ProviderId::Fireworks,
-            ProviderId::Xai,ProviderId::Perplexity,ProviderId::Deepinfra] {
-            let endpoint=reqwest::Url::parse(id.chat_endpoint().unwrap()).unwrap();
-            assert_eq!(endpoint.scheme(),"https");assert!(endpoint.username().is_empty());
-            let selection=ProviderSelection{limits:None,provider:id,model:"vendor/model".into()};
-            let (sender,_receiver)=mpsc::channel(8);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let provider = Provider::for_test(format!("http://{addr}/chat"));
+        for id in [
+            ProviderId::OpenaiApi,
+            ProviderId::Openrouter,
+            ProviderId::Abacus,
+            ProviderId::Gemini,
+            ProviderId::Groq,
+            ProviderId::Together,
+            ProviderId::Mistral,
+            ProviderId::Fireworks,
+            ProviderId::Xai,
+            ProviderId::Perplexity,
+            ProviderId::Deepinfra,
+        ] {
+            let endpoint = reqwest::Url::parse(id.chat_endpoint().unwrap()).unwrap();
+            assert_eq!(endpoint.scheme(), "https");
+            assert!(endpoint.username().is_empty());
+            let selection = ProviderSelection {
+                provider: id,
+                model: "vendor/model".into(),
+            };
+            let (sender, _receiver) = mpsc::channel(8);
             let result=async {
                 let selection = &selection;
                 let tokens = &json!({"api_key":"isolated-key","access_token":"never-forward","account_id":"never-forward"});
@@ -329,11 +581,12 @@ data: [DONE]
                     ).validate()?.bind_credentials(tokens, &cancel)?;
                 provider.dispatch(ready, sender, cancel).await
             }.await.unwrap();
-            assert_eq!(result["output"][0]["content"][0]["text"],"ok");
-            let capture=captured.lock().await;let (headers,body)=capture.as_ref().unwrap();
-            assert_eq!(headers["authorization"],"Bearer isolated-key");
+            assert_eq!(result["output"][0]["content"][0]["text"], "ok");
+            let capture = captured.lock().await;
+            let (headers, body) = capture.as_ref().unwrap();
+            assert_eq!(headers["authorization"], "Bearer isolated-key");
             assert!(!headers.contains_key("chatgpt-account-id"));
-            assert_eq!(body["model"],"vendor/model");
+            assert_eq!(body["model"], "vendor/model");
             assert!(body["messages"][1].get("reasoning_content").is_none());
             assert!(!body.to_string().contains("never-forward"));
         }
@@ -342,26 +595,38 @@ data: [DONE]
     /// Verify redirect-disabled compatible requests cannot forward credentials to a returned location or expose it in errors.
     #[tokio::test]
     async fn fixed_provider_redirect_cannot_forward_key() {
-        use axum::{routing::post,Router};
-        let app=Router::new().route("/chat",post(||async {
-            (axum::http::StatusCode::TEMPORARY_REDIRECT,[("location","http://127.0.0.1:1/private")])
-        }));
-        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let addr=listener.local_addr().unwrap();
-        let server=tokio::spawn(async move {axum::serve(listener,app).await.unwrap();});
-        let provider=Provider::for_test(format!("http://{addr}/chat"));
-        let (sender,_receiver)=mpsc::channel(8);
-        let error=async {
-            let selection = &ProviderSelection { limits:None,
+        use axum::{routing::post, Router};
+        let app = Router::new().route(
+            "/chat",
+            post(|| async {
+                (
+                    axum::http::StatusCode::TEMPORARY_REDIRECT,
+                    [("location", "http://127.0.0.1:1/private")],
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let provider = Provider::for_test(format!("http://{addr}/chat"));
+        let (sender, _receiver) = mpsc::channel(8);
+        let error = async {
+            let selection = &ProviderSelection {
                 provider: ProviderId::Openrouter,
                 model: "vendor/model".into(),
             };
             let tokens = &json!({"api_key":"never-leak-key"});
             let cancel = CancellationToken::new();
-            let ready = crate::provider::CallDraft::new(selection, vec![], vec![], "session", "help")
-                .validate()?
-                .bind_credentials(tokens, &cancel)?;
+            let ready =
+                crate::provider::CallDraft::new(selection, vec![], vec![], "session", "help")
+                    .validate()?
+                    .bind_credentials(tokens, &cancel)?;
             provider.dispatch(ready, sender, cancel).await
-        }.await.unwrap_err();
+        }
+        .await
+        .unwrap_err();
         assert!(!error.to_string().contains("never-leak-key"));
         assert!(!error.to_string().contains("private"));
         server.abort();
@@ -369,14 +634,16 @@ data: [DONE]
     /// Round-trip text plus tool calls without inserting a second assistant message before the tool result.
     #[test]
     fn text_and_tool_calls_share_one_assistant_message() {
-        let mut c=Completion::default();
+        let mut c = Completion::default();
         c.push(&json!({"choices":[{"delta":{"content":"checking","reasoning_content":"thinking","tool_calls":[{"index":0,"id":"call1","function":{"name":"test","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})).unwrap();
-        let result=c.result().unwrap();let mut input=result["output"].as_array().unwrap().clone();
+        let result = c.result().unwrap();
+        let mut input = result["output"].as_array().unwrap().clone();
         input.push(json!({"type":"function_call_output","call_id":"call1","output":"done"}));
-        let body=request_body("deepseek-reasoner",input,vec![],"help").unwrap();
-        assert_eq!(body["messages"].as_array().unwrap().len(),3);
-        assert_eq!(body["messages"][1]["content"],"checking");assert_eq!(body["messages"][1]["tool_calls"][0]["id"],"call1");
-        assert_eq!(body["messages"][2]["role"],"tool");
+        let body = request_body("deepseek-reasoner", input, vec![], "help").unwrap();
+        assert_eq!(body["messages"].as_array().unwrap().len(), 3);
+        assert_eq!(body["messages"][1]["content"], "checking");
+        assert_eq!(body["messages"][1]["tool_calls"][0]["id"], "call1");
+        assert_eq!(body["messages"][2]["role"], "tool");
     }
     /// Verify linked compatible translation preserves call IDs, DeepSeek reasoning and native tool schema/result fields.
     #[test]
@@ -385,17 +652,20 @@ data: [DONE]
             json!({"type":"function_call","call_id":"call1","name":"test","arguments":"{}","deepseek_reasoning":"thinking"}),
             json!({"type":"function_call_output","call_id":"call1","output":"ok"})],
             vec![json!({"type":"function","name":"test","description":"test","parameters":{"type":"object"}})],"help").unwrap();
-        assert_eq!(body["messages"][2]["tool_calls"][0]["id"],"call1");
-        assert_eq!(body["messages"][2]["reasoning_content"],"thinking");
-        assert_eq!(body["messages"][3]["role"],"tool");
-        assert_eq!(body["tools"][0]["function"]["name"],"test");
+        assert_eq!(body["messages"][2]["tool_calls"][0]["id"], "call1");
+        assert_eq!(body["messages"][2]["reasoning_content"], "thinking");
+        assert_eq!(body["messages"][3]["role"], "tool");
+        assert_eq!(body["tools"][0]["function"]["name"], "test");
     }
     /// Verify streamed function-argument fragments and reasoning become one validated final call.
     #[test]
     fn assembles_fragmented_tool_calls() {
-        let mut c=Completion::default();
+        let mut c = Completion::default();
         c.push(&json!({"choices":[{"delta":{"reasoning_content":"think","tool_calls":[{"index":0,"id":"call1","function":{"name":"test","arguments":"{"}}]}}]})).unwrap();
         let (_,done)=c.push(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}"}}]},"finish_reason":"tool_calls"}]})).unwrap();
-        assert!(done);let output=c.result().unwrap();assert_eq!(output["output"][0]["arguments"],"{}");assert_eq!(output["output"][0]["deepseek_reasoning"],"think");
+        assert!(done);
+        let output = c.result().unwrap();
+        assert_eq!(output["output"][0]["arguments"], "{}");
+        assert_eq!(output["output"][0]["deepseek_reasoning"], "think");
     }
 }

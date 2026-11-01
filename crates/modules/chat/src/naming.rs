@@ -108,7 +108,6 @@ impl Config {
     }
 }
 
-
 pub fn validate_settings_at(
     value: &Value,
     source: Option<&Path>,
@@ -193,7 +192,6 @@ pub fn dispatch_at(
         "selection_plan": plan,
         "failover_state": state,
         "provider_selection": webagent_models::provider::ProviderSelection {
-            limits: candidate.limits.clone(),
             provider: candidate.transport.provider_id(),
             model: candidate.upstream_model.clone(),
         }.value(),

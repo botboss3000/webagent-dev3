@@ -2213,10 +2213,6 @@ impl<
                         &system_run["provider_selection"],
                         X::default_model(),
                     )?;
-                    if let Some(limits) = &system_selection.limits {
-                        compaction_config.summary_tokens =
-                            compaction_config.summary_tokens.min(limits.output_tokens);
-                    }
                     compaction_config.system_input_budget = Some(
                         config::Config::<C>::read(&app.runtime_path)?
                             .context
