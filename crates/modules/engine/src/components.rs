@@ -546,6 +546,15 @@ fn parse_controls(bytes: &[u8]) -> Result<Controls> {
     }
     Ok(value)
 }
+/// Validate a release candidate's switches file as start-up reads it: missing means none disabled.
+pub fn validate_controls(path: &std::path::Path) -> Result<()> {
+    // `read_path` checks only its bound for an absolute path, so parse the bytes here.
+    match webagent_configuration::live::read_path(path, CONTROLS_LIMIT, |_| Ok(())) {
+        Ok(bytes) => parse_controls(&bytes).map(|_| ()),
+        Err(e) if webagent_configuration::live::missing(&e) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
 /// The current bytes, for the save fence.
 fn controls_bytes(root: &std::path::Path) -> Result<Option<Vec<u8>>> {
     match webagent_configuration::live::read_path(&controls_path(root), CONTROLS_LIMIT, |bytes| {
@@ -2181,6 +2190,18 @@ mod tests {
         let (version, generation) = execution_identity(&declaration);
         assert_eq!(version, webagent_context_assembly::IMPLEMENTATION_VERSION);
         assert_ne!(generation, declaration.artifact_sha256.unwrap());
+    }
+    #[test]
+    fn candidate_controls_validate_like_start_up() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("engine-components.json");
+        validate_controls(&path).unwrap();
+        std::fs::write(&path, r#"{"revision":1,"disabled":["context-assembly"]}"#).unwrap();
+        validate_controls(&path).unwrap();
+        std::fs::write(&path, r#"{"revision":1,"disabled":["Bad Id"]}"#).unwrap();
+        assert!(validate_controls(&path).is_err());
+        std::fs::write(&path, r#"{"revision":1,"disabled":[],"extra":true}"#).unwrap();
+        assert!(validate_controls(&path).is_err());
     }
     /// A registered module service enters the catalog only with its own group, package and limits.
     #[test]

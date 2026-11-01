@@ -138,23 +138,54 @@ fn scale(levels: &[String], default: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-const FOLDER: &str = "crates/modules/models/providers";
+/// The provider files' folder, relative to the checkout.
+pub const FOLDER: &str = "crates/modules/models/providers";
 
-fn read(name: &str, id: &str) -> Result<Provider> {
-    // The parser sees only the bytes, so it checks the file against its own provider and
-    // the name is checked here (a renamed file fails rather than serving a last good copy).
-    let parse = |bytes: &[u8]| -> Result<Provider> {
-        let provider: Provider = serde_json::from_slice(bytes)?;
-        provider.validate(&provider.provider_id())?;
-        Ok(provider)
-    };
-    let provider =
-        webagent_configuration::live::parsed(&format!("{FOLDER}/{name}"), FILE_LIMIT, parse)
-            .map_err(|error| anyhow!("Invalid provider file {id}: {error:#}"))?;
+/// Every provider file shares this one schema; the parser checks a file against its own provider.
+fn parse(bytes: &[u8]) -> Result<Provider> {
+    let provider: Provider = serde_json::from_slice(bytes)?;
+    provider.validate(&provider.provider_id())?;
+    Ok(provider)
+}
+
+/// A renamed file fails rather than serving a last good copy under the wrong provider.
+fn named(provider: Provider, id: &str) -> Result<Provider> {
     if provider.provider_id() != id {
         bail!("Invalid provider file {id}: Provider file name does not match its provider");
     }
     Ok(provider)
+}
+
+fn read(name: &str, id: &str) -> Result<Provider> {
+    let provider =
+        webagent_configuration::live::parsed(&format!("{FOLDER}/{name}"), FILE_LIMIT, parse)
+            .map_err(|error| anyhow!("Invalid provider file {id}: {error:#}"))?;
+    named(provider, id)
+}
+
+/// Validate every provider file in `folder` (a release candidate's copy) as `load_all`
+/// reads them, so a new provider file needs no new validation code. Returns the count.
+pub fn validate_folder(folder: &std::path::Path) -> Result<usize> {
+    let mut count = 0;
+    for entry in std::fs::read_dir(folder)? {
+        let entry = entry?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| anyhow!("Invalid provider file name"))?;
+        let Some(id) = name.strip_suffix(".json") else {
+            continue;
+        };
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let provider =
+            webagent_configuration::live::parsed_path(&folder.join(&name), FILE_LIMIT, parse)
+                .map_err(|error| anyhow!("Invalid provider file {id}: {error:#}"))?;
+        named(provider, id)?;
+        count += 1;
+    }
+    Ok(count)
 }
 
 /// One provider's file, or `None` when the provider has none.
@@ -308,6 +339,24 @@ mod tests {
             Some(272_000)
         );
         assert_eq!(max_output(ProviderId::Openrouter, "any"), None);
+    }
+    #[test]
+    fn candidate_folder_validates_every_file_with_the_one_schema() {
+        let folder = tempfile::tempdir().unwrap();
+        let shipped = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("providers");
+        for name in ["deepseek.json", "openrouter.json"] {
+            std::fs::copy(shipped.join(name), folder.path().join(name)).unwrap();
+        }
+        std::fs::write(folder.path().join("README.md"), "not a provider").unwrap();
+        assert_eq!(validate_folder(folder.path()).unwrap(), 2);
+        std::fs::copy(
+            shipped.join("deepseek.json"),
+            folder.path().join("openrouter.json"),
+        )
+        .unwrap();
+        assert!(validate_folder(folder.path()).is_err());
+        std::fs::write(folder.path().join("openrouter.json"), "{").unwrap();
+        assert!(validate_folder(folder.path()).is_err());
     }
     #[test]
     fn invalid_files_are_rejected() {

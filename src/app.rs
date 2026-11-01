@@ -855,6 +855,18 @@ async fn run_process() -> Result<()> {
             let value: Value = serde_json::from_slice(&bytes)?;
             crate::api::live_configuration::validate(id, &value)?;
         }
+        // The remaining live files, through their owners' readers; an absolute path reads
+        // exactly the candidate's file.
+        loop_runtime::Config::read(&path.join(webagent_engine::runtime::config::LIVE))?;
+        webagent_diagnostics::config::Config::read(
+            &path.join(webagent_diagnostics::config::Config::LIVE),
+        )?;
+        webagent_engine::components::validate_controls(
+            &path.join(webagent_engine::components::LIVE),
+        )?;
+        let providers = webagent_models::providers::validate_folder(
+            &path.join(webagent_models::providers::FOLDER),
+        )?;
         // Composition is read-only: no model preparation, credential access or provider dispatch.
         let state_root =
             PathBuf::from(std::env::var("V3_STATE_ROOT").unwrap_or_else(|_| "/state".into()));
@@ -866,7 +878,7 @@ async fn run_process() -> Result<()> {
             .map_err(|_| anyhow!("Candidate retention validation failed"))?;
         println!(
             "{}",
-            json!({"catalog_version":catalog.version(),"abilities":catalog.ids().len(),"engine_components":engine.entries.len(),
+            json!({"catalog_version":catalog.version(),"abilities":catalog.ids().len(),"engine_components":engine.entries.len(),"providers":providers,
             "effective_prompt_digest":digest(&json!(effective)),
             "mounted_retention_digest":digest(&json!(mounted_retention))})
         );
