@@ -3336,6 +3336,14 @@ class Broker:
         return release.checkout_drift(live, self.runner.snapshot(), candidate,
                                       changed, context_digest, offset, base)
 
+    def _with_checkout_live(self, files):
+        """Give a task tree the checkout's live-file bytes; released copies are stale by design."""
+        patterns = release.live_patterns(files)
+        if patterns:
+            checkout = release.entries(self.runner.snapshot(), context_digest)
+            files.update({name: value for name, value in checkout.items() if release.is_live(name, patterns)})
+        return files
+
     def _task_base(self, job):
         """The task's base snapshot for a job, which live-file checks compare the checkout with."""
         path = self.state / job["job_id"] / "base.tar"
@@ -4495,7 +4503,7 @@ class Broker:
             if context_digest(snapshot)[0]!=args["expected_inputs_sha256"] or context_digest(snapshot)[0]!=context_digest(baseline)[0]:
                 raise ValueError("Unchanged empty successor and exact input binding required")
             live=self._current_release_blob()
-            current=release.entries(snapshot,context_digest);published=release.entries(live,context_digest)
+            current=release.entries(snapshot,context_digest);published=self._with_checkout_live(release.entries(live,context_digest))
             if {p:v for p,v in current.items() if not release.inspection_path(p)}!=published:
                 raise ValueError("Successor baseline is stale; begin a fresh task")
             source_tree=Path(previous["workspace_path"]).parent
@@ -6085,15 +6093,17 @@ class Broker:
                                 "session_id":None if trusted.get("local_caller")or trusted.get("bridge_caller")else workspace}}
                     if mode == "isolated":
                         blob = self._current_release_blob()
+                        released = release.entries(blob, context_digest)
+                        files = self._with_checkout_live(dict(released))
                         # Only authenticated admin and the fixed local operator receive
                         # private troubleshooting snapshots, never another task owner.
                         if trusted["user_id"] == "admin" or (
                                 trusted.get("local_caller") is True and
                                 trusted["user_id"] == "codex-local" and workspace == LOCAL_WORKSPACE):
-                            files = release.entries(blob, context_digest)
                             inspection = release.entries(self.runner.snapshot(inspection=True), context_digest)
                             files.update({name: value for name, value in inspection.items()
                                           if release.inspection_path(name)})
+                        if files != released:
                             blob = release.archive(files, context_digest)
                         folder = self.work_dir / "trees" / key
                         release.extract(folder, blob, context_digest)

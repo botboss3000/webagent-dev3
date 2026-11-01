@@ -294,7 +294,8 @@ A task that changes only listed files (plus other hot-lane paths) publishes as
 `plugin_deploy` without a core build, when installed compiler evidence excludes each
 file, and refuses a listed `.json` that does not parse; the app's own validators run
 only on read. A listed file the compiler reads, or unavailable evidence, takes
-`build_deploy`, as does a task that also changes code. Creating a file and listing it in the same task is an ordinary change. A rebuild keeps
+`build_deploy`, as does a task that also changes code. A new task's tree takes listed files from the checkout, so it starts from their current
+bytes. Creating a file and listing it in the same task is an ordinary change. A rebuild keeps
 the released bytes of listed files. The broker's 60-second maintenance loop commits settled edits (no
 change for 10 seconds) to listed files as one `Live config edit: ...` commit with
 `git commit --only`, so other writers' staged work is never included. The same loop

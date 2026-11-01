@@ -2252,6 +2252,20 @@ class LiveFileRoutingTests(unittest.TestCase):
   self.assertEqual(self.plan({"crates/modules/context/policy.json":'{"a":1}'},{"v3/src/main.rs","v3/crates/modules/context/policy.json"})["operation"],"build_deploy")
   for evidence in (False,set()):
    with self.subTest(evidence=evidence):self.assertEqual(self.plan({"crates/modules/context/policy.json":'{"a":1}'},evidence)["operation"],"build_deploy")
+ def test_task_starts_from_checkout_live_bytes_so_edits_after_in_place_saves_do_not_conflict(self):
+  manifest=json.dumps({"version":1,"files":["crates/modules/context/*.json"]})
+  files={"v3/live-files.json":manifest,"v3/crates/modules/context/src/lib.rs":"code"}
+  released=fixtures.context(extra={**files,"v3/crates/modules/context/policy.json":'{"saved":0}'})
+  self.runner.blob=fixtures.context(extra={**files,"v3/crates/modules/context/policy.json":'{"saved":1}'})
+  self.runner.core_compile_inputs=lambda:{"v3/src/main.rs"}
+  with patch.object(self.broker,"_current_release_blob",return_value=released):
+   task=self.call("v3_build_work",{"action":"begin","task_id":"live-seed-"+uuid.uuid4().hex,"summary":"Live seed fixture","mode":"isolated"})
+   path=Path(task["workspace_path"],"crates/modules/context/policy.json")
+   self.assertEqual(path.read_text(),'{"saved":1}')
+   path.write_text('{"saved":2}')
+   result=self.call("v3_build_work",{"action":"preflight","task_id":task["task_id"]})
+  self.assertEqual(result["release_plan"]["operation"],"plugin_deploy")
+  self.assertEqual(result["synchronization"]["promotion_conflicts"],0)
  def test_unparseable_live_json_is_refused(self):
   self.assertIn("Live JSON file does not parse: crates/modules/context/policy.json",self.plan({"crates/modules/context/policy.json":"{"})["refusal"])
 
