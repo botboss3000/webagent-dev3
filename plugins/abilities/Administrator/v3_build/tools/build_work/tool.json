@@ -79,7 +79,9 @@
         "type": "string",
         "enum": [
           "check",
-          "test"
+          "test",
+          "fmt",
+          "clippy"
         ]
       },
       "timeout_seconds": {

@@ -54,6 +54,7 @@ A full build takes about 25 minutes and fails late, so prove a Rust change first
 1. check=check with feature_profile=default.
 2. check=check with feature_profile=live when you changed shared host code, engine integration, service wrappers, feature-gated paths or implementation-crate dependencies.
 3. check=test with test_filter for the tests of each module you changed, plus any new or edited test by name.
+4. check=fmt and check=clippy. Both look only at the Rust files your task changed; fix every finding they report.
 
 Each check holds your call until its job ends and returns its status and a log excerpt; do not poll it. On a failure, fix and run the affected checks again on the new digest. check=check skips #[cfg(test)] modules, so a test-only change needs step 3. Finish only after the latest digest passed them. Guidance, JSON, UI and other non-Rust changes need no Rust checks; their release lane runs its own tests.
 
