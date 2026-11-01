@@ -161,3 +161,82 @@ class CursorCliTests(unittest.TestCase):
         with patch.object(client,"call",return_value={}) as call, patch("sys.argv",["buildctl","job","job-1","--log-cursor","42"]), patch("sys.stdout",new_callable=io.StringIO):
             self.assertEqual(client.main(),0)
         call.assert_called_once_with("v3_worker_job",{"job_id":"job-1","log_cursor":42})
+
+
+class OperatorCycleTests(unittest.TestCase):
+    """Server-side operator release steps: install, close, heartbeat and the stage table."""
+    def setUp(self):
+        import tempfile
+        self.folder = tempfile.TemporaryDirectory();root = Path(self.folder.name)
+        self.tree = root / "trees" / ("a" * 64);(self.tree / "v3/src").mkdir(parents=True)
+        self.checkout = root / "checkout";(self.checkout / "src").mkdir(parents=True)
+        import tarfile
+        with tarfile.open(self.tree / "baseline.tar", "w") as archive:
+            for name, body in {"v3/src/same.rs": b"same", "v3/src/edit.rs": b"old", "v3/src/gone.rs": b"x", "ui/x.css": b"ui"}.items():
+                info = tarfile.TarInfo(name);info.size = len(body);archive.addfile(info, io.BytesIO(body))
+        for name, body in {"src/same.rs": b"same", "src/edit.rs": b"new", "src/added.rs": b"add"}.items():
+            (self.tree / "v3" / name).write_bytes(body);(self.checkout / name).write_bytes(body)
+        self.calls = []
+    def tearDown(self):self.folder.cleanup()
+    def broker(self, job_status="completed", busy=False, refusal=None, state="complete"):
+        def request(name, args):
+            self.calls.append((name, args))
+            if name == "v3_build_work" and args["action"] == "status":
+                return {"own": [{"task_id": "task-1", "job_id": "job-1", "workspace_path": str(self.tree / "v3")}]}
+            if name == "v3_build_work" and args["action"] == "preflight":
+                return {"release_plan": {"refusal": refusal}, "synchronization": {"affected": 0}}
+            if name == "v3_worker_job":return {"status": job_status}
+            if name == "v3_build_status":return {"busy": busy, "containers": {r: {"health": "healthy"} for r in ("api", "loop")}}
+            if name == "build_service_maintenance":return {"task_id": None}
+            if args.get("action") == "reservations":
+                held = not any(isinstance(a, dict) and a.get("action") == "release_claims" for _, a in self.calls)
+                return {"tasks": [{"label": "task-1", "scopes": ["module:broker"], "revision": 7, "epoch": 1}] if held else []}
+            if args.get("action") == "release_claims":return {"state": state, "scopes": []}
+            raise AssertionError(name)
+        return request
+    def runner(self, fail=()):
+        from types import SimpleNamespace
+        def run(argv, **kwargs):
+            self.calls.append(("run", argv))
+            if any(word in argv for word in fail):return SimpleNamespace(returncode=1, stdout="", stderr="refused stale tree")
+            return SimpleNamespace(returncode=0, stdout="abc123\n" if "rev-parse" in argv else "", stderr="")
+        return run
+    def test_task_changes_match_the_broker_definition(self):
+        self.assertEqual(client.task_changes(self.tree), ["src/added.rs", "src/edit.rs", "src/gone.rs"])
+    def test_close_commits_exact_paths_then_releases_claims_with_the_commit(self):
+        with patch.dict(client.CONFIG, {"checkout_root": str(self.checkout)}), patch.object(client, "heartbeat") as beat:
+            result = client.close("task-1", "Change", self.broker(), self.runner())
+        add = next(argv for name, argv in self.calls if name == "run" and "add" in argv)
+        self.assertEqual(add[-3:], ["src/added.rs", "src/edit.rs", "src/gone.rs"])
+        release = next(args for name, args in self.calls if args and isinstance(args, dict) and args.get("action") == "release_claims")
+        self.assertEqual((release["commit"], release["scopes"], release["expected_revision"]), ("abc123", ["module:broker"], 7))
+        self.assertEqual(result["state"], "complete");beat.assert_called_once_with("task-1", "stop")
+    def test_close_refuses_unfinished_job_or_drifted_checkout(self):
+        with patch.dict(client.CONFIG, {"checkout_root": str(self.checkout)}):
+            with self.assertRaisesRegex(ValueError, "reconcile"):client.close("task-1", "m", self.broker("failed"), self.runner())
+            (self.checkout / "src/edit.rs").write_bytes(b"other writer")
+            with self.assertRaisesRegex(ValueError, "differs"):client.close("task-1", "m", self.broker(), self.runner())
+        self.assertFalse(any(name == "run" and "commit" in argv for name, argv in self.calls))
+    def test_install_restarts_the_service_even_when_install_is_refused(self):
+        with patch.dict("os.environ", {"WEBAGENT_BUILD_CONFIG": "/etc/fixture.json"}):
+            with self.assertRaisesRegex(RuntimeError, "stale"):client.install_broker("task-1", False, self.broker(), self.runner(fail=("install",)))
+            commands = [argv[3] if argv[:3] == ["sudo", "-n", "systemctl"] else "install" for name, argv in self.calls if name == "run" and "is-active" not in argv]
+            self.assertEqual(commands, ["stop", "install", "start"])
+            self.calls.clear()
+            with self.assertRaisesRegex(ValueError, "busy"):client.install_broker("task-1", False, self.broker(busy=True), self.runner())
+            with self.assertRaisesRegex(ValueError, "refused"):client.install_broker("task-1", False, self.broker(refusal="Possible credentials"), self.runner())
+        self.assertFalse(any(name in ("run", "build_service_maintenance") for name, _ in self.calls))
+    def test_stage_table_and_watch_step(self):
+        running = {"status": "running", "stage": "compile tests", "stage_index": 2, "stage_count": 3, "job_seconds": 90, "job_normal": [60, 120],
+                   "finished_stages": [{"stage": "dependencies", "seconds": 6, "normal": [6, 12]}],
+                   "running_stages": [{"stage": "compile tests", "seconds": 84, "normal": None}],
+                   "upcoming_stages": [{"stage": "run tests", "normal": [300, 600]}]}
+        table = client.stage_table(running)
+        self.assertIn("| 1. Dependencies ✅ | 0.1m (0.1-0.2m) |", table)
+        self.assertIn("| 2. Compile tests ⏳ | 1.4m (no baseline) |", table)
+        self.assertIn("| 3. Run tests | TBD (5.0-10.0m) |", table)
+        later = {**running, "stage": "run tests", "finished_stages": running["finished_stages"] * 2}
+        with patch("sys.stdout", new_callable=io.StringIO):
+            replies = iter([running, running, later])
+            self.assertEqual(client.watch("job-1", True, lambda n, a: next(replies), lambda s: None), 3)
+            self.assertEqual(client.watch("job-1", False, lambda n, a: {**running, "status": "completed"}, lambda s: None), 0)

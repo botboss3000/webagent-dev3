@@ -464,6 +464,28 @@ and would silently revert it; the install is refused and names the files. Begin
 a fresh task from checkout HEAD and re-apply, or pass `--allow-stale-tree` for a
 deliberate rollback.
 
+## Operator release from any SSH session
+
+Every step of an operator release runs on the server with the installed `buildctl`
+(`WEBAGENT_BUILD_CONFIG=/etc/webagent/development/build-service.json python3 -B <service_dir>/buildctl.py ...`),
+so a machine needs only SSH access:
+
+1. `begin TASK "summary [origin=...; session=...]"`, then `heartbeat TASK start`.
+2. `inputs --task TASK` for the digest; `apply TASK --patch FILE --expected DIGEST --request-id ID` (a unified diff).
+3. `check TASK --check check|test|fmt|clippy [--test-filter NAME] [--feature-profile live] --expected DIGEST --request-id ID`.
+4. `preflight TASK`. A broker-only task first runs `install-broker TASK` while idle: it drains, stops the
+   service, runs `lifecycle.py install --install-tree` from the task tree (the stale-tree guard applies) and
+   always starts the service again.
+5. `finish TASK --expected DIGEST`, then `watch JOB --step` in the background: it prints the stage table at
+   each stage change and exits 0 when completed, 1 on another terminal state, 3 at a stage change.
+   `progress JOB --table` prints the same table once.
+6. `close TASK --message-file FILE` verifies the completed job and container health, commits exactly the
+   paths the task changed against its baseline (refusing checkout drift or another writer's staged changes),
+   releases every claim with that commit and stops the heartbeat once the task is complete.
+
+The heartbeat runs detached under `~/.cache/webagent-buildctl/TASK/` and renews ownership every 20 seconds
+until `heartbeat TASK stop` or a completing `close`.
+
 ## Explicit owner claim release
 
 Operators may use `buildctl schedule --input request.json` with action

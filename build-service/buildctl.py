@@ -4,14 +4,20 @@ import argparse
 from pathlib import Path
 import os,importlib.util
 import json
+import signal
 import socket
+import subprocess
 import sys
+import tarfile
 import time
 import uuid
 
 spec=importlib.util.spec_from_file_location("build_client_config",Path(__file__).with_name("config.py"))
 configuration=importlib.util.module_from_spec(spec);spec.loader.exec_module(configuration)
-SOCKET=str(Path(configuration.load()["runtime_root"])/"build.sock")
+CONFIG=configuration.load()
+SOCKET=str(Path(CONFIG["runtime_root"])/"build.sock")
+SERVICE="webagent-build-"+CONFIG["instance"]+".service"
+BEATS=Path.home()/".cache"/"webagent-buildctl"
 POLL_SECONDS = 15
 MAX_WAIT_SECONDS = 30 * 60
 TERMINAL = {"completed", "failed", "stale", "cancelled", "uncertain", "interrupted", "needs_decision"}
@@ -109,6 +115,194 @@ def wait_task(task_id, timeout, request=call, clock=time.monotonic, pause=time.s
         pause(min(POLL_SECONDS, remaining))
 
 
+# Operator release steps on the server itself, so any SSH session can run a full cycle.
+def own_task(task_id, request=call):
+    item = next((i for i in request("v3_build_work", {"action": "status", "task_id": task_id})["own"] if i["task_id"] == task_id), None)
+    if item is None:
+        raise ValueError("task receipt unavailable")
+    return item
+
+
+def reservation(task_id, request=call):
+    """This task's ownership row (scopes, revision, epoch), or None once nothing is held."""
+    for offset in range(0, 400, 40):
+        rows = request("build_work", {"action": "reservations", "offset": offset, "limit": 40}).get("tasks", [])
+        hit = next((row for row in rows if row.get("label") == task_id), None)
+        if hit or not rows:
+            return hit
+    return None
+
+
+def heartbeat(task_id, action):
+    """Renew the task's ownership every 20 s from a detached process until stopped."""
+    folder = BEATS / task_id
+    folder.mkdir(parents=True, exist_ok=True)
+    pidfile, stop = folder / "heartbeat.pid", folder / "heartbeat.stop"
+    def alive():
+        try:
+            os.kill(int(pidfile.read_text()), 0)
+            return True
+        except (OSError, ValueError):
+            return False
+    if action == "status":
+        return {"task_id": task_id, "running": alive(), "log": str(folder / "heartbeat.log")}
+    if action == "stop":
+        stop.touch()
+        if alive():
+            os.kill(int(pidfile.read_text()), signal.SIGTERM)
+        return {"task_id": task_id, "running": False}
+    if not alive():
+        stop.unlink(missing_ok=True)
+        process = subprocess.Popen([sys.executable, "-B", __file__, "_beat", task_id], stdout=subprocess.DEVNULL,
+                                   stderr=open(folder / "heartbeat.log", "a"), start_new_session=True)
+        pidfile.write_text(str(process.pid))
+    return {"task_id": task_id, "running": True, "pid": int(pidfile.read_text())}
+
+
+def beat(task_id, request=call, pause=time.sleep):
+    stop, seq = BEATS / task_id / "heartbeat.stop", 0
+    while not stop.exists():
+        seq += 1
+        # One refused beat must not end renewal and orphan the task.
+        try:
+            row = reservation(task_id, request) or {}
+            if row.get("revision") is not None:
+                request("build_work", {"action": "heartbeat", "task_id": task_id, "expected_revision": row["revision"],
+                                       "expected_epoch": row.get("epoch", 1), "request_id": f"{task_id}-heartbeat-{uuid.uuid4().hex[:12]}"})
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
+            print(time.strftime("%H:%M:%S"), "beat", seq, "failed:", str(error)[:200], file=sys.stderr, flush=True)
+        pause(20)
+
+
+def install_broker(task_id, allow_stale=False, request=call, run=subprocess.run):
+    """Install a broker-only task tree while idle: drain, stop, install, always start again."""
+    if not os.environ.get("WEBAGENT_BUILD_CONFIG"):
+        raise ValueError("set WEBAGENT_BUILD_CONFIG to the installed broker configuration")
+    tree = Path(own_task(task_id, request)["workspace_path"])
+    plan = request("v3_build_work", {"action": "preflight", "task_id": task_id, "offset": 0})
+    refusal = (plan.get("release_plan") or {}).get("refusal") or ""
+    if (plan.get("synchronization") or {}).get("affected"):
+        raise ValueError("preflight reports synchronization drift; resolve before installing")
+    if refusal and "Install this task tree" not in refusal:
+        raise ValueError("preflight refused: " + refusal[:300])
+    if request("v3_build_status", {}).get("busy"):
+        raise ValueError("broker busy; install only while idle")
+    request("build_service_maintenance", {"action": "drain", "task_id": task_id})
+    run(["sudo", "-n", "systemctl", "stop", SERVICE], check=True)
+    try:
+        # lifecycle.py refuses a tree cut before the installed release unless --allow-stale-tree.
+        out = run(["sudo", "-n", "python3", "-B", str(tree / "build-service/lifecycle.py"), "install", "--config", os.environ["WEBAGENT_BUILD_CONFIG"],
+                   "--install-tree", tree.parent.name, *(["--allow-stale-tree"] if allow_stale else [])],
+                  capture_output=True, text=True)
+    finally:
+        run(["sudo", "-n", "systemctl", "start", SERVICE], check=False)
+    if out.returncode:
+        raise RuntimeError("install refused: " + (out.stderr or out.stdout).strip()[-600:])
+    active = run(["systemctl", "is-active", SERVICE], capture_output=True, text=True).stdout.strip()
+    return {"task_id": task_id, "installed": out.stdout.strip().splitlines()[-1][:400] if out.stdout.strip() else "", "service": active,
+            "next": "buildctl finish " + task_id + " --expected <inputs_sha256> publishes it as host_service_deploy"}
+
+
+def task_changes(tree):
+    """V3-relative paths whose bytes differ between the task's baseline.tar and its tree, as the broker computes them."""
+    base = {}
+    with tarfile.open(tree / "baseline.tar") as archive:
+        for member in archive:
+            if member.isfile() and member.name.startswith("v3/"):
+                base[member.name[3:]] = archive.extractfile(member).read()
+    root = tree / "v3"
+    current = {str(p.relative_to(root)) for p in root.rglob("*") if p.is_file() and not p.is_symlink()}
+    return sorted(name for name in set(base) | current
+                  if name not in current or name not in base or (root / name).read_bytes() != base[name])
+
+
+def close(task_id, message, request=call, run=subprocess.run):
+    """Commit exactly the released bytes, then release every claim with that commit; this completes the task."""
+    task = own_task(task_id, request)
+    if not task.get("job_id"):
+        raise ValueError("no finished job to close; run finish first")
+    if request("build_service_maintenance", {"action": "status"}).get("task_id") == task_id:
+        request("build_service_maintenance", {"action": "resume", "task_id": task_id})
+    job = request("v3_worker_job", {"job_id": task["job_id"]})
+    if job.get("status") != "completed":
+        raise ValueError(f"job {task['job_id']} is {job.get('status')}; reconcile before committing")
+    containers = request("v3_build_status", {})["containers"]
+    if any(containers.get(r, {}).get("health") != "healthy" for r in ("api", "loop")):
+        raise ValueError("deployment not healthy; do not commit")
+    tree, checkout = Path(task["workspace_path"]).parent, Path(CONFIG["checkout_root"])
+    paths = task_changes(tree)
+    if not paths:
+        raise ValueError("task changed no files")
+    differs = [p for p in paths if ((checkout / p).read_bytes() if (checkout / p).exists() else None)
+               != ((tree / "v3" / p).read_bytes() if (tree / "v3" / p).exists() else None)]
+    if differs:
+        raise ValueError("checkout differs from the released tree: " + ", ".join(differs[:10]))
+    git = ["git", "-C", str(checkout)]
+    if run(git + ["diff", "--cached", "--name-only"], capture_output=True, text=True, check=True).stdout.strip():
+        raise ValueError("checkout has staged changes from another writer; resolve before committing")
+    if "broker job" not in message:
+        message = message.rstrip() + f" (broker job {task['job_id']})"
+    run(git + ["add", "--", *paths], check=True)
+    run(git + ["commit", "-q", "-F", "-"], input=message, text=True, check=True)
+    commit = run(git + ["rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    reply = {}
+    # The heartbeat keeps renewing, so read the revision right before each attempt; a row may list part of the scopes.
+    for attempt in range(1, 9):
+        row = reservation(task_id, request) or {}
+        if attempt > 1 and not row.get("scopes"):
+            break
+        try:
+            reply = request("build_work", {"action": "release_claims", "task_id": task_id, "scopes": row.get("scopes", []),
+                "reason": f"Release {task['job_id'][:8]} deployed healthy and committed as {commit[:7]}",
+                "request_id": f"{task_id}-release-claims-{commit[:12]}-{attempt}", "expected_revision": row.get("revision"),
+                "expected_epoch": row.get("epoch"), "commit": commit})
+        except RuntimeError as error:
+            if "Stale ownership revision" not in str(error) or attempt == 8:
+                raise
+            time.sleep(1)
+            continue
+        if reply.get("state") == "complete":
+            break
+    if reply.get("state") == "complete":
+        heartbeat(task_id, "stop")
+    return {"task_id": task_id, "commit": commit, "paths": paths, "state": reply.get("state"), "scopes": reply.get("scopes")}
+
+
+def minutes(seconds):
+    return "TBD" if seconds is None else f"{seconds / 60:.1f}m"
+
+
+def stage_table(progress):
+    """The stage table operators paste: finished, running and upcoming stages against their p50-p90 range."""
+    def normal(value):
+        return f"({value[0] / 60:.1f}-{value[1] / 60:.1f}m)" if value else "(no baseline)"
+    rows = ([(s["stage"], " ✅", minutes(s.get("seconds")), s.get("normal")) for s in progress.get("finished_stages", [])]
+            + [(s["stage"], " ⏳", minutes(s.get("seconds")), s.get("normal")) for s in progress.get("running_stages", [])]
+            + [(s["stage"], "", "TBD", s.get("normal")) for s in progress.get("upcoming_stages", [])])
+    mark = {"completed": " ✅", "queued": " ⏳", "running": " ⏳"}.get(progress.get("status"), " ❌")
+    lines = ["| Stage | Time (normal) |", "|---|---|"]
+    lines += [f"| {i}. {name[0].upper() + name[1:]}{flag} | {took} {normal(rng)} |" for i, (name, flag, took, rng) in enumerate(rows, 1)]
+    lines.append(f"| **Job**{mark} | **{minutes(progress.get('job_seconds'))}** {normal(progress.get('job_normal'))} |")
+    return "\n".join(lines)
+
+
+def watch(job_id, step=False, request=call, pause=time.sleep):
+    """Print the stage table at each stage change; exit 0 completed, 1 other terminal, 3 at a stage change with --step."""
+    seen = None
+    while True:
+        progress = request("v3_build_progress", {"job_id": job_id})
+        key = (progress.get("status"), progress.get("stage"), len(progress.get("finished_stages", [])))
+        if key != seen:
+            print(f"{progress.get('status')}: stage {progress.get('stage_index')} of {progress.get('stage_count')} {progress.get('stage')}, "
+                  f"verdict {progress.get('verdict')}\n" + stage_table(progress), flush=True)
+            if progress.get("status") in TERMINAL:
+                return 0 if progress["status"] == "completed" else 1
+            if step and seen is not None:
+                return PENDING_EXIT
+            seen = key
+        pause(POLL_SECONDS)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Coordinate V3 development builds with WebAgent")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -147,6 +341,20 @@ def main():
     abandon.add_argument("task_id")
     progress = commands.add_parser("progress", help="stage k of N with durations against class history; no logs")
     progress.add_argument("job_id")
+    progress.add_argument("--table", action="store_true", help="print the Markdown stage table instead of JSON")
+    watch_parser = commands.add_parser("watch", help="print the stage table at each stage change until the job ends")
+    watch_parser.add_argument("job_id")
+    watch_parser.add_argument("--step", action="store_true", help="also exit 3 at each stage change, for background waits")
+    install = commands.add_parser("install-broker", help="install a broker-only task tree while idle (drain, stop, install, start)")
+    install.add_argument("task_id")
+    install.add_argument("--allow-stale-tree", action="store_true", help="deliberate rollback of a newer installed release")
+    close_parser = commands.add_parser("close", help="commit the released bytes and release every claim with that commit")
+    close_parser.add_argument("task_id")
+    close_parser.add_argument("--message-file", required=True, help="commit message file, or - for stdin")
+    beat_parser = commands.add_parser("heartbeat", help="renew a task's ownership from a detached process")
+    beat_parser.add_argument("task_id")
+    beat_parser.add_argument("action", choices=("start", "stop", "status"))
+    commands.add_parser("_beat").add_argument("task_id")
     rebuild = commands.add_parser("rebuild", help="release the live checkout as it is (dev: changed packages or build; stable: full linked build)")
     rebuild.add_argument("--mode", choices=("dev", "stable"), default="dev")
     rebuild.add_argument("--request-id", required=True)
@@ -174,6 +382,8 @@ def main():
     check=commands.add_parser("check",help="Run a durable task-scoped compile check without deployment")
     check.add_argument("task_id");check.add_argument("--expected",required=True)
     check.add_argument("--request-id",required=True)
+    check.add_argument("--check",choices=("check","test","fmt","clippy"),default="check")
+    check.add_argument("--test-filter",help="check=test only: run the tests whose names contain this text")
     check.add_argument("--feature-profile",choices=("default","live"))
     check.add_argument("--timeout",type=int,default=600)
     check.add_argument("--compiler-memory-cap",type=int)
@@ -188,8 +398,9 @@ def main():
             parser.error("decide requires a sync decision and --sync-digest")
     if args.command=="check":
         if not 1<=args.timeout<=600:parser.error("--timeout must be between 1 and 600 seconds")
-        request={"action":"check","task_id":args.task_id,"check":"check","expected_inputs_sha256":args.expected,
+        request={"action":"check","task_id":args.task_id,"check":args.check,"expected_inputs_sha256":args.expected,
             "request_id":args.request_id,"timeout_seconds":args.timeout}
+        if args.test_filter is not None:request["test_filter"]=args.test_filter
         if args.feature_profile is not None:request["feature_profile"]=args.feature_profile
         if args.compiler_memory_cap is not None:request["compiler_memory_cap"]=args.compiler_memory_cap
         print(json.dumps(call("build_work",request),sort_keys=True));return 0
@@ -201,6 +412,19 @@ def main():
         print(json.dumps(call("v3_source_apply",{"task_id":args.task_id,"request_id":args.request_id,"expected_inputs_sha256":args.expected,"patch":patch}),sort_keys=True));return 0
     if args.command=="maintenance":
         print(json.dumps(call("build_service_maintenance",{"action":args.action,**({"task_id":args.task_id} if args.task_id else {})}),sort_keys=True));return 0
+    if args.command == "_beat":
+        beat(args.task_id);return 0
+    if args.command == "watch":
+        return watch(args.job_id, args.step)
+    if args.command == "progress" and args.table:
+        print(stage_table(call("v3_build_progress", {"job_id": args.job_id})));return 0
+    if args.command == "install-broker":
+        print(json.dumps(install_broker(args.task_id, args.allow_stale_tree), sort_keys=True));return 0
+    if args.command == "close":
+        message = sys.stdin.read(64 * 1024) if args.message_file == "-" else Path(args.message_file).read_text()
+        print(json.dumps(close(args.task_id, message), sort_keys=True));return 0
+    if args.command == "heartbeat":
+        print(json.dumps(heartbeat(args.task_id, args.action), sort_keys=True));return 0
     if args.command == "wait":
         if not 0 <= args.timeout <= MAX_WAIT_SECONDS:
             parser.error("--timeout must be between 0 and 1800 seconds")
