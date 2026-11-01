@@ -261,7 +261,8 @@
               "controls": [
                 "stop",
                 "continue",
-                "mic_send"
+                "mic",
+                "send"
               ],
               "padding": "4px 20px 20px 0"
             }
@@ -538,7 +539,8 @@
               "controls": [
                 "stop",
                 "continue",
-                "mic_send"
+                "mic",
+                "send"
               ],
               "padding": "20px 20px 20px 0"
             }
