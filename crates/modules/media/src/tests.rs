@@ -1,82 +1,16 @@
-//! Media-owned rules without the root App: lanes, capture, utterance routing, speech text and
-//! image receipts. Root tests cover HTTP composition, model calls and attachment publication.
+//! Media-owned rules without the root App: capture, speech text and image receipts. Root tests
+//! cover HTTP composition, model calls and attachment publication.
 // Test code may unwrap (the standard's `allow-unwrap-in-tests`; no clippy.toml carries it yet).
 #![allow(clippy::unwrap_used)]
-use std::collections::HashMap;
-
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::capture::{self, Capture, Chunk, SequenceRejected};
 use crate::image;
-use crate::lanes::{self, LaneError, Lanes};
 use crate::speech::{sample_text, speech_text, voice_catalog, VoiceOutput, DEFAULT_VOICE, VOICES};
-use crate::utterance::{self, Control};
 
 fn pcm(sample: i16, samples: usize) -> Vec<u8> {
     (0..samples).flat_map(|_| sample.to_le_bytes()).collect()
-}
-
-#[test]
-fn removed_voice_lane_cannot_be_recreated_by_an_old_result() {
-    let mut all = HashMap::new();
-    let old = lanes::get_lane(&mut all, "test", 100)
-        .unwrap()
-        .generation
-        .clone();
-    all.remove("test");
-    assert!(lanes::existing_lane(&mut all, "test", &old).is_err());
-    assert!(all.is_empty());
-    let fresh = lanes::get_lane(&mut all, "test", 100)
-        .unwrap()
-        .generation
-        .clone();
-    assert_ne!(fresh, old);
-    assert_eq!(
-        lanes::existing_lane(&mut all, "test", &old).err(),
-        Some(LaneError::Gone)
-    );
-    assert!(lanes::existing_lane(&mut all, "test", &fresh).is_ok());
-}
-
-#[test]
-fn lane_capacity_refuses_new_callers_but_keeps_existing_and_busy_lanes() {
-    let mut all = Lanes::new();
-    for index in 0..lanes::MAX_LANES {
-        lanes::get_lane(&mut all, &format!("lane-{index}"), 100).unwrap();
-    }
-    assert_eq!(
-        lanes::get_lane(&mut all, "extra", 100).err(),
-        Some(LaneError::Busy)
-    );
-    assert_eq!(
-        LaneError::Busy.to_string(),
-        "Voice is busy; try again shortly"
-    );
-    assert!(lanes::get_lane(&mut all, "lane-0", 100).is_ok());
-    // Every lane expires except the busy one, which is never dropped while it works.
-    all.get_mut("lane-1").unwrap().busy = true;
-    let later = 100 + lanes::LANE_TTL_SECS;
-    let lane = lanes::get_lane(&mut all, "extra", later).unwrap();
-    assert_eq!(lane.expires, later + lanes::LANE_TTL_SECS);
-    assert_eq!(all.len(), 2);
-    assert!(all.contains_key("lane-1"));
-}
-
-#[test]
-fn lane_keys_separate_users_and_history_keeps_the_newest_messages() {
-    assert_eq!(lanes::lane_key("u", "s"), "u\0s");
-    assert_ne!(lanes::lane_key("u", "s"), lanes::lane_key("us", ""));
-    let mut lane = lanes::Lane::default();
-    for turn in 0..8 {
-        lane.remember_exchange(&format!("q{turn}"), &format!("a{turn}"));
-    }
-    assert_eq!(lane.history.len(), lanes::HISTORY_LIMIT);
-    assert_eq!(lane.history[0], json!({"role": "user", "content": "q2"}));
-    assert_eq!(
-        lane.history[11],
-        json!({"role": "assistant", "content": "a7"})
-    );
 }
 
 #[test]
@@ -112,77 +46,6 @@ fn a_dictation_stops_at_the_length_limit() {
     }
     assert_eq!(seq as usize * frame.len(), capture::MAX_RECORDING_BYTES);
     assert_eq!(capture.accept(seq + 1, &pcm(0, 1)), Err(SequenceRejected));
-}
-
-#[test]
-fn utterances_classify_confirmations_controls_and_requests() {
-    let text = utterance::words("  Go ahead! ");
-    assert_eq!(text, "go ahead");
-    assert!(utterance::yes(&text));
-    assert!(utterance::no(&utterance::words("Never mind.")));
-    assert!(!utterance::yes("yes please"));
-
-    assert_eq!(utterance::control("stop"), Some(Control::Cancel));
-    assert_eq!(
-        utterance::control("please pause the run"),
-        Some(Control::Cancel)
-    );
-    assert_eq!(
-        utterance::control("continue the task"),
-        Some(Control::Resume)
-    );
-    assert_eq!(utterance::control("hold on"), Some(Control::Cancel));
-    assert_eq!(utterance::control("stop the music"), None);
-    assert_eq!(utterance::control(""), None);
-    for spoken in [
-        "Cancel.",
-        "Please, cancel the task.",
-        "Stop, please.",
-        "OK, stop.",
-        "stop it",
-        "Hold on a second.",
-        "Wait a second.",
-        "Stop\u{2026}",
-    ] {
-        let text = utterance::words(spoken);
-        assert_eq!(utterance::control(&text), Some(Control::Cancel), "{spoken}");
-    }
-    assert_eq!(
-        utterance::control(&utterance::words("Okay, continue the run!")),
-        Some(Control::Resume)
-    );
-    for spoken in [
-        "don't stop",
-        "Don\u{2019}t stop.",
-        "stop the music in the song lyrics you wrote",
-        "wait",
-        "ok",
-        "hold onto it",
-    ] {
-        assert_eq!(
-            utterance::control(&utterance::words(spoken)),
-            None,
-            "{spoken}"
-        );
-    }
-    // A lone "cancel" is also a rejection; voice_route lets a pending proposal take it first.
-    assert!(utterance::no(&utterance::words("Cancel.")));
-    assert_eq!(utterance::words("OK, stop."), "ok stop");
-    assert!(utterance::yes(&utterance::words("OK!")));
-    assert_eq!(Control::Resume.as_str(), "resume");
-
-    assert!(utterance::work("please build a page"));
-    assert!(utterance::work("could you please fix it"));
-    assert!(!utterance::work("tell me a joke"));
-    assert!(utterance::question("how does it work"));
-    assert!(utterance::question("tell me more"));
-    assert!(!utterance::question("build it"));
-
-    assert!(utterance::status_query("what's the status"));
-    assert!(utterance::status_query("are you done"));
-    assert!(!utterance::status_query("are you sure"));
-    assert!(utterance::modifies_work("use postgres instead"));
-    assert!(!utterance::modifies_work("thanks"));
 }
 
 #[test]

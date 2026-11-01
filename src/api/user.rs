@@ -156,10 +156,7 @@ macro_rules! path_json {
                     | "patch_session_api"
                     | "memory_save"
                     | "promotion_reject"
-                    | "voice_route"
-                    | "voice_control"
                     | "voice_audio"
-                    | "voice_speech"
                     | "voice_reply"
                     | "undo_session_api"
                     | "fork_session_api"
@@ -375,11 +372,8 @@ path_json!(mode_set => session_mode_set, String, SessionModeBody);
 path_arg!(abilities => session_abilities, String);
 path_json!(ability_set => session_ability_set, (String, String), SessionAbilityBody);
 path_json!(send => send, String, Value);
-path_json!(voice_route => voice_route, String, Value);
-path_json!(voice_control => voice_control, String, Value);
 path_json!(voice_audio => voice_audio, String, Value);
 path_arg!(voice_capabilities => voice_capabilities,String);
-path_json!(voice_speech => voice_speech,String,Value);
 path_json!(voice_reply => voice_reply, String, Value);
 /// Identity's voice picker samples; any signed-in user may hear the fixed introductions.
 async fn voice_sample(Extension(app): Extension<App>, Path(voice): Path<String>) -> Response {
@@ -780,21 +774,12 @@ pub(crate) fn router() -> Router<App> {
         .route("/sessions/{id}/queue/resume", post(followup_resume))
         .route("/sessions/{id}/background", get(session_background))
         .route("/sessions/{id}/stop", post(session_stop))
-        .route(
-            "/sessions/{id}/voice/route",
-            post(voice_route).layer(axum::middleware::from_fn(crate::api::media_lane::limit)),
-        )
         .route("/sessions/{id}/voice/capabilities", get(voice_capabilities))
-        .route(
-            "/sessions/{id}/voice/speech",
-            post(voice_speech).layer(axum::middleware::from_fn(crate::api::media_lane::limit)),
-        )
         .route(
             "/sessions/{id}/voice/reply",
             post(voice_reply).layer(axum::middleware::from_fn(crate::api::media_lane::limit)),
         )
         .route("/voice/samples/{voice}", get(voice_sample))
-        .route("/sessions/{id}/voice/control", post(voice_control))
         .route(
             "/sessions/{id}/voice/audio",
             post(voice_audio)

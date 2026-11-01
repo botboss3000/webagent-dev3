@@ -154,145 +154,7 @@ async fn upload_composer_auth_ownership_retry_and_persistence() {
     );
 }
 #[tokio::test]
-async fn voice_composer_requires_matching_confirmation_and_publishes_one_turn() {
-    let (_root, app) = fixture().await;
-    let sid = session(&app).await;
-    let route = |text: &str, proposal: Value| json!({"utterance":text,"proposal_id":proposal});
-    assert!(voice_route(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(route("yes", Value::Null))
-    )
-    .await
-    .is_err());
-    let Json(offer) = voice_route(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(route("Create a report", Value::Null)),
-    )
-    .await
-    .unwrap();
-    assert_eq!(offer["action"], "dispatch_work");
-    assert!(app.store.chat_snapshot(&sid).await.unwrap().0.is_empty());
-    let ticket = offer["ticket"].clone();
-    let Json(sent) = voice_control(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(json!({"ticket":ticket})),
-    )
-    .await
-    .unwrap();
-    let replay = voice_control(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(json!({"ticket":ticket})),
-    )
-    .await
-    .unwrap()
-    .0;
-    assert_eq!(replay["run_id"], sent["run_id"]);
-    assert_eq!(app.store.chat_snapshot(&sid).await.unwrap().0.len(), 1);
-    let Json(status) = voice_route(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(route("What is the status?", Value::Null)),
-    )
-    .await
-    .unwrap();
-    assert_eq!(status["action"], "answer");
-    assert_eq!(app.store.chat_snapshot(&sid).await.unwrap().0.len(), 1);
-    let Json(change) = voice_route(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(route("Instead make it shorter", Value::Null)),
-    )
-    .await
-    .unwrap();
-    assert_eq!(change["action"], "request_confirmation");
-    assert!(voice_control(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(json!({"ticket":change["proposal"]["id"]}))
-    )
-    .await
-    .is_err());
-    assert!(voice_route(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(route("yes", json!(uuid())))
-    )
-    .await
-    .is_err());
-    let _ = session_mode_set(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(SessionModeBody {
-            mode: "plan".into(),
-            expected_revision: Some(0),
-            confirm_write: false,
-        }),
-    )
-    .await
-    .unwrap();
-    assert!(voice_route(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(route("yes", change["proposal"]["id"].clone()))
-    )
-    .await
-    .is_err());
-    let Json(change) = voice_route(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(route("Instead make it shorter", Value::Null)),
-    )
-    .await
-    .unwrap();
-    let Json(confirmed) = voice_route(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(route("yes", change["proposal"]["id"].clone())),
-    )
-    .await
-    .unwrap();
-    let Json(replacement) = voice_control(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(json!({"ticket":confirmed["ticket"]})),
-    )
-    .await
-    .unwrap();
-    assert_ne!(replacement["run_id"], sent["run_id"]);
-    assert_eq!(
-        app.run(sent["run_id"].as_str().unwrap()).await.unwrap()["status"],
-        "cancelled"
-    );
-    assert_eq!(app.store.chat_snapshot(&sid).await.unwrap().0.len(), 2);
-    let Json(pause) = voice_route(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(route("pause", Value::Null)),
-    )
-    .await
-    .unwrap();
-    let _ = voice_control(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(json!({"ticket":pause["ticket"]})),
-    )
-    .await
-    .unwrap();
-    // A spoken pause is a stop; the next message carries the work forward.
-    assert_eq!(
-        app.run(replacement["run_id"].as_str().unwrap())
-            .await
-            .unwrap()["status"],
-        "cancelled"
-    );
-    assert_eq!(app.store.chat_snapshot(&sid).await.unwrap().0.len(), 2);
-}
-#[tokio::test]
-async fn voice_composer_audio_and_quick_answers_remain_ephemeral() {
+async fn voice_composer_audio_stays_ephemeral_and_describes_uploads_in_place() {
     let (_root, mut app) = fixture().await;
     let mut catalog = selection_fixture(&app).await;
     catalog.connections.get_mut("one").unwrap().transport = model_selection::Transport::OpenaiApi;
@@ -301,24 +163,19 @@ async fn voice_composer_audio_and_quick_answers_remain_ephemeral() {
         .get_mut("one")
         .unwrap()
         .capabilities
-        .extend(["voice".into(), "image_in".into()]);
-    for role in [
-        model_selection::ModelRole::Voice,
-        model_selection::ModelRole::ImageIn,
-    ] {
-        catalog
-            .agent_models
-            .get_mut("shared_default")
-            .unwrap()
-            .roles
-            .insert(
-                role,
-                model_selection::RoleAssignment {
-                    entry_id: "one".into(),
-                    backup_entry_ids: vec![],
-                },
-            );
-    }
+        .extend(["image_in".into()]);
+    catalog
+        .agent_models
+        .get_mut("shared_default")
+        .unwrap()
+        .roles
+        .insert(
+            model_selection::ModelRole::ImageIn,
+            model_selection::RoleAssignment {
+                entry_id: "one".into(),
+                backup_entry_ids: vec![],
+            },
+        );
     app.store
         .save_model_catalog(&catalog, catalog.revision)
         .await
@@ -391,19 +248,8 @@ async fn voice_composer_audio_and_quick_answers_remain_ephemeral() {
         true
     );
     assert!(app.store.chat_snapshot(&sid).await.unwrap().0.is_empty());
-    let Json(answer) = voice_route(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(json!({"utterance":"Explain this briefly"})),
-    )
-    .await
-    .unwrap();
-    assert_eq!(answer["answer"], "A quick answer.");
     assert!(app.store.chat_snapshot(&sid).await.unwrap().0.is_empty());
     assert!(app.store.active_runs().await.unwrap().is_empty());
-    let requests = captured.lock().await;
-    assert!(requests[0].get("tools").is_none());
-    drop(requests);
     let aid = uuid();
     let _ = uploads::upload(State(app.clone()),Path(sid.clone()),Json(json!({"client_upload_id":aid,"name":"photo.png","media_type":"image/png","data":STANDARD.encode(b"fixture-raster")}))).await.unwrap();
     let _ = uploads::upload_describe(State(app.clone()), Path((sid.clone(), aid.clone())))
@@ -421,43 +267,6 @@ async fn voice_composer_audio_and_quick_answers_remain_ephemeral() {
         .any(|p| p["type"] == "image_url"));
     assert!(app.store.chat_snapshot(&sid).await.unwrap().0.is_empty());
     drop(requests);
-    let Json(offer) = voice_route(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(json!({"utterance":"Create a short summary"})),
-    )
-    .await
-    .unwrap();
-    let Json(sent) = voice_control(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(json!({"ticket":offer["ticket"]})),
-    )
-    .await
-    .unwrap();
-    let rid = sent["run_id"].as_str().unwrap().to_owned();
-    let mut run = app.run(&rid).await.unwrap();
-    assert!(app
-        .store
-        .claim_run(&mut run, "fixture-loop", "voice-e2e")
-        .await
-        .unwrap());
-    crate::execute_run(
-        app.clone(),
-        rid.clone(),
-        "voice-e2e".into(),
-        CancellationToken::new(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(app.run(&rid).await.unwrap()["status"], "completed");
-    let messages = app.store.chat_snapshot(&sid).await.unwrap().0;
-    assert_eq!(
-        messages.iter().filter(|m| m["role"] == "assistant").count(),
-        1
-    );
-    assert_eq!(messages.iter().filter(|m| m["role"] == "user").count(), 1);
-    assert_eq!(messages.last().unwrap()["content"], "A quick answer.");
     server.abort();
 }
 
