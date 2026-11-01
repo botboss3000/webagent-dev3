@@ -1309,11 +1309,11 @@ pub async fn dedup_summary_source(
             let origin = origin["run_id"]
                 .as_str()
                 .context("Summary origin missing")?;
-            let result = journal
-                .tool_result(sid, origin, id)
-                .await?
-                .context("Summary original unavailable")?;
-            item["output"] = result["output"].clone();
+            // A missing original never reappears, so failing here would stall the run on every
+            // retry; summarize the shortened output already in the source instead.
+            if let Some(result) = journal.tool_result(sid, origin, id).await? {
+                item["output"] = result["output"].clone();
+            }
         }
     }
     Ok(full)
@@ -1322,6 +1322,7 @@ pub async fn dedup_summary_source(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::{ready, Future};
 
     fn policy() -> Policy {
         Policy {
@@ -1756,6 +1757,58 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("guidance.md"), "  \n").unwrap();
         assert!(Prompts::read_at(dir.path(), Some(dir.path())).is_err());
+    }
+
+    /// Journal holding the original of call `kept` only.
+    struct KeptOnly;
+    impl crate::ports::Journal for KeptOnly {
+        fn run<'a>(&'a self, _: &'a str) -> impl Future<Output = Result<Value>> + Send + 'a {
+            ready(Err(anyhow!("unused")))
+        }
+        fn document<'a>(
+            &'a self,
+            _: &'a str,
+        ) -> impl Future<Output = Result<Option<Value>>> + Send + 'a {
+            ready(Ok(None))
+        }
+        fn tool_result<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            id: &'a str,
+        ) -> impl Future<Output = Result<Option<Value>>> + Send + 'a {
+            ready(Ok((id == "kept").then(|| json!({"output":"full"}))))
+        }
+        fn tool_result_origin<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+        ) -> impl Future<Output = Result<Option<(String, Value)>>> + Send + 'a {
+            ready(Ok(None))
+        }
+        fn tool_call_record<'a>(
+            &'a self,
+            _: &'a str,
+            _: &'a str,
+            _: &'a str,
+        ) -> impl Future<Output = Result<Option<Value>>> + Send + 'a {
+            ready(Ok(None))
+        }
+    }
+
+    #[tokio::test]
+    async fn summary_source_keeps_stored_output_when_original_is_missing() {
+        let mut r = run();
+        r["session_id"] = json!("s");
+        r["tool_result_projection"]["origins"] =
+            json!({"kept":{"run_id":"old"},"lost":{"run_id":"old"}});
+        let source = [
+            output("kept", "success", "short"),
+            output("lost", "success", "short"),
+        ];
+        let full = dedup_summary_source(&KeptOnly, &r, &source).await.unwrap();
+        assert_eq!(full[0]["output"], "full");
+        assert_eq!(full[1], source[1]);
     }
 }
 
