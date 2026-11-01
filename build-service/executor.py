@@ -30,9 +30,11 @@ TEST_STACK_BYTES=32*1024*1024
 # test threads must stay a pinned recipe value so test_proof stays deterministic.
 # Single named tests (focused checks) keep one thread: parallelism is meaningless
 # there. Evidence: identical pass/fail/ignored counts at 1 vs 4 threads.
-# Four, not eight: on the 3-CPU slice beside the live compile, eight threads
-# starved wall-clock leases and timeouts (2026-10-28: 15+ different flaky tests).
-TEST_THREADS=4
+# Sized for the 6-core/12-thread host (2026-11-01) with a 10-CPU budget. On the
+# earlier 3-CPU slice, eight threads starved wall-clock leases and timeouts
+# (2026-10-28: 15+ different flaky tests); lower these again on a smaller host.
+TEST_THREADS=8
+CARGO_BUILD_JOBS="10"
 # Compiled-dependency snapshots: stub compiles mirror the engine profiles exactly.
 SNAPSHOT_RECIPE="compiled-dependencies-v2"
 SNAPSHOT_COMPILES="set -e\ncargo test --workspace --locked --offline --no-run\ncargo build --workspace --locked --offline --bins\ncargo build --workspace --release --locked --offline --no-default-features --features webagent-v3/live-context"
@@ -235,7 +237,7 @@ class Executor:
             "--cap-drop","ALL","--security-opt","no-new-privileges","--pids-limit","256","--user",str(self.config["service_uid"])+":"+str(self.config["service_gid"]),
             "--network","bridge"if network else"none","--mount","type=bind,src="+str(source)+",dst=/build"+(""if phase=="test"else",readonly"),
             "--mount","type=bind,src="+str(output)+",dst=/output","-w","/build",
-            "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS=3","-e","CARGO_INCREMENTAL="+self.incremental(job,profile),"--env","RUSTFLAGS="+RUSTFLAGS,
+            "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS="+CARGO_BUILD_JOBS,"-e","CARGO_INCREMENTAL="+self.incremental(job,profile),"--env","RUSTFLAGS="+RUSTFLAGS,
             "-e","CARGO_PROFILE_DEV_DEBUG=0","-e","CARGO_PROFILE_TEST_DEBUG=0","-e","CARGO_PROFILE_RELEASE_DEBUG=0",*self.test_stack_env(phase),*self.test_tmpfs_args(phase),*self.cpu_weight_args(phase),image,"sleep","infinity"]
         if cap is not None:create[create.index(image):create.index(image)]=["--memory",str(cap),"--memory-swap",str(cap)]
         try:
