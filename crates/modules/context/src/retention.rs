@@ -1251,10 +1251,10 @@ pub async fn dedup_prepare(
             .assignments
             .get(&id)
             .is_some_and(|entry| entry.template.is_some());
-        // Planner state can outlive the call an output answered; an output that was
-        // not observed this time has no original here and is shown as a preview.
-        if let Some(original) = originals.get(&id).filter(|_| controlled) {
-            item["output"] = json!(original);
+        if controlled {
+            item["output"] = json!(originals
+                .get(&id)
+                .context("Full primary output unavailable")?);
         } else {
             crate::compaction::project_tool_results(std::slice::from_mut(item), preview_bytes)?;
         }

@@ -103,10 +103,40 @@ fn automatic_code_index_journal(
     };
     (calls, results, status)
 }
+/// Number of the run's latest model turn. Unlike `turns`, the turn budget that a resume
+/// resets, it never repeats, so it keys the run's durable model steps.
+pub fn model_turn(run: &Value) -> u64 {
+    run["model_turn"]
+        .as_u64()
+        .or(run["turns"].as_u64())
+        .unwrap_or(0)
+}
+/// Count one model response against both the turn budget and the step numbering.
+pub fn advance_turn(run: &mut Value) {
+    run["model_turn"] = json!(model_turn(run) + 1);
+    run["turns"] = json!(run["turns"].as_u64().expect("run counters are numbers") + 1);
+}
+/// Drop each result that does not follow its own unanswered call. Providers and
+/// context projection reject such a result; resumed runs used to lose their calls
+/// from durable history while keeping the results.
+pub fn drop_orphan_outputs(input: &mut Vec<Value>) {
+    let mut open = std::collections::HashSet::new();
+    input.retain(|item| match item["type"].as_str() {
+        Some("function_call") => {
+            if let Some(id) = item["call_id"].as_str() {
+                open.insert(id.to_owned());
+            }
+            true
+        }
+        Some("function_call_output") => item["call_id"].as_str().is_some_and(|id| open.remove(id)),
+        _ => true,
+    });
+}
 /// History reaches a new run only after earlier runs ended. A call they left
 /// unpaired, for example after abandoned recovery, gets a content-free
 /// unknown-outcome result so providers accept the context and nothing is replayed.
 pub fn pair_unresolved_calls(input: &mut Vec<Value>) {
+    drop_orphan_outputs(input);
     let answered: std::collections::HashSet<String> = input
         .iter()
         .filter(|item| item["type"] == "function_call_output")
@@ -282,6 +312,38 @@ mod automatic_code_index_journal_tests {
         let once = input.clone();
         pair_unresolved_calls(&mut input);
         assert_eq!(input, once);
+    }
+    #[test]
+    fn results_without_a_preceding_open_call_are_dropped() {
+        let call = |id: &str| json!({"type":"function_call","call_id":id,"name":"file_read","arguments":"{}"});
+        let output = |id: &str| json!({"type":"function_call_output","call_id":id,"output":"ok"});
+        let mut input = vec![
+            json!({"role":"user","content":"a"}),
+            output("lost"),
+            call("kept"),
+            output("kept"),
+            output("kept"),
+            output("early"),
+            call("early"),
+        ];
+        pair_unresolved_calls(&mut input);
+        let ids: Vec<_> = input
+            .iter()
+            .filter_map(|item| Some((item["type"].as_str()?, item["call_id"].as_str()?)))
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                ("function_call", "kept"),
+                ("function_call_output", "kept"),
+                ("function_call", "early"),
+                ("function_call_output", "early"),
+            ]
+        );
+        assert!(input[4]["output"]
+            .as_str()
+            .unwrap()
+            .contains("outcome_unknown"));
     }
 }
 
@@ -836,7 +898,7 @@ impl<
                 return Ok(std::ops::ControlFlow::Break(()));
             }
             if let Some(text) = working_text {
-                let message_id = format!("working:{id}:{}:{idx}", run["turns"]);
+                let message_id = format!("working:{id}:{}:{idx}", model_turn(&run));
                 app.store
                     .save_run_observed(
                         &mut run,
@@ -1759,6 +1821,11 @@ impl<
                     });
                     app.save(&mut run).await?;
                     return Ok(());
+                }
+                // Input hydrated before model steps had unique keys can hold results whose
+                // calls were never saved; context projection rejects them.
+                if let Some(input) = run["input"].as_array_mut() {
+                    drop_orphan_outputs(input);
                 }
                 let (policy, _, visibility, ability_state) = app
                     .ability_controls_for(
@@ -3046,8 +3113,7 @@ impl<
                             },
                             workflow::Decision::Pass,
                         )?;
-                        run["turns"] =
-                            json!(run["turns"].as_u64().expect("run counters are numbers") + 1);
+                        advance_turn(&mut run);
                         run["attempt"] = json!(0);
                         run["calls"] = json!(calls);
                         run["call_index"] = json!(0);

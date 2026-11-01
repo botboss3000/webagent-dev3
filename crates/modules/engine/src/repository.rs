@@ -339,9 +339,8 @@ impl<
                 let output = payload["output"]
                     .as_array()
                     .ok_or_else(|| anyhow!("Model output is missing"))?;
-                let turn = run["turns"]
-                    .as_u64()
-                    .ok_or_else(|| anyhow!("Run turn is missing"))?;
+                // Not `turns`: a resume resets it, and a repeated step key is silently ignored.
+                let turn = crate::runtime::run::model_turn(run);
                 for (ordinal, item) in output.iter().enumerate() {
                     crate::send_future(self.chat.insert_interaction(
                         &mut tx,

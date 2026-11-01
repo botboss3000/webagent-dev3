@@ -502,6 +502,27 @@ async fn late_loop_event_abort_rolls_back_staged_ledger_history_notification_and
 }
 
 #[tokio::test]
+async fn model_steps_after_a_resume_keep_their_own_history_keys() {
+    let f = Fixture::new().await;
+    let mut run = f.initial().await;
+    for call in ["before-resume", "after-resume"] {
+        crate::runtime::run::advance_turn(&mut run);
+        let output = json!({"output":[{"type":"function_call","call_id":call,"name":"file_read","arguments":"{}"}]});
+        f.repo()
+            .save_run(&mut run, "model_output", &output)
+            .await
+            .unwrap();
+        // An explicit resume restarts the turn budget.
+        run["turns"] = json!(0);
+    }
+    let steps: Vec<String> = sqlx::query_scalar("SELECT step FROM interactions ORDER BY step")
+        .fetch_all(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(steps, ["model:1:0", "model:2:0"]);
+}
+
+#[tokio::test]
 async fn command_acknowledgement_waits_for_a_concurrent_writer_instead_of_failing_locked() {
     let f = Fixture::new().await;
     sqlx::raw_sql("CREATE TABLE loop_commands(seq INTEGER PRIMARY KEY AUTOINCREMENT,command_id TEXT NOT NULL UNIQUE,run_id TEXT NOT NULL,schema_version INTEGER NOT NULL,kind TEXT NOT NULL,payload BLOB NOT NULL,created_at INTEGER NOT NULL,acknowledged_at INTEGER)").execute(&f.pool).await.unwrap();
