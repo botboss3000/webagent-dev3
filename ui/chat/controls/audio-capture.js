@@ -28,7 +28,7 @@ export function createAudioCapture({send,onState,onText,onComplete,onError}){
   }catch(e){fail(c,e);}finally{c.pumping=false;}
  }
   // Purpose: Buffer PCM into 0.2-second frames so text keeps pace with speech, and fail visibly when more than 64 frames accumulate.
- function append(c,bytes){const next=new Uint8Array(c.pending.length+bytes.length);next.set(c.pending);next.set(bytes,c.pending.length);c.pending=next;while(c.pending.length>=6400){c.queue.push(c.pending.slice(0,6400));c.pending=c.pending.slice(6400);}if(c.queue.length>64){fail(c,Error('Voice connection is too slow. Try again.'));return;}pump(c);}
+ function append(c,bytes){const next=new Uint8Array(c.pending.length+bytes.length);next.set(c.pending);next.set(bytes,c.pending.length);c.pending=next;while(c.pending.length>=3200){c.queue.push(c.pending.slice(0,3200));c.pending=c.pending.slice(3200);}if(c.queue.length>128){fail(c,Error('Voice connection is too slow. Try again.'));return;}pump(c);}
   // Purpose: Finish once, flushing the final PCM tail before the queue is drained.
  async function finish(){const c=active;if(!c||c.finishing)return;c.finishing=true;stop(c);if(c.pending.length)c.queue.push(c.pending);c.pending=new Uint8Array();onState('finishing');await pump(c);}
   // Purpose: Acquire secure-context microphone access and start a server dictation streaming Web Audio PCM. Returns false when already active or invalidated. Secure-context or microphone-availability preflight errors reject before capture creation; failures during later setup are reported through onError and return false.

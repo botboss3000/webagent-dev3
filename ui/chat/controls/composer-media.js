@@ -25,11 +25,27 @@ export function mountComposerMedia({root,client,ensureSession,note,changed,refre
  let attachmentLimits={max_file_size_mb:null,max_per_message:null};
  let available=false,session='',generation=0,disposed=false;
   // Composer text around the dictation insertion point, captured when dictation starts.
- let around=null;
+ let around=null,typingTimer=null;
+  // Stop any in-progress letter-by-letter typing animation.
+ function stopTyping(){if(typingTimer){clearTimeout(typingTimer);typingTimer=null;}}
   // Type the transcript so far between the text that was before and after the cursor, keeping the caret after it.
+  // New transcript text is revealed one character at a time for a typed-on-keyboard feel; corrections apply instantly.
  function dictate(text){
-  if(!around)return;const lead=around.before&&text&&!/\s$/.test(around.before)?' ':'',trail=around.after&&text&&!/^\s/.test(around.after)?' ':'';
-  input.value=around.before+lead+text+trail+around.after;const at=(around.before+lead+text).length;input.setSelectionRange(at,at);input.scrollTop=input.scrollHeight;input.dispatchEvent(new Event('input',{bubbles:true}));
+  if(!around)return;const target=String(text||'');const lead=around.before&&target&&!/\s$/.test(around.before)?' ':'',trail=around.after&&target&&!/^\s/.test(around.after)?' ':'';
+  around.lead=lead;around.trail=trail;around.targetTranscript=target;
+  const prev=around.lastTarget||'';
+  // Non-incremental change: apply the whole transcript immediately.
+  if(!target.startsWith(prev)||target.length<prev.length){around.shown=target.length;around.lastTarget=target;const full=around.before+lead+target+(target?trail:'')+around.after;input.value=full;const at=(around.before+lead+target).length;input.setSelectionRange(at,at);input.scrollTop=input.scrollHeight;input.dispatchEvent(new Event('input',{bubbles:true}));return;}
+  around.lastTarget=target;
+  if(!typingTimer)typeNext();
+ }
+  // Reveal one more character of the dictated transcript, then schedule the next.
+ function typeNext(){
+  if(!around){typingTimer=null;return;}
+  const target=around.targetTranscript||'',lead=around.lead||'',trail=around.shown>=target.length?(around.trail||''):'';
+  if(around.shown<target.length){around.shown++;const shownText=target.slice(0,around.shown);const finalTrail=around.shown>=target.length?(around.trail||''):'';
+   input.value=around.before+lead+shownText+finalTrail+around.after;const at=(around.before+lead+shownText).length;input.setSelectionRange(at,at);input.scrollTop=input.scrollHeight;input.dispatchEvent(new Event('input',{bubbles:true}));
+   typingTimer=setTimeout(typeNext,18);}else{typingTimer=null;}
  }
   // Rebuild attachment previews from the active session and synchronize composer availability, count, and voice-button state.
  function paint(){
@@ -72,23 +88,23 @@ export function mountComposerMedia({root,client,ensureSession,note,changed,refre
   // Reflect capture state in the microphone (a stop square while listening), its accessibility label, and the composer, which is read-only while text is typed into it.
  function state(value){
   const recording=['listening','reconnecting'].includes(value),busy=value!=='idle'&&!recording;mic.classList.toggle('recording',recording);mic.classList.toggle('transcribing',busy);mic.setAttribute('aria-pressed',String(value!=='idle'));mic.title=recording?'Stop dictation':busy?{requesting_microphone:'Waiting for microphone permission…',reconnecting:'Reconnecting…'}[value]||'Finishing dictation…':'Dictate';mic.setAttribute('aria-label',mic.title);pill.classList.toggle('dictating',value!=='idle');
-  if(value==='idle')input.readOnly=false;changed?.();
+  if(value==='idle'){stopTyping();input.readOnly=false;}changed?.();
  }
   // Stop typing into the composer and hand it back to the user with the caret after the dictated text.
- function release(){around=null;input.readOnly=false;if(!disposed&&document.activeElement!==input)input.focus();}
+ function release(){stopTyping();around=null;input.readOnly=false;if(!disposed&&document.activeElement!==input)input.focus();}
   // Bridge capture frames to client.voiceAudio; each transcript update and the final text are typed at the cursor, and errors leave what was typed.
- const capture=createAudioCapture({send:(id,b)=>client.voiceAudio(id,b),onState:state,onText:dictate,onComplete:text=>{dictate(text);if(around&&!text.trim())note('No speech detected.');release();},onError:e=>{release();note(e.name==='NotAllowedError'?'Microphone permission is blocked. Allow it in the browser site controls and try again.':e.message);}});
+ const capture=createAudioCapture({send:(id,b)=>client.voiceAudio(id,b),onState:state,onText:dictate,onComplete:text=>{dictate(text);const finishRelease=()=>{if(typingTimer){setTimeout(finishRelease,30);return;}if(around&&!String(text||'').trim())note('No speech detected.');release();};finishRelease();},onError:e=>{release();note(e.name==='NotAllowedError'?'Microphone permission is blocked. Allow it in the browser site controls and try again.':e.message);}});
   // Toggle: stop the active dictation, or start one at the cursor once availability and session-generation checks pass.
- mic.onclick=guard(async()=>{if(capture.active){await capture.finish();return;}if(!available)return;const epoch=generation,origin=session;const sid=await ensureSession();if(disposed||(origin&&origin!==session)||(epoch!==generation&&session!==sid))return;around={before:input.value.slice(0,input.selectionStart),after:input.value.slice(input.selectionEnd)};input.readOnly=true;try{if(!await capture.start(sid))release();}catch(e){release();throw e;}});
- input.addEventListener('click',()=>{if(!around)return;const start=input.selectionStart,end=input.selectionEnd;capture.cancel();around=null;input.readOnly=false;input.setSelectionRange(start,end);},{signal:abort.signal});
+ mic.onclick=guard(async()=>{if(capture.active){await capture.finish();return;}if(!available)return;const epoch=generation,origin=session;const sid=await ensureSession();if(disposed||(origin&&origin!==session)||(epoch!==generation&&session!==sid))return;around={before:input.value.slice(0,input.selectionStart),after:input.value.slice(input.selectionEnd),targetTranscript:'',shown:0,lastTarget:'',lead:'',trail:''};input.readOnly=true;try{if(!await capture.start(sid))release();}catch(e){release();throw e;}});
+ input.addEventListener('click',()=>{if(!around)return;const start=input.selectionStart,end=input.selectionEnd;stopTyping();capture.cancel();around=null;input.readOnly=false;input.setSelectionRange(start,end);},{signal:abort.signal});
   // Cancel any dictation before displaying a new session.
- function open(id){capture.cancel();around=null;input.readOnly=false;++generation;session=id;paint();}
+ function open(id){stopTyping();capture.cancel();around=null;input.readOnly=false;++generation;session=id;paint();}
   // Return staged upload IDs for submission, refusing while any file is pending, failed, or not uploaded.
  function snapshot(sid=session){const files=staged.get(sid)||[];if(files.some(i=>i.pending||i.error||!i.uploaded))throw Error('Finish or remove failed uploads before sending.');return files.map(i=>i.id);}
   // Retire only the submitted IDs and revoke their preview URLs after the message is accepted.
  function committed(sid,ids){const files=staged.get(sid)||[];for(const i of files.filter(i=>ids.includes(i.id))){i.removed=true;if(i.url)URL.revokeObjectURL(i.url);}staged.set(sid,files.filter(i=>!ids.includes(i.id)));paint();}
   // Tear down dictation, listeners, and object URLs; request removal of uploaded attachments best-effort without waiting for server cleanup.
- function destroy(){disposed=true;capture.cancel();input.readOnly=false;abort.abort();attach.onclick=null;chooser.onchange=null;mic.onclick=null;for(const files of staged.values())for(const i of files){i.removed=true;if(i.url)URL.revokeObjectURL(i.url);if(i.uploaded)client.removeUpload(i.sid,i.id).catch(()=>{});}}
+ function destroy(){disposed=true;stopTyping();capture.cancel();input.readOnly=false;abort.abort();attach.onclick=null;chooser.onchange=null;mic.onclick=null;for(const files of staged.values())for(const i of files){i.removed=true;if(i.url)URL.revokeObjectURL(i.url);if(i.uploaded)client.removeUpload(i.sid,i.id).catch(()=>{});}}
   // Public API: open resets the session view; snapshot/committed bracket submission; setAvailable applies runtime limits; setDescribeImages(false) skips upload descriptions while the selected model reads images itself; disconnect and destroy release the microphone; count/uploading expose current-session composer state.
  return {open,snapshot,committed,destroy,setDescribeImages(value){describeImages=value!==false;},setAvailable(value,limits){attachmentLimits={max_file_size_mb:null,max_per_message:null,...limits};if(available!==value){available=value;paint();}},disconnect:()=>{capture.cancel();input.readOnly=false;},get dictating(){return!!around;},get count(){return(staged.get(session)||[]).length;},get uploading(){return(staged.get(session)||[]).some(i=>i.pending||i.error);}};
 }
