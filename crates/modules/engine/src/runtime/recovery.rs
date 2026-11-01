@@ -233,6 +233,26 @@ impl<
         }
         Ok(BuildPoll::Done(json!({"status":"success","output":output})))
     }
+    /// Window during which a cancellation-caused context pause is still reclaimed.
+    const CANCELLED_PAUSE_RECLAIM_SECS: i64 = 24 * 60 * 60;
+    /// Runs paused only because their context preparation was cancelled by a
+    /// restart (before cancellation was distinguished from context faults).
+    /// Preparation precedes any model dispatch or tool effect, and a new chat
+    /// message supersedes paused runs, so a surviving one is a safe resume point.
+    pub fn cancelled_context_pause(run: &Value, now: i64) -> bool {
+        status(run) == "paused"
+            && run["component_pause"].is_null()
+            && run["uncertain"] != true
+            && run["pending"]["state"] != "executing"
+            && !super::batch::executing_write::<A>(run)
+            && run["error"].as_str().is_some_and(|error| {
+                error.starts_with("Context preparation failed at ")
+                    && error.ends_with(": Engine call cancelled")
+            })
+            && run["updated_at"]
+                .as_i64()
+                .is_some_and(|at| now - at <= Self::CANCELLED_PAUSE_RECLAIM_SECS)
+    }
     // After a restart, put safe unfinished work back in the queue. An interrupted
     // external write is held for review because its effect may already have happened.
     pub async fn recover(app: &Self, startup: bool) -> Result<()> {
@@ -253,6 +273,26 @@ impl<
         for user_app in app.user_views(startup).await? {
             for view in user_app.store.active_runs().await? {
                 let id = view["id"].as_str().unwrap();
+                if startup && status(&view) == "paused" {
+                    let mut run = user_app.run(id).await?;
+                    if !Self::cancelled_context_pause(&run, now() as i64) {
+                        continue;
+                    }
+                    if !resume
+                        || app.shutoff().await?
+                        || !user_app.run_model_authorized(&run).await
+                        || !user_app
+                            .chat
+                            .participation_allows_run(user_app.store.records(), &run)
+                            .await?
+                    {
+                        continue;
+                    }
+                    run["status"] = json!("queued");
+                    run["error"] = json!("Recovered after interruption");
+                    user_app.save_override(&mut run).await?;
+                    continue;
+                }
                 if !matches!(status(&view), "running" | "waiting_external")
                     || (!startup && app.active.lock().await.contains_key(id))
                 {

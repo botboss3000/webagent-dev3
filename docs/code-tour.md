@@ -109,7 +109,11 @@ HTTP handlers; [agent_loop/](../src/agent_loop/mod.rs) owns scheduling,
 recovery, model turns, and publication. Single and parallel tool calls share
 [tools/dispatch.rs](../src/agent_loop/tools/dispatch.rs), while
 [tools/batch.rs](../src/agent_loop/tools/batch.rs) decides which calls may
-overlap. [runtime_config.rs](../src/runtime_config.rs) holds concurrency and
+overlap. Restart recovery lives in the Engine crate's `runtime/recovery.rs`: work
+cancelled by a runtime restart stays `running` with a `restart_interruption`
+marker (context preparation included, since it precedes any dispatch or effect),
+and startup requeues it from the last checkpoint; safe reads are re-requested and
+interrupted writes go to `recovery`. [runtime_config.rs](../src/runtime_config.rs) holds concurrency and
 other loop settings. [gates/](../src/gates/mod.rs) validates selected modules;
 [initial/](../src/gates/initial/mod.rs) and
 [closing/](../src/gates/closing/mod.rs) own their control behavior. The
