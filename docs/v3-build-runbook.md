@@ -7,11 +7,13 @@ Host- and broker-side material moved out of the V3 Build skill (`build-service/d
 Check development storage after each terminal build, including UI releases.
 Use df -h /, docker system df, and sudo /usr/local/sbin/v3-artifact-prune
 for a dry run. The v3-only webagent-dev-artifact-prune.service runs about
-every ten minutes and on receipt changes. Its apply mode retains open tasks,
+every ten minutes from its timer (lock overlap, an unhealthy runtime or a
+mid-run receipt change defers it). Its apply mode retains open tasks,
 failed/uncertain/interrupted work, the pinned recovery task, active compilers,
 mounted releases, runtime data and stopped rollback containers. It deletes
 eligible aged completed/cancelled or abandoned task artifacts while preserving
-receipts. Inspect its bounded operator-pruning deletion reports.
+receipts. Inspect its bounded operator-pruning deletion reports, written only
+when it removed something.
 Do not substitute the historical v2 prune script or host-wide Docker prune.
 
 Inspect the service result if cleanup fails. Retained rollback containers and
