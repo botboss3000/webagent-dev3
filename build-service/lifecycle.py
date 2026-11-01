@@ -95,7 +95,8 @@ def install(args):
  for receipt in Path(value["state_root"]).glob("*.json"):
   if receipt.name=="maintenance.json":continue
   job=json.loads(receipt.read_text())
-  if job.get("status") in {"queued","running","needs_decision"}:raise RuntimeError("Build queue must be idle before installation")
+  # Jobs queued behind the drain have not started; isolated ones survive the restart.
+  if job.get("status") in {"running","needs_decision"}or(job.get("status")=="queued"and job.get("effects_started")):raise RuntimeError("Build queue must be idle before installation")
  if args.install_tree and (len(args.install_tree)!=64 or any(c not in "0123456789abcdef" for c in args.install_tree)):raise ValueError("Exact reviewed tree hash required")
  reviewed=Path(value["state_root"])/"coordination/trees"/args.install_tree/"v3/build-service" if args.install_tree else source
  if args.install_tree and args.config and Path(args.config).exists():
@@ -266,7 +267,7 @@ def gate_security(config_path,task_id,request_id,dry_run=False,rollback=False):
  if Path(__file__).resolve()!=folder/"lifecycle.py":raise PermissionError("Use the reviewed protected lifecycle installation")
  operation=module("gate_reconfiguration",folder/"reconfigure.py")
  state=operation.operator(c,config_path,["maintenance","status"])
- if state.get("busy")or state.get("queued")or not state.get("drained")or state.get("task_id")!=task_id:raise RuntimeError("Reserve an idle broker drain for this exact task")
+ if state.get("busy")or not state.get("drained")or state.get("task_id")!=task_id:raise RuntimeError("Reserve an idle broker drain for this exact task")
  def command(argv,timeout=90):return subprocess.check_output(argv,timeout=timeout)
  def inspect(name):return json.loads(command(["docker","inspect",name]))[0]
  def optional(name):

@@ -86,10 +86,14 @@ Use lifecycle validate, start, stop, status, drain and resume. A source release
 cannot replace the installed service; operators install an exact reviewed tree
 with --install-tree HASH while idle.
 
-buildctl.py maintenance drain --task-id TASK persists a migration gate. Only
-that exact local operator task may mutate source or finish a build while drained.
-Other writes/checks/profiling are refused. Reads, receipts, cancellation and
-lease controls remain available. maintenance resume reopens admission.
+buildctl.py maintenance drain --task-id TASK persists a migration gate: no new
+job starts except that exact local operator task's. Isolated task work (begin,
+edits, reservations, checks and finish) is still admitted; its checks and
+releases queue and start when maintenance resume reopens the queue, so an
+in-app agent's held finish or check simply waits. Other new work (legacy
+checkout builds, profiling, index maintenance, release retries) is refused.
+Reads, receipts, cancellation and lease controls remain available. Installs and
+gate maintenance need nothing running; jobs queued behind the drain may remain.
 State stays under the configured state root. Sockets, PIDs and supervisor
 diagnostics stay under the runtime root. Receipts and archive names are preserved.
 Retain previous configuration, installed release and stopped application containers.

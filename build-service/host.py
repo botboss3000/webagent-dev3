@@ -3446,6 +3446,7 @@ class Broker:
             value.get("operation") not in HOT_OPERATIONS, value["created_at"]))
         for job in pending:
             if job["operation"]=="check"and job["status"]=="queued"and job["job_id"]in self.check_runs:
+                if not self._maintenance_allowed({"local_caller":job.get("user_id")=="codex-local"},job):continue
                 if controlled and not self.scheduler.execution_eligible(job,[self.jobs[key]for key in self.active_jobs]):continue
                 call=self.check_runs.pop(job["job_id"])
                 self.active_jobs.add(job["job_id"]);self.active=next(iter(self.active_jobs),None)
@@ -4732,7 +4733,7 @@ class Broker:
 
     def host_source_scope(self):
         """Broker modules and their docs/tests that the host-only lane may publish."""
-        review_modules={"source_status.py","workspace.py","compiler.Dockerfile","ui_policy.py","monitoring_component.py","buildctl.py","index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py"}
+        review_modules={"source_status.py","workspace.py","compiler.Dockerfile","ui_policy.py","monitoring_component.py","buildctl.py","index_queue.py","engine_components.py","post_deployment.py","release.py","workspace_support.py","review_store.py","review_policy.py","index_coordinator.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py","reconfigure.py"}
         allowed={"v3/tests/test_build_source_status.py","v3/tests/test_admin_workspace.py","v3/plugins/abilities/Administrator/code_index/maintenance.py","v3/tests/test_code_index_maintenance.py","v3/tests/test_published_code_index.py","v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_index_queue.py","v3/tests/test_scheduler_post_deployment.py","v3/tests/test_build_cache_retention.py","v3/tests/test_build_index_resources.py","v3/tests/test_scheduler_review_store.py","v3/tests/test_scheduler_review_policy.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_scheduler_review_lease.py","v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py","v3/tests/test_broker_shared_ui.py","v3/tests/test_broker_ui_override.py","v3/tests/test_scheduler_broker.py","v3/tests/test_build_cancel.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py","v3/tests/test_admin_build.py",
                  "v3/tests/test_context_component_builds.py","v3/tests/test_engine_components.py","v3/tests/test_build_lifecycle_entry.py",
@@ -5280,7 +5281,6 @@ class Broker:
             # Retry signatures describe caller input, not a subsequently changed default.
             cap=executor_module.compiler_cap(args.get("compiler_memory_cap"),CONFIG.get("scheduler",{}))
             if cap is None and self.resources.enabled:cap=CONFIG.get("scheduler",{}).get("compiler_memory_default_bytes",12*1024**3)
-            if not self._maintenance_allowed(trusted,{"task_id":task_id}):raise PermissionError("Build service drained")
             self._incoming_lease(trusted)
             key=hashlib.sha256(canonical([trusted["user_id"],workspace,task_id])).hexdigest();item=self.work.get(key)
             if not item or item.get("mode")!="isolated"or item["status"]!="open":raise ValueError("Open isolated task required")
@@ -5510,7 +5510,9 @@ class Broker:
                 return {**self._maintenance(),"busy":bool(self.active or self.active_ui or self.post_deployment.active or self.maintenance_activities.active or any(j["status"]=="running"for j in self.jobs.values())),"queued":sum(j["status"]=="queued" for j in self.jobs.values())}
             read_actions={"heartbeat","status","review","preflight","receipt","list","get","read","search","job","artifact","reservations","resources","takeover_preview"}
             read_names={"v3_build_status","v3_worker_job","v3_build_dashboard","v3_build_result","administrator_host_lease","administrator_host_revoke","v3_build_cancel","v3_build_leftovers","v3_build_progress","v3_source_list","v3_source_read","v3_source_read_batch","v3_source_search","v3_source_receipt","file_list","file_read","file_search"}
-            if name not in read_names and args.get("action") not in read_actions and not self._maintenance_allowed(trusted,args):raise PermissionError("Build service drained; new work disabled")
+            # Isolated task work (edits, checks, finish) is admitted while drained; _start_next holds its jobs until resume.
+            task_work=name in {"build_work","v3_build_work","v3_cargo_task","v3_source_prepare","v3_source_apply","v3_source_apply_prepared","file_edit","file_write"}and args.get("action")not in {"reconcile_release","reload_resource_policy","reload_memory_policy"}
+            if name not in read_names and args.get("action") not in read_actions and not task_work and not self._maintenance_allowed(trusted,args):raise PermissionError("Build service drained; new work disabled")
             if name == "performance_work":
                 return self.performance.handle(trusted, workspace, args)
             if name == "v3_build_scheduler":

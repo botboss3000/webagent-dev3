@@ -39,7 +39,7 @@ def apply(config_path,candidate_path,task_id,dry_run=False):
     if dry_run or not change["changed_fields"]:return {**change,"status":"validated"}
     ensure_reconciled(previous["state_root"])
     state=operator(previous,config_path,["maintenance","status"])
-    if state.get("busy")or state.get("queued")or not state.get("drained")or state.get("task_id")!=task_id:
+    if state.get("busy")or not state.get("drained")or state.get("task_id")!=task_id:
         raise RuntimeError("Reserve an idle broker maintenance drain for this exact task")
     os.environ["WEBAGENT_BUILD_CONFIG"]=str(config_path)
     host=module("reconfiguration_host",Path(previous["service_dir"])/"host.py")

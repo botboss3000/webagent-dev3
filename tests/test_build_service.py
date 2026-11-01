@@ -235,19 +235,20 @@ class MaintenanceTests(unittest.TestCase):
   self.trusted={"user_id":"codex-local","session_id":self.sid,"lease_until":time.time()+30,"access_fingerprint":"f"*64,"local_caller":True}
  def tearDown(self):self.broker.shutdown();self.temp.cleanup()
  def call(self,name,args,trusted=None):return self.broker.handle({"id":"fixture","name":name,"arguments":args,"workspace":self.sid,"trusted":trusted or self.trusted})
- def test_drain_persists_and_blocks_new_work_but_allows_owner(self):
+ def test_drain_persists_admits_task_work_and_blocks_other_new_work(self):
   self.call("build_service_maintenance",{"action":"drain","task_id":"migration-task"})
-  with self.assertRaisesRegex(PermissionError,"drained"):self.call("v3_build_work",{"action":"begin","task_id":"another-task","summary":"Blocked","mode":"isolated"})
+  result=self.call("v3_build_work",{"action":"begin","task_id":"another-task","summary":"Queued behind drain","mode":"isolated"});self.assertEqual(result["status"],"open")
+  with self.assertRaisesRegex(PermissionError,"drained"):self.call("v3_build_rebuild_checkout",{})
   result=self.call("v3_build_work",{"action":"begin","task_id":"migration-task","summary":"Allowed","mode":"isolated"});self.assertEqual(result["status"],"open")
   self.broker.shutdown();self.broker=fixtures.host.Broker(self.state,self.runner)
   self.assertTrue(self.call("build_service_maintenance",{"action":"status"})["drained"])
   self.call("build_service_maintenance",{"action":"resume"})
-  result=self.call("v3_build_work",{"action":"begin","task_id":"another-task","summary":"Allowed","mode":"isolated"});self.assertEqual(result["status"],"open")
+  result=self.call("v3_build_work",{"action":"begin","task_id":"third-task","summary":"Allowed","mode":"isolated"});self.assertEqual(result["status"],"open")
  def test_app_cannot_open_maintenance_or_override_with_task_id(self):
   app={k:v for k,v in self.trusted.items() if k!="local_caller"}
   with self.assertRaises(PermissionError):self.call("build_service_maintenance",{"action":"drain"},app)
   self.call("build_service_maintenance",{"action":"drain","task_id":"migration-task"})
-  with self.assertRaises(PermissionError):self.call("v3_build_work",{"action":"begin","task_id":"migration-task","summary":"Blocked","mode":"isolated"},app)
+  with self.assertRaises(PermissionError):self.call("v3_build_rebuild_checkout",{"task_id":"migration-task"},app)
 
 class MountBoundaryTests(unittest.TestCase):
  def test_pinned_inode_survives_path_replacement_and_rejects_symlink(self):
@@ -1132,6 +1133,14 @@ class FeatureProfileBrokerTests(unittest.TestCase):
             self.assertEqual(self.broker._view(self.broker.jobs[live["job_id"]])["feature_profile"],"live")
         self.assertFalse(self.runner.calls)
         self.assertEqual(item["status"],"open");self.assertNotIn("job_id",item)
+    def test_drain_holds_a_queued_check_until_resume(self):
+        item,args=self.request();self.broker.resources.enabled=True
+        self.call("build_service_maintenance",{"action":"drain","task_id":"other-maintenance-task"})
+        with patch.object(self.broker.pool,"submit")as submit:
+            result=self.call("build_work",args)
+            self.assertEqual(result["status"],"queued");submit.assert_not_called()
+            self.call("build_service_maintenance",{"action":"resume"})
+            self.assertEqual(self.broker.jobs[result["job_id"]]["status"],"running");submit.assert_called_once()
     def test_invalid_profiles_never_create_jobs(self):
         item,args=self.request();self.broker.resources.enabled=True
         for value in ["arbitrary","--features all",[],{},True]:

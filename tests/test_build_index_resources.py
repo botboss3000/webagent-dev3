@@ -231,13 +231,13 @@ class HistoryMaintenanceAuthorityTests(unittest.TestCase):
         self.broker.code_index_leases.clear()
         self.assertFalse(list(self.broker.code_index_ledger.folder.glob("history-backup-*")))
 
-    def test_foreign_drain_preserves_owner_heartbeat_without_allowing_source_work(self):
+    def test_foreign_drain_preserves_owner_heartbeat_and_admits_source_work(self):
         self.call("build_service_maintenance",{"action":"drain","task_id":"another-maintenance-task"})
         state=self.broker.scheduler.store.get(self.item["key"])
         result=self.call("build_work",{"action":"heartbeat","task_id":self.item["task_id"],"expected_revision":state["revision"],"expected_epoch":state["epoch"],"request_id":"heartbeat-during-foreign-drain"})
         self.assertTrue(result)
-        with self.assertRaisesRegex(PermissionError,"drained"):
-            self.call("build_work",{"action":"reserve","task_id":self.item["task_id"],"paths":["build-service/config.py"],"expected_revision":state["revision"],"expected_epoch":state["epoch"],"request_id":"source-work-during-foreign-drain"})
+        state=self.broker.scheduler.store.get(self.item["key"])
+        self.assertTrue(self.call("build_work",{"action":"reserve","task_id":self.item["task_id"],"paths":["build-service/config.py"],"expected_revision":state["revision"],"expected_epoch":state["epoch"],"request_id":"source-work-during-foreign-drain"}))
 
     def test_runtime_provisioning_requires_idle_drain_and_retains_exact_job_receipt(self):
         import threading

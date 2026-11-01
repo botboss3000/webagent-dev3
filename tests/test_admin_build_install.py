@@ -444,7 +444,7 @@ class GateSecurityTests(unittest.TestCase):
                 values[path]=before
     def test_idle_drain_is_checked_before_docker_effects(self):
         life=self.lifecycle
-        for state in [{'busy':True,'queued':0,'drained':True,'task_id':'task-fixture'},{'busy':False,'queued':1,'drained':True,'task_id':'task-fixture'},{'busy':False,'queued':0,'drained':False,'task_id':'task-fixture'},{'busy':False,'queued':0,'drained':True,'task_id':'foreign-task'}]:
+        for state in [{'busy':True,'queued':0,'drained':True,'task_id':'task-fixture'},{'busy':False,'queued':0,'drained':False,'task_id':'task-fixture'},{'busy':False,'queued':0,'drained':True,'task_id':'foreign-task'}]:
             config={'service_dir':str(PATH.parent)}
             with patch.object(life.os,'geteuid',return_value=0),patch.object(life.cfg,'load',return_value=config),patch.object(life,'module',return_value=types.SimpleNamespace(operator=Mock(return_value=state))),patch.object(life.subprocess,'check_output')as docker:
                 with self.assertRaisesRegex(RuntimeError,'idle broker drain'):life.gate_security('/protected','task-fixture','a'*36)
