@@ -211,6 +211,14 @@ class OperatorCycleTests(unittest.TestCase):
         release = next(args for name, args in self.calls if args and isinstance(args, dict) and args.get("action") == "release_claims")
         self.assertEqual((release["commit"], release["scopes"], release["expected_revision"]), ("abc123", ["module:broker"], 7))
         self.assertEqual(result["state"], "complete");beat.assert_called_once_with("task-1", "stop")
+    def test_close_puts_the_job_on_the_subject_not_the_trailer(self):
+        messages = []
+        def run(argv, **kwargs):
+            if "commit" in argv:messages.append(kwargs["input"])
+            return self.runner()(argv, **kwargs)
+        with patch.dict(client.CONFIG, {"checkout_root": str(self.checkout)}), patch.object(client, "heartbeat"):
+            client.close("task-1", "Subject\n\nCo-Authored-By: Someone <a@example.test>\n", self.broker(), run)
+        self.assertEqual(messages[0], "Subject (broker job job-1)\n\nCo-Authored-By: Someone <a@example.test>\n")
     def test_close_refuses_unfinished_job_or_drifted_checkout(self):
         with patch.dict(client.CONFIG, {"checkout_root": str(self.checkout)}):
             with self.assertRaisesRegex(ValueError, "reconcile"):client.close("task-1", "m", self.broker("failed"), self.runner())
@@ -222,6 +230,10 @@ class OperatorCycleTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "stale"):client.install_broker("task-1", False, self.broker(), self.runner(fail=("install",)))
             commands = [argv[3] if argv[:3] == ["sudo", "-n", "systemctl"] else "install" for name, argv in self.calls if name == "run" and "is-active" not in argv]
             self.assertEqual(commands, ["stop", "install", "start"])
+            self.calls.clear()
+            from types import SimpleNamespace
+            installed = lambda argv, **kwargs: SimpleNamespace(returncode=0, stdout='{"installed": true, "version": "abc"}\n' if "install" in argv else "active\n", stderr="")
+            self.assertEqual(client.install_broker("task-1", False, self.broker(), installed)["installed_version"], "abc")
             self.calls.clear()
             with self.assertRaisesRegex(ValueError, "busy"):client.install_broker("task-1", False, self.broker(busy=True), self.runner())
             with self.assertRaisesRegex(ValueError, "refused"):client.install_broker("task-1", False, self.broker(refusal="Possible credentials"), self.runner())

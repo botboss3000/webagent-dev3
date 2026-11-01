@@ -2676,10 +2676,14 @@ def stage_baselines(jobs):
         values = sorted(values)
         return round(values[min(len(values) - 1, int(round(q * (len(values) - 1))))])
     classes = {}
-    for job in jobs:
-        if job.get("status") != "completed" or not job.get("execution_history") or not job.get("finished_at"):
+    # The 30 most recent completed jobs per class; container-free releases have phase records only.
+    for job in sorted(jobs, key=lambda j: j.get("finished_at") or 0, reverse=True):
+        if (job.get("status") != "completed" or not job.get("finished_at") or not job.get("started_at")
+                or not (job.get("execution_history") or job.get("phase_history"))):
             continue
         c = classes.setdefault(job_class(job), {"walls": [], "spans": {}})
+        if len(c["walls"]) >= 30:
+            continue
         c["walls"].append(job["finished_at"] - job["started_at"])
         for name, (lo, hi) in stage_spans(job).items():
             if hi is not None:

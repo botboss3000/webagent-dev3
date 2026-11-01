@@ -199,7 +199,11 @@ def install_broker(task_id, allow_stale=False, request=call, run=subprocess.run)
     if out.returncode:
         raise RuntimeError("install refused: " + (out.stderr or out.stdout).strip()[-600:])
     active = run(["systemctl", "is-active", SERVICE], capture_output=True, text=True).stdout.strip()
-    return {"task_id": task_id, "installed": out.stdout.strip().splitlines()[-1][:400] if out.stdout.strip() else "", "service": active,
+    try:
+        version = json.loads(out.stdout.strip().splitlines()[-1]).get("version")
+    except (IndexError, ValueError, AttributeError):
+        version = None
+    return {"task_id": task_id, "installed_version": version, "service": active,
             "next": "buildctl finish " + task_id + " --expected <inputs_sha256> publishes it as host_service_deploy"}
 
 
@@ -241,7 +245,9 @@ def close(task_id, message, request=call, run=subprocess.run):
     if run(git + ["diff", "--cached", "--name-only"], capture_output=True, text=True, check=True).stdout.strip():
         raise ValueError("checkout has staged changes from another writer; resolve before committing")
     if "broker job" not in message:
-        message = message.rstrip() + f" (broker job {task['job_id']})"
+        # On the subject line: the last line may be a trailer such as Co-Authored-By.
+        subject, _, rest = message.strip().partition("\n")
+        message = subject + f" (broker job {task['job_id']})" + ("\n" + rest if rest else "") + "\n"
     run(git + ["add", "--", *paths], check=True)
     run(git + ["commit", "-q", "-F", "-"], input=message, text=True, check=True)
     commit = run(git + ["rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()

@@ -623,6 +623,10 @@ class BuildTests(unittest.TestCase):
                                        {"phase": "fmt", "started_at": 6, "elapsed_seconds": 2},
                                        {"phase": "compile_test", "started_at": 10, "elapsed_seconds": 50},
                                        {"phase": "test", "started_at": 61, "elapsed_seconds": 30}]}
+        container_free = [{"job_id": f"h{i}", "status": "completed", "operation": "host_service_deploy", "started_at": i * 100, "finished_at": i * 100 + 20 + i,
+                           "phase_history": [{"phase": "frontend_tests", "at": i * 100}, {"phase": "deploying", "at": i * 100 + 15}]} for i in range(40)]
+        baseline = host.stage_baselines(container_free)["host_service_deploy"]
+        self.assertEqual((baseline["jobs"], baseline["wall"]["p50"]), (30, 44))  # walls 30-59: the newest 30 only
         self.assertEqual(host.stage_spans(check), {"dependencies": [1, 5], "format check": [6, 8], "compile tests": [10, 60], "run tests": [61, 91]})
 
     def test_pending_journal_scan_sees_new_and_rewritten_records(self):
