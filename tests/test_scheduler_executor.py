@@ -638,6 +638,19 @@ class DependencySchedulerTests(unittest.TestCase):
         self.assertEqual(self.broker.scheduler.job_scopes(job),set())
         self.assertTrue(self.broker.scheduler.execution_eligible(job,[{**job,"operation":"build_deploy","check_task":"check"}]))
         self.broker.resources.enabled=False
+    def test_one_check_runs_beside_a_release_but_not_beside_another_check(self):
+        from unittest.mock import patch
+        item=self.begin("parallel-check-fixture");other=self.begin("parallel-release-fixture")
+        self.broker.resources.enabled=True
+        tree=Path(item["workspace_path"]).parent;digest=self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(tree))
+        with patch.object(self.broker,"_start_next"):
+            result=self.call("build_work",{"action":"check","task_id":item["task_id"],"check":"test","test_filter":"focused","request_id":"parallel-check-request","expected_inputs_sha256":digest})
+        check=self.broker.jobs[result["job_id"]];release={"job_id":"release-job","operation":"build_deploy","ownership_id":other["key"]}
+        self.assertEqual(self.broker.scheduler.job_scopes(check)&{"execution:rust-build","execution:rust-check"},{"execution:rust-check"})
+        self.assertTrue(self.broker.scheduler.execution_eligible(check,[release]))
+        self.assertFalse(self.broker.scheduler.execution_eligible(check,[{**release,"operation":"check","check_task":"test"}]))
+        self.assertFalse(self.broker.scheduler.execution_eligible({**release,"job_id":"second-release"},[release]))
+        self.broker.resources.enabled=False
 
 
 class VerificationEvidenceTests(unittest.TestCase):

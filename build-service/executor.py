@@ -980,7 +980,8 @@ class Executor:
     def check(self,job,blob,task,timeout,extract):
         """Use the same attributable recipes for bounded foreground checks and release compilation."""
         profile=check_profile(job.get("feature_profile"));argv=None if task=="dependencies"else check_argv(task,profile)
-        job["artifact_component"]="engine"
+        # Checks own their output folder, so they admit beside a release's engine phases; memory and CPU admission still apply.
+        job["artifact_component"]="engine-check"
         root=Path(self.config["state_root"])/"checks"/job["job_id"];source=root/"source";output=root/"output"
         blob=self.runner.execution_application_blob(blob);root.mkdir(parents=True,exist_ok=True);extract(source,blob);output.mkdir(exist_ok=True)
         application=source/"v3";before=self.runner.execution_source_digest(source);start=time.monotonic()

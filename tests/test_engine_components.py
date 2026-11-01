@@ -113,6 +113,8 @@ class EngineTests(unittest.TestCase):
             certificate=json.loads((Path(temporary)/"verification-certificates"/(job["verification_key"]+".json")).read_text())
             self.assertEqual(certificate["binding"]["source_sha256"],worker.verification_source(blob))
             self.assertEqual(certificate["binding"]["test_filter"],"engine_components::")
+            # A check's own resource component lets it admit beside a release's engine phases.
+            self.assertEqual(job["artifact_component"],"engine-check")
     # Bind compiler memory evidence to its container and reject unenforced limits or OOM outcomes.
     def test_cap_requires_kernel_enforcement_and_oom_cannot_pass(self):
         import threading,uuid

@@ -960,8 +960,10 @@ No manifest field can declare itself exempt from conflicts.
 
 This changes source editing reservations, not execution concurrency, resource
 ceilings, promotion freshness, source attestation, acceptance or deployment gates.
-Rust builds and checks serialize through the `execution:rust-build` execution
-token, which never blocks source edits.
+Rust builds serialize through the `execution:rust-build` execution token and checks
+through `execution:rust-check` (resource component `engine-check`), so one check
+runs beside one release under normal memory and CPU admission. Neither token blocks
+source edits.
 For each future module separation record: actual Cargo root and scope, dependency
 contracts/consumers, independent-edit and contract-conflict tests, legacy overlap,
 and the release/commit proving the installed classifier recognizes the boundary.

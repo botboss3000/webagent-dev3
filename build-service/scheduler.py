@@ -489,8 +489,8 @@ class Scheduler:
         if job.get("operation")=="check"and job.get("check_task")in {"dependencies","runtime_readability"}:return set()
         if job.get("ownership_id"):
             value=self.store.get(job["ownership_id"])
-            return {s for s in value["scopes"]if s.startswith("module:")}|({"execution:rust-build"}if job["operation"]in {"build","build_deploy","check"}else set())
-        # One Rust compile runs at a time; this execution token never touches source write claims.
+            return {s for s in value["scopes"]if s.startswith("module:")}|({"execution:rust-check"}if job["operation"]=="check"else{"execution:rust-build"}if job["operation"]in {"build","build_deploy"}else set())
+        # One release compile and one check run at a time, each beside the other; these execution tokens never touch source write claims.
         # Legacy unclassified executable work is conservative until explicit recovery.
         return {"execution:rust-build"}if job["operation"]=="build_deploy"else{"module:legacy-publication"}
     def assert_job(self,job):

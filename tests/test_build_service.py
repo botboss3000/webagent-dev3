@@ -1628,6 +1628,19 @@ class SameJobPhaseOverlapTests(unittest.TestCase):
     other={"job_id":"other-job","lease_until":time.time()+60,"artifact_component":"engine"}
     with self.assertRaisesRegex(TimeoutError,"component_busy"):scheduler.enter("other",other,"compile_test","engine:rust1.90:compile_test","engine",timeout=.02)
    finally:scheduler.finish("suite",True);scheduler.finish("linked",True)
+ def test_a_check_admits_beside_a_release_engine_phase(self):
+  from test_scheduler_resources import Fake,G
+  with tempfile.TemporaryDirectory()as folder:
+   runner=Fake();scheduler=fixtures.host.resource_module.Resources(folder,runner,{"mode":"enforce"},sampler=lambda:{"available":20*G,"total":24*G,"pressure":{}})
+   runner.resource_progress=lambda job:None
+   release={"job_id":"release-job","lease_until":time.time()+60,"artifact_component":"engine"}
+   check={"job_id":"check-job","lease_until":time.time()+60,"artifact_component":"engine-check"}
+   scheduler.enter("release",release,"compile_release","engine:rust1.90:release","engine",timeout=.2)
+   scheduler.enter("check",check,"compile_test","engine:rust1.90:compile_test","engine",timeout=.2)
+   try:
+    second={"job_id":"second-check","lease_until":time.time()+60,"artifact_component":"engine-check"}
+    with self.assertRaisesRegex(TimeoutError,"component_busy"):scheduler.enter("second",second,"compile_test","engine:rust1.90:compile_test","engine",timeout=.02)
+   finally:scheduler.finish("release",True);scheduler.finish("check",True)
  def test_engine_component_tests_publish_through_the_host_lane(self):
   _,allowed=fixtures.host.Broker.host_source_scope(None)
   self.assertIn("v3/tests/test_engine_components.py",allowed)
