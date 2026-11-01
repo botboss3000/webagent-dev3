@@ -1428,8 +1428,8 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         context_digest(blob)
         return blob
 
-    def promote_checkout(self, before, after, changed):
-        count = release.promote_checkout(self.source, before, after, changed, context_digest, standalone=True)
+    def promote_checkout(self, before, after, changed, base=None):
+        count = release.promote_checkout(self.source, before, after, changed, context_digest, standalone=True, base_blob=base)
         try:
             # New live files must be readable by the app at once, not at the next maintenance pass.
             release.expose_live(self.source, release.live_patterns(release.entries(after, context_digest)))
@@ -1437,7 +1437,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             pass
         return count
 
-    def promote_live_ui(self, before, after, changed):
+    def promote_live_ui(self, before, after, changed, base=None):
         # The app deliberately serves the checkout in live-editing mode.
         # Once this release is active/healthy, promote only conflict-free UI
         # before checking served bytes. Final full promotion stays checked.
@@ -1447,7 +1447,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         except (OSError, ValueError, KeyError, TypeError):
             enabled = False
         if enabled:
-            self.promote_checkout(before, after, [p for p in changed if p.startswith(UI_SOURCE_PREFIX)])
+            self.promote_checkout(before, after, [p for p in changed if p.startswith(UI_SOURCE_PREFIX)], base)
         return enabled
 
     def checkout_matches(self, blob, changed):
@@ -3325,13 +3325,18 @@ class Broker:
         return self.runner.snapshot()
 
 
-    def _sync_report(self, live, candidate, changed, offset=0):
+    def _sync_report(self, live, candidate, changed, offset=0, base=None):
         return release.checkout_drift(live, self.runner.snapshot(), candidate,
-                                      changed, context_digest, offset)
+                                      changed, context_digest, offset, base)
+
+    def _task_base(self, job):
+        """The task's base snapshot for a job, which live-file checks compare the checkout with."""
+        path = self.state / job["job_id"] / "base.tar"
+        return path.read_bytes() if path.is_file() else None
 
     def _sync_job(self, job, live, candidate, changed):
         # Recheck at admission and before the first external effect.
-        report = self._sync_report(live, candidate, changed)
+        report = self._sync_report(live, candidate, changed, base=self._task_base(job))
         job["synchronization"] = report
         if report["total"] and job.get("sync_ack_digest") != report["digest"]:
             job.update(status="needs_decision", phase="checking_checkout",
@@ -5970,7 +5975,8 @@ class Broker:
                     offset = args.get("offset", 0)
                     if type(offset) is not int or offset < 0:
                         raise ValueError("Nonnegative offset required")
-                    report = self._sync_report(live, candidate, changed, offset)
+                    report = self._sync_report(live, candidate, changed, offset,
+                                               self._task_base(job) if job else base)
                     if action == "preflight":
                         if job:
                             plan = {"operation": job["operation"], "changed_paths": sorted(job.get("changed_paths", []))}
@@ -6116,7 +6122,7 @@ class Broker:
                         candidate = release.archive({name: value for name, value in release.entries(task_blob, context_digest).items()
                                                      if not release.inspection_path(name)}, context_digest)
                         current_changed = changed
-                    report = self._sync_report(live, candidate, current_changed)
+                    report = self._sync_report(live, candidate, current_changed, base=base_blob)
                     item["synchronization"] = report
                     self._save_work()
                     decision = args.get("sync_decision")
@@ -6452,7 +6458,7 @@ class Broker:
             job["effects_started"] = True
             self._save(job)
         self.runner.activate_assets(job["job_id"])
-        self.runner.promote_live_ui(self._current_release_blob(), blob, job["changed_paths"])
+        self.runner.promote_live_ui(self._current_release_blob(), blob, job["changed_paths"], self._task_base(job))
         self._phase(job, "checking_ui")
         self.runner.verify_ui(job["changed_paths"])
         for role, name in zip(("api", "loop"), TARGETS):
@@ -6466,7 +6472,7 @@ class Broker:
                 if self.runner.inspect(name).get("Id")!=previous[role].get("Id"):
                     raise RuntimeError("Unrelated container replaced during plugin publication")
         self._phase(job, "promoting_checkout")
-        self.runner.promote_checkout(self._current_release_blob(), blob, job["changed_paths"])
+        self.runner.promote_checkout(self._current_release_blob(), blob, job["changed_paths"], self._task_base(job))
         job["synchronization"] = self._sync_report(blob, blob, ())
         with self.lock:
             self._batch_lease(job)
@@ -6679,7 +6685,7 @@ class Broker:
                         if not self.runner.healthy(name, job["images"][role]):
                             raise RuntimeError("replacement V3 " + role + " not healthy; rollback material retained")
                 if self.runner.ui_hot_swappable():
-                    self.runner.promote_live_ui(self._current_release_blob(), blob, job.get("changed_paths", ()))
+                    self.runner.promote_live_ui(self._current_release_blob(), blob, job.get("changed_paths", ()), self._task_base(job))
                     self._phase(job, "checking_ui")
                     with host_phase(job,"checking_ui"):
                         self.runner.verify_ui(job.get("changed_paths", ()))
@@ -6688,7 +6694,7 @@ class Broker:
             if job.get("isolated"):
                 self._phase(job, "promoting_checkout")
                 with host_phase(job,"promoting_checkout"):
-                    self.runner.promote_checkout(self._current_release_blob(), blob, job["changed_paths"])
+                    self.runner.promote_checkout(self._current_release_blob(), blob, job["changed_paths"], self._task_base(job))
                 job["synchronization"] = self._sync_report(blob, blob, ())
             after, _ = context_digest(
                 release.snapshot(Path(job["release_root"]), CONTEXT, context_digest)

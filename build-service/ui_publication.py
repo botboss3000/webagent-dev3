@@ -563,7 +563,7 @@ class UIPublication:
             job["publication_recovery"]={"digest":digest,"request_id":args["request_id"],"action":args["action"],"done":False}
             self.broker._save(job)
             self.broker.runner.verify_ui(job.get("changed_paths",()))
-            self.broker.runner.promote_checkout(before,candidate,job.get("changed_paths",()))
+            self.broker.runner.promote_checkout(before,candidate,job.get("changed_paths",()),self.broker._task_base(job))
             if not runtime_bound()or self.broker.runner.current_asset_id()!=job["job_id"]or not self.broker.runner.checkout_matches(candidate,job.get("changed_paths",())):
                 raise ValueError("Activated release effects need reconciliation")
             job["synchronization"]=self.broker._sync_report(candidate,candidate,job.get("changed_paths",()))
@@ -599,7 +599,7 @@ class UIPublication:
                 job["engine_execution_modes"]=self.broker.runner.engine_execution_modes(job["job_id"])
             # Checked promotion preflights all paths and tolerates exact before/after
             # bytes after a partial promotion; unrelated checkout bytes are preserved.
-            self.broker.runner.promote_checkout(before,candidate,job.get("changed_paths",()))
+            self.broker.runner.promote_checkout(before,candidate,job.get("changed_paths",()),self.broker._task_base(job))
             if self.runtime()!=bound or self.broker.runner.current_asset_id()!=job["job_id"]or not self.broker.runner.checkout_matches(candidate,job.get("changed_paths",())):
                 raise ValueError("Activated release effects need reconciliation")
             job["synchronization"]=self.broker._sync_report(candidate,candidate,job.get("changed_paths",()))
@@ -650,7 +650,7 @@ class UIPublication:
             if not self.broker.runner.healthy(api,job["images"]["api"]):
                 raise ValueError("Candidate API remains unhealthy after exact bind recovery")
             self.broker.runner.verify_ui(job.get("changed_paths",()))
-            self.broker.runner.promote_checkout(before,candidate,job.get("changed_paths",()))
+            self.broker.runner.promote_checkout(before,candidate,job.get("changed_paths",()),self.broker._task_base(job))
             if (not self.broker.runner.checkout_matches(candidate,job.get("changed_paths",()))
                     or self.broker.runner.current_asset_id()!=job["job_id"]
                     or not self.broker.runner.healthy(api,job["images"]["api"])):

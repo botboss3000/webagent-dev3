@@ -284,9 +284,12 @@ keys are kept; the cache is rebuildable and safe to delete while no job runs.
 the last path segment; never broker, test, data or code paths) that are edited in
 place in the checkout, by hand or by the app, and read live. The published release's
 list applies. Live edits are never checkout drift, so they never pause a release. A
-task cannot change a listed file (remove it from the list first); creating a file and
-listing it in the same task is an ordinary change. A rebuild keeps the released bytes
-of listed files. The broker's 60-second maintenance loop commits settled edits (no
+task may change a listed file alongside code it depends on, in the same release. Its
+change is checked against the task's base bytes, not the released copy (which is stale
+by design): an in-place edit made after the task began shows as a promotion conflict at
+admission and stops promotion, so it is never overwritten; reopen the task to take it.
+Creating a file and listing it in the same task is an ordinary change. A rebuild keeps
+the released bytes of listed files. The broker's 60-second maintenance loop commits settled edits (no
 change for 10 seconds) to listed files as one `Live config edit: ...` commit with
 `git commit --only`, so other writers' staged work is never included. The same loop
 makes listed files and their folders readable by the app's UID. Both app containers

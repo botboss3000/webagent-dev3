@@ -27,7 +27,9 @@ def inspection_path(name):
 
 
 # Live files are edited in place in the checkout (by hand or by the app) and
-# committed by the broker; releases never carry or overwrite their edits.
+# committed by the broker. A release keeps their last released bytes; a task may
+# still change one, checked against the task's own base bytes (never the stale
+# released copy) at admission and promotion, so an in-place edit is never lost.
 LIVE_MANIFEST = "v3/live-files.json"
 LIVE_DENIED = ("build-service/", "tests/", "data/", "build-jobs/", "workspaces/", "runtime/", "target/", ".")
 
@@ -274,13 +276,12 @@ def candidate(base_blob, task_blob, live_blob, validate, *, allow_empty=False, s
     if LIVE_MANIFEST in changed:
         live_patterns(task)
     patterns = live_patterns(live)
-    held = [name for name in changed if is_live(name, patterns)]
-    if held and not skip_live:
-        raise ValueError("live file is edited in place, not through tasks (remove it from live-files.json first to change it in a task): " + held[0].removeprefix("v3/"))
-    changed = [name for name in changed if name not in held]
+    held = {name for name in changed if is_live(name, patterns)}
+    if skip_live:
+        changed = [name for name in changed if name not in held]
     merged = {name: value for name, value in live.items() if name not in RETIRED_CONTEXT}
     for name in changed:
-        if live.get(name) not in (base.get(name), task.get(name)):
+        if name not in held and live.get(name) not in (base.get(name), task.get(name)):
             raise ValueError("source conflict: " + name)
         if name in task:
             merged[name] = task[name]
@@ -395,9 +396,15 @@ def make_source_parents(root, path):
         parent.chmod(0o755)
 
 
-def promote_checkout(root, before_blob, after_blob, changed, validate, standalone=False):
-    """Copy a healthy release's changed files into the shared source checkout."""
+def promote_checkout(root, before_blob, after_blob, changed, validate, standalone=False, base_blob=None):
+    """Copy a healthy release's changed files into the shared source checkout.
+
+    A live file is checked against the task's `base_blob` bytes when given: the
+    released copy is stale by design, and an in-place edit since the task began
+    must stop promotion instead of being overwritten."""
     before, after = entries(before_blob, validate), entries(after_blob, validate)
+    base = entries(base_blob, validate) if base_blob is not None else None
+    patterns = live_patterns(after)
     root = Path(root).resolve()
     actions = []
     for name in changed:
@@ -420,7 +427,8 @@ def promote_checkout(root, before_blob, after_blob, changed, validate, standalon
         current_body = current[1] if current is not None else None
         target = after.get(name)
         target = (checkout_mode(target[0]), target[1]) if target is not None else None
-        before_body = before[name][1] if name in before else None
+        source = base if base is not None and is_live(name, patterns) else before
+        before_body = source[name][1] if name in source else None
         after_body = after[name][1] if name in after else None
         if current_body not in (before_body, after_body):
             raise ValueError("checkout changed during release: " + name)
@@ -638,10 +646,14 @@ def activate_assets(root, job_id):
         temporary.unlink(missing_ok=True)
     return previous
 
-def checkout_drift(live_blob, checkout_blob, candidate_blob, changed, validate, offset=0):
-    """Content-free report over allowlisted V3 source, never runtime data."""
+def checkout_drift(live_blob, checkout_blob, candidate_blob, changed, validate, offset=0, base_blob=None):
+    """Content-free report over allowlisted V3 source, never runtime data.
+
+    With the task's `base_blob`, a live file the task changes is compared with its base
+    bytes, so an in-place edit made since the task began shows as a promotion conflict."""
     live_entries = entries(live_blob, validate)
     patterns = live_patterns(live_entries)
+    held = {name for name in changed if is_live(name, patterns)} if base_blob is not None else set()
     def source(files):
         # Git source identity tracks owner executable status, not ACL masks
         # or checkout read/write permissions. ACL masks can expose group execute
@@ -649,9 +661,17 @@ def checkout_drift(live_blob, checkout_blob, candidate_blob, changed, validate, 
         # edited in place by design, so they are never drift.
         return {name: (mode & 0o100, body)
                 for name, (mode, body) in files.items()
-                if name.startswith("v3/") and not name.startswith("v3/data/") and not is_live(name, patterns)}
+                if name.startswith("v3/") and not name.startswith("v3/data/")
+                and (not is_live(name, patterns) or name in held)}
     live, checkout, candidate = (source(live_entries), source(entries(checkout_blob, validate)),
                                  source(entries(candidate_blob, validate)))
+    if held:
+        base = source(entries(base_blob, validate))
+        for name in held:
+            if name in base:
+                live[name] = base[name]
+            else:
+                live.pop(name, None)
     def fingerprint(values):
         return [(name, mode, hashlib.sha256(body).hexdigest())
                 for name, (mode, body) in sorted(values.items())]

@@ -53,13 +53,33 @@ class LiveFileTests(unittest.TestCase):
         self.assertTrue(release.is_live("v3/crates/modules/models/providers/deepseek.json",patterns))
         self.assertFalse(release.is_live("v3/crates/modules/models/providers/old/deepseek.json",patterns))
         self.assertFalse(release.is_live("v3/crates/modules/models/src/lib.rs",patterns))
-    def test_tasks_cannot_change_live_files_but_can_list_new_ones(self):
+    def test_tasks_change_live_files_against_their_base_and_can_list_new_ones(self):
         release=self.release
-        live=self.blob({release.LIVE_MANIFEST:self.manifest("ui/chat.json"),"v3/ui/chat.json":"{}","v3/README.md":"a"})
-        edited=self.blob({release.LIVE_MANIFEST:self.manifest("ui/chat.json"),"v3/ui/chat.json":'{"x":1}',"v3/README.md":"b"})
-        with self.assertRaisesRegex(ValueError,"edited in place"):release.candidate(live,edited,live,self.validate)
-        _,changed=release.candidate(live,edited,live,self.validate,skip_live=True)
+        manifest=self.manifest("ui/chat.json")
+        # The release keeps stale bytes; the task began after an in-place edit.
+        live=self.blob({release.LIVE_MANIFEST:manifest,"v3/ui/chat.json":"{}","v3/README.md":"a"})
+        base=self.blob({release.LIVE_MANIFEST:manifest,"v3/ui/chat.json":'{"x":1}',"v3/README.md":"a"})
+        edited=self.blob({release.LIVE_MANIFEST:manifest,"v3/ui/chat.json":'{"x":2}',"v3/README.md":"b"})
+        merged,changed=release.candidate(base,edited,live,self.validate)
+        self.assertEqual(changed,["v3/README.md","v3/ui/chat.json"])
+        self.assertEqual(release.entries(merged,self.validate)["v3/ui/chat.json"][1],b'{"x":2}')
+        _,changed=release.candidate(base,edited,live,self.validate,skip_live=True)
         self.assertEqual(changed,["v3/README.md"])
+        # The checkout still holds the task's base bytes: no drift, and promotion writes the task's bytes.
+        report=release.checkout_drift(live,base,merged,["v3/ui/chat.json"],self.validate,base_blob=base)
+        self.assertEqual((report["status"],report["total"]),("synchronized",0))
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);(root/"ui").mkdir();(root/"ui/chat.json").write_text('{"x":1}')
+            release.promote_checkout(root,live,merged,["v3/ui/chat.json"],self.validate,standalone=True,base_blob=base)
+            self.assertEqual((root/"ui/chat.json").read_text(),'{"x":2}')
+            # An in-place edit made after the task began is a conflict, never overwritten.
+            (root/"ui/chat.json").write_text('{"x":3}')
+            moved=self.blob({release.LIVE_MANIFEST:manifest,"v3/ui/chat.json":'{"x":3}',"v3/README.md":"a"})
+            report=release.checkout_drift(live,moved,merged,["v3/ui/chat.json"],self.validate,base_blob=base)
+            self.assertEqual([(row["path"],row["promotion_conflict"])for row in report["files"]],[("ui/chat.json",True)])
+            with self.assertRaisesRegex(ValueError,"checkout changed during release"):
+                release.promote_checkout(root,live,merged,["v3/ui/chat.json"],self.validate,standalone=True,base_blob=base)
+            self.assertEqual((root/"ui/chat.json").read_text(),'{"x":3}')
         # Creating a file and listing it in the same task is an ordinary source change.
         listed=self.blob({release.LIVE_MANIFEST:self.manifest("ui/chat.json","ui/new.json"),"v3/ui/chat.json":"{}","v3/ui/new.json":"{}","v3/README.md":"a"})
         _,changed=release.candidate(live,listed,live,self.validate)

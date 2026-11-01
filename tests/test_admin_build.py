@@ -143,11 +143,11 @@ class FakeRunner:
                 return False
         return self.containers[name]["Image"] == expected and self.containers[name]["State"]["Status"] == "running"
 
-    def promote_checkout(self, before, after, changed):
+    def promote_checkout(self, before, after, changed, base=None):
         self.calls.append(("promote", tuple(changed)))
         self.blob = after
 
-    def promote_live_ui(self, before, after, changed):
+    def promote_live_ui(self, before, after, changed, base=None):
         return False
 
     def commit_release(self, paths, message):
@@ -1925,7 +1925,7 @@ class BuildTests(unittest.TestCase):
         digest = self.call("v3_build_work", {"action": "status",
             "task_id": "adopt-promotion"})["own"][0]["workspace_inputs_sha256"]
         original, bases = self.runner.promote_checkout, []
-        def conflicts_once(before, after, changed):
+        def conflicts_once(before, after, changed, base=None):
             bases.append(before)
             if len(bases) == 1:
                 raise ValueError("checkout changed during release: v3/src/adopt_promotion.rs")
