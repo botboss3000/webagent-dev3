@@ -141,7 +141,7 @@ class EngineTests(unittest.TestCase):
             self.assertIn("nothing to fmt",run("fmt",Mock(),paths=()))
             short="src/other.rs:1:1: warning: unused\n"
             self.assertIn("No clippy findings",run("clippy",Mock(return_value=short)))
-            self.assertEqual(worker.phase.call_args.args[5][:3],["cargo","clippy","--locked"])
+            self.assertEqual(worker.phase.call_args.args[5],["cargo","clippy","--locked","--offline","--tests","--message-format=short"])
             with self.assertRaisesRegex(ValueError,"src/mine.rs:4:2: warning"):run("clippy",Mock(return_value=short+"src/mine.rs:4:2: warning: unwrap_used\n"))
             with self.assertRaises(RuntimeError):run("clippy",Mock(side_effect=failure("error[E0425]: cannot find value\n")))
     # Bind compiler memory evidence to its container and reject unenforced limits or OOM outcomes.

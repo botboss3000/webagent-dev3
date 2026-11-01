@@ -1020,7 +1020,8 @@ class Executor:
         if task=="fmt":argv=["rustfmt","--edition","2021","--check",*paths];phase="fmt";recipe="engine:rust1.90:fmt"
         else:
             log=self.dependencies(job,application,output,prepare=False,timeout=min(timeout,600))
-            argv=["cargo","clippy","--locked","--offline","--all-targets","--message-format=short"];phase="compile_test";recipe="engine:rust1.90:clippy"
+            # --tests mirrors the release's test compile; --all-targets also checks the plain binary with dev-only features on.
+            argv=["cargo","clippy","--locked","--offline","--tests","--message-format=short"];phase="compile_test";recipe="engine:rust1.90:clippy"
         try:out=self.phase(job,phase,"engine",application,output,argv,recipe,max(1,timeout-int(time.monotonic()-start)))
         except RuntimeError as error:
             # rustfmt exits 1 for differences, including in unedited files it reaches through `mod`; anything else is a failure.
