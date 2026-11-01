@@ -111,6 +111,10 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 #chat-voice-btn.recording {align-items:center;justify-content:center;}
 #chat-voice-btn.recording svg {display:none !important;}
 #chat-voice-btn.recording::after {content:'';width:14px;height:14px;border-radius:3px;background:currentColor;}
+/* A slow dictation connection flashes the microphone orange until the upload backlog drains (replaces the old "too slow" toast). */
+#chat-voice-btn.lagging {color:var(--warning);animation:chat-voice-lag 1s ease-in-out infinite;}
+@keyframes chat-voice-lag {50% {opacity:.35;}}
+@media (prefers-reduced-motion: reduce) {#chat-voice-btn.lagging {animation:none;}}
 .v3-message.system{align-items:center}
 .v3-message.system .message-content{max-width:min(90%,680px);font-size:13px;color:var(--fg-2);background:var(--bg-elev);text-align:center}
 

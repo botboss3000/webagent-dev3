@@ -8,27 +8,33 @@ export function downsampleToPcm16(input,inputRate,outputRate=16000){
 }
 /** Purpose: Base64-encode bytes in bounded chunks so large recordings do not exceed spread-argument limits. */
 export function encodeBytes(bytes){let s='';for(let at=0;at<bytes.length;at+=8192)s+=String.fromCharCode(...bytes.subarray(at,at+8192));return btoa(s);}
-/** Purpose: Own one dictation's microphone lifecycle and expose start, finish, cancel, and active state. Callbacks report progress, the whole transcript so far, the final transcript, and terminal errors; generation checks fence stale work after cancellation or session changes. composer-media.js supplies the send hook through client.voiceAudio. */
-export function createAudioCapture({send,onState,onText,onComplete,onError}){
+/** Frames (0.1 s each) waiting to be sent before the connection counts as lagging, and the backlog it must drain to before lagging clears. */
+export const LAG_ON_FRAMES=20,LAG_OFF_FRAMES=5;
+/** Purpose: Own one dictation's microphone lifecycle and expose start, finish, cancel, and active state. Callbacks report progress, the whole transcript so far, the final transcript, terminal errors, and onLag(true|false) while the upload backlog or reconnect retries mean the connection is not keeping up; generation checks fence stale work after cancellation or session changes. composer-media.js supplies the send hook through client.voiceAudio. */
+export function createAudioCapture({send,onState,onText,onComplete,onError,onLag=()=>{}}){
  let active=null,generation=0;
   // Purpose: Accept asynchronous work only while this capture still owns the active generation.
  const valid=c=>active===c&&c.generation===generation;
+  // Purpose: Report lag transitions once, with hysteresis so a backlog hovering at the threshold does not flicker.
+ function lag(c){if(!valid(c))return;const on=c.retrying||c.queue.length>(c.lagging?LAG_OFF_FRAMES:LAG_ON_FRAMES);if(on!==c.lagging){c.lagging=on;onLag(on);}}
+  // Purpose: Clear any reported lag when a capture ends for any reason.
+ function quiet(c){c.retrying=false;if(c.lagging){c.lagging=false;onLag(false);}}
   // Purpose: Release capture timers, Web Audio nodes, context, and microphone tracks; context-close rejection is ignored during teardown.
  function stop(c){clearTimeout(c.timer);c.processor?.disconnect();c.source?.disconnect();c.sink?.disconnect();c.context?.close().catch(()=>{});c.stream?.getTracks().forEach(t=>t.stop());}
-  // Purpose: Send a capture-scoped frame or terminal operation, retrying at most twice only for retryable failures while this generation remains active.
- async function request(c,body){for(let n=0;;n++){if(!valid(c))throw Error('Dictation cancelled');try{return await send(c.sid,{capture_id:c.id,...body});}catch(e){if(n>=2||!valid(c)||(e.status&&e.status<500))throw e;onState('reconnecting');await new Promise(r=>setTimeout(r,350*2**n));}}}
+  // Purpose: Send a capture-scoped frame or terminal operation, retrying at most twice only for retryable failures while this generation remains active. Retries mark the capture lagging until a request succeeds.
+ async function request(c,body){for(let n=0;;n++){if(!valid(c))throw Error('Dictation cancelled');try{const r=await send(c.sid,{capture_id:c.id,...body});if(c.retrying&&valid(c)){c.retrying=false;onState(c.finishing?'finishing':'listening');lag(c);}return r;}catch(e){if(n>=2||!valid(c)||(e.status&&e.status<500))throw e;c.retrying=true;lag(c);onState('reconnecting');await new Promise(r=>setTimeout(r,350*2**n));}}}
   // Purpose: Tear down a current capture, best-effort cancel its server capture, and notify the owner once.
- function fail(c,error){if(!valid(c))return;stop(c);active=null;++generation;if(c.id)send(c.sid,{op:'cancel',capture_id:c.id}).catch(()=>{});onState('idle');onError(error);}
+ function fail(c,error){if(!valid(c))return;quiet(c);stop(c);active=null;++generation;if(c.id)send(c.sid,{op:'cancel',capture_id:c.id}).catch(()=>{});onState('idle');onError(error);}
   // Purpose: Serialize queued PCM frames, forward the server's transcript so far, and finish after the queue drains; request errors fail the capture.
  async function pump(c){
   if(c.pumping)return;c.pumping=true;
   try{
-   while(valid(c)&&c.queue.length){const data=encodeBytes(c.queue.shift());const r=await request(c,{op:'chunk',seq:++c.seq,data});if(!valid(c))return;if(typeof r.text==='string')onText(r.text);}
-   if(valid(c)&&c.finishing){onState('transcribing');const r=await request(c,{op:'finish'});if(!valid(c))return;active=null;++generation;onState('idle');await onComplete(r.text||'',c.sid);}
+   while(valid(c)&&c.queue.length){const data=encodeBytes(c.queue.shift());const r=await request(c,{op:'chunk',seq:++c.seq,data});if(!valid(c))return;lag(c);if(typeof r.text==='string')onText(r.text);}
+   if(valid(c)&&c.finishing){onState('transcribing');const r=await request(c,{op:'finish'});if(!valid(c))return;quiet(c);active=null;++generation;onState('idle');await onComplete(r.text||'',c.sid);}
   }catch(e){fail(c,e);}finally{c.pumping=false;}
  }
-  // Purpose: Buffer PCM into 0.2-second frames so text keeps pace with speech, and fail visibly when more than 64 frames accumulate.
- function append(c,bytes){const next=new Uint8Array(c.pending.length+bytes.length);next.set(c.pending);next.set(bytes,c.pending.length);c.pending=next;while(c.pending.length>=3200){c.queue.push(c.pending.slice(0,3200));c.pending=c.pending.slice(3200);}if(c.queue.length>128){fail(c,Error('Voice connection is too slow. Try again.'));return;}pump(c);}
+  // Purpose: Buffer PCM into 0.1-second frames (3200 bytes of 16 kHz PCM16) so text keeps pace with speech. A slow connection only signals lag; the backlog is bounded by the five-minute dictation limit (about 9.6 MB) and drains when the connection recovers.
+ function append(c,bytes){const next=new Uint8Array(c.pending.length+bytes.length);next.set(c.pending);next.set(bytes,c.pending.length);c.pending=next;while(c.pending.length>=3200){c.queue.push(c.pending.slice(0,3200));c.pending=c.pending.slice(3200);}lag(c);pump(c);}
   // Purpose: Finish once, flushing the final PCM tail before the queue is drained.
  async function finish(){const c=active;if(!c||c.finishing)return;c.finishing=true;stop(c);if(c.pending.length)c.queue.push(c.pending);c.pending=new Uint8Array();onState('finishing');await pump(c);}
   // Purpose: Acquire secure-context microphone access and start a server dictation streaming Web Audio PCM. Returns false when already active or invalidated. Secure-context or microphone-availability preflight errors reject before capture creation; failures during later setup are reported through onError and return false.
@@ -36,7 +42,7 @@ export function createAudioCapture({send,onState,onText,onComplete,onError}){
   if(active)return false;
   const Context=window.AudioContext||window.webkitAudioContext;
   if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia||!Context)throw Error('Dictation needs microphone access on a secure connection.');
-  const c={sid,generation:++generation,id:'',seq:0,queue:[],pending:new Uint8Array(),pumping:false,finishing:false};active=c;
+  const c={sid,generation:++generation,id:'',seq:0,queue:[],pending:new Uint8Array(),pumping:false,finishing:false,lagging:false,retrying:false};active=c;
   try{
    onState('requesting_microphone');c.stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
    if(!valid(c)){stop(c);return false;}
@@ -49,7 +55,7 @@ export function createAudioCapture({send,onState,onText,onComplete,onError}){
   }catch(e){fail(c,e);return false;}
  }
   // Purpose: Invalidate the active generation immediately, stop local recording, and best-effort cancel the server capture.
- function cancel(){const c=active;if(!c)return;active=null;++generation;stop(c);if(c.id)send(c.sid,{op:'cancel',capture_id:c.id}).catch(()=>{});onState('idle');}
+ function cancel(){const c=active;if(!c)return;quiet(c);active=null;++generation;stop(c);if(c.id)send(c.sid,{op:'cancel',capture_id:c.id}).catch(()=>{});onState('idle');}
   // Public API: start/finish/cancel control the single capture; active reflects whether one is still owned.
  return {start,finish,cancel,get active(){return !!active;}};
 }
