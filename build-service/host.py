@@ -2814,6 +2814,9 @@ def job_progress(job, baselines, now):
               | {t.get("phase") for t in job.get("phase_timings") or []})
     known = job.get("operation") != "build_deploy" or bool(phases & {"compile_test", "compile_linked", "compile_release", "package"})
     cls = job_class(job) if known or job.get("status") not in {"queued", "running"} else "build_deploy/compile/tests-ran"
+    if job.get("status") in {"queued", "running"} and phases & {"compile_test", "compile_linked", "compile_release"}:
+        # job_class needs a compile step past 30 s; a running job compiles as soon as one appears.
+        cls = cls.replace("/artifacts-reused/", "/compile/")
     if job.get("status") in {"queued", "running"} and cls.endswith("/tests-reused") and "test" in {a.get("phase") for a in job.get("active_phases") or []} | phases | ({"test"} if "package" not in phases else set()):
         cls = cls.replace("/tests-reused", "/tests-ran")  # a running job's suite has not reported yet
     plan = baselines.get(cls, {"stages": [], "wall": {}})
@@ -2821,7 +2824,9 @@ def job_progress(job, baselines, now):
     names = [s["stage"] for s in plan["stages"]]
     started = next((t for t in (job.get("started_at"), job.get("created_at")) if t is not None), now)
     spans = stage_spans(job, now)
-    order = names + sorted((s for s in spans if s not in names), key=lambda s: spans[s][0])
+    # Stages outside the class plan still take their pipeline place, not the end of the list.
+    order = sorted(set(names) | set(spans), key=lambda s: (STAGE_ORDER.index(s) if s in STAGE_ORDER else len(STAGE_ORDER),
+                                                          spans.get(s, [float("inf")])[0]))
     def normal(name):
         return stats.get(name) and [stats[name]["p50"], stats[name]["p90"]]
     ids = dict(zip(order, stage_ids(order, cls)))

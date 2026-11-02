@@ -662,6 +662,20 @@ class BuildTests(unittest.TestCase):
         rows = {b["name"]: b for b in host.job_progress(done, {}, now)["background"]}
         self.assertEqual((rows["early UI tests"]["status"], rows["early UI tests"]["result"]), ("failed", "fixed command failed: EACCES"))
         self.assertEqual(rows["rollback save"]["result"], "used")
+        # A running job compiles as soon as a compile step appears, before job_class's 30 s mark,
+        # and stages outside the class plan keep their pipeline place.
+        early = {"job_id": "early", "status": "running", "operation": "build_deploy", "started_at": now - 40,
+                 "phase_history": [{"phase": "building_api", "at": now - 40}],
+                 "execution_history": [{"phase": "dependency", "started_at": now - 39, "elapsed_seconds": 2}],
+                 "execution_observation": {"phase": "compile_test", "elapsed_seconds": 10}}
+        plan = {"build_deploy/artifacts-reused/tests-ran": {"stages": [{"stage": "run tests", "p50": 60, "p90": 90}], "wall": {}},
+                "build_deploy/compile/tests-ran": {"stages": [{"stage": "compile tests", "p50": 60, "p90": 90},
+                                                              {"stage": "run tests", "p50": 60, "p90": 90}], "wall": {}}}
+        value = host.job_progress(early, plan, now)
+        self.assertEqual(value["class"], "build_deploy/compile/tests-ran")
+        self.assertEqual([r["stage"] for r in value["finished_stages"] + value["running_stages"] + value["upcoming_stages"]],
+                         ["dependencies", "compile tests", "run tests"])
+        self.assertEqual([r["id"] for r in value["finished_stages"]], ["1"])
         # Reused artifacts: the test replay runs beside packaging.
         self.assertEqual(host.stage_ids(["run tests", "package release", "UI build and tests"], "build_deploy/artifacts-reused/tests-ran"), ["1a", "1b", "2"])
 

@@ -328,10 +328,14 @@ def status_line(progress):
         return "queued" + (" behind " + "; ".join(f"{a.get('task_id')} (session \"{a.get('session') or 'unknown'}\", job {a['job_id'][:8]}, {a.get('phase')})"
                                                    for a in ahead) if ahead else "")
     low, high = progress.get("remaining_seconds") or [0, 0]
-    left = f"; about {low / 60:.0f}-{high / 60:.0f} min left" if high else ""
+    left = f"; about {low / 60:.1f}-{high / 60:.1f} min left" if high else ""
     if len(running) > 1:
         return f"stages {'+'.join(str(s.get('id')) for s in running)}/{count} running: " + ", ".join(
             f"{s['stage']} {minutes(s.get('seconds'))}" for s in running) + left
+    if not running and progress.get("status") == "running":
+        # Started, but between stages (or before the first): name the last one that finished.
+        last = (progress.get("finished_stages") or [{}])[-1].get("stage")
+        return ("running, between stages after " + last if last else "running, starting its first stage") + left
     return (f"stage {progress.get('stage_id') or progress.get('stage_index')}/{count} {progress.get('stage')} "
             f"{minutes(progress.get('stage_seconds'))}, {progress.get('verdict')}{left}")
 

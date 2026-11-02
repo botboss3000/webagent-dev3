@@ -323,6 +323,10 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertIn('queued behind other-task (session "Fix login", job abcdef12, building_api)', out)
 
+    def test_status_line_between_stages_and_short_time_left(self):
+        between = self.progress(finished=[{"stage": "compile tests", "id": "2", "seconds": 60}], remaining_seconds=[20, 40])
+        self.assertEqual(client.status_line(between), "running, between stages after compile tests; about 0.3-0.7 min left")
+
     def test_tables_show_letters_legend_and_background(self):
         value = self.progress(finished=[{"stage": "run tests", "id": "3a", "seconds": 150, "normal": [120, 180]}],
                               running=[{"stage": "release build", "id": "3b", "seconds": 190, "normal": None}],
