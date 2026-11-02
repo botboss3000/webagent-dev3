@@ -1,4 +1,56 @@
 #!/usr/bin/env python3
+# ============================================================================================
+# SETUP GUIDE — for the person or coding agent (for example Claude Code) installing this file
+# ============================================================================================
+# What it is: the client for a WebAgent "bridge" model (Claude Bridge, OpenCode Bridge, Muse
+# Bridge). WebAgent queues each model call for this bridge; this script fetches it, runs it on
+# this computer with the matching local CLI harness, and posts the answer back. It never runs
+# WebAgent's tools itself: it only returns the model's reply and requested tool calls.
+#
+# Requirements:
+#   - Python 3.9+ (standard library only; nothing to pip install).
+#   - Claude Bridge: the `claude` CLI on PATH and signed in (`claude` once interactively, or
+#     `claude login`). Calls run as `claude -p` with no CLAUDE.md, settings, hooks, MCP or skills.
+#   - OpenCode Bridge: the `opencode` CLI installed and signed in.
+#   - Outbound HTTPS to the WebAgent server (default https://dev.webagent.live).
+#
+# Install:
+#   1. Make a folder for it, e.g.  mkdir -p ~/webagent-bridge/bin
+#      and save this file there:   ~/webagent-bridge/bin/harness-bridge.py
+#      The client keeps its state in ../work/harness-bridge/ next to that folder
+#      (here ~/webagent-bridge/work/harness-bridge/): link token, per-chat sessions, timing log.
+#   2. Give it the link token from the bridge model's "Link token" field in WebAgent (Models page
+#      -> the bridge model -> Generate link, then Save the model). One token = one running client.
+#      Either export HARNESS_BRIDGE_TOKEN=<token>, or write it to the token file:
+#        mkdir -p ~/webagent-bridge/work/harness-bridge
+#        printf '%s' '<token>' > ~/webagent-bridge/work/harness-bridge/link-token
+#        chmod 600 ~/webagent-bridge/work/harness-bridge/link-token
+#      Treat the token like a password: never print it, commit it or paste it into chats.
+#   3. Check the install:  python3 ~/webagent-bridge/bin/harness-bridge.py selftest
+#   4. Run it and keep it running (it long-polls forever; WebAgent shows the bridge offline
+#      within about a minute of it stopping):
+#        python3 ~/webagent-bridge/bin/harness-bridge.py auto
+#      For a permanent install use a user service, e.g. systemd (Linux):
+#        ~/.config/systemd/user/harness-bridge.service
+#          [Service]
+#          WorkingDirectory=%h/webagent-bridge
+#          ExecStart=/usr/bin/python3 -B %h/webagent-bridge/bin/harness-bridge.py auto
+#          Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+#          Environment=PYTHONUNBUFFERED=1
+#          Restart=always
+#          RestartSec=10
+#          [Install]
+#          WantedBy=default.target
+#        systemctl --user daemon-reload && systemctl --user enable --now harness-bridge.service
+#      On macOS use a launchd agent or run it in a persistent terminal/tmux session.
+#   5. Verify: send a message in WebAgent with the bridge model; the reply should arrive and
+#      `python3 harness-bridge.py stats` should count the call.
+#
+# Options: HARNESS_BRIDGE_URL=<origin> for another WebAgent server. To serve two bridges (for
+# example a Claude Bridge and an OpenCode Bridge with different tokens), run two copies, each in
+# its own folder so their work/harness-bridge/ state and token stay separate.
+# Updating: download the file again from the Models page and restart the client.
+# ============================================================================================
 """Harness bridge client: answer WebAgent v3 model calls for one bridge link token.
 
 Common to every bridge provider (Claude Bridge, OpenCode Bridge, Muse Bridge).

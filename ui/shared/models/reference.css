@@ -2040,7 +2040,8 @@ live/scheduled) */
 .ac-model-cfg-row { align-items: center; padding-top: 4px; padding-bottom: 4px; }
 /* display:block opts this label OUT of the shared `display:contents` stacked-row
    promotion — here the label is a fixed-width form column, not a title+desc. */
-.ac-model-cfg-row > .ac-ability-label { display: block; flex: 0 0 116px; }
+/* Narrow enough to leave the fields room; fits the longest label ("Display name") at 13px. */
+.ac-model-cfg-row > .ac-ability-label { display: block; flex: 0 0 92px; }
 .ac-model-cfg-control {
   flex: 1;
   display: flex;

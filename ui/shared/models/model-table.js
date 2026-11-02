@@ -598,9 +598,10 @@ export function mountModelTable(host, opts = {}) {
   bridgeClientRow.className = 'ac-ability-row ac-model-cfg-row ac-row-static';
   bridgeClientRow.hidden = true;
   bridgeClientRow.innerHTML = '<span class="ac-ability-label"><span class="ac-ability-name">Bridge client</span></span>'
-    + `<span class="ac-model-cfg-control"><a class="ac-btn ac-btn-ghost ac-btn-sm" download="harness-bridge.py" href="${esc(new URL('harness-bridge.py', import.meta.url).href)}">Download</a>`
+    + `<span class="ac-model-cfg-control"><a class="ac-btn ac-btn-ghost ac-btn-sm" download="harness-bridge.py" href="${esc(new URL('harness-bridge.py', import.meta.url).href)}">Download harness-bridge.py</a>`
     + '<span class="ac-hint" style="margin:0;">On the computer that answers, run <code>python3 harness-bridge.py auto</code> with this link token in <code>HARNESS_BRIDGE_TOKEN</code>. One token links one client.</span></span>';
-  table.appendChild(bridgeClientRow);
+  // Above the link token: download the client first, then generate the token it uses.
+  table.insertBefore(bridgeClientRow, keyRow);
 
   // Saved-key controls get their own row so the API key input keeps the full width.
   const savedKeyRow = document.createElement('div');
@@ -798,7 +799,7 @@ export function mountModelTable(host, opts = {}) {
   // MODEL-ALIASES: reuse the live configurator (including credentials and model
   // validation), never clone its fields or handlers. Restore it before any row
   // rebuild so a destroyed detail panel cannot take the form with it.
-  const configuratorRows = [provRow, urlRow, keyRow, bridgeClientRow, savedKeyRow, subscriptionRow, displayNameRow, modelRow];
+  const configuratorRows = [provRow, urlRow, bridgeClientRow, keyRow, savedKeyRow, subscriptionRow, displayNameRow, modelRow];
   let aliasTarget = null;
   let aliasForm = null;
   let aliasTrigger = null;
@@ -1406,6 +1407,8 @@ export function mountModelTable(host, opts = {}) {
     // A bridge's base URL is fixed by its provider; its key is the generated link token.
     const bridge = isBridgeProvider();
     bridgeClientRow.hidden = !bridge;
+    // The read-only and catalog paths above hide it with display:none too; restore it here.
+    bridgeClientRow.style.display = bridge ? '' : 'none';
     keyRow.querySelector('.ac-ability-name').textContent = bridge ? 'Link token' : 'API Key';
     urlRow.style.display = subscription || bridge ? 'none' : '';
     keyRow.style.display = subscription ? 'none' : '';
