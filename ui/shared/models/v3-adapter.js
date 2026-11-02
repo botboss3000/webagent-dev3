@@ -76,7 +76,7 @@ export function createModelAdapter(request, agentId, onAssignment) {
     if(!data.can_manage)throw Error('Agent model management is read-only');
     for(const p of providers){
       if(p.provider==='webagent_catalog'&&!catalog.entries[p.entry_id]){
-        const choices=await accountChoices();const choice=[...(choices.available_platform_models||[]),...(choices.entries||[])].find(c=>c.id===p.entry_id);
+        const choices=await accountChoices();const choice=(choices.available_platform_models||[]).find(c=>c.id===p.entry_id);
         if(!choice)throw Error('Model choice is no longer available');
         const alias=p.display_name||choices.aliases?.[choice.id]||choice.display_name;
         p.entry_id=await adopt({origin:choice.origin,entry_id:choice.id},alias);
@@ -162,8 +162,9 @@ export function createModelAdapter(request, agentId, onAssignment) {
         preview:true,preview_message:'Current DeepSeek models. Enter an API key to confirm account access.',
       };
       if(provider!=='webagent_catalog')return request('/models/discovery','POST',{provider,api_key});
+      // The catalog provider is the platform roster only; personal BYO models are picked through their own providers.
       const choices=await accountChoices();
-      return {models:[...(choices.available_platform_models||[]),...(choices.entries||[])].map(c=>({
+      return {models:(choices.available_platform_models||[]).map(c=>({
         id:c.id,display_name:choices.aliases?.[c.id]||c.display_name,name:choices.aliases?.[c.id]||c.display_name,catalog_name:c.display_name,
         ...catalogCapabilityFlags(c.capabilities,c.transport),origin:c.origin}))};
     },
