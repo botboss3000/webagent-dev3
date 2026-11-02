@@ -2043,6 +2043,11 @@ live/scheduled) */
    promotion — here the label is a fixed-width form column, not a title+desc. */
 /* Narrow enough to leave the fields room; fits the longest label ("Display name") at 13px. */
 .ac-model-cfg-row > .ac-ability-label { display: block; flex: 0 0 92px; }
+/* Rows with several controls or help text put them under the heading at every width, so a
+   phone keeps full-width fields instead of squeezing them beside the label column. */
+.ac-model-cfg-row.ac-model-cfg-stacked > .ac-ability-label { flex-basis: 100%; }
+.ac-model-cfg-stacked > .ac-model-cfg-control { flex: 1 1 100%; flex-wrap: wrap; }
+.ac-model-cfg-stacked > .ac-model-cfg-control > .ac-hint { flex: 1 1 100%; overflow-wrap: anywhere; }
 .ac-model-cfg-control {
   flex: 1;
   display: flex;

@@ -552,7 +552,7 @@ export function mountModelTable(host, opts = {}) {
 
   // API Key row
   const keyRow = document.createElement('div');
-  keyRow.className = 'ac-ability-row ac-model-cfg-row ac-row-static';
+  keyRow.className = 'ac-ability-row ac-model-cfg-row ac-model-cfg-stacked ac-row-static';
   keyRow.innerHTML = `<span class="ac-ability-label"><span class="ac-ability-name">API Key</span></span>`;
   const keyCtrl = document.createElement('span');
   keyCtrl.className = 'ac-model-cfg-control';
@@ -595,17 +595,17 @@ export function mountModelTable(host, opts = {}) {
 
   // Bridge providers: the common harness bridge client, served beside this module, answers the calls.
   const bridgeClientRow = document.createElement('div');
-  bridgeClientRow.className = 'ac-ability-row ac-model-cfg-row ac-row-static';
+  bridgeClientRow.className = 'ac-ability-row ac-model-cfg-row ac-model-cfg-stacked ac-row-static';
   bridgeClientRow.hidden = true;
   bridgeClientRow.innerHTML = '<span class="ac-ability-label"><span class="ac-ability-name">Bridge client</span></span>'
-    + `<span class="ac-model-cfg-control"><a class="ac-btn ac-btn-ghost ac-btn-sm" download="harness-bridge.py" href="${esc(new URL('harness-bridge.py', import.meta.url).href)}">Download harness-bridge.py</a>`
+    + `<span class="ac-model-cfg-control"><a class="ac-btn ac-btn-ghost ac-btn-sm" style="display:inline-flex;align-items:center;gap:6px;" download="harness-bridge.py" title="Download the bridge client" href="${esc(new URL('harness-bridge.py', import.meta.url).href)}">${icon('download', { size: '16px' })}<span>harness-bridge.py</span></a>`
     + '<span class="ac-hint" style="margin:0;">On the computer that answers, run <code>python3 harness-bridge.py auto</code> with this link token in <code>HARNESS_BRIDGE_TOKEN</code>. One token links one client.</span></span>';
   // Above the link token: download the client first, then generate the token it uses.
   table.insertBefore(bridgeClientRow, keyRow);
 
   // Saved-key controls get their own row so the API key input keeps the full width.
   const savedKeyRow = document.createElement('div');
-  savedKeyRow.className = 'ac-ability-row ac-model-cfg-row ac-row-static';
+  savedKeyRow.className = 'ac-ability-row ac-model-cfg-row ac-model-cfg-stacked ac-row-static';
   savedKeyRow.innerHTML = `<span class="ac-ability-label"><span class="ac-ability-name">Saved key</span></span>`;
   const savedKeyCtrl = document.createElement('span');
   savedKeyCtrl.className = 'ac-model-cfg-control';
