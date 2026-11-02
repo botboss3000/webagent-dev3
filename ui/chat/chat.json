@@ -933,6 +933,14 @@
           "right": [
             "new_session"
           ]
+        },
+        {
+          "_instructions": "left: Left row zone: ordered control identifiers, or a composer zone object. center: Center row zone: ordered control identifiers, or a composer zone object. right: Right row zone: ordered control identifiers, or a composer zone object.",
+          "center": [
+            "sub_agent_tabs"
+          ],
+          "left": [],
+          "right": []
         }
       ]
     },
@@ -1073,6 +1081,14 @@
           "right": [
             "new_session"
           ]
+        },
+        {
+          "_instructions": "left: Left row zone: ordered control identifiers, or a composer zone object. center: Center row zone: ordered control identifiers, or a composer zone object. right: Right row zone: ordered control identifiers, or a composer zone object.",
+          "center": [
+            "sub_agent_tabs"
+          ],
+          "left": [],
+          "right": []
         }
       ]
     },
@@ -1186,6 +1202,13 @@
           "right": [
             "new_session"
           ]
+        },
+        {
+          "center": [
+            "sub_agent_tabs"
+          ],
+          "left": [],
+          "right": []
         }
       ]
     },
