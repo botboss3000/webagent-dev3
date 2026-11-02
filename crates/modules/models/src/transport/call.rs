@@ -42,8 +42,15 @@ pub(super) struct SubscriptionCredentials<'a> {
 
 enum PreparedRequest<'a> {
     Subscription(SubscriptionRequest<'a>),
-    Compatible { body: Value, endpoint: &'static str },
-    Bridge { body: Value, session: &'a str },
+    Compatible {
+        body: Value,
+        endpoint: &'static str,
+    },
+    Bridge {
+        body: Value,
+        session: &'a str,
+        provider: ProviderId,
+    },
 }
 
 enum ReadyTransport<'a> {
@@ -56,6 +63,7 @@ enum ReadyTransport<'a> {
     Bridge {
         body: Value,
         session: &'a str,
+        provider: ProviderId,
         link: &'a str,
     },
 }
@@ -263,6 +271,7 @@ impl<'a> CallDraft<'a> {
                 PreparedRequest::Bridge {
                     body,
                     session: self.session,
+                    provider: self.selection.provider,
                 }
             }
             webagent_provider_contracts::MaterializedV1::ChatCompletions { messages, tools } => {
@@ -351,9 +360,14 @@ impl<'a> ValidatedCall<'a> {
                 endpoint,
                 api_key: required(tokens, "api_key")?,
             },
-            PreparedRequest::Bridge { body, session } => ReadyTransport::Bridge {
+            PreparedRequest::Bridge {
                 body,
                 session,
+                provider,
+            } => ReadyTransport::Bridge {
+                body,
+                session,
+                provider,
                 link: required(tokens, "api_key")?,
             },
         };
@@ -385,6 +399,7 @@ impl Provider {
             ReadyTransport::Bridge {
                 body,
                 session,
+                provider,
                 link,
             } => {
                 let queue = self.bridge.as_ref().ok_or_else(|| {
@@ -398,6 +413,7 @@ impl Provider {
                     .exchange(super::BridgeCall {
                         link: link.to_owned(),
                         session: session.to_owned(),
+                        provider,
                         body,
                         cancel,
                     })

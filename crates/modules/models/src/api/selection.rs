@@ -716,14 +716,11 @@ pub async fn connection_key<C: RuntimeStorage>(
     app.store
         .put(&reference, &json!({"api_key":body.api_key}))
         .await?;
-    // The bridge client endpoints admit only tokens saved on a bridge connection.
+    // The harness bridge client endpoints admit only tokens saved on a bridge connection.
     if connection.transport.provider_id().is_bridge() {
         app.store
             .put(
-                &format!(
-                    "claude_bridge_link:{}",
-                    crate::transport::bridge_link_id(&body.api_key)
-                ),
+                &crate::transport::bridge_link_key(&body.api_key),
                 &json!({"owner_id":caller.user_id}),
             )
             .await?;

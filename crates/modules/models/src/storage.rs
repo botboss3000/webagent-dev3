@@ -21,6 +21,11 @@ pub trait RuntimeStorage: RecordCodec + Clone + Send + Sync + 'static {
         &'a self,
         agent: &'a str,
     ) -> impl Future<Output = Result<SqlitePool>> + Send + 'a;
+    /// The named account's own database.
+    fn user_pool<'a>(
+        &'a self,
+        user: &'a str,
+    ) -> impl Future<Output = Result<SqlitePool>> + Send + 'a;
 }
 pub struct Repository<'a, C: RuntimeStorage> {
     pub(crate) root: &'a Path,
@@ -92,6 +97,9 @@ impl<C: RuntimeStorage> Repository<'_, C> {
     }
     pub(crate) async fn for_agent(&self, agent: &str) -> Result<SqlitePool> {
         self.storage.agent_pool(agent).await
+    }
+    pub(crate) async fn for_user(&self, user: &str) -> Result<SqlitePool> {
+        self.storage.user_pool(user).await
     }
     pub(crate) async fn account_by_id(&self, user: &str) -> Result<Option<Value>> {
         self.access().account_by_id(user).await

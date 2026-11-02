@@ -23,12 +23,17 @@ pub enum ProviderId {
     ClaudeBridge,
     /// A linked OpenCode harness answers each call; no network endpoint.
     OpencodeBridge,
+    /// A linked Muse harness answers each call; no network endpoint.
+    MuseBridge,
 }
 
 impl ProviderId {
-    /// A linked client answers these providers' calls through the host bridge queue.
+    /// A linked client answers these providers' calls through the host's harness bridge queue.
     pub fn is_bridge(self) -> bool {
-        matches!(self, Self::ClaudeBridge | Self::OpencodeBridge)
+        matches!(
+            self,
+            Self::ClaudeBridge | Self::OpencodeBridge | Self::MuseBridge
+        )
     }
     /// Installation-owned endpoints only. Client catalog payloads cannot override these.
     pub fn chat_endpoint(self) -> Option<&'static str> {
@@ -36,7 +41,8 @@ impl ProviderId {
             Self::OpenaiSubscription
             | Self::Typesafe
             | Self::ClaudeBridge
-            | Self::OpencodeBridge => None,
+            | Self::OpencodeBridge
+            | Self::MuseBridge => None,
             Self::Deepseek => Some("https://api.deepseek.com/chat/completions"),
             Self::OpenaiApi => Some("https://api.openai.com/v1/chat/completions"),
             Self::Openrouter => Some("https://openrouter.ai/api/v1/chat/completions"),

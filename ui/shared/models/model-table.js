@@ -584,12 +584,23 @@ export function mountModelTable(host, opts = {}) {
   generateLinkBtn.hidden = true;
   generateLinkBtn.addEventListener('click', () => {
     const bytes = crypto.getRandomValues(new Uint8Array(32));
-    keyInput.value = 'cbl_' + Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    // The harness name (bridge://claude -> claude) only labels the token; WebAgent routes by provider.
+    const harness = (S.presets[S.currentProvider]?.base_url || '').replace('bridge://', '').replace(/[^a-z0-9]/gi, '');
+    keyInput.value = `hbl_${harness || 'bridge'}_` + Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
     keyInput.dispatchEvent(new Event('input', { bubbles: true }));
   });
   keyCtrl.append(keyInput, generateLinkBtn, keyCheck);
   keyRow.appendChild(keyCtrl);
   table.appendChild(keyRow);
+
+  // Bridge providers: the common harness bridge client, served beside this module, answers the calls.
+  const bridgeClientRow = document.createElement('div');
+  bridgeClientRow.className = 'ac-ability-row ac-model-cfg-row ac-row-static';
+  bridgeClientRow.hidden = true;
+  bridgeClientRow.innerHTML = '<span class="ac-ability-label"><span class="ac-ability-name">Bridge client</span></span>'
+    + `<span class="ac-model-cfg-control"><a class="ac-btn ac-btn-ghost ac-btn-sm" download="harness-bridge.py" href="${esc(new URL('harness-bridge.py', import.meta.url).href)}">Download</a>`
+    + '<span class="ac-hint" style="margin:0;">On the computer that answers, run <code>python3 harness-bridge.py auto</code> with this link token in <code>HARNESS_BRIDGE_TOKEN</code>. One token links one client.</span></span>';
+  table.appendChild(bridgeClientRow);
 
   // Saved-key controls get their own row so the API key input keeps the full width.
   const savedKeyRow = document.createElement('div');
@@ -787,7 +798,7 @@ export function mountModelTable(host, opts = {}) {
   // MODEL-ALIASES: reuse the live configurator (including credentials and model
   // validation), never clone its fields or handlers. Restore it before any row
   // rebuild so a destroyed detail panel cannot take the form with it.
-  const configuratorRows = [provRow, urlRow, keyRow, savedKeyRow, subscriptionRow, displayNameRow, modelRow];
+  const configuratorRows = [provRow, urlRow, keyRow, bridgeClientRow, savedKeyRow, subscriptionRow, displayNameRow, modelRow];
   let aliasTarget = null;
   let aliasForm = null;
   let aliasTrigger = null;
@@ -1227,6 +1238,10 @@ export function mountModelTable(host, opts = {}) {
   function isSubscriptionProvider() {
     return S.currentProvider === 'openai_subscription';
   }
+  // Every bridge provider (Claude, OpenCode, Muse, ...) shares one form: its preset base URL is bridge://<harness>.
+  function isBridgeProvider() {
+    return (S.presets[S.currentProvider]?.base_url || '').startsWith('bridge://');
+  }
   async function subscriptionRequest(path, entryId = '', options = {}) {
     const joiner = path.includes('?') ? '&' : '?';
     const rowPath = entryId
@@ -1366,14 +1381,14 @@ export function mountModelTable(host, opts = {}) {
     // appear in the user's Available models flow, regardless of provider.
     if (userCatalog) freeBtn.style.display = 'none';
     if (userCatalog && listProvider()) {
-      [urlRow, keyRow, savedKeyRow, subscriptionRow].forEach(row => { row.hidden = true; row.style.display = 'none'; });
+      [urlRow, keyRow, bridgeClientRow, savedKeyRow, subscriptionRow].forEach(row => { row.hidden = true; row.style.display = 'none'; });
       return;
     }
     if (!userCatalog) freeBtn.style.display = '';
     if (catalogReadOnly) {
       // This helper is also called after the initial catalog hide pass. Keep it
       // from restoring Base URL/API Key while reconciling subscription state.
-      [urlRow, keyRow, savedKeyRow, subscriptionRow].forEach(row => { row.hidden = true; row.style.display = 'none'; });
+      [urlRow, keyRow, bridgeClientRow, savedKeyRow, subscriptionRow].forEach(row => { row.hidden = true; row.style.display = 'none'; });
       return;
     }
     const subscription = isSubscriptionProvider();
@@ -1383,11 +1398,16 @@ export function mountModelTable(host, opts = {}) {
     [credentialSelect, credentialLabelInput, saveCredentialBtn, loadCredentialBtn, credentialSaveCheck].forEach(control => credentialHost.appendChild(control));
     // Subscription credentials are saved under a fixed name; only API keys take a display name.
     credentialLabelInput.hidden = subscription;
-    const vaultName = subscriptionScope === 'agent' ? "this agent's" : subscriptionScope === 'platform' ? "the app's" : 'your personal';
+    // API keys and bridge links are saved to the user's own vault and load on any agent they manage.
+    const vaultName = !subscription ? 'your personal' : subscriptionScope === 'agent' ? "this agent's" : subscriptionScope === 'platform' ? "the app's" : 'your personal';
     saveCredentialBtn.title = `Save this validated credential to ${vaultName} vault`;
     updateCredentialSaveState();
     [urlRow, keyRow, savedKeyRow, subscriptionRow].forEach(row => { row.hidden = false; });
-    urlRow.style.display = subscription ? 'none' : '';
+    // A bridge's base URL is fixed by its provider; its key is the generated link token.
+    const bridge = isBridgeProvider();
+    bridgeClientRow.hidden = !bridge;
+    keyRow.querySelector('.ac-ability-name').textContent = bridge ? 'Link token' : 'API Key';
+    urlRow.style.display = subscription || bridge ? 'none' : '';
     keyRow.style.display = subscription ? 'none' : '';
     savedKeyRow.style.display = subscription ? 'none' : '';
     subscriptionRow.style.display = subscription ? '' : 'none';
@@ -3364,7 +3384,7 @@ export function mountModelTable(host, opts = {}) {
     syncProviderField();
     const saved = S.providerConfigs[S.currentProvider];
     urlInput.value = (saved && saved.base_url) || S.presets[S.currentProvider]?.base_url || '';
-    const bridge = S.currentProvider === 'claude_bridge' || S.currentProvider === 'opencode_bridge';
+    const bridge = isBridgeProvider();
     keyInput.value = ''; keyInput.placeholder = bridge ? 'Generate a link token' : 'sk-...';
     generateLinkBtn.hidden = !bridge;
     opencodeNoteRow.hidden = S.currentProvider !== 'opencode_bridge';

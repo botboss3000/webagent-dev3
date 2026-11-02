@@ -102,8 +102,6 @@ mod context_compaction;
 use webagent_files::attachments;
 #[path = "../crates/modules/models/host/account_catalog.rs"]
 mod account_catalog;
-#[path = "../crates/modules/models/host/claude_bridge.rs"]
-mod claude_bridge;
 #[path = "engine/context/assembly.rs"]
 mod context_assembly;
 #[path = "engine/context/assets.rs"]
@@ -112,6 +110,8 @@ mod context_assets;
 mod context_input;
 #[path = "gates/protocol.rs"]
 mod gate_protocol;
+#[path = "../crates/modules/models/host/harness_bridge.rs"]
+mod harness_bridge;
 #[path = "engine/context/memory.rs"]
 mod memory;
 #[path = "../crates/modules/models/host/selection.rs"]

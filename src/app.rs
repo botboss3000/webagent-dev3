@@ -962,7 +962,7 @@ async fn run_process() -> Result<()> {
         .unwrap_or_else(|_| "/opt/v3/plugins/abilities".to_owned());
     let catalog = abilities::Catalog::load(&PathBuf::from(abilities_root))?;
     store.ensure_agent_connections(&catalog.ids()).await?;
-    let bridge = Arc::new(claude_bridge::Queue(store.clone()));
+    let bridge = Arc::new(harness_bridge::Queue(store.clone()));
     let app = App {
         runtime: Arc::new(RwLock::new(runtime)),
         runtime_path,

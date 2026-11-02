@@ -3364,6 +3364,12 @@ impl webagent_models::storage::RuntimeStorage for Store {
             Ok(self.for_agent(agent).await?.agent_pool.clone())
         }
     }
+    fn user_pool<'a>(
+        &'a self,
+        user: &'a str,
+    ) -> impl std::future::Future<Output = Result<SqlitePool>> + Send + 'a {
+        async move { Ok(self.for_user(user).await?.pool.clone()) }
+    }
 }
 impl Store {
     pub(crate) fn models_repository(&self) -> webagent_models::storage::Repository<'_, Self> {

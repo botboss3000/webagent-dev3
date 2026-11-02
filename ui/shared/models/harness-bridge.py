@@ -1,0 +1,497 @@
+#!/usr/bin/env python3
+"""Harness bridge client: answer WebAgent v3 model calls for one bridge link token.
+
+Common to every bridge provider (Claude Bridge, OpenCode Bridge, Muse Bridge).
+Download it from a bridge model's settings on the Models page and run it on the
+computer that answers the calls (Python 3 standard library only). One link token
+links one running client. WebAgent sends each call's full chat-completions body
+and the bridge provider it is for; this client saves it, works out what is new
+since the previous call of the same WebAgent chat, and runs that provider's
+harness (HARNESSES below).
+
+    next  [--session ID]          wait for the next call; save it, print the delta
+    reply CALL_ID FILE|-          post {"content": str, "tool_calls": [{"name", "arguments": {..}}]}
+    auto  [--session ID]          answer every call with its provider's harness, resumed per WebAgent chat:
+                                  claude_bridge: headless `claude -p` (needs `claude` signed in);
+                                  bare: no CLAUDE.md, settings, hooks, memory, MCP, skills.
+                                  opencode_bridge: `opencode run` (needs `opencode` signed in);
+                                  its tools stay listed (free models require it) but every use is rejected.
+                                  muse_bridge: no harness yet; add one to HARNESSES.
+    stats [HOURS]                 summarize auto-mode call timing (work/harness-bridge/timing.jsonl), default 24 h
+
+Files live in ../work/harness-bridge/ relative to this script's folder (below: work/harness-bridge/).
+Link token: $HARNESS_BRIDGE_TOKEN or work/harness-bridge/link-token (mode 0600).
+Server: $HARNESS_BRIDGE_URL (default https://dev.webagent.live).
+Per-chat files: work/harness-bridge/sessions/<webagent-session>/.
+"""
+import base64, hashlib, json, os, re, shutil, subprocess, sys, tempfile, time, urllib.error, urllib.request, uuid
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent / "work" / "harness-bridge"
+SESSIONS = ROOT / "sessions"
+TIMING = ROOT / "timing.jsonl"
+URL = os.environ.get("HARNESS_BRIDGE_URL", "https://dev.webagent.live").rstrip("/")
+PREVIEW = 2000  # characters of a long message shown inline; the full text stays in the saved request
+REPLY_SCHEMA = {"type": "object", "required": ["content", "tool_calls"], "additionalProperties": False, "properties": {
+    "content": {"type": "string"},
+    "tool_calls": {"type": "array", "items": {"type": "object", "required": ["name", "arguments"],
+        "additionalProperties": False, "properties": {"name": {"type": "string"}, "arguments": {"type": "object"}}}}}}
+# As close to a plain API call as subscription sign-in allows (--bare needs an API key): no
+# CLAUDE.md or settings files, hooks, auto-memory, MCP servers, skills or Chrome. The CLI still
+# adds the account email, working directory, date and model identity.
+BARE = ["--setting-sources=", "--settings", '{"autoMemoryEnabled":false}', "--strict-mcp-config",
+        "--disable-slash-commands", "--no-chrome"]
+AUTO_PROMPT = ("You are the language model behind a WebAgent agent. Act exactly as that model: follow the "
+    "agent instructions and conversation you are given and decide the next assistant turn. You cannot run "
+    "anything yourself; to use one of the listed WebAgent tools, return it in tool_calls with JSON arguments "
+    "matching its schema, and WebAgent runs it and sends you the result. Images are saved as files you may Read. "
+    "Return only the structured output: content (assistant text, may be empty with tool calls) and tool_calls.")
+OPENCODE_PROMPT = ("You are the language model behind a WebAgent agent. Act exactly as that model: follow the "
+    "agent instructions and conversation you are given and decide the next assistant turn. WebAgent's tools are "
+    "your webagent_* tools (webagent_<name> for a tool listed as <name>). Calling one hands it to WebAgent, which "
+    "runs it and sends the result in your next message, so after your tool calls end your turn without waiting. "
+    "Never use your other tools: every use is rejected, and this computer is not the agent's workspace.")
+# The installer puts opencode in ~/.opencode/bin, which a systemd PATH usually lacks.
+OPENCODE = shutil.which("opencode") or str(Path.home() / ".opencode" / "bin" / "opencode")
+OPENCODE_HOME = Path.home() / ".cache" / "opencode-bridge"
+MCP_PREFIX = "webagent_"
+
+
+def opencode_config(work):
+    """Free OpenCode models answer only while the harness lists its own tools, so they stay listed but "ask"
+    makes the headless run reject every use (never pass --auto). WebAgent's tools come from this script's
+    MCP stub, which records each call for the reply instead of running it."""
+    return json.dumps({
+        "mcp": {"webagent": {"type": "local", "enabled": True,
+                             "command": [sys.executable, "-B", str(Path(__file__).resolve()), "mcp", str(work)]}},
+        "agent": {"webagent-bridge": {"mode": "primary", "prompt": OPENCODE_PROMPT,
+                                      "permission": {"*": "ask", MCP_PREFIX + "*": "allow"}}}})
+
+
+def token():
+    value = os.environ.get("HARNESS_BRIDGE_TOKEN") or (ROOT / "link-token").read_text().strip()
+    if not value:
+        sys.exit("no link token: set HARNESS_BRIDGE_TOKEN or write work/harness-bridge/link-token")
+    return value
+
+
+class Transient(Exception):
+    """A gateway or network failure worth retrying."""
+
+
+def post(path, body, timeout=60):
+    request = urllib.request.Request(URL + path, json.dumps(body).encode(), method="POST", headers={
+        "Authorization": "Bearer " + token(), "Content-Type": "application/json", "User-Agent": "harness-bridge/1"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as error:
+        if error.code in (502, 503, 504):
+            raise Transient(f"HTTP {error.code}")
+        sys.exit(f"{path}: HTTP {error.code} {error.read()[:300].decode(errors='replace')}")
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+        raise Transient(str(error))
+
+
+def fetch(session=None):
+    """Long-poll until a call arrives; ride out gateway restarts and network blips."""
+    while True:
+        try:
+            call = post("/api/v3/harness-bridge/next", {"session": session} if session else {}, timeout=90)["call"]
+        except Transient as error:
+            print(f"poll failed ({error}); retrying in 5 s", file=sys.stderr)
+            time.sleep(5)
+            continue
+        if call:
+            call["fetched_at"] = time.time()
+            return call
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def text_of(content, folder):
+    """Render message content; images become saved files."""
+    if isinstance(content, str) or content is None:
+        return content or ""
+    parts = []
+    for part in content:
+        if part.get("type") == "text":
+            parts.append(part.get("text", ""))
+        elif part.get("type") == "image_url":
+            url = part["image_url"]["url"] if isinstance(part.get("image_url"), dict) else part.get("image_url", "")
+            if url.startswith("data:") and ";base64," in url:
+                kind, data = url[5:].split(";base64,", 1)
+                raw = base64.b64decode(data)
+                path = folder / f"image-{hashlib.sha256(raw).hexdigest()[:12]}.{kind.split('/')[-1]}"
+                path.write_bytes(raw)
+                parts.append(f"[image: {path}]")
+            else:
+                parts.append(f"[image: {url[:200]}]")
+        else:
+            parts.append(json.dumps(part)[:PREVIEW])
+    return "\n".join(parts)
+
+
+def render(message, folder, full=False):
+    role = message.get("role")
+    body = text_of(message.get("content"), folder)
+    if not full and len(body) > PREVIEW:
+        body = body[:PREVIEW] + f"\n… [{len(body) - PREVIEW} more characters in the saved request]"
+    calls = "".join(f"\n  → {c['function']['name']}({c['function']['arguments']})" for c in message.get("tool_calls") or [])
+    label = f"tool result {message.get('tool_call_id', '')}" if role == "tool" else role
+    return f"[{label}]\n{body}{calls}"
+
+
+def tools_of(body):
+    return {t["function"]["name"]: t for t in body.get("tools") or [] if t.get("type") == "function"}
+
+
+def split(body):
+    """Leading system/developer messages are the instructions; the rest is the conversation."""
+    messages = body.get("messages") or []
+    count = next((i for i, m in enumerate(messages) if m.get("role") not in ("system", "developer")), len(messages))
+    return messages[:count], messages[count:]
+
+
+def remember(call):
+    """Save the full request and work out what is new for this chat."""
+    folder = SESSIONS / (call.get("session") or "unknown")
+    folder.mkdir(parents=True, exist_ok=True)
+    state_path = folder / "state.json"
+    state = json.loads(state_path.read_text()) if state_path.exists() else {}
+    body = call["body"]
+    (folder / "requests").mkdir(exist_ok=True)
+    count = len(list((folder / "requests").iterdir())) + 1
+    (folder / "requests" / f"{count:04d}-{call['id']}.json").write_text(json.dumps(call, indent=1))
+    instructions, conversation = split(body)
+    tools = tools_of(body)
+    seen = state.get("conversation", [])
+    append = len(seen) <= len(conversation) and all(digest(m) == d for m, d in zip(conversation, seen))
+    delta = {
+        "folder": folder, "count": count,
+        "instructions": None if digest(instructions) == state.get("instructions") else instructions,
+        "tools_added": sorted(set(tools) - set(state.get("tools", []))),
+        "tools_removed": sorted(set(state.get("tools", [])) - set(tools)),
+        "tools_changed": digest(body.get("tools")) != state.get("tools_digest"),
+        "rewritten": bool(seen) and not append,
+        "new": conversation[len(seen):] if append else conversation,
+    }
+    state.update(instructions=digest(instructions), tools=sorted(tools), tools_digest=digest(body.get("tools")),
+                 conversation=[digest(m) for m in conversation])
+    return folder, state, delta
+
+
+def save_state(folder, state):
+    (folder / "state.json").write_text(json.dumps(state, indent=1))
+
+
+def record(call, state, delta, started, ended, output=None):
+    """Append one answered call's timing. gap_s runs from this chat's previous reply to this fetch: WebAgent's
+    own work between turns plus both 1 s polls (WebAgent noticing the reply, this client picking up the call)."""
+    now = time.time()
+    last = state.get("replied_at")
+    entry = {"at": round(now, 3), "call": call["id"], "chat": call.get("session"), "model": call["body"].get("model"),
+             # A new user message starts a turn after idle time, not a between-turns gap.
+             "user_turn": any(m.get("role") == "user" for m in delta["new"]),
+             "gap_s": round(call["fetched_at"] - last, 3) if last else None,
+             "prep_s": round(started - call["fetched_at"], 3), "cli_s": round(ended - started, 3),
+             "reply_s": round(now - ended, 3)}
+    if output:
+        # duration_api_ms accumulates over a resumed CLI session, so only duration_ms is per call.
+        entry["cli_inner_s"] = output.get("duration_ms", 0) / 1000
+    with open(TIMING, "a") as out:
+        out.write(json.dumps(entry) + "\n")
+    state["replied_at"] = now
+
+
+def cmd_stats(hours):
+    cutoff = time.time() - hours * 3600
+    rows = [json.loads(line) for line in TIMING.read_text().splitlines()] if TIMING.exists() else []
+    rows = [r for r in rows if r["at"] >= cutoff]
+    turns = [r for r in rows if not r["user_turn"] and r["gap_s"] is not None]
+    print(f"{len(rows)} calls in the last {hours:g} h, {len(turns)} between turns of a run")
+    metrics = [("gap_s", turns, "reply -> next call fetched (WebAgent work + both polls)"),
+               ("prep_s", rows, "fetched -> CLI started (saving the request)"),
+               ("startup_s", [dict(r, startup_s=r["cli_s"] - r["cli_inner_s"]) for r in rows if "cli_inner_s" in r],
+                "CLI process start/resume outside its own timer"),
+               ("cli_s", rows, "whole CLI run"),
+               ("reply_s", rows, "CLI done -> reply accepted")]
+    for key, subset, label in metrics:
+        values = sorted(r[key] for r in subset if r.get(key) is not None)
+        if values:
+            pick = lambda q: values[min(len(values) - 1, int(q * len(values)))]
+            print(f"{key:10} p50 {pick(.5):7.2f}s  p90 {pick(.9):7.2f}s  total {sum(values):8.1f}s  {label}")
+
+
+def cmd_next(session):
+    call = fetch(session)
+    folder, state, delta = remember(call)
+    save_state(folder, state)
+    body = call["body"]
+    print(f"CALL {call['id']}  chat {call.get('session')}  model {body.get('model')}  "
+          f"effort {body.get('reasoning_effort', 'default')}  request #{delta['count']}")
+    print(f"full request: {folder}/requests/")
+    if delta["instructions"] is not None:
+        print("\n=== instructions" + (" (changed)" if delta["count"] > 1 else ""))
+        for message in delta["instructions"]:
+            print(render(message, folder, full=True))
+    if delta["tools_added"] or delta["tools_removed"]:
+        print(f"\n=== tools  +{delta['tools_added']}  -{delta['tools_removed']}")
+    elif delta["tools_changed"]:
+        print("\n=== tool schemas changed (same names)")
+    print("\n=== context rewritten: full conversation" if delta["rewritten"] else "\n=== new messages")
+    for message in delta["new"]:
+        print(render(message, folder))
+
+
+def parse_reply(raw, body):
+    """Validate a reply against the call's tools and build the chat-completions message."""
+    reply = json.loads(raw)
+    tools = tools_of(body)
+    calls = []
+    for item in reply.get("tool_calls") or []:
+        name, arguments = item["name"], item["arguments"]
+        if name not in tools:
+            sys.exit(f"unknown tool {name!r}; offered: {sorted(tools)}")
+        if isinstance(arguments, str):
+            arguments = json.loads(arguments)
+        calls.append({"id": "call_" + uuid.uuid4().hex[:24], "type": "function",
+                      "function": {"name": name, "arguments": json.dumps(arguments)}})
+    message = {"role": "assistant", "content": reply.get("content") or ""}
+    if calls:
+        message["tool_calls"] = calls
+    return message
+
+
+def find_call(call_id):
+    for path in SESSIONS.glob(f"*/requests/*-{call_id}.json"):
+        return json.loads(path.read_text())
+    sys.exit(f"call {call_id} was not fetched by this client")
+
+
+def cmd_reply(call_id, source):
+    raw = sys.stdin.read() if source == "-" else Path(source).read_text()
+    call = find_call(call_id)
+    print(post("/api/v3/harness-bridge/reply", {"id": call_id, "message": parse_reply(raw, call["body"])}))
+
+
+def prompt_for(call, delta, fresh):
+    """The text the headless session sees: everything on a fresh session, otherwise only what is new."""
+    folder, body = delta["folder"], call["body"]
+    lines = []
+    if fresh:
+        instructions, conversation = split(body)
+        lines.append("## Agent instructions\n" + "\n\n".join(text_of(m.get("content"), folder) for m in instructions))
+        lines.append("## Tools you may call\n" + json.dumps([t["function"] for t in tools_of(body).values()], indent=1))
+        messages = conversation
+    else:
+        messages = delta["new"]
+    lines.append("## Conversation" if fresh else "## New since your last turn")
+    lines += [render(m, folder, full=True) for m in messages]
+    return "\n\n".join(lines)
+
+
+def mcp_stub(work):
+    """Minimal MCP stdio server: lists the call's WebAgent tools and records each call in calls.jsonl."""
+    work = Path(work)
+    tools = json.loads((work / "tools.json").read_text())
+    for line in sys.stdin:
+        request = json.loads(line)
+        method, rid = request.get("method"), request.get("id")
+        if rid is None:
+            continue  # notifications need no answer
+        if method == "initialize":
+            result = {"protocolVersion": request["params"].get("protocolVersion", "2025-06-18"),
+                      "capabilities": {"tools": {}}, "serverInfo": {"name": "webagent", "version": "1"}}
+        elif method == "tools/list":
+            result = {"tools": [{"name": t["name"], "description": t.get("description", ""),
+                                 "inputSchema": t.get("parameters") or {"type": "object"}} for t in tools]}
+        elif method == "tools/call":
+            entry = json.dumps({"name": request["params"]["name"], "arguments": request["params"].get("arguments") or {}})
+            log = work / "calls.jsonl"
+            # Models sometimes repeat a call while "waiting" for its result; record it once.
+            repeat = log.exists() and entry in log.read_text().splitlines()
+            if not repeat:
+                with open(log, "a") as out:
+                    out.write(entry + "\n")
+            result = {"content": [{"type": "text", "text": "Already sent. End your turn now." if repeat else
+                                   "Sent to WebAgent; its result arrives in your next message. "
+                                   "End your turn now unless you have other tool calls to make."}]}
+        elif method == "ping":
+            result = {}
+        else:
+            print(json.dumps({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": method}}), flush=True)
+            continue
+        print(json.dumps({"jsonrpc": "2.0", "id": rid, "result": result}), flush=True)
+
+
+def opencode_turn(command, prompt, work):
+    """Run one `opencode run`; return its session id, the final text and token usage."""
+    # The prompt goes on stdin: a fresh session's full history can exceed the 128 KiB argument cap.
+    result = subprocess.run(command, input=prompt, cwd=work, capture_output=True, text=True, timeout=1800,
+                            env={**os.environ, "OPENCODE_CONFIG_CONTENT": opencode_config(work)})
+    session, texts, usage, errors = None, {}, {"input": 0, "output": 0}, []
+    for line in result.stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        session = event.get("sessionID") or session
+        part = event.get("part") or {}
+        if event.get("type") == "text":
+            texts.setdefault(part.get("messageID"), []).append(part.get("text", ""))
+        elif event.get("type") == "step_finish":
+            tokens = part.get("tokens") or {}
+            cache = tokens.get("cache") or {}
+            usage["input"] += tokens.get("input", 0) + cache.get("read", 0) + cache.get("write", 0)
+            usage["output"] += tokens.get("output", 0)
+        elif event.get("type") == "error":
+            errors.append(str((event.get("error") or {}).get("message", event))[:300])
+    if errors or not session:
+        raise RuntimeError(f"opencode failed ({result.returncode}): {errors or result.stderr[-300:]}")
+    # The last assistant message is the turn's answer; earlier ones led up to its tool calls.
+    return session, "".join(list(texts.values())[-1]) if texts else "", usage
+
+
+def answer_opencode(call, folder, state, delta):
+    body = call["body"]
+    fresh = not state.get("opencode_session") or delta["rewritten"] or delta["instructions"] is not None or delta["tools_changed"]
+    prompt = prompt_for(call, delta, fresh)
+    command = [OPENCODE, "run", "--standalone", "--agent", "webagent-bridge", "-m", body.get("model", ""), "--format", "json"]
+    if not fresh:
+        command += ["-s", state["opencode_session"]]
+    for image in re.findall(r"\[image: (/[^\]]+)\]", prompt):
+        command += ["-f", image]
+    # Run outside this repository: OpenCode would otherwise load the enclosing git project as context.
+    work = OPENCODE_HOME / folder.name
+    work.mkdir(parents=True, exist_ok=True)
+    (work / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
+    (work / "calls.jsonl").unlink(missing_ok=True)
+    started = time.time()
+    session, text, usage = opencode_turn(command, prompt, work)
+    ended = time.time()
+    calls = [json.loads(line) for line in (work / "calls.jsonl").read_text().splitlines()] \
+        if (work / "calls.jsonl").exists() else []
+    calls = [{"name": c["name"].removeprefix(MCP_PREFIX), "arguments": c["arguments"]} for c in calls]
+    message = parse_reply(json.dumps({"content": text, "tool_calls": calls}), body)
+    # Some models report no step usage; send none rather than zeros.
+    usage = {"prompt_tokens": usage["input"], "completion_tokens": usage["output"],
+             "total_tokens": usage["input"] + usage["output"]} if usage["input"] or usage["output"] else None
+    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": usage})
+    record(call, state, delta, started, ended)
+    state["opencode_session"] = session
+    save_state(folder, state)
+    print(f"{call['id']}: answered chat {call.get('session')} with {body.get('model')} "
+          f"({'fresh' if fresh else 'resumed'} session {session}, {len(calls)} tool call(s))")
+
+
+def answer(call):
+    harness = HARNESSES.get(call.get("provider"))
+    if not harness:
+        # Unanswered, the call times out in WebAgent as a failed provider request.
+        print(f"{call['id']}: no harness for {call.get('provider')} on this client", file=sys.stderr)
+        return
+    folder, state, delta = remember(call)
+    return harness(call, folder, state, delta)
+
+
+def answer_claude(call, folder, state, delta):
+    body = call["body"]
+    fresh = not state.get("claude_session") or delta["rewritten"] or delta["instructions"] is not None or delta["tools_changed"]
+    session = str(uuid.uuid4()) if fresh else state["claude_session"]
+    command = ["claude", "-p", "--output-format", "json", "--json-schema", json.dumps(REPLY_SCHEMA),
+               "--system-prompt", AUTO_PROMPT, "--tools", "Read", "--model", body.get("model", ""), *BARE]
+    if body.get("reasoning_effort"):
+        command += ["--effort", body["reasoning_effort"]]
+    command += ["--session-id", session] if fresh else ["--resume", session]
+    # Prompt on stdin: a fresh chat's full history exceeds Linux's 128 KiB single-argument limit.
+    prompt = prompt_for(call, delta, fresh)
+    started = time.time()
+    result = subprocess.run(command, input=prompt, cwd=folder, capture_output=True, text=True, timeout=1800)
+    ended = time.time()
+    try:
+        output = json.loads(result.stdout)
+    except ValueError:
+        print(f"{call['id']}: claude failed ({result.returncode}): {result.stderr[:300]}", file=sys.stderr)
+        return
+    if output.get("is_error"):
+        print(f"{call['id']}: claude error: {str(output.get('result'))[:300]}", file=sys.stderr)
+        return
+    structured = output.get("structured_output")
+    raw = json.dumps(structured) if structured is not None else output.get("result", "")
+    message = parse_reply(raw, body)
+    usage = output.get("usage") or {}
+    prompt_tokens = sum(usage.get(k, 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+    completion_tokens = usage.get("output_tokens", 0)
+    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": {
+        "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "total_tokens": prompt_tokens + completion_tokens}})
+    record(call, state, delta, started, ended, output)
+    state["claude_session"] = output.get("session_id") or session
+    save_state(folder, state)
+    print(f"{call['id']}: answered chat {call.get('session')} ({'fresh' if fresh else 'resumed'} session {state['claude_session']})")
+
+
+# Bridge provider -> harness that answers its calls. Each takes (call, folder, state, delta).
+HARNESSES = {"claude_bridge": answer_claude, "opencode_bridge": answer_opencode}
+
+
+def cmd_auto(session):
+    with ThreadPoolExecutor(4) as pool:
+        while True:
+            pool.submit(answer, fetch(session)).add_done_callback(lambda f: f.exception() and print(f.exception(), file=sys.stderr))
+
+
+def selftest():
+    folder = Path(tempfile.mkdtemp(prefix="harness-bridge-selftest-"))  # fresh: earlier runs leave state
+    global SESSIONS
+    SESSIONS = folder
+    body = {"model": "m", "messages": [{"role": "system", "content": "be brief"}, {"role": "user", "content": "hi"}],
+            "tools": [{"type": "function", "function": {"name": "file_list", "parameters": {}}}]}
+    _, state, delta = remember({"id": "a", "session": "s", "body": body})
+    save_state(SESSIONS / "s", state)
+    assert delta["new"] == body["messages"][1:] and delta["instructions"] and delta["tools_added"] == ["file_list"]
+    body["messages"] += [{"role": "assistant", "content": "hello"}, {"role": "user", "content": "again"}]
+    _, state, delta = remember({"id": "b", "session": "s", "body": body})
+    save_state(SESSIONS / "s", state)
+    assert len(delta["new"]) == 2 and delta["instructions"] is None and not delta["rewritten"]
+    body["messages"] = body["messages"][:1] + [{"role": "user", "content": "summary"}]
+    _, _, delta = remember({"id": "c", "session": "s", "body": body})
+    assert delta["rewritten"] and len(delta["new"]) == 1
+    message = parse_reply('{"content":"","tool_calls":[{"name":"file_list","arguments":{}}]}', body)
+    assert message["tool_calls"][0]["function"] == {"name": "file_list", "arguments": "{}"}
+    global TIMING
+    TIMING = folder / "timing.jsonl"
+    fetched = time.time()
+    state = {"replied_at": fetched - 3}
+    record({"id": "d", "session": "s", "body": body, "fetched_at": fetched}, state, {"new": [{"role": "tool"}]},
+           fetched, fetched + 1, {"duration_ms": 800})
+    row = json.loads(TIMING.read_text())
+    assert not row["user_turn"] and 2.9 < row["gap_s"] < 3.5 and state["replied_at"] >= fetched
+    cmd_stats(1)
+    print("selftest ok")
+
+
+if __name__ == "__main__":
+    args = sys.argv[1:]
+    session = None
+    if "--session" in args:
+        index = args.index("--session")
+        session = args[index + 1]
+        del args[index:index + 2]
+    if args[:1] == ["next"]:
+        cmd_next(session)
+    elif args[:1] == ["reply"] and len(args) == 3:
+        cmd_reply(args[1], args[2])
+    elif args[:1] == ["auto"]:
+        cmd_auto(session)
+    elif args[:1] == ["mcp"] and len(args) == 2:
+        mcp_stub(args[1])
+    elif args[:1] == ["stats"] and len(args) <= 2:
+        cmd_stats(float(args[1]) if len(args) == 2 else 24)
+    elif args[:1] == ["selftest"]:
+        selftest()
+    else:
+        sys.exit(__doc__)

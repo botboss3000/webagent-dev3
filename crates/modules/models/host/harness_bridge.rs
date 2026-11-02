@@ -1,5 +1,6 @@
-//! Claude and OpenCode Bridges: a model call waits in the shared application store until the
-//! client holding the connection's link token fetches it and posts the reply.
+//! Harness bridge, common to every bridge provider (Claude, OpenCode, Muse): a model call waits in
+//! the shared application store until the client holding the connection's link token fetches it,
+//! runs it with the harness its `provider` names, and posts the reply. One token links one client.
 //! The API (client endpoints) and the loop (calls) are separate processes; both
 //! poll the same sealed documents, so a restart simply drops waiting calls.
 use crate::*;
@@ -9,10 +10,8 @@ use webagent_models::{
     transport::{typed_failure, BridgeCall, BridgeQueue},
 };
 
-const CALLS: &str = "claude_bridge_call:";
-const SEEN: &str = "claude_bridge_seen:";
-/// Written when a bridge connection's link token is saved; the client endpoints admit only these.
-const LINKS: &str = "claude_bridge_link:";
+const CALLS: &str = "harness_bridge_call:";
+const SEEN: &str = "harness_bridge_seen:";
 /// No client fetch within this window means the client is offline.
 const OFFLINE_SECS: u64 = 60;
 /// A fetched call waits this long for its reply.
@@ -26,7 +25,7 @@ fn now() -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
-use webagent_models::transport::bridge_link_id as link_id;
+use webagent_models::transport::{bridge_link_id as link_id, bridge_link_key};
 
 pub(crate) struct Queue(pub(crate) Store);
 impl BridgeQueue for Queue {
@@ -53,7 +52,7 @@ impl BridgeQueue for Queue {
             }
             let id = Uuid::new_v4().to_string();
             let key = format!("{CALLS}{link}:{id}");
-            self.0.put(&key, &json!({"id":id,"session":call.session,"body":call.body,"state":"pending","created":now()})).await?;
+            self.0.put(&key, &json!({"id":id,"session":call.session,"provider":call.provider,"body":call.body,"state":"pending","created":now()})).await?;
             let result = async {
                 loop {
                     tokio::select! {
@@ -84,14 +83,14 @@ async fn admit(store: &Store, headers: &HeaderMap) -> Result<String, ApiError> {
         .and_then(|v| v.strip_prefix("Bearer "))
         .filter(|t| (8..=512).contains(&t.len()))
         .ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "Link token required".into()))?;
-    let link = link_id(token);
-    if store.get(&format!("{LINKS}{link}")).await?.is_none() {
+    // Written when a bridge connection's link token is saved; only those tokens are admitted.
+    if store.get(&bridge_link_key(token)).await?.is_none() {
         return Err(ApiError(
             StatusCode::UNAUTHORIZED,
             "Unknown link token".into(),
         ));
     }
-    Ok(link)
+    Ok(link_id(token))
 }
 
 /// Long-poll for the next pending call on this link, optionally for one WebAgent chat.
@@ -129,7 +128,7 @@ pub async fn next(
                 call["claimed"] = json!(now());
                 app.store.put(&key, &call).await?;
                 return Ok(Json(
-                    json!({"call":{"id":call["id"],"session":call["session"],"body":call["body"]}}),
+                    json!({"call":{"id":call["id"],"session":call["session"],"provider":call["provider"],"body":call["body"]}}),
                 ));
             }
         }

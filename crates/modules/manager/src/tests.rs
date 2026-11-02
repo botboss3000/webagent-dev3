@@ -415,6 +415,9 @@ mod independent_runtime_io {
             }
             Ok(self.scoped(id)?.agent)
         }
+        async fn user_pool<'a>(&'a self, _user: &'a str) -> Result<SqlitePool> {
+            bail!("Fixture has no account databases")
+        }
     }
     impl RecordEffects for Storage {
         fn unseal(&self, bytes: &[u8]) -> Result<Value> {
