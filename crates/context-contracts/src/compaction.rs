@@ -612,3 +612,18 @@ pub fn validate_external_plan(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{json, Value};
+
+    /// Plan validation compares the config the context service echoes back, so a calibrated
+    /// `bytes_per_token` must survive JSON exactly; this value does not without `float_roundtrip`.
+    #[test]
+    fn calibrated_ratios_round_trip_exactly() {
+        let ratio = 1.500_096_120_345_751_5_f64;
+        let text = serde_json::to_string(&json!({ "bytes_per_token": ratio })).unwrap();
+        let parsed: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(parsed["bytes_per_token"].as_f64(), Some(ratio));
+    }
+}
