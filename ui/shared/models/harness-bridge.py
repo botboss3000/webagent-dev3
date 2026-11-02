@@ -10,7 +10,7 @@
 # Requirements:
 #   - Python 3.9+ (standard library only; nothing to pip install).
 #   - Claude Bridge: the `claude` CLI on PATH and signed in (`claude` once interactively, or
-#     `claude login`). Calls run as `claude -p` with no CLAUDE.md, settings, hooks, MCP or skills.
+#     `claude login`). Calls run as `claude -p` with no CLAUDE.md, settings, hooks or skills.
 #   - OpenCode Bridge: the `opencode` CLI installed and signed in.
 #   - Muse Bridge: no CLI. A Muse agent on this computer must answer handoff files: for each
 #     work/harness-bridge/sessions/<chat>/muse-inbox/<call>.request.json it writes the reply JSON
@@ -68,7 +68,7 @@ harness (HARNESSES below).
     reply CALL_ID FILE|-          post {"content": str, "tool_calls": [{"name", "arguments": {..}}]}
     auto  [--session ID]          answer every call with its provider's harness, resumed per WebAgent chat:
                                   claude_bridge: headless `claude -p` (needs `claude` signed in);
-                                  bare: no CLAUDE.md, settings, hooks, memory, MCP, skills.
+                                  bare: no CLAUDE.md, settings, hooks, memory, skills.
                                   opencode_bridge: `opencode run` (needs `opencode` signed in);
                                   its tools stay listed (free models require it) but every use is rejected.
                                   muse_bridge: hands each turn to a live Muse agent through files in the
@@ -89,20 +89,17 @@ SESSIONS = ROOT / "sessions"
 TIMING = ROOT / "timing.jsonl"
 URL = os.environ.get("HARNESS_BRIDGE_URL", "https://dev.webagent.live").rstrip("/")
 PREVIEW = 2000  # characters of a long message shown inline; the full text stays in the saved request
-REPLY_SCHEMA = {"type": "object", "required": ["content", "tool_calls"], "additionalProperties": False, "properties": {
-    "content": {"type": "string"},
-    "tool_calls": {"type": "array", "items": {"type": "object", "required": ["name", "arguments"],
-        "additionalProperties": False, "properties": {"name": {"type": "string"}, "arguments": {"type": "object"}}}}}}
 # As close to a plain API call as subscription sign-in allows (--bare needs an API key): no
-# CLAUDE.md or settings files, hooks, auto-memory, MCP servers, skills or Chrome. The CLI still
-# adds the account email, working directory, date and model identity.
+# CLAUDE.md or settings files, hooks, auto-memory, skills or Chrome, and no MCP server but this
+# script's stub for WebAgent's tools. The CLI still adds the account email, working directory,
+# date and model identity.
 BARE = ["--setting-sources=", "--settings", '{"autoMemoryEnabled":false}', "--strict-mcp-config",
         "--disable-slash-commands", "--no-chrome"]
 AUTO_PROMPT = ("You are the language model behind a WebAgent agent. Act exactly as that model: follow the "
-    "agent instructions and conversation you are given and decide the next assistant turn. You cannot run "
-    "anything yourself; to use one of the listed WebAgent tools, return it in tool_calls with JSON arguments "
-    "matching its schema, and WebAgent runs it and sends you the result. Images are saved as files you may Read. "
-    "Return only the structured output: content (assistant text, may be empty with tool calls) and tool_calls.")
+    "agent instructions and conversation you are given and decide the next assistant turn. WebAgent's tools are "
+    "your mcp__harness__* tools (mcp__harness__<name> for a tool listed as <name>). Calling one hands it to "
+    "WebAgent, which runs it and sends the result in your next message, so after your tool calls end your turn "
+    "without waiting or describing them. Images are saved as files you may Read. Your final text is the agent's reply.")
 OPENCODE_PROMPT = ("You are the language model behind a WebAgent agent. Act exactly as that model: follow the "
     "agent instructions and conversation you are given and decide the next assistant turn. WebAgent's tools are "
     "your webagent_* tools (webagent_<name> for a tool listed as <name>). Calling one hands it to WebAgent, which "
@@ -458,8 +455,15 @@ def answer_claude(call, folder, state, delta):
     body = call["body"]
     fresh = not state.get("claude_session") or delta["rewritten"] or delta["instructions"] is not None or delta["tools_changed"]
     session = str(uuid.uuid4()) if fresh else state["claude_session"]
-    command = ["claude", "-p", "--output-format", "json", "--json-schema", json.dumps(REPLY_SCHEMA),
-               "--system-prompt", AUTO_PROMPT, "--tools", "Read", "--model", body.get("model", ""), *BARE]
+    # WebAgent's tools come from the MCP stub, which records each call for the reply (as for OpenCode).
+    (folder / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
+    (folder / "calls.jsonl").unlink(missing_ok=True)
+    # The CLI reserves the server name "webagent" and silently skips it.
+    mcp = {"mcpServers": {"harness": {"command": sys.executable,
+                                      "args": ["-B", str(Path(__file__).resolve()), "mcp", str(folder)]}}}
+    command = ["claude", "-p", "--output-format", "json", "--system-prompt", AUTO_PROMPT, "--tools", "Read",
+               "--mcp-config", json.dumps(mcp), "--allowedTools", "mcp__harness", "--model", body.get("model", ""),
+               *BARE]
     if body.get("reasoning_effort"):
         command += ["--effort", body["reasoning_effort"]]
     command += ["--session-id", session] if fresh else ["--resume", session]
@@ -476,9 +480,9 @@ def answer_claude(call, folder, state, delta):
     if output.get("is_error"):
         print(f"{call['id']}: claude error: {str(output.get('result'))[:300]}", file=sys.stderr)
         return
-    structured = output.get("structured_output")
-    raw = json.dumps(structured) if structured is not None else output.get("result", "")
-    message = parse_reply(raw, body)
+    calls = [json.loads(line) for line in (folder / "calls.jsonl").read_text().splitlines()] \
+        if (folder / "calls.jsonl").exists() else []
+    message = parse_reply(json.dumps({"content": output.get("result") or "", "tool_calls": calls}), body)
     usage = output.get("usage") or {}
     prompt_tokens = sum(usage.get(k, 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
     completion_tokens = usage.get("output_tokens", 0)
