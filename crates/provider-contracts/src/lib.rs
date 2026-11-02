@@ -27,6 +27,7 @@ pub enum ProviderIdV1 {
     Typesafe,
     ClaudeBridge,
     OpencodeBridge,
+    MuseBridge,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

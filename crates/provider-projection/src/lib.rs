@@ -125,6 +125,7 @@ mod tests {
             ProviderIdV1::Typesafe,
             ProviderIdV1::ClaudeBridge,
             ProviderIdV1::OpencodeBridge,
+            ProviderIdV1::MuseBridge,
         ] {
             let result = project(&RequestV1::Profile {
                 version: 1,

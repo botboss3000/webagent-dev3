@@ -461,6 +461,7 @@ pub enum Transport {
     Deepinfra,
     ClaudeBridge,
     OpencodeBridge,
+    MuseBridge,
 }
 
 impl Transport {
@@ -487,6 +488,7 @@ impl Transport {
             Self::Deepinfra => crate::provider::ProviderId::Deepinfra,
             Self::ClaudeBridge => crate::provider::ProviderId::ClaudeBridge,
             Self::OpencodeBridge => crate::provider::ProviderId::OpencodeBridge,
+            Self::MuseBridge => crate::provider::ProviderId::MuseBridge,
         }
     }
 }
