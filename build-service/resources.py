@@ -134,10 +134,10 @@ class Resources:
                 "available_cores":(delta[3]+delta[4])*count/total,"iowait_cores":delta[4]*count/total,
                 "spare":(execution+steal)*count<=capacity*total}
 
-    @staticmethod
-    def cpu_floor(phase):
-        """Reserve one core for deadline-sensitive assertions; other phases retain a small share."""
-        return 1000 if phase in {"test","ui_test","plugin_test"}else 100
+    def cpu_floor(self,phase):
+        """Reserve a floor per phase (cpu_floor_millis): a core for deadline-sensitive tests, a small share otherwise."""
+        floors=self.policy.get("cpu_floor_millis")or{"test":1000,"ui_test":1000,"plugin_test":1000,"default":100}
+        return floors.get(phase,floors.get("default",100))
     def cpu_capacity(self):
         return min(max(1,(os.cpu_count()or 1)-1)*1000,self.policy.get("cpu_budget_millis",0)or max(1,(os.cpu_count()or 1)-1)*1000)
     def cpu_fits(self,phase):
@@ -158,7 +158,9 @@ class Resources:
         running={n:r for n,r in active.items()if r["state"]=="running"}
         reserved=sum(self.cpu_floor(r["phase"])for r in active.values())
         extra=max(0,min(self.cpu_capacity(),max(reserved,int(self.cpu_budget*1000)))-reserved)
-        weights={n:1+max(0,r["priority"])+min(2,int((self.clock()-r["started"])/900))for n,r in running.items()}
+        # cpu_phase_weights multiplies a phase's share of the spare budget (unlisted phases weigh 1).
+        phase_weights=self.policy.get("cpu_phase_weights")or{}
+        weights={n:(1+max(0,r["priority"])+min(2,int((self.clock()-r["started"])/900)))*phase_weights.get(r["phase"],1)for n,r in running.items()}
         for name,row in running.items():
             self.allocate_cpu(name,self.cpu_floor(row["phase"])+int(extra*weights[name]/sum(weights.values())))
 

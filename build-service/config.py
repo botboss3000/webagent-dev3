@@ -12,6 +12,17 @@ def memory_policy_digest(policy):
  import hashlib
  return hashlib.sha256(json.dumps(memory_policy(policy),sort_keys=True,separators=(",",":")).encode()).hexdigest()
 CPU_KEYS={"cpu_budget_millis","cpu_priority"}
+# Build tuning (see build-service/README.md "Tuning settings"); read when the broker starts.
+TUNING_KEYS={"cargo_build_jobs","test_threads","release_cpu_shares","cpu_floor_millis","cpu_phase_weights"}
+def validate_tuning(policy):
+ """Bound build parallelism and CPU sharing; values outside these ranges are refused."""
+ cores=os.cpu_count()or 1
+ for key,low,high in [("cargo_build_jobs",1,64),("test_threads",1,64),("release_cpu_shares",2,1024)]:
+  if type(policy.get(key))is not int or not low<=policy[key]<=high:raise ValueError("Invalid build tuning: "+key)
+ floors=policy.get("cpu_floor_millis")
+ if not isinstance(floors,dict)or "default"not in floors or any(not isinstance(k,str)or type(v)is not int or not 100<=v<=cores*1000 for k,v in floors.items()):raise ValueError("Invalid build tuning: cpu_floor_millis")
+ weights=policy.get("cpu_phase_weights")
+ if not isinstance(weights,dict)or any(not isinstance(k,str)or type(v)is not int or not 1<=v<=10 for k,v in weights.items()):raise ValueError("Invalid build tuning: cpu_phase_weights")
 RESOURCE_KEYS=MEMORY_KEYS|CPU_KEYS
 def cpu_policy(policy):
  return {"cpu_budget_millis":policy.get("cpu_budget_millis",0),"cpu_priority":policy.get("cpu_priority","balanced")}
@@ -36,12 +47,13 @@ def validate(value):
  ledger=v["code_index_ledger_max_bytes"]
  if type(ledger)is not int or not 512*1024**2<=ledger<=1024**3 or ledger%4096:raise ValueError("Invalid review ledger storage budget")
  policy=v.get("scheduler",{})
- if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes","task_aware_cleanup","disk_min_free_bytes","disk_grace_seconds","disk_cleanup_batch","documentation_review_order","post_deployment_indexing","package_cache_enabled","package_cache_download_workers","package_cache_max_age_seconds","package_cache_retention_seconds","package_cache_max_bytes","package_cache_prepare_memory_bytes","failure_grace_seconds"}-RESOURCE_KEYS:raise ValueError("Invalid scheduler policy")
+ if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes","task_aware_cleanup","disk_min_free_bytes","disk_grace_seconds","disk_cleanup_batch","documentation_review_order","post_deployment_indexing","package_cache_enabled","package_cache_download_workers","package_cache_max_age_seconds","package_cache_retention_seconds","package_cache_max_bytes","package_cache_prepare_memory_bytes","failure_grace_seconds"}-RESOURCE_KEYS-TUNING_KEYS:raise ValueError("Invalid scheduler policy")
  policy={**scheduler_defaults(),**policy}
  cpu=cpu_policy(policy)
  if type(cpu["cpu_budget_millis"])is not int or cpu["cpu_budget_millis"]!=0 and not 1000<=cpu["cpu_budget_millis"]<=max(1,(os.cpu_count()or 1)-1)*1000:raise ValueError("CPU budget must retain host headroom")
  if type(cpu["cpu_priority"])is not str or cpu["cpu_priority"]not in {"balanced","broker"}:raise ValueError("Invalid CPU priority")
  policy.update(cpu)
+ validate_tuning(policy)
  if policy.get("documentation_review_order","before_deployment")not in {"before_deployment","after_deployment"}:raise ValueError("Invalid documentation review order")
  if policy["mode"]not in {"observe","enforce"}or type(policy["orphan_after_seconds"])is not int or not 60<=policy["orphan_after_seconds"]<=86400:raise ValueError("Invalid ownership policy")
  if type(policy.get("failure_grace_seconds",1800))is not int or not 300<=policy.get("failure_grace_seconds",1800)<=7200:raise ValueError("Invalid failed-release grace window")

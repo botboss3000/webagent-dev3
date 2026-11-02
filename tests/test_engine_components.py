@@ -277,9 +277,14 @@ class EngineTests(unittest.TestCase):
         for phase in ("compile_test","compile_linked","compile_release","linked_smoke","live_smoke","dependency","engine_metadata"):
             self.assertEqual(executor.Executor.test_stack_env(phase),[])
     def test_only_the_live_release_compile_yields_cpu_to_the_overlapping_suite(self):
-        self.assertEqual(executor.Executor.cpu_weight_args("compile_release"),["--cpu-shares","2"])
+        worker=executor.Executor(None,None,{})
+        self.assertEqual(worker.cpu_weight_args("compile_release"),["--cpu-shares","2"])
         for phase in ("test","compile_test","compile_linked","linked_smoke","live_smoke","dependency"):
-            self.assertEqual(executor.Executor.cpu_weight_args(phase),[])
+            self.assertEqual(worker.cpu_weight_args(phase),[])
+        # The scheduler config tunes it, like the build jobs and test threads.
+        tuned=executor.Executor(None,None,{"scheduler":{"release_cpu_shares":4,"test_threads":6}})
+        self.assertEqual(tuned.cpu_weight_args("compile_release"),["--cpu-shares","4"])
+        self.assertEqual(tuned.tuning("test_threads",8),6);self.assertEqual(worker.tuning("test_threads",8),8)
         source=(ROOT/"build-service/executor.py").read_text()
         self.assertIn('*self.test_stack_env(phase),*self.test_tmpfs_args(phase),*self.cpu_weight_args(phase),image,"sleep","infinity"]',source)
     def test_only_rust_test_phases_keep_tmp_in_ram_with_exec(self):
@@ -289,12 +294,12 @@ class EngineTests(unittest.TestCase):
     def test_suite_gate_runs_parallel_and_single_tests_stay_serial(self):
         self.assertEqual(executor.TEST_THREADS,8)
         source=(ROOT/"build-service/executor.py").read_text()
-        engine=source[source.index("    def engine(self,job,blob,extract,digest):"):]
-        self.assertIn('"--test-threads="+str(TEST_THREADS)',engine)
+        engine=source[source.index("    def engine(self,job,blob,extract,digest,defer_tests=False):"):]
+        self.assertIn('"--test-threads="+str(self.tuning(\"test_threads\",TEST_THREADS))',engine)
         self.assertEqual(engine.count('"--test-threads=1"'),0)
         # focused single-test sites outside engine() keep one thread: a named
         # test cannot use parallelism, and those recipes predate the gate change.
-        focused=source[:source.index("    def engine(self,job,blob,extract,digest):")]
+        focused=source[:source.index("    def engine(self,job,blob,extract,digest,defer_tests=False):")]
         self.assertGreaterEqual(focused.count('"--test-threads=1"'),3)
     def test_suite_totals_sums_and_detects_empty_runs(self):
         output="\n".join(["test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured",
@@ -322,7 +327,7 @@ class EngineRebaseAttestationOrderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory()as temporary:
             worker=executor.Executor(runner,None,{"state_root":temporary});job={"job_id":str(uuid.uuid4())}
             created=(Path(temporary)/"execution"/job["job_id"]/"output/cargo/registry");created.mkdir(parents=True)
-            def phase(job,name,kind,source,output,argv,profile,timeout=3600,network=False):
+            def phase(job,name,kind,source,output,argv,profile,timeout=3600,network=False,cargo_home=None):
                 timeline.append(name)
                 calls.append((name,argv))
                 if name=="compile_test":
@@ -467,7 +472,7 @@ class EngineSuiteOverlapTests(unittest.TestCase):
         with tempfile.TemporaryDirectory()as temporary:
             worker=executor.Executor(runner,None,{"state_root":temporary});job={"job_id":str(uuid.uuid4())}
             root=Path(temporary)/"execution"/job["job_id"];(root/"output/cargo/registry").mkdir(parents=True)
-            def phase(job,name,kind,source,output,argv,profile,timeout=3600,network=False):
+            def phase(job,name,kind,source,output,argv,profile,timeout=3600,network=False,cargo_home=None):
                 if name=="test":
                     seen["suite_thread"]=threading.current_thread().name
                     seen["overlapped"]=linked_started.wait(5)

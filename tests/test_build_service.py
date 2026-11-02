@@ -192,6 +192,17 @@ class ConfigurationTests(unittest.TestCase):
    legacy={k:v for k,v in value.items()if k!="api_pids_limit"}
    self.assertEqual(config.validate(legacy)["api_pids_limit"],256)
    self.assertEqual(config.validate({**value,"api_pids_limit":1024})["api_pids_limit"],1024)
+ def test_build_tuning_defaults_and_bounds(self):
+  value=config.defaults("/srv/one");value.update(service_account="builder",source_owner="owner")
+  with patch.object(config.os,"cpu_count",return_value=12),patch.object(config.pwd,"getpwnam",side_effect=self.account):
+   policy=config.validate(value)["scheduler"]
+   self.assertEqual((policy["cargo_build_jobs"],policy["test_threads"],policy["release_cpu_shares"],policy["cpu_phase_weights"]),(10,8,2,{}))
+   self.assertEqual(policy["cpu_floor_millis"]["default"],100)
+   tuned=config.validate({**value,"scheduler":{**value["scheduler"],"cpu_phase_weights":{"test":2},"test_threads":6}})["scheduler"]
+   self.assertEqual((tuned["cpu_phase_weights"],tuned["test_threads"]),({"test":2},6))
+   for override in ({"cargo_build_jobs":65},{"test_threads":0},{"release_cpu_shares":1},{"cpu_phase_weights":{"test":0}},
+                    {"cpu_phase_weights":{"test":1.5}},{"cpu_floor_millis":{"test":1000}},{"cpu_floor_millis":{"default":50}},{"unknown_knob":1}):
+    with self.assertRaises(ValueError):config.validate({**value,"scheduler":{**value["scheduler"],**override}})
  def test_cpu_policy_requires_typed_budget_and_host_headroom(self):
   value=config.defaults("/srv/one");value.update(service_account="builder",source_owner="owner")
   with patch.object(config.os,"cpu_count",return_value=4),patch.object(config.pwd,"getpwnam",side_effect=self.account):

@@ -29,5 +29,15 @@
   "package_cache_max_age_seconds": 604800,
   "package_cache_retention_seconds": 604800,
   "package_cache_max_bytes": 8589934592,
-  "package_cache_prepare_memory_bytes": 3221225472
+  "package_cache_prepare_memory_bytes": 3221225472,
+  "cargo_build_jobs": 10,
+  "test_threads": 8,
+  "release_cpu_shares": 2,
+  "cpu_floor_millis": {
+    "test": 1000,
+    "ui_test": 1000,
+    "plugin_test": 1000,
+    "default": 100
+  },
+  "cpu_phase_weights": {}
 }

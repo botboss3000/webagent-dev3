@@ -170,12 +170,14 @@ class Executor:
         since a 0-to-1 switch rebuilds every workspace crate. Snapshots, components, plugins, checks and
         stable releases stay non-incremental."""
         return "1"if job.get("cargo_incremental")is True and profile.startswith("engine:rust1.90:")else"0"
-    @staticmethod
-    def cpu_weight_args(phase):
+    def tuning(self,key,default):
+        """A build tuning value from the scheduler config (scheduler-defaults.json fills unset keys)."""
+        return (self.config.get("scheduler")or{}).get(key,default)
+    def cpu_weight_args(self,phase):
         """The live release compile runs beside the full suite inside the build slice's CPU
         quota; give it the lowest weight so timing-sensitive tests get CPU first and the
         compile uses only what they leave idle. Same work, so no added CPU-seconds."""
-        return ["--cpu-shares","2"]if phase=="compile_release"else[]
+        return ["--cpu-shares",str(self.tuning("release_cpu_shares",2))]if phase=="compile_release"else[]
     @staticmethod
     def suite_totals(output):
         """Sum one cargo test run's result counts; an empty run proves nothing executed."""
@@ -241,7 +243,7 @@ class Executor:
             "--cap-drop","ALL","--security-opt","no-new-privileges","--pids-limit","256","--user",str(self.config["service_uid"])+":"+str(self.config["service_gid"]),
             "--network","bridge"if network else"none","--mount","type=bind,src="+str(source)+",dst=/build"+(""if phase=="test"else",readonly"),
             "--mount","type=bind,src="+str(output)+",dst=/output",*(["--mount","type=bind,src="+str(cargo_home)+",dst=/output/cargo"]if cargo_home else[]),"-w","/build",
-            "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS="+CARGO_BUILD_JOBS,"-e","CARGO_INCREMENTAL="+self.incremental(job,profile),"--env","RUSTFLAGS="+RUSTFLAGS,
+            "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS="+str(self.tuning("cargo_build_jobs",int(CARGO_BUILD_JOBS))),"-e","CARGO_INCREMENTAL="+self.incremental(job,profile),"--env","RUSTFLAGS="+RUSTFLAGS,
             "-e","CARGO_PROFILE_DEV_DEBUG=0","-e","CARGO_PROFILE_TEST_DEBUG=0","-e","CARGO_PROFILE_RELEASE_DEBUG=0",*self.test_stack_env(phase),*self.test_tmpfs_args(phase),*self.cpu_weight_args(phase),image,"sleep","infinity"]
         if cap is not None:create[create.index(image):create.index(image)]=["--memory",str(cap),"--memory-swap",str(cap)]
         try:
@@ -842,7 +844,9 @@ class Executor:
         import platform
         return {"policy":"exact-source-tests-v1","source_sha256":self.verification_source(blob),"toolchain":RUST,
             "compiler_recipe":self.compiler_recipe(),"architecture":platform.machine(),"kernel":platform.release(),"executor_sha256":hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-            "identities":{k:self.config.get(k)for k in ("service_uid","service_gid","app_uid","app_gid","worker_uid","worker_gid")}}
+            "identities":{k:self.config.get(k)for k in ("service_uid","service_gid","app_uid","app_gid","worker_uid","worker_gid")},
+            # The configured thread count is part of how the suite ran.
+            "test_threads":self.tuning("test_threads",TEST_THREADS)}
 
     def verification_binding(self,job,blob,task,profile):
         return {**self.test_proof(blob),"task":task,"feature_profile":profile,"test_filter":job.get("test_filter"),"lint_paths":job.get("lint_paths"),
@@ -1625,7 +1629,7 @@ class Executor:
                     replayed=0;results=0
                     for binary in sorted((artifacts/"tests").iterdir()):
                         if not re.fullmatch(r"[a-z0-9_]+-[a-f0-9]{16}",binary.name):raise ValueError("Cached test executable name invalid")
-                        run=self.phase(job,"test","test",application,output,Executor.replay_argv("/output/artifacts/tests/"+binary.name,"--test-threads="+str(TEST_THREADS)),"engine:rust1.90:test")
+                        run=self.phase(job,"test","test",application,output,Executor.replay_argv("/output/artifacts/tests/"+binary.name,"--test-threads="+str(self.tuning("test_threads",TEST_THREADS))),"engine:rust1.90:test")
                         logs+=run;replayed+=1;results+=len(re.findall(r"test result:",run))
                     if replayed!=results:raise ValueError("Parallel replay skipped a retained test binary")
                     counts=Executor.suite_totals(logs)
@@ -1690,7 +1694,7 @@ class Executor:
         # made the suite and this compile take turns. The compile mounts its own offline copy at
         # the same /output/cargo path, keeping registry source paths (and fingerprints) unchanged.
         release_cargo=output/"cargo-release";shutil.rmtree(release_cargo,ignore_errors=True);shutil.copytree(cargo,release_cargo,symlinks=True)
-        suite=self.concurrent_phase(job,"test","test",application,output,["cargo","test","--workspace","--locked","--offline","--","--test-threads="+str(TEST_THREADS)],"engine:rust1.90:test")
+        suite=self.concurrent_phase(job,"test","test",application,output,["cargo","test","--workspace","--locked","--offline","--","--test-threads="+str(self.tuning("test_threads",TEST_THREADS))],"engine:rust1.90:test")
         try:live_log=self.phase(job,"compile_release","engine",linked_source/"v3",output,self.live_recipe(stable_release,job["cargo_incremental"]),"engine:rust1.90:release",cargo_home=release_cargo)
         finally:
             try:suite_output=suite.result()

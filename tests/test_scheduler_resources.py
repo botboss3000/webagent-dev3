@@ -42,6 +42,20 @@ class ResourceTests(unittest.TestCase):
             self.assertEqual(reopened.resource_policy()["sha256"],applied["sha256"])
             self.assertEqual(reopened.rows["one"]["state"],"recovery_required");reopened.close()
 
+    def test_phase_weights_and_floors_come_from_policy(self):
+        from unittest.mock import patch
+        with patch.object(m.os,"cpu_count",return_value=11):
+            self.scheduler.policy.update(cpu_budget_millis=10000,cpu_priority="broker",cpu_phase_weights={"test":2},
+                                         cpu_floor_millis={"test":1000,"default":100})
+            self.scheduler.cpu_budget=10
+            self.phase("release","compile_release")
+            # A second running phase beside it, as the full suite runs beside the release compile.
+            self.scheduler.rows["suite"]={**self.scheduler.rows["release"],"phase":"test"}
+            self.scheduler.rebalance_cpu()
+            # 10 cores less the floors (1.0 + 0.1) split 2:1 between the suite and the release compile.
+            self.assertEqual((self.scheduler.rows["suite"]["cpu_millis"],self.scheduler.rows["release"]["cpu_millis"]),(1000+5933,100+2966))
+            self.assertEqual(self.scheduler.cpu_floor("plugin_compile"),100)
+
     def test_cpu_policy_failure_can_reconcile_and_floors_cannot_be_removed(self):
         from unittest.mock import patch
         with patch.object(m.os,"cpu_count",return_value=4):

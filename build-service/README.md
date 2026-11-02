@@ -126,6 +126,32 @@ advisory: note any divergence, and still release through the broker.
   not its label; wait or coordinate, never take over its claims.
 - Work dropped: `abandon TASK` releases its claims and queued requests.
 
+## Tuning settings
+
+Build parallelism and CPU sharing are settings, not code. Defaults live in
+`build-service/scheduler-defaults.json` (released with the broker); the installed
+`/etc/webagent/development/build-service.json` (root-owned) overrides any key under
+`scheduler`. `config.py` validates every key and refuses unknown keys or values out
+of range. To change one: edit the installed file with sudo, then restart the broker
+while it is idle (`sudo systemctl restart webagent-build-development.service`;
+`buildctl status` shows `busy`). Watch the next builds with `buildctl monitor` and
+compare stage times. The build-speed keys:
+
+| Key | Default | Range | Effect |
+|---|---|---|---|
+| `cpu_budget_millis` | 0 (cores − 1) | 1000 – (cores − 1) × 1000 | Total CPU the build steps share (1000 = one core). |
+| `cpu_priority` | `balanced` | `balanced`, `broker` | `broker` keeps the whole budget; `balanced` shrinks it under host CPU pressure. |
+| `cpu_floor_millis` | test, ui_test, plugin_test 1000; default 100 | 100 – cores × 1000; needs `default` | CPU each running step is guaranteed; the rest is shared by weight. |
+| `cpu_phase_weights` | `{}` (every step weighs 1) | integers 1–10 | Multiplies a step's share of the spare budget, e.g. `{"test": 2}` gives the full suite twice the release compile's share while both run. |
+| `release_cpu_shares` | 2 | 2–1024 | Docker CPU weight of the release compile: the lowest, so the suite beside it wins contended CPU. |
+| `cargo_build_jobs` | 10 | 1–64 | `CARGO_BUILD_JOBS` for engine compiles and tests (plugin and workspace builds keep 3). |
+| `test_threads` | 8 | 1–64 | `--test-threads` for the full suite and retained-test replays. Part of the test fingerprint, so a change runs the suite once instead of reusing its result. |
+
+How the split works: each running step gets its floor, and the rest of the budget
+is divided by weight (weight × (1 + priority + up to 2 for steps running past
+15 min)), rebalanced every few seconds as steps start and end. Memory, disk,
+packaging and admission keys are described in their own sections below.
+
 ## Release-scope guards
 
 Checked source patches are text unified diffs, except that image and font assets
