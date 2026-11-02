@@ -286,6 +286,101 @@ impl<C: crate::storage::RuntimeStorage> crate::storage::Repository<'_, C> {
         tx.commit().await?;
         Ok(saved)
     }
+    /// Deletes one of the caller's own saved (BYO) models: it leaves every agent
+    /// roster, role and backup slot, then the entry itself. The connection and its
+    /// credential stay, so other models on that connection keep working.
+    pub async fn delete_byo_entry(&self, user: &str, source_id: &str) -> Result<Value> {
+        let id = source_id
+            .strip_prefix("byo:")
+            .ok_or_else(|| anyhow::anyhow!("Invalid BYO source"))?;
+        let catalog_key = "model_selection:catalog:v1";
+        let mut tx = self.app_pool.begin().await?;
+        sqlx::query("UPDATE docs SET value=value WHERE key=?")
+            .bind(catalog_key)
+            .execute(&mut *tx)
+            .await?;
+        let mut catalog = self.read_catalog_connection(&mut tx).await?;
+        catalog.migrate_stored(&mut tx).await?;
+        if catalog.platform_sources.contains_key(id)
+            || catalog.entries.get(id).is_none_or(|e| e.owner_id != user)
+        {
+            bail!("Not one of this account's saved models");
+        }
+        let mut agents = Vec::new();
+        for roster in catalog.agent_models.values_mut() {
+            let before = roster.clone();
+            roster.entry_ids.retain(|e| e != id);
+            roster.efforts.remove(id);
+            // A role whose primary is deleted falls back to its first backup, else is cleared.
+            roster.roles.retain(|_, role| {
+                role.backup_entry_ids.retain(|e| e != id);
+                if role.entry_id != id {
+                    return true;
+                }
+                if role.backup_entry_ids.is_empty() {
+                    return false;
+                }
+                role.entry_id = role.backup_entry_ids.remove(0);
+                true
+            });
+            if *roster != before {
+                roster.revision = roster
+                    .revision
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow::anyhow!("Revision exhausted"))?;
+                agents.push(roster.agent_id.clone());
+            }
+        }
+        for group in catalog.groups.values_mut() {
+            group.entry_ids.retain(|e| e != id);
+        }
+        // Legacy assignments are rollback material only; one naming this model cannot survive it.
+        catalog.assignments.retain(|_, a| a.primary_entry_id != id);
+        catalog.entries.remove(id);
+        catalog.revision = catalog
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("Revision exhausted"))?;
+        self.stage_catalog_connection(&mut tx, &catalog).await?;
+        for agent in catalog.agent_models.keys() {
+            sqlx::query("DELETE FROM docs WHERE key=?")
+                .bind(format!("model_adoption:v1:{agent}:{id}"))
+                .execute(&mut *tx)
+                .await?;
+        }
+        let preferences_key = format!("account_models:v1:{user}");
+        if let Some(row) = sqlx::query("SELECT value FROM docs WHERE key=?")
+            .bind(&preferences_key)
+            .fetch_optional(&mut *tx)
+            .await?
+        {
+            use sqlx::Row;
+            let mut preferences: Preferences =
+                serde_json::from_value(self.unseal(&row.get::<Vec<u8>, _>("value"))?)?;
+            let aliased = preferences.aliases.remove(source_id).is_some();
+            let default = preferences.default_entry_id.as_deref() == Some(source_id);
+            if aliased || default {
+                if default {
+                    preferences.default_entry_id = None;
+                }
+                preferences.revision = preferences
+                    .revision
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow::anyhow!("Revision exhausted"))?;
+                sqlx::query("UPDATE docs SET value=? WHERE key=?")
+                    .bind(self.seal(&serde_json::to_value(&preferences)?)?)
+                    .bind(&preferences_key)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+        sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES('','model_deleted',?)")
+            .bind(self.seal(&json!({"actor":user,"entry_id":id,"agents":agents}))?)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(json!({"entry_id":source_id,"agents":agents}))
+    }
 }
 #[cfg(test)]
 mod tests {

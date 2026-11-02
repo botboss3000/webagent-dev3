@@ -257,6 +257,10 @@ pub(super) fn router(app: App) -> Router {
             "/models/me/catalog/default",
             put(account_models::set_default),
         )
+        .route(
+            "/models/me/catalog/entries/{entry}",
+            axum::routing::delete(account_models::delete_entry),
+        )
         .route("/models/agents/{id}/adoptions", post(account_models::adopt))
         .route(
             "/agents/{id}/context-composition",

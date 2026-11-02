@@ -1109,6 +1109,31 @@ export function mountModelTable(host, opts = {}) {
         + `</div>`
         + (badges ? `<div class="ac-model-item-badges">${badges}</div>` : '')
         + `<div class="ac-model-item-caps">${capBadges}</div>`;
+      if (S.currentProvider === 'my_models' && adapter.deleteMyModel && !catalogReadOnly) {
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'ac-btn ac-btn-ghost ac-btn-sm ac-model-item-delete';
+        remove.textContent = 'Delete from My Models';
+        remove.style.color = 'var(--danger)';
+        remove.addEventListener('click', async (event) => {
+          event.stopPropagation();
+          if (!window.confirm(`Delete “${visibleModelName}” from My Models?\n\nThis removes it from your available models and from every agent currently using it, including any role it fills there.`)) return;
+          remove.disabled = true;
+          try {
+            await adapter.deleteMyModel(m.id);
+            if (S.selectedModel === m.id) S.selectedModel = '';
+            await reload();
+            // Reload reopens the configured provider; return to the list the user was editing.
+            provSel.value = 'my_models';
+            provSel.dispatchEvent(new Event('change'));
+            setModelStatus(`Deleted ${visibleModelName} from My Models.`, true);
+          } catch (error) {
+            remove.disabled = false;
+            setModelStatus(error.message || 'Could not delete the model.');
+          }
+        });
+        item.querySelector('.ac-model-item-caps').after(remove);
+      }
       if (inlineCatalogAdd) {
         item.tabIndex = catalogReadOnly ? -1 : 0;
         item.setAttribute('role', 'group');

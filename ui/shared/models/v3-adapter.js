@@ -144,8 +144,10 @@ export function createModelAdapter(request, agentId, onAssignment) {
   }
   const adapter={
     loadConfig:async()=>{await read();await Promise.all((catalog.agent_models?.[agentId]?.entry_ids||[]).map(async id=>{const c=catalog.connections[catalog.entries[id]?.connection_id];if(c)try{statuses.set(c.id,await request('/models/connections/'+encodeURIComponent(c.id)+'?agent_id='+encodeURIComponent(agentId)));}catch{statuses.delete(c.id);}}));return {provider:'webagent_catalog',roster:rows(),role_assignments:Object.fromEntries(Object.entries(catalog.agent_models?.[agentId]?.roles||{}).map(([r,a])=>[r,a.entry_id]))};},
+    // Owner-only: removes a saved model from My Models and every agent using it.
+    deleteMyModel:id=>request('/models/me/catalog/entries/'+encodeURIComponent(id),'DELETE'),
     saveRoster:payload=>{const work=()=>save(payload);const result=queue.then(work,work);queue=result.catch(()=>{});return result;},
-    loadPresets:async()=>({webagent_catalog:{name:'WebAgent Catalog / Available models',base_url:''},my_models:{name:'My Models',base_url:''},...await presets()}),
+    loadPresets:async()=>({webagent_catalog:{name:'WebAgent Catalog',base_url:''},my_models:{name:'My Models',base_url:''},...await presets()}),
     fetchModels:async({provider,api_key,entry_id})=>{
       if(provider==='openai_subscription'){
         const connectionId=catalog.entries[entry_id]?.connection_id||drafts.get(entry_id);

@@ -1336,6 +1336,7 @@ details.ac-card:not([open]) > *:not(summary) { display: none; }
 .ac-model-item-row { display: flex; align-items: baseline; gap: 4px; min-width: 0; }
 .ac-model-item-badges { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
 .ac-model-item-caps { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+.ac-model-item-delete { margin-top: 8px; }
 
 /* Context / cost badges (model rows + selected-model panel) */
 .ac-model-badge {
