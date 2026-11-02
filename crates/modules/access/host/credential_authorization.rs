@@ -1,17 +1,32 @@
 //! Tool-owned account authorization is never a participant or agent-policy grant.
 use crate::*;
 pub(crate) fn declaration(name: &str) -> Option<Value> {
-    if crate::source_control::needs_approval(name) {return Some(json!({"kind":"source_control_owner"}));}
     tools::schemas()
         .into_iter()
         .find(|s| s["name"] == name)
         .and_then(|s| s.get("authorization").cloned())
 }
-async fn binding(store:&store::Store,run:&Value,name:&str,args:&Value,requirement:&Value)->Result<Value> {
-    let reference=access::credential_authorization::reference(run,store.current_user_id(),requirement)?;
-    let credential=store.get(&reference).await?
-        .ok_or_else(||anyhow!("The requesting user must configure their own credential"))?;
-    access::credential_authorization::binding(run,store.current_user_id(),name,args,requirement,&credential)
+async fn binding(
+    store: &store::Store,
+    run: &Value,
+    name: &str,
+    args: &Value,
+    requirement: &Value,
+) -> Result<Value> {
+    let reference =
+        access::credential_authorization::reference(run, store.current_user_id(), requirement)?;
+    let credential = store
+        .get(&reference)
+        .await?
+        .ok_or_else(|| anyhow!("The requesting user must configure their own credential"))?;
+    access::credential_authorization::binding(
+        run,
+        store.current_user_id(),
+        name,
+        args,
+        requirement,
+        &credential,
+    )
 }
 pub(crate) async fn resolve(
     store: &store::Store,
@@ -19,7 +34,6 @@ pub(crate) async fn resolve(
     name: &str,
     args: &Value,
 ) -> Result<Option<Value>> {
-    if crate::source_control::needs_approval(name) {return Box::pin(crate::source_control::approval_binding(store,run,name,args)).await.map(Some);}
     match declaration(name) {
         Some(requirement) => Ok(Some(binding(store, run, name, args, &requirement).await?)),
         None => Ok(None),
@@ -27,14 +41,10 @@ pub(crate) async fn resolve(
 }
 pub(crate) async fn valid(store: &store::Store, run: &Value, pending: &Value) -> Result<bool> {
     let name = pending["name"].as_str().unwrap_or("");
-    if crate::source_control::needs_approval(name) {
-        let mut selected=run.clone();selected["pending"]=pending.clone();
-        return Ok(Box::pin(crate::source_control::approval_binding(store,&selected,name,&pending["arguments"])).await.is_ok_and(|v|v==pending["authorization"]));
-    }
     let Some(requirement) = declaration(name) else {
         return Ok(pending["authorization"].is_null());
     };
-    let selected=json!({"id":run["id"],"session_id":run["session_id"],"requester_user_id":run["requester_user_id"],"participation_generation":run["participation_generation"],"pending":pending});
+    let selected = json!({"id":run["id"],"session_id":run["session_id"],"requester_user_id":run["requester_user_id"],"participation_generation":run["participation_generation"],"pending":pending});
     Ok(
         binding(store, &selected, name, &pending["arguments"], &requirement)
             .await
@@ -52,27 +62,40 @@ mod tests {
         std::fs::create_dir_all(&packages).unwrap();
         app.abilities = std::sync::Arc::new(abilities::Catalog::load(&packages).unwrap());
         // Install the development adapter grants only in this disposable fixture.
-        let mut access_policy=app.store.read_access_policy().unwrap();
-        access_policy["tiers"]["operator"]["tools"]["test_owner_purchase"]=json!("ask");
-        access_policy["tiers"]["operator"]["ability_permissions"]["base"]=json!("auto");
+        let mut access_policy = app.store.read_access_policy().unwrap();
+        access_policy["tiers"]["operator"]["tools"]["test_owner_purchase"] = json!("ask");
+        access_policy["tiers"]["operator"]["ability_permissions"]["base"] = json!("auto");
         app.store.write_access_policy(&access_policy).unwrap();
-        let levels=app.store.capability_levels("shared_default").await.unwrap();
-        let mut level=levels.levels["operator"].clone();
-        level.ability_permissions.insert("base".into(),crate::access::Permission::Auto);
-        app.store.save_capability_level("shared_default",level,levels.revision).await.unwrap();
+        let levels = app.store.capability_levels("shared_default").await.unwrap();
+        let mut level = levels.levels["operator"].clone();
+        level
+            .ability_permissions
+            .insert("base".into(), crate::access::Permission::Auto);
+        app.store
+            .save_capability_level("shared_default", level, levels.revision)
+            .await
+            .unwrap();
         let mut policy = app.store.get("policy").await.unwrap().unwrap();
         policy["rules"]["test_owner_purchase"] = json!("require_approval");
         app.store.put("policy", &policy).await.unwrap();
         // The fixture tool must be visible through the ordinary ability gate.
         // Owner approval does not activate a hidden ability.
-        let mut visibility=app.store.agent_abilities().await.unwrap();
-        let revision=visibility["revision"].as_u64().unwrap();
-        visibility["visibility"]["base"]=json!("visible");
-        visibility["revision"]=json!(revision+1);
-        app.store.save_agent_abilities(&visibility,revision).await.unwrap();
+        let mut visibility = app.store.agent_abilities().await.unwrap();
+        let revision = visibility["revision"].as_u64().unwrap();
+        visibility["visibility"]["base"] = json!("visible");
+        visibility["revision"] = json!(revision + 1);
+        app.store
+            .save_agent_abilities(&visibility, revision)
+            .await
+            .unwrap();
         let sid = crate::runtime_tests::conversation(&app).await;
-        app.store.put(&format!("session_mode:{sid}"),
-            &json!({"mode":"write","execution_mode":"auto","revision":0})).await.unwrap();
+        app.store
+            .put(
+                &format!("session_mode:{sid}"),
+                &json!({"mode":"write","execution_mode":"auto","revision":0}),
+            )
+            .await
+            .unwrap();
         let rid = crate::runtime_tests::queued(&app, &sid).await;
         let owner = app.store.current_user_id().to_owned();
         app.store
@@ -96,10 +119,27 @@ mod tests {
         let access = crate::shared_chat::live_access(&app.store, &owner, &sid, agent)
             .await
             .unwrap();
-        let mode=session_mode(&app,&sid).await.unwrap();
-        let effective=live_tool_decision(&app,&access,"test_owner_purchase",&policy,&visibility,&state,&run["loaded_abilities"],mode["mode"]=="read_only").for_execution_mode(&mode);
-        assert_ne!(effective.permission,crate::access::Permission::Deny,"fixture ordinary tool gate: {effective:?}");
-        assert!(app.run_model_authorized(&run).await,"fixture model authority");
+        let mode = session_mode(&app, &sid).await.unwrap();
+        let effective = live_tool_decision(
+            &app,
+            &access,
+            "test_owner_purchase",
+            &policy,
+            &visibility,
+            &state,
+            &run["loaded_abilities"],
+            mode["mode"] == "read_only",
+        )
+        .for_execution_mode(&mode);
+        assert_ne!(
+            effective.permission,
+            crate::access::Permission::Deny,
+            "fixture ordinary tool gate: {effective:?}"
+        );
+        assert!(
+            app.run_model_authorized(&run).await,
+            "fixture model authority"
+        );
         run["pending"] = json!({"id":"owner-dispatch","name":"test_owner_purchase","arguments":{},"call_id":"test-call","state":"executing","human_approved":false,
             "policy_version":policy["version"],"mode_revision":mode_revision,"visibility_revision":visibility["revision"],"ability_state_revision":state["revision"],"access_revision":access.revision});
         run["pending"]["authorization"] =

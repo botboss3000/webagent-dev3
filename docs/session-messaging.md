@@ -33,8 +33,7 @@ sender title. Model context uses the attributed envelope from context(), saying
 that delivery is owner-authorized agent content, not a direct human instruction
 or a permission grant. Acknowledgement instead of following the body is allowed.
 No automatic transcript merge, reply routing, side-agent loop, or inferred
-message_main_chat behavior is implemented by these two tools. Cross-session
-forwarding always needs fresh owner approval.
+message_main_chat behavior is implemented by these two tools.
 
 ## Authority and approval
 
@@ -47,12 +46,12 @@ broaden the old grant. Ordinary Base/tool visibility and explicit Deny remain
 in force. The dedicated read-only sender exception applies only to these two
 write-classified tools; it grants no other write tool.
 
-Every new session, interrupt and onward agent-origin message requires exact owner
-approval even in Auto mode. Queue/steer may use an explicitly remembered directed
-route, otherwise exact owner approval is required. The approval card displays
-source, destination, delivery and recipient mode. Its opt-in checkbox remembers
-only eligible queue/steer routes. Polling preserves the explicit checkbox choice;
-interrupt/new-session/onward requests cannot grant a reusable route.
+Approval follows the ordinary tool policy and session mode: Auto proceeds, and a
+tool set to Ask asks in Ask mode. When asked, the approval card displays source,
+destination, delivery and recipient mode. Its opt-in checkbox remembers only
+eligible queue/steer routes; a remembered route binds later sends to its
+revocation. Polling preserves the explicit checkbox choice; interrupt,
+new-session and onward requests cannot grant a reusable route.
 
 Config: the built-in Base ability (crates/modules/abilities/src/base.rs) lists the native tools.
 Tool schemas live in session_messaging::schemas; discovery is filtered by live
@@ -137,7 +136,7 @@ These views do not grant authority; the API always rechecks it.
 | Store::legacy_message_meta, followup_consume, followup_choice | Preserve origin, batch eligibility and owner choice; consumed agent entries mark the run as agent-origin. |
 | live_tool_decision, filter_ability_entry, effective_policy_for_mode | Keep ordinary policy/visibility checks while allowing only the dedicated read-only delegation exception. |
 | execute_run_inner; execute_parallel_batch; call_raw_inner; native_schemas | Apply the same preflight in single/batch paths, bind call-scoped delegation guidance and execute the native adapter. |
-| api/chat::approval; shared_projection::messages | Recheck exact owner approval binding and expose durable origin to public transcript projection. |
+| api/chat::approval; shared_projection::messages | Recheck the recipient binding and expose durable origin to public transcript projection. |
 | Store::action_origin, conversation_history, delete_session | Exclude agent input as human authority; preserve fork evidence and remove session-owned messaging state on deletion. |
 | mountMessagingRoutes; load; open/disconnect/destroy | Mount disclosure, fence late reads, reset session state and dispose UI callbacks. |
 | mountChatActionPanel; showTool; destroy | Display exact destination/approval, retain eligible explicit remember choice across polling and clear it on disposal. |

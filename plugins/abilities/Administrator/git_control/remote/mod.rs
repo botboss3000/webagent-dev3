@@ -32,9 +32,6 @@ pub fn owns(name: &str) -> bool {
 pub fn is_read(name: &str) -> bool {
     matches!(name, "source_remote_read" | "source_site_status")
 }
-pub fn needs_approval(name: &str) -> bool {
-    matches!(name, "source_publish" | "source_rollback")
-}
 async fn authority(app: &App, identity: &Value, agent: &str) -> Result<Store> {
     let uid = identity["_user_id"]
         .as_str()
@@ -94,44 +91,11 @@ pub async fn settings_put(
     crate::phase3_api::quiesce_agent(&app, &agent).await?;
     Ok(Json(result))
 }
-/// Existing Engine credential-binding flow forces human approval even in Auto mode.
-pub async fn approval_binding(
-    store: &Store,
-    run: &Value,
-    name: &str,
-    args: &Value,
-) -> Result<Value> {
-    anyhow::ensure!(needs_approval(name), "Unsupported Source Control approval");
-    let owner = run["requester_user_id"]
-        .as_str()
-        .unwrap_or(store.current_user_id());
-    let agent = run["agent_id"].as_str().unwrap_or("shared_default");
-    let store = store.for_user(owner).await?.for_agent(agent).await?;
-    let site = load(&store, agent, field(args, "site_id", 80)?).await?;
-    anyhow::ensure!(
-        args["connection_revision"].as_u64() == Some(site.revision),
-        "Connection changed before approval"
-    );
-    let secret = credentials(&store, &site).await?;
-    let state = if name == "source_publish" {
-        json!([
-            site.runtime["preview"]["commit_sha"],
-            site.runtime["preview"]["branch"]
-        ])
-    } else {
-        site.runtime["rollback_target"].clone()
-    };
-    Ok(
-        json!({"kind":"source_control_owner","owner_user_id":owner,"agent_id":agent,"site_id":site.id,"connection_revision":site.revision,"credential_digest":digest(&serde_json::to_value(secret)?),"candidate_digest":digest(&state),"tool":name,"arguments_digest":digest(args),"run_id":run["id"],"session_id":run["session_id"],"participation_generation":run["participation_generation"]}),
-    )
-}
 pub async fn execute(
     app: &App,
     sid: &str,
-    run: &Value,
     name: &str,
     args: &Value,
-    pending_id: &str,
     cancel: CancellationToken,
 ) -> Result<Value> {
     let agent = session_agent_id(app, sid).await?;
@@ -146,7 +110,9 @@ pub async fn execute(
         // Configure has no external effect, so invalid input is a readable result, not an uncertain failure.
         return Ok(match configure(&store, &agent, args).await {
             Ok(output) => json!({"status":"success","output":output}),
-            Err(error) => json!({"status":"failed","output":{"error":error.to_string(),"example":{"site_id":"my-site","operation":"configure","request_id":"my-site-configure-1","connection_revision":0,"configuration":{"github_owner":"octocat","github_repo":"my-site","worker_name":"my-site","custom_domain":"my-site.example.com"}}}}),
+            Err(error) => {
+                json!({"status":"failed","output":{"error":error.to_string(),"example":{"site_id":"my-site","operation":"configure","request_id":"my-site-configure-1","connection_revision":0,"configuration":{"github_owner":"octocat","github_repo":"my-site","worker_name":"my-site","custom_domain":"my-site.example.com"}}}})
+            }
         });
     }
     let id = field(args, "site_id", 80)?;
@@ -161,29 +127,6 @@ pub async fn execute(
         args["connection_revision"].as_u64() == Some(site.revision),
         "Connection changed; inspect site status before retrying"
     );
-    if needs_approval(name) {
-        let pending = if run["pending"]["id"] == pending_id
-            || run["pending"]["action_pending_id"] == pending_id
-        {
-            Some(&run["pending"])
-        } else {
-            run["batch"].as_array().and_then(|a| {
-                a.iter()
-                    .map(|v| &v["pending"])
-                    .find(|p| p["id"] == pending_id || p["action_pending_id"] == pending_id)
-            })
-        };
-        anyhow::ensure!(
-            pending.is_some_and(|p| p["human_approved"] == true && p["name"] == name),
-            "Publish and rollback require fresh human approval through the tool approval card"
-        );
-        let pending = pending.unwrap();
-        let current = approval_binding(&store, run, name, &pending["arguments"]).await?;
-        anyhow::ensure!(
-            pending["authorization"] == current,
-            "Source or connection changed after approval"
-        );
-    }
     let secret = credentials(&store, &site).await?;
     if name == "source_remote_commit" {
         for content in args["changes"]
@@ -349,7 +292,9 @@ const CREDENTIAL_INSTRUCTION: &str = "For each missing credential, first show th
 async fn resolve_attachments(app: &App, sid: &str, args: &Value) -> Result<Value> {
     let mut args = args.clone();
     for change in args["changes"].as_array_mut().into_iter().flatten() {
-        let Some(id) = change["attachment_id"].as_str().map(str::to_owned) else { continue };
+        let Some(id) = change["attachment_id"].as_str().map(str::to_owned) else {
+            continue;
+        };
         anyhow::ensure!(
             change.get("content").is_none() && change.get("content_base64").is_none(),
             "Use one of content, content_base64 or attachment_id per file"
@@ -361,9 +306,17 @@ async fn resolve_attachments(app: &App, sid: &str, args: &Value) -> Result<Value
             .filter(|record| webagent_files::uploads::sent_view(record, sid).is_some())
             .ok_or_else(|| anyhow!("Attachment {id} is not a file sent in this conversation"))?;
         let bytes = webagent_files::uploads::content_bytes(&record)?;
-        let object = change.as_object_mut().ok_or_else(|| anyhow!("Invalid change"))?;
+        let object = change
+            .as_object_mut()
+            .ok_or_else(|| anyhow!("Invalid change"))?;
         object.remove("attachment_id");
-        object.insert("content_base64".into(), json!(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)));
+        object.insert(
+            "content_base64".into(),
+            json!(base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                bytes
+            )),
+        );
     }
     Ok(args)
 }

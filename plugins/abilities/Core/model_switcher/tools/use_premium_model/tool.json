@@ -1,6 +1,6 @@
 {
   "name": "use_premium_model",
-  "description": "Use this agent's assigned Premium role for this run. Requires exact human approval.",
+  "description": "Use this agent's assigned Premium role for this run.",
   "effect": "write",
   "default_access": {
     "operator": "auto",

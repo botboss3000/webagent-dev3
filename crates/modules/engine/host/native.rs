@@ -586,13 +586,6 @@ impl
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         async move {
             let app = self.host.app(view);
-            tools::native::model_switcher::require_premium_confirmation(
-                &tools::native_host::Host(&app),
-                run,
-                name,
-                args,
-            )
-            .await?;
             crate::session_messaging::preflight(&app, run, name, args).await
         }
     }

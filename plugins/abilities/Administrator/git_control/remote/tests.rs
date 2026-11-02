@@ -338,44 +338,6 @@ async fn uncertain_write_is_saved_and_identical_retry_never_replays() {
     .is_err());
 }
 #[tokio::test]
-async fn approval_binding_changes_with_credential_and_preview_source() {
-    let (_root, app, mut site) = fixture().await;
-    let run = json!({"id":"test-run","session_id":"test-session","agent_id":"shared_default","requester_user_id":"admin"});
-    let request = json!({"site_id":"fixture","connection_revision":1,"commit_sha":HEAD});
-    let first = approval_binding(&app.store, &run, "source_publish", &request)
-        .await
-        .unwrap();
-    site.runtime = json!({"preview":{"commit_sha":NEXT,"branch":"webagent/home"}});
-    app.store
-        .put(
-            &site_key("shared_default", "fixture"),
-            &serde_json::to_value(&site).unwrap(),
-        )
-        .await
-        .unwrap();
-    let second = approval_binding(&app.store, &run, "source_publish", &request)
-        .await
-        .unwrap();
-    assert_ne!(first, second);
-    save(
-        &app.store,
-        "shared_default",
-        "fixture",
-        Save {
-            expected_revision: 1,
-            configuration: config(),
-            revoked: false,
-        },
-    )
-    .await
-    .unwrap();
-    assert!(
-        approval_binding(&app.store, &run, "source_publish", &request)
-            .await
-            .is_err()
-    );
-}
-#[tokio::test]
 async fn provider_delete_success_does_not_mean_preview_is_disabled() {
     let (_root, app, mut site) = fixture().await;
     site.runtime = json!({"preview":{"build_id":BUILD,"branch":"webagent/home","commit_sha":HEAD,"status":"ready","url":"https://home-fixture.user.workers.dev/","preview_name":"home"}});
@@ -908,57 +870,11 @@ async fn source_validation_rejects_executable_worker_configuration_before_build(
     transport.done();
 }
 
-#[tokio::test]
-async fn native_owner_approval_binding_is_required_and_revoked_by_rotation() {
-    let (_root, app, _site) = fixture().await;
-    let sid = crate::runtime_tests::conversation(&app).await;
-    let request = json!({"site_id":"fixture","connection_revision":1,"request_id":"approval-boundary","commit_sha":NEXT,"expected_production_sha":HEAD});
-    let mut run = json!({"id":"source-approval-test","session_id":sid,"agent_id":"shared_default","requester_user_id":"admin","pending":{"id":"source-pending","name":"source_publish","arguments":request,"human_approved":false}});
-    assert!(crate::credential_authorization::declaration("source_publish").is_some());
-    let denied = execute(
-        &app,
-        &sid,
-        &run,
-        "source_publish",
-        &request,
-        "source-pending",
-        CancellationToken::new(),
-    )
-    .await
-    .unwrap_err();
-    assert!(
-        denied.to_string().contains("fresh human approval"),
-        "{denied}"
-    );
-    let binding =
-        crate::credential_authorization::resolve(&app.store, &run, "source_publish", &request)
-            .await
-            .unwrap()
-            .unwrap();
-    run["pending"]["authorization"] = binding;
-    run["pending"]["human_approved"] = json!(true);
-    assert!(
-        crate::credential_authorization::valid(&app.store, &run, &run["pending"])
-            .await
-            .unwrap()
-    );
-    save(
-        &app.store,
-        "shared_default",
-        "fixture",
-        Save {
-            expected_revision: 1,
-            configuration: config(),
-            revoked: false,
-        },
-    )
-    .await
-    .unwrap();
-    assert!(
-        !crate::credential_authorization::valid(&app.store, &run, &run["pending"])
-            .await
-            .unwrap()
-    );
+#[test]
+fn publish_and_rollback_follow_ordinary_tool_policy() {
+    for name in ["source_publish", "source_rollback"] {
+        assert!(crate::credential_authorization::declaration(name).is_none());
+    }
 }
 #[tokio::test]
 async fn settings_api_returns_conflict_for_stale_revision_and_never_returns_tokens() {
@@ -1030,27 +946,6 @@ async fn uncertain_build_cannot_adopt_an_older_build_of_the_same_commit() {
     transport.done();
 }
 
-#[tokio::test]
-async fn vault_rotation_invalidates_publish_approval_without_connection_change() {
-    let (_root, app, site) = fixture().await;
-    let run = json!({"id":"run","session_id":"session","agent_id":"shared_default","requester_user_id":"admin"});
-    let request = json!({"site_id":"fixture","connection_revision":1});
-    let first = approval_binding(&app.store, &run, "source_publish", &request)
-        .await
-        .unwrap();
-    seed_vault(&app.store, &site, "github", "fixture-token-only", 2).await;
-    let second = approval_binding(&app.store, &run, "source_publish", &request)
-        .await
-        .unwrap();
-    assert_ne!(first, second);
-    assert_eq!(
-        load(&app.store, "shared_default", "fixture")
-            .await
-            .unwrap()
-            .revision,
-        1
-    );
-}
 #[tokio::test]
 async fn missing_vault_entries_return_private_form_metadata_without_values() {
     let (_root, app, site) = fixture().await;
@@ -1159,16 +1054,30 @@ async fn agent_configuration_cannot_reenable_a_human_revoked_connection() {
 async fn minimal_configuration_needs_no_cloudflare_ids_and_returns_creation_links() {
     let (_root, app, _site) = fixture().await;
     let args = json!({"site_id":"minimal","connection_revision":0,"request_id":"setup-minimal","configuration":{"github_owner":"fixture-owner","github_repo":"fixture-min","worker_name":"fixture-min","custom_domain":"fixture-min.example.com"}});
-    let output = configure(&app.store, "shared_default", &args).await.unwrap();
+    let output = configure(&app.store, "shared_default", &args)
+        .await
+        .unwrap();
     assert_eq!(output["configuration"]["production_branch"], "main");
     assert_eq!(output["configuration"]["cloudflare_account_id"], "");
     assert_eq!(output["configuration"]["build_command"], BUILD_COMMAND);
-    assert_eq!(output["credential_requests"][0]["create_url"], "https://github.com/settings/personal-access-tokens/new");
-    assert_eq!(output["credential_requests"][1]["create_url"], "https://dash.cloudflare.com/profile/api-tokens");
+    assert_eq!(
+        output["credential_requests"][0]["create_url"],
+        "https://github.com/settings/personal-access-tokens/new"
+    );
+    assert_eq!(
+        output["credential_requests"][1]["create_url"],
+        "https://dash.cloudflare.com/profile/api-tokens"
+    );
     assert_eq!(output["setup_links"][0]["url"], GITHUB_APP_INSTALL);
     let missing = json!({"site_id":"broken","connection_revision":0,"request_id":"setup-broken"});
-    let error = configure(&app.store, "shared_default", &missing).await.unwrap_err().to_string();
-    assert!(error.contains("github_owner, github_repo and worker_name"), "{error}");
+    let error = configure(&app.store, "shared_default", &missing)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("github_owner, github_repo and worker_name"),
+        "{error}"
+    );
     let mut bad = args.clone();
     bad["site_id"] = json!("bad-domain");
     bad["configuration"]["custom_domain"] = json!("Bad_Domain");
@@ -1179,7 +1088,9 @@ async fn discovery_operation<'a>(app: &'a App, site: &Site, mock: &'a Mock) -> O
         store: &app.store,
         site: site.clone(),
         transport: mock,
-        credential_digest: digest(&serde_json::to_value(credentials(&app.store, site).await.unwrap()).unwrap()),
+        credential_digest: digest(
+            &serde_json::to_value(credentials(&app.store, site).await.unwrap()).unwrap(),
+        ),
         receipt: json!({"steps":[]}),
         key: "fixture-discovery-receipt".into(),
     }
@@ -1192,9 +1103,24 @@ async fn cloudflare_ids_are_discovered_and_custom_domain_attached_once() {
     site.configuration.custom_domain = "fixture.example.com".into();
     let account = "b".repeat(32);
     let mock = Mock::new(vec![
-        ("GET", "/client/v4/accounts", 200, json!({"success":true,"result":[{"id":account,"name":"Fixture"}]})),
-        ("GET", "/builds/tokens", 200, json!({"success":true,"result":[{"build_token_name":"fixture","build_token_uuid":BUILD}]})),
-        ("PUT", "/workers/domains", 200, json!({"success":true,"result":{"hostname":"fixture.example.com"}})),
+        (
+            "GET",
+            "/client/v4/accounts",
+            200,
+            json!({"success":true,"result":[{"id":account,"name":"Fixture"}]}),
+        ),
+        (
+            "GET",
+            "/builds/tokens",
+            200,
+            json!({"success":true,"result":[{"build_token_name":"fixture","build_token_uuid":BUILD}]}),
+        ),
+        (
+            "PUT",
+            "/workers/domains",
+            200,
+            json!({"success":true,"result":{"hostname":"fixture.example.com"}}),
+        ),
     ]);
     let mut op = discovery_operation(&app, &site, &mock).await;
     op.resolve_cloudflare().await.unwrap();
@@ -1205,8 +1131,14 @@ async fn cloudflare_ids_are_discovered_and_custom_domain_attached_once() {
     mock.done();
     let calls = mock.requests.lock().unwrap();
     let domain = calls.last().unwrap();
-    assert_eq!(domain.path, format!("/client/v4/accounts/{account}/workers/domains"));
-    assert_eq!(domain.body, json!({"hostname":"fixture.example.com","service":"fixture-site"}));
+    assert_eq!(
+        domain.path,
+        format!("/client/v4/accounts/{account}/workers/domains")
+    );
+    assert_eq!(
+        domain.body,
+        json!({"hostname":"fixture.example.com","service":"fixture-site"})
+    );
 }
 #[tokio::test]
 async fn several_cloudflare_accounts_require_an_explicit_choice() {
@@ -1220,7 +1152,12 @@ async fn several_cloudflare_accounts_require_an_explicit_choice() {
     )]);
     let mut op = discovery_operation(&app, &site, &mock).await;
     let error = op.resolve_cloudflare().await.unwrap_err().to_string();
-    assert!(error.contains("2 accounts") && error.contains("One = ") && error.contains("cloudflare_account_id"), "{error}");
+    assert!(
+        error.contains("2 accounts")
+            && error.contains("One = ")
+            && error.contains("cloudflare_account_id"),
+        "{error}"
+    );
     assert!(op.account_id().is_empty());
 }
 #[tokio::test]
@@ -1228,22 +1165,52 @@ async fn binary_files_commit_as_base64_blobs_and_invalid_base64_never_reaches_gi
     let (_root, app, site) = fixture().await;
     let encoded = base64::engine::general_purpose::STANDARD.encode([0u8, 1, 2, 255]);
     let transport = Mock::new(vec![
-        ("GET", "/git/ref/heads/webagent/images", 200, json!({"object":{"sha":HEAD}})),
-        ("GET", "/git/commits/1111111111111111111111111111111111111111", 200, json!({"tree":{"sha":TREE}})),
+        (
+            "GET",
+            "/git/ref/heads/webagent/images",
+            200,
+            json!({"object":{"sha":HEAD}}),
+        ),
+        (
+            "GET",
+            "/git/commits/1111111111111111111111111111111111111111",
+            200,
+            json!({"tree":{"sha":TREE}}),
+        ),
         ("POST", "/git/blobs", 201, json!({"sha":TREE})),
         ("POST", "/git/trees", 201, json!({"sha":TREE})),
         ("POST", "/git/commits", 201, json!({"sha":NEXT})),
-        ("PATCH", "/git/refs/heads/webagent/images", 200, json!({"object":{"sha":NEXT}})),
+        (
+            "PATCH",
+            "/git/refs/heads/webagent/images",
+            200,
+            json!({"object":{"sha":NEXT}}),
+        ),
     ]);
     let mut request = args("commit-binary");
     request["branch"] = json!("webagent/images");
     request["expected_head"] = json!(HEAD);
     request["message"] = json!("Add photo");
     request["changes"] = json!([{"path":"public/photo.png","content_base64":encoded}]);
-    let result = run_operation(&app.store, site.clone(), &transport, "source_remote_commit", &request).await.unwrap();
+    let result = run_operation(
+        &app.store,
+        site.clone(),
+        &transport,
+        "source_remote_commit",
+        &request,
+    )
+    .await
+    .unwrap();
     assert_eq!(result["status"], "success", "{result}");
     transport.done();
-    let blob = transport.requests.lock().unwrap().iter().find(|r| r.path.ends_with("/git/blobs")).unwrap().clone();
+    let blob = transport
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|r| r.path.ends_with("/git/blobs"))
+        .unwrap()
+        .clone();
     assert_eq!(blob.body, json!({"content":encoded,"encoding":"base64"}));
     let empty = Mock::new(vec![]);
     let mut invalid = args("commit-invalid-binary");
@@ -1251,7 +1218,15 @@ async fn binary_files_commit_as_base64_blobs_and_invalid_base64_never_reaches_gi
     invalid["expected_head"] = json!(HEAD);
     invalid["message"] = json!("Broken");
     invalid["changes"] = json!([{"path":"public/x.png","content_base64":"not base64!"}]);
-    let result = run_operation(&app.store, load(&app.store, "shared_default", "fixture").await.unwrap(), &empty, "source_remote_commit", &invalid).await.unwrap();
+    let result = run_operation(
+        &app.store,
+        load(&app.store, "shared_default", "fixture").await.unwrap(),
+        &empty,
+        "source_remote_commit",
+        &invalid,
+    )
+    .await
+    .unwrap();
     assert_eq!(result["status"], "failed", "{result}");
     assert!(empty.requests.lock().unwrap().is_empty());
 }

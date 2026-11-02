@@ -45,22 +45,6 @@ fn permission_to_switch(run: &Value) -> Result<()> {
     }
     Ok(())
 }
-fn premium_entry(catalog: &model_selection::Catalog, agent: &str, entry: &str) -> bool {
-    let Some(roster) = catalog.agent_models.get(agent) else {
-        return false;
-    };
-    if roster
-        .roles
-        .get(&model_selection::ModelRole::Standard)
-        .is_some_and(|a| a.entry_id == entry)
-    {
-        return false;
-    }
-    roster
-        .roles
-        .get(&model_selection::ModelRole::Premium)
-        .is_some_and(|a| a.entry_id == entry || a.backup_entry_ids.iter().any(|id| id == entry))
-}
 /// Execute model control `name` at `call`'s position.
 pub async fn execute(
     host: &dyn NativeHost,
@@ -132,19 +116,10 @@ pub async fn execute(
             let q: Model = serde_json::from_value(args.clone())?;
             let mut plan = catalog.resolve_custom(&agent, &q.entry_id)?;
             host.pin_model_plan(&mut plan).await?;
-            let premium = premium_entry(&catalog, &agent, &q.entry_id);
-            if premium && run["pending"]["human_approved"] != true {
-                return Err(anyhow!(
-                    "Premium model selection requires exact human approval"
-                ));
-            }
-            state["state"]["selection"] = json!({"entry_id":q.entry_id,"premium_approved":premium});
+            state["state"]["selection"] = json!({"entry_id":q.entry_id});
         }
         "use_premium_model" => {
             let _: Empty = serde_json::from_value(args.clone())?;
-            if run["pending"]["human_approved"] != true {
-                return Err(anyhow!("Premium role requires exact human approval"));
-            }
             let mut plan = catalog.resolve_role(&agent, model_selection::ModelRole::Premium)?;
             host.pin_model_plan(&mut plan).await?;
             state["state"]["selection"] = json!({"role":"premium"});
@@ -182,25 +157,6 @@ pub async fn execute(
         .await?;
     Ok(json!({"status":"success","output":result}))
 }
-/// Mark a premium model change on `run`'s pending call as needing new-intent confirmation.
-pub async fn require_premium_confirmation(
-    host: &dyn NativeHost,
-    run: &mut Value,
-    name: &str,
-    args: &Value,
-) -> Result<()> {
-    if name == "use_premium_model"
-        || name == "set_model"
-            && premium_entry(
-                &host.model_catalog().await?,
-                run["agent_id"].as_str().unwrap_or("shared_default"),
-                args["entry_id"].as_str().unwrap_or(""),
-            )
-    {
-        run["pending"]["new_intent_confirmation"] = json!(true);
-    }
-    Ok(())
-}
 /// Apply accepted overrides once at a model boundary; System and later runs keep their own plans.
 pub async fn apply(host: &dyn NativeHost, run: &mut Value) -> Result<bool> {
     let Some(rid) = run["id"].as_str() else {
@@ -219,9 +175,6 @@ pub async fn apply(host: &dyn NativeHost, run: &mut Value) -> Result<bool> {
     let selection = &state["state"]["selection"];
     if selection.is_object() {
         let mut plan = if let Some(entry) = selection["entry_id"].as_str() {
-            if premium_entry(&catalog, agent, entry) && selection["premium_approved"] != true {
-                return Err(anyhow!("Selected entry now requires Premium approval"));
-            }
             catalog.resolve_custom(agent, entry)?
         } else {
             catalog.resolve_role(

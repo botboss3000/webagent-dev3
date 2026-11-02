@@ -416,10 +416,7 @@ pub async fn execute(
         bail!("Current run/session mismatch");
     }
     if crate::source_control::owns(name) {
-        return Box::pin(crate::source_control::execute(
-            app, sid, &run, name, args, pending_id, cancel,
-        ))
-        .await;
+        return Box::pin(crate::source_control::execute(app, sid, name, args, cancel)).await;
     }
     match name {
         "code_index_maintenance" => {

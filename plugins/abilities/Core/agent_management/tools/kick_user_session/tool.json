@@ -1,6 +1,6 @@
 {
   "name": "kick_user_session",
-  "description": "Send a caller-attributed message to an owner-private session through normal queue admission. Requires exact owner approval; returns admission, not a completed answer.",
+  "description": "Send a caller-attributed message to an owner-private session through normal queue admission. Returns admission, not a completed answer.",
   "effect": "write",
   "default_access": {
     "operator": "auto",

@@ -1,7 +1,7 @@
 {
   "display_name": "Model Switcher",
   "kind": "ability",
-  "description": "Select a permitted text-chat model or reasoning effort for the current run. Premium selection requires exact human approval; later runs retain their normal assignments.",
+  "description": "Select a permitted text-chat model or reasoning effort for the current run. Later runs retain their normal assignments.",
   "icon": "gauge",
   "color": "#bb9af7",
   "order": 8,
@@ -14,7 +14,7 @@
       "levels": {
         "conservative": "MODEL-SWITCHING POSTURE — Conservative: stay on your default model at its default effort. Only switch model, or raise reasoning effort, when the user explicitly asks or when you are genuinely stuck and a stronger model / deeper thinking is the clear remedy. Do not proactively upgrade or raise effort.",
         "balanced": "",
-        "eager": "MODEL-SWITCHING POSTURE — Eager: choose an eligible text-chat model and supported reasoning effort appropriate to the task. Premium changes require exact human approval. Use Image Vision/Image Generation for assigned Image In/Out roles. No closing revert is needed at run end."
+        "eager": "MODEL-SWITCHING POSTURE — Eager: choose an eligible text-chat model and supported reasoning effort appropriate to the task. Use Image Vision/Image Generation for assigned Image In/Out roles. No closing revert is needed at run end."
       }
     },
     "guidance": {
