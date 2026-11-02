@@ -1071,6 +1071,7 @@ class EarlyBuildWorkTests(unittest.TestCase):
         self.assertEqual(images,["sha256:"+name for name in fixtures.host.TARGETS]);self.assertEqual(exported,[images])
         self.assertEqual(path,broker.state/"execution"/job["job_id"]/"rollback-early.tar");self.assertTrue(path.is_file())
         self.assertEqual(prewarmed,[b"blob"]);self.assertEqual(job["early_work"]["ui"],{"executed":1,"reused":2})
+        self.assertEqual(sorted(t["phase"]for t in job["phase_timings"]),["early_rollback_save","early_ui_tests"])
     def test_other_operations_and_disabled_publication_skip_overlap(self):
         broker,exported,prewarmed=self.broker(ui_enabled=False)
         self.assertEqual(broker._start_early({"job_id":str(uuid.uuid4()),"operation":"deploy"},b"blob"),{})
@@ -1081,6 +1082,7 @@ class EarlyBuildWorkTests(unittest.TestCase):
         job={"job_id":str(uuid.uuid4()),"operation":"build_deploy"}
         ready=broker._join_early(job,broker._start_early(job,b"blob"))
         self.assertNotIn("rollback",ready);self.assertIn("docker save failed",job["early_work"]["rollback"])
+        self.assertEqual([(t["phase"],t["outcome"])for t in job["phase_timings"]if t["phase"]=="early_rollback_save"],[("early_rollback_save","failed")])
 
 
 class PrewarmTests(unittest.TestCase):
@@ -1088,9 +1090,13 @@ class PrewarmTests(unittest.TestCase):
         import types
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup);root=Path(temp.name);seen=[]
         def validate(job_id,folder,evidence):
+            # The fixture container runs as another user: every file and directory must be readable by others.
+            for path in [folder,*folder.rglob("*")]:self.assertTrue(path.stat().st_mode&0o004,path)
             seen.append((job_id,(folder/"v3/ui/app.test.js").read_text(),evidence["runtime_images"],evidence["tests"]))
             return {"executed_tests":evidence["tests"]}
-        blob=fixtures.context(extra={"v3/ui/app.test.js":"test\n"})
+        files={name:(0o644,data.encode())for name,data in {"v3/Dockerfile":"FROM test","v3/Cargo.toml":"fixture","v3/Cargo.lock":"locked"}.items()}
+        files["v3/ui/app.test.js"]=(0o600,b"test\n")  # owner-only in the source, as some fixtures are
+        blob=fixtures.host.release.archive(files,fixtures.host.context_digest)
         broker=types.SimpleNamespace(runner=types.SimpleNamespace(validate_selected_tests=validate))
         policy=types.SimpleNamespace(dependencies=lambda entries,changed:{"tests":tests,"sha256":"x"})
         publication=fixtures.host.ui_publication_module.UIPublication(broker,fixtures.host.release,fixtures.host.context_digest,None,root,policy)

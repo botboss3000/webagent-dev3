@@ -6601,15 +6601,20 @@ class Broker:
         executor = getattr(self.runner, "executor", None)
         if executor is None or job["operation"] != "build_deploy":
             return {}
+        # Each records its duration in phase_timings (early_rollback_save, early_ui_tests).
         def rollback():
-            images = [self.runner.inspect(name)["Image"] for name in TARGETS]
-            path = self.state / "execution" / job["job_id"] / "rollback-early.tar"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            self.runner.export(images, path)
-            return images, path
+            with host_phase(job, "early_rollback_save"):
+                images = [self.runner.inspect(name)["Image"] for name in TARGETS]
+                path = self.state / "execution" / job["job_id"] / "rollback-early.tar"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                self.runner.export(images, path)
+                return images, path
+        def ui():
+            with host_phase(job, "early_ui_tests"):
+                return self.ui_publication.prewarm(job, blob)
         early = {"rollback": executor.background(rollback, "early-rollback")}
         if self.ui_publication.enabled(job):
-            early["ui"] = executor.background(lambda: self.ui_publication.prewarm(job, blob), "early-ui-tests")
+            early["ui"] = executor.background(ui, "early-ui-tests")
         return early
 
     def _join_early(self, job, early):

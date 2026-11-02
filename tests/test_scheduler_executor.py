@@ -989,6 +989,13 @@ class DependencySnapshotTests(unittest.TestCase):
         (shared/"target/release/deps/libserde-0123.rlib").write_bytes(b"tampered")
         job,output,log=self.run_job()
         self.assertEqual(job["dependency_snapshot"]["decision"],"unavailable");self.assertFalse((output/"target").exists())
+    def test_failed_stub_compile_keeps_the_end_of_its_output(self):
+        def failed(*args,**kwargs):raise RuntimeError("fixed command failed: "+"   Compiling crate v1.0.0\n"*200+"error: could not compile `fixture` (lib)")
+        self.worker.phase=failed
+        job={"job_id":str(uuid.uuid4())};log=self.worker.dependency_snapshot(job,self.source,self.metadata(self.root/uuid.uuid4().hex))
+        self.assertEqual(job["dependency_snapshot"]["decision"],"unavailable")
+        self.assertTrue(job["dependency_snapshot"]["detail"].endswith("could not compile `fixture` (lib)"))
+        self.assertLessEqual(len(job["dependency_snapshot"]["detail"]),2000);self.assertIn("could not compile",log)
     def test_changed_lockfile_selects_a_new_snapshot_and_cancellation_propagates(self):
         self.run_job()
         (self.source/"Cargo.lock").write_text("version = 4\n# changed\n")

@@ -675,8 +675,9 @@ class Executor:
         except (OSError,RuntimeError,ValueError,KeyError,TypeError)as error:
             if target.is_symlink():target.unlink()
             elif target.exists():shutil.rmtree(target)
-            persist("unavailable",reason=type(error).__name__,detail=str(error)[:300])
-            return "Compiled-dependency snapshot unavailable; compiling cold: "+str(error)[:300]+"\n"
+            # A failed compile's message starts with progress lines; its cause is at the end.
+            persist("unavailable",reason=type(error).__name__,detail=str(error)[-2000:])
+            return "Compiled-dependency snapshot unavailable; compiling cold: "+str(error)[-2000:]+"\n"
 
     @staticmethod
     def workspace_stub(source,metadata,stub):
@@ -821,8 +822,8 @@ class Executor:
             raise
         except (OSError,RuntimeError,ValueError,KeyError,TypeError)as error:
             if replacement.exists():shutil.rmtree(replacement,ignore_errors=True)
-            persist("unavailable",reason=type(error).__name__,detail=str(error)[:300])
-            return "Workspace snapshot unavailable; module crates compile in the build: "+str(error)[:300]+"\n"
+            persist("unavailable",reason=type(error).__name__,detail=str(error)[-2000:])
+            return "Workspace snapshot unavailable; module crates compile in the build: "+str(error)[-2000:]+"\n"
 
     @staticmethod
     def workspace_receipt(folder):

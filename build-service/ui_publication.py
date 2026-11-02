@@ -256,6 +256,10 @@ class UIPublication:
         folder=self.assets/"preparation-attempts"/job["job_id"]/("early-"+uuid.uuid4().hex)
         try:
             self.release.extract(folder,blob,self.validate)
+            # The fixture container runs as another user; this private scratch copy keeps source
+            # modes (some owner-only), so make it readable as staged publication assets are.
+            for path in [folder,*folder.rglob("*")]:
+                if not path.is_symlink():path.chmod(0o755 if path.is_dir()else path.stat().st_mode&0o777|0o444)
             return self.broker.runner.validate_selected_tests(job["job_id"],folder,{**evidence,"runtime_images":{}})
         finally:shutil.rmtree(folder,ignore_errors=True)
 
