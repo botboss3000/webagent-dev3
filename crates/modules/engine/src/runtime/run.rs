@@ -513,6 +513,10 @@ impl<
             return Ok(());
         }
         if !crate::components::available(crate::ports::AgentMetadata::root(app.store.records())) {
+            eprintln!(
+                "Context preparation at {stage} paused run {} for an unavailable engine component: {error:#}",
+                run["id"].as_str().unwrap_or("unknown")
+            );
             return app.component_pause(run).await;
         }
         eprintln!(

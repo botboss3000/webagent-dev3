@@ -587,6 +587,25 @@ static FAILURE_UNTIL: OnceLock<StdMutex<Option<std::time::Instant>>> = OnceLock:
 /// Expired entries are pruned and at most 256 live roots/components are retained.
 static PURE_FAILURE_UNTIL: OnceLock<StdMutex<BTreeMap<(PathBuf, String), std::time::Instant>>> =
     OnceLock::new();
+/// The latest failed component and its bounded cause, so a paused run can name it.
+static LAST_FAILURE: OnceLock<StdMutex<Option<(String, String)>>> = OnceLock::new();
+/// Log a component failure and keep its cause; the cooldown that follows otherwise hides it.
+fn note_failure(id: &str, error: &anyhow::Error) {
+    let cause: String = format!("{error:#}").chars().take(300).collect();
+    eprintln!("Engine component {id} failed: {cause}");
+    *LAST_FAILURE
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some((id.into(), cause));
+}
+/// The most recently failed component and its bounded cause, if any.
+pub fn last_failure() -> Option<(String, String)> {
+    LAST_FAILURE
+        .get_or_init(|| StdMutex::new(None))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
 /// Keep only the reviewed execution IDs eligible for host-retained run pauses.
 pub fn working_component(id: &str) -> bool {
     WORKING_COMPONENTS.contains(&id)
@@ -1750,9 +1769,10 @@ async fn pure_call<T: serde::Serialize, R: serde::de::DeserializeOwned>(
         )
     }
     .await;
-    if result.is_err() {
+    if let Err(error) = &result {
         *service.connection.lock().await = None;
         if !cancel.is_cancelled() {
+            note_failure(id, error);
             record_pure_failure(root, id);
         }
     }
@@ -1890,6 +1910,7 @@ pub async fn background_plan(
         match result {
             Ok(plan) => plan,
             Err(error) => {
+                note_failure(BACKGROUND, &error);
                 *service.connection.lock().await = None;
                 *BACKGROUND_FAILURE_UNTIL
                     .get_or_init(|| StdMutex::new(None))
@@ -2055,6 +2076,7 @@ pub async fn tool_results_plan(
         match result {
             Ok(plan) => plan,
             Err(error) => {
+                note_failure(CONTEXT, &error);
                 *service.connection.lock().await = None;
                 *FAILURE_UNTIL
                     .get_or_init(|| StdMutex::new(None))
@@ -2120,6 +2142,7 @@ pub async fn prepare<'a>(
         let response = match service.call(&run_key, &input, cancel).await {
             Ok(response) => response,
             Err(error) => {
+                note_failure(CONTEXT, &error);
                 *FAILURE_UNTIL
                     .get_or_init(|| StdMutex::new(None))
                     .lock()
@@ -2160,7 +2183,8 @@ pub async fn prepare<'a>(
             return Err(context_assembly::Failure::new(pair.0, pair.1).into());
         }
         let result = validated(request, state, response);
-        if result.is_err() {
+        if let Err(error) = &result {
+            note_failure(CONTEXT, error);
             *service.connection.lock().await = None;
             *FAILURE_UNTIL
                 .get_or_init(|| StdMutex::new(None))
@@ -2517,6 +2541,14 @@ mod tests {
                 "{pointer}"
             );
         }
+    }
+
+    /// A failure keeps a bounded cause that a run pause can name.
+    #[test]
+    fn component_failure_cause_is_recorded_and_bounded() {
+        note_failure(PROJECTION, &anyhow!("{}", "x".repeat(400)));
+        let (id, cause) = last_failure().unwrap();
+        assert_eq!((id.as_str(), cause.chars().count()), (PROJECTION, 300));
     }
 
     /// Each new registry ID has an isolated bounded retry fence, including expiry.
