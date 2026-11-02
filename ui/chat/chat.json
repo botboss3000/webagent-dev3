@@ -123,10 +123,6 @@
           "target": {
             "_instructions": "container_size: Control container size as a CSS length; auto allows natural sizing.",
             "container_size": "28px"
-          },
-          "voice_reply": {
-            "_instructions": "container_size: Control container size as a CSS length; auto allows natural sizing.",
-            "container_size": "28px"
           }
         },
         "enabled": true,
@@ -140,7 +136,6 @@
               "mode",
               "model_changer",
               "abilities",
-              "voice_reply",
               "browser_notifications"
             ]
           }
@@ -261,8 +256,7 @@
               "controls": [
                 "stop",
                 "continue",
-                "mic",
-                "send"
+                "mic_send"
               ],
               "padding": "4px 20px 20px 0"
             }
@@ -539,8 +533,7 @@
               "controls": [
                 "stop",
                 "continue",
-                "mic",
-                "send"
+                "mic_send"
               ],
               "padding": "20px 20px 20px 0"
             }
@@ -551,9 +544,9 @@
       "margin_bottom": "24px"
     },
     "live_reload": {
-      "_instructions": "Enabled native open chats reread this file automatically. interval_ms is bounded to 1000–60000ms; provided guest/embed settings keep their existing owner. Disable requires reload to enable again.",
       "enabled": true,
-      "interval_ms": 2000
+      "interval_ms": 2000,
+      "_instructions": "Enabled native open chats reread this file automatically. interval_ms is bounded to 1000–60000ms; provided guest/embed settings keep their existing owner. Disable requires reload to enable again."
     },
     "mark_read_on_visit": false,
     "message_bubbles": {
@@ -892,7 +885,6 @@
               "mode",
               "model_changer",
               "abilities",
-              "voice_reply",
               "browser_notifications"
             ]
           }
@@ -1048,8 +1040,11 @@
             "center": [],
             "left": [],
             "right": [
+              "changes",
+              "mode",
               "model_changer",
-              "voice_reply"
+              "abilities",
+              "browser_notifications"
             ]
           }
         ]
@@ -1172,7 +1167,6 @@
               "mode",
               "model_changer",
               "abilities",
-              "voice_reply",
               "browser_notifications"
             ]
           }
@@ -1302,14 +1296,10 @@
       }
     },
     "window": {
-      "_instructions": "width, height, min_width, min_height: Window size in CSS pixels, clamped to the viewport. resizable: Allow edge resizing. radius: Outer corner radius in pixels (0-64). background: CSS colour for the window and chat surface; panel tints derive from it; empty keeps the theme colour. theme: light or dark to fix the text theme for that colour; empty follows the visitor preference.",
-      "background": "",
       "height": 620,
       "min_height": 320,
       "min_width": 300,
-      "radius": 16,
       "resizable": true,
-      "theme": "",
       "width": 440
     }
   },
@@ -1564,15 +1554,6 @@
         "icon": "mic",
         "targets": [
           "pill"
-        ]
-      },
-      "voice_reply": {
-        "_instructions": "display_name: Human-readable control name in the reference catalog. targets: Reference list of layout regions in which this control can appear. icon: Lucide icon name.",
-        "description": "Speak each new agent reply aloud in the agent's voice; shown only when the agent's Identity turns voice output on",
-        "display_name": "Voice Reply",
-        "icon": "volume-2",
-        "targets": [
-          "below_pill"
         ]
       }
     },
