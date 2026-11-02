@@ -351,6 +351,9 @@ export function mountModelTable(host, opts = {}) {
   const catalogReadOnly = opts.catalogReadOnly === true;
   const userCatalog = opts.userCatalog === true;
   const inlineCatalogAdd = opts.inlineCatalogAdd === true;
+  // Providers whose models are picked from an account list (platform roster or saved BYO models), not a credential.
+  const LIST_PROVIDERS = new Set(['webagent_catalog', 'my_models']);
+  const listProvider = () => LIST_PROVIDERS.has(S.currentProvider);
   const agentLocalRoster = opts.agentLocalRoster === true;
 
   // ── instance state ──
@@ -1035,7 +1038,7 @@ export function mountModelTable(host, opts = {}) {
 
   function renderModelDropdown(filter) {
     modelDd.innerHTML = '';
-    const manualId = inlineCatalogAdd && opts.manualModelEntry && S.currentProvider !== 'webagent_catalog'
+    const manualId = inlineCatalogAdd && opts.manualModelEntry && !listProvider()
       && !isSubscriptionProvider() ? modelSearch.value.trim() : '';
     if (!S.allModels.length && !manualId) {
       modelDd.innerHTML = '<div class="ac-model-results-empty">Models will appear here when available.</div>';
@@ -1076,8 +1079,9 @@ export function mountModelTable(host, opts = {}) {
       // never the real "provider / model" string.
       const visibleModelName = isPlatformCatalogModel
         ? (m.display_name || 'WebAgent Catalog model')
-        : m.id;
-      const secondaryModelName = isPlatformCatalogModel ? '' : (m.name || '');
+        : (listProvider() ? (m.name || m.id) : m.id);
+      // List-provider ids are opaque (platform:/byo:), so their rows show the saved name only.
+      const secondaryModelName = isPlatformCatalogModel || listProvider() ? '' : (m.name || '');
       const capBadges = [
         ['Decision', !!m.decision_capable],
         ['Text', m.text_capable !== false],
@@ -1361,7 +1365,7 @@ export function mountModelTable(host, opts = {}) {
     // OpenRouter Free is an App → Model Catalog authoring shortcut. It must not
     // appear in the user's Available models flow, regardless of provider.
     if (userCatalog) freeBtn.style.display = 'none';
-    if (userCatalog && S.currentProvider === 'webagent_catalog') {
+    if (userCatalog && listProvider()) {
       [urlRow, keyRow, savedKeyRow, subscriptionRow].forEach(row => { row.hidden = true; row.style.display = 'none'; });
       return;
     }
@@ -1542,7 +1546,7 @@ export function mountModelTable(host, opts = {}) {
     const provider = S.currentProvider === '_custom' ? '' : S.currentProvider;
     const key = keyInput.value.trim();
     const base = urlInput.value.trim() || S.presets[S.currentProvider]?.base_url || '';
-    const platformCatalog = userCatalog && S.currentProvider === 'webagent_catalog';
+    const platformCatalog = userCatalog && listProvider();
     if (!isSubscriptionProvider() && !platformCatalog && provider !== 'deepseek' && !key) {
       setModelStatus('Enter an API key to see available models.');
       S.allModels = [];
@@ -1685,7 +1689,7 @@ export function mountModelTable(host, opts = {}) {
   async function showCredentialPicker(options = {}) {
     const quiet = options.quiet === true;
     const provider = currentCredentialProvider();
-    if (!provider || provider === 'webagent_catalog') {
+    if (!provider || LIST_PROVIDERS.has(provider)) {
       if (!quiet) setModelStatus('Select a provider to load its saved credentials.');
       return;
     }
@@ -1817,7 +1821,7 @@ export function mountModelTable(host, opts = {}) {
     const apiKey = keyInput.value.trim();
     const provider = currentCredentialProvider();
     if (!apiKey || validatedCredential !== credentialFingerprint()) return setModelStatus('Enter and validate the provider credential before saving.');
-    if (!provider || provider === 'webagent_catalog' || isSubscriptionProvider()) return setModelStatus('Select an API-key provider before saving.');
+    if (!provider || LIST_PROVIDERS.has(provider) || isSubscriptionProvider()) return setModelStatus('Select an API-key provider before saving.');
     const label = credentialLabelInput.value.trim() || `${S.presets[provider]?.name || provider} key`;
     saveCredentialBtn.disabled = true;
     try {
@@ -3247,8 +3251,8 @@ export function mountModelTable(host, opts = {}) {
     return `F${(used.length ? Math.max(...used) : 0) + 1}`;
   }
   async function addModel({ free = false } = {}) {
-    const platformCatalog = userCatalog && S.currentProvider === 'webagent_catalog';
-    const provider = free ? 'openrouter' : (platformCatalog ? 'webagent_catalog' : (S.currentProvider === '_custom' ? 'custom' : S.currentProvider));
+    const platformCatalog = userCatalog && listProvider();
+    const provider = free ? 'openrouter' : (platformCatalog ? S.currentProvider : (S.currentProvider === '_custom' ? 'custom' : S.currentProvider));
     const baseUrl = free ? 'https://openrouter.ai/api/v1' : urlInput.value.trim();
     const apiKey = keyInput.value.trim();
     const subscription = isSubscriptionProvider();
@@ -3280,7 +3284,7 @@ export function mountModelTable(host, opts = {}) {
       const subscriptionConnection = subscription ? matchingSubscriptionRow() : null;
       // Persisted IDs are owned by the server. `_uid` is the only client-side row
       // identity; adapters hydrate `entry_id` into this same object after save.
-      const newP = { entry_id: platformCatalog ? S.selectedModel : (subscription && pendingSubscriptionRow?.entry_id ? pendingSubscriptionRow.entry_id : ''), connection_id: subscriptionConnection?.connection_id || '', catalog_source_id: platformCatalog ? S.selectedModel : '', display_name: requestedName, provider, auth_mode: subscription ? 'chatgpt' : 'api_key', base_url: platformCatalog ? '' : (subscription ? 'codex://chatgpt' : baseUrl), api_key: platformCatalog ? '' : apiKey, model: free ? 'openrouter/free' : S.selectedModel, catalog_origin: platformCatalog ? 'platform' : 'byo', catalog_name: platformCatalog ? (chosen.catalog_name || chosen.display_name || '') : '', routing_mode: free ? 'openrouter_free' : '', text_capable: free || capText, image_capable: free ? false : capImage, image_out_capable: free ? false : capImageOut, voice_capable: free ? false : capVoice, high_effort_capable: false, credential_scope: subscription ? subscriptionScope : '', credential_configured: subscription ? !!subscriptionConnection?.credential_configured : true, credential_email: subscription ? (subscriptionConnection?.credential_email || '') : '', credential_plan_type: subscription ? (subscriptionConnection?.credential_plan_type || '') : '', _uid: ++S.uid };
+      const newP = { entry_id: platformCatalog ? S.selectedModel : (subscription && pendingSubscriptionRow?.entry_id ? pendingSubscriptionRow.entry_id : ''), connection_id: subscriptionConnection?.connection_id || '', catalog_source_id: platformCatalog ? S.selectedModel : '', display_name: requestedName, provider, auth_mode: subscription ? 'chatgpt' : 'api_key', base_url: platformCatalog ? '' : (subscription ? 'codex://chatgpt' : baseUrl), api_key: platformCatalog ? '' : apiKey, model: free ? 'openrouter/free' : S.selectedModel, catalog_origin: platformCatalog && provider === 'webagent_catalog' ? 'platform' : 'byo', catalog_name: platformCatalog ? (chosen.catalog_name || chosen.display_name || '') : '', routing_mode: free ? 'openrouter_free' : '', text_capable: free || capText, image_capable: free ? false : capImage, image_out_capable: free ? false : capImageOut, voice_capable: free ? false : capVoice, high_effort_capable: false, credential_scope: subscription ? subscriptionScope : '', credential_configured: subscription ? !!subscriptionConnection?.credential_configured : true, credential_email: subscription ? (subscriptionConnection?.credential_email || '') : '', credential_plan_type: subscription ? (subscriptionConnection?.credential_plan_type || '') : '', _uid: ++S.uid };
       newP.video_capable = free ? false : !!chosen.video_capable;
       newP.decision_capable = !!chosen.decision_capable;
       if (pendingEffort) newP.default_effort = pendingEffort;
@@ -3388,10 +3392,10 @@ export function mountModelTable(host, opts = {}) {
   credentialSelect.addEventListener('change', () => applySavedCredential(credentialSelect.value));
   modelSearch.addEventListener('focus', async () => {
     // The panel is already visible; focus only retries the catalog load if needed.
-    if (!S.allModels.length && S.currentProvider === 'webagent_catalog') await loadModels();
+    if (!S.allModels.length && listProvider()) await loadModels();
   });
   modelSearch.addEventListener('input', () => {
-    if (opts.manualModelEntry && S.currentProvider !== 'webagent_catalog' && !inlineCatalogAdd) {
+    if (opts.manualModelEntry && !listProvider() && !inlineCatalogAdd) {
       S.selectedModel = modelSearch.value.trim(); S.selCaps = {text:true,image:false,imageOut:false,voice:false}; renderDetectedCaps(null);
     } else if (inlineCatalogAdd) {
       S.selectedModel = '';
@@ -3517,9 +3521,10 @@ export function mountModelTable(host, opts = {}) {
         // second, then explicit BYO providers. Do not make all providers look
         // like platform catalog sources.
         if (S.presets.webagent_catalog) appendProviderOption('webagent_catalog', S.presets.webagent_catalog);
+        if (S.presets.my_models) appendProviderOption('my_models', S.presets.my_models);
         const custom = document.createElement('option'); custom.value = '_custom'; custom.textContent = 'Custom'; provSel.appendChild(custom);
         for (const [key, preset] of Object.entries(S.presets)) {
-          if (key !== 'webagent_catalog') appendProviderOption(key, preset);
+          if (!LIST_PROVIDERS.has(key)) appendProviderOption(key, preset);
         }
       } else {
         for (const [key, preset] of Object.entries(S.presets)) appendProviderOption(key, preset);

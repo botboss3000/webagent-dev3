@@ -19,9 +19,9 @@ export function modelAddGuard({ platformCatalog, providers, selectedModel, alias
   // A catalog row's entry_id IS the opaque catalog model id, so it can be
   // matched against the picker's selectedModel. BYO/subscription rows have no
   // stable client identity for a not-yet-saved pick, so they never produce a
-  // duplicate here.
+  // duplicate here. A My Models pick (byo:<entry>) matches a row's catalog_source_id.
   const dupe = platformCatalog
-    ? (providers || []).find(row => String(row.entry_id) === String(selectedModel)) || null
+    ? (providers || []).find(row => [row.entry_id, row.catalog_source_id].map(String).includes(String(selectedModel))) || null
     : null;
   // Normal Add: a catalog model already in the roster is not re-added as a
   // duplicate; the alias flow is the only way to attach a second connection.
