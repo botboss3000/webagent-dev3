@@ -107,14 +107,18 @@ export function mountChatActionPanel({root,guard,request,note}) {
     for(const [key,entry] of toolCards)if(!done.tools.has(key)){entry.node.remove();toolCards.delete(key);}
     pendingApprovals=toolCards.size>0;updateRoutesVisibility();fitRoom();
   }
-  // Cap the composer band to the room between the chat header and the pill; CSS takes the tighter of this and 35dvh.
+  // Cap each action card to the room left between the chat header and the pill after the band's other rows
+  // (progress line, notices). CSS takes the tighter of this and 35dvh; the card scrolls inside its own border.
+  // The value does not depend on the card's own height, so re-measuring on band resize converges.
   const band=host.closest?.('#chat-above-pill');
   function fitRoom(){
     try{
       const pill=root.querySelector('#chat-input-row'),header=root.querySelector('#chat-header');
       if(!band?.style?.setProperty||!pill?.getBoundingClientRect)return;
       const top=header?.getBoundingClientRect?Math.max(0,header.getBoundingClientRect().bottom):0;
-      band.style.setProperty('--chat-action-room',Math.max(120,Math.floor(pill.getBoundingClientRect().top-top-16))+'px');
+      const other=Math.max(0,(band.getBoundingClientRect?.().height||0)-(host.getBoundingClientRect?.().height||0));
+      const room=Math.max(120,Math.floor(pill.getBoundingClientRect().top-top-other-24))+'px';
+      if(band.style.getPropertyValue?.('--chat-action-room')!==room)band.style.setProperty('--chat-action-room',room);
     }catch{}
   }
   const roomObserver=typeof ResizeObserver==='function'&&band?new ResizeObserver(()=>fitRoom()):null;
@@ -122,6 +126,7 @@ export function mountChatActionPanel({root,guard,request,note}) {
     const pill=root.querySelector('#chat-input-row'),panel=band?.closest?.('#chat-panel');
     if(roomObserver&&pill?.nodeType===1)roomObserver.observe(pill);
     if(roomObserver&&panel?.nodeType===1)roomObserver.observe(panel);
+    if(roomObserver&&band?.nodeType===1)roomObserver.observe(band);
   }catch{}
   globalThis.visualViewport?.addEventListener?.('resize',fitRoom);fitRoom();
 

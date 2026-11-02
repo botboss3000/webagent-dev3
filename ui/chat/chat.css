@@ -32,11 +32,12 @@ body.light-mode .chat-action{background:var(--chat-pill-bg,color-mix(in oklab,va
 .chat-action-detail-toggle:focus-visible,.chat-action-action:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
 .chat-action pre{box-sizing:border-box;max-width:100%;max-height:120px;margin:8px 0;padding:8px 10px;border:var(--border-width) solid var(--border);border-radius:12px;background:var(--bg-1);color:var(--fg-1);font-size:12px;line-height:1.45;white-space:pre-wrap;overflow:auto;text-align:left}
 .chat-action pre[hidden]{display:none}
-/* While an action card shows, the above-pill band is the single scroller, capped at the tighter of 35dvh and the
-   measured room between the chat header and the pill (--chat-action-room, set by chat-action-panel.js).
-   This overrides the shared idle-mode and .expanded uncaps, which are kept for the compact progress note only. */
-#chat-panel #chat-input-area #chat-above-pill:has(.chat-action:not([hidden])){max-height:min(35dvh,var(--chat-action-room,35dvh))!important;overflow-x:hidden!important;overflow-y:auto!important;overscroll-behavior:contain;scrollbar-gutter:stable;opacity:1;pointer-events:auto}
-#chat-action-panel .chat-action{user-select:text;-webkit-user-select:text}
+/* While an action card shows, the above-pill band grows to its content and never scrolls; each card is its own
+   scroller instead, capped at the tighter of 35dvh and --chat-action-room (the room left above the pill after the
+   band's other rows, measured by chat-action-panel.js), so the card's top and bottom edges always stay in view.
+   This overrides the shared idle-mode and .expanded rules, which are kept for the compact progress note only. */
+#chat-panel #chat-input-area #chat-above-pill:has(.chat-action:not([hidden])){max-height:none!important;overflow:visible!important;opacity:1;pointer-events:auto}
+#chat-action-panel .chat-action{max-height:min(35dvh,var(--chat-action-room,35dvh));overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;user-select:text;-webkit-user-select:text}
 /* Raw code surface: capped, internally scrolling, selectable, with a Copy control pinned top-right. */
 .chat-action-code{position:relative;box-sizing:border-box;max-width:100%;margin:8px 0;text-align:left}
 .chat-action-code[hidden]{display:none}
