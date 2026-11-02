@@ -12,6 +12,9 @@
 #   - Claude Bridge: the `claude` CLI on PATH and signed in (`claude` once interactively, or
 #     `claude login`). Calls run as `claude -p` with no CLAUDE.md, settings, hooks, MCP or skills.
 #   - OpenCode Bridge: the `opencode` CLI installed and signed in.
+#   - Muse Bridge: no CLI. A Muse agent on this computer must answer handoff files: for each
+#     work/harness-bridge/sessions/<chat>/muse-inbox/<call>.request.json it writes the reply JSON
+#     to the handoff's reply_file within 25 minutes (Muse's queue watcher wakes the agent).
 #   - Outbound HTTPS to the WebAgent server (default https://dev.webagent.live).
 #
 # Install:
@@ -68,7 +71,8 @@ harness (HARNESSES below).
                                   bare: no CLAUDE.md, settings, hooks, memory, MCP, skills.
                                   opencode_bridge: `opencode run` (needs `opencode` signed in);
                                   its tools stay listed (free models require it) but every use is rejected.
-                                  muse_bridge: no harness yet; add one to HARNESSES.
+                                  muse_bridge: hands each turn to a live Muse agent through files in the
+                                  chat's muse-inbox/ (see answer_muse).
     stats [HOURS]                 summarize auto-mode call timing (work/harness-bridge/timing.jsonl), default 24 h
 
 Files live in ../work/harness-bridge/ relative to this script's folder (below: work/harness-bridge/).
@@ -486,8 +490,69 @@ def answer_claude(call, folder, state, delta):
     print(f"{call['id']}: answered chat {call.get('session')} ({'fresh' if fresh else 'resumed'} session {state['claude_session']})")
 
 
+# Muse Bridge harness (supplied by the Muse side). There is no Muse CLI: the harness is a live
+# Muse agent on this computer. answer_muse writes a handoff file into the chat's muse-inbox/,
+# a Muse-side watcher (or a live Muse chat) answers it by writing the reply JSON, and
+# answer_muse validates and posts that reply. The handoff names the saved full request, so a
+# fresh agent turn can read the whole conversation; state["muse_session"] is a stable per-chat id.
+MUSE_PROMPT = ("You are the language model behind a WebAgent agent. Act exactly as that model: follow the "
+    "agent instructions and conversation in the prompt and decide the next assistant turn. You cannot run "
+    "WebAgent's tools yourself; to use one of the listed WebAgent tools, return it in tool_calls with JSON "
+    "arguments matching its schema, and WebAgent runs it and sends you the result. If your prompt shows only "
+    "what is new since the last turn and you need earlier context, read the full saved request named in the "
+    "handoff before answering. Images appear as [image: /absolute/path] lines; you may view those files. "
+    "Write only the reply JSON to the reply path named in the handoff: "
+    "{\"content\": str, \"tool_calls\": [{\"name\": str, \"arguments\": {...}}]}.")
+MUSE_WAIT_SECS = 25 * 60  # WebAgent fails a claimed call at 30 minutes; stop waiting at 25.
+
+
+def answer_muse(call, folder, state, delta):
+    body = call["body"]
+    fresh = not state.get("muse_session") or delta["rewritten"] or delta["instructions"] is not None or delta["tools_changed"]
+    prompt = prompt_for(call, delta, fresh)
+    inbox = folder / "muse-inbox"
+    inbox.mkdir(exist_ok=True)
+    reply_path = inbox / f"{call['id']}.reply.json"
+    reply_path.unlink(missing_ok=True)
+    saved = sorted((folder / "requests").glob(f"*-{call['id']}.json"))
+    handoff = {"call": call["id"], "session": call.get("session"), "model": body.get("model"),
+               "reasoning_effort": body.get("reasoning_effort"), "fresh": fresh,
+               "framing": MUSE_PROMPT, "prompt": prompt,
+               "request_file": str(saved[-1]) if saved else None,
+               "reply_file": str(reply_path), "deadline": time.time() + MUSE_WAIT_SECS}
+    (inbox / f"{call['id']}.request.json").write_text(json.dumps(handoff, indent=1))
+    started = time.time()
+    raw = None
+    while time.time() - started < MUSE_WAIT_SECS:
+        if reply_path.exists():
+            raw = reply_path.read_text()
+            try:
+                json.loads(raw)
+                break
+            except ValueError:
+                raw = None  # still being written; read it again on the next poll
+        time.sleep(2)
+    ended = time.time()
+    if raw is None:
+        print(f"{call['id']}: muse harness did not answer within {MUSE_WAIT_SECS // 60} minutes", file=sys.stderr)
+        return
+    try:
+        message = parse_reply(raw, body)
+    except (SystemExit, ValueError, KeyError, TypeError):
+        print(f"{call['id']}: muse reply failed validation against the call's tools", file=sys.stderr)
+        return
+    # The Muse runtime does not expose per-turn token counts to the answering agent, so
+    # usage is None (the reply endpoint accepts that) rather than invented numbers.
+    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": None})
+    record(call, state, delta, started, ended)
+    state["muse_session"] = state.get("muse_session") or f"muse-{call.get('session') or 'unknown'}"
+    save_state(folder, state)
+    print(f"{call['id']}: answered chat {call.get('session')} with {body.get('model')} "
+          f"({'fresh' if fresh else 'resumed'} session {state['muse_session']})")
+
+
 # Bridge provider -> harness that answers its calls. Each takes (call, folder, state, delta).
-HARNESSES = {"claude_bridge": answer_claude, "opencode_bridge": answer_opencode}
+HARNESSES = {"claude_bridge": answer_claude, "opencode_bridge": answer_opencode, "muse_bridge": answer_muse}
 
 
 def cmd_auto(session):
@@ -523,6 +588,27 @@ def selftest():
     row = json.loads(TIMING.read_text())
     assert not row["user_turn"] and 2.9 < row["gap_s"] < 3.5 and state["replied_at"] >= fetched
     cmd_stats(1)
+    # Muse: a stand-in agent answers the handoff (a partial write first); the reply is posted.
+    import threading
+    global post
+    posted, real_post = [], post
+    post = lambda path, payload, timeout=60: posted.append((path, payload))
+    muse_call = {"id": "m", "session": "s", "provider": "muse_bridge", "body": body, "fetched_at": time.time()}
+    reply = folder / "s" / "muse-inbox" / "m.reply.json"
+
+    def agent():
+        while not (folder / "s" / "muse-inbox" / "m.request.json").exists():
+            time.sleep(0.1)
+        reply.write_text('{"content": "hi", "tool_')
+        time.sleep(2.5)
+        reply.write_text('{"content": "hi", "tool_calls": [{"name": "file_list", "arguments": {}}]}')
+    threading.Thread(target=agent, daemon=True).start()
+    try:
+        answer(muse_call)
+    finally:
+        post = real_post
+    assert posted and posted[0][0] == "/api/v3/harness-bridge/reply"
+    assert posted[0][1]["message"]["tool_calls"][0]["function"]["name"] == "file_list"
     print("selftest ok")
 
 
