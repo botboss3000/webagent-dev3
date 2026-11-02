@@ -383,6 +383,26 @@ class CacheTests(unittest.TestCase):
             self.assertEqual("test_reuse"in job,reuse)
             self.assertEqual(self.worker.artifact_hashes(artifacts),hashes)
 
+    def test_deferred_replay_writes_the_receipt_only_when_joined(self):
+        from unittest.mock import patch
+        import threading
+        stable=self.artifacts/"stable";stable.mkdir()
+        for name in ("smoke.json","mode-equivalence.json","linker-proof.json"):(stable/name).write_text("{}")
+        self.worker.runner=types.SimpleNamespace(**{name:getattr(fixtures.host.Runner,name)for name in
+            ("execution_entries","execution_application_blob","execution_source_digest","execution_source_digest_blob")},compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64},job_context=threading.local())
+        hashes=self.worker.artifact_hashes(self.artifacts)
+        self.worker.retain_engine(self.job,self.blob,{"src/main.rs","config/embedded.json"},hashes,"test result: ok. 2 passed; 0 failed\n")
+        candidate=self.candidate({"v3/config/runtime-fixture.json":"changed"});job={"job_id":str(uuid.uuid4())}
+        release=threading.Event()
+        def phase(*args,**kwargs):
+            release.wait(5);return "test result: ok. 2 passed; 0 failed\n"
+        with patch.object(self.worker,"validate_compiler_recipe",return_value=False),patch.object(self.worker,"phase",side_effect=phase):
+            artifacts,tests=self.worker.engine(job,candidate,lambda p,b:fixtures.host.release.extract(p,b,fixtures.host.context_digest),fixtures.host.context_digest,defer_tests=True)
+            verified=self.root/"execution"/job["job_id"]/"verified.json"
+            self.assertFalse(verified.exists());self.assertEqual(self.worker.artifact_hashes(artifacts),hashes)
+            release.set();self.assertIn("2 passed",tests.result())
+        self.assertTrue(verified.exists());self.assertIn("suite_counts",job)
+
     def test_registry_or_test_tampering_is_rejected(self):
         """Validate every packaged artifact rather than just the main executable."""
         (self.artifacts/"optimization-cargo/registry/cache").write_bytes(b"tampered")
@@ -780,10 +800,13 @@ class HostFocusedVerificationTests(unittest.TestCase):
         job={**self.job,"job_id":str(uuid.uuid4())};phases=[]
         def dependency(job,application,output,**kwargs):
             (output/"dependency-metadata.json").write_text('{"packages":[]}');return "offline ready\n"
-        def phase(job,phase,kind,source,output,argv,recipe,*args):
+        def phase(job,phase,kind,source,output,argv,recipe,*args,cargo_home=None):
             phases.append((phase,recipe))
             if "focused-v2"in recipe and not success:raise RuntimeError("host regression")
-            if phase=="compile_release":raise RuntimeError("optimized pipeline reached")
+            if phase=="compile_release":
+                # The release compile mounts its own Cargo home copy, so it never waits on the suite's package-cache lock.
+                self.assertEqual(cargo_home,output/"cargo-release");self.assertTrue(cargo_home.is_dir())
+                raise RuntimeError("optimized pipeline reached")
             return "test result: ok. 1 passed; 0 failed\n"
         manifest={"tests":[{"file":"tests/webagent_v3-0123456789abcdef","target_name":"webagent-v3","source_path":"/build/src/main.rs","kind":["bin"],"package_id":"path+file:///build#webagent-v3@0.1.0"},{"file":"tests/webagent_engine-fedcba9876543210","target_name":"webagent_engine","source_path":"/build/crates/modules/engine/src/lib.rs","kind":["lib"],"package_id":"path+file:///build/crates/modules/engine#webagent-engine@0.1.0"}]}
         with patch.object(self.worker,"smoke_artifact",return_value="{}"),patch.object(self.worker,"linked_smoke",return_value={"mode":"linked"}),patch.object(self.worker,"dependency_snapshot",return_value=""),patch.object(self.worker,"retain_test_manifest",return_value=manifest)as retain,patch.object(self.worker,"test_manifest",return_value=manifest),patch.object(self.worker,"validate_compiler_recipe",return_value=False),patch.object(self.worker,"cached_engine",return_value=None),patch.object(self.worker,"seed_cargo_cache",return_value=False),patch.object(self.worker,"dependencies",side_effect=dependency),patch.object(self.worker,"phase",side_effect=phase):
@@ -793,6 +816,7 @@ class HostFocusedVerificationTests(unittest.TestCase):
         required=[p for p in phases if p[1]=="engine:rust1.90:test"]
         self.assertEqual(bool(required),success);self.assertEqual(any(p[0]=="compile_release"for p in phases),success)
         self.assertFalse((self.root/"state/execution"/job["job_id"]/"verified.json").exists())
+        if success:self.assertFalse((self.root/"state/execution"/job["job_id"]/"output/cargo-release").exists())
 
     def test_missing_required_source_is_reported_as_failed_input_guard(self):
         def deleted(*args):(self.source/"v3/Cargo.lock").unlink();return "test result: ok. 1 passed; 0 failed"

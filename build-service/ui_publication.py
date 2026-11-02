@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import time
 import uuid
@@ -244,6 +245,19 @@ class UIPublication:
             job.update(status="needs_decision",phase="waiting_publication_base",reason="Publication inputs changed during three preparation attempts; resume this job after contention settles")
             self.broker._save(job)
         return None
+
+    def prewarm(self,job,blob):
+        """Run the candidate's selected UI fixtures beside the Rust build.
+
+        Passing fixtures are recorded by exact input hash, so the publication-time run reuses them
+        and reruns only fixtures whose inputs the later rebase changed. That run stays the gate."""
+        evidence=self.policy.dependencies(self.release.entries(blob,self.validate),job.get("changed_paths",()))
+        if not evidence["tests"]:return None
+        folder=self.assets/"preparation-attempts"/job["job_id"]/("early-"+uuid.uuid4().hex)
+        try:
+            self.release.extract(folder,blob,self.validate)
+            return self.broker.runner.validate_selected_tests(job["job_id"],folder,{**evidence,"runtime_images":{}})
+        finally:shutil.rmtree(folder,ignore_errors=True)
 
     def frontend_tests(self,job,destination,evidence,attempt,revision):
         """Run selected fixtures; rerun only failing files once, then pause a build_deploy for operator judgement.

@@ -453,3 +453,58 @@ class RetryRegistrationRecoveryTests(unittest.TestCase):
         self.assertEqual(result["disposition"],"cancelled")
         self.assertEqual(self.call("build_work",args)["status"],"cancelled")
         self.assertFalse(self.runner.calls)
+
+
+class OverlappedPackagingTests(unittest.TestCase):
+    """Both images build on one BuildKit daemon at once, beside a deferred test replay."""
+    def runner(self,tests,fail_build=None):
+        import contextlib,threading,test_admin_build as fixtures
+        from unittest.mock import patch
+        host=fixtures.host;temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup);root=Path(temp.name)
+        job={"job_id":"12345678-1234-1234-1234-123456789abc"}
+        runner=host.Runner.__new__(host.Runner)
+        runner.resources=SimpleNamespace(enabled=True);runner.job_context=threading.local();runner.job_context.job=job
+        runner.package_cache=None;runner.resource_progress=lambda job:None;runner.retain_image=lambda image,job_id:None
+        worker=host.executor_module.Executor(runner,runner.resources,{});runner.executor=worker
+        worker.preflight_packaging=lambda job,blob:{}
+        worker.engine=lambda *args,defer_tests=False:(root/"artifacts",tests)
+        worker.package=lambda blob,artifacts,entries,role,destination,recipe_transform:destination.write_bytes(role.encode())
+        daemons=[];both=threading.Barrier(2,timeout=5)
+        @contextlib.contextmanager
+        def packager(job,role):
+            daemons.append(role);yield "builder"
+        worker.packager=packager
+        def command(argv,**kwargs):
+            if argv[:2]==["docker","buildx"]:
+                role=argv[argv.index("--target")+1]
+                both.wait()  # Fails unless both image builds are in flight together.
+                if role==fail_build:raise RuntimeError("image build failed")
+                return role+" built\n"
+            return "sha256:"+("a"if "api"in argv[-1]else"b")*64
+        runner.command=command
+        patches=[patch.object(host,"CONFIG",{**host.CONFIG,"state_root":str(root)}),
+                 patch.object(host.image_reuse_module,"source_receipt",lambda runner,job,blob:"receipt"),
+                 patch.object(host.image_reuse_module,"recipe_receipt",lambda runner:"recipe"),
+                 patch.object(host.image_reuse_module,"record",lambda runner,job,blob,role,image,digest:{"role":role,"image_id":image})]
+        for item in patches:item.start();self.addCleanup(item.stop)
+        return runner,job,daemons,root
+    def test_api_build_packages_both_images_and_records_only_after_tests(self):
+        order=[]
+        def result():order.append("tests");return "suite log\n"
+        runner,job,daemons,root=self.runner(SimpleNamespace(result=result))
+        image,log=runner.build(b"source",job["job_id"],"api")
+        self.assertEqual(daemons,["api"]);self.assertEqual(image,"sha256:"+"a"*64)
+        self.assertEqual(set(job["image_receipts"]),{"api","loop"});self.assertEqual(job["images"]["loop"],"sha256:"+"b"*64)
+        self.assertEqual(log,"suite log\napi built\nloop built\n");self.assertEqual(order,["tests"])
+        self.assertEqual(list((root/"execution"/job["job_id"]).glob("package-*.tar")),[])
+        self.assertEqual({t["phase"]for t in job["phase_timings"]},{"packaging_api","packaging_loop","image_build_api","image_build_loop"})
+    def test_failed_tests_record_no_image_or_checkpoint(self):
+        def result():raise ValueError("suite failed")
+        runner,job,daemons,root=self.runner(SimpleNamespace(result=result))
+        with self.assertRaisesRegex(ValueError,"suite failed"):runner.build(b"source",job["job_id"],"api")
+        self.assertNotIn("image_receipts",job);self.assertNotIn("compiler_checkpoint",job)
+    def test_failed_image_build_after_passing_tests_leaves_a_resumable_checkpoint(self):
+        runner,job,daemons,root=self.runner(SimpleNamespace(result=lambda:"suite log\n"),fail_build="loop")
+        with self.assertRaisesRegex(RuntimeError,"image build failed"):runner.build(b"source",job["job_id"],"api")
+        self.assertIn("compiler_checkpoint",job);self.assertNotIn("image_receipts",job)
+        self.assertEqual(list((root/"execution"/job["job_id"]).glob("package-*.tar")),[])

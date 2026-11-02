@@ -592,8 +592,10 @@ def host_phase(job,name):
         yield
         outcome="completed"
     finally:
-        job.setdefault("phase_timings",[]).append({"phase":name,"recipe":"host:v1:"+name,"seconds":round(time.monotonic()-started,3),"outcome":outcome})
-        job["phase_timings"]=job["phase_timings"][-128:]
+        timings=job.setdefault("phase_timings",[])
+        timings.append({"phase":name,"recipe":"host:v1:"+name,"seconds":round(time.monotonic()-started,3),"outcome":outcome})
+        # Image builds record from concurrent threads; trimming only when needed keeps their appends.
+        if len(timings)>128:job["phase_timings"]=timings[-128:]
 
 
 
@@ -2368,35 +2370,29 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             preflight=self.executor.preflight_packaging(job,blob)
             preflight["recipe"]=image_reuse_module.recipe_receipt(self)
             self.resource_progress(job)
+            # The API build also packages the loop image when it has none yet, so both image
+            # builds share one BuildKit daemon; build(blob,job_id,"loop") then reuses it.
+            roles=[role]+(["loop"]if role=="api"and not job.get("image_receipts",{}).get("loop")else[])
             if job.get("packaging_resume"):
                 artifacts=image_reuse_module.packaging_artifacts(self,job,blob)
-                compiler_log="Verified frozen compiler artifacts reused for packaging; compilation and tests were not repeated.\n"
+                tests=self.executor.finished("Verified frozen compiler artifacts reused for packaging; compilation and tests were not repeated.\n")
             else:
-                artifacts,compiler_log=self.executor.engine(job,blob,lambda root,data:release.extract(root,data,context_digest),lambda data:context_digest(data)[0])
+                # A replay of retained tests runs beside packaging; nothing is recorded until it passes.
+                artifacts,tests=self.executor.engine(job,blob,lambda root,data:release.extract(root,data,context_digest),lambda data:context_digest(data)[0],defer_tests=True)
+            self.resource_progress(job)
+            failure=None
+            try:built=self._package_roles(job,blob,artifacts,roles)
+            except BaseException as error:failure=error
+            compiler_log=tests.result()
+            # Tests passed: a packaging failure still leaves a resumable compiler checkpoint.
             job["compiler_checkpoint"]={"source_sha256":image_reuse_module.digest(blob),"compiler_receipt_sha256":image_reuse_module.source_receipt(self,job,blob),"recipe":image_reuse_module.recipe_receipt(self)}
+            if failure is not None:raise failure
+            for name,(image,package_log,context_sha256) in built.items():
+                self.retain_image(image,job_id)
+                job.setdefault("image_receipts",{})[name]=image_reuse_module.record(self,job,blob,name,image,context_sha256)
+                job.setdefault("images",{})[name]=image
             self.resource_progress(job)
-            packaging_path=Path(CONFIG["state_root"])/"execution"/job_id/("package-"+role+".tar")
-            packaging_path.parent.mkdir(parents=True,exist_ok=True)
-            if packaging_path.exists():raise ValueError("Packaging context requires reconciliation")
-            try:
-                cache=getattr(self,"package_cache",None)
-                if cache is not None and cache.enabled:
-                    cache.ready(blob)
-                    self.job_context.source_blob=blob
-                transform=packaging_cache_module.package_dockerfile if cache is not None and cache.enabled else None
-                with host_phase(job,"packaging_"+role):
-                    packaging=self.executor.package(blob,artifacts,lambda data:release.entries(data,context_digest),role=role,destination=packaging_path,recipe_transform=transform)
-                with host_phase(job,"image_build_"+role):
-                    image,package_log=self._build_packaged(packaging,job_id,role)
-                with packaging_path.open("rb") as stream:
-                    context_sha256=hashlib.file_digest(stream,"sha256").hexdigest()
-            finally:packaging_path.unlink(missing_ok=True)
-            self.retain_image(image,job_id)
-            checkpoint=image_reuse_module.record(self,job,blob,role,image,context_sha256)
-            job.setdefault("image_receipts",{})[role]=checkpoint
-            job.setdefault("images",{})[role]=image
-            self.resource_progress(job)
-            return image,(compiler_log if role=="api"else"")+package_log
+            return built[role][0],(compiler_log if role=="api"else"")+"".join(built[name][1]for name in roles)
         tag = TARGETS[1 if role=="loop" else 0]+":job-"+job_id
         log = self.command(["docker", "buildx", "build", "--builder", "default", "--load",
                             "--progress=plain", "--target", role, "-f", "v3/Dockerfile",
@@ -2407,19 +2403,58 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         self.retain_image(image,job_id)
         return image, log
 
-    def _build_packaged(self,blob,job_id,role):
-        """Package already verified artifacts; BuildKit does not execute Cargo in this context."""
-        tag="webagent-v3-"+role+"-"+job_id
+    def _package_roles(self,job,blob,artifacts,roles):
+        """Package each role's context, then build every image concurrently on one BuildKit daemon.
+
+        Returns {role: (image, log, context_sha256)}; the context archives are always removed."""
+        job_id=job["job_id"];contexts={}
+        cache=getattr(self,"package_cache",None)
+        transform=packaging_cache_module.package_dockerfile if cache is not None and cache.enabled else None
+        try:
+            if cache is not None and cache.enabled:
+                cache.ready(blob)
+                self.job_context.source_blob=blob
+            for role in roles:
+                path=Path(CONFIG["state_root"])/"execution"/job_id/("package-"+role+".tar")
+                path.parent.mkdir(parents=True,exist_ok=True)
+                if path.exists():raise ValueError("Packaging context requires reconciliation")
+                contexts[role]=path
+                with host_phase(job,"packaging_"+role):
+                    self.executor.package(blob,artifacts,lambda data:release.entries(data,context_digest),role=role,destination=path,recipe_transform=transform)
+            images=self._build_packaged(contexts,job_id)
+            digests={}
+            for role,path in contexts.items():
+                with path.open("rb") as stream:digests[role]=hashlib.file_digest(stream,"sha256").hexdigest()
+            return {role:(*images[role],digests[role])for role in roles}
+        finally:
+            for path in contexts.values():path.unlink(missing_ok=True)
+
+    def _build_packaged(self,contexts,job_id):
+        """Package already verified artifacts; BuildKit does not execute Cargo in this context.
+
+        contexts maps role to its packaging archive; the roles build concurrently on one daemon,
+        which alone may own the persistent package cache."""
         job=getattr(self.job_context,"job",None)
         if job is None or job["job_id"]!=job_id:raise ValueError("Owned packaging job required")
         cache=getattr(self,"package_cache",None)
         inputs=cache.package_inputs(job,self.job_context.source_blob) if cache is not None and cache.enabled else []
-        with self.executor.packager(job,role=role)as builder:
-            with Path(blob).open("rb")as stream:
-                log=self.command(["docker","buildx","build","--builder",builder,"--load","--progress=plain","--target",role,"-f","v3/Dockerfile","-t",tag,*inputs,"-"],stdin=stream,timeout=3600)
-        image=self.command(["docker","image","inspect","--format","{{.Id}}",tag],timeout=30).strip()
-        if not re.fullmatch(r"sha256:[0-9a-f]{64}",image):raise ValueError("Image identity unavailable")
-        return image,log
+        def build(builder,role):
+            tag="webagent-v3-"+role+"-"+job_id
+            with host_phase(job,"image_build_"+role):
+                with Path(contexts[role]).open("rb")as stream:
+                    log=self.command(["docker","buildx","build","--builder",builder,"--load","--progress=plain","--target",role,"-f","v3/Dockerfile","-t",tag,*inputs,"-"],stdin=stream,timeout=3600)
+                image=self.command(["docker","image","inspect","--format","{{.Id}}",tag],timeout=30).strip()
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}",image):raise ValueError("Image identity unavailable")
+            return image,log
+        # The daemon's profile names the API stage whenever it builds it (the larger image).
+        with self.executor.packager(job,role="api"if "api"in contexts else next(iter(contexts)))as builder:
+            running={role:self.executor.background(lambda role=role:build(builder,role),"image-"+role)for role in contexts}
+            results={};failure=None
+            for role,handle in running.items():
+                try:results[role]=handle.result()
+                except BaseException as error:failure=failure or error
+            if failure is not None:raise failure
+        return results
 
 
     def export(self, images, destination):
@@ -3709,7 +3744,7 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "compiler_recipe", "compiler_runtime", "linker_proof", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight", "verification_cache", "focused_verification", "test_reuse", "phase_timings", "active_verification", "publication_wait", "publication_wait_history", "last_resource_wait", "broker_install", "ui_test_failure", "ui_test_override", "finished_at", "rebuild_closeout") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "compiler_recipe", "compiler_runtime", "linker_proof", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight", "verification_cache", "focused_verification", "test_reuse", "phase_timings", "active_verification", "publication_wait", "publication_wait_history", "last_resource_wait", "broker_install", "ui_test_failure", "ui_test_override", "early_work", "finished_at", "rebuild_closeout") if key in job}
         for key in ("publication_wait","resource_waiting"):
             if view.get(key,{}).get("state","waiting")=="waiting"and view.get(key,{}).get("since"):
                 view[key]={**view[key],"elapsed_seconds":round(max(0,time.time()-view[key]["since"]),3)}
@@ -6560,6 +6595,38 @@ class Broker:
         if self._closes_itself(job):
             self._rebuild_closeout(job)
 
+    def _start_early(self, job, blob):
+        """Overlap a build_deploy's work that the build does not feed: saving the live images for
+        rollback, and the candidate's UI fixtures. Either can be redone at its usual step."""
+        executor = getattr(self.runner, "executor", None)
+        if executor is None or job["operation"] != "build_deploy":
+            return {}
+        def rollback():
+            images = [self.runner.inspect(name)["Image"] for name in TARGETS]
+            path = self.state / "execution" / job["job_id"] / "rollback-early.tar"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self.runner.export(images, path)
+            return images, path
+        early = {"rollback": executor.background(rollback, "early-rollback")}
+        if self.ui_publication.enabled(job):
+            early["ui"] = executor.background(lambda: self.ui_publication.prewarm(job, blob), "early-ui-tests")
+        return early
+
+    def _join_early(self, job, early):
+        """Wait for overlapped work; a failure there only costs the time it would have saved."""
+        results = {}
+        for name, handle in early.items():
+            try:
+                results[name] = handle.result()
+            except Exception as error:
+                with self.lock:
+                    job.setdefault("early_work", {})[name] = scrub(str(error), self.runner.secrets)[:300]
+        ui = results.get("ui")
+        if ui:
+            with self.lock:
+                job.setdefault("early_work", {})["ui"] = {"executed": len(ui.get("executed_tests", ())), "reused": len(ui.get("reused_tests", ()))}
+        return results
+
     def _run(self, job, blob):
         """Execute a sealed job; hot plugins compile before rebasing and stage immutable assets only afterward."""
         with self.lock:
@@ -6573,6 +6640,8 @@ class Broker:
         deploy_locked = False
         boot_guard = None
         publication_started = None
+        early = {}
+        ready = {}
         try:
             with self.lock:
                 self._batch_lease(job)
@@ -6621,6 +6690,7 @@ class Broker:
                         self.runner.inspect(target)
                     except Exception:
                         pass
+                early = self._start_early(job, blob)
                 for role in ("api", "loop"):
                     self.runner.check_space(MIN_DEPLOY_FREE)
                     self._phase(job, "building_" + role)
@@ -6642,6 +6712,7 @@ class Broker:
                     # Prepare confined artifacts first; freeze assets only after the final locked rebase.
                     job["engine_artifacts"]=self.runner.build_engine_artifacts(job["job_id"],source_root=Path(job["release_root"]))
                     job["plugin_artifacts"]=self.runner.build_ability_artifacts(job["job_id"],source_root=Path(job["release_root"]))
+            ready, early = self._join_early(job, early), {}
             if job["operation"] in ("deploy", "build_deploy", "ui_deploy", "index_deploy", "plugin_deploy"):
                 if self.ui_publication.enabled(job):
                     admitted=self.ui_publication.admit(job,blob,tested_runtime=job["operation"]=="build_deploy")
@@ -6676,7 +6747,18 @@ class Broker:
                     stream.flush()
                     os.fsync(stream.fileno())
                 with host_phase(job,"rollback_export"):
-                    self.runner.export([previous[r]["Image"] for r in ("api", "loop")], private / "rollback-images.tar")
+                    wanted = [previous[r]["Image"] for r in ("api", "loop")]
+                    saved = ready.get("rollback")
+                    if saved and saved[0] == wanted:
+                        # Saved while the build ran, and the live images have not changed since.
+                        os.replace(saved[1], private / "rollback-images.tar")
+                        directory = os.open(private, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                        try:
+                            os.fsync(directory)
+                        finally:
+                            os.close(directory)
+                    else:
+                        self.runner.export(wanted, private / "rollback-images.tar")
                 if job.get("isolated"):
                     prepared = release.snapshot(Path(job["release_root"]), CONTEXT, context_digest)
                     if context_digest(prepared)[0] != job["inputs_sha256"]:
@@ -6811,6 +6893,8 @@ class Broker:
             if restore:
                 self._auto_restore(job)
         finally:
+            self._join_early(job, early)
+            (self.state / "execution" / job["job_id"] / "rollback-early.tar").unlink(missing_ok=True)
             if hasattr(self.runner, "job_context"):
                 self.runner.job_context.job = None
                 self.runner.job_context.event = None

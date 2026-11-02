@@ -456,6 +456,25 @@ digest check is unchanged. A suite failure is reported before a compile failure.
 Admission lets phases of one job share their component; other jobs still
 serialize per component. Each phase records its own execution history; the live
 `execution_observation` shows whichever phase reported last.
+Cargo holds its home's package-cache lock for a whole build, so the compile
+mounts its own copy of the job's offline Cargo home at the same `/output/cargo`
+path (identical registry paths keep its fingerprints); with one shared home the
+two took turns.
+
+When compiled artifacts are reused, the retained-test replay runs beside
+packaging instead of before it. The API build packages the loop image too: both
+image builds run at once on the one BuildKit daemon that owns the package cache,
+and `verified.json`, the compiler checkpoint and both image receipts are written
+only after the replay passes (a packaging failure after passing tests keeps the
+checkpoint for a resumed retry).
+
+A `build_deploy` also starts two pieces of work the build does not feed: saving
+the live images for rollback and running the candidate's selected UI fixtures.
+At deployment the early rollback archive is used only if the live images are
+unchanged; otherwise they are saved again. The publication-time fixture run
+stays the gate and reuses the early passes by exact input hash, rerunning any
+fixture a rebase changed. A failure in either early piece is recorded in
+`early_work` and only costs the time it would have saved.
 
 ## Stale-tree install guard
 

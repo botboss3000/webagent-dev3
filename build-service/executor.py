@@ -187,22 +187,25 @@ class Executor:
     def job_lock(self):
         """Serialize read-modify-write job updates with receipt saves while phases overlap."""
         return getattr(self.runner,"observation_lock",None)or contextlib.nullcontext()
-    def concurrent_phase(self,job,*args,**kwargs):
-        """Start one phase on a thread carrying this job's context; join with result()."""
+    def background(self,work,name="background"):
+        """Start work() on a thread carrying this job's context; join with result(), which re-raises its error."""
         shared=getattr(self.runner,"job_context",None)
         context={key:value for key,value in vars(shared).items()if key not in {"phase_container","observation_scope","verification_id","last_observation"}}if shared is not None else {}
         outcome={}
         def run():
             for key,value in context.items():setattr(shared,key,value)
-            try:outcome["value"]=self.phase(job,*args,**kwargs)
+            try:outcome["value"]=work()
             except BaseException as error:outcome["error"]=error
-        worker=threading.Thread(target=run,name="phase-"+args[0],daemon=True);worker.start()
+        worker=threading.Thread(target=run,name=name,daemon=True);worker.start()
         def result():
             worker.join()
             if "error"in outcome:raise outcome["error"]
             return outcome["value"]
         return types.SimpleNamespace(result=result)
-    def phase(self,job,phase,kind,source,output,argv,profile,timeout=3600,network=False):
+    def concurrent_phase(self,job,*args,**kwargs):
+        """Start one phase on a thread carrying this job's context; join with result()."""
+        return self.background(lambda:self.phase(job,*args,**kwargs),"phase-"+args[0])
+    def phase(self,job,phase,kind,source,output,argv,profile,timeout=3600,network=False,cargo_home=None):
         """Expose bounded phase timing and current work without command text or private paths."""
         started=time.monotonic();token=uuid.uuid4().hex;outcome="failed"
         job["active_verification"]={"id":token,"phase":phase,"recipe":profile,"started_at":time.time()}
@@ -211,7 +214,7 @@ class Executor:
         with self.job_lock():job["active_phases"]=[a for a in job.get("active_phases",[])if a.get("id")!=token]+[{"id":token,"phase":phase,"recipe":profile,"started_at":time.time()}]
         getattr(self.runner,"resource_progress",lambda _:None)(job)
         try:
-            result=self._phase_workload(job,phase,kind,source,output,argv,profile,timeout,network)
+            result=self._phase_workload(job,phase,kind,source,output,argv,profile,timeout,network,cargo_home)
             outcome="completed";return result
         finally:
             with self.job_lock():
@@ -221,7 +224,7 @@ class Executor:
             if job.get("active_verification",{}).get("id")==token:job.pop("active_verification",None)
             getattr(self.runner,"resource_progress",lambda _:None)(job)
 
-    def _phase_workload(self,job,phase,kind,source,output,argv,profile,timeout=3600,network=False):
+    def _phase_workload(self,job,phase,kind,source,output,argv,profile,timeout=3600,network=False,cargo_home=None):
         """Launch one identified container and preserve counters before removing a terminal container."""
         image=self.runner.compiler_runtime(job)["image"]
         jobhex=uuid.UUID(job["job_id"]).hex
@@ -237,7 +240,7 @@ class Executor:
         create=["docker","create","--name",name,"--cgroup-parent",parent,"--label","webagent.scheduler.instance="+self.config["instance"],"--label","webagent.scheduler.job="+jobhex,"--label","webagent.scheduler.phase="+phase,
             "--cap-drop","ALL","--security-opt","no-new-privileges","--pids-limit","256","--user",str(self.config["service_uid"])+":"+str(self.config["service_gid"]),
             "--network","bridge"if network else"none","--mount","type=bind,src="+str(source)+",dst=/build"+(""if phase=="test"else",readonly"),
-            "--mount","type=bind,src="+str(output)+",dst=/output","-w","/build",
+            "--mount","type=bind,src="+str(output)+",dst=/output",*(["--mount","type=bind,src="+str(cargo_home)+",dst=/output/cargo"]if cargo_home else[]),"-w","/build",
             "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS="+CARGO_BUILD_JOBS,"-e","CARGO_INCREMENTAL="+self.incremental(job,profile),"--env","RUSTFLAGS="+RUSTFLAGS,
             "-e","CARGO_PROFILE_DEV_DEBUG=0","-e","CARGO_PROFILE_TEST_DEBUG=0","-e","CARGO_PROFILE_RELEASE_DEBUG=0",*self.test_stack_env(phase),*self.test_tmpfs_args(phase),*self.cpu_weight_args(phase),image,"sleep","infinity"]
         if cap is not None:create[create.index(image):create.index(image)]=["--memory",str(cap),"--memory-swap",str(cap)]
@@ -1587,8 +1590,11 @@ class Executor:
         """Re-attest the deferred publication rebase before expensive work; optional on non-broker runners."""
         attest=getattr(self.runner,"attest_release_base",None)
         if attest is not None:attest(job,blob)
-    def engine(self,job,blob,extract,digest):
-        """Compile/test once, retain input attestations and produce the complete existing image artifact set."""
+    def engine(self,job,blob,extract,digest,defer_tests=False):
+        """Compile/test once, retain input attestations and produce the complete existing image artifact set.
+
+        With defer_tests the second value is a handle whose result() returns the log: a replay of
+        retained tests then runs beside packaging, and verified.json exists only after result()."""
         job["artifact_component"]="engine"
         context_blob=blob;self.attest_release_base(job,context_blob)
         blob=self.runner.execution_application_blob(blob);legacy_automation=self.validate_compiler_recipe(blob)
@@ -1598,7 +1604,7 @@ class Executor:
             if receipt["inputs_sha256"]!=digest(blob):raise ValueError("Artifact source changed")
             if self.artifact_hashes(output/"artifacts")!=receipt["artifacts"]:raise ValueError("Retained artifact changed")
             if receipt.get("test_proof")!=self.test_proof(blob):raise ValueError("Retained verification recipe/environment changed; reconcile through a successor")
-            return output/"artifacts",receipt["log"]
+            return output/"artifacts",(Executor.finished(receipt["log"])if defer_tests else receipt["log"])
         job["compiler_recipe"]=self.compiler_recipe()
         blob=self.runner.execution_application_blob(blob)
         root.mkdir(parents=True,exist_ok=True);extract(source,blob);application=source/"v3";output.mkdir(exist_ok=True)
@@ -1609,40 +1615,44 @@ class Executor:
             manifest=self.test_manifest(artifacts)
             self.restore_test_support(output,artifacts,manifest)
             reused_tests=old.get("test_proof")==self.test_proof(blob)and isinstance(old.get("test_log"),str)
-            if reused_tests:
-                job["test_reuse"]={"source_job_id":old["job_id"],"binding":old["test_proof"],"decision":"reused_completed_workspace_suite"}
-                logs="Exact source, toolchain and fixture proof matched; complete workspace test evidence reused from "+old["job_id"]+".\n"+old["test_log"]
-            else:
-                logs+=self.focused_tests(job,application,output,retained=artifacts)
-                replayed=0;results=0
-                for binary in sorted((artifacts/"tests").iterdir()):
-                    if not re.fullmatch(r"[a-z0-9_]+-[a-f0-9]{16}",binary.name):raise ValueError("Cached test executable name invalid")
-                    run=self.phase(job,"test","test",application,output,Executor.replay_argv("/output/artifacts/tests/"+binary.name,"--test-threads="+str(TEST_THREADS)),"engine:rust1.90:test")
-                    logs+=run;replayed+=1;results+=len(re.findall(r"test result:",run))
-                if replayed!=results:raise ValueError("Parallel replay skipped a retained test binary")
-                counts=Executor.suite_totals(logs)
-                job["suite_counts"]={"passed":counts[0],"failed":counts[1],"ignored":counts[2]}
-            if self.runner.execution_source_digest(source)!=self.runner.execution_source_digest_blob(blob):
-                raise ValueError("Cached tests changed candidate source")
-            logs=logs.replace("locked Rust tests previously passed on identical compiled inputs.","current candidate ran retained tests from identical compiled inputs.")
-            if self.artifact_hashes(artifacts)!=old["artifacts"]:raise ValueError("Retained test run changed verified compiler artifacts")
-            if not reused_tests:self.retain_engine(job,blob,[name.removeprefix("v3/")for name in old["compiled_inputs"]],old["artifacts"],logs)
-            receipt={"inputs_sha256":digest(blob),"artifacts":old["artifacts"],"log":logs,"reused_from":old["job_id"],"test_proof":self.test_proof(blob)}
-            temporary=root/"verified.new";temporary.write_text(json.dumps(receipt));os.replace(temporary,root/"verified.json")
-            if not (artifacts/"stable/smoke.json").is_file():raise ValueError("Retained optimized linked smoke proof missing")
-            job["linked_stable"]=json.loads((artifacts/"stable/smoke.json").read_text())
-            job["optimized_mode_equivalence"]=json.loads((artifacts/"stable/mode-equivalence.json").read_text())
-            job["compiler_artifact_reuse"]=old["job_id"]
-            try:
-                rust_digest=self.verification_source(blob)
-                proof_store=Path(self.config["state_root"])/"equivalence-proofs"/(rust_digest[:16])
-                if not (proof_store/"mode-equivalence.json").is_file() and (artifacts/"stable"/"mode-equivalence.json").is_file():
-                    proof_store.mkdir(parents=True,exist_ok=True)
-                    (proof_store/"mode-equivalence.json").write_text((artifacts/"stable"/"mode-equivalence.json").read_text())
-            except (OSError,ValueError,json.JSONDecodeError):
-                pass
-            job["linker_proof"]=self.metadata_receipt(artifacts/"stable/linker-proof.json")
-            return artifacts,logs
+            def verify(logs):
+                if reused_tests:
+                    job["test_reuse"]={"source_job_id":old["job_id"],"binding":old["test_proof"],"decision":"reused_completed_workspace_suite"}
+                    logs="Exact source, toolchain and fixture proof matched; complete workspace test evidence reused from "+old["job_id"]+".\n"+old["test_log"]
+                else:
+                    logs+=self.focused_tests(job,application,output,retained=artifacts)
+                    replayed=0;results=0
+                    for binary in sorted((artifacts/"tests").iterdir()):
+                        if not re.fullmatch(r"[a-z0-9_]+-[a-f0-9]{16}",binary.name):raise ValueError("Cached test executable name invalid")
+                        run=self.phase(job,"test","test",application,output,Executor.replay_argv("/output/artifacts/tests/"+binary.name,"--test-threads="+str(TEST_THREADS)),"engine:rust1.90:test")
+                        logs+=run;replayed+=1;results+=len(re.findall(r"test result:",run))
+                    if replayed!=results:raise ValueError("Parallel replay skipped a retained test binary")
+                    counts=Executor.suite_totals(logs)
+                    job["suite_counts"]={"passed":counts[0],"failed":counts[1],"ignored":counts[2]}
+                if self.runner.execution_source_digest(source)!=self.runner.execution_source_digest_blob(blob):
+                    raise ValueError("Cached tests changed candidate source")
+                logs=logs.replace("locked Rust tests previously passed on identical compiled inputs.","current candidate ran retained tests from identical compiled inputs.")
+                if self.artifact_hashes(artifacts)!=old["artifacts"]:raise ValueError("Retained test run changed verified compiler artifacts")
+                if not reused_tests:self.retain_engine(job,blob,[name.removeprefix("v3/")for name in old["compiled_inputs"]],old["artifacts"],logs)
+                receipt={"inputs_sha256":digest(blob),"artifacts":old["artifacts"],"log":logs,"reused_from":old["job_id"],"test_proof":self.test_proof(blob)}
+                temporary=root/"verified.new";temporary.write_text(json.dumps(receipt));os.replace(temporary,root/"verified.json")
+                if not (artifacts/"stable/smoke.json").is_file():raise ValueError("Retained optimized linked smoke proof missing")
+                job["linked_stable"]=json.loads((artifacts/"stable/smoke.json").read_text())
+                job["optimized_mode_equivalence"]=json.loads((artifacts/"stable/mode-equivalence.json").read_text())
+                job["compiler_artifact_reuse"]=old["job_id"]
+                try:
+                    rust_digest=self.verification_source(blob)
+                    proof_store=Path(self.config["state_root"])/"equivalence-proofs"/(rust_digest[:16])
+                    if not (proof_store/"mode-equivalence.json").is_file() and (artifacts/"stable"/"mode-equivalence.json").is_file():
+                        proof_store.mkdir(parents=True,exist_ok=True)
+                        (proof_store/"mode-equivalence.json").write_text((artifacts/"stable"/"mode-equivalence.json").read_text())
+                except (OSError,ValueError,json.JSONDecodeError):
+                    pass
+                job["linker_proof"]=self.metadata_receipt(artifacts/"stable/linker-proof.json")
+                return logs
+            if defer_tests and not reused_tests:return artifacts,self.background(lambda:verify(logs),"engine-tests")
+            logs=verify(logs)
+            return artifacts,(Executor.finished(logs)if defer_tests else logs)
         seeded=self.seed_cargo_cache(job,blob,output)
         cargo=output/"cargo";cargo.mkdir(exist_ok=True)
         inputs=digest(blob);before=self.runner.execution_source_digest(source)
@@ -1675,11 +1685,17 @@ class Executor:
         shutil.copytree(source,linked_source,symlinks=True)
         if self.runner.execution_source_digest(linked_source)!=before:raise ValueError("Compile source copy differs from captured inputs")
         self.attest_release_base(job,context_blob)
+        # Cargo holds the package-cache lock of its CARGO_HOME for a whole build, so a shared home
+        # made the suite and this compile take turns. The compile mounts its own offline copy at
+        # the same /output/cargo path, keeping registry source paths (and fingerprints) unchanged.
+        release_cargo=output/"cargo-release";shutil.rmtree(release_cargo,ignore_errors=True);shutil.copytree(cargo,release_cargo,symlinks=True)
         suite=self.concurrent_phase(job,"test","test",application,output,["cargo","test","--workspace","--locked","--offline","--","--test-threads="+str(TEST_THREADS)],"engine:rust1.90:test")
-        try:live_log=self.phase(job,"compile_release","engine",linked_source/"v3",output,self.live_recipe(stable_release,job["cargo_incremental"]),"engine:rust1.90:release")
+        try:live_log=self.phase(job,"compile_release","engine",linked_source/"v3",output,self.live_recipe(stable_release,job["cargo_incremental"]),"engine:rust1.90:release",cargo_home=release_cargo)
         finally:
             try:suite_output=suite.result()
-            finally:shutil.rmtree(linked_source,ignore_errors=True)
+            finally:
+                shutil.rmtree(linked_source,ignore_errors=True)
+                shutil.rmtree(release_cargo,ignore_errors=True)
         logs+=suite_output
         counts=Executor.suite_totals(suite_output)
         if not any(counts):raise ValueError("Suite executed no tests")
@@ -1732,7 +1748,11 @@ class Executor:
         self.prune_execution_targets(job)
         receipt={"inputs_sha256":inputs,"artifacts":hashes,"log":logs,"test_proof":self.test_proof(blob)}
         temporary=root/"verified.new";temporary.write_text(json.dumps(receipt));os.replace(temporary,root/"verified.json")
-        return artifacts,logs
+        return artifacts,(Executor.finished(logs)if defer_tests else logs)
+    @staticmethod
+    def finished(value):
+        """A result() handle for work that already completed."""
+        return types.SimpleNamespace(result=lambda:value)
     @staticmethod
     def runtime_python_modes(dockerfile):
         """Normalize only baked runtime scripts; frozen source and private modes stay intact."""

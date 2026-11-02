@@ -1046,3 +1046,61 @@ class PublicationAdmissionIntegrationTests(ConcurrentUIEntryTests):
         report=self.call("build_work",{"action":"preflight","task_id":"resume-publish-wait"})["synchronization"]
         self.call("build_work",{"action":"decide","task_id":"resume-publish-wait","sync_decision":"proceed","expected_sync_digest":report["digest"]})
         self.assertEqual(self.wait([job])[0]["status"],"completed")
+
+
+class EarlyBuildWorkTests(unittest.TestCase):
+    """Rollback saving and UI fixtures overlap the Rust build; failures only cost the saved time."""
+    def broker(self,ui_enabled=True,fail_export=False):
+        import types
+        temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup);root=Path(temp.name)
+        exported=[];prewarmed=[]
+        def export(images,path):
+            if fail_export:raise RuntimeError("docker save failed")
+            exported.append(images);path.write_bytes(b"images")
+        executor=fixtures.host.executor_module.Executor(types.SimpleNamespace(job_context=threading.local()),None,{})
+        runner=types.SimpleNamespace(executor=executor,inspect=lambda name:{"Image":"sha256:"+name},export=export,secrets=())
+        publication=types.SimpleNamespace(enabled=lambda job:ui_enabled,prewarm=lambda job,blob:prewarmed.append(blob)or{"executed_tests":["a"],"reused_tests":["b","c"]})
+        broker=types.SimpleNamespace(runner=runner,state=root,ui_publication=publication,lock=threading.RLock())
+        for name in ("_start_early","_join_early"):setattr(broker,name,getattr(fixtures.host.Broker,name).__get__(broker))
+        return broker,exported,prewarmed
+    def test_build_deploy_saves_live_images_and_prewarms_ui(self):
+        broker,exported,prewarmed=self.broker()
+        job={"job_id":str(uuid.uuid4()),"operation":"build_deploy"}
+        ready=broker._join_early(job,broker._start_early(job,b"blob"))
+        images,path=ready["rollback"]
+        self.assertEqual(images,["sha256:"+name for name in fixtures.host.TARGETS]);self.assertEqual(exported,[images])
+        self.assertEqual(path,broker.state/"execution"/job["job_id"]/"rollback-early.tar");self.assertTrue(path.is_file())
+        self.assertEqual(prewarmed,[b"blob"]);self.assertEqual(job["early_work"]["ui"],{"executed":1,"reused":2})
+    def test_other_operations_and_disabled_publication_skip_overlap(self):
+        broker,exported,prewarmed=self.broker(ui_enabled=False)
+        self.assertEqual(broker._start_early({"job_id":str(uuid.uuid4()),"operation":"deploy"},b"blob"),{})
+        early=broker._start_early({"job_id":str(uuid.uuid4()),"operation":"build_deploy"},b"blob")
+        self.assertEqual(set(early),{"rollback"});broker._join_early({},early);self.assertEqual(prewarmed,[])
+    def test_failed_early_work_is_recorded_not_raised(self):
+        broker,exported,prewarmed=self.broker(fail_export=True)
+        job={"job_id":str(uuid.uuid4()),"operation":"build_deploy"}
+        ready=broker._join_early(job,broker._start_early(job,b"blob"))
+        self.assertNotIn("rollback",ready);self.assertIn("docker save failed",job["early_work"]["rollback"])
+
+
+class PrewarmTests(unittest.TestCase):
+    def publication(self,tests):
+        import types
+        temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup);root=Path(temp.name);seen=[]
+        def validate(job_id,folder,evidence):
+            seen.append((job_id,(folder/"v3/ui/app.test.js").read_text(),evidence["runtime_images"],evidence["tests"]))
+            return {"executed_tests":evidence["tests"]}
+        blob=fixtures.context(extra={"v3/ui/app.test.js":"test\n"})
+        broker=types.SimpleNamespace(runner=types.SimpleNamespace(validate_selected_tests=validate))
+        policy=types.SimpleNamespace(dependencies=lambda entries,changed:{"tests":tests,"sha256":"x"})
+        publication=fixtures.host.ui_publication_module.UIPublication(broker,fixtures.host.release,fixtures.host.context_digest,None,root,policy)
+        return publication,blob,seen,root
+    def test_selected_fixtures_run_on_an_extracted_candidate_that_is_removed(self):
+        publication,blob,seen,root=self.publication(["v3/ui/app.test.js"])
+        job={"job_id":str(uuid.uuid4()),"changed_paths":["v3/ui/app.test.js"]}
+        self.assertEqual(publication.prewarm(job,blob),{"executed_tests":["v3/ui/app.test.js"]})
+        self.assertEqual(seen,[(job["job_id"],"test\n",{},["v3/ui/app.test.js"])])
+        self.assertEqual(list((root/"preparation-attempts"/job["job_id"]).iterdir()),[])
+    def test_no_selected_fixture_runs_nothing(self):
+        publication,blob,seen,root=self.publication([])
+        self.assertIsNone(publication.prewarm({"job_id":str(uuid.uuid4())},blob));self.assertEqual(seen,[])
