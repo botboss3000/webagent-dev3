@@ -576,8 +576,12 @@ class BuildTests(unittest.TestCase):
                     "phase_history": [{"phase": p, "at": start + t} for p, t in phases]}
         steps = [("dependency", 0, 10), ("compile_test", 10, 290), ("test", 300, 600), ("compile_linked", 900, 400), ("compile_release", 1300, 400)]
         phases = [("building_api", 0), ("building_loop", 1700), ("frontend_tests", 1800)]
+        since = host.BUILD_DEPLOY_SINCE
+        # Ranges count only build_deploy jobs created since the broker changed their timings.
+        old = {"old": receipt("old", "completed", since - 5000, steps, phases, since - 3100)}
+        self.assertEqual({s["p50"] for s in host.stage_baselines(old.values())["build_deploy/compile/tests-ran"]["stages"]}, {None})
         for i in range(5):
-            self.broker.jobs[f"done-{i}"] = receipt(f"done-{i}", "completed", 1000.0 * i, steps, phases, 1000.0 * i + 1900)
+            self.broker.jobs[f"done-{i}"] = receipt(f"done-{i}", "completed", since + 1000.0 * i, steps, phases, since + 1000.0 * i + 1900)
         now = time.time()
         self.broker.jobs["live"] = dict(receipt("live", "running", now - 400, steps[:2], phases[:1]),
             execution_observation={"phase": "test", "elapsed_seconds": 100})
@@ -628,6 +632,38 @@ class BuildTests(unittest.TestCase):
         baseline = host.stage_baselines(container_free)["host_service_deploy"]
         self.assertEqual((baseline["jobs"], baseline["wall"]["p50"]), (30, 44))  # walls 30-59: the newest 30 only
         self.assertEqual(host.stage_spans(check), {"dependencies": [1, 5], "format check": [6, 8], "compile tests": [10, 60], "run tests": [61, 91]})
+
+    def test_progress_shows_host_packaging_letters_and_early_work(self):
+        now = 10000.0
+        job = {"job_id": "pkg", "status": "running", "operation": "build_deploy", "started_at": now - 600, "created_at": now - 600,
+               "phase_history": [{"phase": "building_api", "at": now - 600}],
+               "execution_history": [{"phase": "compile_test", "started_at": now - 590, "elapsed_seconds": 60},
+                                     {"phase": "test", "started_at": now - 520, "elapsed_seconds": 150},
+                                     {"phase": "compile_release", "started_at": now - 520, "elapsed_seconds": 200}],
+               "phase_timings": [{"phase": "compile_test", "seconds": 60}, {"phase": "compile_release", "seconds": 200},
+                                 {"phase": "early_rollback_save", "started_at": now - 598, "seconds": 12, "outcome": "completed"},
+                                 {"phase": "early_ui_tests", "started_at": now - 598, "seconds": None, "outcome": "running"},
+                                 {"phase": "packaging_api", "started_at": now - 315, "seconds": 5, "outcome": "completed"},
+                                 {"phase": "image_build_api", "started_at": now - 309, "seconds": None, "outcome": "running"},
+                                 {"phase": "image_build_loop", "started_at": now - 309, "seconds": None, "outcome": "running"}]}
+        value = host.job_progress(job, {}, now)
+        # Image builds have no execution step: their host timings make packaging the running stage.
+        self.assertEqual([(r["id"], r["stage"]) for r in value["running_stages"]], [("3", "package release")])
+        self.assertEqual([(r["id"], r["stage"]) for r in value["finished_stages"]],
+                         [("1", "compile tests"), ("2a", "run tests"), ("2b", "release build")])
+        self.assertEqual((value["stage"], value["stage_id"], value["stage_seconds"]), ("package release", "3", 315))
+        self.assertEqual([(b["name"], b["status"], b["seconds"]) for b in value["background"]],
+                         [("rollback save", "completed", 12), ("early UI tests", "running", 598)])
+        done = dict(job, status="completed", finished_at=now,
+                    early_work={"ui": "fixed command failed: EACCES\nmore"},
+                    phase_timings=[{"phase": "early_ui_tests", "started_at": now - 598, "seconds": 3, "outcome": "completed"},
+                                   {"phase": "early_rollback_save", "started_at": now - 598, "seconds": 12, "outcome": "completed"},
+                                   {"phase": "rollback_export", "seconds": 0.01, "outcome": "completed"}])
+        rows = {b["name"]: b for b in host.job_progress(done, {}, now)["background"]}
+        self.assertEqual((rows["early UI tests"]["status"], rows["early UI tests"]["result"]), ("failed", "fixed command failed: EACCES"))
+        self.assertEqual(rows["rollback save"]["result"], "used")
+        # Reused artifacts: the test replay runs beside packaging.
+        self.assertEqual(host.stage_ids(["run tests", "package release", "UI build and tests"], "build_deploy/artifacts-reused/tests-ran"), ["1a", "1b", "2"])
 
     def test_pending_journal_scan_sees_new_and_rewritten_records(self):
         scheduler = self.broker.scheduler

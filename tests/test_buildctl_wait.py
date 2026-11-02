@@ -252,3 +252,105 @@ class OperatorCycleTests(unittest.TestCase):
             replies = iter([running, running, later])
             self.assertEqual(client.watch("job-1", True, lambda n, a: next(replies), lambda s: None), 3)
             self.assertEqual(client.watch("job-1", False, lambda n, a: {**running, "status": "completed"}, lambda s: None), 0)
+
+
+class MonitorTests(unittest.TestCase):
+    """buildctl monitor: one wake per event, state kept between relaunches."""
+    def setUp(self):
+        import tempfile
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.state = Path(self.temp.name) / "monitor"
+        self.clock = [0.0]
+
+    def progress(self, status="running", finished=(), running=(), upcoming=(), **extra):
+        return {"status": status, "stage": running[0]["stage"] if running else "queued", "stage_id": running[0]["id"] if running else None,
+                "stage_seconds": running[0].get("seconds", 0) if running else 0, "verdict": "on track",
+                "finished_stages": list(finished), "running_stages": list(running), "upcoming_stages": list(upcoming),
+                "job_seconds": 100, "job_normal": None, "remaining_seconds": [60, 120], **extra}
+
+    def run_monitor(self, replies, task=None, job="job-1", **kwargs):
+        replies = iter(replies)
+        def request(name, arguments):
+            if name == "v3_build_progress":
+                return next(replies)
+            if name == "v3_worker_job":
+                return {"reason": None, "images": {"api": "sha256:a"}}
+            if name == "v3_build_status":
+                return {"containers": {"api": {"health": "healthy"}, "loop": {"health": "healthy"}}}
+            if name == "v3_build_work":
+                return {"own": [next(replies)]}
+            raise AssertionError(name)
+        def pause(seconds):
+            self.clock[0] += seconds
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            code = client.monitor(task, job, request, pause, lambda: self.clock[0], self.state, **kwargs)
+        return code, out.getvalue()
+
+    def test_stage_finish_wakes_once_then_relaunch_waits_for_the_next_event(self):
+        compile_tests = {"stage": "compile tests", "id": "2", "seconds": 60}
+        first = self.progress(running=[compile_tests], upcoming=[{"stage": "run tests", "id": "3a"}, {"stage": "release build", "id": "3b"}])
+        tests = {"stage": "run tests", "id": "3a", "seconds": 1}
+        only_tests = self.progress(finished=[compile_tests], running=[tests], upcoming=[{"stage": "release build", "id": "3b"}])
+        both = self.progress(finished=[compile_tests], running=[tests, {"stage": "release build", "id": "3b", "seconds": 1}])
+        code, out = self.run_monitor([first, first, only_tests, both])
+        # It held the wake until the parallel partner started, so both show together.
+        self.assertEqual(code, 3); self.assertIn("stages 3a+3b", out)
+        code, out = self.run_monitor([both, self.progress(status="completed", finished=[compile_tests])])
+        self.assertEqual(code, 0); self.assertIn('"healthy": true', out)
+        self.assertFalse((self.state / "job-1.json").exists())
+
+    def test_late_stage_and_stall_wake_with_four(self):
+        slow = {"stage": "release build", "id": "3b", "seconds": 700, "late": 600, "samples": 5}
+        code, out = self.run_monitor([self.progress(running=[slow])])
+        self.assertEqual(code, 4); self.assertIn("past its normal range", out)
+        # The same check-in does not wake twice; few samples only get the stall check.
+        code, _ = self.run_monitor([self.progress(running=[slow]), self.progress(status="failed")])
+        self.assertEqual(code, 1)
+        stuck = {"stage": "compile tests", "id": "2", "seconds": 1000, "late": 600, "samples": 2}
+        code, out = self.run_monitor([self.progress(running=[stuck], idle_seconds=901)], job="job-2")
+        self.assertEqual(code, 4); self.assertIn("no progress for 901s", out)
+
+    def test_task_without_a_job_times_out_and_abandoned_task_fails(self):
+        code, _ = self.run_monitor([{"task_id": "t", "status": "open", "job_id": None}] * 3, task="t", job=None, timeout=20)
+        self.assertEqual(code, 2)
+        code, _ = self.run_monitor([{"task_id": "t", "status": "abandoned"}], task="t", job=None)
+        self.assertEqual(code, 1)
+
+    def test_queued_job_names_what_it_waits_behind(self):
+        ahead = [{"job_id": "abcdef12-0000", "task_id": "other-task", "session": "Fix login", "phase": "building_api"}]
+        queued = self.progress(status="queued", queued_behind=ahead)
+        code, out = self.run_monitor([queued, self.progress(running=[{"stage": "dependencies", "id": "1", "seconds": 1}])])
+        self.assertEqual(code, 3)
+        self.assertIn('queued behind other-task (session "Fix login", job abcdef12, building_api)', out)
+
+    def test_tables_show_letters_legend_and_background(self):
+        value = self.progress(finished=[{"stage": "run tests", "id": "3a", "seconds": 150, "normal": [120, 180]}],
+                              running=[{"stage": "release build", "id": "3b", "seconds": 190, "normal": None}],
+                              upcoming=[{"stage": "package release", "id": "4", "normal": [60, 90]}],
+                              background=[{"name": "early UI tests", "status": "completed", "seconds": 170, "needed_by": "5", "result": "ran 47"}])
+        table = client.stage_table(value)
+        self.assertIn("| 3a. Run tests ✅ | 2.5m (2.0-3.0m) |", table)
+        self.assertIn("| 4. Package release (api ‖ loop) | TBD (1.0-1.5m) |", table)
+        self.assertIn(client.LEGEND, table)
+        self.assertIn("| Early UI tests ✅ | 2.8m | 5 | ran 47 |", table)
+
+
+class WorkcopyTests(unittest.TestCase):
+    def test_workcopy_and_patch_round_trip_without_build_output(self):
+        import tempfile, subprocess
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        root = Path(temp.name); tree = root / "tree"; (tree / "v3/src").mkdir(parents=True)
+        (tree / "v3/src/main.rs").write_text("fn main() {}\n"); (tree / "v3/old.txt").write_text("gone\n")
+        request = lambda name, arguments: {"own": [{"task_id": "t", "workspace_path": str(tree / "workspace")}]}
+        copy = root / "copy"
+        client.workcopy("t", copy, request)
+        (copy / "src/main.rs").write_text("fn main() { println!(); }\n"); (copy / "old.txt").unlink()
+        (copy / "new.txt").write_text("new\n"); (copy / "__pycache__").mkdir(); (copy / "__pycache__/x.pyc").write_bytes(b"x")
+        with patch.object(client, "BEATS", root / "beats"), patch.object(client, "credential_findings", lambda paths, folder: []):
+            result = client.make_patch("t", copy, request)
+        self.assertEqual(result["files"], ["new.txt", "old.txt", "src/main.rs"])
+        check = subprocess.run(["git", "apply", "--check", result["patch"]], cwd=tree / "v3", capture_output=True, text=True)
+        self.assertEqual(check.returncode, 0, check.stderr)
+        with self.assertRaisesRegex(ValueError, "exists"):client.workcopy("t", copy, request)
+        with patch.object(client, "credential_findings", lambda paths, folder: ["src/main.rs"]):
+            with self.assertRaisesRegex(ValueError, "credential guard blocked"):client.make_patch("t", copy, request)

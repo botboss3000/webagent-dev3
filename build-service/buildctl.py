@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
-"""Codex-side client for the protected V3 development build coordinator."""
+"""Operator client for the protected V3 development build coordinator.
+
+Agents and people releasing v3 changes: read "Agent guide: releasing and monitoring" in
+build-service/README.md first. It covers the full release cycle (begin, workcopy, patch,
+apply, check, install-broker, finish, monitor, close), the monitor's exit codes, how to read
+its stage tables and what to do when a release fails. Run this on the server:
+WEBAGENT_BUILD_CONFIG=/etc/webagent/development/build-service.json python3 -B <service_dir>/buildctl.py --help
+"""
 import argparse
 from pathlib import Path
 import os,importlib.util
 import json
 import signal
 import socket
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -278,18 +286,54 @@ def minutes(seconds):
     return "TBD" if seconds is None else f"{seconds / 60:.1f}m"
 
 
+LABELS = {"deploy and health checks": "deploy and health", "UI build and tests": "UI checks",
+          "package release": "package release (api ‖ loop)"}
+LEGEND = "a/b = run at the same time · ‖ = in parallel inside a stage"
+
+
 def stage_table(progress):
-    """The stage table operators paste: finished, running and upcoming stages against their p50-p90 range."""
+    """The stage tables operators paste: finished, running and upcoming stages against their p50-p90 range,
+    then the background work (early UI tests, rollback save) when the job has any."""
     def normal(value):
         return f"({value[0] / 60:.1f}-{value[1] / 60:.1f}m)" if value else "(no baseline)"
-    rows = ([(s["stage"], " ✅", minutes(s.get("seconds")), s.get("normal")) for s in progress.get("finished_stages", [])]
-            + [(s["stage"], " ⏳", minutes(s.get("seconds")), s.get("normal")) for s in progress.get("running_stages", [])]
-            + [(s["stage"], "", "TBD", s.get("normal")) for s in progress.get("upcoming_stages", [])])
+    def label(name):
+        name = LABELS.get(name, name)
+        return name[0].upper() + name[1:]
+    rows = ([(s, " ✅", minutes(s.get("seconds"))) for s in progress.get("finished_stages", [])]
+            + [(s, " ⏳", minutes(s.get("seconds"))) for s in progress.get("running_stages", [])]
+            + [(s, "", "TBD") for s in progress.get("upcoming_stages", [])])
+    if all(s.get("id") for s, _, _ in rows):
+        rows.sort(key=lambda r: (int(r[0]["id"].rstrip("abcdefgh")), r[0]["id"]))
     mark = {"completed": " ✅", "queued": " ⏳", "running": " ⏳"}.get(progress.get("status"), " ❌")
     lines = ["| Stage | Time (normal) |", "|---|---|"]
-    lines += [f"| {i}. {name[0].upper() + name[1:]}{flag} | {took} {normal(rng)} |" for i, (name, flag, took, rng) in enumerate(rows, 1)]
+    lines += [f"| {s.get('id') or i}. {label(s['stage'])}{flag} | {took} {normal(s.get('normal'))} |" for i, (s, flag, took) in enumerate(rows, 1)]
     lines.append(f"| **Job**{mark} | **{minutes(progress.get('job_seconds'))}** {normal(progress.get('job_normal'))} |")
+    if any(s.get("id", "")[-1:].isalpha() for s, _, _ in rows):
+        lines += ["", LEGEND]
+    background = progress.get("background") or []
+    if background:
+        lines += ["", "| Background | Time | Needed by | Result |", "|---|---|---|---|"]
+        flags = {"completed": " ✅", "running": " ⏳", "failed": " ❌", "interrupted": " ❌"}
+        lines += [f"| {b['name'][0].upper() + b['name'][1:]}{flags.get(b['status'], '')} | {minutes(b.get('seconds'))} | "
+                  f"{b.get('needed_by') or ''} | {b.get('result') or ''} |" for b in background]
     return "\n".join(lines)
+
+
+def status_line(progress):
+    """One line above the tables: what runs now, or what a queued job waits behind, and the time left."""
+    running = progress.get("running_stages", [])
+    count = len({str(s.get("id", "")).rstrip("abcdefgh") for s in progress.get("finished_stages", []) + running + progress.get("upcoming_stages", [])})
+    if progress.get("status") == "queued":
+        ahead = progress.get("queued_behind") or []
+        return "queued" + (" behind " + "; ".join(f"{a.get('task_id')} (session \"{a.get('session') or 'unknown'}\", job {a['job_id'][:8]}, {a.get('phase')})"
+                                                   for a in ahead) if ahead else "")
+    low, high = progress.get("remaining_seconds") or [0, 0]
+    left = f"; about {low / 60:.0f}-{high / 60:.0f} min left" if high else ""
+    if len(running) > 1:
+        return f"stages {'+'.join(str(s.get('id')) for s in running)}/{count} running: " + ", ".join(
+            f"{s['stage']} {minutes(s.get('seconds'))}" for s in running) + left
+    return (f"stage {progress.get('stage_id') or progress.get('stage_index')}/{count} {progress.get('stage')} "
+            f"{minutes(progress.get('stage_seconds'))}, {progress.get('verdict')}{left}")
 
 
 def watch(job_id, step=False, request=call, pause=time.sleep):
@@ -307,6 +351,139 @@ def watch(job_id, step=False, request=call, pause=time.sleep):
                 return PENDING_EXIT
             seen = key
         pause(POLL_SECONDS)
+
+
+STALL_SECONDS = 900
+LATE_EVERY = 300
+PARALLEL_HOLD = 120
+MONITOR_TIMEOUT = 3600
+
+
+def monitor(task_id=None, job_id=None, request=call, pause=time.sleep, clock=time.time, state_root=None, timeout=MONITOR_TIMEOUT):
+    """Follow one release and return at the next event its agent should report; relaunch until 0, 1 or 2.
+
+    Exit 0 completed with healthy containers; 1 failed, cancelled, uncertain, interrupted, needs a decision,
+    or completed unhealthy; 2 no job appeared for the task within timeout; 3 the job queued, its queue
+    changed, it started, or a stage finished (it waits up to PARALLEL_HOLD for a parallel partner to start,
+    so 3a and 3b show together); 4 a running stage passed the high end of its normal range (p95, needing
+    5 recent jobs) or its live step reported nothing for STALL_SECONDS, then at check-ins every
+    min(p95, LATE_EVERY) while it runs. State between relaunches lives under ~/.cache/webagent-buildctl/monitor/."""
+    state_root = Path(state_root or BEATS / "monitor")
+    state_path = state_root / ((task_id or job_id) + ".json")
+    started = clock()
+    try:
+        saved = json.loads(state_path.read_text())
+    except (OSError, ValueError):
+        saved = None
+    def save(value):
+        state_root.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps(value))
+    def show(progress):
+        print(status_line(progress) + "\n\n" + stage_table(progress), flush=True)
+    held = None
+    while True:
+        if job_id is None:
+            task = own_task(task_id, request)
+            if task.get("status") == "abandoned":
+                print(json.dumps({"task_id": task_id, "result": "task abandoned"}));return 1
+            if not task.get("job_id"):
+                if clock() - started > timeout:
+                    print(json.dumps({"task_id": task_id, "result": "no job appeared", "status": task.get("status")}));return 2
+                pause(POLL_SECONDS);continue
+            job_id = task["job_id"]
+        progress = request("v3_build_progress", {"job_id": job_id})
+        status = progress.get("status")
+        if status in TERMINAL:
+            job = request("v3_worker_job", {"job_id": job_id})
+            healthy = None
+            if status == "completed":
+                containers = request("v3_build_status", {})["containers"]
+                healthy = all(containers.get(r, {}).get("health") == "healthy" for r in ("api", "loop"))
+            print(json.dumps({"task_id": task_id, "job_id": job_id, "status": status, "healthy": healthy,
+                              "reason": _excerpt(job.get("reason"), 400), "images": job.get("images"),
+                              "synchronization": (job.get("synchronization") or {}).get("status")}, sort_keys=True))
+            show(progress)
+            state_path.unlink(missing_ok=True)
+            return 0 if status == "completed" and healthy else 1
+        finished = sorted(s["stage"] for s in progress.get("finished_stages", []))
+        queue = [[a.get("job_id"), a.get("phase")] for a in progress.get("queued_behind") or []]
+        current = {"job_id": job_id, "status": status, "finished": finished, "queue": queue,
+                   "alerted": (saved or {}).get("alerted", {}), "stalled": (saved or {}).get("stalled", [])}
+        if saved is None or saved.get("job_id") != job_id:
+            saved = current;save(current);show(progress)
+        changed = (status != saved["status"] or set(finished) - set(saved["finished"])
+                   or (status == "queued" and queue != saved["queue"]))
+        if changed:
+            running_ids = {str(s.get("id", "")).rstrip("abcdefgh") for s in progress.get("running_stages", [])}
+            partner = any(str(s.get("id", ""))[-1:].isalpha() and str(s["id"]).rstrip("abcdefgh") in running_ids
+                          for s in progress.get("upcoming_stages", []))
+            held = held or clock()
+            if not partner or clock() - held >= PARALLEL_HOLD:
+                save(current);show(progress);return PENDING_EXIT
+        alerted, stalled = current["alerted"], current["stalled"]
+        for stage in progress.get("running_stages", []):
+            name, seconds, late = stage["stage"], stage.get("seconds") or 0, stage.get("late")
+            stall = stage["stage"] == progress.get("stage") and (progress.get("idle_seconds") or 0) > STALL_SECONDS and name not in stalled
+            due = late and stage.get("samples", 0) >= 5 and seconds >= late + alerted.get(name, 0) * min(late, LATE_EVERY)
+            if stall or due:
+                if stall:
+                    stalled.append(name)
+                if due:
+                    alerted[name] = int((seconds - late) // min(late, LATE_EVERY)) + 1
+                print(f"{'no progress for ' + str(progress.get('idle_seconds')) + 's in' if stall else 'past its normal range:'} "
+                      f"{stage.get('id')} {name} at {minutes(seconds)} (late after {minutes(late)})")
+                save(current);show(progress);return DECISION_EXIT
+        pause(POLL_SECONDS)
+
+
+IGNORED = ("__pycache__", ".pytest_cache", "target")
+
+
+def workcopy(task_id, folder, request=call):
+    """Copy the task's isolated tree (its v3 sources) to a private scratch folder to edit."""
+    tree = Path(own_task(task_id, request)["workspace_path"]).parent / "v3"
+    folder = Path(folder)
+    if folder.exists():
+        raise ValueError(f"{folder} exists; choose a new folder")
+    shutil.copytree(tree, folder, symlinks=True, ignore=shutil.ignore_patterns(*IGNORED, "*.pyc"))
+    return {"task_id": task_id, "folder": str(folder), "tree": str(tree)}
+
+
+def credential_findings(paths, root):
+    """Run the checkout's Git Control credential guard over changed files; returns the flagged paths only."""
+    adapter = (Path(CONFIG["checkout_root"]) / "plugins/abilities/Administrator/git_control/adapter.py").read_text()
+    namespace = {"re": __import__("re")}
+    exec(adapter[adapter.index("_DUMMY_CREDENTIALS={"):adapter.index("async def command(")], namespace)
+    return [p for p in paths if (root / p).is_file() and namespace["secret"]((root / p).read_bytes())]
+
+
+def make_patch(task_id, folder, request=call, run=subprocess.run):
+    """A unified diff from the task's tree to the edited workcopy, after the credential guard; prints no file content."""
+    tree = Path(own_task(task_id, request)["workspace_path"]).parent / "v3"
+    folder = Path(folder)
+    def files(root):
+        return {str(p.relative_to(root)) for p in root.rglob("*") if (p.is_file() or p.is_symlink())
+                and not any(part in IGNORED for part in p.relative_to(root).parts) and p.suffix != ".pyc"}
+    names = sorted(n for n in files(tree) | files(folder)
+                   if not (tree / n).exists() or not (folder / n).exists() or (tree / n).read_bytes() != (folder / n).read_bytes())
+    if not names:
+        raise ValueError("workcopy matches the task tree; nothing to patch")
+    flagged = credential_findings(names, folder)
+    if flagged:
+        raise ValueError("credential guard blocked: " + ", ".join(flagged[:10]) + "; build fixture values without credential-shaped literals")
+    chunks = []
+    for name in names:
+        a = tree / name if (tree / name).exists() else Path("/dev/null")
+        b = folder / name if (folder / name).exists() else Path("/dev/null")
+        out = run(["git", "diff", "--no-index", "--full-index", "--binary", "--src-prefix=a/", "--dst-prefix=b/", str(a), str(b)],
+                  capture_output=True, text=True).stdout
+        for side in (a, b):
+            out = out.replace(f"a{side}", f"a/{name}").replace(f"b{side}", f"b/{name}")
+        chunks.append(out)
+    path = BEATS / task_id / f"{task_id}.patch"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(chunks))
+    return {"task_id": task_id, "patch": str(path), "files": names, "credential_guard": "passed"}
 
 
 def main():
@@ -351,6 +528,17 @@ def main():
     watch_parser = commands.add_parser("watch", help="print the stage table at each stage change until the job ends")
     watch_parser.add_argument("job_id")
     watch_parser.add_argument("--step", action="store_true", help="also exit 3 at each stage change, for background waits")
+    mon = commands.add_parser("monitor", help="follow one release in the background; exit 0/1/2 at the end, 3 at a stage or queue change, 4 when late or stalled")
+    target = mon.add_mutually_exclusive_group(required=True)
+    target.add_argument("--task", help="the task label (follows its finish job)")
+    target.add_argument("--job", help="one job ID")
+    mon.add_argument("--timeout", type=int, default=MONITOR_TIMEOUT, help="seconds to wait for a task's job to appear (exit 2)")
+    copy = commands.add_parser("workcopy", help="copy a task's tree to a private folder to edit on the server")
+    copy.add_argument("task_id")
+    copy.add_argument("folder")
+    diff = commands.add_parser("patch", help="credential-guarded unified diff from the task tree to an edited workcopy")
+    diff.add_argument("task_id")
+    diff.add_argument("folder")
     install = commands.add_parser("install-broker", help="install a broker-only task tree while idle (drain, stop, install, start)")
     install.add_argument("task_id")
     install.add_argument("--allow-stale-tree", action="store_true", help="deliberate rollback of a newer installed release")
@@ -422,6 +610,12 @@ def main():
         beat(args.task_id);return 0
     if args.command == "watch":
         return watch(args.job_id, args.step)
+    if args.command == "monitor":
+        return monitor(args.task, args.job, timeout=args.timeout)
+    if args.command == "workcopy":
+        print(json.dumps(workcopy(args.task_id, args.folder), sort_keys=True));return 0
+    if args.command == "patch":
+        print(json.dumps(make_patch(args.task_id, args.folder), sort_keys=True));return 0
     if args.command == "progress" and args.table:
         print(stage_table(call("v3_build_progress", {"job_id": args.job_id})));return 0
     if args.command == "install-broker":

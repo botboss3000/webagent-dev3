@@ -30,6 +30,102 @@ unavailable. Task acceptance, claim release and completion never require an
 index or reviews. Earlier review ordering, approval and deferral text below
 describes the protected before_deployment policy and legacy jobs only.
 
+## Agent guide: releasing and monitoring
+
+Start here if you are an agent (or person) changing WebAgent v3 and have no other
+instructions. Every release goes through this broker; never edit, build or restart
+the live checkout or containers by hand. All commands below run **on the server**
+(`ssh` in from any machine), so every operator uses the same code.
+
+**Two ways in.**
+- *In-app agents* use the WebAgent source tools: edits open a broker task
+  automatically, the finish tool queues the release, the chat posts stage progress
+  (from `v3_build_progress`, the same data as `buildctl progress`), and a completed
+  release closes itself (commit and claim release, see above).
+- *Remote operators* use `buildctl` over SSH:
+  `WEBAGENT_BUILD_CONFIG=/etc/webagent/development/build-service.json python3 -B <service_dir>/buildctl.py COMMAND`,
+  where `<service_dir>` is `service_dir` in that JSON file (it changes with every
+  broker install, so read it each time).
+
+**One release, step by step** (remote operator):
+1. `begin TASK "what changes [origin=<tool>; session=<chat name>; session_id=<id>]"`
+   (at most 200 characters; the Builds page and blocker messages name the session),
+   then `heartbeat TASK start`. Keep the heartbeat running until close.
+2. `workcopy TASK ~/scratch/TASK` copies the task's tree (its `v3/` sources) to a
+   private folder. Edit there. Run quick checks there if useful (Python suites:
+   `python3 -B -m unittest` from `tests/`).
+3. `patch TASK ~/scratch/TASK` writes a unified diff from the task tree to your
+   copy after the Git Control credential guard (blocked files are named, never
+   printed). Build test fixtures without credential-shaped literals.
+4. `inputs --task TASK` gives the digest; `apply TASK --patch PATCH --expected DIGEST --request-id TASK-apply-N`.
+   Apply again with a new patch from the same workcopy for later edits.
+   The reply lists the claims the edit took (`module:` scopes); broad ones such
+   as `module:broker` or `module:workspace` block other writers.
+5. Optional server checks: `check TASK --check check|test|fmt|clippy [--test-filter NAME] --expected DIGEST --request-id ID`.
+   A release runs the full suite anyway; use checks to catch errors before queueing.
+6. `preflight TASK`. A change confined to `build-service/` is a broker-only task:
+   `install-broker TASK` while the broker is idle (it drains, installs from the
+   task tree and always restarts the service; the app keeps running), then preflight again.
+7. `finish TASK --expected DIGEST` (add `--sync-decision ... --sync-digest ...` only
+   when preflight lists drift). Record the job ID it returns; never submit finish
+   twice to recover a lookup, use `job JOB_ID`.
+8. Follow it with `monitor --task TASK` as a **background** command (below) until it exits 0, 1 or 2.
+9. `close TASK --message-file FILE` (or `-` for stdin) after a completed, healthy
+   release: it commits exactly the released paths (refusing checkout drift or
+   another writer's staged changes), releases every claim with that commit and
+   stops the heartbeat. Run acceptance checks after close, without claims; a fix
+   is a new task. Pushing is separate and needs the owner's say-so.
+
+**Monitoring.** `monitor --task TASK` (or `--job JOB`) polls every 15 s and exits at
+the next thing worth reporting, printing a status line and the stage tables:
+- `0` completed with healthy containers; `1` failed, cancelled, uncertain,
+  interrupted, needs a decision, or completed unhealthy; `2` no job appeared for
+  the task within `--timeout` (default 3600 s).
+- `3` the job queued (naming the task and session it waits behind), its queue
+  changed, it started, or a stage finished. It waits up to 2 min for a parallel
+  partner to start so 3a and 3b show together.
+- `4` a running stage passed the high end of its normal range (p95, once 5 recent
+  jobs exist), then again every min(p95, 5 min) while it runs; or the live step
+  reported nothing for 15 min. Check that it is slow rather than stuck before relaunching.
+Relaunch the same command after 3 or 4; it keeps its state under
+`~/.cache/webagent-buildctl/monitor/` so an event wakes it once. Run it as a
+background command so your harness wakes you when it exits; do not end your turn
+while a job is in flight and do not poll by sleeping. `progress JOB --table`
+prints the tables once; `watch JOB --step` is the older, simpler follower.
+
+**Reading the tables.** Stages sharing a number with letters run at the same
+time: the full suite (3a) beside the release build (3b) when compiling; the test
+replay beside packaging when compiled artifacts are reused. "api ‖ loop" means
+both images build at once. Each cell is time taken and the normal p50–p90 range
+for that kind of job; `n=` marks a range from few jobs, "(no baseline)" none yet.
+build_deploy ranges count only jobs since broker eb579161 (2026-11-02), when these
+timings changed. The **Background** table lists work started beside the stages:
+the early UI fixture run and the rollback image save, waited for just before the
+UI checks ("Needed by"), with their result (fixtures run and reused, rollback
+save used or saved again). Background failures never fail a release; they only
+cost the time they would have saved.
+
+**Where checks run.** The server (12 threads) is the default and only gate:
+release builds, the full suite, deployment and promotion always run here. An
+operator may also mirror a task's sources to another machine for a fast local
+edit-and-check loop (same Rust 1.90 toolchain, Mold 1.10.1 linker,
+`CARGO_INCREMENTAL=0`, `RUSTFLAGS="-C debuginfo=0 -C link-arg=-fuse-ld=mold"`),
+for example while the broker is busy with another release. Local results are
+advisory: note any divergence, and still release through the broker.
+
+**When things go wrong.**
+- Failed or cancelled before any deployment effect: reopen the same task
+  (`schedule` action `reopen`, see "Failed releases, reopen and abandon"), fix, apply, finish again.
+  Unchanged Rust inputs reuse the verified compile.
+- `needs_decision`: synchronization prompts take `decide TASK --sync-decision ...`;
+  UI fixtures that failed twice may be accepted by the local operator with
+  `decide JOB --accept-ui-failure FILE ... --reason "..."` (see below).
+- `uncertain` or `interrupted`: reconcile before anything else (`adopt JOB` for an
+  operator continuation); never retry an uncertain deployment blindly.
+- Blocked by another task: name it by its owning session (the `session` field),
+  not its label; wait or coordinate, never take over its claims.
+- Work dropped: `abandon TASK` releases its claims and queued requests.
+
 ## Release-scope guards
 
 Checked source patches are text unified diffs, except that image and font assets
@@ -266,7 +362,13 @@ job, each against its class p50/p90, plus a remaining-time range. Stages are
 built from step spans (`execution_history`, last 128 steps) and the job's
 `active_phases` list, so overlapping phases such as the full suite beside the
 live compile both show as running; steps started inside a later job phase
-(loop image packaging, engine component plugin builds) count toward that phase.
+(engine component plugin builds) count toward that phase. Host steps record
+`started_at` and appear in `phase_timings` from their start (outcome `running`,
+seconds `null` until they end), so image packaging and image builds show as the
+package stage while they run, and the early rollback save and UI fixture run are
+listed under `background`. Each stage carries an `id` (letters for stages that run
+at once), `samples` and `late` (its p95); `idle_seconds` is the time since the live
+step last reported, and a queued job lists `queued_behind`.
 Classes are the work actually done (operation, compiled or reused artifacts,
 tests run or reused), computed from completed receipts. The read follows the
 same ownership rule as `buildctl job` and never returns logs.
@@ -497,9 +599,9 @@ so a machine needs only SSH access:
 4. `preflight TASK`. A broker-only task first runs `install-broker TASK` while idle: it drains, stops the
    service, runs `lifecycle.py install --install-tree` from the task tree (the stale-tree guard applies) and
    always starts the service again.
-5. `finish TASK --expected DIGEST`, then `watch JOB --step` in the background: it prints the stage table at
-   each stage change and exits 0 when completed, 1 on another terminal state, 3 at a stage change.
-   `progress JOB --table` prints the same table once.
+5. `finish TASK --expected DIGEST`, then `monitor --task TASK` in the background (see "Agent guide" for its
+   exit codes); `watch JOB --step` is the older follower and `progress JOB --table` prints the tables once.
+   `workcopy TASK DIR` and `patch TASK DIR` make the patch for step 2 on the server.
 6. `close TASK --message-file FILE` verifies the completed job and container health, commits exactly the
    paths the task changed against its baseline (refusing checkout drift or another writer's staged changes),
    releases every claim with that commit and stops the heartbeat once the task is complete.

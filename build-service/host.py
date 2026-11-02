@@ -586,16 +586,22 @@ def failure_fields(error,limit=5):
 
 @contextlib.contextmanager
 def host_phase(job,name):
-    """Attribute host-side publication and packaging work in phase_timings (P3)."""
-    started=time.monotonic();outcome="failed"
+    """Attribute host-side publication and packaging work in phase_timings (P3).
+
+    The entry is listed from its start (outcome "running", seconds None) with started_at,
+    so progress can show host work such as image builds while it runs."""
+    started=time.monotonic()
+    entry={"phase":name,"recipe":"host:v1:"+name,"started_at":time.time(),"seconds":None,"outcome":"running"}
+    timings=job.setdefault("phase_timings",[])
+    timings.append(entry)
+    # Image builds record from concurrent threads; trimming only when needed keeps their appends.
+    if len(timings)>128:job["phase_timings"]=timings[-128:]
+    outcome="failed"
     try:
         yield
         outcome="completed"
     finally:
-        timings=job.setdefault("phase_timings",[])
-        timings.append({"phase":name,"recipe":"host:v1:"+name,"seconds":round(time.monotonic()-started,3),"outcome":outcome})
-        # Image builds record from concurrent threads; trimming only when needed keeps their appends.
-        if len(timings)>128:job["phase_timings"]=timings[-128:]
+        entry.update(seconds=round(time.monotonic()-started,3),outcome=outcome)
 
 
 
@@ -2660,6 +2666,14 @@ STEP_PHASES = {"building_api", "checking_source"}
 STAGE_SKIP = {"engine_metadata", "linked_smoke", "start", "finished", "admitted", "queued_check", None} | STEP_PHASES
 STAGE_ORDER = ["dependencies", "format check", "compile tests", "run tests", "release build", "package release",
     "UI build and tests", "deploy and health checks"]
+# Timed host steps that belong to a stage; early work runs beside the stages (background).
+HOST_STAGE = {"packaging_api": "package release", "packaging_loop": "package release",
+    "image_build_api": "package release", "image_build_loop": "package release"}
+EARLY_WORK = {"early_ui_tests": ("early UI tests", "ui"), "early_rollback_save": ("rollback save", "rollback")}
+# Broker eb579161 (2026-11-02 05:15) changed build_deploy timings: the suite and release compile
+# stopped sharing a Cargo lock, both images build at once, and UI fixtures and the rollback save
+# start early. build_deploy ranges count only jobs created since; older jobs still give stage order.
+BUILD_DEPLOY_SINCE = 1793614500
 
 
 def stage_spans(job, now=None):
@@ -2685,6 +2699,13 @@ def stage_spans(job, now=None):
     for e in job.get("execution_history") or []:
         if e.get("started_at"):
             add(stage(e.get("phase"), e["started_at"]), e["started_at"], e["started_at"] + (e.get("elapsed_seconds") or 0))
+    # Image packaging runs on the host (no execution step) inside building_api since broker eb579161.
+    for t in job.get("phase_timings") or []:
+        if HOST_STAGE.get(t.get("phase")) and t.get("started_at"):
+            if t.get("seconds") is not None:
+                add(HOST_STAGE[t["phase"]], t["started_at"], t["started_at"] + t["seconds"])
+            elif not terminal:
+                add(HOST_STAGE[t["phase"]], t["started_at"], None)
     if not terminal:
         running = [(a.get("phase"), a.get("started_at")) for a in job.get("active_phases") or [] if a.get("started_at")]
         live = job.get("execution_observation") or {}
@@ -2709,27 +2730,81 @@ def job_class(job):
 
 
 def stage_baselines(jobs):
-    """p50/p90 seconds per stage and wall per class, from completed receipts with step timestamps."""
+    """p50/p90/p95 seconds per stage and wall per class, from completed receipts with step timestamps.
+
+    Each class's 30 newest completed jobs set its stage order; build_deploy ranges use only jobs
+    created since BUILD_DEPLOY_SINCE, and a stage without such jobs has no range (n=0)."""
     def pct(values, q):
         values = sorted(values)
         return round(values[min(len(values) - 1, int(round(q * (len(values) - 1))))])
+    def stat(values):
+        return {"p50": pct(values, .5), "p90": pct(values, .9), "p95": pct(values, .95)} if values else None
     classes = {}
-    # The 30 most recent completed jobs per class; container-free releases have phase records only.
+    # Container-free releases have phase records only.
     for job in sorted(jobs, key=lambda j: j.get("finished_at") or 0, reverse=True):
         if (job.get("status") != "completed" or not job.get("finished_at") or not job.get("started_at")
                 or not (job.get("execution_history") or job.get("phase_history"))):
             continue
-        c = classes.setdefault(job_class(job), {"walls": [], "spans": {}})
-        if len(c["walls"]) >= 30:
+        name = job_class(job)
+        c = classes.setdefault(name, {"jobs": 0, "seen": {}, "walls": [], "spans": {}})
+        if c["jobs"] >= 30:
+            continue
+        c["jobs"] += 1
+        spans = {stage: hi - lo for stage, (lo, hi) in stage_spans(job).items() if hi is not None}
+        for stage in spans:
+            c["seen"][stage] = c["seen"].get(stage, 0) + 1
+        if name.startswith("build_deploy") and (job.get("created_at") or 0) < BUILD_DEPLOY_SINCE:
             continue
         c["walls"].append(job["finished_at"] - job["started_at"])
-        for name, (lo, hi) in stage_spans(job).items():
-            if hi is not None:
-                c["spans"].setdefault(name, []).append(max(0, hi - lo))
-    return {name: {"jobs": len(c["walls"]), "wall": {"p50": pct(c["walls"], .5), "p90": pct(c["walls"], .9)},
-                   "stages": [{"stage": s, "n": len(c["spans"][s]), "p50": pct(c["spans"][s], .5), "p90": pct(c["spans"][s], .9)}
-                              for s in STAGE_ORDER if len(c["spans"].get(s, [])) * 5 >= len(c["walls"])]}
+        for stage, seconds in spans.items():
+            c["spans"].setdefault(stage, []).append(max(0, seconds))
+    return {name: {"jobs": len(c["walls"]), "wall": stat(c["walls"]) or {},
+                   "stages": [{"stage": s, "n": len(c["spans"].get(s, [])), **(stat(c["spans"].get(s, [])) or {"p50": None, "p90": None, "p95": None})}
+                              for s in STAGE_ORDER if c["seen"].get(s, 0) * 5 >= c["jobs"]]}
             for name, c in classes.items()}
+
+
+def stage_ids(stages, cls):
+    """Stage numbers in order; stages that run at the same time share a number with letters (3a, 3b).
+
+    A compile runs the suite beside the release build; with reused artifacts the test replay
+    runs beside packaging (broker eb579161)."""
+    group = ("run tests", "package release") if "artifacts-reused" in (cls or "") else ("run tests", "release build")
+    grouped = sum(s in group for s in stages) > 1
+    ids, number, letter = [], 0, 0
+    for i, stage in enumerate(stages):
+        joins = grouped and stage in group and i and stages[i - 1] in group
+        number, letter = (number, letter + 1) if joins else (number + 1, 0)
+        ids.append(f"{number}{'abcdefgh'[letter]}" if grouped and stage in group else str(number))
+    return ids
+
+
+def early_work(job, now, needed_by):
+    """Work started beside the stages (rollback save, UI fixtures), each with its time and result."""
+    rows = []
+    for t in job.get("phase_timings") or []:
+        if t.get("phase") not in EARLY_WORK:
+            continue
+        name, key = EARLY_WORK[t["phase"]]
+        recorded = (job.get("early_work") or {}).get(key)
+        status = t.get("outcome") or "completed"
+        if status == "running" and job.get("status") not in {"queued", "running"}:
+            status = "interrupted"
+        result = None
+        if isinstance(recorded, str):
+            status, result = "failed", recorded.strip().splitlines()[0][:120] if recorded.strip() else "failed"
+        elif key == "ui" and isinstance(recorded, dict):
+            evidence = job.get("ui_test_evidence") or {}
+            result = f"ran {recorded.get('executed', 0)}"
+            if evidence.get("tests"):
+                result += f"; UI checks reused {len(evidence.get('reused_tests') or [])}/{len(evidence['tests'])}"
+        elif key == "rollback" and status == "completed":
+            redo = [r.get("seconds") for r in job.get("phase_timings") or [] if r.get("phase") == "rollback_export"]
+            if redo and redo[-1] is not None:
+                result = "used" if redo[-1] < 1 else f"saved again at deploy ({round(redo[-1])}s)"
+        seconds = t.get("seconds") if t.get("seconds") is not None else now - (t.get("started_at") or now)
+        rows.append({"name": name, "status": status, "seconds": round(seconds), "needed_by": needed_by, "result": result})
+    return rows
 
 
 def job_progress(job, baselines, now):
@@ -2742,21 +2817,26 @@ def job_progress(job, baselines, now):
     if job.get("status") in {"queued", "running"} and cls.endswith("/tests-reused") and "test" in {a.get("phase") for a in job.get("active_phases") or []} | phases | ({"test"} if "package" not in phases else set()):
         cls = cls.replace("/tests-reused", "/tests-ran")  # a running job's suite has not reported yet
     plan = baselines.get(cls, {"stages": [], "wall": {}})
-    stats = {s["stage"]: s for s in plan["stages"]}
+    stats = {s["stage"]: s for s in plan["stages"] if s.get("p50") is not None}
     names = [s["stage"] for s in plan["stages"]]
     started = next((t for t in (job.get("started_at"), job.get("created_at")) if t is not None), now)
     spans = stage_spans(job, now)
     order = names + sorted((s for s in spans if s not in names), key=lambda s: spans[s][0])
     def normal(name):
         return stats.get(name) and [stats[name]["p50"], stats[name]["p90"]]
+    ids = dict(zip(order, stage_ids(order, cls)))
+    def row(name, **value):
+        # late: the high end of the normal range (p95), where a monitor starts checking in.
+        return {"stage": name, "id": ids[name], **value, "normal": normal(name), "samples": stats.get(name, {}).get("n", 0),
+                "late": stats.get(name, {}).get("p95") or (stats.get(name) and round(stats[name]["p90"] * 1.1))}
     finished, running, upcoming = [], [], []
     for name in order:
         if name not in spans:
-            upcoming.append({"stage": name, "normal": normal(name)})
+            upcoming.append(row(name))
         elif spans[name][1] is None:
-            running.append({"stage": name, "seconds": round(now - spans[name][0]), "normal": normal(name)})
+            running.append(row(name, seconds=round(now - spans[name][0])))
         else:
-            finished.append({"stage": name, "seconds": round(spans[name][1] - spans[name][0]), "normal": normal(name)})
+            finished.append(row(name, seconds=round(spans[name][1] - spans[name][0])))
     current = running[-1] if running else None
     elapsed = current["seconds"] if current else 0
     stat = stats.get(current["stage"]) if current else None
@@ -2770,9 +2850,23 @@ def job_progress(job, baselines, now):
     return {"job_id": job.get("job_id"), "status": job.get("status"), "class": cls, "class_provisional": not known,
             "stage": stage_name, "stage_index": order.index(stage_name) + 1 if stage_name in order else len(finished) + 1,
             "stage_count": len(order), "stage_seconds": round(elapsed), "stage_normal": normal(stage_name),
+            "stage_id": ids.get(stage_name),
             "verdict": verdict, "finished_stages": finished, "running_stages": running, "upcoming_stages": upcoming,
             "job_seconds": round(now - started), "job_normal": plan["wall"] and [plan["wall"]["p50"], plan["wall"]["p90"]],
-            "remaining_seconds": [round(low), round(high)]}
+            "remaining_seconds": [round(low), round(high)],
+            # Seconds since the live step last reported output or progress (a stall reading).
+            "idle_seconds": idle_seconds(job, now),
+            # Early work is waited for just before the UI checks stage.
+            "background": early_work(job, now, ids.get("UI build and tests"))}
+
+
+def idle_seconds(job, now):
+    observed = job.get("execution_observation") or {}
+    if job.get("status") != "running" or observed.get("state") == "terminal":
+        return 0
+    last = max([observed.get(k) or 0 for k in ("last_output_at", "last_progress_at", "heartbeat_at")] +
+               [e.get("at") or 0 for e in observed.get("events") or []])
+    return round(max(0, now - last)) if last else 0
 
 
 def container_mounts(runner, ids, batch=32):
@@ -6338,7 +6432,19 @@ class Broker:
                 if getattr(self, "_stage_baselines", (None,))[0] != completed:
                     self._stage_baselines = (completed, stage_baselines(list(self.jobs.values())))
                 self._touch_job_task(job, trusted, workspace)
-                return job_progress(job, self._stage_baselines[1], time.time())
+                value = job_progress(job, self._stage_baselines[1], time.time())
+                if job.get("status") == "queued":
+                    # Who this job waits behind: task, owning session (session= in its summary) and phase.
+                    summaries = {item.get("task_id"): item.get("summary") or "" for item in self.work.values()}
+                    def session(task_id):
+                        found = re.search(r"session=([^;\]]{1,80})", summaries.get(task_id, ""))
+                        return found.group(1).strip() if found else None
+                    value["queued_behind"] = [{"job_id": other["job_id"], "task_id": other.get("task_id"), "session": session(other.get("task_id")),
+                                               "status": other.get("status"), "phase": other.get("phase")}
+                                              for other in sorted(self.jobs.values(), key=lambda j: j.get("created_at") or 0)
+                                              if other is not job and other.get("status") in {"queued", "running"}
+                                              and (other.get("status") == "running" or (other.get("created_at") or 0) < (job.get("created_at") or 0))][:8]
+                return value
             if name == "v3_worker_job":
                 if "job_id" not in args or set(args) - {"job_id", "log_cursor"}:
                     raise ValueError("job_id and optional log_cursor required")
