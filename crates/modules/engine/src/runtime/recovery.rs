@@ -1,15 +1,19 @@
-use super::{config, models::ModelRecords, ports::*, Runtime};
+use super::config;
+use super::models::ModelRecords;
+use super::ports::{
+    AgentPolicy, ChatAuthority, ContextDiagnostics, CredentialBindings, FollowupQueue,
+    InstallationAccess, MainGuidance, ModelDiagnostics, ModuleBindings, NativePolicy, PromptSlots,
+    ProviderUsage, RunObservation, RunPresentation, ScopedStorage, SkillSources, StartupPolicy,
+};
+use super::Runtime;
 use crate::context::abilities::Catalog;
-use crate::ports::*;
-use crate::tools::{self, execution as tool_execution};
-use crate::{digest, now, status, uuid, workflow};
+use crate::ports::{AdmissionEffects, ChatEffects, NotificationEffects, ToolJournal, UsageEffects};
+use crate::{now, status};
 use anyhow::bail;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use std::{sync::Arc, time::Duration};
-use tokio::sync::Mutex;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
-use webagent_access as access;
 impl<
         S: ScopedStorage
             + ModelRecords
@@ -159,7 +163,9 @@ impl<
                 return Ok(BuildPoll::Waiting(None));
             }
         }
-        let job_id = job_id.unwrap();
+        let Some(job_id) = job_id else {
+            return Ok(BuildPoll::Waiting(None));
+        };
         let response = crate::tools::transport::execute_host_trusted(
             "v3_worker_job",
             &json!({"job_id":job_id}),
@@ -272,7 +278,9 @@ impl<
         };
         for user_app in app.user_views(startup).await? {
             for view in user_app.store.active_runs().await? {
-                let id = view["id"].as_str().unwrap();
+                let Some(id) = view["id"].as_str() else {
+                    continue;
+                };
                 if startup && status(&view) == "paused" {
                     let mut run = user_app.run(id).await?;
                     if !Self::cancelled_context_pause(&run, now() as i64) {
@@ -466,34 +474,58 @@ enum BuildPoll {
 
 /// The chat line for a build stage change, keyed so each change is posted once. A
 /// verdict change counts, so a stage running past its normal range is reported too.
+///
+/// Stages that run at the same time share a number with letters (3a, 3b), as in the
+/// broker's own tables; work the broker starts beside the stages (early UI tests,
+/// rollback save) follows as a short background sentence.
 fn progress_notice(run: &Value, progress: &Value) -> Option<(String, String)> {
     let job = progress["job_id"].as_str()?;
     let short = job.get(..8).unwrap_or(job);
     let stage = progress["stage"].as_str().unwrap_or("queued");
     let verdict = progress["verdict"].as_str().unwrap_or("");
-    let finished = progress["finished_stages"]
-        .as_array()
-        .map_or(&[][..], Vec::as_slice);
+    let finished = list(&progress["finished_stages"]);
+    let running = list(&progress["running_stages"]);
     let key = format!("{short}:{}:{stage}:{verdict}", finished.len()).replace(' ', "-");
     if run["pending"]["external_job"]["progress_key"] == key.as_str() {
         return None;
     }
     let mut text = format!("Build {short}: ");
-    if progress["stage_count"]
-        .as_u64()
-        .is_some_and(|count| count > 0)
-    {
+    let count = stage_count(progress);
+    if running.len() > 1 {
+        let ids: Vec<&str> = running.iter().filter_map(|s| s["id"].as_str()).collect();
+        let stages: Vec<String> = running.iter().map(running_stage).collect();
         text += &format!(
-            "stage {} of {}, ",
-            progress["stage_index"], progress["stage_count"]
+            "stages {} of {count}, {}",
+            ids.join("+"),
+            stages.join(" and ")
         );
+    } else {
+        if count > 0 {
+            let id = progress["stage_id"]
+                .as_str()
+                .map_or_else(|| progress["stage_index"].to_string(), str::to_owned);
+            text += &format!("stage {id} of {count}, ");
+        }
+        text += stage;
+        if let Some(seconds) = progress["stage_seconds"].as_u64().filter(|s| *s > 0) {
+            text += &format!(" running {}", minutes(seconds));
+        }
+        if !progress["stage_normal"].is_null() {
+            text += &format!(" (normal {})", range(&progress["stage_normal"]));
+        }
     }
-    text += stage;
-    if let Some(seconds) = progress["stage_seconds"].as_u64().filter(|s| *s > 0) {
-        text += &format!(" running {}", minutes(seconds));
-    }
-    if !progress["stage_normal"].is_null() {
-        text += &format!(" (normal {})", range(&progress["stage_normal"]));
+    let behind: Vec<String> = list(&progress["queued_behind"])
+        .iter()
+        .map(|other| {
+            let task = other["task_id"].as_str().unwrap_or("another task");
+            match other["session"].as_str() {
+                Some(session) => format!("{task} (session \"{session}\")"),
+                None => task.to_owned(),
+            }
+        })
+        .collect();
+    if !behind.is_empty() {
+        text += &format!(" behind {}", behind.join(", "));
     }
     text += &format!(", {verdict}.");
     if let Some(last) = finished.last() {
@@ -504,17 +536,74 @@ fn progress_notice(run: &Value, progress: &Value) -> Option<(String, String)> {
             range(&last["normal"])
         );
     }
-    if let [low, high] = progress["remaining_seconds"]
-        .as_array()
-        .map_or(&[][..], Vec::as_slice)
-    {
+    if let [low, high] = list(&progress["remaining_seconds"]) {
         text += &format!(
             " About {}–{} left.",
             minutes(low.as_u64().unwrap_or(0)),
             minutes(high.as_u64().unwrap_or(0))
         );
     }
+    let background: Vec<String> = list(&progress["background"])
+        .iter()
+        .map(background_work)
+        .collect();
+    if !background.is_empty() {
+        text += &format!(" Background: {}.", background.join("; "));
+    }
     Some((key, text))
+}
+
+fn list(value: &Value) -> &[Value] {
+    value.as_array().map_or(&[][..], Vec::as_slice)
+}
+
+/// Distinct stage numbers (3a and 3b count once), or the broker's plain count.
+fn stage_count(progress: &Value) -> usize {
+    let mut numbers: Vec<&str> = ["finished_stages", "running_stages", "upcoming_stages"]
+        .iter()
+        .flat_map(|field| list(&progress[*field]))
+        .filter_map(|stage| stage["id"].as_str())
+        .map(|id| id.trim_end_matches(|c: char| c.is_ascii_alphabetic()))
+        .collect();
+    numbers.sort_unstable();
+    numbers.dedup();
+    if numbers.is_empty() {
+        progress["stage_count"]
+            .as_u64()
+            .and_then(|count| usize::try_from(count).ok())
+            .unwrap_or(0)
+    } else {
+        numbers.len()
+    }
+}
+
+fn running_stage(stage: &Value) -> String {
+    let mut text = format!(
+        "{} {}",
+        stage["stage"].as_str().unwrap_or("stage"),
+        minutes(stage["seconds"].as_u64().unwrap_or(0))
+    );
+    if !stage["normal"].is_null() {
+        text += &format!(" (normal {})", range(&stage["normal"]));
+    }
+    text
+}
+
+fn background_work(work: &Value) -> String {
+    let state = match work["status"].as_str() {
+        Some("completed") => "done",
+        Some(other) => other,
+        None => "running",
+    };
+    let mut text = format!(
+        "{} {state} {}",
+        work["name"].as_str().unwrap_or("early work"),
+        minutes(work["seconds"].as_u64().unwrap_or(0))
+    );
+    if let Some(result) = work["result"].as_str() {
+        text += &format!(" ({result})");
+    }
+    text
 }
 
 fn minutes(seconds: u64) -> String {
@@ -604,6 +693,37 @@ mod tests {
         assert!(progress_notice(&run, &progress("run tests", 2, "on track")).is_none());
         assert!(progress_notice(&run, &progress("run tests", 2, "slow, past p90")).is_some());
         assert!(progress_notice(&run, &progress("release build", 3, "on track")).is_some());
+    }
+
+    #[test]
+    fn parallel_stages_queue_and_background_read_in_one_line() {
+        let run = json!({"pending":{"external_job":{}}});
+        let both = json!({"job_id":"fa109e1e-eb03","stage":"release build","stage_id":"3b",
+            "stage_index":4,"stage_count":7,"stage_seconds":54,"stage_normal":null,
+            "verdict":"no baseline",
+            "finished_stages":[{"stage":"dependencies","id":"1","seconds":6,"normal":null},
+                {"stage":"compile tests","id":"2","seconds":62,"normal":[60,120]}],
+            "running_stages":[{"stage":"run tests","id":"3a","seconds":63,"normal":[120,180]},
+                {"stage":"release build","id":"3b","seconds":54,"normal":null}],
+            "upcoming_stages":[{"stage":"package release","id":"4"},
+                {"stage":"UI build and tests","id":"5"},{"stage":"deploy and health checks","id":"6"}],
+            "remaining_seconds":[300,600],
+            "background":[{"name":"early UI tests","status":"running","seconds":125},
+                {"name":"rollback save","status":"completed","seconds":12,"result":"used"}]});
+        let (_, text) = progress_notice(&run, &both).unwrap();
+        assert_eq!(
+            text,
+            "Build fa109e1e: stages 3a+3b of 6, run tests 1m (normal 2m–3m) and release build \
+             54s, no baseline. Last finished: compile tests in 1m (normal 1m–2m). About 5m–10m \
+             left. Background: early UI tests running 2m; rollback save done 12s (used)."
+        );
+        let queued = json!({"job_id":"abc","stage":"queued","stage_count":0,"verdict":"no baseline",
+            "queued_behind":[{"task_id":"bridge-form","session":"Check out webagent"}]});
+        let (_, text) = progress_notice(&run, &queued).unwrap();
+        assert_eq!(
+            text,
+            "Build abc: queued behind bridge-form (session \"Check out webagent\"), no baseline."
+        );
     }
 
     #[test]
