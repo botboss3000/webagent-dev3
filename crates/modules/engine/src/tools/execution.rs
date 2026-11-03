@@ -47,7 +47,8 @@ pub struct Settings<C: ActionCatalog> {
 /// Fixed recovery rules, projected from the same classification used by dispatch.
 /// These describe runtime safeguards; they are not configurable permission grants.
 pub fn advanced_policies<C: ActionCatalog>(name: &str) -> Value {
-    if C::is_read(name) {
+    // Reads and the exempt chat controls have no write safeguards to describe.
+    if C::is_read(name) || C::retry(name).risk == crate::tools::retry_guard::Risk::Exempt {
         return Value::Null;
     }
     serde_json::json!({

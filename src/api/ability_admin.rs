@@ -152,6 +152,19 @@ pub(super) async fn grant_ceiling(
     }
     Ok(())
 }
+/// Chat controls the run loop owns, shown under Base as fixed. They are exempt from the
+/// repeat guard and have no permission, execution or retry settings.
+const RUNTIME_CONTROLS: &[(&str, &str)] = &[
+    (
+        "set_closer_status",
+        "Record how the agent's turn ends (complete or needs input) before the final reply.",
+    ),
+    (
+        "publish_main_message",
+        "Publish the agent's reply to the main chat.",
+    ),
+];
+
 async fn catalog(app: &App, identity: &Value, id: &str, params: &HashMap<String, String>) -> Api {
     let rights = authority(app, identity, id, false).await?;
     let caller = identity["_user_id"].as_str().ok_or_else(denied)?;
@@ -271,6 +284,18 @@ async fn catalog(app: &App, identity: &Value, id: &str, params: &HashMap<String,
                 first = false;
                 usable |= decision.permission != Permission::Deny;
                 tool["effective"] = serde_json::to_value(decision).map_err(anyhow::Error::from)?;
+            }
+        }
+        if ability_id == "base" {
+            // The chat's own controls run inside the run loop, not the catalog. They are
+            // listed here so the page shows them, locked: no permission or retry setting
+            // may change them without breaking the conversation.
+            if let Some(tools) = ability["tools"].as_array_mut() {
+                for (name, description) in RUNTIME_CONTROLS {
+                    tools.push(json!({"name":name,"description":description,"locked":true,
+                        "runtime_control":true,"supported":true,
+                        "call_count":call_counts.get(*name).copied().unwrap_or(0)}));
+                }
             }
         }
         ability["available"] = json!(ready && permission != Permission::Deny && usable);
