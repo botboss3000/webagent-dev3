@@ -6,6 +6,7 @@ import {currentChatProfile} from '../controls/chat-config.js';
 import {_refreshLucideIcons} from './presentation.js';
 import {copyText} from '../../shared/models/clipboard.js';
 import {openChatElementFullView} from './full-view.js';
+import {openChatImagePreview} from './image-preview.js';
 import {createBubbleGutter} from './bubble-gutters.js';
 /** Creates an accessible gutter button and forwards its click to the supplied action. */
 function button(title,icon,action){const node=document.createElement('button');node.type='button';node.className='turn-gutter-btn';node.title=title;node.setAttribute('aria-label',title);node.innerHTML='<i data-lucide="'+icon+'" style="width:14px;height:14px"></i>';node.addEventListener('click',action);return node;}
@@ -49,12 +50,17 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
     const sid=new URL(location.href).searchParams.get('session_id');
     for(const file of item.attachments){
       if(typeof file.id!=='string'||!/^[0-9a-f-]{36}$/i.test(file.id)||!sid)continue;
-      const link=document.createElement('a');link.href='/api/v3/sessions/'+encodeURIComponent(sid)+'/attachments/'+encodeURIComponent(file.id)+'/content';link.textContent=file.name||'Attachment';link.download=file.name||'attachment';link.target='_blank';link.rel='noopener';
-      let image;
-      if(file.preview===true){image=document.createElement('img');if(!resolveAsset)image.src=link.href;image.alt=file.name||'Image attachment';image.loading='lazy';link.prepend(image);}
+      const link=document.createElement('a');link.href='/api/v3/sessions/'+encodeURIComponent(sid)+'/attachments/'+encodeURIComponent(file.id)+'/content';link.target='_blank';link.rel='noopener';
+      const image=file.preview===true?document.createElement('img'):null;
+      // Images are bare square tiles that open the shared viewer; other files keep their name as the link label.
+      if(image){link.className='chat-attachment-image';image.alt=file.name||'Image attachment';image.loading='lazy';image.decoding='async';link.append(image);link.title=file.name||'Image attachment';link.setAttribute('aria-label','Preview '+(file.name||'image attachment'));}
+      else{link.className='chat-attachment-file';link.textContent=file.name||'Attachment';link.download=file.name||'attachment';}
+      let ready=!resolveAsset,assetError='';
+      if(image)link.addEventListener('click',event=>{if(event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;event.preventDefault();if(assetError){note('Attachment unavailable: '+assetError);return;}if(!ready||!image.getAttribute('src')){note('Attachment is loading; try again shortly.');return;}openChatImagePreview(image.currentSrc||image.src,image.alt,link);});
       // Resolve attachment content lazily; detached rows are ignored and failed links stay non-navigable.
-      if(resolveAsset){const url=link.href;let ready=false;link.onclick=event=>{if(!ready){event.preventDefault();note('Attachment is loading; try again shortly.');}};
-        resolveAsset(url).then(blobUrl=>{if(!link.isConnected)return;ready=true;link.href=blobUrl;if(image)image.src=blobUrl;}).catch(error=>{link.onclick=event=>{event.preventDefault();note('Attachment unavailable: '+error.message);};});}
+      if(resolveAsset){const url=link.href;
+        if(!image)link.addEventListener('click',event=>{if(ready)return;event.preventDefault();note(assetError?'Attachment unavailable: '+assetError:'Attachment is loading; try again shortly.');});
+        resolveAsset(url).then(blobUrl=>{if(!link.isConnected)return;ready=true;link.href=blobUrl;if(image)image.src=blobUrl;}).catch(error=>{assetError=error.message;});}
       files.append(link);
     }
     if(files.childElementCount)bubble.append(files); // Empty or filtered attachment lists must not reserve spacing.

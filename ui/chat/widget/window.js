@@ -189,6 +189,7 @@ const PORTAL_SELECTOR = [
   '.chat-control-lock-popover',
   '.bubble-more-menu',
   '.chat-element-full-view-backdrop',
+  '.chat-image-preview-backdrop',
   '[data-chat-control-surface="undo"]',
 ].join(',');
 const SHELL_SELECTOR = '#chat-toggle-btn, #chat-float-btn';

@@ -1,5 +1,6 @@
 // @code-index {"version":1,"feature":"chat-composer-media","aliases":["chat footer","composer media","voice capture"],"purpose":"Locates composer attachments and dictation behavior Config: ui/chat/chat.json -> chat_limits.attachments.{max_file_size_mb,max_per_message}; chat_common.{active_footer,idle_footer}.chat_pill.controls.{attach,mic,mic_send}. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_limits/attachments","/chat_common/active_footer/chat_pill/controls","/chat_common/idle_footer/chat_pill/controls"],"profile_overrides":true}],"opportunities":[]}}
 import {createAudioCapture,encodeBytes} from './audio-capture.js';
+import {openChatImagePreview} from '../core/image-preview.js';
 // V2 attachment staging and composer dictation; the server recognizes speech locally.
 /** Purpose: Prefer the browser-reported media type, falling back to the supported filename map or a generic binary type. */
 export function inferMedia(file){
@@ -52,9 +53,19 @@ export function mountComposerMedia({root,client,ensureSession,note,changed,refre
   const files=staged.get(session)||[];preview.replaceChildren();
   for(const item of files){
    const card=document.createElement('div');card.className='chat-preview-item';
-   if(item.url){const image=document.createElement('img');image.src=item.url;image.alt=item.file.name;card.append(image);}
-   const label=document.createElement('span');label.textContent=item.file.name+(item.error?' — upload failed':item.pending?' — uploading…':'');label.title=item.issue||item.error||item.file.name;card.append(label);
-   if(item.error){const retry=document.createElement('button');retry.type='button';retry.textContent='Retry';retry.onclick=guard(()=>upload(item));card.append(retry);}
+   // The tile is the picture, so the file name lives in title/aria text and the tile keeps zero padding.
+   const status=item.error?'upload failed':item.pending?'uploading…':'';
+   card.title=item.file.name+(status?' — '+status:'')+(item.error&&item.issue?'\n'+item.issue:'');
+   card.classList.toggle('is-pending',!!item.pending);card.classList.toggle('is-error',!!item.error);
+   if(item.url){
+    const open=document.createElement('button');open.type='button';open.className='chat-preview-open';open.title=card.title;open.setAttribute('aria-label','Preview '+item.file.name);
+    const image=document.createElement('img');image.src=item.url;image.alt='';image.decoding='async';open.append(image);
+    open.onclick=()=>openChatImagePreview(image.currentSrc||item.url,item.file.name,open);card.append(open);
+   }else{
+    const ext=(/\.([A-Za-z0-9]{1,5})$/.exec(item.file.name||'')||[])[1]||'file';
+    const badge=document.createElement('span');badge.className='chat-preview-ext';badge.setAttribute('aria-hidden','true');badge.textContent=ext.toUpperCase();card.append(badge);
+   }
+   if(item.error){const retry=document.createElement('button');retry.type='button';retry.className='chat-preview-retry';retry.textContent='Retry';retry.onclick=guard(()=>upload(item));card.append(retry);}
    const remove=document.createElement('button');remove.type='button';remove.className='chat-preview-remove';remove.textContent='×';remove.setAttribute('aria-label','Remove '+item.file.name);remove.onclick=()=>removeFile(item);card.append(remove);preview.append(card);
   }
   preview.style.display=files.length?'':'none';pill.dataset.attachmentCount=String(files.length);pill.classList.toggle('has-attachments',!!files.length);pill.dataset.composerAvailable=String(available);$('chat-attach-btn').disabled=!available;mic.disabled=!available||!!getState().shutoff;changed();

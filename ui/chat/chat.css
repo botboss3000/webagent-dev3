@@ -102,14 +102,39 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 .v3-chat-model-list .cml-item:disabled{opacity:.5}
 
 
-#chat-preview-bar {gap:8px;flex-wrap:wrap;padding:8px 12px;}
+/* Attachment thumbnails are square photo frames, deliberately theme-independent
+   because they sit against arbitrary image content rather than a themed surface. */
+#chat-panel {--chat-att-thumb:56px;--chat-attachment-frame:#000;}
+/* Composer tray: zero-padding square tiles in one horizontally scrolling row.
+   The tile is the picture; the file name lives in title/aria text only. */
+#chat-preview-bar {gap:6px;flex-wrap:nowrap;align-items:flex-start;padding:6px 4px;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;scrollbar-width:thin;scroll-snap-type:x proximity;}
 #chat-preview-bar:not([style*="display: none"]):not([style*="display:none"]) {display:flex;}
-#chat-preview-bar .chat-preview-item {display:flex;align-items:center;gap:6px;max-width:220px;border:1px solid var(--border);border-radius:8px;padding:4px 8px;}
-#chat-preview-bar .chat-preview-item img,.chat-attachments img {width:48px;height:48px;object-fit:cover;border-radius:4px;}
-#chat-preview-bar .chat-preview-item span {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#chat-preview-bar .chat-preview-item {position:relative;flex:0 0 auto;box-sizing:border-box;width:var(--chat-att-thumb);height:var(--chat-att-thumb);margin:0;padding:0;border:var(--border-width) solid var(--chat-attachment-frame);border-radius:0;background:var(--bg-1);overflow:hidden;scroll-snap-align:start;}
+#chat-preview-bar .chat-preview-open {display:block;box-sizing:border-box;width:100%;height:100%;margin:0;padding:0;border:0;border-radius:0;background:transparent;cursor:zoom-in;}
+#chat-preview-bar .chat-preview-open img {display:block;width:100%;height:100%;object-fit:cover;border:0;border-radius:0;}
+#chat-preview-bar .chat-preview-ext {display:grid;place-items:center;width:100%;height:100%;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--fg-2);}
+#chat-preview-bar .chat-preview-item.is-pending .chat-preview-open img {opacity:.45;}
+#chat-preview-bar .chat-preview-item.is-pending::after {content:'';position:absolute;left:50%;top:50%;width:16px;height:16px;margin:-8px 0 0 -8px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:chat-att-spin .8s linear infinite;pointer-events:none;}
+@keyframes chat-att-spin {to {transform:rotate(360deg);}}
+@media (prefers-reduced-motion: reduce) {#chat-preview-bar .chat-preview-item.is-pending::after {animation:none;}}
+#chat-preview-bar .chat-preview-item.is-error {border-color:var(--danger);}
+#chat-preview-bar .chat-preview-retry {position:absolute;left:0;right:0;bottom:0;padding:1px 0;border:0;border-radius:0;background:var(--danger);color:#fff;font-size:10px;font-weight:700;line-height:1.5;}
+#chat-preview-bar .chat-preview-remove {position:absolute;top:0;right:0;display:grid;place-items:center;width:18px;height:18px;margin:0;padding:0;border:0;border-radius:0;background:color-mix(in oklab,#000 62%,transparent);color:#fff;font-size:13px;line-height:1;cursor:pointer;}
+#chat-preview-bar .chat-preview-remove:hover,#chat-preview-bar .chat-preview-remove:focus-visible {background:var(--danger);}
 #chat-preview-bar button {border:0;background:transparent;color:inherit;cursor:pointer;}
-.chat-attachments {display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;}
-.chat-attachments a {display:flex;gap:6px;align-items:center;color:inherit;}
+#chat-preview-bar .chat-preview-item:focus-within {outline:2px solid var(--brand);outline-offset:1px;}
+/* Published message attachments: the same square tiles in one scrolling row, so
+   extra images carousel left-to-right instead of stacking or wrapping. */
+.chat-attachments {display:flex;flex-wrap:nowrap;align-items:flex-start;gap:6px;max-width:100%;min-width:0;margin-top:8px;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;scrollbar-width:thin;scroll-snap-type:x proximity;}
+.chat-attachments a {display:block;flex:0 0 auto;box-sizing:border-box;width:var(--chat-att-thumb,56px);height:var(--chat-att-thumb,56px);margin:0;padding:0;border:var(--border-width) solid var(--chat-attachment-frame,#000);border-radius:0;overflow:hidden;color:inherit;scroll-snap-align:start;}
+.chat-attachments a.chat-attachment-file {display:inline-flex;width:auto;height:auto;max-width:100%;align-items:center;gap:6px;padding:4px 8px;border-radius:var(--r-sm);}
+.chat-attachments img {display:block;width:100%;height:100%;object-fit:cover;border:0;border-radius:0;cursor:zoom-in;}
+/* Full-screen image preview shared by composer tiles and published attachments. */
+.chat-image-preview-backdrop {position:fixed;inset:0;z-index:10070;display:grid;place-items:center;padding:24px;background:color-mix(in oklab,#000 74%,transparent);}
+.chat-image-preview {position:relative;display:flex;align-items:center;justify-content:center;max-width:100%;max-height:100%;margin:0;}
+.chat-image-preview img {display:block;width:auto;height:auto;max-width:100%;max-height:calc(100dvh - 48px);object-fit:contain;border:var(--border-width) solid var(--chat-attachment-frame,#000);border-radius:0;background:var(--bg-1);box-shadow:0 18px 60px color-mix(in oklab,#000 45%,transparent);}
+.chat-image-preview-close {position:absolute;top:-14px;right:-14px;display:grid;place-items:center;width:36px;height:36px;padding:0;border:var(--border-width) solid color-mix(in oklab,#fff 30%,transparent);border-radius:50%;background:color-mix(in oklab,#000 70%,transparent);color:#fff;font-size:20px;line-height:1;cursor:pointer;}
+.chat-image-preview-close:focus-visible {outline:2px solid var(--brand);outline-offset:2px;}
 /* While dictating, the microphone becomes a stop square. */
 #chat-voice-btn.recording {align-items:center;justify-content:center;}
 #chat-voice-btn.recording svg {display:none !important;}
