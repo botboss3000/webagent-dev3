@@ -30,8 +30,10 @@ export function mountTranscriptAnchor({scroller,inner,header,getProfile}) {
   function reachable(top){const shortfall=top-Math.max(0,scroller.scrollHeight-scroller.clientHeight);if(shortfall>0){const extra=parseFloat(inner.style.getPropertyValue('--v3-anchor-extra'))||0;inner.style.setProperty('--v3-anchor-extra',(extra+shortfall)+'px');void inner.offsetHeight;}}
   /** Ends the animated snap and clears its fallback timer. */
   function finishSnap(){snapping=false;clearTimeout(snapFallback);snapFallback=0;}
+  /** Marks reader scroll intent and cancels anchoring without changing tail following. */
+  function intent(){focusedId=null;clearTimeout(snapTimer);finishSnap();scroller.scrollTo({top:scroller.scrollTop,behavior:'instant'});intentUntil=performance.now()+setting('scroll_intent_ms',2000);}
   /** Cancels anchoring after reader input and holds a short intent window against recapture. */
-  function release(){focusedId=null;following=false;clearTimeout(snapTimer);finishSnap();scroller.scrollTo({top:scroller.scrollTop,behavior:'instant'});intentUntil=performance.now()+setting('scroll_intent_ms',2000);}
+  function release(){intent();following=false;}
   /** Lands the focused row while its hold window or active run remains valid. */
   function land(){if(!focusedId||config().enabled===false)return;const row=users().find(row=>row.dataset.publicId===focusedId);if(!row)return;if(!active&&performance.now()>deadline){focusedId=null;return;}const top=target(row);reachable(top);scroller.scrollTop=top;neighborhoodLanding=top;consumed.up.add(row.dataset.publicId);consumed.down.add(row.dataset.publicId);}
   /** Recomputes the landing or tail position on the next animation frame after layout changes. */
@@ -97,7 +99,7 @@ export function mountTranscriptAnchor({scroller,inner,header,getProfile}) {
   const observer=new ResizeObserver(entries=>{if(focusedId||entries.some(entry=>entry.target!==scroller))changed();});observer.observe(inner);observer.observe(header);observer.observe(scroller);
   // Polling rechecks focused landings; land honors an active run or the original focus deadline.
   const tick=setInterval(()=>{if(focusedId)land();},300);
-  return {reset,focus,changed,
+  return {reset,focus,changed,intent,
     /** Treats a published user row as a new focus target; assistant rows only refresh layout. */
     published(item){if(item.role==='user')focus();else changed();},
     /** Tracks active run statuses and extends the current focus deadline while work is underway. */
