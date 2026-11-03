@@ -77,8 +77,10 @@ pub async fn execute(
                 .as_str()
                 .filter(|value| !value.is_empty())
                 .map_or_else(|| format!("/app?session_id={sid}"), str::to_owned);
-            if !arguments::valid_development_path(&path, sid, agent) {
-                bail!("Development path unavailable");
+            // A rejected path is an ordinary tool error the agent can correct, not a failure.
+            if let Err(cause) = arguments::valid_development_path(&path, sid, agent) {
+                return Ok(json!({"status":"rejected","error_kind":"invalid_path",
+                    "output":format!("dev_browser_url rejected the path: {cause}. No URL was created.")}));
             }
             let url = format!("{}{path}", arguments::public_origin());
             Ok(json!({"status":"success","output":{"url":url,"authentication_required":true}}))

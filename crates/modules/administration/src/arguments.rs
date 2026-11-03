@@ -211,26 +211,41 @@ pub fn live_git_operation(name: &str, args: &Value) -> Result<bool> {
     Ok(true)
 }
 
-/// Whether a development browser may open `path` for session `sid` and `agent`: the app
-/// for this session and agent only, the caller's identity, or this session's API.
-#[must_use]
-pub fn valid_development_path(path: &str, sid: &str, agent: &str) -> bool {
-    if path.len() > 1024
-        || !path.starts_with('/')
-        || path.starts_with("//")
-        || path.contains('\\')
-        || path.chars().any(char::is_control)
-    {
-        return false;
+/// Checks whether a development browser may open `path` for session `sid` and `agent`:
+/// the app for this session and agent only, the caller's identity, or this session's API.
+/// The error names the cause so the agent can correct its argument.
+pub fn valid_development_path(path: &str, sid: &str, agent: &str) -> Result<(), &'static str> {
+    if path.len() > 1024 {
+        return Err("path is longer than 1024 characters");
+    }
+    if !path.starts_with('/') || path.starts_with("//") {
+        return Err("path must be relative to the app origin and start with a single /");
+    }
+    if path.contains('\\') || path.chars().any(char::is_control) {
+        return Err("path must not contain backslashes or control characters");
     }
     if path == "/app" || path.starts_with("/app?") {
-        return url::Url::parse(&format!("{}{path}", public_origin())).is_ok_and(|url| {
-            url.query_pairs().all(|(key, value)| {
-                (key != "session_id" || value == sid) && (key != "agent" || value == agent)
-            })
-        });
+        let url = url::Url::parse(&format!("{}{path}", public_origin()))
+            .map_err(|_| "path is not a valid URL path")?;
+        for (key, value) in url.query_pairs() {
+            if key == "session_id" && value != sid {
+                return Err(
+                    "session_id must be the current session; omit it or use this session's ID",
+                );
+            }
+            if key == "agent" && value != agent {
+                return Err("agent must be the current session's agent");
+            }
+        }
+        return Ok(());
     }
-    path == "/api/v3/auth/me" || path.starts_with(&format!("/api/v3/sessions/{sid}/"))
+    if path == "/api/v3/auth/me" || path.starts_with(&format!("/api/v3/sessions/{sid}/")) {
+        return Ok(());
+    }
+    Err(
+        "path is outside the allowed routes: /app or /app?<query> for this session, \
+         /api/v3/auth/me, or /api/v3/sessions/<current session>/...",
+    )
 }
 
 /// The run `read_diagnostics` targets: the current run for an omitted, empty or
@@ -430,27 +445,14 @@ mod tests {
 
     #[test]
     fn routes_are_current_session_and_fixed_origin() {
-        assert!(valid_development_path(
-            "/app?session_id=own",
-            "own",
-            "agent-a"
-        ));
-        assert!(!valid_development_path(
-            "/app?session_id=other",
-            "own",
-            "agent-a"
-        ));
-        assert!(!valid_development_path("//evil/app", "own", "agent-a"));
-        assert!(!valid_development_path(
-            "/api/v3/sessions/other/",
-            "own",
-            "agent-a"
-        ));
-        assert!(!valid_development_path(
-            "/app?session_id=own&session_id=other",
-            "own",
-            "agent-a"
-        ));
+        assert!(valid_development_path("/app?session_id=own", "own", "agent-a").is_ok());
+        assert!(valid_development_path("/app?session_id=other", "own", "agent-a").is_err());
+        assert!(valid_development_path("//evil/app", "own", "agent-a").is_err());
+        assert!(valid_development_path("/api/v3/sessions/other/", "own", "agent-a").is_err());
+        assert!(
+            valid_development_path("/app?session_id=own&session_id=other", "own", "agent-a")
+                .is_err()
+        );
     }
 
     #[test]

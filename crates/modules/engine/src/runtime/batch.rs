@@ -190,6 +190,8 @@ impl<
         };
         let read_only = execution_mode["mode"] == "read_only";
         let saved_index = run["call_index"].as_u64().unwrap_or(0);
+        // Calls admitted earlier in this turn: an identical later call is held, not run twice.
+        let mut admitted = std::collections::HashMap::new();
         for (idx, model_call) in calls.iter().enumerate() {
             if run["batch"][idx]["state"] != "new" {
                 continue;
@@ -271,6 +273,27 @@ impl<
                     ));
                 }
                 pending = view["pending"].clone();
+            }
+            if result.is_none() {
+                let retry = A::retry(&name);
+                let call_id = model_call["call_id"].as_str().unwrap_or("").to_owned();
+                match tools::retry_guard::admit(
+                    &mut run,
+                    &name,
+                    &args,
+                    &call_id,
+                    &retry,
+                    Some(&admitted),
+                ) {
+                    tools::retry_guard::Admission::Run => {}
+                    tools::retry_guard::Admission::Approve => {
+                        tools::retry_guard::require_approval(&mut pending, &args, &retry);
+                    }
+                    tools::retry_guard::Admission::Held(held) => result = Some(held),
+                }
+                if result.is_none() && retry.risk != tools::retry_guard::Risk::None {
+                    admitted.insert(tools::retry_guard::key(&name, &args), call_id);
+                }
                 if pending["new_intent_confirmation"] == true {
                     effective.permission = access::Permission::Ask;
                 }
@@ -328,7 +351,8 @@ impl<
                                 &run["batch"][idx]["pending"],
                             )
                             .await?;
-                        run["batch"][idx]["result"] = denied("Tool approval denied");
+                        run["batch"][idx]["result"] = tools::retry_guard::declined(&run["pending"])
+                            .unwrap_or_else(|| denied("Tool approval denied"));
                         run["batch"][idx]["state"] = json!("done");
                         run["pending"] = Value::Null;
                     }
@@ -501,25 +525,45 @@ impl<
                         }
                         Err(_) => true,
                     };
-                if interrupted && !tool_execution::settles_on_interrupt::<A>(&name) {
+                // Only a user stop leaves an interrupted write for review; otherwise the
+                // agent receives the outcome and the repeat guard records it.
+                if interrupted
+                    && cancel.is_cancelled()
+                    && !tool_execution::settles_on_interrupt::<A>(&name)
+                {
                     current["batch"][idx]["state"] = json!("uncertain");
                     current["uncertain"] = json!(true);
                     current["status"] = json!("recovery");
                     current["error"] = json!("Parallel write outcome unknown; review each call");
                 } else {
-                    current["batch"][idx]["result"] = match result {
+                    let retry = A::retry(&name);
+                    let value = match result {
                         Ok(value) => {
                             current["batch"][idx]["execution_metadata"] =
                                 serde_json::to_value(&value.metadata)?;
                             value.content
                         }
-                        Err(_) => refused
-                            .as_ref()
-                            .map(tools::failure::refused_result)
-                            .unwrap_or_else(
-                                || json!({"status":"error","output":"Tool interrupted"}),
-                            ),
+                        Err(_) => match refused.as_ref() {
+                            Some(failure) => tools::failure::refused_result(failure),
+                            None if A::is_read(&name) => {
+                                json!({"status":"error","output":"Tool interrupted"})
+                            }
+                            None => tools::retry_guard::outcome_unknown(&retry),
+                        },
                     };
+                    if refused.is_none() {
+                        let pending = current["batch"][idx]["pending"].clone();
+                        let call_id = pending["call_id"].as_str().unwrap_or("").to_owned();
+                        tools::retry_guard::record(
+                            &mut current,
+                            &name,
+                            &pending["arguments"],
+                            &call_id,
+                            Some(&value),
+                            &retry,
+                        );
+                    }
+                    current["batch"][idx]["result"] = value;
                     current["batch"][idx]["state"] = json!("done");
                     if current["status"] == "recovery" && uncertain_count(&current) == 0 {
                         current["uncertain"] = json!(false);
@@ -547,6 +591,9 @@ impl<
             {
                 current["pending"] = item["pending"].clone();
                 current["pending"]["state"] = json!("waiting");
+                if current["pending"]["waiting_since"].is_null() {
+                    current["pending"]["waiting_since"] = json!(crate::now());
+                }
                 current["status"] = json!("waiting_approval");
                 let mut payload = current["pending"].clone();
                 payload["run_id"] = json!(id);

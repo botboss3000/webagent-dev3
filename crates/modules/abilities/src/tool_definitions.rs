@@ -26,6 +26,15 @@ pub enum Effect {
     Write,
 }
 
+/// How a repeat of an identical call in one run is treated; writes default to `High`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RetryRisk {
+    None,
+    Low,
+    High,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ToolDefinition {
@@ -43,6 +52,15 @@ pub struct ToolDefinition {
     /// wildcard nor its entitlement group. Not a security boundary; tools enforce their own.
     #[serde(default)]
     pub account_access: BTreeMap<String, Permission>,
+    /// Repeat risk; absent means high for a write. Reads are never repeat-guarded.
+    #[serde(default)]
+    pub retry_risk: Option<RetryRisk>,
+    /// What the agent should verify before repeating this tool's call.
+    #[serde(default)]
+    pub retry_hint: Option<String>,
+    /// What the user is told when asked to approve a repeat.
+    #[serde(default)]
+    pub repeat_warning: Option<String>,
 }
 
 impl ToolDefinition {
@@ -91,6 +109,18 @@ impl ToolDefinition {
             .any(|tier| !webagent_access::valid_id(tier))
         {
             bail!("account_access names an invalid tier: {folder}");
+        }
+        if self.effect == Effect::Read
+            && self.retry_risk.is_some_and(|risk| risk != RetryRisk::None)
+        {
+            bail!("A read tool cannot set a retry risk: {folder}");
+        }
+        if [&self.retry_hint, &self.repeat_warning]
+            .into_iter()
+            .flatten()
+            .any(|text| text.trim().is_empty() || text.len() > 1000)
+        {
+            bail!("Invalid retry_hint or repeat_warning: {folder}");
         }
         Ok(())
     }

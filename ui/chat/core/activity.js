@@ -24,6 +24,30 @@ export function mergeActivity(previous, page, sessionId) {
     segments: page.segments, cursor: page.cursor};
 }
 
+// Tool result statuses that mean the call failed.
+const FAILED_STATUSES=new Set(['error','rejected','denied','failed','cancelled','timeout','uncertain','interrupted']);
+// Parses a tool_result payload's result; non-JSON or oversized text yields null.
+function toolResult(payload) {
+  let value=payload?.result ?? payload?.output;
+  if (typeof value==='string' && value.length<=1024*1024) {
+    try {value=JSON.parse(value);} catch (_) {return null;}
+  }
+  return value && typeof value==='object' ? value : null;
+}
+/** Whether the runtime held a tool call as a possible duplicate instead of running it. */
+export function toolHeld(payload) {
+  return toolResult(payload)?.status==='held';
+}
+/** Returns a tool_result payload's failure text, or null when the tool did not report a failure. */
+export function toolFailure(payload) {
+  if (payload?.error) return typeof payload.error==='string' ? payload.error : 'error';
+  const value=toolResult(payload);
+  if (!value || !FAILED_STATUSES.has(value.status)) return null;
+  const text=typeof value.output==='string' ? value.output
+    : typeof value.error==='string' ? value.error : value.status;
+  return text.length>300 ? text.slice(0,300)+'…' : text;
+}
+
 /** Projects journal events into grouped tool, message, mode, and compaction rows for activityGroups. */
 export function activityRows(events) {
   const rows=[], tools=new Map(), messages=new Map();
@@ -38,7 +62,8 @@ export function activityRows(events) {
       }
       row.events.push(event);
       row.label=(p.tool || row.label.split(' · ')[0])+' · '+
-        (kind==='tool_call' ? 'running' : p.error ? 'error' : 'done');
+        (kind==='tool_call' ? 'running' : toolHeld(p) ? 'held: possible duplicate'
+          : toolFailure(p)!==null ? 'failed: '+toolFailure(p) : 'done');
     } else if (kind === 'agent_step_end' || kind === 'response') {
       const key=p.asst_id || event.event_id;
       let row=messages.get(key);

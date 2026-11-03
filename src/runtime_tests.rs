@@ -5357,7 +5357,8 @@ async fn diagnostics_route_is_authenticated_session_bound_and_redacted() {
     assert_eq!(body["last_successful_assembly"], body["context_summary"]);
     assert_eq!(body["tool_failure"]["code"], "authorization_rejected");
     assert!(body["tool_failure"]["raw_error"].is_null());
-    assert_eq!(body.as_object().unwrap().len(), 11);
+    assert_eq!(body["repeat_guard"], json!([]));
+    assert_eq!(body.as_object().unwrap().len(), 12);
     assert!(body["ability_context"].is_null());
 }
 
@@ -7445,7 +7446,7 @@ async fn parallel_batch_rejects_duplicate_provider_call_ids_before_dispatch() {
     assert!(failed["error"].as_str().unwrap().contains("duplicate"));
 }
 #[tokio::test]
-async fn parallel_writes_need_independent_approvals_and_reconcile_uncertain_call() {
+async fn parallel_writes_need_independent_approvals_and_return_uncertain_call_to_agent() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixListener;
     let (_root, app) = fixture().await;
@@ -7574,24 +7575,21 @@ async fn parallel_writes_need_independent_approvals_and_reconcile_uncertain_call
         .await
         .expect("Fake worker did not receive both approved workspace writes")
         .unwrap();
-    let recovering = app.run(&id).await.unwrap();
-    assert_eq!(recovering["status"], "recovery");
-    assert_eq!(recovering["batch"][0]["state"], "done");
-    assert_eq!(recovering["batch"][1]["state"], "uncertain");
-    command(
-        State(app.clone()),
-        Path((id.clone(), "recovery".into())),
-        Json(json!({"client_request_id":"accept-two","decision":"accept",
-            "call_id":"write-two","output":"verified effect"})),
-    )
-    .await
-    .unwrap();
-    running(&app, &id, "fourth").await;
+    // The uncertain write settles as its result; the repeat guard remembers it.
+    let done = app.run(&id).await.unwrap();
+    assert_ne!(done["status"], "recovery");
+    assert_eq!(done["batch"][1]["state"], "done");
+    assert_eq!(done["batch"][1]["result"]["status"], "uncertain");
+    let guarded = done["retry_guard"]["actions"].as_object().unwrap();
+    assert!(guarded
+        .values()
+        .any(|entry| entry["call_id"] == "write-two" && entry["state"] == "uncertain"));
+    // The run stays claimed; the same generation's next pass hands both results to the model.
     let guard = app.gate.lock().await;
     parallel_batch::execute_parallel_batch(
         &app,
         &id,
-        "fourth",
+        "third",
         &CancellationToken::new(),
         &policy,
         &access,

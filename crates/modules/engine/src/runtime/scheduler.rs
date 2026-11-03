@@ -52,6 +52,26 @@ impl<
         if status(&run) != "waiting_approval" {
             return Ok(());
         }
+        // An approval left undecided past the configured expiry counts as declined; the
+        // run continues and the agent is told not to retry.
+        let expiry = config::Config::<C>::read(&app.runtime_path)?
+            .tools
+            .approval_expiry_seconds;
+        if expiry > 0
+            && run["pending"]["decision"].is_null()
+            && run["pending"]["waiting_since"]
+                .as_u64()
+                .is_some_and(|since| crate::now() >= since.saturating_add(expiry))
+        {
+            run["pending"]["decision"] = json!("deny");
+            run["pending"]["expired"] = json!(true);
+            run["status"] = json!("queued");
+            let public = app.store.records().present_run(&run);
+            return app
+                .store
+                .save_run_observed(&mut run, "run_status", &public)
+                .await;
+        }
         let mut restricted = Vec::new();
         fn requires_specific_approval(pending: &Value) -> bool {
             !pending["authorization"].is_null() || pending["new_intent_confirmation"] == true

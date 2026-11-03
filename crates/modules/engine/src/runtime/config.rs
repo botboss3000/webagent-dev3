@@ -104,6 +104,9 @@ pub struct Cache {
 pub struct Tools {
     pub max_parallel_calls: usize,
     pub parallel_modes: BTreeMap<String, String>,
+    /// Seconds a tool approval may wait before it counts as declined; 0 never expires.
+    #[serde(default)]
+    pub approval_expiry_seconds: u64,
 }
 impl Default for Tools {
     fn default() -> Self {
@@ -121,6 +124,7 @@ impl Default for Tools {
         Self {
             max_parallel_calls: 4,
             parallel_modes,
+            approval_expiry_seconds: 0,
         }
     }
 }

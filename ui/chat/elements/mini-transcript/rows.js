@@ -5,6 +5,7 @@
 import {copyText} from '../../../shared/models/clipboard.js';
 import {_refreshLucideIcons} from '../../core/presentation.js';
 import {openChatElementFullView, closeChatElementFullView} from '../../core/full-view.js';
+import {toolFailure,toolHeld} from '../../core/activity.js';
 
 // Build display elements with textContent so labels stay inert.
 function el(tag, text='', cls='') {
@@ -38,7 +39,7 @@ export function normalizeRow(row) {
     time:row.events.at(-1)?.created_at,
     args:payloadValue(call?.payload,['arguments','args']),
     result:payloadValue(result?.payload,['result','output',...(result?.payload?.error?['error']:[])]),
-    status:result?(result.payload?.error?'error':'done'):'running'};
+    status:!result?'running':toolHeld(result.payload)?'held':toolFailure(result.payload)!==null?'error':'done'};
 }
 // Read bounded broker metadata through the tool transport envelope; source text is never searched.
 export function brokerDetails(result) {
@@ -126,7 +127,7 @@ export function patchTranscriptRow(node,row) {
   node.dataset.signature=signature;node.dataset.category=row.category;
   const value=normalizeRow(row),p=node._parts;node._text=value.text;
   if(p.tool) {
-    p.head.textContent=(value.status==='done'?'✓ ':value.status==='error'?'! ':'◷ ')+row.label;
+    p.head.textContent=({done:'✓ ',error:'✗ ',held:'⏸ '}[value.status]||'◷ ')+row.label;
     node.dataset.status=value.status;
     const details=brokerDetails(value.result);p.broker.hidden=!details;
     p.broker.lastElementChild.textContent=details?details.map(([label,text])=>label+': '+text).join('\n'):'';

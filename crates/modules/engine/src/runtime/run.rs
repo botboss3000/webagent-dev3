@@ -552,7 +552,7 @@ impl<
     }
 
     // A selected interruption must settle the whole returned call list before the
-    // parent becomes immutable terminal state. Ordinary read failures still fail.
+    // parent becomes immutable terminal state. Reads fail here only when cancelled or interrupted.
     pub async fn commit_tool_transport_failure(
         app: &Self,
         run: &mut Value,
@@ -1187,7 +1187,10 @@ impl<
                     args.get("invalid_arguments").is_some(),
                 )
             };
-            let result = json!({"status":"denied","output":message});
+            let result = match tools::retry_guard::declined(&run["pending"]) {
+                Some(result) if run["pending"]["decision"] == "deny" => result,
+                _ => json!({"status":"denied","output":message}),
+            };
             Self::append_tool(&mut run, &result)?;
             app.store
                 .save_run_observed(
@@ -1248,6 +1251,28 @@ impl<
                     return Ok(std::ops::ControlFlow::Continue(()));
                 }
             }
+            let retry = A::retry(&name);
+            let call_id = run["pending"]["call_id"].as_str().unwrap_or("").to_owned();
+            match tools::retry_guard::admit(&mut run, &name, &args, &call_id, &retry, None) {
+                tools::retry_guard::Admission::Run => {}
+                tools::retry_guard::Admission::Approve => {
+                    tools::retry_guard::require_approval(&mut run["pending"], &args, &retry);
+                }
+                tools::retry_guard::Admission::Held(result) => {
+                    app.actions
+                        .not_dispatched(app.store.records(), &run, &run["pending"])
+                        .await?;
+                    Self::append_tool(&mut run, &result)?;
+                    app.store
+                        .save_run_observed(
+                            &mut run,
+                            "tool_result",
+                            &json!({"run_id":id,"name":name,"result":result}),
+                        )
+                        .await?;
+                    return Ok(std::ops::ControlFlow::Continue(()));
+                }
+            }
             if run["pending"]["new_intent_confirmation"] == true {
                 effective.permission = access::Permission::Ask;
             }
@@ -1257,6 +1282,9 @@ impl<
         {
             run["status"] = json!("waiting_approval");
             run["pending"]["state"] = json!("waiting");
+            if run["pending"]["waiting_since"].is_null() {
+                run["pending"]["waiting_since"] = json!(now());
+            }
             let mut payload = run["pending"].clone();
             payload["run_id"] = json!(id);
             app.store
@@ -1398,24 +1426,17 @@ impl<
                     app.save(&mut run).await?;
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
-                let uncertain = value["uncertain"] == true
-                    || matches!(
-                        value["status"].as_str(),
-                        Some("cancelled" | "timeout" | "uncertain")
-                    );
-                if uncertain && !tool_execution::settles_on_interrupt::<A>(&name) {
-                    Self::record_tool_interruption(
-                        &mut run,
-                        value["status"].as_str().unwrap_or("uncertain"),
-                    );
-                    run["uncertain"] = json!(true);
-                    run["status"] = json!("recovery");
-                    run["error"] = json!("Tool interrupted; review its outcome");
-                    app.store
-                        .save_run_observed(&mut run, "run_status", &json!({"run_id":id}))
-                        .await?;
-                    return Ok(std::ops::ControlFlow::Break(()));
-                }
+                // An uncertain result reaches the agent like any other; the repeat guard
+                // keeps an identical call from blindly running again in this run.
+                let call_id = run["pending"]["call_id"].as_str().unwrap_or("").to_owned();
+                tools::retry_guard::record(
+                    &mut run,
+                    &name,
+                    &args,
+                    &call_id,
+                    Some(&value),
+                    &A::retry(&name),
+                );
                 Self::append_tool(&mut run, &value)?;
                 if name == "compact_context"
                     && value["status"] == "success"
@@ -1454,6 +1475,31 @@ impl<
                     tools::failure::refused_before_dispatch(&run["pending"]["failure"])
                 {
                     let result = tools::failure::refused_result(&failure);
+                    Self::append_tool(&mut run, &result)?;
+                    app.store
+                        .save_run_observed(
+                            &mut run,
+                            "tool_result",
+                            &json!({"run_id":id,"name":name,"result":result}),
+                        )
+                        .await?;
+                    return Ok(std::ops::ControlFlow::Continue(()));
+                }
+                // The model receives the failure and continues: a read returned nothing, and
+                // a write's unknown outcome is recorded so an identical repeat is held.
+                // Cancellation and user interrupts still settle through the interruption path.
+                if tools::failure::interruption_reason(&run["pending"]["failure"]) != "cancelled"
+                    && !app.interrupt_requested(&id).await?
+                {
+                    let retry = A::retry(&name);
+                    let result = if A::is_read(&name) {
+                        json!({"status":"error","error_kind":"read_failed",
+                            "output":"The tool failed before returning a result; no data was returned. Check the arguments or try another tool."})
+                    } else {
+                        tools::retry_guard::outcome_unknown(&retry)
+                    };
+                    let call_id = run["pending"]["call_id"].as_str().unwrap_or("").to_owned();
+                    tools::retry_guard::record(&mut run, &name, &args, &call_id, None, &retry);
                     Self::append_tool(&mut run, &result)?;
                     app.store
                         .save_run_observed(

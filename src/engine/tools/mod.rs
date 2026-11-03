@@ -45,6 +45,37 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+/// A tool's repeat policy: reads are never repeat-guarded; a write uses its `tool.json`
+/// retry fields. Without them, workspace-confined coding tools (shell, python) are low
+/// risk, since their effects can be inspected and reverted, and every other write is high.
+pub fn retry(name: &str) -> webagent_engine::tools::retry_guard::Retry {
+    use webagent_abilities::tool_definitions::RetryRisk;
+    use webagent_engine::tools::retry_guard::{Retry, Risk};
+    if is_read(name) {
+        return Retry {
+            risk: Risk::None,
+            ..Retry::default()
+        };
+    }
+    let fallback = || Retry {
+        risk: if webagent_engine::tools::execution::workspace_confined(name) {
+            Risk::Low
+        } else {
+            Risk::High
+        },
+        ..Retry::default()
+    };
+    webagent_abilities::tool_definitions::get(name).map_or_else(fallback, |definition| Retry {
+        risk: match definition.retry_risk {
+            Some(RetryRisk::None) => Risk::None,
+            Some(RetryRisk::Low) => Risk::Low,
+            Some(RetryRisk::High) | None => Risk::High,
+        },
+        hint: definition.retry_hint.clone(),
+        warning: definition.repeat_warning.clone(),
+    })
+}
+
 /// Whether a tool only reads. A tool folder's `effect` decides; tools still defined in
 /// code use the lists below, and an unknown tool counts as a write.
 pub fn is_read(name: &str) -> bool {

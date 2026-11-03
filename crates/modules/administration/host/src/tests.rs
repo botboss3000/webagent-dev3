@@ -340,7 +340,16 @@ async fn diagnostics_and_browser_links_stay_in_the_session() {
         .unwrap()
         .ends_with(&format!("/app?session_id={SID}")));
     let foreign = json!({"path":"/app?session_id=other"});
-    assert!(call(&host, "dev_browser_url", foreign).await.is_err());
+    let rejected = call(&host, "dev_browser_url", foreign).await.unwrap();
+    assert_eq!(rejected["status"], "rejected");
+    assert!(rejected["output"].as_str().unwrap().contains("session_id"));
+    let outside = call(&host, "dev_browser_url", json!({"path":"/"}))
+        .await
+        .unwrap();
+    assert!(outside["output"]
+        .as_str()
+        .unwrap()
+        .contains("outside the allowed routes"));
 }
 
 #[tokio::test]

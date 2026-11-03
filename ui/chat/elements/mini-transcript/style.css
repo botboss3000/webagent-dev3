@@ -34,6 +34,7 @@
 .v2-activity-body .v2-mini-tool { padding: 4px 14px; background: var(--bg-tint); }
 .v2-activity-body .v2-mini-tool-disclosure > summary { font-family: var(--font-mono); }
 .v2-activity-body .v2-mini-tool[data-status="error"] > details > summary { color: var(--danger); }
+.v2-activity-body .v2-mini-tool[data-status="held"] > details > summary { color: var(--warning); }
 .v2-activity-body .v2-mini-section-head { display: flex; align-items: center; justify-content: space-between; color: var(--fg-3); }
 .v2-activity-body pre {
   white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono);

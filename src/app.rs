@@ -362,6 +362,7 @@ fn run_diagnostics(run: &Value) -> Value {
     json!({"run_id":run["id"],"session_id":run["session_id"],"status":run["status"],
         "uncertain":run["uncertain"],"checkpoints":checkpoints,
         "tool_failure":tools::failure::project(&run["latest_tool_failure"]),
+        "repeat_guard":webagent_engine::tools::retry_guard::diagnostics(run),
         "context_summary":public_context_summary(run),
         "latest_context_assembly":public_assembly_attempt(&run["latest_context_assembly"]),
         "last_successful_assembly":public_context_summary(run),
