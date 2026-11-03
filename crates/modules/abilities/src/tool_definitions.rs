@@ -409,4 +409,23 @@ mod tests {
         unknown["default_access"]["admin"] = json!("auto");
         assert!(ToolDefinition::parse(&serde_json::to_vec(&unknown).unwrap(), "lookup").is_err());
     }
+
+    #[test]
+    fn retry_fields_are_validated_and_exempt_is_not_configurable() {
+        let mut low = body("lookup");
+        low["effect"] = json!("write");
+        low["retry_risk"] = json!("low");
+        low["retry_hint"] = json!("read it again first");
+        let parsed = ToolDefinition::parse(&serde_json::to_vec(&low).unwrap(), "lookup").unwrap();
+        assert_eq!(parsed.retry_risk, Some(RetryRisk::Low));
+        let mut exempt = low.clone();
+        exempt["retry_risk"] = json!("exempt");
+        assert!(ToolDefinition::parse(&serde_json::to_vec(&exempt).unwrap(), "lookup").is_err());
+        let mut read = body("lookup");
+        read["effect"] = json!("read");
+        read["retry_risk"] = json!("high");
+        assert!(ToolDefinition::parse(&serde_json::to_vec(&read).unwrap(), "lookup").is_err());
+        low["repeat_warning"] = json!(" ");
+        assert!(ToolDefinition::parse(&serde_json::to_vec(&low).unwrap(), "lookup").is_err());
+    }
 }

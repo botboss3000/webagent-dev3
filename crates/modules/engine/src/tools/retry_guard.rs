@@ -14,10 +14,28 @@ const DEFAULT_WARNING: &str =
 /// Most decisions kept per run; older ones are dropped first.
 const MAX_DECISIONS: usize = 64;
 
+/// The chat's own control tools. They keep the conversation working, so they are never
+/// repeat-guarded and no `tool.json` or admin setting can change that.
+pub const EXEMPT: &[&str] = &[
+    "set_closer_status",
+    "publish_main_message",
+    "compact_context",
+    "set_execution_mode",
+    "load_ability",
+    "list_abilities",
+    "load_tool",
+    "list_tools",
+    "search_tools",
+    "load_skill",
+    "list_skills",
+];
+
 /// How a repeat of a matching call is treated.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Risk {
+    /// A conversation control (see [`EXEMPT`]); fixed by the runtime, never configurable.
+    Exempt,
     /// Repeats run freely and are not tracked.
     None,
     /// A repeat runs once the agent names the earlier call with `_repeat_of`.
@@ -75,7 +93,7 @@ pub fn admit(
     retry: &Retry,
     batch_seen: Option<&std::collections::HashMap<String, String>>,
 ) -> Admission {
-    if retry.risk == Risk::None {
+    if matches!(retry.risk, Risk::None | Risk::Exempt) {
         return Admission::Run;
     }
     let key = key(name, args);
@@ -167,7 +185,7 @@ pub fn record(
     result: Option<&Value>,
     retry: &Retry,
 ) {
-    if retry.risk == Risk::None {
+    if matches!(retry.risk, Risk::None | Risk::Exempt) {
         return;
     }
     let state = match result {
@@ -377,6 +395,23 @@ mod tests {
         );
         assert_eq!(
             admit(&mut run, "t", &args, "c3", &high(), None),
+            Admission::Run
+        );
+        let exempt = Retry {
+            risk: Risk::Exempt,
+            ..Retry::default()
+        };
+        let done = json!({"status":"ok"});
+        record(
+            &mut run,
+            "set_closer_status",
+            &args,
+            "c1",
+            Some(&done),
+            &exempt,
+        );
+        assert_eq!(
+            admit(&mut run, "set_closer_status", &args, "c2", &exempt, None),
             Admission::Run
         );
         let none = Retry {

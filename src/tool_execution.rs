@@ -63,6 +63,12 @@ mod tests {
         use webagent_engine::tools::execution::ActionCatalog;
         use webagent_engine::tools::retry_guard::Risk;
         assert_eq!(NativeActions::retry("file_read").risk, Risk::None);
+        assert_eq!(NativeActions::retry("set_closer_status").risk, Risk::Exempt);
+        assert_eq!(
+            NativeActions::retry("publish_main_message").risk,
+            Risk::Exempt
+        );
+        assert_eq!(NativeActions::retry("edit_own_prompt").risk, Risk::High);
         assert_eq!(NativeActions::retry("shell").risk, Risk::Low);
         assert_eq!(NativeActions::retry("python").risk, Risk::Low);
         assert_eq!(NativeActions::retry("commit_and_push").risk, Risk::High);
@@ -76,13 +82,16 @@ mod tests {
             assert_eq!(policies.is_null(), crate::tools::is_read(name), "{name}");
             if !policies.is_null() {
                 assert_eq!(policies["applies_in_auto"], true);
-                assert_eq!(policies["retry"], "explicit_authorization");
+                assert_eq!(policies["retry"], "repeat_guard");
                 assert_eq!(policies["read_only_session"], "blocked");
             }
         }
         assert!(advanced_policies("file_read").is_null());
         assert_eq!(advanced_policies("shell")["classification"], "tool_name");
-        assert_eq!(advanced_policies("unknown")["uncertain_outcome"], "review");
+        assert_eq!(
+            advanced_policies("unknown")["uncertain_outcome"],
+            "returned_to_agent"
+        );
         for name in ["build_work", "v3_build_work"] {
             assert_eq!(
                 advanced_policies(name)["build_finish"],
@@ -98,31 +107,23 @@ mod action_settings_tests {
     use super::*;
     use serde_json::json;
     #[test]
-    fn protected_defaults_old_clients_and_strict_settings() {
+    fn retired_ledger_settings_are_ignored_not_fatal() {
+        // These tools now use the repeat guard; settings saved for the old ledger are dropped.
+        let off = json!({"tool_execution":{"edit_own_prompt":{"mode":"foreground",
+            "max_concurrency":1,"on_run_end":"stop","duplicate_protection":"off"}}});
+        assert!(resolve(&off, "edit_own_prompt")
+            .unwrap()
+            .duplicate_protection
+            .is_none());
         assert_eq!(
-            resolve(&json!({}), "edit_own_prompt")
+            resolve(&json!({}), "test_owner_purchase")
                 .unwrap()
                 .duplicate_protection,
             Some(crate::actions::Protection::On)
         );
-        let old = json!({"tool_execution":{"edit_own_prompt":{"mode":"foreground","max_concurrency":1,"on_run_end":"stop"}}});
-        assert_eq!(
-            resolve(&old, "edit_own_prompt")
-                .unwrap()
-                .duplicate_protection,
-            Some(crate::actions::Protection::On)
-        );
-        let mut off = old;
-        off["tool_execution"]["edit_own_prompt"]["duplicate_protection"] = json!("off");
-        assert_eq!(
-            resolve(&off, "edit_own_prompt")
-                .unwrap()
-                .duplicate_protection,
-            Some(crate::actions::Protection::Off)
-        );
-        off["tool_execution"]["edit_own_prompt"]["duplicate_protection"] = json!("ignore");
-        assert!(resolve(&off, "edit_own_prompt").is_err());
-        assert!(resolve(&json!({"tool_execution":{"shell":{"mode":"foreground","max_concurrency":1,"on_run_end":"stop","duplicate_protection":"on"}}}),"shell").is_err());
+        let mut bad = off;
+        bad["tool_execution"]["edit_own_prompt"]["duplicate_protection"] = json!("ignore");
+        assert!(resolve(&bad, "edit_own_prompt").is_err());
         assert!(resolve(&json!({}), "shell")
             .unwrap()
             .duplicate_protection

@@ -61,17 +61,17 @@ fn candidate(id: &str, seq: i64, content: &str) -> Value {
 
 #[test]
 fn supported_tools_default_to_protection_on() {
+    assert!(supported("test_owner_purchase"));
+    assert!(default_on("test_owner_purchase"));
     for name in [
         "prompt_slot_write",
         "edit_own_prompt",
         "save_own_skill",
         "remove_own_skill",
-        "test_owner_purchase",
+        "shell",
     ] {
-        assert!(supported(name), "{name}");
-        assert!(default_on(name), "{name}");
+        assert!(!supported(name), "{name}");
     }
-    assert!(!supported("shell"));
     assert!(!default_on("file_read"));
     assert_eq!(Protection::default(), Protection::On);
     assert_eq!(serde_json::to_value(Protection::Off).unwrap(), "off");

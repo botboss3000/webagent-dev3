@@ -50,7 +50,13 @@ use tokio_util::sync::CancellationToken;
 /// risk, since their effects can be inspected and reverted, and every other write is high.
 pub fn retry(name: &str) -> webagent_engine::tools::retry_guard::Retry {
     use webagent_abilities::tool_definitions::RetryRisk;
-    use webagent_engine::tools::retry_guard::{Retry, Risk};
+    use webagent_engine::tools::retry_guard::{Retry, Risk, EXEMPT};
+    if EXEMPT.contains(&name) {
+        return Retry {
+            risk: Risk::Exempt,
+            ..Retry::default()
+        };
+    }
     if is_read(name) {
         return Retry {
             risk: Risk::None,

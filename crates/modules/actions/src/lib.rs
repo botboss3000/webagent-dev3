@@ -18,17 +18,12 @@ pub use intent::{strip, valid_id};
 pub use outcome::{response, summary};
 pub use webagent_chat::RecordCodec;
 
-/// Whether `name` is a tool whose effects the action ledger protects.
+/// Whether `name` is a tool whose effects the action ledger protects. Only the
+/// owner-credential purchase fixture remains; every other write uses the engine's
+/// per-run repeat guard.
 #[must_use]
 pub fn supported(name: &str) -> bool {
-    matches!(
-        name,
-        "prompt_slot_write"
-            | "edit_own_prompt"
-            | "save_own_skill"
-            | "remove_own_skill"
-            | "test_owner_purchase"
-    )
+    name == "test_owner_purchase"
 }
 
 /// Whether duplicate protection is on for `name` when no setting chooses otherwise.

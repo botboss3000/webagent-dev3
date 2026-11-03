@@ -291,7 +291,12 @@ impl<
                     }
                     tools::retry_guard::Admission::Held(held) => result = Some(held),
                 }
-                if result.is_none() && retry.risk != tools::retry_guard::Risk::None {
+                if result.is_none()
+                    && !matches!(
+                        retry.risk,
+                        tools::retry_guard::Risk::None | tools::retry_guard::Risk::Exempt
+                    )
+                {
                     admitted.insert(tools::retry_guard::key(&name, &args), call_id);
                 }
                 if pending["new_intent_confirmation"] == true {
