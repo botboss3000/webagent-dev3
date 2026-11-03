@@ -335,7 +335,7 @@
       "_instructions": "top: Top fade distance in pixels. bottom: Bottom fade distance in pixels.",
       "bottom": 160,
       "description": "Vertical fade mask on the message scroller. The top edge fades transcript content below the header; bottom remains a pixel-height fade to protect the composer edge.",
-      "top": 24
+      "top": 200
     },
     "fold_main_messages": false,
     "glimmer": {
@@ -562,7 +562,7 @@
         "line_height": 1.5,
         "padding_bottom_px": 4,
         "padding_left_px": 4,
-        "padding_right_px": 14,
+        "padding_right_px": 4,
         "padding_top_px": 8,
         "radius_bottom_left_px": null,
         "radius_bottom_right_px": null,
@@ -959,7 +959,7 @@
     "fade": {
       "_instructions": "top: Top fade distance in pixels. bottom: Bottom fade distance in pixels.",
       "bottom": 200,
-      "top": 24
+      "top": 200
     },
     "idle_footer": {
       "below_pill": {
@@ -1105,7 +1105,7 @@
     "fade": {
       "_instructions": "top: Top fade distance in pixels. bottom: Bottom fade distance in pixels.",
       "bottom": 120,
-      "top": 24
+      "top": 200
     },
     "idle_footer": {
       "below_pill": {
