@@ -51,12 +51,19 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
     for(const file of item.attachments){
       if(typeof file.id!=='string'||!/^[0-9a-f-]{36}$/i.test(file.id)||!sid)continue;
       const link=document.createElement('a');link.href='/api/v3/sessions/'+encodeURIComponent(sid)+'/attachments/'+encodeURIComponent(file.id)+'/content';link.target='_blank';link.rel='noopener';
-      const image=file.preview===true?document.createElement('img'):null;
-      // Images are bare square tiles that open the shared viewer; other files keep their name as the link label.
-      if(image){link.className='chat-attachment-image';image.alt=file.name||'Image attachment';image.loading='lazy';image.decoding='async';link.append(image);link.title=file.name||'Image attachment';link.setAttribute('aria-label','Preview '+(file.name||'image attachment'));}
+      const name=file.name||'Image attachment';
+      // The API does not always flag an image, so trust the media type or file name as well; otherwise a
+      // PNG renders as a filename pill and clicking it downloads instead of opening the preview.
+      const isImage=file.preview===true||/^image\//i.test(file.media_type||file.mime_type||file.mime||file.type||'')||/\.(?:png|jpe?g|gif|webp|avif|bmp|svg|heic|heif)$/i.test(name);
+      const image=isImage?document.createElement('img'):null;
+      // Images are bare rounded tiles that open the shared viewer; other files keep their name as the link label.
+      if(image){link.className='chat-attachment-image';image.alt=name;image.loading='lazy';image.decoding='async';link.append(image);link.title=name;link.setAttribute('aria-label','Preview '+name);}
       else{link.className='chat-attachment-file';link.textContent=file.name||'Attachment';link.download=file.name||'attachment';}
       let ready=!resolveAsset,assetError='';
-      if(image)link.addEventListener('click',event=>{if(event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;event.preventDefault();if(assetError){note('Attachment unavailable: '+assetError);return;}if(!ready||!image.getAttribute('src')){note('Attachment is loading; try again shortly.');return;}openChatImagePreview(image.currentSrc||image.src,image.alt,link);});
+      // The main app authorizes attachment reads with its own cookie, so the content URL is a valid image
+      // source; the embedded host has no cookie and supplies resolveAsset to swap in an authorized blob URL.
+      if(image&&!resolveAsset)image.src=link.href;
+      if(image)link.addEventListener('click',event=>{if(event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;event.preventDefault();if(assetError){note('Attachment unavailable: '+assetError);return;}if(!ready){note('Attachment is loading; try again shortly.');return;}openChatImagePreview(image.currentSrc||image.getAttribute('src')||link.getAttribute('href'),name,link);});
       // Resolve attachment content lazily; detached rows are ignored and failed links stay non-navigable.
       if(resolveAsset){const url=link.href;
         if(!image)link.addEventListener('click',event=>{if(ready)return;event.preventDefault();note(assetError?'Attachment unavailable: '+assetError:'Attachment is loading; try again shortly.');});
