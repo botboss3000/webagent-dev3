@@ -45,3 +45,5 @@ body.light-mode .wa-launcher-main,:host([data-theme=light]) .wa-launcher-main{co
 :where(.wa-chat-window,.wa-chat-launcher) :where(button,[role="button"],[role="menuitem"],summary) {
   -webkit-tap-highlight-color:transparent;
 }
+
+.wa-chat-window #chat-header{top:32px}
