@@ -1221,7 +1221,7 @@
     "fade": {
       "_instructions": "top: Top fade distance in pixels. bottom: Bottom fade distance in pixels.",
       "bottom": 80,
-      "top": 0
+      "top": 50
     },
     "idle_footer": {
       "below_pill": {
