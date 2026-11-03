@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { forwardFooterGestures } from './footer-gesture-forward.js';
+import { forwardFooterGestures, pullRefreshOwnsPull } from './footer-gesture-forward.js';
 
 const selection = { removed: 0, removeAllRanges() { this.removed += 1; } };
 globalThis.window = {
@@ -39,14 +39,14 @@ function makeElement() {
   };
 }
 
-function fixture() {
+function fixture(options = {}) {
   const calls = [];
   const scroller = { clientHeight: 400, scrollBy({ top }) { calls.push(top); } };
   const footer = makeElement();
   const row = makeElement();
   let intent = 0;
   const dispose = forwardFooterGestures({
-    targets: [footer, row], scroller, markIntent: () => { intent += 1; },
+    targets: [footer, row], scroller, markIntent: () => { intent += 1; }, ...options,
   });
   return { calls, scroller, footer, row, dispose, intent: () => intent };
 }
@@ -123,6 +123,41 @@ test('a claimed touch move cancels forwarding for the rest of the gesture', () =
   f.footer.dispatch('touchmove', { touches: [{ clientY: 280 }], defaultPrevented: true });
   f.footer.dispatch('touchmove', { touches: [{ clientY: 260 }] });
   assert.deepEqual(f.calls, []);
+});
+
+test('pull-refresh owns only downward movement while its indicator is visible', () => {
+  const visible = { hidden: false };
+  const hidden = { hidden: true };
+  assert.equal(pullRefreshOwnsPull({ lastY: 100, currentY: 120, indicator: visible }), true);
+  assert.equal(pullRefreshOwnsPull({ lastY: 100, currentY: 90, indicator: visible }), false);
+  assert.equal(pullRefreshOwnsPull({ lastY: 100, currentY: 120, indicator: hidden }), false);
+});
+
+test('a deferred downward pull starts scrolling when the finger reverses upward', () => {
+  const indicator = { hidden: false };
+  const f = fixture({
+    touchGuard: args => pullRefreshOwnsPull({ ...args, indicator }),
+  });
+  f.footer.dispatch('touchstart', { touches: [{ clientY: 300 }] });
+  f.footer.dispatch('touchmove', { touches: [{ clientY: 330 }] });
+  assert.deepEqual(f.calls, []);
+  assert.equal(f.intent(), 0);
+  f.footer.dispatch('touchmove', { touches: [{ clientY: 290 }] });
+  assert.deepEqual(f.calls, [40]);
+  assert.equal(f.intent(), 1);
+});
+
+test('canForward vetoes wheel and touch without claiming the gesture', () => {
+  let allow = false;
+  const f = fixture({ canForward: () => allow });
+  f.footer.dispatch('wheel', { deltaY: 80 });
+  f.footer.dispatch('touchstart', { touches: [{ clientY: 300 }] });
+  f.footer.dispatch('touchmove', { touches: [{ clientY: 280 }] });
+  assert.deepEqual(f.calls, []);
+  assert.equal(f.intent(), 0);
+  allow = true;
+  f.footer.dispatch('wheel', { deltaY: 80 });
+  assert.deepEqual(f.calls, [80]);
 });
 
 test('wiring is idempotent and the disposer aborts every listener', () => {

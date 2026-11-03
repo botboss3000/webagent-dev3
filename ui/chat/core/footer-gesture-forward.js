@@ -1,10 +1,11 @@
 'use strict';
-// @code-index {"version":1,"feature":"chat-footer-gesture-forward","aliases":["footer scroll","composer scroll forwarding"],"purpose":"Routes wheel and touch gestures that begin over the chat composer footer to the transcript scroller and marks reader scroll intent.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Gesture forwarding owns no tunable configuration; the transcript anchor's scroll_intent_ms governs how long a forwarded gesture counts as reader intent."}}
+// @code-index {"version":1,"feature":"chat-footer-gesture-forward","aliases":["footer scroll","header scroll","composer scroll forwarding"],"purpose":"Routes wheel and touch gestures that begin over the chat footer, chat header, or mobile app header to the transcript scroller and marks reader scroll intent.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Gesture forwarding owns no tunable configuration; pull-to-refresh priority is read from the live refresh indicator and the transcript anchor's scroll_intent_ms governs intent duration."}}
 // Ported from v2 ui/chat/js/footer-gesture-forward.js. The footer (composer pill
-// and control rows) has no scrollable ancestor — #chat-panel, #stage and <body>
-// are all overflow:hidden — so a gesture that starts there never reaches the
-// transcript. Forward wheel and touch drags to #chat-messages and report them as
-// transcript intent, so the anchor treats them like a gesture over the messages.
+// and control rows) and the headers have no scrollable ancestor — #chat-panel,
+// #stage and <body> are all overflow:hidden — so a gesture that starts there
+// never reaches the transcript. Forward wheel and touch drags to #chat-messages
+// and report them as transcript intent, so the anchor treats them like a gesture
+// over the messages.
 const TOUCH_ENGAGE_PX = 6;
 
 /**
@@ -24,10 +25,27 @@ function _isInsideScrollableChild(root, target) {
 }
 
 /**
- * Wires footer targets to the transcript scroller. Returns a disposer that
- * removes every listener it added; wiring is idempotent per element.
+ * True when a downward pull is already owned by the app's pull-to-refresh
+ * indicator. Upward movement never yields to refresh, so a gesture can reverse
+ * direction and start scrolling the transcript.
  */
-export function forwardFooterGestures({ targets = [], scroller, markIntent } = {}) {
+export function pullRefreshOwnsPull({ lastY, currentY, indicator } = {}) {
+  if (!(currentY > lastY)) return false;
+  const node = indicator || (typeof document === 'undefined' ? null : document.getElementById('ptr-indicator'));
+  return !!node && !node.hidden;
+}
+
+/**
+ * Wires targets to the transcript scroller. Returns a disposer that removes
+ * every listener it added; wiring is idempotent per element.
+ *
+ * `canForward(event, element)` can veto a target for the current event (for
+ * example the app header only forwards in mobile mode).
+ * `touchGuard({ event, element, startY, lastY, currentY })` lets a
+ * higher-priority surface own one touch move; returning true leaves the move
+ * unclaimed by the transcript.
+ */
+export function forwardFooterGestures({ targets = [], scroller, markIntent, canForward, touchGuard } = {}) {
   if (!scroller) return () => {};
   const abort = new AbortController();
   const { signal } = abort;
@@ -40,6 +58,7 @@ export function forwardFooterGestures({ targets = [], scroller, markIntent } = {
     el.addEventListener('wheel', (event) => {
       // Ctrl+wheel belongs to chat-zoom; a handled or zero-delta event stays put.
       if (event.ctrlKey || event.defaultPrevented || !event.deltaY) return;
+      if (canForward && !canForward(event, el)) return;
       // A nested scroller inside the footer keeps its own gesture.
       if (_isInsideScrollableChild(el, event.target)) return;
       event.preventDefault();
@@ -63,6 +82,7 @@ export function forwardFooterGestures({ targets = [], scroller, markIntent } = {
       engaged = false;
       const t = event.touches && event.touches[0];
       if (!t) return;
+      if (canForward && !canForward(event, el)) return;
       // A nested scroller inside the footer keeps its own gesture.
       if (_isInsideScrollableChild(el, event.target)) return;
       active = true;
@@ -72,18 +92,26 @@ export function forwardFooterGestures({ targets = [], scroller, markIntent } = {
       if (!active) return;
       // A descendant forwarder already claimed this move — never double-scroll.
       if (event.defaultPrevented) { active = false; return; }
+      if (canForward && !canForward(event, el)) { active = false; return; }
       const t = event.touches && event.touches[0];
       if (!t) return;
+      const currentY = t.clientY;
+      // A higher-priority surface (pull-to-refresh) owns this move. Keep tracking
+      // the finger so a reversal can still start scrolling without a new touch.
+      if (touchGuard && touchGuard({ event, element: el, startY, lastY, currentY })) {
+        lastY = currentY;
+        return;
+      }
       if (!engaged) {
-        if (Math.abs(t.clientY - startY) < TOUCH_ENGAGE_PX) return;
+        if (Math.abs(currentY - startY) < TOUCH_ENGAGE_PX) return;
         engaged = true;
         // The drag is a scroll, not a caret placement — drop any selection the
         // touchstart began in the composer so text does not smear while scrolling.
         const sel = window.getSelection && window.getSelection();
         if (sel && sel.removeAllRanges) sel.removeAllRanges();
       }
-      const dy = lastY - t.clientY; // > 0 = finger up = scroll down
-      lastY = t.clientY;
+      const dy = lastY - currentY; // > 0 = finger up = scroll down
+      lastY = currentY;
       if (!dy) return;
       event.preventDefault();
       markIntent?.();

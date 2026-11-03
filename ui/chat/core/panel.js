@@ -11,7 +11,7 @@ import {mountSharedChat} from '../controls/shared-chat.js';
 import { createChatClient } from './client.js';
 import {mountFollowupQueue} from './followup-queue.js';
 import {mountTranscriptAnchor} from './transcript-anchor.js';
-import {forwardFooterGestures} from './footer-gesture-forward.js';
+import {forwardFooterGestures,pullRefreshOwnsPull} from './footer-gesture-forward.js';
 import {mountUiTrace} from './ui-trace.js';
 import {mountChatZoom} from './chat-zoom.js';
 import {mountComposerMedia,describesUploads} from '../controls/composer-media.js';
@@ -89,6 +89,16 @@ const {messagingRoutes}=chatActions;
 const anchor=mountTranscriptAnchor({scroller:$('chat-messages'),inner:$('chat-messages-inner'),header:$('chat-header'),getProfile:currentChatProfile});
 // A gesture that begins over the footer has no scrollable ancestor; forward it to the transcript.
 const disposeFooterGestures=forwardFooterGestures({targets:[$('chat-input-area'),$('chat-footer-row')],scroller:$('chat-messages'),markIntent:anchor.intent});
+// Header drags scroll too. The app header is mobile-only, and a downward pull that the
+// pull-to-refresh indicator already owns stays with refresh; upward pulls always scroll.
+const mobileHeaderLayout=matchMedia('(max-width:800px)');
+const disposeHeaderGestures=forwardFooterGestures({
+  targets:[$('chat-header'),document.getElementById('main-header')],
+  scroller:$('chat-messages'),
+  markIntent:anchor.intent,
+  canForward:(event,el)=>el.id!=='main-header'||mobileHeaderLayout.matches,
+  touchGuard:pullRefreshOwnsPull,
+});
 // Diagnostics ui_trace collection runs only while that category is enabled.
 const uiTrace=mountUiTrace({request,getSessionId:()=>session});
 // Pinch / Ctrl+wheel zoom scales only the transcript content; destroy removes its listeners and chip.
@@ -443,7 +453,7 @@ $('chat-stop-btn').onclick=guard(()=>$('chat-stop-btn').dataset.run?cancel($('ch
   /** Disconnects and disposes panel-owned timers, observers, listeners, and mounted child controls. */
   function destroy(){visualThemeObserver.disconnect();
     mainNotes?.destroy();disposeFeedback();screenAwake.destroy();++sessionGeneration;closeUndoDialog?.();
-    disconnect();followups.destroy();chatActions.destroy();anchor.destroy();uiTrace.then(dispose=>dispose());disposeFooterGestures();disposeZoom();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();voiceReply.destroy();controls.destroy();sharing.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
+    disconnect();followups.destroy();chatActions.destroy();anchor.destroy();uiTrace.then(dispose=>dispose());disposeFooterGestures();disposeHeaderGestures();disposeZoom();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();voiceReply.destroy();controls.destroy();sharing.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
     $('sessions').onchange=null;$('new').onclick=null;$('composer').onsubmit=null;
     $('chat-input').onkeydown=null;$('chat-input').oninput=null;$('chat-stop-btn').onclick=null;$('chat-continue-btn').onclick=null;
   }
