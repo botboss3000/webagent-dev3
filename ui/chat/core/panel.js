@@ -61,7 +61,7 @@ export async function mountChatPanel({root = document.getElementById('chat-panel
   let privacyMode=null;
   // The server's tools notice (agent has no saved capability levels) shares the privacy hint line.
   function privacyNotice(mode,toolsNotice){privacyMode=mode;const notice=$('chat-privacy-notice');if(!notice)return;
-    const privacy=mode==='private'?'':mode==='operator_reviewable'?'Agent Operators can read this conversation and join to reply.':'Conversation privacy is loading…';
+    const privacy=mode==='private'?'':mode==='operator_reviewable'?'':'Conversation privacy is loading…';
     notice.textContent=[toolsNotice,privacy].filter(Boolean).join(' ');notice.hidden=!notice.textContent;}
   // Remaining messages under the caller's level limits for this agent; hidden when unlimited.
   async function loadAllowance(){const hint=$('chat-allowance-hint');if(!hint)return;
