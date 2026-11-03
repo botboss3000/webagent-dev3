@@ -2,6 +2,8 @@
   "name": "dev_browser_action",
   "description": "Operate the current caller development browser; input requires a fresh observation and approval",
   "effect": "write",
+  "retry_risk": "low",
+  "retry_hint": "read the page again to see whether the earlier click or typing already took effect; repeating read, screenshot or navigate is safe",
   "default_access": {
     "operator": "auto",
     "member": "deny",
