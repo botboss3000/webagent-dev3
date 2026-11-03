@@ -18,6 +18,10 @@ const OFFLINE_SECS: u64 = 60;
 const ANSWER_SECS: u64 = 30 * 60;
 /// Client long-poll window.
 const POLL_SECS: u64 = 25;
+/// How often a waiting side re-reads the call document. The API and the loop are separate
+/// processes, so polling is the only signal; a short tick makes a queued call and its reply
+/// visible within a fraction of a second instead of a whole one.
+const TICK: Duration = Duration::from_millis(250);
 
 fn now() -> u64 {
     std::time::SystemTime::now()
@@ -57,7 +61,7 @@ impl BridgeQueue for Queue {
                 loop {
                     tokio::select! {
                         _ = call.cancel.cancelled() => return Err(typed_failure(FailureKind::Cancelled, false, "Provider request cancelled")),
-                        _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                        _ = tokio::time::sleep(TICK) => {}
                     }
                     let Some(doc) = self.0.get(&key).await? else { return Err(offline()) };
                     match doc["state"].as_str() {
@@ -135,7 +139,7 @@ pub async fn next(
         if now() >= deadline {
             return Ok(Json(json!({"call":null})));
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(TICK).await;
     }
 }
 
