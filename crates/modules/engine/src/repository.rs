@@ -5,6 +5,11 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use sqlx::{Row, SqlitePool};
 
+/// A compaction source may exceed the summary-source limit: the planner shortens its tool
+/// outputs for the summary prompt, while the recall segment keeps them whole. It still fits
+/// in the largest context a run can send.
+const MAX_COMPACTION_SOURCE_BYTES: usize = 4_194_304;
+
 pub struct Repository<'a, R, H, Q, N, U> {
     pub(crate) root: &'a std::path::Path,
     pub(crate) pool: &'a SqlitePool,
@@ -436,27 +441,14 @@ impl<
                 let segment_id = payload["segment_id"]
                     .as_str()
                     .ok_or_else(|| anyhow!("Compaction segment identity missing"))?;
-                let dropped = payload["dropped_items"].as_u64().unwrap_or(0) as usize;
-                let expected_segment =
-                    format!("{}-{}", rid, run["compactions"].as_u64().unwrap_or(0));
-                // Name the failed check: the rejected payload is rolled back with this transaction.
-                let rejected = if source.is_empty() || source.len() != dropped {
-                    Some(format!(
-                        "{} source items for {dropped} dropped",
-                        source.len()
-                    ))
-                } else if source_bytes.len() > 262_144 {
-                    Some(format!(
-                        "source is {} bytes, over 262144",
-                        source_bytes.len()
-                    ))
-                } else if crate::digest(source) != source_digest {
-                    Some("source digest mismatch".to_owned())
-                } else if segment_id != expected_segment {
-                    Some(format!("segment {segment_id}, expected {expected_segment}"))
-                } else {
-                    None
-                };
+                let rejected = compaction_rejection(
+                    source,
+                    source_bytes.len(),
+                    payload["dropped_items"].as_u64().unwrap_or(0) as usize,
+                    source_digest,
+                    segment_id,
+                    &format!("{}-{}", rid, run["compactions"].as_u64().unwrap_or(0)),
+                );
                 if let Some(reason) = rejected {
                     return Err(anyhow!("Invalid compaction segment provenance: {reason}"));
                 }
@@ -886,3 +878,61 @@ fn bounded_code_index_run_fields(run: &Value) -> Value {
 
 mod background;
 mod background_followup;
+
+/// Name the failed provenance check of a compaction save, if any: the rejected payload is
+/// rolled back with its transaction, so the error is the only record of why.
+fn compaction_rejection(
+    source: &[Value],
+    source_bytes: usize,
+    dropped: usize,
+    source_digest: &str,
+    segment_id: &str,
+    expected_segment: &str,
+) -> Option<String> {
+    if source.is_empty() || source.len() != dropped {
+        Some(format!(
+            "{} source items for {dropped} dropped",
+            source.len()
+        ))
+    } else if source_bytes > MAX_COMPACTION_SOURCE_BYTES {
+        Some(format!(
+            "source is {source_bytes} bytes, over {MAX_COMPACTION_SOURCE_BYTES}"
+        ))
+    } else if crate::digest(source) != source_digest {
+        Some("source digest mismatch".to_owned())
+    } else if segment_id != expected_segment {
+        Some(format!("segment {segment_id}, expected {expected_segment}"))
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod compaction_tests {
+    use super::compaction_rejection;
+    use serde_json::json;
+
+    /// A source whose tool outputs the planner shortened for the summary can exceed 256 KiB.
+    #[test]
+    fn a_source_over_the_summary_source_limit_is_accepted() {
+        let source = vec![
+            json!({"role":"user","content":"read"}),
+            json!({"type":"function_call_output","call_id":"a","output":"x".repeat(300_000)}),
+        ];
+        let bytes = serde_json::to_vec(&source).unwrap().len();
+        let digest = crate::digest(&source);
+        assert_eq!(
+            compaction_rejection(&source, bytes, 2, &digest, "r-1", "r-1"),
+            None
+        );
+        assert!(
+            compaction_rejection(&source, 5_000_000, 2, &digest, "r-1", "r-1")
+                .unwrap()
+                .starts_with("source is 5000000 bytes")
+        );
+        assert_eq!(
+            compaction_rejection(&source, bytes, 2, &digest, "r-2", "r-1").unwrap(),
+            "segment r-2, expected r-1"
+        );
+    }
+}
