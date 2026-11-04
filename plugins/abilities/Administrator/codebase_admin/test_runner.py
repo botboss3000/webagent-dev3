@@ -81,6 +81,15 @@ class PluginTests(unittest.TestCase):
             with patch.object(runner.os,"replace",side_effect=OSError("injected")):
                 with self.assertRaises(OSError):runner.file_operation({},root,{"path":str(path),"content":"replacement"},"file_write")
             self.assertEqual(path.read_text(),"original");self.assertFalse(list(root.glob(".v3-write-*")))
+    def test_file_write_mode_is_broker_only(self):
+        """mode belongs to broker drafts; the plugin writer refuses it rather than ignoring it."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);path=root/"sample";path.write_text("original")
+            for mode in ("create","replace","append"):
+                with self.assertRaisesRegex(ValueError,"broker task files"):
+                    runner.file_operation({},root,{"path":str(path),"content":"replacement","mode":mode},"file_write")
+                self.assertEqual(path.read_text(),"original")
+            self.assertFalse(list(root.glob(".v3-write-*")))
     def test_plan_command_is_fixed_and_state_has_no_plugin_effect(self):
         for tool,args,executable in (("shell",{"command":"true"},"/bin/sh"),("python",{"code":"pass"},"/usr/bin/python3")):
             result=runner.invoke({"version":1,"operation":"plan","name":tool,"arguments":args})

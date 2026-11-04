@@ -4449,7 +4449,7 @@ class Broker:
             "file_read": {"task_id", "path", "offset", "limit"},
             "file_search": {"task_id", "path", "query", "regex", "file_glob", "comments_only", "limit"},
             "file_edit": {"task_id", "path", "old_text", "new_text", "expected_sha256", "expected_inputs_sha256", "request_id"},
-            "file_write": {"task_id", "path", "content", "delete", "expected_inputs_sha256", "request_id"},
+            "file_write": {"task_id", "path", "content", "delete", "mode", "expected_inputs_sha256", "request_id"},
         }
         if set(args) - allowed[name]:
             raise ValueError("unsupported task file argument")
@@ -4542,8 +4542,28 @@ class Broker:
         else:
             after = args.get("content")
             if not isinstance(after, str): raise ValueError("file_write requires content or delete")
+            if args.get("mode") == "append":
+                after = before + after
         if len(after.encode()) > 1024 * 1024 or "\0" in after:
             raise ValueError("task write exceeds text bound")
+        write_mode = args.get("mode")
+        if write_mode is not None and (name != "file_write" or write_mode not in ("create", "replace", "append")):
+            raise ValueError("mode applies to file_write as create, replace or append")
+        if write_mode == "create" and exists:
+            raise ValueError("mode create requires a path that does not exist")
+        if write_mode == "append" and delete:
+            raise ValueError("mode append cannot be combined with delete")
+        # Shrink guard: a whole-file replacement that loses most of the file needs an explicit mode.
+        guard = "n/a"
+        if name == "file_write" and exists and not delete:
+            size_before, size_after = len(original), len(after.encode())
+            shrink = size_after * 2 < size_before and (size_before - size_after) >= 4096
+            if shrink and write_mode != "replace":
+                raise ValueError(
+                    "refusing to replace %s (%d bytes) with %d bytes (-%d): pass mode:\"replace\" to confirm, "
+                    "or use file_edit for an in-place change" % (path, size_before, size_after, size_before - size_after)
+                )
+            guard = "overridden" if shrink else "passed"
         if before == after and exists and not delete:
             receipt = {"task_id": task_id, "request_id": args["request_id"],
                 "file_request_sha256": fingerprint, "status": "success", "unchanged": True,
@@ -4564,6 +4584,24 @@ class Broker:
         item["applies"][args["request_id"]]["file_request_sha256"] = fingerprint
         result["file_request_sha256"] = fingerprint
         result["workspace_inputs_sha256"] = context_digest(release.snapshot(tree, TASK_CONTEXT, context_digest))[0]
+        # Compact receipt: machine-checkable before the diff, survives response truncation.
+        added, removed = source_patch_text_counts(patch)
+        result["write_receipt"] = {
+            "path": path,
+            "mode": write_mode or ("delete" if delete else ("create" if not exists else "replace")),
+            "guard": guard,
+            "existed_before": exists,
+            "lines_before": before.count("\n"),
+            "lines_after": after.count("\n"),
+            "bytes_before": len(original),
+            "bytes_after": len(after.encode()),
+            "sha256": hashlib.sha256(after.encode()).hexdigest(),
+            "diff_summary": {
+                "added": added,
+                "removed": removed,
+                "hunks": sum(1 for line in patch.splitlines() if line.startswith("@@ ")),
+            },
+        }
         result["diff"] = patch[:16000]
         result["diff_truncated"] = len(patch) > 16000
         result["task_created"] = created

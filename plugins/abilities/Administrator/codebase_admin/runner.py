@@ -138,6 +138,8 @@ def file_operation(request, base, args, name):
             return {"status": "success", "output": "edited",
                     "previous_sha256": digest, "sha256": hashlib.sha256(updated).hexdigest()}
         if name == "file_write":
+            if args.get("mode") is not None:
+                raise ValueError("mode applies only to broker task files; use file_edit for in-place changes")
             if leaf == ".":
                 raise ValueError("path must name a file")
             if args.get("delete") is not None or not isinstance(args.get("content"), str):
