@@ -605,7 +605,7 @@ def main():
     check=commands.add_parser("check",help="Run a durable task-scoped compile check without deployment")
     check.add_argument("task_id");check.add_argument("--expected",required=True)
     check.add_argument("--request-id",required=True)
-    check.add_argument("--check",choices=("check","test","fmt","clippy"),default="check")
+    check.add_argument("--check",choices=("check","test","fmt","clippy","ui_test"),default="check",help="ui_test runs the UI fixtures the task's changed paths select, without deploying")
     check.add_argument("--test-filter",help="check=test only: run the tests whose names contain this text")
     check.add_argument("--feature-profile",choices=("default","live"))
     check.add_argument("--timeout",type=int,default=600)

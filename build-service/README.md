@@ -61,8 +61,10 @@ the live checkout or containers by hand. All commands below run **on the server*
    Apply again with a new patch from the same workcopy for later edits.
    The reply lists the claims the edit took (`module:` scopes); broad ones such
    as `module:broker` or `module:workspace` block other writers.
-5. Optional server checks: `check TASK --check check|test|fmt|clippy [--test-filter NAME] --expected DIGEST --request-id ID`.
+5. Optional server checks: `check TASK --check check|test|fmt|clippy|ui_test [--test-filter NAME] --expected DIGEST --request-id ID`.
    A release runs the full suite anyway; use checks to catch errors before queueing.
+   `ui_test` runs the browser fixtures the task's changed paths select, exactly as a
+   release's UI stage does, and never deploys; a failure's output is in `log_excerpt`.
 6. `preflight TASK`. A change confined to `build-service/` is a broker-only task:
    `install-broker TASK` while the broker is idle (it drains, installs from the
    task tree and always restarts the service; the app keeps running), then preflight again.

@@ -1193,6 +1193,25 @@ class FeatureProfileBrokerTests(unittest.TestCase):
         self.assertEqual(job["lint_paths"],["src/lint_fixture.rs"]);self.assertEqual(clippy["check_task"],"clippy")
         with self.assertRaisesRegex(ValueError,"only to compile"):self.call("build_work",{**args,"request_id":"lint-live","feature_profile":"live"})
 
+    def test_ui_test_check_runs_selected_fixtures_without_publication(self):
+        item=self.begin("ui-test-check-fixture");tree=Path(item["workspace_path"]).parent
+        (Path(item["workspace_path"])/"ui").mkdir(exist_ok=True);(Path(item["workspace_path"])/"ui/fixture.js").write_text("export const value=1;\n")
+        args={"action":"check","task_id":item["task_id"],"check":"ui_test","expected_inputs_sha256":self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(tree)),"timeout_seconds":30,"request_id":"ui-check-request"}
+        self.broker.resources.enabled=True
+        with self.assertRaisesRegex(ValueError,"only to compile"):self.call("build_work",{**args,"feature_profile":"live"})
+        with patch.object(self.broker,"_start_next"):
+            result=self.call("build_work",args)
+            job=self.broker.jobs[result["job_id"]];self.assertEqual(job["changed_paths"],["v3/ui/fixture.js"])
+            passed={"executed_tests":["v3/ui/fixture.browser.test.mjs"],"reused_tests":[]}
+            with patch.object(self.broker.ui_publication,"prewarm",return_value=passed)as prewarm:
+                receipt=self.broker._execute_check(*self.broker.check_runs[result["job_id"]])
+            self.assertIs(prewarm.call_args.args[0],job)
+            self.assertEqual(receipt["status"],"completed");self.assertIn("fixture.browser.test.mjs",receipt["log_excerpt"])
+            failing=self.call("build_work",{**args,"request_id":"ui-check-failing"})
+            with patch.object(self.broker.ui_publication,"prewarm",side_effect=RuntimeError("pageerror: Cannot read properties of null")):
+                receipt=self.broker._execute_check(*self.broker.check_runs[failing["job_id"]])
+        self.assertEqual(receipt["status"],"failed");self.assertIn("pageerror: Cannot read properties of null",receipt["log_excerpt"])
+        self.assertFalse(self.runner.calls);self.assertEqual(item["status"],"open")
     def test_live_input_race_is_stale_without_publication(self):
         item,args=self.request();self.broker.resources.enabled=True
         with patch.object(self.broker,"_start_next"):

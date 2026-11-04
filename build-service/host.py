@@ -5524,7 +5524,7 @@ class Broker:
         if set(args)-{"task_id","task","expected_inputs_sha256","timeout_seconds","request_id","compiler_memory_cap","test_filter","feature_profile"}or not{"task_id","task","expected_inputs_sha256"}<=set(args):
             raise ValueError("Task-scoped Cargo check arguments required")
         task_id,task=args["task_id"],args["task"];expected=args["expected_inputs_sha256"];timeout=args.get("timeout_seconds",600)
-        if not isinstance(task_id,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id)or task not in {"check","test","fmt","clippy","resource_probe","execution_probe","dependencies","runtime_readability"}or not isinstance(expected,str)or not re.fullmatch(r"[a-f0-9]{64}",expected)or type(timeout)is not int or not 1<=timeout<=600:
+        if not isinstance(task_id,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",task_id)or task not in {"check","test","fmt","clippy","ui_test","resource_probe","execution_probe","dependencies","runtime_readability"}or not isinstance(expected,str)or not re.fullmatch(r"[a-f0-9]{64}",expected)or type(timeout)is not int or not 1<=timeout<=600:
             raise ValueError("Bounded task Cargo request required")
         request_id=args.get("request_id")
         if request_id is not None and (not isinstance(request_id,str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",request_id)):
@@ -5566,6 +5566,11 @@ class Broker:
                 # The workspace is not lint-clean, so findings are scoped to the Rust files this task changed.
                 _,changed=release.candidate((root/"baseline.tar").read_bytes(),blob,(root/"baseline.tar").read_bytes(),context_digest,allow_empty=True)
                 lint_paths=[name[3:]for name in changed if name.endswith(".rs")and(root/name).is_file()]
+            changed_paths=None
+            if task=="ui_test":
+                # Fixtures are selected by the task's changed paths, as a release selects them.
+                _,changed=release.candidate((root/"baseline.tar").read_bytes(),blob,(root/"baseline.tar").read_bytes(),context_digest,allow_empty=True)
+                changed_paths=sorted(changed)
             if any(j.get("task_id")==task_id and self._owned(j,trusted,workspace)and j["status"]in {"running","queued"}and (j["operation"]!="check"or self.scheduler.mode!="enforce"or not request_id)for j in self.jobs.values()):
                 raise ValueError("This task already has pending execution")
             ownership_value=None
@@ -5573,13 +5578,13 @@ class Broker:
                 if task in {"dependencies","runtime_readability"}:
                     value=self.scheduler.ensure(item,trusted,workspace)
                     self.scheduler.store.assert_owned(key,self.scheduler.owner(trusted,workspace),value["epoch"],[])
-                else:self.scheduler.submit(item,trusted,workspace,["build-service/resources.py"]if task in {"resource_probe","execution_probe"}else["src","Cargo.toml","Cargo.lock"],before)
+                else:self.scheduler.submit(item,trusted,workspace,["build-service/resources.py"]if task in {"resource_probe","execution_probe"}else[p[3:]for p in changed_paths]if task=="ui_test"else["src","Cargo.toml","Cargo.lock"],before)
                 ownership_value=self.scheduler.store.get(key)
             job_id=str(uuid.uuid4());event=threading.Event();self.job_cancellations[job_id]=event
             job={"job_id":job_id,"request_key":request_key or "check-"+job_id,"check_signature":request_signature,"task_id":task_id,"user_id":trusted["user_id"],"workspace":workspace,
                 "operation":"check","check_task":task,"status":"queued","phase":"queued_check","created_at":time.time(),"started_at":None if request_id else time.time(),
-                "inputs_sha256":before,"lease_until":time.time()+timeout+120,"access_fingerprint":trusted["access_fingerprint"],
-                "images":{},"log":"","phase_history":[],"summary":"Isolated Cargo "+task,"compiler_memory_cap":cap,"test_filter":selected,"feature_profile":profile,**({"lint_paths":lint_paths}if lint_paths is not None else{})}
+                "inputs_sha256":before,"lease_until":time.time()+(900 if task=="ui_test"else timeout)+120,"access_fingerprint":trusted["access_fingerprint"],
+                "images":{},"log":"","phase_history":[],"summary":"Isolated Cargo "+task,"compiler_memory_cap":cap,"test_filter":selected,"feature_profile":profile,**({"lint_paths":lint_paths}if lint_paths is not None else{}),**({"changed_paths":changed_paths}if changed_paths is not None else{})}
             if ownership_value:
                 job.update(ownership_id=key,ownership_epoch=ownership_value["epoch"],source_generation=ownership_value["generation"])
             self.jobs[job_id]=job;self._save(job)
@@ -5610,7 +5615,13 @@ class Broker:
             if context_digest(release.snapshot(root,TASK_CONTEXT,context_digest))[0]!=before:
                 raise ValueError("Task changed before check execution")
             if hasattr(self.runner,"job_context"):self.runner.job_context.job=job;self.runner.job_context.event=event
-            if self.resources.enabled:
+            if task=="ui_test":
+                # Same fixture run as a release's early UI tests, never followed by publication;
+                # its own fixture timeout (at most 900 s) applies, which the lease above covers.
+                # Inspection snapshots stay out of the fixture copy.
+                result=self.ui_publication.prewarm(job,release.snapshot(root,CONTEXT,context_digest))
+                log=("UI fixtures passed: "+", ".join(result["executed_tests"])+("; reused: "+", ".join(result["reused_tests"])if result["reused_tests"]else""))if result else "No UI fixtures depend on this task's changed paths"
+            elif self.resources.enabled:
                 if task=="runtime_readability":
                     previous={role:self.runner.inspect(name)for role,name in zip(("api","loop"),TARGETS)}
                     self.runner.preflight_runtime_mounts(job,previous,self.runner.current_asset_id());log="Published runtime mount readability passed as application and worker identities"
