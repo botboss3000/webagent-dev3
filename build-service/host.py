@@ -3563,7 +3563,11 @@ class Broker:
                            key=lambda job: (job.get("finished_at", job["created_at"]), job["job_id"]))
         if completed:
             job = completed[-1]
-            blob = (self.state / job["job_id"] / "candidate.tar").read_bytes()
+            path = self.state / job["job_id"] / "candidate.tar"
+            # Retention can remove a release's folder; an older release would be a stale base.
+            if not path.is_file():
+                return self.runner.snapshot()
+            blob = path.read_bytes()
             if context_digest(blob)[0] != job["inputs_sha256"]:
                 raise ValueError("durable release input mismatch")
             return blob
