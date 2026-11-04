@@ -97,6 +97,15 @@ pub trait AdministrationHost: Sync {
         trusted: Option<Value>,
         cancel: CancellationToken,
     ) -> Pending<'a, Result<Value>>;
+    /// Save PNG `data` (base64) with identifier `id` as an attachment of run `run_id`'s
+    /// agent reply in session `sid`; returns the attachment metadata.
+    fn reply_image<'a>(
+        &'a self,
+        sid: &'a str,
+        run_id: &'a str,
+        id: &'a str,
+        data: &'a str,
+    ) -> Pending<'a, Result<Value>>;
     /// Send `name` to the protected build broker.
     fn broker<'a>(
         &'a self,

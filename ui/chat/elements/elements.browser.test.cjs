@@ -102,3 +102,23 @@ test('bundled DOMPurify renders chat and mini Markdown under deployed CSP',async
   const link=body.locator('a').first();assert.equal(await link.getAttribute('target'),'_blank');assert.equal(await link.getAttribute('rel'),'noopener noreferrer');
  }
 });
+test('agent reply screenshots use the attachment tile row and scroll sideways at phone width',async t=>{
+ const p=await fixture(t,{mobile:true});
+ await p.evaluate(async()=>{
+  view.disconnect();
+  history.replaceState(null,'','/?session_id=s');
+  const css=document.createElement('link');css.rel='stylesheet';css.href='/v3-ui/chat/chat.css';document.head.append(css);
+  await new Promise(resolve=>{css.onload=resolve;css.onerror=resolve;});
+  const {createMessage}=await import('/v3-ui/chat/core/message-view.js');
+  const files=Array.from({length:12},(_,i)=>({id:'00000000-0000-4000-8000-0000000000'+String(i).padStart(2,'0'),name:'screenshot-'+i+'.png',media_type:'image/png'}));
+  window.reply=createMessage({id:'assistant:r',seq:2,run_id:'r',role:'assistant',content:'Checked both widths.',attachments:files});
+  window.progress=createMessage({id:'working:r:auto:1:0',seq:1,run_id:'r',role:'assistant',content:'Reading the page.'});
+  document.querySelector('#messages').replaceChildren(progress,reply);
+ });
+ const row=p.locator('.chat-bubble.agent .chat-attachments');
+ assert.equal(await row.count(),1);
+ assert.equal(await row.locator('a.chat-attachment-image img').count(),12);
+ assert.equal(await row.locator('a').first().getAttribute('href'),'/api/v3/sessions/s/attachments/00000000-0000-4000-8000-000000000000/content');
+ const box=await row.evaluate(node=>({wrap:getComputedStyle(node).flexWrap,overflow:getComputedStyle(node).overflowX,scrolls:node.scrollWidth>node.clientWidth,fits:node.getBoundingClientRect().right<=innerWidth}));
+ assert.deepEqual(box,{wrap:'nowrap',overflow:'auto',scrolls:true,fits:true});
+});

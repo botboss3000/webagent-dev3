@@ -90,7 +90,13 @@ pub async fn execute(
         | "dev_browser_action"
         | "dev_browser_record" => {
             let authority = browser_authority(host, sid).await?;
-            host.worker(name, args, sid, Some(authority), cancel).await
+            let output = host
+                .worker(name, args, sid, Some(authority.clone()), cancel.clone())
+                .await?;
+            if name == "dev_browser_action" && args["action"] == "screenshot" {
+                return Ok(attach_screenshot(host, sid, run_id, authority, output, cancel).await);
+            }
+            Ok(output)
         }
         "v3_workspace_receipt" => {
             let id = arguments::request_id(args)?;
@@ -192,6 +198,47 @@ async fn broker_call(
     let identity = trusted(host.actor(), sid, &json!(fingerprint));
     host.broker(name, &forwarded, sid, Some(identity), cancel)
         .await
+}
+
+/// Save a successful screenshot as an attachment of this run's reply while the browser
+/// authority still allows reading it, so the user sees it in the chat after the lease ends.
+/// A failure keeps the screenshot result and says why in `attachment_error`.
+pub(crate) async fn attach_screenshot(
+    host: &dyn AdministrationHost,
+    sid: &str,
+    run_id: &str,
+    authority: Value,
+    mut output: Value,
+    cancel: CancellationToken,
+) -> Value {
+    let Some(id) = output["artifact_id"]
+        .as_str()
+        .filter(|_| output["status"] == "success")
+        .map(str::to_owned)
+    else {
+        return output;
+    };
+    let published = async {
+        let image = host
+            .worker(
+                "administrator_artifact_get",
+                &json!({"artifact_id":id}),
+                sid,
+                Some(authority),
+                cancel,
+            )
+            .await?;
+        let data = image["png_base64"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Screenshot bytes unavailable"))?;
+        host.reply_image(sid, run_id, &id, data).await
+    }
+    .await;
+    match published {
+        Ok(file) => output["attachment"] = file,
+        Err(error) => output["attachment_error"] = json!(error.to_string()),
+    }
+    output
 }
 
 /// A short-lived browser session for the caller, reused while it stays valid.

@@ -170,6 +170,28 @@ impl AdministrationHost for Host<'_> {
     fn store(&self) -> &webagent_host_core::StoreCore {
         &self.0.store
     }
+    fn reply_image<'a>(
+        &'a self,
+        sid: &'a str,
+        run_id: &'a str,
+        id: &'a str,
+        data: &'a str,
+    ) -> Pending<'a, Result<Value>> {
+        Box::pin(async move {
+            let name = format!("screenshot-{}.png", id.get(..8).unwrap_or(id));
+            crate::api::uploads::publish_reply_file(
+                self.0,
+                sid,
+                run_id,
+                id,
+                &name,
+                "image/png",
+                data,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!(error.1))
+        })
+    }
     fn actor(&self) -> &str {
         crate::shared_chat::actor(self.0)
     }

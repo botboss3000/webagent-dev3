@@ -19,6 +19,12 @@ pub fn message_files_key(run_id: &str) -> String {
     format!("message_attachments:{run_id}")
 }
 
+/// Files a tool produced for the agent reply of one run, such as browser screenshots.
+/// The record carries its `session_id`, so deleting the session deletes it.
+pub fn reply_files_key(run_id: &str) -> String {
+    format!("reply_attachments:{run_id}")
+}
+
 /// Running byte total of stored uploads in this user plane.
 pub const QUOTA_KEY: &str = "attachment_quota";
 

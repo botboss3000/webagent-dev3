@@ -16,7 +16,7 @@ Reads return bounded sanitized visible text with `source_kind: untrusted_browser
 
 ## Images and recording
 
-Screenshots are actual bounded viewport PNG files stored privately outside the coding workspace. Inputs, textareas, secret-marked nodes and exact authentication-cookie and CSRF-token text are masked before capture. Results contain an opaque artifact ID, digest, dimensions and an authenticated current-session API download path; never a host path.
+Screenshots are actual bounded viewport PNG files stored privately outside the coding workspace. Each successful screenshot is also saved as an attachment of your final reply in this run, so the user sees it as a thumbnail under that message after the browser closes; take the screenshots that show the user what you validated, and refer to them in the reply. A screenshot result carries that `attachment`, or `attachment_error` when it could not be saved. Inputs, textareas, secret-marked nodes and exact authentication-cookie and CSRF-token text are masked before capture. Results contain an opaque artifact ID, digest, dimensions and an authenticated current-session API download path; never a host path.
 
 `dev_browser_record` has `start`, `status` and `stop`. It records at most 30 PNG frames over 30 seconds. The result is explicitly `bounded_png_frames`, not a video. Stop recording and close the browser after use. A screenshot quota or lease failure stops capture.
 

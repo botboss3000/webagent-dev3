@@ -67,6 +67,7 @@ pub fn plane_for(key: &str) -> Plane {
         || key.starts_with("session_usage:")
         || key == "attachment_quota"
         || key.starts_with("message_attachments:")
+        || key.starts_with("reply_attachments:")
         || key.starts_with("memory:")
         || key.starts_with("promotion:")
         || key.starts_with("receipt:session:")

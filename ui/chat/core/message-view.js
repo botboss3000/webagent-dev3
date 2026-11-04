@@ -45,7 +45,8 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
   const label=document.createElement('span');label.className='label';label.textContent=item.message_kind==='operator'?((item.author?.display_name||item.author?.user_id||item.author_id||'Human')+' (Agent Operator)'):item.message_kind==='agent_message'?(item.author_name||'Message from another agent'):role==='user'?(item.author?.display_name||item.author?.user_id||item.author_name||item.author_id||item.author_display_name||item.author_user_id||'You'):'Agent';bubble.append(label);
   const body=document.createElement('div');
   if(role==='agent'){const section=document.createElement('div');section.className='turn-section llm-section md';section.dataset.sectionIdx='0';section.dataset.msgId=item.id;markdown(body,text);section.append(body);bubble.append(section);}else{body.className='bubble-body';linkify(body,text);bubble.append(body);}
-  if(role==='user'&&Array.isArray(item.attachments)){
+  // User uploads and the agent's tool-produced files (such as validation screenshots) share one tile row.
+  if(Array.isArray(item.attachments)){
     const files=document.createElement('div');files.className='chat-attachments';
     const sid=new URL(location.href).searchParams.get('session_id');
     for(const file of item.attachments){

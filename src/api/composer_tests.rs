@@ -16,6 +16,61 @@ async fn session(app: &App) -> String {
         .unwrap()
         .into()
 }
+/// A tool-produced screenshot joins only its run's final reply, as a sent attachment.
+#[tokio::test]
+async fn tool_screenshots_attach_only_to_the_final_reply_as_sent_files() {
+    let (_root, app) = fixture().await;
+    let sid = session(&app).await;
+    let other_sid = session(&app).await;
+    let id = uuid();
+    let upload = json!({"client_upload_id":id,"name":"notes.md","media_type":"text/markdown","data":STANDARD.encode(b"notes")});
+    uploads::upload(State(app.clone()), Path(sid.clone()), Json(upload))
+        .await
+        .unwrap();
+    let (_, Json(sent)) = send(
+        State(app.clone()),
+        Path(sid.clone()),
+        Json(json!({"text":"Check the page","client_message_id":uuid(),"attachment_ids":[id]})),
+    )
+    .await
+    .unwrap();
+    let rid = sent["run_id"].as_str().unwrap();
+    let shot = uuid();
+    let png = STANDARD.encode(b"\x89PNG\r\n\x1a\nfixture");
+    let first =
+        uploads::publish_reply_file(&app, &sid, rid, &shot, "screenshot.png", "image/png", &png)
+            .await
+            .unwrap();
+    let again =
+        uploads::publish_reply_file(&app, &sid, rid, &shot, "screenshot.png", "image/png", &png)
+            .await
+            .unwrap();
+    assert_eq!(first, again);
+    assert_eq!(
+        uploads::lookup(&app, &sid, &shot).await.unwrap()["run_id"],
+        rid
+    );
+    let mut rows = vec![
+        json!({"role":"assistant","id":format!("assistant:{rid}"),"run_id":rid}),
+        json!({"role":"assistant","id":format!("working:{rid}:auto:1:0"),"run_id":rid}),
+        json!({"role":"user","id":format!("user:{rid}"),"run_id":rid}),
+    ];
+    uploads::message_files(&app, &mut rows).await.unwrap();
+    assert_eq!(rows[0]["attachments"][0]["id"], shot);
+    assert!(rows[1].get("attachments").is_none());
+    assert_eq!(rows[2]["attachments"][0]["id"], id);
+    assert!(uploads::publish_reply_file(
+        &app,
+        &other_sid,
+        rid,
+        &uuid(),
+        "screenshot.png",
+        "image/png",
+        &png
+    )
+    .await
+    .is_err());
+}
 #[tokio::test]
 async fn upload_composer_auth_ownership_retry_and_persistence() {
     let (_root, app) = fixture().await;
