@@ -5,7 +5,7 @@ const server=http.createServer(async(req,res)=>{try{const file=path.resolve(root
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 let browser;try{
  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/snap/bin/chromium',headless:true,args:['--no-sandbox']});
- const page=await browser.newPage({viewport:{width:1200,height:850}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ const page=await browser.newPage({viewport:{width:1200,height:850}});const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.error('pageerror: '+e.message);});
  await page.goto('http://127.0.0.1:'+server.address().port+'/ui/main-panel/agents/pages/sessions/sessions.html');
  const result=await page.evaluate(async()=>{
   const html=await(await fetch('/ui/main-panel/agents/pages/sessions/sessions.html')).text();document.body.innerHTML='<div id="tab-agents" class="active"><div id="sessions-region"><section id="sessions-section"></section></div></div>';

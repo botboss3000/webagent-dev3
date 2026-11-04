@@ -23,7 +23,7 @@ try{
  browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH,args:['--no-sandbox']});
  for(const touch of [false,true]){
   const context=await browser.newContext({hasTouch:touch,isMobile:touch,viewport:touch?{width:390,height:844}:{width:1200,height:900}});
-  const page=await context.newPage();page.setDefaultTimeout(6000);const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  const page=await context.newPage();page.setDefaultTimeout(6000);const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.error('pageerror: '+e.message);});
   await page.goto('http://127.0.0.1:'+server.address().port+'/');
   await page.evaluate(async()=>{
    const {createAgentArchive}=await import('/ui/main-panel/agents/agent-archive.js');

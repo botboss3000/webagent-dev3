@@ -16,7 +16,7 @@ try{
  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/snap/bin/chromium',headless:true,args:['--no-sandbox']});
  for(const reducedMotion of ['no-preference','reduce']){
   const page=await browser.newPage({reducedMotion});const errors=[];
-  page.on('pageerror',error=>errors.push(error.message));
+  page.on('pageerror',error=>{errors.push(error.message);console.error('pageerror: '+error.message);});
   await page.addInitScript(()=>{
    const timeout=window.setTimeout.bind(window);
    window.setTimeout=(fn,ms,...args)=>timeout(()=>{fn(...args);if(ms===10000)document.body.dataset.bootTimeout='fired';},ms===10000?50:ms);

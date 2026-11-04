@@ -142,11 +142,15 @@ unfinished affected units rather than silently completing them.
 ### Existing checks and evidence identity
 
 Use build_work(action="check", task_id=..., expected_inputs_sha256=...,
-check="check" or "test", timeout_seconds=...) against exact isolated inputs.
+check="check", "test" or "ui_test", timeout_seconds=...) against exact isolated inputs.
 The digest must come from a fresh task read/list/review; timeout is 1-600 seconds.
 
 - check="check" runs cargo check --locked in the pinned Rust image.
 - check="test" runs cargo test --locked -- --test-threads=1 there.
+- check="ui_test" runs the browser fixtures the task's changed paths select, as a
+  release's UI stage does, and never deploys. Run it before finish for UI changes:
+  a failure's log_excerpt carries the fixture output, including each uncaught page
+  error (printed as "pageerror: ..."), which a failed release's receipt may cut off.
 - Task source is read-only during these checks and Cargo output is separate.
 - This interface does not offer arbitrary commands, targeted test filters,
   formatting, Clippy, standalone doctest selection, benchmarks or profiling.

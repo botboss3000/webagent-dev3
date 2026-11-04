@@ -25,7 +25,7 @@ let browser;
 try{
  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/snap/bin/chromium',headless:true,args:['--no-sandbox']});
  for(const viewport of [{width:1200,height:850},{width:390,height:844}]){
-  const page=await browser.newPage({viewport});const errors=[];page.on('pageerror',error=>errors.push(error.message));
+  const page=await browser.newPage({viewport});const errors=[];page.on('pageerror',error=>{errors.push(error.message);console.error('pageerror: '+error.message);});
   await page.goto('http://127.0.0.1:'+server.address().port+'/app?tab=app&appView=config');
   await page.getByRole('button',{name:'Star File Manager',exact:true}).waitFor();
   // App pages grow past the shared 520px detail cap instead of clipping their content.

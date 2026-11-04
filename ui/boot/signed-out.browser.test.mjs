@@ -39,7 +39,7 @@ try{
  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/snap/bin/chromium',headless:true,args:['--no-sandbox']});
  for(const viewport of [{width:390,height:844},{width:1280,height:720}]){
   const page=await browser.newPage({viewport});page.setDefaultTimeout(15000);
-  const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.error('pageerror: '+e.message);});
   for(const route of ['/','/app','/?tab=agents&agentView=identity&appView=files&agent=shared_default','/?tab=automation']){
    await page.goto('http://127.0.0.1:'+server.address().port+route);
    await page.getByRole('button',{name:'Sign in',exact:true}).waitFor();

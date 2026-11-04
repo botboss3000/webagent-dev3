@@ -81,7 +81,8 @@
           "check",
           "test",
           "fmt",
-          "clippy"
+          "clippy",
+          "ui_test"
         ]
       },
       "timeout_seconds": {

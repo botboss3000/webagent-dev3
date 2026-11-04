@@ -61,7 +61,7 @@ try{
  browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/snap/bin/chromium',headless:true,args:['--no-sandbox']});
  for(const mobile of [false,true]){
   const context=await browser.newContext({viewport:mobile?{width:390,height:844}:{width:1280,height:900},isMobile:mobile,hasTouch:mobile});
-  const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  const page=await context.newPage();const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.error('pageerror: '+e.message);});
   mode='live';delay=2000;
   await page.goto('http://127.0.0.1:'+server.address().port+'/fixture');
   const cpu=page.locator('[data-card=cpu]'),system=page.locator('[data-card=system_resources]');

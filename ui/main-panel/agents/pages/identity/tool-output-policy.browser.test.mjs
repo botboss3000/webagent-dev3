@@ -20,7 +20,7 @@ try {
  for(const touch of [false,true])for(const light of [false,true]) {
   const context=await browser.newContext({hasTouch:touch,isMobile:touch,viewport:touch?{width:390,height:844}:{width:1200,height:900}});
   await context.addInitScript(()=>{window.pulses=[];Object.defineProperty(navigator,'vibrate',{configurable:true,value:n=>{pulses.push(n);return true;}});});
-  const page=await context.newPage();page.setDefaultTimeout(5000);const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  const page=await context.newPage();page.setDefaultTimeout(5000);const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.error('pageerror: '+e.message);});
   const setup=async(available=true,canManage=true)=>{
    await page.evaluate(async({available,canManage,light})=>{
     document.body.classList.toggle('light-mode',light);
