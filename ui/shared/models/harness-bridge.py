@@ -88,6 +88,9 @@ ROOT = Path(__file__).resolve().parent.parent / "work" / "harness-bridge"
 SESSIONS = ROOT / "sessions"
 TIMING = ROOT / "timing.jsonl"
 URL = os.environ.get("HARNESS_BRIDGE_URL", "https://dev.webagent.live").rstrip("/")
+# Under the server's 60 s offline window (and over its 25 s hold), so a poll that hangs in the
+# network path is retried before a waiting call is declared offline.
+POLL_TIMEOUT = 35
 PREVIEW = 2000  # characters of a long message shown inline; the full text stays in the saved request
 # As close to a plain API call as subscription sign-in allows (--bare needs an API key): no
 # CLAUDE.md or settings files, hooks, auto-memory, skills or Chrome, and no MCP server but this
@@ -151,10 +154,10 @@ def fetch(session=None):
     """Long-poll until a call arrives; ride out gateway restarts and network blips."""
     while True:
         try:
-            call = post("/api/v3/harness-bridge/next", {"session": session} if session else {}, timeout=90)["call"]
+            call = post("/api/v3/harness-bridge/next", {"session": session} if session else {}, timeout=POLL_TIMEOUT)["call"]
         except Transient as error:
-            print(f"poll failed ({error}); retrying in 5 s", file=sys.stderr)
-            time.sleep(5)
+            print(f"poll failed ({error}); retrying in 2 s", file=sys.stderr)
+            time.sleep(2)
             continue
         if call:
             call["fetched_at"] = time.time()
@@ -566,6 +569,7 @@ def cmd_auto(session):
 
 
 def selftest():
+    assert 25 < POLL_TIMEOUT + 2 < 60
     folder = Path(tempfile.mkdtemp(prefix="harness-bridge-selftest-"))  # fresh: earlier runs leave state
     global SESSIONS
     SESSIONS = folder

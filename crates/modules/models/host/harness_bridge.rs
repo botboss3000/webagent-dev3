@@ -12,8 +12,11 @@ use webagent_models::{
 
 const CALLS: &str = "harness_bridge_call:";
 const SEEN: &str = "harness_bridge_seen:";
-/// No client fetch within this window means the client is offline.
+/// A queued call no client fetches within this window fails.
 const OFFLINE_SECS: u64 = 60;
+/// A call left unclaimed on a link that polled within this window is retryable: one poll can hang
+/// in the network path while the client itself is still running.
+const RECENT_SECS: u64 = 120;
 /// A fetched call waits this long for its reply.
 const ANSWER_SECS: u64 = 30 * 60;
 /// Client long-poll window.
@@ -30,6 +33,10 @@ fn now() -> u64 {
         .as_secs()
 }
 use webagent_models::transport::{bridge_link_id as link_id, bridge_link_key};
+
+fn recently_seen(seen: Option<u64>, at: u64) -> bool {
+    seen.is_some_and(|seen| at <= seen + RECENT_SECS)
+}
 
 pub(crate) struct Queue(pub(crate) Store);
 impl BridgeQueue for Queue {
@@ -51,7 +58,8 @@ impl BridgeQueue for Queue {
                 .get(&format!("{SEEN}{link}"))
                 .await?
                 .and_then(|v| v["at"].as_u64());
-            if seen.is_none_or(|at| now() > at + OFFLINE_SECS) {
+            // The retry of a call that a hung poll left unclaimed must still reach the client.
+            if !recently_seen(seen, now()) {
                 return Err(offline());
             }
             let id = Uuid::new_v4().to_string();
@@ -66,7 +74,14 @@ impl BridgeQueue for Queue {
                     let Some(doc) = self.0.get(&key).await? else { return Err(offline()) };
                     match doc["state"].as_str() {
                         Some("replied") => return Ok(doc["reply"].clone()),
-                        Some("pending") if now() > doc["created"].as_u64().unwrap_or(0) + OFFLINE_SECS => return Err(offline()),
+                        Some("pending") if now() > doc["created"].as_u64().unwrap_or(0) + OFFLINE_SECS => {
+                            let seen = self.0.get(&format!("{SEEN}{link}")).await?.and_then(|v| v["at"].as_u64());
+                            return Err(if recently_seen(seen, now()) {
+                                typed_failure(FailureKind::Transient, true, "Bridge call not picked up; the client polled recently, retrying")
+                            } else {
+                                offline()
+                            });
+                        }
                         Some("claimed") if now() > doc["claimed"].as_u64().unwrap_or(0) + ANSWER_SECS =>
                             return Err(typed_failure(FailureKind::Transient, true, "Bridge reply timed out")),
                         _ => {}
@@ -187,5 +202,12 @@ mod tests {
         assert!(!id.contains("fixture"));
         assert_eq!(id, super::link_id("fixture-link-value"));
         assert_ne!(id, super::link_id("fixture-link-other"));
+    }
+
+    #[test]
+    fn unclaimed_call_is_retryable_only_on_a_recently_seen_link() {
+        assert!(super::recently_seen(Some(1000), 1000 + super::RECENT_SECS));
+        assert!(!super::recently_seen(Some(1000), 1001 + super::RECENT_SECS));
+        assert!(!super::recently_seen(None, 1000));
     }
 }
