@@ -872,11 +872,21 @@ let themeChoice='system';
 try{const saved=localStorage.getItem('v3-theme');if(['light','dark','system'].includes(saved))themeChoice=saved;}catch{}
 // The account menu and the mobile sidebar footer each have a theme switch; both stay in sync.
 const themeOptions=document.querySelectorAll('#user-dropdown-menu .theme-option, #mobile-nav-footer .theme-option');
+const themeBar=document.querySelector('meta[name="theme-color"]');
+let themeBarFrame=0;
+// Mirrors --bg-0 (design-system.css) so OS status/nav bars match the app theme.
+// While the black boot curtain is up the bar stays black and then fades with it, frame by frame.
+function paintThemeBar(light){
+  cancelAnimationFrame(themeBarFrame);
+  const curtain=document.getElementById('boot-curtain');
+  let color=light?'#ffffff':'#000000';
+  if(light&&curtain){const v=Math.round(255*(1-Number(getComputedStyle(curtain).opacity)));color=`rgb(${v},${v},${v})`;themeBarFrame=requestAnimationFrame(()=>paintThemeBar(light));}
+  if(themeBar&&themeBar.content!==color)themeBar.content=color;
+}
 function applyAccountTheme(){
   const light=themeChoice==='light'||themeChoice==='system'&&systemTheme.matches;
   document.body.classList.toggle('light-mode',light);
-  // Mirrors --bg-0 (design-system.css) so OS status/nav bars match the app theme.
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content',light?'#ffffff':'#000000');
+  paintThemeBar(light);
   for(const option of themeOptions){
     const active=option.dataset.theme===themeChoice;
     option.classList.toggle('active',active);option.setAttribute('aria-pressed',String(active));
