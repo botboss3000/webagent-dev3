@@ -287,8 +287,22 @@ def source_differs(before, after):
     return before[1] != after[1] or (before[0] ^ after[0]) & 0o100 != 0
 
 
+_CANDIDATE_ENTRIES = {}
+
+
+def _parsed_once(blob, validate):
+    """candidate() only reads its parsed inputs, and finish/preflight pass the same few blobs repeatedly."""
+    key = (hashlib.blake2b(blob, digest_size=32).digest(), validate)
+    found = _CANDIDATE_ENTRIES.get(key)
+    if found is None:
+        found = _CANDIDATE_ENTRIES[key] = candidate_entries(blob, validate)
+        while len(_CANDIDATE_ENTRIES) > 4:  # each holds one context's source bytes (~20 MB)
+            _CANDIDATE_ENTRIES.pop(next(iter(_CANDIDATE_ENTRIES)), None)
+    return found
+
+
 def candidate(base_blob, task_blob, live_blob, validate, *, allow_empty=False, skip_live=False):
-    (base,base_inspection),(task,task_inspection),(live,_) = (candidate_entries(value,validate)for value in (base_blob,task_blob,live_blob))
+    (base,base_inspection),(task,task_inspection),(live,_) = (_parsed_once(value,validate)for value in (base_blob,task_blob,live_blob))
     # Same attested identity without holding private inspection bodies in memory.
     if base_inspection!=task_inspection:raise ValueError("read-only inspection snapshot changed")
     # ui/ is projected from v3/build-service/shared-ui/, so only its source counts as a change.

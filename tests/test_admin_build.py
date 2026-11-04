@@ -1688,6 +1688,71 @@ class BuildTests(unittest.TestCase):
             self.deploy(value)
         self.assertFalse(any(c[0] == "stop" for c in self.runner.calls))
 
+    def test_reads_stay_within_budget_on_a_large_job_store(self):
+        # 1000 receipts with a shared 256 KiB log: a read that views or scrubs every job blows the budget.
+        log = "compiler output line\n" * 12000
+        for index in range(1000):
+            job_id = str(uuid.uuid4())
+            self.broker.jobs[job_id] = {"job_id": job_id, "operation": "build_deploy", "status": "failed", "phase": "finished",
+                                        "created_at": index, "finished_at": index + 1, "user_id": "fixture-user",
+                                        "workspace": self.workspace, "log": log, "reason": "fixture"}
+        newest = job_id
+        budget = 1.0
+        for name, args in (("v3_build_status", {}), ("v3_build_progress", {"job_id": newest}),
+                           ("v3_worker_job", {"job_id": newest}), ("v3_build_leftovers", {})):
+            started = time.monotonic()
+            self.call(name, args)
+            self.assertLess(time.monotonic() - started, budget, name)
+
+    def test_lock_logs_long_holds_and_waits_with_their_holder(self):
+        lock = host.BrokerLock()
+        entered = threading.Event()
+        def hold():
+            with lock:
+                entered.set()
+                time.sleep(.2)
+        with patch.object(host, "SLOW_LOCK_SECONDS", .05), patch.object(host, "broker_log") as log:
+            holder = threading.Thread(target=host.call_labelled, args=("v3_build_status", hold))
+            holder.start(); entered.wait(1)
+            host.call_labelled("job-runner", lambda: lock.acquire() and lock.release())
+            holder.join()
+        lines = [c.args[0] for c in log.call_args_list]
+        self.assertTrue(any("job-runner waited" in l and "last held by v3_build_status" in l for l in lines), lines)
+        self.assertTrue(any("held" in l and "by v3_build_status" in l for l in lines), lines)
+        self.assertGreaterEqual(host._PERF["locks"]["v3_build_status"]["max"], .2)
+
+    def test_idle_counts_between_commands_and_stall_watch_logs_once(self):
+        now = 10_000.0
+        job = {"job_id": "j" * 8, "status": "running", "phase": "building_api",
+               "execution_observation": {"state": "terminal", "heartbeat_at": now - 1000},
+               "phase_history": [{"at": now - 2000, "phase": "building_api"}]}
+        self.assertEqual(1000, host.idle_seconds(job, now))
+        self.assertEqual(0, host.idle_seconds({**job, "resource_waiting": {"state": "waiting", "since": now - 5}}, now))
+        self.assertEqual(0, host.idle_seconds({**job, "phase_timings": [{"phase": "packaging_api", "started_at": now - 50}]}, now))
+        self.broker.jobs[job["job_id"]] = job
+        with patch.object(host, "broker_log") as log:
+            self.assertEqual([job["job_id"]], self.broker.stall_watch(now))
+            self.assertEqual([], self.broker.stall_watch(now + 60))
+        self.assertIn("issued no command", log.call_args.args[0])
+
+    def test_context_digest_parses_the_same_bytes_once(self):
+        blob = context(extra={"v3/README.md": "memo"})
+        with patch.object(host, "_context_digest", wraps=host._context_digest) as parse:
+            first, second = host.context_digest(blob), host.context_digest(bytes(blob))
+        self.assertEqual(first, second)
+        self.assertEqual(1, parse.call_count)
+        with self.assertRaises(ValueError):
+            host.context_digest(context(extra={"v3/../escape": "x"}))
+
+    def test_candidate_parses_each_input_once_across_calls(self):
+        unique = str(uuid.uuid4())  # bytes no earlier test cached
+        base, task = context(extra={"v3/README.md": "base " + unique}), context(extra={"v3/README.md": "task " + unique})
+        with patch.object(host.release, "candidate_entries", wraps=host.release.candidate_entries) as parse:
+            first = host.release.candidate(base, task, base, host.context_digest)
+            second = host.release.candidate(base, task, base, host.context_digest)
+        self.assertEqual(first, second)
+        self.assertEqual(2, parse.call_count)  # base (also live) and task, once each
+
     def test_status_views_only_the_three_newest_owned_jobs(self):
         # Regression: status once viewed (scrubbed) every owned job before keeping three, holding the lock ~30s.
         for index in range(40):
@@ -2379,6 +2444,44 @@ class InheritedSocketTests(unittest.IsolatedAsyncioTestCase):
                 task.cancel()
                 try:
                     await task
+                except asyncio.CancelledError:
+                    pass
+                listener.close()
+
+
+class CoalescedReadTests(unittest.IsolatedAsyncioTestCase):
+    async def test_identical_operator_reads_share_one_handler_run(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = str(Path(temp) / "broker.sock")
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            listener.bind(path); listener.listen(8)
+            runs = []
+            class SlowBroker:
+                runner = FakeRunner()
+                def handle(self, request):
+                    runs.append(request["name"]); time.sleep(.3)
+                    return {"name": request["name"]}
+            service = asyncio.create_task(host.serve(SlowBroker(), listener))
+            async def ask(name, arguments):
+                reader, writer = await asyncio.open_unix_connection(path)
+                writer.write(json.dumps({"id": "x", "name": name, "arguments": arguments}).encode() + b"\n")
+                await writer.drain()
+                response = json.loads(await reader.readline())
+                writer.close(); await writer.wait_closed()
+                return response
+            try:
+                await asyncio.sleep(.02)
+                answers = await asyncio.gather(*(ask("v3_build_status", {}) for _ in range(3)),
+                                               ask("build_work", {"action": "heartbeat", "task_id": "t"}),
+                                               ask("build_work", {"action": "heartbeat", "task_id": "t"}))
+                self.assertTrue(all(a["status"] == "success" for a in answers), answers)
+                # Three identical reads ran once; mutating heartbeats are never shared.
+                self.assertEqual(1, runs.count("v3_build_status"))
+                self.assertEqual(2, runs.count("build_work"))
+            finally:
+                service.cancel()
+                try:
+                    await service
                 except asyncio.CancelledError:
                     pass
                 listener.close()

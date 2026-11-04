@@ -310,14 +310,26 @@ class MonitorTests(unittest.TestCase):
         code, out = self.run_monitor([self.progress(running=[stuck], idle_seconds=901)], job="job-2")
         self.assertEqual(code, 4); self.assertIn("no progress for 901s", out)
 
-    def test_unresponsive_broker_wakes_with_four_and_names_it(self):
+    def test_unresponsive_broker_backs_off_then_wakes_with_four_and_names_it(self):
+        calls, pauses = [], []
         def request(name, arguments):
+            calls.append(name)
             raise client.BrokerUnresponsive("broker unresponsive: no reply to v3_build_progress within 75s")
         with patch("sys.stdout", new_callable=io.StringIO) as out:
-            code = client.monitor(None, "job-1", request, lambda s: None, lambda: 0.0, self.state)
+            code = client.monitor(None, "job-1", request, pauses.append, lambda: 0.0, self.state)
         self.assertEqual(code, 4)
+        self.assertEqual(client.UNRESPONSIVE_TRIES, len(calls))
+        self.assertEqual([30, 60], pauses)  # growing pauses, not an immediate retry
         self.assertIn("broker unresponsive", out.getvalue())
         self.assertNotIn("past its normal range", out.getvalue())
+
+    def test_no_command_between_stages_wakes_once_with_four(self):
+        done = {"stage": "run tests", "id": "3a", "seconds": 8}
+        quiet = self.progress(finished=[done], idle_seconds=client.STALL_SECONDS + 1)
+        code, out = self.run_monitor([quiet])
+        self.assertEqual(code, 4); self.assertIn("no command or progress for", out)
+        code, _ = self.run_monitor([quiet, self.progress(status="failed", finished=[done])])
+        self.assertEqual(code, 1)
 
     def test_task_without_a_job_times_out_and_abandoned_task_fails(self):
         code, _ = self.run_monitor([{"task_id": "t", "status": "open", "job_id": None}] * 3, task="t", job=None, timeout=20)

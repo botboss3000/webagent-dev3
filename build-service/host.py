@@ -512,7 +512,21 @@ class CommandObservation:
             getattr(self.runner, "resource_progress", lambda _: None)(self.job)
 
 
+_CONTEXT_DIGESTS = {}
+
+
 def context_digest(blob):
+    """Digest and count of a build context; the same bytes are parsed once (finish/preflight re-check a few blobs many times)."""
+    key = hashlib.blake2b(blob, digest_size=32).digest()
+    found = _CONTEXT_DIGESTS.get(key)
+    if found is None:
+        found = _CONTEXT_DIGESTS[key] = _context_digest(blob)
+        while len(_CONTEXT_DIGESTS) > 32:
+            _CONTEXT_DIGESTS.pop(next(iter(_CONTEXT_DIGESTS)), None)
+    return found
+
+
+def _context_digest(blob):
     if len(blob) > MAX_TASK_CONTEXT:
         raise ValueError("build context exceeds bound")
     entries = {}
@@ -2584,7 +2598,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
 
 # Content-free broker timings: step names, durations and process byte counts only.
 _PERF_LOCK = threading.Lock()
-_PERF = {"steps": [], "requests": {}}
+_PERF = {"steps": [], "requests": {}, "locks": {}}
 _PERF_LOCAL = threading.local()
 
 
@@ -2633,11 +2647,75 @@ def timed(name):
     return wrap
 
 
-def record_request(name, seconds, read, written, action=None):
-    """Aggregate request cost per validated operation name and action; arguments are never recorded."""
+def request_key(name, action=None):
+    """A bounded label for a request: validated operation name and action, never arguments."""
     key = name if isinstance(name, str) and re.fullmatch(r"[a-z0-9_]{1,64}", name) else "other"
     if key != "other" and isinstance(action, str) and re.fullmatch(r"[a-z_]{1,40}", action):
         key += "." + action
+    return key
+
+
+def broker_log(text):
+    """A dated line in broker-error.log (stderr); content-free operational notices only."""
+    print(time.strftime("%Y-%m-%d %H:%M:%S") + " " + text, file=sys.stderr, flush=True)
+
+
+SLOW_LOCK_SECONDS = 5
+_LOCK_LABEL = threading.local()
+
+
+def call_labelled(label, function, *args):
+    """Run function with label naming this thread's broker-lock holds."""
+    _LOCK_LABEL.name = label
+    try:
+        return function(*args)
+    finally:
+        _LOCK_LABEL.name = None
+
+
+class BrokerLock:
+    """The broker's global RLock. Every request and job phase change waits on it, so holds and waits
+    past SLOW_LOCK_SECONDS are logged with the holder, and each holder's longest hold is kept."""
+    def __init__(self):
+        self._lock, self._local, self.holder = threading.RLock(), threading.local(), None
+
+    def acquire(self, blocking=True, timeout=-1):
+        asked = time.monotonic()
+        if not self._lock.acquire(blocking, timeout):
+            return False
+        depth = getattr(self._local, "depth", 0)
+        self._local.depth = depth + 1
+        if depth == 0:
+            previous = self.holder
+            self.holder = getattr(_LOCK_LABEL, "name", None) or threading.current_thread().name
+            self._local.since = time.monotonic()
+            if self._local.since - asked > SLOW_LOCK_SECONDS:
+                broker_log(f"{self.holder} waited {self._local.since - asked:.1f}s for the broker lock, last held by {previous}")
+        return True
+
+    def release(self):
+        self._local.depth -= 1
+        if self._local.depth == 0:
+            held, holder = time.monotonic() - self._local.since, self.holder
+            if held > SLOW_LOCK_SECONDS:
+                broker_log(f"broker lock held {held:.1f}s by {holder}")
+            with _PERF_LOCK:
+                row = _PERF["locks"].setdefault(holder, {"count": 0, "seconds": 0.0, "max": 0.0})
+                row["count"] += 1
+                row["seconds"] = round(row["seconds"] + held, 3)
+                row["max"] = max(row["max"], round(held, 3))
+        self._lock.release()
+
+    def __enter__(self):
+        return self.acquire()
+
+    def __exit__(self, *exc):
+        self.release()
+
+
+def record_request(name, seconds, read, written, action=None):
+    """Aggregate request cost per validated operation name and action; arguments are never recorded."""
+    key = request_key(name, action)
     with _PERF_LOCK:
         row = _PERF["requests"].setdefault(key, {"count": 0, "seconds": 0.0, "read": 0, "written": 0})
         row["count"] += 1
@@ -2650,7 +2728,8 @@ def write_performance(path):
     """Persist bounded timings atomically for operators; callers ignore failures."""
     with _PERF_LOCK:
         value = {"updated_at": int(time.time()), "steps": list(_PERF["steps"]),
-                 "requests": {k: dict(v) for k, v in _PERF["requests"].items()}}
+                 "requests": {k: dict(v) for k, v in _PERF["requests"].items()},
+                 "locks": {k: dict(v) for k, v in _PERF["locks"].items()}}
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(value, sort_keys=True))
     os.replace(temporary, path)
@@ -2865,12 +2944,25 @@ def job_progress(job, baselines, now):
             "background": early_work(job, now, ids.get("UI build and tests"))}
 
 
+STALL_SECONDS = 900  # buildctl monitor's stall threshold
+
+
 def idle_seconds(job, now):
-    observed = job.get("execution_observation") or {}
-    if job.get("status") != "running" or observed.get("state") == "terminal":
+    """Seconds since a running job last showed activity: command output, progress or heartbeat, a phase
+    change, or a host step ending. Between commands this keeps counting, so a runner that never issues
+    its next command reads as stalled; declared waits and running host steps read 0."""
+    if job.get("status") != "running":
         return 0
+    if any((job.get(key) or {}).get("state") == "waiting" for key in ("resource_waiting", "publication_wait", "review_wait")):
+        return 0
+    timings = job.get("phase_timings") or []
+    if any(HOST_STAGE.get(t.get("phase")) and t.get("seconds") is None and t.get("started_at") for t in timings):
+        return 0
+    observed = job.get("execution_observation") or {}
     last = max([observed.get(k) or 0 for k in ("last_output_at", "last_progress_at", "heartbeat_at")] +
-               [e.get("at") or 0 for e in observed.get("events") or []])
+               [e.get("at") or 0 for e in observed.get("events") or []] +
+               [e.get("at") or 0 for e in job.get("phase_history") or []] +
+               [(t.get("started_at") or 0) + (t.get("seconds") or 0) for t in timings])
     return round(max(0, now - last)) if last else 0
 
 
@@ -2933,9 +3025,9 @@ class Broker:
             os.close(self.lease)
             raise ValueError("development build broker already running")
         self.runner = runner or Runner()
-        self.lock = threading.RLock()
-        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=CONFIG.get("scheduler",{}).get("max_phases",4)if CONFIG.get("scheduler",{}).get("mode")=="enforce"else 1)
-        self.ui_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self.lock = BrokerLock()
+        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=CONFIG.get("scheduler",{}).get("max_phases",4)if CONFIG.get("scheduler",{}).get("mode")=="enforce"else 1,thread_name_prefix="job-runner")
+        self.ui_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1,thread_name_prefix="ui-runner")
         self.deploy_lock = threading.RLock()
         self.active_ui = None
         self.jobs = {}
@@ -6137,15 +6229,17 @@ class Broker:
                     selected = args.get("task_id")
                     if selected is not None and (not isinstance(selected, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", selected)):
                         raise ValueError("bounded task_id required")
+                    rows = [i for i in self.work.values() if self._owned(i, trusted, workspace)
+                            and (selected is None or i["task_id"] == selected)]
+                    # Digest only the rows returned; a tree digest walks the whole task tree.
                     own = [dict(task_id=i["task_id"], status=i["status"], summary=i["summary"],
                                 inputs_sha256=i.get("inputs_sha256"), job_id=i.get("job_id"), last_check_job_id=i.get("last_check_job_id"),
                                 mode=i.get("mode", "shared"), workspace_path=i.get("workspace_path"),
                                 synchronization=i.get("synchronization"),
                                 workspace_inputs_sha256=(self._tree_inputs_digest(self.work_dir / "trees" / i["key"])
                                     if i.get("mode") == "isolated" and i["status"] == "open" else None))
-                           for i in self.work.values() if self._owned(i, trusted, workspace)
-                           and (selected is None or i["task_id"] == selected)]
-                    return {"open_count": len(self._open_work()), "own": own if selected else own[-20:],
+                           for i in (rows if selected else rows[-20:])]
+                    return {"open_count": len(self._open_work()), "own": own,
                             "busy": self.active is not None or self.active_ui is not None}
                 if action not in ("begin", "finish", "abandon", "preflight", "decide"):
                     raise ValueError("unsupported work action")
@@ -7059,6 +7153,22 @@ class Broker:
             job["reason"] = failure + note
             self._save(job)
 
+    def stall_watch(self, now=None):
+        """Log once per quiet spell each running job idle past STALL_SECONDS; progress shows the same reading."""
+        now = time.time() if now is None else now
+        with self.lock:
+            idle = [(job["job_id"], job.get("phase"), idle_seconds(job, now)) for job in self.jobs.values()
+                    if job.get("status") == "running"]
+        logged = self.__dict__.setdefault("_stalls_logged", {})
+        stalled = []
+        for job_id, phase, seconds in idle:
+            spell = round(now - seconds)
+            if seconds > STALL_SECONDS and logged.get(job_id) != spell:
+                logged[job_id] = spell
+                broker_log(f"job {job_id} ({phase}) issued no command and reported nothing for {seconds}s")
+                stalled.append(job_id)
+        return stalled
+
     def request_shutdown(self):
         with self.lock:
             self.stopping = True
@@ -7083,9 +7193,13 @@ class Broker:
 
 
 SLOW_REQUEST_SECONDS = 10
+# Read-only operations an operator caller may share with an identical in-flight request.
+COALESCED_READS = {"v3_build_status", "v3_build_progress", "v3_worker_job", "v3_build_leftovers",
+                   "build_work.status", "build_work.reservations", "v3_build_work.status"}
 
 
 async def serve(broker, listener, bridge_listener=None):
+    inflight = {}
     async def client(reader, writer, bridge=False):
         request = None
         try:
@@ -7115,18 +7229,28 @@ async def serve(broker, listener, bridge_listener=None):
                     "local_caller": True}
             elif request.get("trusted", {}).get("local_caller") is not None or request.get("trusted", {}).get("bridge_caller") is not None:
                 raise ValueError("local or bridge authority cannot be supplied by the app")
+            action = (request.get("arguments") or {}).get("action") if isinstance(request.get("arguments"), dict) else None
+            label = request_key(request.get("name"), action)
             started, read, written = time.monotonic(), *_process_io()
             try:
-                result = await asyncio.to_thread(broker.handle, request)
+                # Operator tools retry after a timeout while the first read still runs; identical reads share it.
+                key = (canonical([request.get("name"), request.get("arguments")])
+                       if not bridge and uid == CONFIG["service_uid"] and label in COALESCED_READS else None)
+                work = inflight.get(key) if key else None
+                if work is None:
+                    work = asyncio.ensure_future(asyncio.to_thread(call_labelled, label, broker.handle, request))
+                    if key:
+                        inflight[key] = work
+                        work.add_done_callback(lambda _, key=key: inflight.pop(key, None))
+                # A caller that disconnects must not cancel work another caller shares.
+                result = await asyncio.shield(work)
             finally:
                 elapsed = time.monotonic() - started
                 if elapsed > SLOW_REQUEST_SECONDS:
                     # Requests share the broker lock, so one slow request stalls the rest; leave a dated trace.
-                    print(time.strftime("%Y-%m-%d %H:%M:%S") + " slow broker request " + str(request.get("name"))[:80]
-                          + " took " + str(round(elapsed, 1)) + "s", file=sys.stderr, flush=True)
+                    broker_log("slow broker request " + label + " took " + str(round(elapsed, 1)) + "s")
                 record_request(request.get("name"), elapsed,
-                               *(now - before for now, before in zip(_process_io(), (read, written))),
-                               action=(request.get("arguments") or {}).get("action") if isinstance(request.get("arguments"), dict) else None)
+                               *(now - before for now, before in zip(_process_io(), (read, written))), action=action)
             response = {"id": request.get("id"), "status": "success", "output": result}
         except Exception as error:
             response = {"id": request.get("id") if isinstance(request, dict) else None,
@@ -7172,22 +7296,26 @@ def main():
         async def notice_postprocess():
             while True:
                 try:
-                    await asyncio.to_thread(broker.reconcile_leftovers)
+                    await asyncio.to_thread(call_labelled, "reconcile_leftovers", broker.reconcile_leftovers)
                 except Exception:
                     print("Leftover notice reconciliation deferred", flush=True)
                 try:
-                    result = await asyncio.to_thread(broker.prune_check_caches)
+                    result = await asyncio.to_thread(call_labelled, "prune_check_caches", broker.prune_check_caches)
                     if result.get("removed"):
                         print("Check-cache pruning: " + str(len(result["removed"])) + " folders removed", flush=True)
                 except Exception:
                     # Fixed diagnostic only: Docker inspection contains private configuration.
                     print("Check-cache pruning deferred", flush=True)
                 try:
-                    commit = await asyncio.to_thread(broker.commit_live_files)
+                    commit = await asyncio.to_thread(call_labelled, "commit_live_files", broker.commit_live_files)
                     if commit:
                         print("Live file edits committed as " + commit[:12], flush=True)
                 except Exception:
                     print("Live file commit deferred", flush=True)
+                try:
+                    await asyncio.to_thread(call_labelled, "stall_watch", broker.stall_watch)
+                except Exception:
+                    print("Stall watch deferred", flush=True)
                 try:
                     await asyncio.to_thread(write_performance, broker.work_dir / "performance.json")
                 except Exception:

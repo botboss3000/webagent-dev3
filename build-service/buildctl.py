@@ -367,6 +367,7 @@ def watch(job_id, step=False, request=call, pause=time.sleep):
 
 STALL_SECONDS = 900
 LATE_EVERY = 300
+UNRESPONSIVE_TRIES = 3  # reply timeouts in a row before monitor reports the broker unresponsive
 PARALLEL_HOLD = 120
 MONITOR_TIMEOUT = 3600
 
@@ -392,7 +393,7 @@ def monitor(task_id=None, job_id=None, request=call, pause=time.sleep, clock=tim
         state_path.write_text(json.dumps(value))
     def show(progress):
         print(status_line(progress) + "\n\n" + stage_table(progress), flush=True)
-    held = None
+    held, quiet = None, 0
     while True:
         if job_id is None:
             task = own_task(task_id, request)
@@ -405,10 +406,15 @@ def monitor(task_id=None, job_id=None, request=call, pause=time.sleep, clock=tim
             job_id = task["job_id"]
         try:
             progress = request("v3_build_progress", {"job_id": job_id})
+            quiet = 0
         except BrokerUnresponsive as error:
-            # The job may be fine; say so rather than report a stalled stage.
-            print(str(error) + "; the job state is unknown, relaunch to check again", flush=True)
-            return DECISION_EXIT
+            # Back off instead of piling more reads on a busy broker; the job may be fine.
+            quiet += 1
+            if quiet >= UNRESPONSIVE_TRIES:
+                print(str(error) + f"; {quiet} tries over backoff, the job state is unknown, relaunch to check again", flush=True)
+                return DECISION_EXIT
+            pause(min(POLL_SECONDS * 2 ** quiet, 120))
+            continue
         status = progress.get("status")
         if status in TERMINAL:
             job = request("v3_worker_job", {"job_id": job_id})
@@ -450,6 +456,12 @@ def monitor(task_id=None, job_id=None, request=call, pause=time.sleep, clock=tim
                 print(f"{'no progress for ' + str(progress.get('idle_seconds')) + 's in' if stall else 'past its normal range:'} "
                       f"{stage.get('id')} {name} at {minutes(seconds)} (late after {minutes(late)})")
                 save(current);show(progress);return DECISION_EXIT
+        idle = progress.get("idle_seconds") or 0
+        if status == "running" and not progress.get("running_stages") and idle > STALL_SECONDS and "between stages" not in stalled:
+            # No command running and nothing reported: the runner never started its next step.
+            stalled.append("between stages")
+            print(f"no command or progress for {idle}s after {progress.get('stage')}")
+            save(current);show(progress);return DECISION_EXIT
         pause(POLL_SECONDS)
 
 
