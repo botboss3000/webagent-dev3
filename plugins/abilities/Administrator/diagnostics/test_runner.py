@@ -110,6 +110,34 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             result=await self.call(action="navigate",path=path)
             self.assertEqual(result["status"],"error",path)
         self.assertEqual((await self.call(action="navigate",path="/api/v3/auth/me"))["status"],"success")
+    async def test_current_app_routes_viewport_page_errors_and_named_rejections(self):
+        origin=browser.ORIGIN
+        await self.call("login_as_current_user")
+        for path in ["/app?tab=app","/app?tab=builds&job_id=job-1","/app?tab=agents&agent=shared_default&agentView=identity&agentScope=sessions",
+                     "/app?tab=app&appView=files&path=/notes/today.md","/app?tab=session-metrics"]:
+            self.assertEqual((await self.call(action="navigate",path=path))["status"],"success",path)
+        for path,reason in [("/app?tab=app&chat_invite=x","Unsupported app route parameters"),("/app?tab=app&embed_auth=x","Unsupported app route parameters"),
+                            ("/app?tab=Agents%20x","Unsupported development page"),("/app?agent=another","Another agent is unavailable")]:
+            result=await self.call(action="navigate",path=path)
+            self.assertEqual(result["output"],"Private browser request rejected: "+reason,path)
+        # A page that drifted outside the routes blocks reads but navigation recovers.
+        driver=self.drivers[0];driver.current_url=origin+"/app?tab=agents&agent=another"
+        self.assertEqual((await self.call(action="read"))["output"],"Private browser request rejected: Another agent is unavailable")
+        self.assertEqual((await self.call(action="navigate",path="/app?tab=app"))["status"],"success")
+        driver.cdp=[]
+        driver.execute_cdp_cmd=lambda command,params:driver.cdp.append((command,params))
+        phone=await self.call(action="viewport",preset="phone")
+        self.assertEqual((phone["width"],phone["height"],phone["navigate_required"]),(390,844,True))
+        self.assertEqual(driver.cdp,[("Emulation.setDeviceMetricsOverride",{"width":390,"height":844,"deviceScaleFactor":1,"mobile":True}),
+            ("Emulation.setTouchEmulationEnabled",{"enabled":True})])
+        self.assertEqual((await self.call(action="viewport",preset="desktop"))["width"],1280)
+        self.assertIn("phone or desktop",(await self.call(action="viewport",preset="tablet"))["output"])
+        self.assertEqual((await self.call(action="viewport"))["status"],"error")
+        driver.get_log=lambda kind:[{"level":"SEVERE","message":"app.js 455 Uncaught TypeError "+self.trusted["cookie"]},
+            {"level":"INFO","message":"ignored"},{"level":"SEVERE","message":"x"*400}]
+        errors=(await self.call(action="read"))["page_errors"]
+        self.assertEqual(errors[0],"app.js 455 Uncaught TypeError [redacted]");self.assertEqual(len(errors),2);self.assertEqual(len(errors[1]),300)
+        self.assertNotIn(self.trusted["cookie"],json.dumps(errors))
     async def test_fresh_read_before_each_input_and_secret_targets_blocked(self):
         self.assertEqual((await self.call(action="click",selector="#button"))["status"],"error")
         read=await self.call(action="read")

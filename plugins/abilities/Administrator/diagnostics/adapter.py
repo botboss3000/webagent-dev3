@@ -34,6 +34,10 @@ IDLE_SECONDS=180
 READ_FRESH_SECONDS=30
 PAGE_TIMEOUT=10
 CALL_TIMEOUT=20
+# URL parameters the app itself writes. Invite and embed authentication parameters stay excluded.
+APP_PARAMS={"tab","agent","agentView","agentScope","appView","session_id","article","path","job_id","theme","window"}
+VIEWPORTS={"phone":(390,844),"desktop":(1280,900)}
+MAX_PAGE_ERRORS=20
 
 # Fixed native scripts only. Model text can enter a CSS selector or literal
 # send_keys argument, never script source. Every browser output is untrusted.
@@ -138,12 +142,12 @@ def validate_path(path,trusted):
     if len(pairs)!=len(dict(pairs)):raise Rejected("Duplicate route parameters")
     query=dict(pairs)
     if parsed.path=="/app":
-        if set(query)-{"tab","agent","agentView","session_id"}:raise Rejected("Unsupported app route parameters")
-        if query.get("tab","chat") not in {"chat","agents","account"}:raise Rejected("Unsupported development page")
+        if set(query)-APP_PARAMS:raise Rejected("Unsupported app route parameters")
+        if any(not 1<=len(value)<=256 for value in query.values()):raise Rejected("Invalid app route parameter")
+        if not re.fullmatch(r"[a-z0-9-]{1,40}",query.get("tab","chat")):raise Rejected("Unsupported development page")
         if "session_id" in query and query["session_id"]!=trusted["session_id"]:raise Rejected("Another chat session is unavailable")
         if "agent" in query and query["agent"]!=trusted["agent_id"]:raise Rejected("Another agent is unavailable")
-        if query.get("agentView","config") not in {"config","model","abilities","modes","prompts"}:
-            raise Rejected("Unsupported agent view")
+        if not re.fullmatch(r"[a-z0-9_-]{1,40}",query.get("agentView","config")):raise Rejected("Unsupported agent view")
         # Avoid an unconstrained restored conversation on a bare app route.
         query.setdefault("session_id",trusted["session_id"])
         return urlunsplit(("","",parsed.path,urlencode(query),""))
@@ -160,15 +164,15 @@ def validate_args(name,args):
     if name in {"login_as_current_user","login_as_current_user_v3"}:
         allowed={"path"};action="login"
     elif name=="dev_browser_action":
-        allowed={"action","path","selector","text","expected_sequence"};action=args.get("action")
-        if action not in {"navigate","read","click","type","screenshot","close"}:raise Rejected("Unsupported browser action")
+        allowed={"action","path","selector","text","preset","expected_sequence"};action=args.get("action")
+        if action not in {"navigate","read","click","type","screenshot","viewport","close"}:raise Rejected("Unsupported browser action")
     elif name=="dev_browser_record":
         allowed={"action"};action=args.get("action")
         if action not in {"start","stop","status"}:raise Rejected("Unsupported recorder action")
     else:raise Rejected("Unknown Diagnostics browser tool")
     if set(args)-allowed:raise Rejected("Unknown browser argument")
     permitted={"login":{"path"},"navigate":{"path"},"read":{"selector"},"click":{"selector"},
-        "type":{"selector","text"},"screenshot":set(),"close":set(),"start":set(),"stop":set(),"status":set()}
+        "type":{"selector","text"},"screenshot":set(),"viewport":{"preset"},"close":set(),"start":set(),"stop":set(),"status":set()}
     for key in list(args):
         if key not in ({"action"}|permitted[action]):
             if key=="expected_sequence" and type(args[key]) is int and args[key]==0:
@@ -183,6 +187,7 @@ def validate_args(name,args):
         raise Rejected("Literal text exceeds limit")
     if action in {"click","type"} and not args.get("selector"):raise Rejected("Action requires a selector")
     if action=="type" and "text" not in args:raise Rejected("Type requires literal text")
+    if action=="viewport" and args.get("preset") not in VIEWPORTS:raise Rejected("Viewport preset must be phone or desktop")
     return action
 def png_metadata(data):
     """Verify PNG bytes and dimensions before storing or serving a private screenshot."""
@@ -239,7 +244,8 @@ def chrome_factory(profile,origin,*,offline=False):
         options.add_argument("--host-resolver-rules=MAP * ~NOTFOUND")
         options.add_argument("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
         options.add_argument("--disable-quic")
-        options.set_capability("goog:loggingPrefs",{"browser":"ALL"})
+    # Reads report uncaught page errors from this console log.
+    options.set_capability("goog:loggingPrefs",{"browser":"ALL"})
     options.add_experimental_option("prefs",{"download_restrictions":3,
         "credentials_enable_service":False,"profile.password_manager_enabled":False})
     service=Service(executable_path="/usr/bin/chromedriver",log_path="/dev/null",
@@ -406,6 +412,17 @@ class BrowserService:
         os.chmod(manifest,0o600)
         return {**meta,"artifact_id":artifact,
             "path":"/api/v3/sessions/"+state.sid+"/administrator/artifacts/"+artifact}
+    def page_errors(self,state):
+        """Uncaught errors and console errors since the last read, credentials redacted before truncation."""
+        try:entries=state.driver.get_log("browser")
+        except Exception:return None
+        errors=[]
+        for entry in entries:
+            if not isinstance(entry,dict) or entry.get("level")!="SEVERE":continue
+            text=str(entry.get("message","")).replace(state.cookie,"[redacted]")
+            if state.csrf:text=text.replace(state.csrf,"[redacted]")
+            errors.append(text[:300])
+        return errors[-MAX_PAGE_ERRORS:]
     def screenshot(self,state):
         """Mask credentials and editable content, capture a PNG, and invalidate the prior observation."""
         try:
@@ -443,7 +460,9 @@ class BrowserService:
             state=self.open(trusted)
         with state.lock:
             if state.cancelled.is_set() or state.expires<=time.time():raise Rejected("Browser authorization expired")
-            state.touched=time.monotonic();self.safe_url(state)
+            # Navigation may leave a page whose URL is outside the routes; other actions may not act on one.
+            state.touched=time.monotonic()
+            if action not in {"login","navigate"}:self.safe_url(state)
             if action in {"login","navigate"}:
                 route=validate_path(args.get("path","/app"),trusted)
                 state.observed=None;state.driver.get(self.origin+route);self.safe_url(state)
@@ -460,6 +479,7 @@ class BrowserService:
                     state.observed_selector=args.get("selector","body");state.observed_at=time.monotonic()
                 else:state.observed=None
                 result["fresh_for_input"]=state.observed is not None
+                result["page_errors"]=self.page_errors(state)
             elif action in {"click","type"}:
                 target=self.fresh_target(state,args["selector"]);state.observed=None
                 try:
@@ -469,6 +489,13 @@ class BrowserService:
                 except Exception:raise Uncertain("Input outcome is uncertain; inspect the page before another action") from None
                 result={"action":action,"applied":True,"read_required":True}
             elif action=="screenshot":result=self.screenshot(state)
+            elif action=="viewport":
+                # Device emulation changes width, touch and mobile media queries; navigate again so boot-time layout reruns.
+                width,height=VIEWPORTS[args["preset"]];phone=args["preset"]=="phone"
+                state.driver.execute_cdp_cmd("Emulation.setDeviceMetricsOverride",{"width":width,"height":height,"deviceScaleFactor":1,"mobile":phone})
+                state.driver.execute_cdp_cmd("Emulation.setTouchEmulationEnabled",{"enabled":phone})
+                state.observed=None
+                result={"viewport":args["preset"],"width":width,"height":height,"navigate_required":True}
             else:raise Rejected("Recorder actions use the recorder interface")
             if state.cancelled.is_set():raise Uncertain("Browser action cancelled; inspect the outcome before retrying")
             return {"status":"success","application":"v3","backend":"private_chromium","session_id":state.sid,
@@ -490,8 +517,9 @@ class BrowserService:
         except (StartupFailure,AuthenticationFailure,CapacityFailure) as error:
             kind={StartupFailure:"browser_startup_failed",AuthenticationFailure:"browser_authentication_failed",CapacityFailure:"browser_capacity"}[type(error)]
             return {"status":"error","error_kind":kind,"output":"Private browser operation failed; credentials were not returned"}
-        except Rejected:
-            return {"status":"error","error_kind":"browser_invalid_request","output":"Private browser request rejected"}
+        except Rejected as error:
+            # Rejection messages are fixed strings in this file, never page or credential text.
+            return {"status":"error","error_kind":"browser_invalid_request","output":"Private browser request rejected: "+str(error)}
         except Exception:
             return {"status":"error","error_kind":"browser_backend_failed","output":"Private browser backend failed; credentials were not returned"}
         finally:

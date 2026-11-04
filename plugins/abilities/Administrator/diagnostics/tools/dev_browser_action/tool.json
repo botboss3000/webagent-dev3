@@ -20,6 +20,7 @@
           "click",
           "type",
           "screenshot",
+          "viewport",
           "close"
         ]
       },
@@ -31,6 +32,14 @@
       },
       "text": {
         "type": "string"
+      },
+      "preset": {
+        "type": "string",
+        "enum": [
+          "phone",
+          "desktop"
+        ],
+        "description": "viewport only: phone emulates a 390x844 touch device, desktop restores 1280x900; navigate again afterwards"
       }
     },
     "required": [
