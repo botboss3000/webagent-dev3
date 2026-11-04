@@ -796,7 +796,7 @@
       "after_input_ms": 120000,
       "allow_device_overrides": false,
       "dim_after_ms": 30000,
-      "dim_opacity": 0.8,
+      "dim_opacity": 0.6,
       "enabled": true,
       "inactive": "off",
       "mobile_only": true

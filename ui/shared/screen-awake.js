@@ -4,7 +4,7 @@ const WAITING = new Set(['waiting_approval', 'recovery']);
 const PREFERENCES = ['enabled', 'after_activity_ms', 'after_input_ms', 'active', 'inactive', 'dim_after_ms', 'dim_opacity'];
 const MODES = new Set(['on', 'dim', 'off']);
 // Missing optional profile values inherit these defaults; malformed explicit values disable the enhancement.
-export const DEFAULT_SCREEN_POLICY = Object.freeze({enabled:true, mobile_only:true, after_activity_ms:120000, after_input_ms:120000, active:'dim', inactive:'off', dim_after_ms:30000, dim_opacity:0.8, allow_device_overrides:false});
+export const DEFAULT_SCREEN_POLICY = Object.freeze({enabled:true, mobile_only:true, after_activity_ms:120000, after_input_ms:120000, active:'dim', inactive:'off', dim_after_ms:30000, dim_opacity:0.6, allow_device_overrides:false});
 const STORAGE_KEY = 'v3.chat.screen-awake';
 /** Reject malformed settings rather than allowing an accidental unlimited display lease. */
 export function screenPolicy(value) {
