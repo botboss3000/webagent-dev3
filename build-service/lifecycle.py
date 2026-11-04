@@ -29,7 +29,12 @@ def installation_entry(folder):
   if candidate.is_symlink():raise PermissionError("Installer entry symlink")
   if candidate.is_file():return candidate
  raise FileNotFoundError("Reviewed lifecycle installer unavailable")
-def stale_tree(tree,installed):
+def committed_blobs(checkout,name):
+ """Git blob ids build-service/<name> has had in the checkout's history up to HEAD; empty when git fails."""
+ out=subprocess.run(["git","-c","safe.directory="+str(checkout),"-C",str(checkout),"log","--format=","--raw","--no-abbrev",
+                     "HEAD","--","build-service/"+name],capture_output=True,text=True)
+ return {field for line in out.stdout.splitlines() for field in line.split()[2:4]} if out.returncode==0 else set()
+def stale_tree(tree,installed,history=lambda name:set()):
  """Broker files a tree would revert: it differs from the installed release and did not start from it.
 
  A task tree is cut from the checkout at begin (baseline.tar). If another release
@@ -46,7 +51,10 @@ def stale_tree(tree,installed):
   candidate=tree/"v3/build-service"/name
   if not path.is_file() or path.is_symlink() or not candidate.is_file():continue
   current=path.read_bytes()
-  if candidate.read_bytes()!=current and base.get(name)!=current:stale.append(name)
+  # A release can commit broker files without installing them; a tree cut after that commit
+  # moves forward from the installed bytes when they are an earlier committed version.
+  blob=hashlib.sha1(b"blob %d\0"%len(current)+current).hexdigest()
+  if candidate.read_bytes()!=current and base.get(name)!=current and blob not in history(name):stale.append(name)
  return stale
 BOOT_PIN="50-reviewed-broker-release.conf"
 def boot_pin(value,unit_root="/etc/systemd/system"):
@@ -102,7 +110,7 @@ def install(args):
  if args.install_tree and args.config and Path(args.config).exists():
   installed=Path(json.loads(Path(args.config).read_text()).get("service_dir",""))
   if installed.is_dir():
-   stale=stale_tree(reviewed.parent.parent,installed)
+   stale=stale_tree(reviewed.parent.parent,installed,lambda name:committed_blobs(checkout,name))
    if stale and not args.allow_stale_tree:
     raise RuntimeError("Tree would revert the installed broker release ("+installed.name[:8]+") in: "+", ".join(stale)
                        +"; begin a fresh task from checkout HEAD and re-apply, or pass --allow-stale-tree for a deliberate rollback")

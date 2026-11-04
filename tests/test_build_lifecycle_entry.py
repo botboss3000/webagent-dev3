@@ -49,6 +49,12 @@ class StaleTreeGuardTests(unittest.TestCase):
     def test_tree_that_already_carries_the_installed_bytes_passes(self):
         tree,release=self.layout(base={"host.py":b"old"},tree={"host.py":b"theirs"},installed={"host.py":b"theirs"})
         self.assertEqual(lifecycle.stale_tree(tree,release),[])
+    def test_tree_after_an_uninstalled_committed_release_passes(self):
+        import hashlib
+        blob=hashlib.sha1(b"blob 6\0theirs").hexdigest()
+        tree,release=self.layout(base={"host.py":b"newer"},tree={"host.py":b"newer"},installed={"host.py":b"theirs"})
+        self.assertEqual(lifecycle.stale_tree(tree,release,lambda name:{blob} if name=="host.py" else set()),[])
+        self.assertEqual(lifecycle.stale_tree(tree,release,lambda name:set()),["host.py"])
     def test_install_refuses_unless_explicitly_overridden(self):
         source=(Path(__file__).resolve().parents[1]/"build-service/lifecycle.py").read_text()
         self.assertIn("--allow-stale-tree",source)
