@@ -574,7 +574,7 @@
       "font_size_px": 17,
       "user": {
         "_instructions": "Pixel padding for each side and radius for each corner. Values are independent by role. Surface profiles in this chat.json override chat_common. Missing values use built-in defaults; radius_px is an optional per-role all-corners fallback. background_opacity: 0 to 1, background only; null/omitted preserves color alpha. backdrop_blur_px: nonnegative pixels; null/omitted disables blur. Independent role/surface values update live.",
-        "backdrop_blur_px": 8,
+        "backdrop_blur_px": null,
         "background_opacity": 0.5,
         "bg_dark": "#2563eb",
         "bg_light": "#93c5fd",
