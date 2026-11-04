@@ -597,6 +597,39 @@ async fn new_message_supersedes_paused_run_but_not_uncertain_work() {
     assert_eq!(app.run(next_id).await.unwrap()["status"], "paused");
 }
 
+// With no work left, the user's next message is the resume for a held queue.
+#[tokio::test]
+async fn new_message_resumes_held_queue_after_run_ends() {
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    let (_, Json(first)) = send(
+        State(app.clone()),
+        Path(sid.clone()),
+        Json(json!({"client_message_id":"one","text":"hello"})),
+    )
+    .await
+    .unwrap();
+    let mut failed = app.run(first["run_id"].as_str().unwrap()).await.unwrap();
+    failed["status"] = json!("failed");
+    app.save(&mut failed).await.unwrap();
+    app.store
+        .followup_hold(
+            &sid,
+            "Previous run stopped or failed; resume the queue when ready",
+        )
+        .await
+        .unwrap();
+    let (_, Json(second)) = send(
+        State(app.clone()),
+        Path(sid.clone()),
+        Json(json!({"client_message_id":"two","text":"carry on"})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(app.store.followup_queue(&sid).await.unwrap()["held"], false);
+    assert!(second["run_id"].is_string(), "message dispatched, not held");
+}
+
 // A bare stop phrase stops in-flight work without recording a message; idle sessions
 // receive it as an ordinary message.
 #[tokio::test]

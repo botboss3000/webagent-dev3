@@ -75,7 +75,23 @@ pub(crate) async fn send(
     let participation = app.store.participation_state(&id).await?;
     let legacy = participation["active"] == true
         && !crate::shared_chat::uses_shared_queue(&app, &id).await?;
-    if legacy && !app.shutoff().await? {
+    if legacy {
+        // Conditions that block every run refuse the message now rather than queue it
+        // silently behind a hold the user cannot see.
+        if app.shutoff().await? {
+            return Err(conflict("Global shutoff is active"));
+        }
+        if !app
+            .store
+            .live_access(app.store.current_user_id(), &agent_id)
+            .await?
+            .admitted()
+        {
+            return Err(ApiError(
+                StatusCode::FORBIDDEN,
+                "Agent access unavailable".into(),
+            ));
+        }
         supersede_stopped_runs(&app, &id, request_id).await?;
     }
     if legacy && crate::followup_queue::should_queue(&app, &id).await? {
@@ -178,15 +194,14 @@ async fn typed_stop(
         .await?;
     Ok(Some(result))
 }
-/// A new message replaces paused or stopped work in its conversation, so the message
-/// (and any queue held behind that work) is delivered instead of waiting on it.
-/// Uncertain tool outcomes still need explicit recovery and are never replaced.
+/// A new message replaces paused or stopped work in its conversation, and is the user's
+/// resume for a held queue once no work remains, so the message (and the queue behind
+/// it) is delivered instead of waiting. Uncertain work still needs explicit recovery.
 async fn supersede_stopped_runs(
     app: &App,
     sid: &str,
     request_id: &str,
 ) -> std::result::Result<(), ApiError> {
-    let mut superseded = false;
     for view in app.store.active_runs().await? {
         if view["session_id"] != sid
             || !matches!(status(&view), "paused" | "stopped")
@@ -208,10 +223,15 @@ async fn supersede_stopped_runs(
         app.store
             .atomic_docs_event(vec![(key("run", run_id), run)], sid, "run_status", &result)
             .await?;
-        superseded = true;
     }
     let queue = app.store.followup_queue(sid).await?;
-    if superseded && queue["held"] == true {
+    let busy = app
+        .store
+        .active_runs()
+        .await?
+        .iter()
+        .any(|r| r["session_id"] == sid);
+    if queue["held"] == true && !busy {
         let revision = queue["revision"].as_u64().unwrap_or(0);
         let request = format!("supersede:{request_id}");
         let body = json!({"client_request_id":request,"expected_revision":revision});

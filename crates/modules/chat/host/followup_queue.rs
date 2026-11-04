@@ -6,6 +6,36 @@ fn successor_id(app: &App, sid: &str, entry: &Value) -> Result<String> {
 pub(crate) use webagent_chat::followup::{public, public_entry};
 /// Why a chat's queue waits while one of its runs has an uncertain write to review.
 pub(crate) const RECOVERY_HOLD: &str = "Existing write outcome requires recovery";
+const SHUTOFF_HOLD: &str = "Global shutoff is active";
+const ACCESS_HOLD: &str = "Agent access unavailable";
+const MODEL_HOLD: &str = "Model unavailable; restore access then resume queue";
+const INTERRUPT_MODEL_HOLD: &str = "Interrupted work is held because the model is unavailable";
+/// Retired: a waiting run is no longer recorded as a hold. Stored queues may still carry it.
+const EXISTING_WORK_HOLD: &str = "Existing work must be resolved before queue delivery";
+/// Condition holds lift once their cause is gone; decision holds wait for the user's
+/// next message or an explicit resume. Reached only with no active run and no shutoff.
+async fn condition_cleared(app: &App, q: &Value) -> Result<bool> {
+    Ok(match q["reason"].as_str().unwrap_or("") {
+        EXISTING_WORK_HOLD | SHUTOFF_HOLD => true,
+        ACCESS_HOLD | MODEL_HOLD | INTERRUPT_MODEL_HOLD => {
+            let Some(e) = q["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["status"] == "pending" && e["review_status"] == "acceptable")
+            else {
+                return Ok(false);
+            };
+            let agent = e["agent_id"].as_str().unwrap_or("shared_default");
+            app.store
+                .live_access(app.store.current_user_id(), agent)
+                .await?
+                .admitted()
+                && app.run_candidate(&e["template"]).await.is_ok()
+        }
+        _ => false,
+    })
+}
 pub(crate) async fn should_queue(app: &App, s: &str) -> Result<bool> {
     let q = app.store.followup_queue(s).await?;
     Ok(q["held"] == true
@@ -200,27 +230,20 @@ pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
             }
         }
         if app.shutoff().await? {
-            app.store
-                .followup_hold(&s, "Global shutoff is active")
-                .await?;
+            app.store.followup_hold(&s, SHUTOFF_HOLD).await?;
             continue;
         }
         let active = app.store.active_runs().await?;
         if let Some(r) = active.iter().find(|r| r["session_id"] == s) {
-            if matches!(
-                status(r),
-                "stopped" | "paused" | "recovery" | "waiting_external"
-            ) {
-                app.store
-                    .followup_hold(
-                        &s,
-                        if r["uncertain"] == true {
-                            RECOVERY_HOLD
-                        } else {
-                            "Existing work must be resolved before queue delivery"
-                        },
-                    )
-                    .await?;
+            // Delivery simply waits for live work; only an uncertain write is recorded
+            // as a hold, because it needs a decision before anything runs again.
+            if r["uncertain"] == true
+                && matches!(
+                    status(r),
+                    "stopped" | "paused" | "recovery" | "waiting_external"
+                )
+            {
+                app.store.followup_hold(&s, RECOVERY_HOLD).await?;
             }
             continue;
         }
@@ -270,6 +293,11 @@ pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
             }
         }
         if q["held"] == true {
+            if !condition_cleared(app, &q).await? {
+                continue;
+            }
+            let reason = q["reason"].as_str().unwrap_or("").to_owned();
+            app.store.followup_release_hold(&s, &reason).await?;
             continue;
         }
         let latest = app.store.followup_last_run(&s).await?;
@@ -308,9 +336,7 @@ pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
             .live_access(app.store.current_user_id(), agent)
             .await?;
         if !access.admitted() {
-            app.store
-                .followup_hold(&s, "Agent access unavailable")
-                .await?;
+            app.store.followup_hold(&s, ACCESS_HOLD).await?;
             continue;
         }
         if active.len() >= app.runtime.read().await.scheduler.max_unresolved_runs
@@ -320,9 +346,7 @@ pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
         }
         let mut next = e["template"].clone();
         if app.run_candidate(&next).await.is_err() {
-            app.store
-                .followup_hold(&s, "Model unavailable; restore access then resume queue")
-                .await?;
+            app.store.followup_hold(&s, MODEL_HOLD).await?;
             continue;
         }
         next["id"] = json!(successor_id(app, &s, &e)?);
@@ -392,5 +416,44 @@ mod lifecycle_tests {
                 .is_err());
         }
         assert!(app.store.active_runs().await.unwrap().is_empty());
+    }
+    // Condition holds lift on their own once the cause is gone; decision holds stay.
+    #[tokio::test]
+    async fn condition_holds_release_without_resume_and_decision_holds_stay() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let sid = "held";
+        app.store
+            .put(
+                &format!("session:{sid}"),
+                &json!({"id":sid,"status":"active","agent_id":"shared_default"}),
+            )
+            .await
+            .unwrap();
+        let e = json!({"id":"message_held","message_id":"user:message_held","session_id":sid,"agent_id":"shared_default","revision":0,"choice":"queue","status":"pending","review_status":"acceptable","content":"pending","context_content":"pending","attachments":[]});
+        app.store
+            .followup_submit(sid, e, vec![], "submit", "digest", &json!({}))
+            .await
+            .unwrap();
+        app.store
+            .put("control", &json!({"shutoff":false}))
+            .await
+            .unwrap();
+        for reason in [EXISTING_WORK_HOLD, SHUTOFF_HOLD] {
+            app.store.followup_hold(sid, reason).await.unwrap();
+            scheduler_tick(&app).await.unwrap();
+            assert_eq!(app.store.followup_queue(sid).await.unwrap()["held"], false);
+        }
+        for reason in [
+            RECOVERY_HOLD,
+            "Previous run stopped or failed; resume the queue when ready",
+        ] {
+            app.store.followup_hold(sid, reason).await.unwrap();
+            scheduler_tick(&app).await.unwrap();
+            let q = app.store.followup_queue(sid).await.unwrap();
+            assert_eq!(
+                (q["held"].clone(), q["reason"].clone()),
+                (json!(true), json!(reason))
+            );
+        }
     }
 }
