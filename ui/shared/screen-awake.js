@@ -198,8 +198,13 @@ export function mountScreenAwake(root, {getProfile = () => null} = {}) {
   const overlay = document.createElement('div'); overlay.dataset.screenDim = ''; overlay.setAttribute('aria-hidden', 'true');
   Object.assign(overlay.style, {position:'fixed', inset:'0', background:'#000', pointerEvents:'none', zIndex:'2147483647', display:'none'});
   document.body.append(overlay);
+  // The OS status bar follows theme-color and sits outside the overlay: black it out while dimmed, restore after.
+  // shortcut: a system theme flip during a dim is undone on restore, fixed by the next applyAccountTheme.
+  const bar = document.querySelector('meta[name="theme-color"]'); let barColor = null;
   const controller = createScreenAwake({config:policy, setDim:(dim, opacity) => {
     overlay.style.opacity = String(opacity); overlay.style.display = dim ? 'block' : 'none';
+    if (!bar || dim === (barColor !== null)) return;
+    if (dim) { barColor = bar.content; bar.content = '#000000'; } else { bar.content = barColor; barColor = null; }
   }});
   /** Apply preferences even if persistence is blocked, and report the true storage result to the user. */
   function save(next) {
