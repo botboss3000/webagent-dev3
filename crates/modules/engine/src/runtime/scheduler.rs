@@ -558,6 +558,20 @@ impl<
                                         .await
                                     {
                                         tracing::warn!(run_id=%id,"Run interrupted: {}",error);
+                                        let _settle_guard =
+                                            crate::send_future(cloned.handles.gate.lock()).await;
+                                        if let Ok(mut failed) =
+                                            crate::send_future(cloned.run(&id)).await
+                                        {
+                                            if note_interrupt(&mut failed, &error.to_string()) {
+                                                if let Err(error) =
+                                                    crate::send_future(cloned.save(&mut failed))
+                                                        .await
+                                                {
+                                                    tracing::warn!(run_id=%id,"Interrupt note not saved: {error}");
+                                                }
+                                            }
+                                        }
                                     }
                                     // Join paths that return early (approval and parallel tools)
                                     // also settle durable interruption after their awaits finish.
@@ -612,5 +626,61 @@ impl<
             modules.abort();
             heartbeat.abort();
         }
+    }
+}
+
+/// Failed executions of one turn before the run pauses instead of being recovered again.
+const MAX_INTERRUPTS: u64 = 3;
+
+/// Record a failed execution on an active run so the chat shows it. A run that fails the same
+/// turn `MAX_INTERRUPTS` times pauses with the error; a new turn starts the count again.
+fn note_interrupt(run: &mut Value, error: &str) -> bool {
+    if !matches!(status(run), "running" | "queued") {
+        return false;
+    }
+    let count = if run["interrupts"]["turn"] == run["turns"] {
+        run["interrupts"]["count"].as_u64().unwrap_or(0) + 1
+    } else {
+        1
+    };
+    run["interrupts"] = json!({"turn":run["turns"],"count":count});
+    if count >= MAX_INTERRUPTS {
+        run["status"] = json!("paused");
+        run["error"] = json!(format!("Paused after {count} failed attempts: {error}"));
+    } else {
+        run["error"] = json!(format!(
+            "Retrying ({count} of {MAX_INTERRUPTS} attempts failed): {error}"
+        ));
+    }
+    true
+}
+
+#[cfg(test)]
+mod interrupt_tests {
+    use super::note_interrupt;
+    use serde_json::json;
+
+    #[test]
+    fn repeated_failures_on_one_turn_pause_the_run() {
+        let mut run = json!({"status":"running","turns":4});
+        assert!(note_interrupt(&mut run, "boom"));
+        assert_eq!(run["error"], "Retrying (1 of 3 attempts failed): boom");
+        assert!(note_interrupt(&mut run, "boom"));
+        assert_eq!(run["status"], "running");
+        assert!(note_interrupt(&mut run, "boom"));
+        assert_eq!(run["status"], "paused");
+        assert_eq!(run["error"], "Paused after 3 failed attempts: boom");
+    }
+
+    #[test]
+    fn a_new_turn_restarts_the_count_and_settled_runs_are_left_alone() {
+        let mut run = json!({"status":"running","turns":4,"interrupts":{"turn":4,"count":2}});
+        run["turns"] = json!(5);
+        note_interrupt(&mut run, "boom");
+        assert_eq!(run["interrupts"]["count"], 1);
+        assert_eq!(run["status"], "running");
+        let mut cancelled = json!({"status":"cancelled","turns":5});
+        assert!(!note_interrupt(&mut cancelled, "boom"));
+        assert!(cancelled.get("error").is_none());
     }
 }

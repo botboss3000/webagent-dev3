@@ -317,7 +317,8 @@ async function stopAll(){const id=session;progress.hold(STOPPED,stoppedRun);cons
 function failedRunMessages(items){
   const target=$('chat-messages-inner');
   // Error stops share the failed notice; uncertain outcomes keep their recovery controls.
-  const failed=items.filter(run=>!run.uncertain&&(run.status==='failed'||(['paused','stopped'].includes(run.status)&&run.error)));
+  const retrying=run=>['queued','running'].includes(run.status)&&run.error?.startsWith('Retrying');
+  const failed=items.filter(run=>!run.uncertain&&(run.status==='failed'||retrying(run)||(['paused','stopped'].includes(run.status)&&run.error)));
   const ids=new Set(failed.map(run=>run.id));
   for(const row of target.querySelectorAll('[data-failed-run-id]'))if(!ids.has(row.dataset.failedRunId))row.remove();
   for(const run of failed){
@@ -328,6 +329,11 @@ function failedRunMessages(items){
       const turns=[...target.children].filter(node=>node.dataset.turnId===run.id);
       const after=turns.at(-1);
       target.insertBefore(row,after?.nextSibling||null);
+    }
+    if(retrying(run)){
+      row.firstChild.querySelector('strong').textContent=run.error;
+      row.firstChild.querySelector('.chat-action-message').textContent='The run restarts automatically.';
+      continue;
     }
     row.firstChild.querySelector('strong').textContent=(run.status==='failed'?'Run failed':'Stopped')+(run.error?' — '+run.error:'');
     row.firstChild.querySelector('.chat-action-message').textContent='To continue, write a new message in the chat.';

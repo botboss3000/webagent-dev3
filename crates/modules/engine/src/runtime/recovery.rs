@@ -424,11 +424,18 @@ impl<
                             }
                         }
                     }
-                    run["error"] = json!(if !resume {
-                        "Automatic startup resume is disabled; explicit resume required"
-                    } else {
-                        "Recovered after interruption"
-                    });
+                    // Keep a recorded failure visible while the run retries.
+                    if !resume
+                        || !run["error"]
+                            .as_str()
+                            .is_some_and(|e| e.starts_with("Retrying"))
+                    {
+                        run["error"] = json!(if !resume {
+                            "Automatic startup resume is disabled; explicit resume required"
+                        } else {
+                            "Recovered after interruption"
+                        });
+                    }
                 }
                 user_app.save_override(&mut run).await?;
             }

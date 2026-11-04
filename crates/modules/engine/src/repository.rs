@@ -436,13 +436,29 @@ impl<
                 let segment_id = payload["segment_id"]
                     .as_str()
                     .ok_or_else(|| anyhow!("Compaction segment identity missing"))?;
-                if source.is_empty()
-                    || source.len() != payload["dropped_items"].as_u64().unwrap_or(0) as usize
-                    || source_bytes.len() > 262_144
-                    || crate::digest(source) != source_digest
-                    || segment_id != format!("{}-{}", rid, run["compactions"].as_u64().unwrap_or(0))
-                {
-                    return Err(anyhow!("Invalid compaction segment provenance"));
+                let dropped = payload["dropped_items"].as_u64().unwrap_or(0) as usize;
+                let expected_segment =
+                    format!("{}-{}", rid, run["compactions"].as_u64().unwrap_or(0));
+                // Name the failed check: the rejected payload is rolled back with this transaction.
+                let rejected = if source.is_empty() || source.len() != dropped {
+                    Some(format!(
+                        "{} source items for {dropped} dropped",
+                        source.len()
+                    ))
+                } else if source_bytes.len() > 262_144 {
+                    Some(format!(
+                        "source is {} bytes, over 262144",
+                        source_bytes.len()
+                    ))
+                } else if crate::digest(source) != source_digest {
+                    Some("source digest mismatch".to_owned())
+                } else if segment_id != expected_segment {
+                    Some(format!("segment {segment_id}, expected {expected_segment}"))
+                } else {
+                    None
+                };
+                if let Some(reason) = rejected {
+                    return Err(anyhow!("Invalid compaction segment provenance: {reason}"));
                 }
                 let created_at = crate::now();
                 // The discarded prefix is kept only in memory. Recall and events
