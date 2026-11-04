@@ -306,6 +306,8 @@ export function applyChatConfig() {
   if (!profile) return; window.__chatKeyboardMotionConfigure?.(profile.composer?.keyboard_motion);
   // Notify display consumers even when layout is cached; adoption never counts as new chat activity.
   document.dispatchEvent(new Event('v3:chat-config-applied'));
+  // The chat panel mounts on demand; configuration can be adopted before its surface exists.
+  if (!byId('chat-input') || !byId('chat-header')) return;
   const surface = surfaceName();
   const focused = document.activeElement;
   const inComposer = byId('chat-input-area')?.contains(focused) || focused?.closest('.v3-context-panel:not([hidden]), .v3-chat-model-list:not([hidden])');
@@ -353,10 +355,10 @@ export async function initChatConfig({config:provided,root=null} = {}) {
   // Cancel detached layout work synchronously before fetching component settings.
   if (footerNodes && footerNodes.input !== byId('chat-input')) { disposeChatPillLayout(footerNodes.pill); headerNodes=null; footerNodes=null; footerControls=null; currentSurface=''; currentFooterMode=''; }
   await loadSessionDropdownConfig();
-  if (generation !== configGeneration) return;
+  if (generation !== configGeneration) return null;
   configProvided = !!provided; liveOptions = null;
   const data = provided || await fetchUiConfig();
-  if (generation !== configGeneration || !adoptUiConfig(data)) return;
+  if (generation !== configGeneration || !adoptUiConfig(data)) return null;
   applyChatConfig();
   const panel = byId('chat-panel');
   if (observedPanel !== panel) {
@@ -396,4 +398,6 @@ export async function initChatConfig({config:provided,root=null} = {}) {
     document.addEventListener('focusout', () => setTimeout(applyChatConfig, 0));
     document.addEventListener('input', event => { if(event.target === byId('chat-input'))applyChatConfig(); });
   }
+  // Boot reuses this response for the first layout instead of fetching ui-config twice.
+  return data;
 }
