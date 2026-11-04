@@ -1,4 +1,5 @@
 """Frozen task contexts and versioned development release mounts."""
+import concurrent.futures
 import fnmatch
 import io
 import importlib.util
@@ -171,27 +172,34 @@ def archive(files, validate):
     return blob
 
 
+def _fsync_path(path, flags=os.O_RDONLY):
+    fd = os.open(path, flags | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def extract(root, blob, validate):
     if root.exists():
         raise ValueError("release snapshot already exists")
     root.mkdir(parents=True, mode=0o700)
+    written = []
     for name, (mode, body) in entries(blob, validate).items():
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("xb") as output:
             output.write(body)
         path.chmod(mode)
-        with path.open("rb") as stream:
-            os.fsync(stream.fileno())
-    # Persist staged source directories before any release pointer selects them.
-    for directory in sorted((p for p in root.rglob("*") if p.is_dir()),
-                            key=lambda p:len(p.parts),reverse=True):
-        fd=os.open(directory,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
-        try:os.fsync(fd)
-        finally:os.close(fd)
-    fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
-    try:os.fsync(fd)
-    finally:os.close(fd)
+        written.append(path)
+    directories = [p for p in root.rglob("*") if p.is_dir()]
+    # Every file, then every directory, is fsynced before return, as before. Issued together, the
+    # journal commits them in groups: ~1,600 files one at a time took ~16 s (2026-11-03).
+    with concurrent.futures.ThreadPoolExecutor(16) as pool:
+        list(pool.map(_fsync_path, written))
+        # Persist staged source directories before any release pointer selects them.
+        list(pool.map(lambda directory: _fsync_path(directory, os.O_RDONLY | os.O_DIRECTORY), directories))
+    _fsync_path(root, os.O_RDONLY | os.O_DIRECTORY)
 
 
 # Shared UI archive names and their source: v3/build-service/shared-ui/<name>, the

@@ -1753,6 +1753,20 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(2, parse.call_count)  # base (also live) and task, once each
 
+    def test_extract_fsyncs_every_file_and_directory_before_returning(self):
+        blob = context(extra={"v3/src/a/b/one.rs": "1", "v3/src/a/two.rs": "2"})
+        synced = []
+        real = os.fsync
+        def fsync(fd):
+            synced.append(os.readlink(f"/proc/self/fd/{fd}")); real(fd)
+        root = Path(self.temp.name) / "extracted"
+        with patch.object(host.release.os, "fsync", side_effect=fsync):
+            host.release.extract(root, blob, host.context_digest)
+        expected = {str(p) for p in root.rglob("*")} | {str(root)}
+        self.assertEqual(expected, set(synced))
+        self.assertEqual(len(expected), len(synced))  # once each
+        self.assertEqual(str(root), synced[-1])  # the root last, after everything under it
+
     def test_status_views_only_the_three_newest_owned_jobs(self):
         # Regression: status once viewed (scrubbed) every owned job before keeping three, holding the lock ~30s.
         for index in range(40):
