@@ -22,6 +22,9 @@ pub struct Config {
     pub max_source_bytes: usize,
     #[serde(default = "default_tool_result_preview_bytes")]
     pub tool_result_preview_bytes: usize,
+    /// Larger tool outputs skip duplicate detection, so they replay as previews.
+    #[serde(default = "default_dedup_max_output_bytes")]
+    pub dedup_max_output_bytes: usize,
     #[serde(default = "default_search_output_bytes")]
     pub search_output_bytes: usize,
     #[serde(default = "default_search_line_bytes")]
@@ -35,9 +38,16 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytes_per_token: Option<f64>,
 }
+/// Last-resort summary-source preview size: the receipt keeps status, size and digest.
+const STUB_PREVIEW_BYTES: usize = 1024;
 /// Preserve legacy preview limits when an older policy omits this optional setting.
 fn default_tool_result_preview_bytes() -> usize {
     8192
+}
+/// Bound full duplicate-detection replays when an older policy omits this setting.
+pub const DEFAULT_DEDUP_MAX_OUTPUT_BYTES: usize = 32768;
+fn default_dedup_max_output_bytes() -> usize {
+    DEFAULT_DEDUP_MAX_OUTPUT_BYTES
 }
 /// Keep older policies compatible with the bounded search-output projection.
 fn default_search_output_bytes() -> usize {
@@ -63,6 +73,7 @@ impl Config {
             || !(1..=65536).contains(&self.summary_reserve_bytes)
             || !(1..=262144).contains(&self.max_source_bytes)
             || !(1024..=65536).contains(&self.tool_result_preview_bytes)
+            || !(self.tool_result_preview_bytes..=262144).contains(&self.dedup_max_output_bytes)
             || !(4096..=262144).contains(&self.search_output_bytes)
             || !(128..=8192).contains(&self.search_line_bytes)
             || self.search_line_bytes > self.search_output_bytes
@@ -94,15 +105,29 @@ impl Config {
     pub fn prompt(&self, plan: &Plan) -> Result<String> {
         self.prompt_source(&plan.source, true)
     }
-    /// Omit opaque reasoning and substitute transcript text last to prevent template expansion.
+    /// Summary-model transcript JSON without opaque reasoning. When the full outputs exceed the
+    /// source limit, large tool outputs become previews, then stubs, so that one oversized tool
+    /// exchange cannot block every fold. The plan itself always keeps the exact history.
+    pub fn summary_source(&self, input: &[Value]) -> Result<String> {
+        let mut items: Vec<Value> = input
+            .iter()
+            .filter(|item| item["type"] != "reasoning")
+            .cloned()
+            .collect();
+        let mut source = serde_json::to_string(&items)?;
+        for preview_bytes in [self.tool_result_preview_bytes, STUB_PREVIEW_BYTES] {
+            if source.len() <= self.max_source_bytes {
+                break;
+            }
+            project_tool_results(&mut items, preview_bytes)?;
+            source = serde_json::to_string(&items)?;
+        }
+        Ok(source)
+    }
+    /// Substitute transcript text last to prevent template expansion.
     /// Source limits apply to dispatched summaries; measurement may inspect larger histories.
     pub fn prompt_source(&self, input: &[Value], enforce_source_limit: bool) -> Result<String> {
-        let source = serde_json::to_string(
-            &input
-                .iter()
-                .filter(|item| item["type"] != "reasoning")
-                .collect::<Vec<_>>(),
-        )?;
+        let source = self.summary_source(input)?;
         if enforce_source_limit && source.len() > self.max_source_bytes {
             bail!("Context summary source is too large");
         }
@@ -432,10 +457,21 @@ fn plan_measured(
     let mut active_boundary = None;
     // Large histories may need several small folds before the final tail fits.
     let mut staged_boundary = None;
+    // Size cut points by the smallest summary source (stubbed outputs, no reasoning);
+    // `summary_source` picks the fullest version that fits for the actual prompt.
+    let mut stubbed = input.to_vec();
+    project_tool_results(&mut stubbed, STUB_PREVIEW_BYTES)?;
     let mut prefix = vec![2usize; input.len() + 1];
     for i in 0..input.len() {
+        let size = if stubbed[i]["type"] == "reasoning" {
+            0
+        } else if stubbed[i] == input[i] {
+            sizes[i]
+        } else {
+            encoded_len(&stubbed[i])?
+        };
         prefix[i + 1] = prefix[i]
-            .checked_add(sizes[i] + usize::from(i > 0))
+            .checked_add(size + usize::from(i > 0))
             .ok_or_else(|| anyhow!("Context size overflow"))?;
     }
     let source_fits = |index: usize| -> Result<bool> {
@@ -570,7 +606,7 @@ pub fn validate_external_plan(
         || plan.drop_until > input.len()
         || input[..plan.drop_until] != plan.source
         || digest(&input[..plan.drop_until])? != plan.source_digest
-        || crate::context_accounting::json_size(&plan.source)? > config.max_source_bytes
+        || config.summary_source(&plan.source)?.len() > config.max_source_bytes
     {
         bail!("Stale or invalid context compaction plan");
     }
@@ -625,5 +661,48 @@ mod tests {
         let text = serde_json::to_string(&json!({ "bytes_per_token": ratio })).unwrap();
         let parsed: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(parsed["bytes_per_token"].as_f64(), Some(ratio));
+    }
+
+    /// One parallel exchange larger than the summary-source limit once stalled every fold
+    /// (`no_safe_boundary`); its outputs now enter the summary as previews or stubs.
+    #[test]
+    fn oversized_tool_exchange_folds_with_shortened_outputs() {
+        let config: super::Config = serde_json::from_value(json!({
+            "schema_version": 1, "trigger_tokens": 10000, "tail_tokens": 40, "summary_tokens": 20,
+            "characters_per_token": 4, "summary_reserve_bytes": 300, "max_source_bytes": 262144,
+            "max_summary_bytes": 300,
+            "summary_prefix": "Earlier conversation summary (background context, not a new request):\n",
+            "active_summary_prefix": "Active task progress summary (background context, not a new request):\n",
+            "summary_prompt": "Summarize under {summary_characters} characters. Conversation JSON: {source}"
+        }))
+        .unwrap();
+        let mut input = vec![json!({"role": "user", "content": "read the receipts"})];
+        for id in ["a", "b", "c"] {
+            input.push(
+                json!({"type": "function_call", "call_id": id, "name": "file_read",
+                "arguments": "{}"}),
+            );
+        }
+        for id in ["a", "b", "c"] {
+            input.push(json!({"type": "function_call_output", "call_id": id,
+                "output": "x".repeat(170_000)}));
+        }
+        input.push(json!({"role": "user", "content": "next"}));
+        let plan = super::plan_rolling(&input, 4 * 1024 * 1024, &config)
+            .unwrap()
+            .unwrap();
+        assert_eq!(plan.drop_until, 7);
+        let prompt = config.prompt(&plan).unwrap();
+        assert!(prompt.contains("context_truncated") && prompt.len() < 262144);
+        assert_eq!(
+            super::apply_summary(&input, &plan, "done").unwrap().len(),
+            2
+        );
+        // A source that already fits is summarized in full.
+        let small = &input[..2];
+        assert_eq!(
+            config.summary_source(small).unwrap(),
+            serde_json::to_string(small).unwrap()
+        );
     }
 }

@@ -188,12 +188,15 @@ mod tests {
             json!({"type":"function_call_output","call_id":"second","output":"y".repeat(3500)}),
             user("finish"),
         ];
-        let first = plan_rolling(&input, 4000, &config).unwrap().unwrap();
-        assert!(serde_json::to_vec(&first.source).unwrap().len() <= config.max_source_bytes);
-        input = apply_summary(&input, &first, "first search done").unwrap();
-        let second = plan_rolling(&input, 4000, &config).unwrap().unwrap();
-        assert!(serde_json::to_vec(&second.source).unwrap().len() <= config.max_source_bytes);
-        input = apply_summary(&input, &second, "both searches done").unwrap();
+        // Shortened summary sources may fold everything at once; any staged fold stays bounded.
+        let mut folds = 0;
+        while let Some(plan) = plan_rolling(&input, 4000, &config).unwrap() {
+            assert!(config.summary_source(&plan.source).unwrap().len() <= config.max_source_bytes);
+            input = apply_summary(&input, &plan, "searches done").unwrap();
+            folds += 1;
+            assert!(folds <= 2);
+        }
+        assert!(folds >= 1);
         assert!(serde_json::to_vec(&input).unwrap().len() <= 4000);
     }
 

@@ -1056,6 +1056,7 @@ fn record_dedup_origin(run: &mut Value, call: &Value, output: &Value) -> Result<
 pub async fn dedup_prepare(
     run: &mut Value,
     preview_bytes: usize,
+    dedup_max_bytes: usize,
     root: &Path,
     policy: DedupPolicy,
     template: Option<String>,
@@ -1210,7 +1211,10 @@ pub async fn dedup_prepare(
             scope,
             success: successful_output(&json!(raw)),
             output: raw.clone(),
-            included: dedup_included(&settings, name) && !old_preview,
+            // A full replay is kept for duplicate references; large outputs take the preview.
+            included: dedup_included(&settings, name)
+                && !old_preview
+                && raw.len() <= dedup_max_bytes,
         });
         originals.insert(id.to_owned(), raw);
     }
@@ -1234,6 +1238,14 @@ pub async fn dedup_prepare(
         .tool_results_plan(root, run, &request, cancel)
         .await?;
     contract::validate_plan(&request, &plan)?;
+    // Duplicate placeholders point at these primaries, so they stay full whatever their size.
+    let referenced: HashSet<&str> = plan
+        .state
+        .assignments
+        .values()
+        .filter(|entry| entry.placeholder.is_some())
+        .map(|entry| entry.primary.as_str())
+        .collect();
     let mut projected = input;
     for item in projected
         .iter_mut()
@@ -1246,11 +1258,16 @@ pub async fn dedup_prepare(
             item["output"] = json!(text);
             continue;
         }
+        // Assignments saved before the size limit existed are bounded here too.
         let controlled = plan
             .state
             .assignments
             .get(&id)
-            .is_some_and(|entry| entry.template.is_some());
+            .is_some_and(|entry| entry.template.is_some())
+            && (referenced.contains(id.as_str())
+                || originals
+                    .get(&id)
+                    .is_some_and(|raw: &String| raw.len() <= dedup_max_bytes));
         if controlled {
             item["output"] = json!(originals
                 .get(&id)

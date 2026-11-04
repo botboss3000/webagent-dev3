@@ -23,6 +23,8 @@ from pathlib import Path
 
 
 LIMIT=1024*1024
+# Matches the broker read bound so one file_read cannot flood the model context.
+READ_LIMIT=16000
 FRAME_LIMIT=8*LIMIT
 CONTEXT_CONFIG_PATH=Path("/live-checkout/crates/modules/context/context-compaction.json")
 LIVE_CHECKOUT=Path("/live-checkout")
@@ -195,6 +197,7 @@ def file_operation(request, base, args, name):
                 os.close(fd)
                 raise ValueError("only regular files are supported")
             output, output_size, total, next_offset, truncated = [], 0, 0, None, False
+            cut_line = None
             size = 0
             with os.fdopen(fd, "rb") as file:
                 if os.fstat(file.fileno()).st_size > 32 * LIMIT:
@@ -209,16 +212,24 @@ def file_operation(request, base, args, name):
                     total += 1
                     if total < offset or next_offset is not None:
                         continue
-                    if total >= offset + limit or output_size + len(line) > LIMIT:
-                        next_offset = total
+                    if total >= offset + limit or output_size + len(line) > READ_LIMIT:
                         truncated = True
-                        continue
+                        if output:
+                            next_offset = total
+                            continue
+                        # A single line over the budget (minified JSON) is cut, not returned whole.
+                        line, cut_line = line[:READ_LIMIT], total
                     output.append(line)
                     output_size += len(line)
-            return {"status": "success",
-                    "output": b"".join(output).decode(errors="replace"),
-                    "offset": offset, "limit": limit, "total_lines": total,
-                    "next_offset": next_offset, "truncated": truncated}
+            result = {"status": "success",
+                      "output": b"".join(output).decode(errors="replace"),
+                      "offset": offset, "limit": limit, "total_lines": total,
+                      "next_offset": next_offset, "truncated": truncated,
+                      "returned_bytes": output_size, "full_bytes": size}
+            if cut_line is not None:
+                result["hint"] = (f"Line {cut_line} was cut at {READ_LIMIT} bytes; for single-line"
+                                  " files use file_search or python to extract fields.")
+            return result
         elif name in ("file_list", "file_search"):
             if name == "file_list":
                 fd = os.open(leaf, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,

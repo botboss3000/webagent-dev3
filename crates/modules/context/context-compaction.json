@@ -12,5 +12,6 @@
   "summary_tokens": 4000,
   "tail_tokens": 40000,
   "tool_result_preview_bytes": 8192,
+  "dedup_max_output_bytes": 32768,
   "trigger_tokens": 150000
 }

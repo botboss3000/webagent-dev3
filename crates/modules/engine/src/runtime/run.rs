@@ -2314,9 +2314,10 @@ impl<
                     });
                 }
                 let retention_input = match app
-                    .dedup_prepare(
+                    .dedup_prepare_bounded(
                         &mut run,
                         compaction_config.tool_result_preview_bytes,
+                        compaction_config.dedup_max_output_bytes,
                         &cancel,
                     )
                     .await

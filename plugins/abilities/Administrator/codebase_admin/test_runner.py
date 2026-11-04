@@ -63,6 +63,18 @@ class PluginTests(unittest.TestCase):
             self.assertIn("sample.txt",call("file_list",{"path":temporary})["output"])
             self.assertEqual(call("file_read",{"path":path},2)["status"],"failed")
             self.assertEqual(call("file_read",{"path":path},True)["status"],"failed")
+    def test_file_read_bounds_output_bytes(self):
+        """A single-line file cannot flood the context; ordinary reads page at the byte budget."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);single=root/"receipt.json";single.write_text("x"*100000)
+            result=runner.file_operation({},root,{"path":str(single),"limit":3},"file_read")
+            self.assertEqual(len(result["output"]),runner.READ_LIMIT)
+            self.assertTrue(result["truncated"]);self.assertEqual(result["full_bytes"],100000)
+            self.assertIsNone(result["next_offset"]);self.assertIn("file_search",result["hint"])
+            lines=root/"lines.txt";lines.write_text(("y"*999+"\n")*40)
+            result=runner.file_operation({},root,{"path":str(lines)},"file_read")
+            self.assertEqual(result["returned_bytes"],16000);self.assertEqual(result["next_offset"],17)
+            self.assertNotIn("hint",result)
     def test_atomic_write_failure_preserves_original(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);path=root/"sample";path.write_text("original")

@@ -1916,6 +1916,7 @@
       "summary_reserve_bytes": 16384,
       "max_source_bytes": 262144,
       "tool_result_preview_bytes": 8192,
+      "dedup_max_output_bytes": 32768,
       "search_output_bytes": 32768,
       "search_line_bytes": 2048,
       "max_summary_bytes": 65536,
