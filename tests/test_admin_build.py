@@ -1688,6 +1688,21 @@ class BuildTests(unittest.TestCase):
             self.deploy(value)
         self.assertFalse(any(c[0] == "stop" for c in self.runner.calls))
 
+    def test_status_views_only_the_three_newest_owned_jobs(self):
+        # Regression: status once viewed (scrubbed) every owned job before keeping three, holding the lock ~30s.
+        for index in range(40):
+            job_id = str(uuid.uuid4())
+            self.broker.jobs[job_id] = {"job_id": job_id, "status": "failed", "created_at": index,
+                                        "user_id": "fixture-user", "workspace": self.workspace}
+        viewed = []
+        def view(job, **_):
+            viewed.append(job["created_at"])
+            return {"job_id": job["job_id"]}
+        with patch.object(self.broker, "_view", side_effect=view):
+            result = self.call("v3_build_status")
+        self.assertEqual([39, 38, 37], viewed)
+        self.assertEqual(3, len(result["jobs"]))
+
     def test_busy_and_scope_rejections(self):
         self.runner.block = threading.Event()
         submitted = self.build()

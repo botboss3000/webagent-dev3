@@ -33,6 +33,10 @@ PENDING_EXIT = 3
 DECISION_EXIT = 4
 
 
+class BrokerUnresponsive(TimeoutError):
+    """The broker accepted the request but sent no reply; distinct from a slow build stage."""
+
+
 def call(name, arguments):
     request_id = str(uuid.uuid4())
     request = {"id": request_id, "name": name, "arguments": arguments}
@@ -40,8 +44,12 @@ def call(name, arguments):
         connection.settimeout(75)
         connection.connect(SOCKET)
         connection.sendall(json.dumps(request, separators=(",", ":")).encode() + b"\n")
-        with connection.makefile("rb") as stream:
-            raw = stream.readline(2*1024*1024+1)
+        try:
+            with connection.makefile("rb") as stream:
+                raw = stream.readline(2*1024*1024+1)
+        except TimeoutError:
+            raise BrokerUnresponsive(f"broker unresponsive: no reply to {name} within 75s; "
+                                     "slow requests are listed in runtime/build/broker-error.log") from None
     if not raw.endswith(b"\n") or len(raw) > 2*1024*1024:
         raise RuntimeError("bounded broker response unavailable")
     response = json.loads(raw)
@@ -395,7 +403,12 @@ def monitor(task_id=None, job_id=None, request=call, pause=time.sleep, clock=tim
                     print(json.dumps({"task_id": task_id, "result": "no job appeared", "status": task.get("status")}));return 2
                 pause(POLL_SECONDS);continue
             job_id = task["job_id"]
-        progress = request("v3_build_progress", {"job_id": job_id})
+        try:
+            progress = request("v3_build_progress", {"job_id": job_id})
+        except BrokerUnresponsive as error:
+            # The job may be fine; say so rather than report a stalled stage.
+            print(str(error) + "; the job state is unknown, relaunch to check again", flush=True)
+            return DECISION_EXIT
         status = progress.get("status")
         if status in TERMINAL:
             job = request("v3_worker_job", {"job_id": job_id})

@@ -6421,7 +6421,9 @@ class Broker:
                         containers[role] = {"image_id": value["Image"], "state": value["State"]["Status"], "health": value["State"].get("Health", {}).get("Status", "unknown")}
                     except Exception:
                         containers[role] = {"state": "unavailable"}
-                jobs = [self._view(j) for j in sorted(self.jobs.values(), key=lambda j: j["created_at"], reverse=True) if self._owned(j, trusted, workspace)][:3]
+                # Select before viewing: a view scrubs the job's whole log, and the operator owns hundreds of jobs.
+                owned = [j for j in sorted(self.jobs.values(), key=lambda j: j["created_at"], reverse=True) if self._owned(j, trusted, workspace)][:3]
+                jobs = [self._view(j) for j in owned]
                 live = self._current_release_blob()
                 return {"inputs_sha256": digest, "input_files": count, "containers": containers, "jobs": jobs, "busy": self.active is not None or self.active_ui is not None,
                         "synchronization": self._sync_report(live, live, ())}
@@ -7080,6 +7082,9 @@ class Broker:
             self.lease = None
 
 
+SLOW_REQUEST_SECONDS = 10
+
+
 async def serve(broker, listener, bridge_listener=None):
     async def client(reader, writer, bridge=False):
         request = None
@@ -7114,7 +7119,12 @@ async def serve(broker, listener, bridge_listener=None):
             try:
                 result = await asyncio.to_thread(broker.handle, request)
             finally:
-                record_request(request.get("name"), time.monotonic() - started,
+                elapsed = time.monotonic() - started
+                if elapsed > SLOW_REQUEST_SECONDS:
+                    # Requests share the broker lock, so one slow request stalls the rest; leave a dated trace.
+                    print(time.strftime("%Y-%m-%d %H:%M:%S") + " slow broker request " + str(request.get("name"))[:80]
+                          + " took " + str(round(elapsed, 1)) + "s", file=sys.stderr, flush=True)
+                record_request(request.get("name"), elapsed,
                                *(now - before for now, before in zip(_process_io(), (read, written))),
                                action=(request.get("arguments") or {}).get("action") if isinstance(request.get("arguments"), dict) else None)
             response = {"id": request.get("id"), "status": "success", "output": result}
