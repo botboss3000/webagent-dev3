@@ -8466,11 +8466,15 @@ async fn ability_revocation_keeps_parallel_write_outcomes_uncertain() {
         {"state":"executing","pending":{"name":"file_read","call_id":"read"}}]);
     app.save(&mut run).await.unwrap();
     let _guard = app.gate.lock().await;
-    phase3_api::quiesce_agent(&app, "shared_default")
+    phase3_api::quiesce_agent(&app, "shared_default", "test change")
         .await
         .unwrap();
     let after = app.run(&id).await.unwrap();
     assert_eq!(after["status"], "recovery");
+    assert_eq!(
+        after["error"],
+        "Access changed (test change) during an uncertain tool effect; review required"
+    );
     assert_eq!(after["uncertain"], true);
     assert_eq!(after["batch"][0]["state"], "uncertain");
     assert_eq!(after["batch"][1]["state"], "executing");

@@ -225,7 +225,13 @@ async fn member_set(
             crate::conflict("Membership update rejected: check authority, account and revision")
         })?;
     // MEMBERSHIP-REVOCATION: stop active work now, preserving uncertain effects for review.
-    crate::phase3_api::quiesce_user(&app, &body.user_id, Some(&id)).await?;
+    crate::phase3_api::quiesce_user(
+        &app,
+        &body.user_id,
+        Some(&id),
+        "membership in this agent changed",
+    )
+    .await?;
     Ok(Json(json!({"membership":result})))
 }
 

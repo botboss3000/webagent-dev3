@@ -88,7 +88,7 @@ pub async fn settings_put(
         }
     })?;
     // In-flight work rechecks the new connection revision before every external effect.
-    crate::phase3_api::quiesce_agent(&app, &agent).await?;
+    crate::phase3_api::quiesce_agent(&app, &agent, "this agent's site connection changed").await?;
     Ok(Json(result))
 }
 pub async fn execute(

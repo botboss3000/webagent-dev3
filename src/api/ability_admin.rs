@@ -402,7 +402,12 @@ pub(crate) async fn level_set(
     // Configuration applies at the next step: policy and tool decisions are re-read per
     // model call and before every tool, so running work is not stopped; only approvals
     // waiting under the old settings are revoked.
-    phase3_api::revoke_waiting_approvals(&app, Some(&id)).await?;
+    phase3_api::revoke_waiting_approvals(
+        &app,
+        Some(&id),
+        "this agent's capability level settings changed",
+    )
+    .await?;
     Ok(Json(json!({"capability_levels":saved})))
 }
 #[derive(Deserialize)]
@@ -446,7 +451,15 @@ pub(crate) async fn member_set(
         )
         .await
         .map_err(update_error)?;
-    phase3_api::quiesce_agent(&app, &id).await?;
+    // Configuration applies at the next step: each tool call is re-decided against live
+    // permissions, so a revoked tool is refused like a disabled one and running work is not
+    // stopped; only approvals waiting under the old settings are revoked.
+    phase3_api::revoke_waiting_approvals(
+        &app,
+        Some(&id),
+        "a member's capability level in this agent changed",
+    )
+    .await?;
     Ok(Json(json!({"membership":member})))
 }
 #[derive(Deserialize)]
@@ -492,7 +505,12 @@ pub(crate) async fn permissions_set(
     // Configuration applies at the next step: policy and tool decisions are re-read per
     // model call and before every tool, so running work is not stopped; only approvals
     // waiting under the old settings are revoked.
-    phase3_api::revoke_waiting_approvals(&app, Some(&id)).await?;
+    phase3_api::revoke_waiting_approvals(
+        &app,
+        Some(&id),
+        "this agent's ability permissions changed",
+    )
+    .await?;
     Ok(Json(value))
 }
 async fn visibility(
@@ -559,7 +577,12 @@ async fn visibility(
     // Configuration applies at the next step: policy and tool decisions are re-read per
     // model call and before every tool, so running work is not stopped; only approvals
     // waiting under the old settings are revoked.
-    phase3_api::revoke_waiting_approvals(&app, Some(&id)).await?;
+    phase3_api::revoke_waiting_approvals(
+        &app,
+        Some(&id),
+        "this agent's ability visibility changed",
+    )
+    .await?;
     Ok(Json(value))
 }
 pub(crate) async fn visibility_set(
@@ -1371,7 +1394,8 @@ pub(crate) async fn settings_set(
     // Configuration applies at the next step: policy and tool decisions are re-read per
     // model call and before every tool, so running work is not stopped; only approvals
     // waiting under the old settings are revoked.
-    phase3_api::revoke_waiting_approvals(&app, Some(&id)).await?;
+    phase3_api::revoke_waiting_approvals(&app, Some(&id), "this agent's ability settings changed")
+        .await?;
     Ok(Json(value))
 }
 #[cfg(test)]

@@ -249,7 +249,12 @@ pub(crate) async fn agent_ability_visibility_set(
     // Configuration applies at the next step: policy and tool decisions are re-read per
     // model call and before every tool, so running work is not stopped; only approvals
     // waiting under the old settings are revoked.
-    phase3_api::revoke_waiting_approvals(&app, Some(&id)).await?;
+    phase3_api::revoke_waiting_approvals(
+        &app,
+        Some(&id),
+        "this agent's ability visibility changed",
+    )
+    .await?;
     Ok(Json(value))
 }
 pub(crate) async fn agent_ability_skill_visibility_set(
@@ -283,7 +288,8 @@ pub(crate) async fn agent_ability_skill_visibility_set(
     // Configuration applies at the next step: policy and tool decisions are re-read per
     // model call and before every tool, so running work is not stopped; only approvals
     // waiting under the old settings are revoked.
-    phase3_api::revoke_waiting_approvals(&app, Some(&id)).await?;
+    phase3_api::revoke_waiting_approvals(&app, Some(&id), "this agent's skill visibility changed")
+        .await?;
     Ok(Json(value))
 }
 pub(crate) async fn agent_tool_mode_set(
@@ -314,7 +320,8 @@ pub(crate) async fn agent_tool_mode_set(
     // Configuration applies at the next step: policy and tool decisions are re-read per
     // model call and before every tool, so running work is not stopped; only approvals
     // waiting under the old settings are revoked.
-    phase3_api::revoke_waiting_approvals(&app, Some(&id)).await?;
+    phase3_api::revoke_waiting_approvals(&app, Some(&id), "this agent's tool modes changed")
+        .await?;
     Ok(Json(value))
 }
 pub(crate) async fn policy_get(State(app): State<App>) -> Api {
@@ -400,7 +407,8 @@ pub(crate) async fn policy_set(State(app): State<App>, Json(body): Json<Value>) 
     // Configuration applies at the next step: policy and tool decisions are re-read per
     // model call and before every tool, so running work is not stopped; only approvals
     // waiting under the old settings are revoked.
-    phase3_api::revoke_waiting_approvals(&app, None).await?;
+    phase3_api::revoke_waiting_approvals(&app, None, "the installation tool policy changed")
+        .await?;
     Ok(Json(value))
 }
 #[cfg(test)]

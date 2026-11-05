@@ -87,7 +87,7 @@ impl webagent_agents::service::Access for Bridge<'_> {
     async fn leave(&self, agent: &str) -> Result<()> {
         let user = self.identity["_user_id"].as_str().unwrap_or("");
         self.app.store.leave_agent(user, agent).await?;
-        crate::phase3_api::quiesce_user(self.app, user, Some(agent))
+        crate::phase3_api::quiesce_user(self.app, user, Some(agent), "the account left this agent")
             .await
             .map_err(|e| anyhow!(e.1))
     }
@@ -110,9 +110,13 @@ impl webagent_agents::service::Effects for Bridge<'_> {
         Ok(())
     }
     async fn quiesce(&self, agent: &str) -> Result<()> {
-        crate::phase3_api::quiesce_agent(self.app, agent)
-            .await
-            .map_err(|e| anyhow!(e.1))
+        crate::phase3_api::quiesce_agent(
+            self.app,
+            agent,
+            "this agent was disabled, archived or deleted",
+        )
+        .await
+        .map_err(|e| anyhow!(e.1))
     }
     /// Each step is idempotent, so a failed erase leaves an archived agent that can be retried.
     async fn erase(&self, agent: &str) -> Result<()> {

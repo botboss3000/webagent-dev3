@@ -1304,7 +1304,7 @@ impl<
         run["pending"]["state"] = json!("executing");
         run["pending"]["human_approved"] = json!(run["pending"]["decision"] == "approve");
         run["pending"]["decision"] = json!("consumed");
-        let valid = app
+        let current = app
             .chat
             .live_access(
                 app.store.records(),
@@ -1315,15 +1315,24 @@ impl<
                 &agent_id,
             )
             .await
-            .is_ok_and(|current| {
-                current.admitted() && json!(current.revision) == run["pending"]["access_revision"]
-            })
+            .ok();
+        let admitted = current.as_ref().is_some_and(|current| current.admitted())
             && app.run_model_authorized(&run).await;
-        if !valid {
+        let unchanged = current
+            .as_ref()
+            .is_some_and(|current| json!(current.revision) == run["pending"]["access_revision"]);
+        if !admitted || !unchanged {
             run["pending"]["state"] = json!("requested");
             run["pending"]["decision"] = Value::Null;
+            if admitted {
+                // Only permissions changed: decide this call again under them, so a revoked
+                // tool is refused like a disabled one and the run continues.
+                app.save(&mut run).await?;
+                return Ok(std::ops::ControlFlow::Continue(()));
+            }
             run["status"] = json!("stopped");
-            run["error"] = json!("Access changed before tool dispatch");
+            run["error"] =
+                json!("Access changed before tool dispatch: this account or agent lost access");
             app.save(&mut run).await?;
             return Ok(std::ops::ControlFlow::Break(()));
         }

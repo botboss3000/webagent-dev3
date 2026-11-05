@@ -51,11 +51,15 @@ async fn agent_operator(app: &App, identity: &Value, agent: &str) -> Result<(), 
 }
 /// Stop `caller`'s active runs in `statuses` (for `agent_filter` only, when given). An
 /// in-flight or uncertain write goes to recovery instead, so its effect can be reconciled.
+/// `cause` names the change in the run's message, for example "this agent's tool permissions
+/// changed"; a stop that only withdraws approvals says so instead of blaming access.
 async fn stop_runs(
     caller: &App,
     agent_filter: Option<&str>,
     statuses: &[&str],
+    cause: &str,
 ) -> Result<(), ApiError> {
+    let approvals_only = statuses == ["waiting_approval"];
     for view in caller.store.active_runs().await? {
         let id = view["id"].as_str().unwrap_or("");
         let mut run = caller.run(id).await?;
@@ -81,10 +85,19 @@ async fn stop_runs(
             run["uncertain"] = json!(true);
             // Access revocation preserves reconciliation for every in-flight write.
             crate::parallel_batch::mark_uncertain_writes(&mut run);
-            run["error"] = json!("Access changed during an uncertain tool effect; review required");
+            run["error"] = json!(format!(
+                "Access changed ({cause}) during an uncertain tool effect; review required"
+            ));
+        } else if approvals_only {
+            run["status"] = json!("stopped");
+            run["error"] = json!(format!(
+                "Approval withdrawn: {cause} while it was waiting; send a message to continue"
+            ));
         } else {
             run["status"] = json!("stopped");
-            run["error"] = json!("Access changed; review permissions before resuming");
+            run["error"] = json!(format!(
+                "Access changed: {cause}; review permissions before resuming"
+            ));
         }
         caller.save_override(&mut run).await?;
     }
@@ -96,11 +109,12 @@ async fn stop_runs(
 pub(crate) async fn revoke_waiting_approvals(
     app: &App,
     agent_filter: Option<&str>,
+    cause: &str,
 ) -> Result<(), ApiError> {
     for user_id in app.store.all_user_ids().await? {
         let mut caller = app.clone();
         caller.store = app.store.for_user(&user_id).await?;
-        stop_runs(&caller, agent_filter, &["waiting_approval"]).await?;
+        stop_runs(&caller, agent_filter, &["waiting_approval"], cause).await?;
     }
     Ok(())
 }
@@ -110,6 +124,7 @@ pub(crate) async fn quiesce_user(
     app: &App,
     user_id: &str,
     agent_filter: Option<&str>,
+    cause: &str,
 ) -> Result<(), ApiError> {
     let mut caller = app.clone();
     caller.store = app.store.for_user(user_id).await?;
@@ -117,6 +132,7 @@ pub(crate) async fn quiesce_user(
         &caller,
         agent_filter,
         &["queued", "running", "waiting_approval", "waiting_external"],
+        cause,
     )
     .await?;
     let mut closure_error = None;
@@ -221,10 +237,10 @@ pub(crate) async fn quiesce_session_resources(app: &App, sid: &str) -> Result<()
     Ok(())
 }
 
-pub(crate) async fn quiesce_agent(app: &App, agent_id: &str) -> Result<(), ApiError> {
+pub(crate) async fn quiesce_agent(app: &App, agent_id: &str, cause: &str) -> Result<(), ApiError> {
     let mut closure_error = None;
     for user_id in app.store.all_user_ids().await? {
-        if let Err(error) = quiesce_user(app, &user_id, Some(agent_id)).await {
+        if let Err(error) = quiesce_user(app, &user_id, Some(agent_id), cause).await {
             closure_error = Some(error);
         }
     }
@@ -234,6 +250,7 @@ pub(crate) async fn quiesce_agent(app: &App, agent_id: &str) -> Result<(), ApiEr
     Ok(())
 }
 async fn quiesce_tier(app: &App, tier_id: &str) -> Result<(), ApiError> {
+    let cause = format!("account tier \"{tier_id}\" changed");
     let policy = app.store.read_access_policy()?;
     let order = crate::access::account_ladder::order(&policy)?;
     let index = order
@@ -243,7 +260,7 @@ async fn quiesce_tier(app: &App, tier_id: &str) -> Result<(), ApiError> {
     let mut error = None;
     for tier in &order[index..] {
         for user in app.store.access_repository().tier_user_ids(tier).await? {
-            if let Err(failure) = quiesce_user(app, &user, None).await {
+            if let Err(failure) = quiesce_user(app, &user, None, &cause).await {
                 error = Some(failure);
             }
         }
@@ -288,7 +305,13 @@ async fn change_account(
         )
         .await
         .map_err(|_| stale("Account update rejected; reload the account and tier"))?;
-    quiesce_user(&app, &id, None).await?;
+    quiesce_user(
+        &app,
+        &id,
+        None,
+        "the account's status, role or tier changed",
+    )
+    .await?;
     Ok(Json(json!({"account":account})))
 }
 async fn tiers(State(app): State<App>, Extension(identity): Extension<Value>) -> Api {
@@ -360,7 +383,7 @@ async fn tier_order(
         app.store.access_repository().write_access_policy(&policy)?;
     }
     for user in app.store.all_user_ids().await? {
-        quiesce_user(&app, &user, None).await?;
+        quiesce_user(&app, &user, None, "the account tier order changed").await?;
     }
     Ok(Json(json!({"saved":true})))
 }
@@ -445,7 +468,13 @@ async fn change_membership(
         )
         .await
         .map_err(|_| stale("Membership update rejected; reload the account and agent"))?;
-    quiesce_user(&app, &user_id, Some(&agent_id)).await?;
+    quiesce_user(
+        &app,
+        &user_id,
+        Some(&agent_id),
+        "membership in this agent changed",
+    )
+    .await?;
     Ok(Json(json!({"membership":value})))
 }
 #[derive(Deserialize)]
@@ -482,7 +511,10 @@ async fn change_agent_tool_permissions(
         .set_agent_tool_permissions(&id, body.expected_revision, body.tool_permissions)
         .await
         .map_err(|_| stale("Agent permissions changed; reload before saving"))?;
-    quiesce_agent(&app, &id).await?;
+    // Configuration applies at the next step: each tool call is re-decided against live
+    // permissions, so a revoked tool is refused like a disabled one and running work is not
+    // stopped; only approvals waiting under the old settings are revoked.
+    revoke_waiting_approvals(&app, Some(&id), "this agent's tool permissions changed").await?;
     Ok(Json(value))
 }
 #[derive(Deserialize)]
@@ -519,7 +551,10 @@ async fn change_agent_tool_callers(
         .set_agent_tool_callers(&id, body.expected_revision, body.tool_callers)
         .await
         .map_err(|_| stale("Agent caller restrictions changed; reload before saving"))?;
-    quiesce_agent(&app, &id).await?;
+    // Configuration applies at the next step: each tool call is re-decided against live
+    // permissions, so a revoked tool is refused like a disabled one and running work is not
+    // stopped; only approvals waiting under the old settings are revoked.
+    revoke_waiting_approvals(&app, Some(&id), "this agent's tool caller rules changed").await?;
     Ok(Json(value))
 }
 #[derive(Deserialize)]
@@ -556,7 +591,10 @@ async fn change_agent_ability_permissions(
         .set_agent_ability_permissions(&id, body.expected_revision, body.ability_permissions)
         .await
         .map_err(|_| stale("Agent ability permissions changed; reload before saving"))?;
-    quiesce_agent(&app, &id).await?;
+    // Configuration applies at the next step: each tool call is re-decided against live
+    // permissions, so a revoked tool is refused like a disabled one and running work is not
+    // stopped; only approvals waiting under the old settings are revoked.
+    revoke_waiting_approvals(&app, Some(&id), "this agent's ability permissions changed").await?;
     Ok(Json(value))
 }
 #[derive(Deserialize)]
@@ -604,7 +642,7 @@ async fn change_page_policy(
         .save_page_policy(body.pages, body.expected_revision)
         .map_err(|_| stale("Policy changed; reload before saving"))?;
     for id in app.store.all_user_ids().await? {
-        quiesce_user(&app, &id, None).await?;
+        quiesce_user(&app, &id, None, "the page access policy changed").await?;
     }
     app.store
         .event(

@@ -129,7 +129,13 @@ async fn update(
         let approved = !body.blocked && body.level_id.is_some();
         notify_access_decision(&app, &id, &body.user_id, approved).await?;
     }
-    crate::phase3_api::quiesce_user(&app, &body.user_id, Some(&id)).await?;
+    crate::phase3_api::quiesce_user(
+        &app,
+        &body.user_id,
+        Some(&id),
+        "membership in this agent changed",
+    )
+    .await?;
     Ok(Json(json!({"member":member})))
 }
 #[derive(Deserialize)]
@@ -299,7 +305,15 @@ async fn ladder(
         .await
         .map_err(anyhow::Error::from)?;
     tx.commit().await.map_err(anyhow::Error::from)?;
-    crate::phase3_api::quiesce_agent(&app, &id).await?;
+    // Configuration applies at the next step: each tool call is re-decided against live
+    // permissions, so a revoked tool is refused like a disabled one and running work is not
+    // stopped; only approvals waiting under the old settings are revoked.
+    crate::phase3_api::revoke_waiting_approvals(
+        &app,
+        Some(&id),
+        "this agent's capability levels changed",
+    )
+    .await?;
     Ok(Json(json!({"capability_levels":body.ladder})))
 }
 async fn summary(
