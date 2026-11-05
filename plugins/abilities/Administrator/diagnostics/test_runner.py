@@ -116,10 +116,10 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         for path in ["/app?tab=app","/app?tab=builds&job_id=job-1","/app?tab=agents&agent=shared_default&agentView=identity&agentScope=sessions",
                      "/app?tab=app&appView=files&path=/notes/today.md","/app?tab=session-metrics"]:
             self.assertEqual((await self.call(action="navigate",path=path))["status"],"success",path)
-        for path,reason in [("/app?tab=app&chat_invite=x","Unsupported app route parameters"),("/app?tab=app&embed_auth=x","Unsupported app route parameters"),
+        for path,reason in [("/app?tab=app&chat_invite=x","Unsupported app route parameters; allowed: agent, agentScope"),("/app?tab=app&embed_auth=x","Unsupported app route parameters"),
                             ("/app?tab=Agents%20x","Unsupported development page"),("/app?agent=another","Another agent is unavailable")]:
             result=await self.call(action="navigate",path=path)
-            self.assertEqual(result["output"],"Private browser request rejected: "+reason,path)
+            self.assertTrue(result["output"].startswith("Private browser request rejected: "+reason),path)
         # A page that drifted outside the routes blocks reads but navigation recovers.
         driver=self.drivers[0];driver.current_url=origin+"/app?tab=agents&agent=another"
         self.assertEqual((await self.call(action="read"))["output"],"Private browser request rejected: Another agent is unavailable")

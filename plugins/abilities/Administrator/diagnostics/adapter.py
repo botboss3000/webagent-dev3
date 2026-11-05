@@ -35,7 +35,8 @@ MAX_SESSIONS=2
 MAX_PRIVATE_SESSIONS=32
 MAX_ARTIFACT_BYTES=64*1024*1024
 IDLE_SECONDS=180
-READ_FRESH_SECONDS=30
+# Agent turns between a read and the input often take over 30 s; the target is re-checked at dispatch anyway.
+READ_FRESH_SECONDS=120
 PAGE_TIMEOUT=10
 CALL_TIMEOUT=20
 # URL parameters the app itself writes. Invite and embed authentication parameters stay excluded.
@@ -273,7 +274,7 @@ def validate_path(path,trusted):
     if len(pairs)!=len(dict(pairs)):raise Rejected("Duplicate route parameters")
     query=dict(pairs)
     if parsed.path=="/app":
-        if set(query)-APP_PARAMS:raise Rejected("Unsupported app route parameters")
+        if set(query)-APP_PARAMS:raise Rejected("Unsupported app route parameters; allowed: "+", ".join(sorted(APP_PARAMS)))
         if any(not 1<=len(value)<=256 for value in query.values()):raise Rejected("Invalid app route parameter")
         if not re.fullmatch(r"[a-z0-9-]{1,40}",query.get("tab","chat")):raise Rejected("Unsupported development page")
         if "session_id" in query and query["session_id"]!=trusted["session_id"]:raise Rejected("Another chat session is unavailable")
@@ -663,7 +664,7 @@ class BrowserService:
             if urlunsplit((parsed.scheme,parsed.netloc,"","",""))!=self.origin:raise Rejected("External navigation is unavailable")
             validate_path(urlunsplit(("","",parsed.path,parsed.query,"")),{"session_id":state.sid,"agent_id":state.agent})
         element=state.driver.find_element("css selector",selector)
-        if not element.is_displayed() or not element.is_enabled():raise Rejected("Input target is not visible and enabled")
+        if not element.is_displayed() or not element.is_enabled():raise Rejected("Input target is not visible and enabled; it may be inside a closed menu or panel, or disabled")
         label=str(target.get("label","")).replace(state.cookie,"[redacted]")
         if state.csrf:label=label.replace(state.csrf,"[redacted]")
         return element,{"tag":str(target.get("tag","")),"label":label}
