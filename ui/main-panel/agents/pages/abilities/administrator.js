@@ -194,7 +194,17 @@ function buildManifestSettings({ ability, data, request, scope, levelId, preview
     }
     control.disabled = !enabled;
     controls.push([item, control]);
-    panel.append(row(item.label, control, item.hint || ''));
+    if (item.type === 'text') {
+      // A text box owns its own line (name, box, hint), so phones keep the label readable.
+      const stacked = node('div', 'ac-gate-param'), slot = node('div', 'ac-gate-param-control');
+      const hint = node('div', 'ac-gate-param-desc', item.hint || '');
+      hint.title = item.hint || '';
+      slot.append(control);
+      stacked.append(node('div', 'ac-gate-param-name', item.label), slot, hint);
+      panel.append(stacked);
+    } else {
+      panel.append(row(item.label, control, item.hint || ''));
+    }
   }
   const read = ([item, control]) => item.type === 'boolean' ? control.checked
     : item.type === 'select' || item.type === 'text' ? control.value : Number(control.value);
