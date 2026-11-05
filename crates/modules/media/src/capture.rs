@@ -6,8 +6,11 @@ use sha2::{Digest, Sha256};
 pub const SAMPLE_RATE: u32 = 16000;
 /// Largest accepted PCM frame in bytes.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
-/// Longest dictation: five minutes of PCM plus ten seconds of slack for client timer drift.
-pub const MAX_RECORDING_BYTES: usize = 16000 * 2 * 310;
+/// PCM bytes accepted for a dictation of `seconds`, plus ten seconds of slack for client timer
+/// drift.
+pub fn recording_limit(seconds: u32) -> usize {
+    (seconds as usize + 10) * SAMPLE_RATE as usize * 2
+}
 
 /// True when `frame` is a non-empty whole number of samples within [`MAX_FRAME_BYTES`].
 pub fn valid_frame(frame: &[u8]) -> bool {
@@ -21,6 +24,7 @@ pub struct Capture {
     seq: u64,
     last_hash: String,
     bytes: usize,
+    max_bytes: usize,
 }
 
 /// Result of offering one frame to a capture.
@@ -35,18 +39,19 @@ pub enum Chunk {
     Accepted,
 }
 
-/// A frame out of sequence, or one that would exceed [`MAX_RECORDING_BYTES`].
+/// A frame out of sequence, or one past the capture's length limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SequenceRejected;
 
 impl Capture {
-    /// An empty capture.
-    pub fn new(id: String) -> Self {
+    /// An empty capture accepting at most `max_bytes` of PCM ([`recording_limit`]).
+    pub fn new(id: String, max_bytes: usize) -> Self {
         Self {
             id,
             seq: 0,
             last_hash: String::new(),
             bytes: 0,
+            max_bytes,
         }
     }
 
@@ -57,7 +62,7 @@ impl Capture {
         if sequence == self.seq && hash == self.last_hash {
             return Ok(Chunk::Replayed { seq: self.seq });
         }
-        if sequence != self.seq + 1 || self.bytes + frame.len() > MAX_RECORDING_BYTES {
+        if sequence != self.seq + 1 || self.bytes + frame.len() > self.max_bytes {
             return Err(SequenceRejected);
         }
         self.bytes += frame.len();

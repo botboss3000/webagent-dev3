@@ -1,7 +1,8 @@
-//! The shared composer dictation recognizer. One process (`webagent-v3 --voice-service`, started
-//! by `host/voice.rs`) holds the Parakeet model for every dictation and transcribes each phrase
-//! when the Silero pause detector closes it. sherpa-onnx is loaded at run time from the `voice`
-//! stage of the Dockerfile, so the workspace builds and tests without its native libraries.
+//! The shared composer dictation recognizer. One process (`webagent-v3 --voice-service
+//! dictation`, started by `host/voice.rs`) holds the multilingual Parakeet v3 model for every
+//! dictation and transcribes each phrase when the Silero pause detector closes it; the spoken
+//! language is detected per phrase. sherpa-onnx is loaded at run time from the `voice` stage of
+//! the Dockerfile, so the workspace builds and tests without its native libraries.
 //!
 //! Requests arrive one JSON object per line on stdin: `{"op":"open","id":ID}`,
 //! `{"op":"audio","id":ID,"pcm":BASE64}` (16 kHz mono s16le), `{"op":"finish","id":ID}` or
@@ -19,13 +20,13 @@ use base64::Engine;
 use libloading::Library;
 use serde_json::{json, Value};
 
+use crate::settings;
+
 /// Where the `voice` stage installs `lib/` and `models/`.
 pub const VOICE_ROOT: &str = "/opt/voice";
 /// The only sherpa-onnx release whose C layouts [`ffi`] mirrors.
 const LIBRARY_VERSION: &str = "2.0.1";
 const SAMPLE_RATE: i32 = 16000;
-/// Decoder threads: a phrase takes about 0.3 s on two, leaving the host's other cores to builds.
-const THREADS: i32 = 2;
 /// Audio the detector may hold for a phrase in progress, in seconds.
 const VAD_BUFFER_SECONDS: f32 = 60.0;
 
@@ -99,8 +100,8 @@ pub fn serve<T: Transcriber>(
 }
 
 /// Load the model from `root` (`lib/` and `models/`) and serve stdin until it closes.
-pub fn run(root: &Path) -> Result<(), String> {
-    let parakeet = Parakeet::load(root)?;
+pub fn run(root: &Path, settings: &settings::Dictation) -> Result<(), String> {
+    let parakeet = Parakeet::load(root, settings)?;
     serve(&parakeet, io::stdin().lock(), io::stdout().lock()).map_err(|error| error.to_string())
 }
 
@@ -290,13 +291,13 @@ mod ffi {
 }
 
 /// An all-zero config, which sherpa-onnx reads as "every option unset".
-fn zeroed<T>() -> T {
+pub(crate) fn zeroed<T>() -> T {
     // SAFETY: only used for the `ffi` config structs, whose fields are raw pointers, integers and
     // floats; the all-zero bit pattern is a valid null/0 value for each of them.
     unsafe { std::mem::zeroed() }
 }
 
-type Handle = *const c_void;
+pub(crate) type Handle = *const c_void;
 
 /// The sherpa-onnx entry points used here, resolved once from the loaded library.
 struct Api {
@@ -341,35 +342,59 @@ impl Drop for ParakeetDictation {
     }
 }
 
-fn text(value: &str) -> Result<CString, String> {
+pub(crate) fn text(value: &str) -> Result<CString, String> {
     CString::new(value).map_err(|_| "model path contains a NUL byte".to_owned())
+}
+
+/// Load a shared library from `root/lib`.
+pub(crate) fn library(root: &Path, name: &str) -> Result<Library, String> {
+    let path = root.join("lib").join(name);
+    // SAFETY: loads a checksum-pinned library from the image (sherpa-onnx, whose initializers
+    // only set up ONNX Runtime, or espeak-ng, which has none); nothing else is loaded from there.
+    unsafe { Library::new(&path) }
+        .map_err(|error| format!("cannot load {}: {error}", path.display()))
+}
+
+/// Resolve one entry point; the caller declares `T` with its C signature.
+///
+/// # Safety
+/// `T` must be the symbol's exact function pointer type.
+pub(crate) unsafe fn symbol<T: Copy>(library: &Library, name: &str) -> Result<T, String> {
+    // SAFETY: the caller guarantees the signature; the copied pointer is used only while
+    // `library` stays loaded, which its owners keep for the process lifetime.
+    unsafe { library.get::<T>(name.as_bytes()) }
+        .map(|symbol| *symbol)
+        .map_err(|error| format!("{name}: {error}"))
+}
+
+/// sherpa-onnx from `root/lib`, refused unless it is the release [`ffi`] mirrors.
+pub(crate) fn sherpa(root: &Path) -> Result<Library, String> {
+    let library = library(root, "libsherpa-onnx-c-api.so")?;
+    // SAFETY: the version query has this signature in every sherpa-onnx release and returns a
+    // static string.
+    let found = unsafe {
+        let version: unsafe extern "C" fn() -> *const c_char =
+            symbol(&library, "SherpaOnnxGetVersionStr")?;
+        CStr::from_ptr(version()).to_string_lossy().into_owned()
+    };
+    if found != LIBRARY_VERSION {
+        return Err(format!(
+            "sherpa-onnx {found} found; the C layouts match {LIBRARY_VERSION}"
+        ));
+    }
+    Ok(library)
 }
 
 impl Parakeet {
     /// Load sherpa-onnx from `root/lib` and the models from `root/models`.
-    pub fn load(root: &Path) -> Result<Self, String> {
-        let library_path = root.join("lib/libsherpa-onnx-c-api.so");
-        // SAFETY: loads the checksum-pinned sherpa-onnx release from the image (its initializers
-        // only set up ONNX Runtime); nothing else is loaded from this path.
-        let library = unsafe { Library::new(&library_path) }
-            .map_err(|error| format!("cannot load {}: {error}", library_path.display()))?;
-        // SAFETY: each symbol is declared with the signature of sherpa-onnx 2.0.1's C API,
-        // and the version check below runs before any of them is called.
+    pub fn load(root: &Path, settings: &settings::Dictation) -> Result<Self, String> {
+        let library = sherpa(root)?;
+        // SAFETY: each symbol is declared with the signature of sherpa-onnx 2.0.1's C API.
         let api = unsafe {
             macro_rules! symbol {
                 ($name:literal) => {
-                    *library
-                        .get(concat!($name, "\0").as_bytes())
-                        .map_err(|error| format!("{}: {error}", $name))?
+                    symbol(&library, $name)?
                 };
-            }
-            let version: unsafe extern "C" fn() -> *const c_char =
-                symbol!("SherpaOnnxGetVersionStr");
-            let found = CStr::from_ptr(version()).to_string_lossy().into_owned();
-            if found != LIBRARY_VERSION {
-                return Err(format!(
-                    "sherpa-onnx {found} found; the C layouts match {LIBRARY_VERSION}"
-                ));
             }
             Api {
                 accept_waveform: symbol!("SherpaOnnxAcceptWaveformOffline"),
@@ -408,7 +433,7 @@ impl Parakeet {
             joiner: joiner.as_ptr(),
         };
         config.model_config.tokens = tokens.as_ptr();
-        config.model_config.num_threads = THREADS;
+        config.model_config.num_threads = settings.threads;
         config.model_config.model_type = model_type.as_ptr();
         config.decoding_method = method.as_ptr();
         config.max_active_paths = 4;
@@ -416,24 +441,22 @@ impl Parakeet {
         // outlive the call, which copies what it needs.
         let recognizer = unsafe {
             let create: unsafe extern "C" fn(*const ffi::OfflineRecognizerConfig) -> Handle =
-                *library
-                    .get(b"SherpaOnnxCreateOfflineRecognizer\0")
-                    .map_err(|error| error.to_string())?;
+                symbol(&library, "SherpaOnnxCreateOfflineRecognizer")?;
             create(&config)
         };
         if recognizer.is_null() {
             return Err("Parakeet model failed to load".into());
         }
         let silero = model("silero_vad.onnx")?;
+        let pauses = &settings.pause_detection;
         let mut vad: ffi::VadModelConfig = zeroed();
         vad.silero_vad = ffi::VadModel {
             model: silero.as_ptr(),
-            threshold: 0.5,
-            min_silence_duration: 0.4,
-            min_speech_duration: 0.25,
+            threshold: pauses.threshold,
+            min_silence_duration: pauses.min_silence_seconds,
+            min_speech_duration: pauses.min_speech_seconds,
             window_size: 512,
-            // Unbroken speech is cut into phrases of at most this many seconds so text keeps coming.
-            max_speech_duration: 10.0,
+            max_speech_duration: pauses.max_phrase_seconds,
         };
         vad.sample_rate = SAMPLE_RATE;
         vad.num_threads = 1;
@@ -613,19 +636,29 @@ mod tests {
         );
     }
 
-    /// Loads the real library and models when `WEBAGENT_VOICE_ROOT` names a `voice` stage copy;
-    /// the broker's test run has none, so the check is skipped there.
+    /// Loads the real library and models when `WEBAGENT_VOICE_ROOT` names a `voice` stage copy
+    /// with the model's sample recordings; the broker's test run has none, so it is skipped there.
     #[test]
-    fn parakeet_transcribes_a_recording_when_installed() {
+    fn parakeet_transcribes_recordings_when_installed() {
         let Ok(root) = std::env::var("WEBAGENT_VOICE_ROOT") else {
             return;
         };
-        let parakeet = Parakeet::load(Path::new(&root)).unwrap();
-        let wav = std::fs::read(Path::new(&root).join("models/parakeet/test_wavs/0.wav")).unwrap();
-        let mut dictation = parakeet.open().unwrap();
-        for frame in samples(&wav[44..]).chunks(1600) {
-            parakeet.push(&mut dictation, frame);
+        let defaults = crate::settings::VoiceSettings::default();
+        let parakeet = Parakeet::load(Path::new(&root), &defaults.dictation).unwrap();
+        for (language, word) in [
+            ("en", "country"),
+            ("de", "Wurst"),
+            ("fr", "pays"),
+            ("es", "país"),
+        ] {
+            let wav = Path::new(&root).join(format!("models/parakeet/test_wavs/{language}.wav"));
+            let wav = std::fs::read(wav).unwrap();
+            let mut dictation = parakeet.open().unwrap();
+            for frame in samples(&wav[44..]).chunks(1600) {
+                parakeet.push(&mut dictation, frame);
+            }
+            let text = parakeet.finish(dictation);
+            assert!(text.contains(word), "{language}: {text}");
         }
-        assert!(parakeet.finish(dictation).contains("portrait"));
     }
 }

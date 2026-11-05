@@ -64,32 +64,40 @@ RUN --mount=type=cache,id=webagent-v3-target,target=/build/target,sharing=locked
       | tr ' ' '\n' | LC_ALL=C sort -u > /out/core-inputs.txt
 RUN test -s /out/core-inputs.txt
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS voice
-RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates curl \
+# Voice (webagent_media::recognizer and ::speaker load these at run time; python3 here only
+# unpacks archives): the sherpa-onnx 2.0.1 C API with ONNX Runtime (Apache-2.0/MIT, the version
+# its C layouts mirror); NVIDIA Parakeet TDT 0.6B v3 int8 (CC-BY-4.0) and Kokoro v1.0 int8
+# (Apache-2.0) in sherpa-onnx form; Silero VAD (MIT); espeak-ng 1.52 with its English data
+# (GPL-3.0, from the espeakng-loader 0.2.4 wheel) for Kokoro's phonemes. Attribution in
+# models/NOTICE.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates curl bzip2 \
     && rm -rf /var/lib/apt/lists/* \
-    && python3 -m venv /opt/voice/venv \
-    && /opt/voice/venv/bin/pip install --no-cache-dir kokoro-onnx==0.6.1 onnxruntime==1.31.0 soundfile==0.14.0 numpy==2.4.6 \
-    && mkdir /opt/voice/models && cd /opt/voice/models \
-    && curl -fsSLO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx \
-    && curl -fsSLO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin \
-    && printf '%s  %s\n' 6e742170d309016e5891a994e1ce1559c702a2ccd0075e67ef7157974f6406cb kokoro-v1.0.int8.onnx \
-        bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d voices-v1.0.bin | sha256sum -c - \
-    && chmod -R a+rX /opt/voice
-# Composer dictation (webagent_media::recognizer loads these at run time): the sherpa-onnx 2.0.1
-# C API with ONNX Runtime (Apache-2.0/MIT, the version its C layouts mirror), NVIDIA Parakeet TDT
-# 0.6B v2 int8 in sherpa-onnx form (CC-BY-4.0, attribution in models/NOTICE) and Silero VAD (MIT).
-RUN cd /tmp && curl -fsSLo sherpa.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/sherpa-onnx-v2.0.1-linux-x64-shared-lib.tar.bz2 \
-    && printf '%s  %s\n' 532c45bbd41036d83cd70606797529aa8086c2053395a58967736c727625b120 sherpa.tar.bz2 | sha256sum -c - \
-    && python3 -c "import tarfile; tarfile.open('sherpa.tar.bz2').extractall()" \
-    && mkdir /opt/voice/lib && mv sherpa-onnx-v2.0.1-linux-x64-shared-lib/lib/libsherpa-onnx-c-api.so sherpa-onnx-v2.0.1-linux-x64-shared-lib/lib/libonnxruntime.so /opt/voice/lib/ \
-    && rm -rf sherpa.tar.bz2 sherpa-onnx-v2.0.1-linux-x64-shared-lib \
-    && curl -fsSLo parakeet.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2 \
+    && mkdir -p /opt/voice/lib /opt/voice/models && cd /tmp \
+    && curl -fsSLo sherpa.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/sherpa-onnx-v2.0.1-linux-x64-shared-lib.tar.bz2 \
+    && curl -fsSLo parakeet.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2 \
+    && curl -fsSLo kokoro.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_0.tar.bz2 \
+    && curl -fsSLo espeak.whl https://files.pythonhosted.org/packages/de/1e/25ec5ab07528c0fbb215a61800a38eca05c8a99445515a02d7fa5debcb32/espeakng_loader-0.2.4-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl \
     && curl -fsSLo /opt/voice/models/silero_vad.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx \
-    && printf '%s  %s\n' 157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad parakeet.tar.bz2 \
+    && printf '%s  %s\n' 532c45bbd41036d83cd70606797529aa8086c2053395a58967736c727625b120 sherpa.tar.bz2 \
+        5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf parakeet.tar.bz2 \
+        72c347230107ef8a31098ec4d468a605244beef5f1ed00db97efa13518800653 kokoro.tar.bz2 \
+        08721baf27d13d461f6be6eed9a65277e70d68234ff484fd8b9897b222cdcb6d espeak.whl \
         9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6 /opt/voice/models/silero_vad.onnx | sha256sum -c - \
-    && python3 -c "import tarfile; tarfile.open('parakeet.tar.bz2').extractall()" \
-    && mv sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8 /opt/voice/models/parakeet && rm parakeet.tar.bz2 \
-    && printf '%s\n' 'parakeet/: NVIDIA parakeet-tdt-0.6b-v2 (https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2), CC-BY-4.0, converted by k2-fsa/sherpa-onnx.' \
-        'silero_vad.onnx: Silero VAD (https://github.com/snakers4/silero-vad), MIT.' > /opt/voice/models/NOTICE \
+    && tar xjf sherpa.tar.bz2 && tar xjf parakeet.tar.bz2 && tar xjf kokoro.tar.bz2 \
+    && python3 -I -m zipfile -e espeak.whl espeak \
+    && mv sherpa-onnx-v2.0.1-linux-x64-shared-lib/lib/libsherpa-onnx-c-api.so sherpa-onnx-v2.0.1-linux-x64-shared-lib/lib/libonnxruntime.so /opt/voice/lib/ \
+    && mkdir /opt/voice/models/parakeet /opt/voice/models/kokoro \
+    && mv sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/encoder.int8.onnx sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/decoder.int8.onnx \
+        sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/joiner.int8.onnx sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/tokens.txt /opt/voice/models/parakeet/ \
+    && mv kokoro-int8-multi-lang-v1_0/model.int8.onnx kokoro-int8-multi-lang-v1_0/voices.bin kokoro-int8-multi-lang-v1_0/tokens.txt /opt/voice/models/kokoro/ \
+    && mv espeak/espeakng_loader/libespeak-ng.so.1.52.0 /opt/voice/lib/libespeak-ng.so.1 \
+    && mv espeak/espeakng_loader/espeak-ng-data /opt/voice/espeak-ng-data \
+    && find /opt/voice/espeak-ng-data -maxdepth 1 -name '*_dict' ! -name en_dict -delete \
+    && rm -rf /tmp/* \
+    && printf '%s\n' 'parakeet/: NVIDIA parakeet-tdt-0.6b-v3 (https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), CC-BY-4.0, converted by k2-fsa/sherpa-onnx.' \
+        'kokoro/: Kokoro-82M v1.0 (https://huggingface.co/hexgrad/Kokoro-82M), Apache-2.0, converted by k2-fsa/sherpa-onnx.' \
+        'silero_vad.onnx: Silero VAD (https://github.com/snakers4/silero-vad), MIT.' \
+        '../espeak-ng-data, ../lib/libespeak-ng.so.1: espeak-ng 1.52 (https://github.com/espeak-ng/espeak-ng), GPL-3.0.' > /opt/voice/models/NOTICE \
     && chmod -R a+rX /opt/voice
 
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS api
@@ -126,11 +134,10 @@ COPY --from=tested_builder /out/webagent-assets-service /usr/local/lib/webagent/
 COPY --from=tested_builder /out/webagent-capability-service /usr/local/lib/webagent/engine/capability-context/webagent-capability-service
 COPY --from=tested_builder /out/webagent-provider-service /usr/local/lib/webagent/engine/provider-projection/webagent-provider-service
 COPY v3/plugins/gates /opt/v3/plugins/gates
-# Agent voice output and composer dictation (crates/modules/media/host/voice.rs): the pinned
-# Kokoro venv, the sherpa-onnx library and checked models come from the `voice` stage, prepared
+# Agent voice output and composer dictation (crates/modules/media/host/voice.rs): the
+# sherpa-onnx and espeak-ng libraries and checked models come from the `voice` stage, prepared
 # once as a dependency base.
 COPY --from=voice /opt/voice /opt/voice
-COPY --chmod=0644 v3/crates/modules/media/voice/speak.py /opt/voice/
 RUN chmod -R a+rX /opt/v3/plugins
 RUN chmod 0755 /opt/v3 /opt/v3/plugins /opt/v3/plugins/gates /opt/v3/plugins/gates/publication_size_guard_v1 && chmod 0444 /opt/v3/plugins/gates/publication_size_guard_v1/gate.json
 RUN chmod a+r /opt/v3/*.py && python3 -c "import os,pathlib; os.setgid(1100); os.setuid(1101); files=[pathlib.Path('/opt/v3/plugins/abilities/Core/create_tools/runtime.py'),pathlib.Path('/opt/v3/plugins/abilities/Core/visualizer/capture.py')]; [compile(p.read_text(),str(p),'exec') for p in files]"

@@ -1,0 +1,24 @@
+{
+  "_instructions": "Voice settings, read live. Limits and timeouts apply to the next dictation or reply; threads and pause_detection apply when a model next loads. idle_unload_minutes: free a model's memory after this long unused (0 keeps it loaded; the next use then waits a few seconds while it loads). dictation: max_concurrent dictations across all users; idle_capture_seconds before an abandoned dictation is dropped; finish_timeout_seconds to wait for the last phrase; max_recording_seconds per dictation; pause_detection closes a phrase after min_silence_seconds of silence (threshold = speech probability, phrases shorter than min_speech_seconds are ignored, unbroken speech is cut at max_phrase_seconds). speech: max_chars of a reply read aloud; queue_wait_seconds a reply waits for the one before it.",
+  "schema_version": 1,
+  "dictation": {
+    "idle_unload_minutes": 10,
+    "max_concurrent": 4,
+    "idle_capture_seconds": 90,
+    "finish_timeout_seconds": 15,
+    "max_recording_seconds": 300,
+    "threads": 2,
+    "pause_detection": {
+      "threshold": 0.5,
+      "min_silence_seconds": 0.4,
+      "min_speech_seconds": 0.25,
+      "max_phrase_seconds": 10
+    }
+  },
+  "speech": {
+    "idle_unload_minutes": 10,
+    "threads": 4,
+    "max_chars": 1800,
+    "queue_wait_seconds": 120
+  }
+}

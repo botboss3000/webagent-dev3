@@ -7,7 +7,13 @@ use sha2::{Digest, Sha256};
 
 use crate::capture::{self, Capture, Chunk, SequenceRejected};
 use crate::image;
-use crate::speech::{sample_text, speech_text, voice_catalog, VoiceOutput, DEFAULT_VOICE, VOICES};
+use crate::speech::{
+    sample_text, speech_chunks, voice_catalog, VoiceOutput, DEFAULT_VOICE, VOICES,
+};
+
+fn speech_text(text: &str) -> String {
+    crate::speech::speech_text(text, 1800)
+}
 
 fn pcm(sample: i16, samples: usize) -> Vec<u8> {
     (0..samples).flat_map(|_| sample.to_le_bytes()).collect()
@@ -24,7 +30,7 @@ fn frames_must_be_whole_samples_within_bounds() {
 
 #[test]
 fn capture_replays_identical_retries_and_rejects_gaps() {
-    let mut capture = Capture::new("c".into());
+    let mut capture = Capture::new("c".into(), capture::recording_limit(300));
     assert_eq!(capture.accept(2, &pcm(0, 16)), Err(SequenceRejected));
     assert_eq!(capture.accept(1, &pcm(0, 16)), Ok(Chunk::Accepted));
     assert_eq!(
@@ -38,13 +44,15 @@ fn capture_replays_identical_retries_and_rejects_gaps() {
 
 #[test]
 fn a_dictation_stops_at_the_length_limit() {
-    let mut capture = Capture::new("c".into());
+    let limit = capture::recording_limit(300);
+    assert_eq!(limit, 16000 * 2 * 310);
+    let mut capture = Capture::new("c".into(), limit);
     let frame = pcm(8000, 16000);
     let mut seq = 0;
     while capture.accept(seq + 1, &frame).is_ok() {
         seq += 1;
     }
-    assert_eq!(seq as usize * frame.len(), capture::MAX_RECORDING_BYTES);
+    assert_eq!(seq as usize * frame.len(), limit);
     assert_eq!(capture.accept(seq + 1, &pcm(0, 1)), Err(SequenceRejected));
 }
 
@@ -74,6 +82,24 @@ fn speech_text_omits_code_links_and_secrets() {
          keep [brackets] and a < b."
     );
     assert_eq!(speech_text(&"x".repeat(5000)).chars().count(), 1800);
+    assert_eq!(crate::speech::speech_text("abcdef", 3), "abc");
+}
+
+#[test]
+fn speech_is_sent_in_sentence_groups_starting_short() {
+    let sentence = "This sentence is about forty characters.";
+    let text = [sentence; 14].join(" ");
+    let chunks = speech_chunks(&text);
+    let lengths: Vec<usize> = chunks.iter().map(|c| c.chars().count()).collect();
+    // 120 characters fit two sentences plus a space; later groups fit nine.
+    assert_eq!(lengths, vec![81, 368, 122]);
+    assert_eq!(chunks.join(" "), text);
+    assert_eq!(
+        speech_chunks("One long sentence without a stop"),
+        vec!["One long sentence without a stop"]
+    );
+    assert_eq!(speech_chunks("Wait:  now?\nYes"), vec!["Wait: now? Yes"]);
+    assert!(speech_chunks("").is_empty());
 }
 
 #[test]

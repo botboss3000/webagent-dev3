@@ -133,3 +133,14 @@ test('requests keep retrying past a short outage instead of ending the dictation
   assert.equal(events.states.at(-1),'listening');
  }finally{capture.cancel();}
 });
+
+test('recording stops at the length limit the server gives at start',async()=>{
+ fakeBrowser();
+ const {capture,events}=harness(async()=>({text:''}),async()=>({capture_id:'cap',max_seconds:0.05}));
+ try{
+  await capture.start('s1');
+  await new Promise(r=>setTimeout(r,400));
+  assert.deepEqual(events.done,['done']);
+  assert.equal(capture.active,false);
+ }finally{capture.cancel();}
+});

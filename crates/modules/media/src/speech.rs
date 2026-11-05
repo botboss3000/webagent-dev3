@@ -2,14 +2,17 @@
 //! are not read aloud, and the result is bounded.
 //! Also the Kokoro voice catalog and the per-agent voice output setting it validates.
 
-/// Most characters sent to speech synthesis.
-pub const MAX_SPEECH_CHARS: usize = 1800;
+/// The first group of sentences holds at most this many characters (unless one sentence is
+/// longer), so playback starts after about one sentence.
+const FIRST_CHUNK_CHARS: usize = 120;
+/// Later groups hold at most this many characters.
+const CHUNK_CHARS: usize = 400;
 
 /// Replace fenced code with a short notice, read Markdown as plain text (link text without its URL),
 /// omit links, redact bearer tokens and key-like words, collapse whitespace and truncate to
-/// [`MAX_SPEECH_CHARS`]. Each line ends a sentence, so headings and list items get a spoken pause
-/// instead of running into the next line.
-pub fn speech_text(text: &str) -> String {
+/// `max_chars`. Each line ends a sentence, so headings and list items get a spoken pause instead
+/// of running into the next line.
+pub fn speech_text(text: &str, max_chars: usize) -> String {
     let mut result = String::new();
     for (index, part) in text.split("\u{60}\u{60}\u{60}").enumerate() {
         if index % 2 == 0 {
@@ -49,7 +52,37 @@ pub fn speech_text(text: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ");
-    result.chars().take(MAX_SPEECH_CHARS).collect()
+    result.chars().take(max_chars).collect()
+}
+
+/// Prepared speech split into the groups of sentences that are synthesized and sent one at a
+/// time: a sentence ends at `.`, `!`, `?`, `;` or `:` followed by whitespace.
+pub fn speech_chunks(text: &str) -> Vec<String> {
+    let mut sentences = vec![String::new()];
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        let ended = sentences
+            .last()
+            .is_some_and(|s| s.ends_with(['.', '!', '?', ';', ':']));
+        if c.is_whitespace() && ended {
+            while chars.next_if(|c| c.is_whitespace()).is_some() {}
+            sentences.push(String::new());
+        } else if let Some(current) = sentences.last_mut() {
+            current.push(c);
+        }
+    }
+    let (mut chunks, mut group, mut limit) = (Vec::new(), String::new(), FIRST_CHUNK_CHARS);
+    for sentence in sentences {
+        if !group.is_empty() && group.chars().count() + sentence.chars().count() > limit {
+            chunks.push(std::mem::take(&mut group));
+            limit = CHUNK_CHARS;
+        }
+        group = format!("{group} {sentence}").trim().to_owned();
+    }
+    if !group.is_empty() {
+        chunks.push(group);
+    }
+    chunks
 }
 
 /// A non-empty line without closing punctuation gets a period; speech pauses on punctuation.

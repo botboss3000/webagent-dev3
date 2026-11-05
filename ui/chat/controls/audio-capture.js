@@ -47,8 +47,10 @@ export function createAudioCapture({send,onState,onText,onComplete,onError,onLag
  }
   // Purpose: Tear down a current capture, best-effort cancel its server capture, and notify the owner once.
  function fail(c,error){if(!valid(c))return;quiet(c);stop(c);active=null;++generation;if(c.id)send(c.sid,{op:'cancel',capture_id:c.id}).catch(()=>{});onState('idle');onError(error);}
-  // Purpose: Open a server capture, cancelling it best-effort if this capture ended meanwhile.
- async function open(c){c.id='';c.seq=0;const ready=await request(c,{op:'start'});if(valid(c))c.id=ready.capture_id;else send(c.sid,{op:'cancel',capture_id:ready.capture_id}).catch(()=>{});}
+  // Purpose: Stop recording when the dictation reaches the server's length limit, counted from the first sample.
+ function limit(c){clearTimeout(c.timer);if(c.node&&!c.stopping)c.timer=setTimeout(()=>finish(),Math.max(0,c.limitMs-(Date.now()-c.started)));}
+  // Purpose: Open a server capture, taking its length limit, and cancel it best-effort if this capture ended meanwhile.
+ async function open(c){c.id='';c.seq=0;const ready=await request(c,{op:'start'});if(!valid(c)){send(c.sid,{op:'cancel',capture_id:ready.capture_id}).catch(()=>{});return;}c.id=ready.capture_id;if(ready.max_seconds>0){c.limitMs=ready.max_seconds*1000;limit(c);}}
   // Purpose: Replace an expired server capture (idle too long, its recognizer stopped, or the server restarted) with a new one fed the whole recording again; its partial text stays hidden until that replay is sent.
  function restart(c,e){if(e.status!==409||c.restarts>=MAX_RESTARTS)return false;c.restarts++;c.id='';c.queue=c.recorded.slice();c.replay=c.queue.length;lag(c);return true;}
   // Purpose: Open the server capture, send queued frames (several per request when a backlog has built up), forward the server's transcript so far, and finish after the queue drains. Other request errors fail the capture.
@@ -68,7 +70,7 @@ export function createAudioCapture({send,onState,onText,onComplete,onError,onLag
    }
   }catch(e){fail(c,e);}finally{c.pumping=false;}
  }
-  // Purpose: Buffer PCM into 0.1-second frames (3200 bytes of 16 kHz PCM16) so text keeps pace with speech, keeping every frame for a replay. A slow connection only signals lag; the recording is bounded by the five-minute dictation limit (about 9.6 MB) and the backlog drains when the connection recovers.
+  // Purpose: Buffer PCM into 0.1-second frames (3200 bytes of 16 kHz PCM16) so text keeps pace with speech, keeping every frame for a replay. A slow connection only signals lag; the recording is bounded by the server's dictation limit (five minutes, about 9.6 MB, by default) and the backlog drains when the connection recovers.
  function append(c,bytes){const next=new Uint8Array(c.pending.length+bytes.length);next.set(c.pending);next.set(bytes,c.pending.length);c.pending=next;while(c.pending.length>=3200){const frame=c.pending.slice(0,3200);c.queue.push(frame);c.recorded.push(frame);c.pending=c.pending.slice(3200);}lag(c);pump(c);}
   // Purpose: Finish once recording has started: collect the worklet's last partial block, then queue the PCM tail and drain the queue.
  async function finish(){
@@ -81,7 +83,7 @@ export function createAudioCapture({send,onState,onText,onComplete,onError,onLag
   if(active)return false;
   const Context=window.AudioContext||window.webkitAudioContext;
   if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia||!Context||!window.AudioWorkletNode)throw Error('Dictation needs a current browser with microphone access on a secure connection.');
-  const c={sid,generation:++generation,id:'',seq:0,queue:[],recorded:[],pending:new Uint8Array(),replay:0,restarts:0,okAt:Date.now(),pumping:false,stopping:false,finishing:false,lagging:false,retrying:false};active=c;
+  const c={sid,generation:++generation,started:Date.now(),limitMs:300000,id:'',seq:0,queue:[],recorded:[],pending:new Uint8Array(),replay:0,restarts:0,okAt:Date.now(),pumping:false,stopping:false,finishing:false,lagging:false,retrying:false};active=c;
   try{
       // Ready before the microphone prompt resolves, so recording begins with the first sample.
    c.context=new Context();const resumed=c.context.resume();
@@ -93,8 +95,8 @@ export function createAudioCapture({send,onState,onText,onComplete,onError,onLag
    c.source=c.context.createMediaStreamSource(c.stream);c.node=new window.AudioWorkletNode(c.context,'dictation-capture');c.sink=c.context.createGain();c.sink.gain.value=0;
    c.node.port.onmessage=e=>{if(e.data==='flushed')c.flushed?.();else if(valid(c)&&!c.finishing)append(c,new Uint8Array(downsampleToPcm16(e.data,c.context.sampleRate)));};
    c.source.connect(c.node);c.node.connect(c.sink);c.sink.connect(c.context.destination);await resumed;
-      // The server accepts five minutes of audio per dictation.
-   c.timer=setTimeout(()=>finish(),300000);if(!c.retrying)onState('listening');return true;
+      // Five minutes until the server's start reply gives its own limit.
+   limit(c);if(!c.retrying)onState('listening');return true;
   }catch(e){fail(c,e);return false;}
  }
   // Purpose: Invalidate the active generation immediately, stop local recording, and best-effort cancel the server capture.
