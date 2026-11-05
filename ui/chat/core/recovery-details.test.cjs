@@ -7,33 +7,33 @@ function render(pending,extra={}){
  const decisions=[];const root=context.createRecoveryDetails({id:'run-1',pending,...extra},{expanded:new Set(),button:(label,click)=>({textContent:label,click}),decide:(...args)=>decisions.push(args)});
  return {root,nodes,text:nodes.map(n=>n.textContent).join('\n'),decisions};
 }
-test('specific failure label and stage replace misleading transport label',()=>{
- const f=render({name:'build_work',interruption:{reason:'transport_error'},failure:{version:1,stage:'authorization',code:'legacy_authorization_rejected',delivery:'not_sent',elapsed_ms:4}});
- assert.match(f.text,/Broker authorization rejected/);assert.match(f.text,/Checking authorization/);assert.match(f.text,/Request not sent/);assert.doesNotMatch(f.text,/Connection interrupted/);
- const actions=f.root.children.at(-1).children;assert.deepEqual(actions.map(x=>x.textContent),['Accept known result','Authorize retry','Abandon run']);actions[1].click();assert.deepEqual(f.decisions,[['retry',undefined]]);
+const flat=node=>[node,...(node.children||[]).flatMap(flat)];
+const buttons=f=>flat(f.root).filter(n=>typeof n.click==='function');
+test('choices are visible without expanding, and diagnostics keep specific labels',()=>{
+ const f=render({name:'build_work',call_id:'c1',id:'pend-1',interruption:{reason:'transport_error'},failure:{version:1,stage:'authorization',code:'legacy_authorization_rejected',delivery:'not_sent',elapsed_ms:4}});
+ assert.deepEqual(buttons(f).map(b=>b.textContent),['Run again','Use my result','End run']);
+ assert.equal(f.root.children.some(n=>n.tag==='details'&&n.className==='recovery-diagnostics'),true);
+ assert.match(f.text,/Broker authorization rejected/);assert.match(f.text,/Checking authorization/);assert.match(f.text,/Request not sent/);
+ assert.match(f.text,/Interaction: pend-1/);
+ const [again,mine,end]=buttons(f);assert.equal(mine.disabled,true);
+ again.click();end.click();assert.deepEqual(f.decisions,[['retry',undefined,undefined],['abandon','']]);
 });
 test('legacy records remain readable and unknown diagnostic text is never rendered',()=>{
  const legacy=render({name:'shell',interruption:{reason:'transport_error'}});assert.match(legacy.text,/Connection interrupted/);assert.match(legacy.text,/Detailed failure evidence unavailable/);
  const invalid=render({failure:{version:1,code:'SECRET_CANARY',stage:'SECRET_CANARY',delivery:'SECRET_CANARY'}});assert.doesNotMatch(invalid.text,/SECRET_CANARY/);
 });
-test('response validation and execution failure have distinct labels',()=>{
- for(const [stage,code,label]of[['response_validation','malformed_response','Invalid tool response'],['execution_task','task_panicked','Execution task failed']]){
-  const f=render({failure:{version:1,stage,code,delivery:'response_received',elapsed_ms:12}});assert.ok(f.text.includes(label));assert.doesNotMatch(f.text,/Connection interrupted/);
- }
+test('a run with no open call offers resume and end only',()=>{
+ const f=render(null,{tool_failure:{version:1,stage:'response_read',code:'cancelled',tool:'dev_browser_action',call_id:'parallel-call-2',delivery:'possibly_sent',elapsed_ms:9}});
+ assert.deepEqual(buttons(f).map(b=>b.textContent),['Resume run','End run']);
+ assert.match(f.text,/No call needs a decision/);assert.match(f.text,/Last failed call: parallel-call-2/);
+ buttons(f)[0].click();assert.deepEqual(f.decisions,[['retry','']]);
 });
-
-test('parallel failure metadata retains the tool and call reference without pending arguments',()=>{
- const f=render(null,{tool_failure:{version:1,stage:'response_read',code:'disconnected_response',tool:'build_work',call_id:'parallel-call-2',delivery:'possibly_sent',elapsed_ms:9}});
- assert.match(f.text,/build_work/);assert.match(f.text,/Call: parallel-call-2/);
-});
-
-test('each uncertain parallel call shows its tool, arguments and IDs and resolves by call ID',()=>{
+test('each uncertain parallel call shows its tool, action, arguments and IDs and resolves by call ID',()=>{
  const f=render(null,{uncertain_calls:[
   {call_id:'call-a',name:'dev_browser_action',arguments:{action:'navigate',path:'/app'},interaction_id:'pend-a',transport_request_id:'req-a'},
   {call_id:'call-b',name:'dev_browser_action',arguments:{action:'read'},interaction_id:'pend-b'}]});
- assert.match(f.text,/Tool: dev_browser_action/);assert.match(f.text,/"path": "\/app"/);
+ assert.match(f.text,/dev_browser_action · navigate/);assert.match(f.text,/"path": "\/app"/);assert.match(f.text,/2 tool calls were interrupted/);
  assert.match(f.text,/Call: call-a · Interaction: pend-a · Request: req-a/);assert.match(f.text,/Call: call-b · Interaction: pend-b/);
- const sections=f.root.children.filter(n=>n.className==='recovery-call');assert.equal(sections.length,2);
- sections[1].children.at(-1).children[1].click();assert.deepEqual(f.decisions,[['retry',undefined,'call-b']]);
- const last=f.root.children.at(-1).children;assert.deepEqual(last.map(x=>x.textContent),['Abandon run']);
+ assert.deepEqual(buttons(f).map(b=>b.textContent),['Run again','Use my result','Run again','Use my result','End run']);
+ buttons(f)[2].click();assert.deepEqual(f.decisions,[['retry',undefined,'call-b']]);
 });

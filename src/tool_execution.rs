@@ -75,6 +75,13 @@ mod tests {
         let mut low = json!({"batch":[
             {"state":"executing","pending":{"name":"shell","call_id":"a","arguments":{}}}]});
         assert!(!crate::parallel_batch::mark_uncertain_writes(&mut low));
+        // A low-risk call already held as uncertain settles on the next sort.
+        let mut held = json!({"batch":[
+            {"state":"uncertain","pending":{"name":"shell","call_id":"a","arguments":{}}},
+            {"state":"uncertain","pending":{"name":"commit_and_push","call_id":"b","arguments":{}}}]});
+        assert!(crate::parallel_batch::mark_uncertain_writes(&mut held));
+        assert_eq!(held["batch"][0]["state"], "done");
+        assert_eq!(held["batch"][1]["state"], "uncertain");
     }
     #[test]
     fn repeat_policy_defaults_follow_tool_class() {

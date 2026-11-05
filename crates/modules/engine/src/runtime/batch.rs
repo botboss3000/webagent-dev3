@@ -89,7 +89,8 @@ pub fn uncertain_count(run: &Value) -> usize {
         })
         .unwrap_or(0)
 }
-/// Settle parallel writes cut off by a stop, restart or revocation. A high-risk write is
+/// Settle parallel writes cut off by a stop, restart or revocation, or still held as
+/// uncertain. A high-risk write is
 /// held for review; any other write completes as "outcome unknown", which the repeat guard
 /// records so the agent cannot blindly repeat it. Returns whether a review is needed.
 pub fn mark_uncertain_writes<A: tool_execution::ActionCatalog>(run: &mut Value) -> bool {
@@ -98,7 +99,11 @@ pub fn mark_uncertain_writes<A: tool_execution::ActionCatalog>(run: &mut Value) 
     if let Some(items) = run["batch"].as_array_mut() {
         for item in items {
             let name = item["pending"]["name"].as_str().unwrap_or("").to_owned();
-            if item["state"] != "executing" || A::is_read(&name) {
+            // Calls already held as uncertain are re-sorted too, so a call held before its
+            // tool's risk was lowered can settle instead of waiting for review forever.
+            if !matches!(item["state"].as_str(), Some("executing" | "uncertain"))
+                || A::is_read(&name)
+            {
                 continue;
             }
             let retry = A::retry(&name);

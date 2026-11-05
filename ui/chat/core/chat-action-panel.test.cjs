@@ -78,7 +78,7 @@ test('paused and stopped runs stay quiet while observer and recovery notices ret
  for(const status of ['paused','stopped'])for(const canControl of [true,false])assert.equal(ui.showRun({run:{id:status,status,error:'Cancelled by user'},canControl}),undefined);
  assert.equal(host.children[3].children.length,0);
  const waiting=ui.showRun({run:{id:'waiting',status:'waiting_approval',pending:{arguments:{secret:'hidden'},can_decide:false}},canControl:false});assert.match(flat(waiting),/Waiting for the authorized user/);assert.doesNotMatch(flat(waiting),/hidden/);
- const recovery=ui.showRun({run:{id:'uncertain',status:'paused',uncertain:true},canControl:true,expanded:new Set(),renderRecovery:(run,{button,decide})=>{const body=new E();body.append(button('Authorize retry',()=>decide('retry','known')));return body;},recover:(...args)=>calls.push(args)});
+ const recovery=ui.showRun({run:{id:'uncertain',status:'paused',uncertain:true},canControl:true,expanded:new Set(),renderRecovery:(run,{button,decide})=>{const body=new E();body.append(button('Run again',()=>decide('retry','known')));return body;},recover:(...args)=>calls.push(args)});
  assert.equal(recovery.querySelector('.chat-action-approve').className,'chat-action-action chat-action-approve');recovery.querySelector('button').onclick();assert.deepEqual(calls[0],['retry','known']);assert.equal(guarded,1);assert.doesNotMatch(flat(recovery),/Resume run/);
  for(const status of ['completed','running','queued','failed'])assert.equal(ui.showRun({run:{id:status,status}}),undefined);
  ui.clearRuns();assert.equal(host.children[3].children.length,0);ui.destroy();assert.equal(host.children.length,0);

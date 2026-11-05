@@ -163,11 +163,16 @@ async fn public_runs(app: &App, views: Vec<Value>) -> Result<Vec<Value>> {
     let mut result = Vec::with_capacity(views.len());
     for view in views {
         // Paused views need the owning record's private component marker; old
-        // views need its model fields. Read through Store and project only safe fields.
+        // views need its model fields; runs under review need their parallel calls,
+        // which views omit. Read through Store and project only safe fields.
         let has_retrieval_marker = view["code_index_retrieval_attempted"].is_boolean()
             && view["code_index_retrieval_status"].as_str().is_some()
             && view["code_index_retrieval_stage"].as_str().is_some();
-        if view["status"] == "paused" || view["model"].is_null() || !has_retrieval_marker {
+        if view["status"] == "paused"
+            || view["status"] == "recovery"
+            || view["model"].is_null()
+            || !has_retrieval_marker
+        {
             let run = app
                 .run(
                     view["id"]

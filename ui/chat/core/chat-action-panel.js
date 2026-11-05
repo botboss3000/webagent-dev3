@@ -244,7 +244,7 @@ export function mountChatActionPanel({root,guard,request,note}) {
       else {
         if((run.uncertain||run.status==='recovery')&&canControl){
           title='Run recovery';
-          body=renderRecovery(run,{expanded,button:(label,fn)=>action(label,label==='Authorize retry'?'approve':label==='Abandon run'?'deny':'neutral',fn),decide:recover,code:text=>createCodeBlock(text).wrap});
+          body=renderRecovery(run,{expanded,button:(label,fn)=>action(label,label==='Run again'||label==='Resume run'?'approve':label==='End run'?'deny':'neutral',fn),decide:recover,code:text=>createCodeBlock(text).wrap});
         }
         if(canControl&&active?.id===run.id)actions.push({label:'Cancel run',kind:'neutral',run:cancel});
       }
