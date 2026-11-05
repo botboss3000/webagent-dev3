@@ -110,7 +110,10 @@ pub(crate) async fn binding(app: &App, run: &Value, name: &str, args: &Value) ->
                 )
                 .await?
                 {
-                    bail!("Delegation to other agents is off for this agent; use start_spawn or start_session without agent_id");
+                    return Err(webagent_access::PublicRefusal(
+                        "Delegation to other agents is off for this agent. Use start_spawn for a sub agent, or start_session without agent_id to fork yourself.",
+                    )
+                    .into());
                 }
             } else {
                 // A fork copies history through the last reply before this run.

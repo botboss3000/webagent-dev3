@@ -1202,13 +1202,18 @@ impl<
             return Ok(std::ops::ControlFlow::Continue(()));
         }
         if effective.permission != access::Permission::Deny && H::messaging_owns(&name) {
-            if app
+            if let Err(error) = app
                 .native
                 .messaging_preflight(app.native_view(), &mut run, &name, &args)
                 .await
-                .is_err()
             {
-                let result = json!({"status":"denied","output":"Private messaging destination or authority unavailable"});
+                let reason = error
+                    .downcast_ref::<webagent_access::PublicRefusal>()
+                    .map_or(
+                        "Private messaging destination or authority unavailable",
+                        |r| r.0,
+                    );
+                let result = json!({"status":"denied","output":reason});
                 Self::append_tool(&mut run, &result)?;
                 app.store
                     .save_run_observed(

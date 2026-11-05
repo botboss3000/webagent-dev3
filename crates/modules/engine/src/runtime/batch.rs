@@ -261,16 +261,21 @@ impl<
                         "Invalid action metadata or unavailable action record",
                     )),
                 };
-                if result.is_none()
-                    && app
+                if result.is_none() {
+                    if let Err(error) = app
                         .native
                         .messaging_preflight(app.native_view(), &mut view, &name, &args)
                         .await
-                        .is_err()
-                {
-                    result = Some(denied(
-                        "Private messaging destination or authority unavailable",
-                    ));
+                    {
+                        result = Some(denied(
+                            error
+                                .downcast_ref::<webagent_access::PublicRefusal>()
+                                .map_or(
+                                    "Private messaging destination or authority unavailable",
+                                    |r| r.0,
+                                ),
+                        ));
+                    }
                 }
                 pending = view["pending"].clone();
             }

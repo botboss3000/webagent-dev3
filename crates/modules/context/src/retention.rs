@@ -1167,13 +1167,19 @@ pub async fn dedup_prepare(
         } else if let Some(scope) = scopes.get(&source_run) {
             scope.clone()
         } else {
-            let source = journal.run(&source_run).await?;
-            if source["session_id"] != sid
-                || source["agent_id"].as_str().unwrap_or("shared_default") != agent
-            {
-                bail!("Tool-result origin is outside this conversation");
-            }
-            let scope = dedup_scope(&source);
+            // A fork copies earlier results under run IDs it holds no run record for. The
+            // result was found in this conversation's own journal, so it takes this run's scope.
+            let scope = match journal.document(&format!("run:{source_run}")).await? {
+                Some(source) => {
+                    if source["session_id"] != sid
+                        || source["agent_id"].as_str().unwrap_or("shared_default") != agent
+                    {
+                        bail!("Tool-result origin is outside this conversation");
+                    }
+                    dedup_scope(&source)
+                }
+                None => dedup_scope(run),
+            };
             scopes.insert(source_run.clone(), scope.clone());
             scope
         };

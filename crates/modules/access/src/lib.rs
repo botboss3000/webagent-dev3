@@ -8,6 +8,19 @@ use std::collections::BTreeMap;
 
 pub use webagent_accounts::AccountStatus;
 
+/// A refusal whose fixed reason is safe to show the agent: it names a setting, never a
+/// destination, identity or authority detail. Other preflight errors stay masked.
+#[derive(Debug)]
+pub struct PublicRefusal(pub &'static str);
+
+impl std::fmt::Display for PublicRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for PublicRefusal {}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
