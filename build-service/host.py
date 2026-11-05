@@ -6580,12 +6580,16 @@ class Broker:
                 job = self.jobs.get(args["job_id"])
                 participant = any(self._owned(item, trusted, workspace) and item.get("job_id") == args["job_id"]
                                   for item in self.work.values())
-                if not job or not (self._owned(job, trusted, workspace) or participant):
+                # The administrator dashboard reads any job's stages (the in-app Broker card page),
+                # as it may cancel any job; it is not the owner, so it never keeps a task alive.
+                dashboard = trusted["user_id"] == "admin" and workspace == "00000000-0000-0000-0000-000000000000"
+                if not job or not (self._owned(job, trusted, workspace) or participant or dashboard):
                     raise ValueError("job not available to this session")
                 completed = sum(1 for j in self.jobs.values() if j.get("status") == "completed")
                 if getattr(self, "_stage_baselines", (None,))[0] != completed:
                     self._stage_baselines = (completed, stage_baselines(list(self.jobs.values())))
-                self._touch_job_task(job, trusted, workspace)
+                if not dashboard:
+                    self._touch_job_task(job, trusted, workspace)
                 value = job_progress(job, self._stage_baselines[1], time.time())
                 if job.get("status") == "queued":
                     # Who this job waits behind: task, owning session (session= in its summary) and phase.

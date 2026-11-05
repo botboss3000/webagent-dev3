@@ -596,6 +596,11 @@ class BuildTests(unittest.TestCase):
         other = dict(self.trusted, user_id="someone-else")
         with self.assertRaises(ValueError):
             self.call("v3_build_progress", {"job_id": "live"}, trusted=other, workspace=self.workspace)
+        # The administrator dashboard reads any job's stages; it is not the job's owner.
+        dashboard = dict(self.trusted, user_id="admin", session_id="00000000-0000-0000-0000-000000000000")
+        seen = self.call("v3_build_progress", {"job_id": "live"}, trusted=dashboard,
+                         workspace="00000000-0000-0000-0000-000000000000")
+        self.assertEqual(seen["stage"], "run tests")
         with self.assertRaises(ValueError):
             self.call("v3_build_progress", {"job_id": "live", "extra": 1})
 
