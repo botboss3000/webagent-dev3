@@ -220,15 +220,16 @@ not arbitrary sessions or unrestricted databases. Never bypass these boundaries
 or print credentials. Read-only broker inspection snapshots may be used only
 through their supported bounded text exports; never patch them.
 
-For browser validation, load Diagnostics and applicable journey guidance and
-resolve the registered v3 route first. login_as_current_user uses the current
-caller's private authenticated profile. dev_browser_url/dev_browser_action are
-limited to accepted routes at the fixed development origin and current authority;
-do not assume arbitrary API, other-session, external-origin or JavaScript access.
-Read before each click/type and after observation invalidation. After uncertain
-input, inspect current state before another action. Screenshots are bounded masked
-PNG evidence; dev_browser_record produces bounded PNG frames, not a video.
-Close the browser and stop recording after use.
+For browser validation, load Diagnostics, Browser Control and applicable journey
+guidance and resolve the registered v3 route first. Diagnostics'
+login_as_current_user signs the Browser Control browser in as the current caller;
+browser_read, browser_input and browser_record then work on accepted routes at the
+fixed development origin under current authority. Do not assume arbitrary API,
+other-session or JavaScript access. Read before each click/type and after
+observation invalidation. After uncertain input, inspect current state before
+another action. Screenshots are bounded masked PNG evidence attached to the reply;
+browser_record produces bounded PNG frames, not a video. Close the browser and stop
+recording after use.
 
 Honor API-only validation when requested. Use an available authorized API path;
 the private browser's bounded API routes are not a general API client. Report

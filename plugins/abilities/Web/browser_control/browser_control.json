@@ -1,0 +1,41 @@
+{
+  "display_name": "Browser Control",
+  "kind": "ability",
+  "icon": "app-window",
+  "color": "#7aa2f7",
+  "description": "Look at public web pages in a private server browser: read rendered text, measure element sizes and positions, sample exact colours, time page loads and interactions, inspect animations, check phone, tablet and desktop sizes and dark mode, click and type with approval, and attach screenshots to the reply. With Diagnostics, the same browser can sign in to the V3 development app.",
+  "skill_summary": "Private server browser: signed out on public sites behind an egress guard, or signed in to the V3 development app through Diagnostics; read, measure, colours, timing, animations, viewport and screenshots.",
+  "order": 2,
+  "placeholder": false,
+  "readiness": "ready",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "deny"
+  },
+  "config": {
+    "settings": [
+      {
+        "key": "allow_sites",
+        "label": "Allowed sites",
+        "type": "text",
+        "default": "",
+        "max_length": 4000,
+        "hint": "Hosts separated by commas or new lines, for example example.com. Each covers its subdomains. Leave empty to allow any public site."
+      },
+      {
+        "key": "block_sites",
+        "label": "Blocked sites",
+        "type": "text",
+        "default": "",
+        "max_length": 4000,
+        "hint": "Hosts the agent may never open, separated by commas or new lines; each covers its subdomains. Internal and private addresses are always blocked."
+      }
+    ]
+  },
+  "tools": [
+    "browser_read",
+    "browser_input",
+    "browser_record"
+  ]
+}

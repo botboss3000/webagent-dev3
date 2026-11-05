@@ -1,17 +1,17 @@
-"""Native package supervisor contracts use real child processes and the existing browser mock."""
+"""Browser Control package supervisor contracts use real child processes and the package's browser mock."""
 import asyncio,importlib.util,json,os,sys,tempfile,time,unittest,uuid
 from pathlib import Path
 from unittest import mock
 ROOT=Path(__file__).parents[1]
-spec=importlib.util.spec_from_file_location("diagnostics_worker_fixture",ROOT/"worker.py")
+spec=importlib.util.spec_from_file_location("browser_worker_fixture",ROOT/"worker.py")
 worker=importlib.util.module_from_spec(spec);spec.loader.exec_module(worker)
 import test_admin_build as fixtures
 class PublicationTests(unittest.TestCase):
     def test_complete_contract_and_executable_lane(self):
-        folder=ROOT/"plugins/abilities/Administrator/diagnostics"
-        fixtures.host.validate_diagnostics_package(folder)
-        prefix=fixtures.host.DIAGNOSTICS_ROOT
-        for name in ("adapter.py","runner.py","test_runner.py","plugin.json","diagnostics.skill.md"):
+        folder=ROOT/"plugins/abilities/Web/browser_control"
+        fixtures.host.validate_browser_package(folder)
+        prefix=fixtures.host.BROWSER_ROOT
+        for name in ("adapter.py","runner.py","egress.py","test_runner.py","plugin.json","browser_control.skill.md"):
             self.assertTrue(fixtures.host.hot_source_path(prefix+name))
         self.assertFalse(fixtures.host.hot_source_path(prefix+"unreviewed.py"))
         with tempfile.TemporaryDirectory()as tmp:
@@ -19,16 +19,16 @@ class PublicationTests(unittest.TestCase):
             dest=Path(tmp)/"package";shutil.copytree(folder,dest)
             manifest=json.loads((dest/"plugin.json").read_text());manifest["protocol"]=True
             (dest/"plugin.json").write_text(json.dumps(manifest))
-            with self.assertRaises(ValueError):fixtures.host.validate_diagnostics_package(dest)
+            with self.assertRaises(ValueError):fixtures.host.validate_browser_package(dest)
 class SupervisorTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name);self.bridge=worker.DiagnosticsPackages()
+        self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name);self.bridge=worker.BrowserPackages()
         self.folder=self.root/"package";self.folder.mkdir()
         # The stub loads the actual package runner/adapter and injects only WebDriver.
         program="\n".join([
             "import asyncio,importlib.util,runpy,sys",
             "from pathlib import Path",
-            "package=Path("+repr(str(ROOT/"plugins/abilities/Administrator/diagnostics"))+")",
+            "package=Path("+repr(str(ROOT/"plugins/abilities/Web/browser_control"))+")",
             "spec=importlib.util.spec_from_file_location('runner',package/'runner.py')",
             "r=importlib.util.module_from_spec(spec);spec.loader.exec_module(r)",
             "m=r.adapter()",
@@ -42,7 +42,7 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         ])+"\n"
         (self.folder/"runner.py").write_text(program)
         self.revision="old";self.hash="a"*64
-        self.select=mock.patch.object(worker,"diagnostics_package",side_effect=lambda:(self.folder,self.revision,self.hash));self.select.start()
+        self.select=mock.patch.object(worker,"browser_package",side_effect=lambda:(self.folder,self.revision,self.hash));self.select.start()
     async def asyncTearDown(self):
         for sid in list(self.bridge.sessions):await self.bridge.drop(sid)
         if self.bridge.reaper:
@@ -52,7 +52,7 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
     def identity(self):
         sid=str(uuid.uuid4());base=self.root/sid;base.mkdir()
         return base,{"session_id":sid,"user_id":"admin","agent_id":"shared_default","generation":"fixture","cookie":str(uuid.uuid4()),"expires_at":time.time()+300,"allowed_session_ids":[sid]}
-    async def call(self,base,trusted,name="dev_browser_action",**args):
+    async def call(self,base,trusted,name="browser_read",**args):
         return await self.bridge.call(name,args,base,trusted)
     async def test_state_recording_hot_revision_and_stateless_artifact(self):
         base,trusted=self.identity()
@@ -61,10 +61,10 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         self.revision="new";self.hash="b"*64
         read=await self.call(base,trusted,action="read");self.assertTrue(read["fresh_for_input"])
         self.assertEqual(read["plugin_revision"],"old")
-        self.assertEqual((await self.call(base,trusted,action="click",selector="#go"))["status"],"success")
-        started=await self.call(base,trusted,"dev_browser_record",action="start");self.assertTrue(started["recording"])
+        self.assertEqual((await self.call(base,trusted,"browser_input",action="click",selector="#go"))["status"],"success")
+        started=await self.call(base,trusted,"browser_record",action="start");self.assertTrue(started["recording"])
         await asyncio.sleep(1.2)
-        stopped=await self.call(base,trusted,"dev_browser_record",action="stop")
+        stopped=await self.call(base,trusted,"browser_record",action="stop")
         self.assertGreaterEqual(stopped["frames"],1,stopped)
         artifact=stopped["artifacts"][0]["artifact_id"]
         await self.call(base,trusted,action="close")
@@ -94,6 +94,6 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         process.kill();await process.wait()
         # Break after admission, rather than silently starting a replacement.
         with mock.patch.object(self.bridge,"exchange",side_effect=EOFError):
-            result=await self.call(base,trusted,action="click",selector="#go")
+            result=await self.call(base,trusted,"browser_input",action="click",selector="#go")
         self.assertEqual(result["status"],"uncertain",result);self.assertNotIn(base.name,self.bridge.sessions)
 if __name__=="__main__":unittest.main()

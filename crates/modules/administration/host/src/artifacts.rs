@@ -28,7 +28,7 @@ fn invalid() -> ApiError {
 async fn authority(host: &dyn AdministrationHost, sid: &str) -> Result<(String, Value), ApiError> {
     let not_found = || ApiError(StatusCode::NOT_FOUND, "Session not found".into());
     let access = host
-        .access(sid, &[("dev_browser_action", "diagnostics")])
+        .access(sid, &[("browser_read", "browser_control")])
         .await?
         .ok_or_else(not_found)?;
     if !access.active {

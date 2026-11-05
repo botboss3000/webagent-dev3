@@ -1,17 +1,31 @@
-//! Browser control through the user's own browser extension.
+//! Browsers the agent drives: the user's own Chrome through the WebAgent extension
+//! (Browser Extension), and a private server browser (Browser Control).
 //!
 //! The extension links to one WebAgent account and long-polls for queued actions; the
 //! agent's `browser_extension_action` tool queues one action and waits for its result. This crate
 //! holds the pure rules: which sites an agent may control, action admission, link codes
-//! and the queued call's lifecycle. The root adapter (`host/browser.rs`) owns storage,
-//! routes and tool dispatch.
+//! and the queued call's lifecycle. Browser Control runs in the worker's browser package;
+//! this crate holds its site-policy parsing. The root adapter (`host/browser.rs`) owns
+//! storage, routes, authority and tool dispatch.
 use anyhow::{bail, Result};
 use serde_json::Value;
 
-/// Tools served by this module.
-pub const TOOLS: &[&str] = &["browser_extension_status", "browser_extension_action"];
-/// The ability whose per-agent settings hold the site allowlist.
+/// Tools served by this module: the extension's, then Browser Control's.
+pub const TOOLS: &[&str] = &[
+    "browser_extension_status",
+    "browser_extension_action",
+    "browser_read",
+    "browser_input",
+    "browser_record",
+];
+/// Browser Control's tools, run in the worker's private browser.
+pub const SERVER_TOOLS: &[&str] = &["browser_read", "browser_input", "browser_record"];
+/// The ability whose per-agent settings hold the extension's site allowlist.
 pub const ABILITY: &str = "browser_extension";
+/// The ability whose per-agent settings hold Browser Control's allow and block lists.
+pub const SERVER_ABILITY: &str = "browser_control";
+/// Most hosts in one Browser Control site list.
+pub const SERVER_SITES_MAX: usize = 200;
 
 /// A queued action nobody fetches within this window fails as not started.
 pub const OFFLINE_SECS: u64 = 30;
@@ -45,6 +59,21 @@ pub fn sites(setting: &str) -> Vec<String> {
             ((!host.is_empty() && host.contains('.')) || host == "localhost")
                 .then(|| host.to_owned())
         })
+        .collect()
+}
+
+/// Hosts from a Browser Control `allow_sites` or `block_sites` setting, limited to the
+/// characters and count the browser package accepts; anything else is dropped.
+pub fn server_sites(setting: &str) -> Vec<String> {
+    sites(setting)
+        .into_iter()
+        .filter(|host| {
+            host.len() <= 253
+                && host
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-')
+        })
+        .take(SERVER_SITES_MAX)
         .collect()
 }
 
@@ -141,6 +170,14 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn server_sites_keep_package_safe_hosts_only() {
+        assert_eq!(
+            super::server_sites("https://Example.com/path, *.docs.rs\nbad_host.test, ünïcode.test"),
+            ["example.com", "docs.rs"]
+        );
+        assert_eq!(super::server_sites(&"a.test ".repeat(300)).len(), 200);
+    }
     #[test]
     fn sites_accept_pasted_urls_and_wildcards() {
         assert_eq!(

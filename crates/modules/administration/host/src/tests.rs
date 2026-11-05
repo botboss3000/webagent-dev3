@@ -35,9 +35,6 @@ struct Fake {
     refuse: Option<&'static str>,
     settings: Value,
     broker_reply: fn(&str, &Value) -> Value,
-    worker_reply: fn(&str, &Value) -> Value,
-    /// When set, saving a reply image fails with this message.
-    reply_failure: Option<&'static str>,
     events: Mutex<Vec<(String, String)>>,
 }
 
@@ -52,8 +49,6 @@ impl Fake {
             refuse: None,
             settings: json!({}),
             broker_reply: |_, _| json!({"status":"success","output":{"status":"success"}}),
-            worker_reply: |_, _| json!({"status":"success","output":"worker"}),
-            reply_failure: None,
             events: Mutex::new(Vec::new()),
         }
     }
@@ -140,28 +135,7 @@ impl AdministrationHost for Fake {
         _cancel: CancellationToken,
     ) -> Pending<'a, Result<Value>> {
         self.push("worker", name, args, trusted);
-        let reply = (self.worker_reply)(name, args);
-        Box::pin(async move { Ok(reply) })
-    }
-    fn reply_image<'a>(
-        &'a self,
-        sid: &'a str,
-        run_id: &'a str,
-        id: &'a str,
-        data: &'a str,
-    ) -> Pending<'a, Result<Value>> {
-        self.push(
-            "reply",
-            id,
-            &json!({"sid":sid,"run_id":run_id,"data":data}),
-            None,
-        );
-        Box::pin(async move {
-            match self.reply_failure {
-                Some(message) => bail!(message),
-                None => Ok(json!({"id":id,"name":"screenshot.png","media_type":"image/png"})),
-            }
-        })
+        Box::pin(async { Ok(json!({"status":"success","output":"worker"})) })
     }
     fn broker<'a>(
         &'a self,
@@ -591,62 +565,4 @@ async fn code_index_maintenance_routes_snapshots_to_worker_and_live_work_to_brok
     )
     .await
     .is_err());
-}
-
-#[tokio::test]
-async fn screenshots_become_reply_attachments_and_failures_keep_the_screenshot() {
-    use crate::tools::attach_screenshot;
-    let dir = root();
-    let mut host = Fake::new(dir.path()).await;
-    host.worker_reply = |_, _| json!({"status":"success","png_base64":"iVBORw0K"});
-    let authority = json!({"session_id":SID,"cookie":"private"});
-    let shot = json!({"status":"success","artifact_id":"33333333-3333-4333-8333-333333333333"});
-    let output = attach_screenshot(
-        &host,
-        SID,
-        RUN,
-        authority.clone(),
-        shot.clone(),
-        CancellationToken::new(),
-    )
-    .await;
-    assert_eq!(
-        output["attachment"]["id"],
-        "33333333-3333-4333-8333-333333333333"
-    );
-    assert_eq!(output["artifact_id"], shot["artifact_id"]);
-    let sent = host.sent();
-    assert_eq!(sent[0].name, "administrator_artifact_get");
-    assert_eq!(sent[0].trusted, Some(authority.clone()));
-    assert_eq!(sent[1].socket, "reply");
-    assert_eq!(
-        sent[1].args,
-        json!({"sid":SID,"run_id":RUN,"data":"iVBORw0K"})
-    );
-    // A failed screenshot is returned unchanged and nothing is saved.
-    let failed = json!({"status":"error","output":"rejected"});
-    let unchanged = attach_screenshot(
-        &host,
-        SID,
-        RUN,
-        authority.clone(),
-        failed.clone(),
-        CancellationToken::new(),
-    )
-    .await;
-    assert_eq!(unchanged, failed);
-    assert_eq!(host.sent().len(), 2);
-    host.reply_failure = Some("quota reached");
-    let kept = attach_screenshot(
-        &host,
-        SID,
-        RUN,
-        authority,
-        shot.clone(),
-        CancellationToken::new(),
-    )
-    .await;
-    assert_eq!(kept["artifact_id"], shot["artifact_id"]);
-    assert_eq!(kept["attachment_error"], "quota reached");
-    assert!(kept.get("attachment").is_none());
 }

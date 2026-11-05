@@ -2061,6 +2061,9 @@
           "max_sessions": 50,
           "revision": 7,
           "tools": {
+            "browser_input": "ask",
+            "browser_read": "ask",
+            "browser_record": "ask",
             "calculate": "auto",
             "code_index_coverage": "ask",
             "code_index_lookup": "ask",
@@ -2068,8 +2071,6 @@
             "code_index_scan": "ask",
             "code_index_trace": "ask",
             "commit_and_push": "ask",
-            "dev_browser_action": "ask",
-            "dev_browser_record": "ask",
             "dev_browser_url": "ask",
             "file_list": "ask",
             "file_read": "ask",

@@ -1,0 +1,56 @@
+{
+  "name": "browser_input",
+  "description": "Click, type or press a key in the private server browser. Each input needs a browser_read read under 120 seconds old whose region contains the target; password and credential fields are refused",
+  "effect": "write",
+  "retry_risk": "none",
+  "retry_hint": "read the page again to see whether the earlier click or typing already took effect; every input needs its own fresh read, so input cannot repeat blindly",
+  "default_access": {
+    "operator": "ask",
+    "member": "ask",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "click",
+          "type",
+          "press"
+        ]
+      },
+      "selector": {
+        "type": "string",
+        "description": "The target; it must lie inside the region your last browser_read read covered. press: optional, defaults to the focused element"
+      },
+      "text": {
+        "type": "string",
+        "description": "type only: literal text to type"
+      },
+      "key": {
+        "type": "string",
+        "enum": [
+          "Tab",
+          "Shift+Tab",
+          "Enter",
+          "Escape",
+          "Space",
+          "ArrowUp",
+          "ArrowDown",
+          "ArrowLeft",
+          "ArrowRight",
+          "Home",
+          "End",
+          "PageUp",
+          "PageDown"
+        ],
+        "description": "press only: sent to selector, or to the focused element"
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "additionalProperties": false
+  }
+}

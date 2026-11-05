@@ -1,21 +1,20 @@
 {
   "version": 1,
-  "id": "diagnostics",
+  "id": "browser_control",
   "protocol": 1,
   "interface": 1,
   "runtime": "python3",
   "entrypoint": "runner.py",
   "tools": [
-    "read_diagnostics",
-    "login_as_current_user",
-    "dev_browser_url",
-    "dev_browser_action",
-    "dev_browser_record"
+    "browser_read",
+    "browser_input",
+    "browser_record"
   ],
   "build": {
     "inputs": [
       "runner.py",
-      "adapter.py"
+      "adapter.py",
+      "egress.py"
     ],
     "dependencies": [],
     "toolchain": "image-python3",
@@ -24,10 +23,9 @@
       "-B"
     ],
     "assets": [
-      "diagnostics.json",
-      "diagnostics.skill.md",
-      "tools",
-      "skills"
+      "browser_control.json",
+      "browser_control.skill.md",
+      "tools"
     ]
   }
 }

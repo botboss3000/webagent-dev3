@@ -1,18 +1,18 @@
-"""Private native Diagnostics protocol: trusted worker frames, never model-selected authority."""
+"""Private native Browser Control protocol: trusted worker frames, never model-selected authority."""
 import asyncio,base64,contextlib,ctypes,importlib.util,json,os,signal,sys,time
 from pathlib import Path
 PROTOCOL=1
-IMPLEMENTATION_VERSION="1.0.1"
+IMPLEMENTATION_VERSION="2.0.0"
 MAX_FRAME=2*1024*1024
-TOOLS={"login_as_current_user","login_as_current_user_v3","dev_browser_action","dev_browser_record","administrator_artifact_get","close"}
+TOOLS={"login_as_current_user","login_as_current_user_v3","browser_read","browser_input","browser_record","administrator_artifact_get","close"}
 def adapter():
     """Load only the helper inside this pinned package."""
-    spec=importlib.util.spec_from_file_location("diagnostics_package_adapter",Path(__file__).with_name("adapter.py"))
+    spec=importlib.util.spec_from_file_location("browser_control_package_adapter",Path(__file__).with_name("adapter.py"))
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
 async def exchange(module,request):
     """Validate transport separately from the browser's caller/session validation."""
     if type(request.get("protocol"))is not int or request["protocol"]!=1 or request.get("tool")not in TOOLS:
-        raise ValueError("Invalid native Diagnostics frame")
+        raise ValueError("Invalid native Browser Control frame")
     invocation=request.get("invocation_id")
     if not isinstance(invocation,str)or not 1<=len(invocation)<=80:raise ValueError("Invalid invocation")
     base=Path(request["base"]);trusted=request["trusted"]

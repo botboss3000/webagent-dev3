@@ -57,13 +57,16 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             "cookie":str(uuid.uuid4()),"generation":"first","expires_at":time.time()+300,
             "allowed_session_ids":[self.sid]}
         self.drivers=[]
-        def factory(profile,origin):
+        def factory(profile,origin,**options):
             driver=Driver();driver.typed=[];self.drivers.append(driver);return driver
         self.service=browser.BrowserService(self.root/"private",driver_factory=factory)
     async def asyncTearDown(self):
         await self.service.close_all(self.base)
         self.temp.cleanup()
-    async def call(self,name="dev_browser_action",**args):
+    async def call(self,name=None,**args):
+        # Input actions belong to browser_input; signed-in routes are passed as url.
+        if name is None:name="browser_input" if args.get("action") in {"click","type","press"} else "browser_read"
+        if "path" in args and name=="browser_read":args["url"]=args.pop("path")
         return await self.service.call(name,args,self.base,self.trusted)
     async def test_optional_action_schema_defaults_preserve_boundaries(self):
         self.assertEqual((await self.call("login_as_current_user",path=""))["status"],"success")
@@ -78,11 +81,11 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                      {"action":"navigate","path":"","selector":"","text":""},
                      {"action":"close","unknown":""}]:
             self.assertEqual((await self.call(**args))["status"],"error",args)
-        args={"action":"read","selector":None,"path":None,"text":None}
-        self.assertEqual(browser.validate_args("dev_browser_action",args),"read")
-        self.assertEqual(browser.validate_args("dev_browser_action",{"action":"read","expected_sequence":0}),"read")
+        args={"action":"read","selector":None,"url":None,"text":None}
+        self.assertEqual(browser.validate_args("browser_read",args),"read")
+        self.assertEqual(browser.validate_args("browser_read",{"action":"read","expected_sequence":0}),"read")
         with self.assertRaises(browser.Rejected):
-            browser.validate_args("dev_browser_action",{"action":"read","expected_sequence":1})
+            browser.validate_args("browser_read",{"action":"read","expected_sequence":1})
         self.assertEqual(args,{"action":"read"})
     def test_native_read_script_preserves_javascript_newline_escape(self):
         self.assertIn("text+=chunk+'\\n';",browser.READ_SCRIPT)
@@ -228,6 +231,49 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         # Media emulation is re-applied after navigation, like the viewport.
         driver.cdp.clear();await self.call(action="navigate",path="/app?tab=app")
         self.assertEqual(driver.cdp[-1][0],"Emulation.setEmulatedMedia")
+    async def test_signed_out_public_urls_site_policy_guard_and_tool_split(self):
+        public={k:v for k,v in self.trusted.items() if k!="cookie"}
+        public["sites"]={"allow":[],"block":["blocked-by-policy.test"]}
+        for url,reason in [("http://localhost/","Private and internal"),("https://10.0.0.1/","Private and internal"),
+                           ("https://"+"name"+":"+"value"+"@example.com/","user name or password"),("ftp://example.com/","full http"),
+                           ("https://example.com:8080/","ports 80 and 443"),("/app","full http"),("https://sub.blocked-by-policy.test/","blocks")]:
+            with self.assertRaises(browser.Rejected) as caught:browser.validate_url(url,public)
+            self.assertIn(reason,str(caught.exception),url)
+        allow={**public,"sites":{"allow":["example.com"],"block":[]}}
+        self.assertEqual(browser.validate_url("https://www.example.com/a?b=1",allow),"https://www.example.com/a?b=1")
+        with self.assertRaises(browser.Rejected) as caught:browser.validate_url("https://other.test/",allow)
+        self.assertIn("may only open: example.com",str(caught.exception))
+        with self.assertRaises(browser.Rejected):browser.validate_trusted(self.base,{**public,"sites":{"allow":["Bad Host"],"block":[]}})
+        options=[]
+        def factory(profile,origin,**kwargs):
+            options.append((origin,kwargs));driver=Driver();driver.typed=[];self.drivers.append(driver)
+            def get(url):
+                driver.revision+=1
+                driver.current_url="chrome-error://chromewebdata/" if "refused.test" in url else url
+            driver.get=get;return driver
+        self.service.factory=factory
+        call=lambda name,**args:self.service.call(name,args,self.base,public)
+        opened=await call("browser_read",action="navigate",url="https://example.com/")
+        self.assertEqual((opened["status"],opened["signed_in"],opened["url"]),("success",False,"https://example.com/"),opened)
+        self.assertIsNone(options[0][0]);self.assertEqual(options[0][1]["proxy"],browser.egress_guard().port)
+        self.assertEqual(self.drivers[-1].cookies,[])
+        browser.egress_guard().refused("refused.test","it resolves to a private or internal address")
+        blocked=await call("browser_read",action="navigate",url="https://refused.test/")
+        self.assertIn("Blocked: refused.test",blocked["output"])
+        self.assertIn("navigate to another URL",(await call("browser_read",action="read"))["output"])
+        self.assertEqual((await call("browser_read",action="navigate",url="https://example.com/next"))["status"],"success")
+        read=await call("browser_read",action="read")
+        self.assertEqual(read["status"],"success");self.assertTrue(read["text"].startswith("Visible bounded text"))
+        self.assertIn("browser_input",(await call("browser_read",action="click",selector="#button"))["output"])
+        self.assertIn("browser_read",(await call("browser_input",action="read"))["output"])
+        self.assertEqual((await call("browser_input",action="click",selector="#button"))["status"],"success")
+        self.assertIn("needs Diagnostics",(await call("login_as_current_user"))["output"])
+        # Signing in replaces the signed-out browser with one locked to the development origin.
+        self.service.factory=lambda profile,origin,**kwargs:(self.drivers.append(Driver()) or self.drivers[-1])
+        self.drivers.append(None);self.drivers.pop()
+        signed=await self.call("login_as_current_user")
+        self.assertEqual(signed["status"],"success",signed);self.assertTrue(signed["signed_in"])
+        self.assertIn("Only exact relative",(await self.call(action="navigate",url="https://example.com/"))["output"])
     async def test_fresh_read_before_each_input_and_secret_targets_blocked(self):
         self.assertEqual((await self.call(action="click",selector="#button"))["status"],"error")
         read=await self.call(action="read")
@@ -338,15 +384,15 @@ class RealBrowserTests(unittest.IsolatedAsyncioTestCase):
                 login=await service.call("login_as_current_user",{},base,trusted)
                 self.assertEqual(login["status"],"success",login)
                 self.assertNotIn(cookie,json.dumps(login))
-                read=await service.call("dev_browser_action",{"action":"read"},base,trusted)
+                read=await service.call("browser_read",{"action":"read"},base,trusted)
                 self.assertEqual(read["status"],"success",read)
                 self.assertIn("Fixture ready",read["text"])
                 self.assertNotIn("PRIVATE_VALUE",read["text"])
-                clicked=await service.call("dev_browser_action",{"action":"click","selector":"#go"},base,trusted)
+                clicked=await service.call("browser_input",{"action":"click","selector":"#go"},base,trusted)
                 self.assertEqual(clicked["status"],"success",clicked)
-                read=await service.call("dev_browser_action",{"action":"read"},base,trusted)
+                read=await service.call("browser_read",{"action":"read"},base,trusted)
                 self.assertIn("Clicked",read["text"])
-                shot=await service.call("dev_browser_action",{"action":"screenshot"},base,trusted)
+                shot=await service.call("browser_read",{"action":"screenshot"},base,trusted)
                 self.assertEqual(shot["status"],"success",shot)
                 image=service.read_artifact(base,trusted,shot["artifact_id"])
                 self.assertTrue(image.startswith(b"\x89PNG"))

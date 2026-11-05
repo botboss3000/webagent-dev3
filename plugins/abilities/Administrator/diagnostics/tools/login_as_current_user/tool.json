@@ -1,6 +1,6 @@
 {
   "name": "login_as_current_user",
-  "description": "Open a development browser authenticated as the current caller; never returns credentials",
+  "description": "Sign the Browser Control browser in to the V3 development app as the current caller and open a route; never returns credentials",
   "effect": "write",
   "default_access": {
     "operator": "auto",

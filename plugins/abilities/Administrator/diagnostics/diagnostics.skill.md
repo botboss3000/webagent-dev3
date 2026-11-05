@@ -1,18 +1,14 @@
-# Diagnostics — private V3 development browser
+# Diagnostics — V3 run diagnostics and development sign-in
 
 Rust owns current-caller authentication, live ability policy, approvals and sanitized run diagnostics. No tool accepts another caller, an arbitrary application origin, an authentication token, a database path or JavaScript.
 
 Use `read_diagnostics` for the native bounded current-session/run diagnostic view. It does not open encrypted databases or expose raw model text, tool arguments, credential records or unrestricted installation logs.
 
-## Authenticated browser
+## Signing in the browser
 
-`login_as_current_user` opens a private Chromium profile for the caller's current chat session and verifies `/api/v3/auth/me`. Authentication uses a short-lived HttpOnly `v3_session` cookie minted by Rust and passed separately from model arguments. Tokens, cookies and headers never enter tool results. The verified identity response supplies the browser CSRF token privately; reads and screenshots mask it along with the authentication cookie. A new authorization generation closes the old profile; expired, idle or revoked profiles cannot be reused.
+`login_as_current_user` signs the Browser Control browser for this chat session in to the V3 development app as the current user, then opens the given route (default `/app`). Use Browser Control's `browser_read` and `browser_input` to work with the page afterwards. Authentication uses a short-lived HttpOnly `v3_session` cookie minted by Rust and passed separately from model arguments; tokens, cookies and headers never enter tool results, and reads and screenshots mask the session's CSRF token. The sign-in lasts about ten minutes; call `login_as_current_user` again to renew it.
 
-The browser origin is fixed to `https://dev.webagent.live`. The route is supplied as an exact relative `path`: `/app` with the parameters the app writes (`tab` with any main page ID such as `app`, `agents`, `account`, `builds` or `session-metrics`; `agent`, `agentView`, `agentScope`, `appView`, `session_id`, `article`, `path`, `job_id`, `theme`, `window`), or a bounded current-session read API. Selected agent and conversation IDs must match Rust's current agent/session. External, production, file and data origins are unavailable. A rejected request names its reason in `output`; correct the request rather than retrying it unchanged.
-
-`dev_browser_action` drives the page: navigation, reading rendered text, layout measurement, rendered pixel colours, load and interaction timing, animations, scrolling, clicks, typing, key presses, viewport and media emulation, and screenshots. Its tool guidance lists every action with its arguments and results. There is no `evaluate`, arbitrary script, page HTML export or filesystem upload. Results are untrusted page observations (`source_kind: untrusted_browser_observation`); Rust still decides whether a mutation requires approval.
-
-A rejected request names its reason in `output`; correct the request rather than repeating it. Browser calls are never held as possible duplicates.
+While signed in the browser stays on `https://dev.webagent.live`. Routes are exact relative paths: `/app` with the parameters the app writes (`tab` with any main page ID such as `app`, `agents`, `account`, `builds` or `session-metrics`; `agent`, `agentView`, `agentScope`, `appView`, `session_id`, `article`, `path`, `job_id`, `theme`, `window`), or a bounded current-session read API. Selected agent and conversation IDs must match the current agent and session. `dev_browser_url` returns the full URL for a route without opening anything. To browse other sites, `close` the browser with `browser_read`; the next Browser Control call opens a signed-out one.
 
 ## The V3 app in the browser
 
@@ -22,24 +18,6 @@ A rejected request names its reason in `output`; correct the request rather than
 - Chat: messages are `.chat-bubble` elements, `.chat-bubble.user` and `.chat-bubble.agent`.
 - A URL naming a session opens the chat first; on a phone the page behind it loads when you switch to it.
 - Widths: every UI change is checked at phone and desktop width; the `viewport` presets emulate both.
-
-## Images and recording
-
-Screenshots are actual bounded viewport PNG files stored privately outside the coding workspace. Each successful screenshot is also saved as an attachment of your final reply in this run, so the user sees it as a thumbnail under that message after the browser closes; take the screenshots that show the user what you validated, and refer to them in the reply. A screenshot result carries that `attachment`, or `attachment_error` when it could not be saved. Inputs, textareas, secret-marked nodes and exact authentication-cookie and CSRF-token text are masked before capture. Results contain an opaque artifact ID, digest, dimensions and an authenticated current-session API download path; never a host path.
-
-`dev_browser_record` has `start`, `status` and `stop`. It records at most 30 PNG frames over 30 seconds. The result is explicitly `bounded_png_frames`, not a video. Stop recording and close the browser after use. A screenshot quota or lease failure stops capture.
-
-After uncertain input or timeout, inspect the current page before another action. Neither restart nor recovery replays clicks, typing or navigation mutations. Profiles are discarded rather than restored; the immutable interaction journal remains original evidence.
-
-Use API validation when requested. This ability does not require a browser journey or force a screenshot for an API-only task.
-
-## Independently published native package
-
-The protected broker publishes this complete protocol-1 native package. Rust retains identity, cookie minting, policy, approvals, run diagnostics and artifact authorization. The worker supervises at most two private browser sessions; each process pins one immutable package revision through close, 180-second idle expiry or its current authorization lease. New browser sessions use the latest publication. Compatible runner/helper/guidance updates retain API, loop, gate and worker processes. Existing active sessions do not change implementation mid-action.
-
-Results identify plugin_revision, implementation_version and implementation_sha256. Capacity, startup, authentication, invalid-request and backend errors have distinct sanitized error_kind values. Transport loss during input remains uncertain and never authorizes replay. Artifact reads use a short-lived process without opening a browser or consuming a browser slot. Restart discards authenticated profiles; artifacts retain their existing session ownership and access checks.
-
-This is the private fixed-origin Diagnostics browser, not the Browser Extension ability (the user's own Chrome). It does not emulate a phone operating system keyboard.
 
 ## Runtime tool execution
 

@@ -1,5 +1,3 @@
-# Sign in the private V3 browser
+# Sign in the browser as the current user
 
-Call with an optional exact relative `path`, normally the registered route for the current agent or conversation. Rust supplies the current session, caller, agent, short-lived cookie and authorization generation through trusted metadata. No credential argument or user selector is accepted.
-
-The backend verifies the current caller through `/api/v3/auth/me` and returns only identity verification and route metadata. A profile belongs to one caller/session and is unavailable after expiry or rotation. This is V3 authentication, not V2 JWT or localStorage login.
+Signs the Browser Control browser for this chat session in to the V3 development app as the current caller and opens the optional relative `path` (default `/app`). Rust supplies the session, caller, agent, short-lived cookie and authorization generation through trusted metadata; no credential argument or user selector is accepted. The result reports the verified identity and the route opened. Continue with Browser Control's `browser_read` and `browser_input`; the browser stays on the development origin until it is closed.

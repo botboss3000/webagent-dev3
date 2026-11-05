@@ -1,4 +1,8 @@
-"""Private fixed-origin browser execution; Rust owns authentication and approval.
+"""Browser Control engine: one private Chromium per chat session; Rust owns authority and approval.
+
+Two modes. Signed out (no cookie in the trusted authority): public http(s) sites through the
+egress guard, filtered by the agent's allow/block lists. Signed in (Diagnostics'
+login_as_current_user supplies a cookie): the fixed development origin only.
 
 Trusted cookie metadata is a separate dispatcher field, never a model argument.
 There is no caller-supplied JavaScript, origin, profile or filesystem path.
@@ -8,6 +12,8 @@ import asyncio
 import base64
 import contextlib
 import hashlib
+import importlib.util
+import ipaddress
 import json
 import logging
 import os
@@ -48,6 +54,8 @@ TOUCH_VIEWPORTS={"phone","phone_small","tablet"}
 IGNORED_PAGE_ERRORS=("static.cloudflareinsights.com",)
 MAX_PAGE_ERRORS=20
 MAX_ELEMENTS=50
+READ_ACTIONS={"navigate","read","measure","pixels","performance","wait_for","animations","scroll","viewport","emulate","screenshot","close"}
+INPUT_ACTIONS={"click","type","press"}
 MEASURE_PAGE=20
 MAX_PIXELS=20
 MAX_SCROLL=20000
@@ -238,6 +246,18 @@ document.querySelectorAll('[data-v3-private-mask]').forEach(node=>node.remove())
 class Rejected(Exception):pass
 class Uncertain(Exception):pass
 class StartupFailure(Rejected):pass
+_GUARD=None
+def egress_guard():
+    """The process's egress guard, started on first signed-out use."""
+    global _GUARD
+    if _GUARD is None:
+        spec=importlib.util.spec_from_file_location("browser_control_egress",Path(__file__).with_name("egress.py"))
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        _GUARD=module.Guard()
+    return _GUARD
+def host_matches(host,patterns):
+    """A pattern covers its host and every subdomain."""
+    return any(host==p or host.endswith("."+p) for p in patterns)
 class AuthenticationFailure(Rejected):pass
 class CapacityFailure(Rejected):pass
 def canonical_id(value):
@@ -253,14 +273,42 @@ def validate_trusted(base,trusted):
         raise Rejected("Invalid trusted caller")
     if not isinstance(trusted.get("agent_id"),str) or not re.fullmatch(r"[a-z0-9_-]{1,64}",trusted["agent_id"]):
         raise Rejected("Invalid trusted agent")
-    if not canonical_id(trusted.get("cookie")):raise Rejected("Invalid trusted authentication")
+    if trusted.get("cookie") is not None and not canonical_id(trusted.get("cookie")):raise Rejected("Invalid trusted authentication")
+    if trusted.get("cookie") is None:
+        sites=trusted.get("sites")
+        if not isinstance(sites,dict) or set(sites)!={"allow","block"} or any(not isinstance(sites[k],list) or len(sites[k])>200
+            or any(not isinstance(h,str) or not re.fullmatch(r"[a-z0-9.-]{1,253}",h) for h in sites[k]) for k in sites):
+            raise Rejected("Invalid trusted site policy")
     if not isinstance(trusted.get("generation"),str) or not 1<=len(trusted["generation"])<=128:
         raise Rejected("Invalid trusted generation")
     expires=trusted.get("expires_at")
     if type(expires) not in (int,float) or not time.time()<expires<=time.time()+601:
         raise Rejected("Browser authorization expired or exceeds lease")
     if trusted.get("allowed_session_ids")!=[sid]:raise Rejected("Browser routes require the current session")
-    return dict(trusted)
+    return {**trusted,"cookie":trusted.get("cookie")}
+def validate_url(url,trusted):
+    """Signed out: a public http(s) URL the agent's site policy allows. Signed in: a development route."""
+    if trusted.get("cookie") is not None:
+        if isinstance(url,str) and url.startswith(ORIGIN+"/"):url=url[len(ORIGIN):]
+        return validate_path(url,trusted)
+    if not isinstance(url,str) or not 1<=len(url)<=2048 or any(ord(c)<33 for c in url) or "\\" in url:
+        raise Rejected("Navigate needs a full http or https URL")
+    parsed=urlsplit(url)
+    if parsed.scheme not in ("http","https") or not parsed.hostname:raise Rejected("Navigate needs a full http or https URL")
+    if parsed.username or parsed.password:raise Rejected("URLs with a user name or password are not allowed")
+    try:port=parsed.port
+    except ValueError:raise Rejected("Invalid URL port") from None
+    if port not in (None,80,443):raise Rejected("Only ports 80 and 443 are allowed")
+    host=parsed.hostname.lower().rstrip(".")
+    with contextlib.suppress(ValueError):
+        if not ipaddress.ip_address(host).is_global:raise Rejected("Private and internal addresses are not allowed")
+    # The guard checks resolved addresses too; obvious internal names fail early with a clear reason.
+    if "." not in host or host_matches(host,["localhost","local","internal","lan","home.arpa"]):
+        raise Rejected("Private and internal addresses are not allowed")
+    sites=trusted["sites"]
+    if host_matches(host,sites["block"]):raise Rejected("This agent's site policy blocks "+host)
+    if sites["allow"] and not host_matches(host,sites["allow"]):raise Rejected("This agent may only open: "+", ".join(sites["allow"]))
+    return urlunsplit((parsed.scheme,parsed.netloc.lower(),parsed.path or "/",parsed.query,""))
 def validate_path(path,trusted):
     """Confine navigation to the fixed development origin and implemented current-session routes."""
     if not isinstance(path,str) or not 1<=len(path)<=2048 or any(ord(c)<32 for c in path) or "\\" in path:
@@ -295,17 +343,19 @@ def validate_args(name,args):
     if not isinstance(args,dict):raise Rejected("Browser arguments must be an object")
     if name in {"login_as_current_user","login_as_current_user_v3"}:
         allowed={"path"};action="login"
-    elif name=="dev_browser_action":
-        allowed={"action","path","selector","text","preset","offset","condition","timeout_ms","quiet_ms","dx","dy","key",
+    elif name=="browser_read":
+        allowed={"action","url","selector","offset","condition","text","timeout_ms","quiet_ms","dx","dy","preset",
             "color_scheme","reduced_motion","styles","points","expected_sequence"};action=args.get("action")
-        if action not in {"navigate","read","click","type","screenshot","viewport","close","measure","wait_for","animations",
-            "scroll","press","emulate","pixels","performance"}:raise Rejected("Unsupported browser action")
-    elif name=="dev_browser_record":
+        if action not in READ_ACTIONS:raise Rejected("browser_read actions: "+", ".join(sorted(READ_ACTIONS))+"; click, type and press use browser_input")
+    elif name=="browser_input":
+        allowed={"action","selector","text","key","expected_sequence"};action=args.get("action")
+        if action not in INPUT_ACTIONS:raise Rejected("browser_input actions: click, type, press; everything else uses browser_read")
+    elif name=="browser_record":
         allowed={"action"};action=args.get("action")
         if action not in {"start","stop","status"}:raise Rejected("Unsupported recorder action")
-    else:raise Rejected("Unknown Diagnostics browser tool")
+    else:raise Rejected("Unknown browser tool")
     if set(args)-allowed:raise Rejected("Unknown browser argument")
-    permitted={"login":{"path"},"navigate":{"path"},"read":{"selector","offset"},"click":{"selector"},
+    permitted={"login":{"path"},"navigate":{"url"},"read":{"selector","offset"},"click":{"selector"},
         "type":{"selector","text"},"screenshot":set(),"viewport":{"preset"},"close":set(),"start":set(),"stop":set(),"status":set(),
         "measure":{"selector","offset","styles"},"pixels":{"points","selector"},"performance":set(),"wait_for":{"condition","selector","text","timeout_ms","quiet_ms"},"animations":{"selector"},
         "scroll":{"selector","dx","dy"},"press":{"key","selector"},"emulate":{"color_scheme","reduced_motion"}}
@@ -317,6 +367,7 @@ def validate_args(name,args):
             del args[key]
     if action in {"read","animations","scroll","press","wait_for","pixels"} and args.get("selector") in ("",None):args.pop("selector",None)
     if action=="login" and args.get("path") in ("",None):args.pop("path",None)
+    if action=="navigate" and not args.get("url"):raise Rejected("Navigate needs a url")
     if "selector" in args and (not isinstance(args["selector"],str) or not 1<=len(args["selector"])<=256 or "\0" in args["selector"]):
         raise Rejected("Invalid bounded CSS selector")
     if "text" in args and (not isinstance(args["text"],str) or len(args["text"].encode())>4096 or "\0" in args["text"]):
@@ -391,7 +442,7 @@ def cleanup_prior(directory):
                 if process_stamp(pid)==data.get("stamp"):os.killpg(pid,signal.SIGKILL)
         except OSError:pass
     record.unlink()
-def chrome_factory(profile,origin,*,offline=False):
+def chrome_factory(profile,origin,*,offline=False,proxy=None):
     # Selenium's debug transport logging includes cookie command bodies.
     # This private worker suppresses those libraries instead of trusting log redaction.
     """Start fixed-origin Chromium with private storage and scrubbed partial-startup cleanup."""
@@ -399,7 +450,7 @@ def chrome_factory(profile,origin,*,offline=False):
         logger=logging.getLogger(name);logger.setLevel(logging.CRITICAL);logger.propagate=False
     from selenium import webdriver
     from selenium.webdriver.chrome.service import Service
-    parsed=urlsplit(origin);port=parsed.port or (443 if parsed.scheme=="https" else 80)
+    parsed=urlsplit(origin or "");port=parsed.port or (443 if parsed.scheme=="https" else 80)
     options=webdriver.ChromeOptions()
     options.binary_location="/usr/bin/chromium"
     for argument in ("--headless=new","--no-sandbox","--disable-dev-shm-usage",
@@ -410,8 +461,16 @@ def chrome_factory(profile,origin,*,offline=False):
     options.add_argument("--user-data-dir="+str(profile))
     # Unrelated origins cannot receive browser network traffic. Only the fixed
     # origin bypasses an intentionally unavailable local proxy.
-    options.add_argument("--proxy-server=http://127.0.0.1:9")
-    options.add_argument("--proxy-bypass-list="+("<-loopback>" if offline else "<-loopback>;"+parsed.hostname+":"+str(port)))
+    if proxy:
+        # Signed out: every request, loopback included, goes through the egress guard.
+        options.add_argument("--proxy-server=http://127.0.0.1:"+str(proxy))
+        options.add_argument("--proxy-bypass-list=<-loopback>")
+        options.add_argument("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
+        options.add_argument("--disable-quic")
+        options.add_argument("--dns-prefetch-disable")
+    else:
+        options.add_argument("--proxy-server=http://127.0.0.1:9")
+        options.add_argument("--proxy-bypass-list="+("<-loopback>" if offline else "<-loopback>;"+parsed.hostname+":"+str(port)))
     if offline:
         options.add_argument("--host-resolver-rules=MAP * ~NOTFOUND")
         options.add_argument("--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
@@ -446,8 +505,11 @@ class BrowserState:
         self.touched=time.monotonic();self.observed=None;self.observed_url=""
         self.observed_selector="";self.observed_at=0;self.viewport=None
         self.media={};self.last_action="";self.last_action_at=None
+        self.signed_in=cookie is not None;self.sites=None
+        # Signed out there is no credential to scrub; a random value keeps the scrub scripts harmless.
+        if cookie is None:self.cookie=str(uuid.uuid4())
 
-# @code-index {"version":1,"feature":"diagnostics-private-browser","aliases":["login as current user","private development browser"],"purpose":"Confines Diagnostics browser actions and artifacts to worker-bound current-caller authority; resource defaults live in this package and worker provisioning","span_lines":80,"configuration":{"status":"not_applicable","references":[],"opportunities":[],"rationale":"Current-caller ownership and fixed-origin confinement are enforced security invariants."}}
+# @code-index {"version":1,"feature":"browser-control-private-browser","aliases":["login as current user","private development browser","browser control"],"purpose":"Confines Browser Control actions and artifacts to worker-bound current-caller authority, signed out behind the egress guard or signed in on the development origin; resource defaults live in this package and worker provisioning","span_lines":80,"configuration":{"status":"not_applicable","references":[],"opportunities":[],"rationale":"Current-caller ownership and fixed-origin confinement are enforced security invariants."}}
 class BrowserService:
     def __init__(self,private_root=PRIVATE_ROOT,*,test_origin=None,driver_factory=None):
         """Initialize private state and synchronization without opening a browser."""
@@ -486,6 +548,12 @@ class BrowserService:
         return directory
     def safe_url(self,state):
         """Check the observed URL after browser effects and reject cross-origin or cross-session state."""
+        if not state.signed_in:
+            current=state.driver.current_url
+            if current=="about:blank":return current
+            if not current.startswith(("http://","https://")):
+                raise Rejected("The last navigation was blocked or failed; navigate to another URL")
+            return validate_url(current,{"cookie":None,"sites":state.sites})
         parsed=urlsplit(state.driver.current_url)
         origin=urlunsplit((parsed.scheme,parsed.netloc,"","",""))
         if origin!=self.origin:raise Uncertain("Browser left the fixed development origin; inspect the action before retrying")
@@ -521,7 +589,8 @@ class BrowserService:
         sid=trusted["session_id"];self.purge()
         state=self.states.get(sid)
         if state and (state.user!=trusted["user_id"]):raise Rejected("Browser caller mismatch")
-        if state and (state.cookie!=trusted["cookie"] or state.generation!=trusted["generation"] or state.agent!=trusted["agent_id"]):
+        if state and (state.signed_in!=(trusted["cookie"] is not None) or (state.signed_in and state.cookie!=trusted["cookie"])
+            or state.sites!=trusted.get("sites") or state.generation!=trusted["generation"] or state.agent!=trusted["agent_id"]):
             self.drop(sid);state=None
         if state:return state
         if len(self.states)>=MAX_SESSIONS:raise CapacityFailure("Private browser capacity reached")
@@ -531,21 +600,20 @@ class BrowserService:
         if profile.is_symlink():raise Rejected("Invalid browser profile")
         if profile.exists():shutil.rmtree(profile) # Restart never restores an authenticated profile.
         profile.mkdir(mode=0o700)
-        try:driver=self.factory(profile,self.origin)
+        try:driver=self.factory(profile,self.origin) if trusted["cookie"] is not None else self.factory(profile,None,proxy=egress_guard().port)
         except Exception:
             with contextlib.suppress(OSError):shutil.rmtree(profile)
             raise StartupFailure("Private browser startup failed") from None
         state=BrowserState(sid,trusted["user_id"],trusted["generation"],trusted["cookie"],
             trusted["expires_at"],driver,directory)
         state.agent=trusted["agent_id"]
+        if trusted["cookie"] is None:
+            state.sites=trusted["sites"]
+            self.record_process(driver,directory)
+            self.states[sid]=state
+            return state
         try:
-            try:
-                process=driver.service.process
-                if process and process.poll() is None:
-                    with (directory/"driver.json").open("x") as output:
-                        json.dump({"pid":process.pid,"stamp":process_stamp(process.pid)},output)
-                    os.chmod(directory/"driver.json",0o600)
-            except AttributeError:pass
+            self.record_process(driver,directory)
             driver.get(self.origin+"/health/ready")
             first=urlsplit(driver.current_url)
             if urlunsplit((first.scheme,first.netloc,"","",""))!=self.origin:raise Rejected("Initial browser origin mismatch")
@@ -565,6 +633,19 @@ class BrowserService:
         except Exception:
             self.kill(state)
             raise AuthenticationFailure("Private browser identity verification failed") from None
+    def ensure_open(self,trusted):
+        """Open (or reuse) this session's browser without acting on a page."""
+        with self.guard:
+            self.purge();return self.open(trusted)
+    def record_process(self,driver,directory):
+        """Note the driver process so a later start can reap it after a crash."""
+        try:
+            process=driver.service.process
+            if process and process.poll() is None:
+                with (directory/"driver.json").open("x") as output:
+                    json.dump({"pid":process.pid,"stamp":process_stamp(process.pid)},output)
+                os.chmod(directory/"driver.json",0o600)
+        except AttributeError:pass
     def artifact(self,state,data):
         """Store bounded PNG bytes with ownership, digest and quota metadata."""
         meta=png_metadata(data);folder=state.directory/"artifacts"
@@ -659,7 +740,9 @@ class BrowserService:
         target=state.driver.execute_script(TARGET_SCRIPT,selector,state.observed_selector)
         if not target.get("allowed"):raise Rejected("Target is not in the region last read; read a selector that contains it")
         if target.get("secret"):raise Rejected("Target contains private credentials")
-        if target.get("href"):
+        if target.get("href") and not state.signed_in:
+            if target["href"].startswith(("http://","https://")):validate_url(target["href"],{"cookie":None,"sites":state.sites})
+        elif target.get("href"):
             parsed=urlsplit(target["href"])
             if urlunsplit((parsed.scheme,parsed.netloc,"","",""))!=self.origin:raise Rejected("External navigation is unavailable")
             validate_path(urlunsplit(("","",parsed.path,parsed.query,"")),{"session_id":state.sid,"agent_id":state.agent})
@@ -672,7 +755,10 @@ class BrowserService:
         """Execute one validated action with serialized profile access and no automatic input replay."""
         trusted=validate_trusted(base,trusted);action=validate_args(name,args)
         # Reject a route before starting Chromium or causing navigation.
-        if action in {"login","navigate"}:validate_path(args.get("path","/app"),trusted)
+        if action=="login":
+            if trusted["cookie"] is None:raise Rejected("Signing in needs Diagnostics' login_as_current_user")
+            validate_path(args.get("path","/app"),trusted)
+        if action=="navigate":validate_url(args["url"],trusted)
         with self.guard:
             self.purge()
             if action=="close":
@@ -685,10 +771,19 @@ class BrowserService:
             # Navigation may leave a page whose URL is outside the routes; other actions may not act on one.
             state.touched=time.monotonic()
             if action not in {"login","navigate"}:self.safe_url(state)
-            if action in {"login","navigate"}:
-                route=validate_path(args.get("path","/app"),trusted)
+            if action=="login" or (action=="navigate" and state.signed_in):
+                route=validate_url(args["url"],trusted) if action=="navigate" else validate_path(args.get("path","/app"),trusted)
                 state.observed=None;state.driver.get(self.origin+route);self.acted(state,"navigate");self.apply_viewport(state);self.safe_url(state)
-                result={"path":route,"identity_verified":True,"user_id":state.user}
+                result={"url":self.origin+route,"signed_in":True,"identity_verified":True,"user_id":state.user}
+            elif action=="navigate":
+                url=validate_url(args["url"],trusted)
+                state.observed=None;state.driver.get(url);self.acted(state,"navigate");self.apply_viewport(state)
+                current=state.driver.current_url
+                if not current.startswith(("http://","https://")):
+                    host=urlsplit(url).hostname
+                    reason=egress_guard().reason(host)
+                    raise Rejected(("Blocked: "+host+" — "+reason) if reason else "The page could not be loaded (blocked, unreachable or not found)")
+                result={"url":self.safe_url(state),"signed_in":False}
             elif action=="read":
                 read=state.driver.execute_script(READ_SCRIPT,args.get("selector","body"),state.cookie,MAX_TEXT,args.get("offset",0))
                 if not isinstance(read,dict) or not isinstance(read.get("text"),str):raise Rejected("Invalid bounded DOM result")
@@ -758,7 +853,7 @@ class BrowserService:
                 result={"color_scheme":state.media.get("color_scheme","default"),"reduced_motion":state.media.get("reduced_motion","default")}
             else:raise Rejected("Recorder actions use the recorder interface")
             if state.cancelled.is_set():raise Uncertain("Browser action cancelled; inspect the outcome before retrying")
-            return {"status":"success","application":"v3","backend":"private_chromium","session_id":state.sid,
+            return {"status":"success","backend":"private_chromium","signed_in":state.signed_in,"session_id":state.sid,
                 "source_kind":"untrusted_browser_observation",**result}
     async def call(self,name,args,base,trusted):
         """Bound synchronous browser work and publish only sanitized known or uncertain outcomes."""
@@ -792,7 +887,7 @@ class BrowserService:
                 if record["stop"].is_set() or time.time()>=trusted["expires_at"]:break
                 await asyncio.sleep(1)
                 if record["stop"].is_set():break
-                result=await self.call("dev_browser_action",{"action":"screenshot"},base,trusted)
+                result=await self.call("browser_read",{"action":"screenshot"},base,trusted)
                 if result.get("status")!="success":
                     record["status"]="stopped";break
                 record["artifacts"].append({k:result[k] for k in ("artifact_id","path","media_type","bytes","width","height","sha256")})
@@ -809,7 +904,7 @@ class BrowserService:
     async def _record(self,args,base,trusted):
         """Start or stop a caller-bound recording and return bounded artifact metadata."""
         try:
-            trusted=validate_trusted(base,trusted);action=validate_args("dev_browser_record",args);sid=trusted["session_id"]
+            trusted=validate_trusted(base,trusted);action=validate_args("browser_record",args);sid=trusted["session_id"]
             record=self.recordings.get(sid)
             if record and record["user"]!=trusted["user_id"]:raise Rejected("Recorder caller mismatch")
             if record and (record["cookie"]!=trusted["cookie"] or record["generation"]!=trusted["generation"]):
@@ -819,8 +914,7 @@ class BrowserService:
                 record["status"]="stopped"
             if action=="start":
                 if record and record["status"]=="recording":raise Rejected("Recorder already running")
-                opened=await self.call("login_as_current_user",{},base,trusted)
-                if opened.get("status")!="success":return opened
+                await asyncio.to_thread(self.ensure_open,trusted)
                 record={"user":trusted["user_id"],"generation":trusted["generation"],"cookie":trusted["cookie"],
                     "status":"recording","artifacts":[],"started_at":int(time.time()),
                     "stop":asyncio.Event()}
@@ -867,7 +961,7 @@ class BrowserService:
 _SERVICE=BrowserService()
 async def execute(name,args,base,trusted):
     """Dispatch browser or recording work to the package-owned persistent service."""
-    if name=="dev_browser_record":return await _SERVICE.record(args,base,trusted)
+    if name=="browser_record":return await _SERVICE.record(args,base,trusted)
     return await _SERVICE.call(name,args,base,trusted)
 def read_artifact(base,trusted,artifact):
     """Authenticate private artifact ownership and verify stored bytes before returning a PNG."""

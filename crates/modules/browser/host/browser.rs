@@ -1,5 +1,7 @@
-//! Root adapter for Browser Extension: device linking, the extension's action queue and the
-//! `browser_extension_status`/`browser_extension_action` tools. Rules live in `webagent_browser`.
+//! Root adapter for the browser abilities. Browser Extension: device linking, the extension's
+//! action queue and the `browser_extension_status`/`browser_extension_action` tools. Browser
+//! Control: authority for the worker's private browser and reply attachments for its
+//! screenshots. Rules live in `webagent_browser`.
 //!
 //! The API (extension endpoints) and the loop (tools) are separate processes; both read the
 //! shared application store, the same way the harness bridge does. A device belongs to one
@@ -7,6 +9,7 @@
 use crate::*;
 use axum::{http::HeaderMap, Extension};
 use tokio_util::sync::CancellationToken;
+use webagent_accounts_host::AccountsStore;
 use webagent_browser as rules;
 use webagent_configuration::digest;
 
@@ -351,7 +354,136 @@ fn install_url() -> String {
     )
 }
 
-/// Run `browser_extension_status` or `browser_extension_action` for the chatting user.
+/// How long a signed-out Browser Control authority lasts; the worker accepts at most ten minutes.
+const SERVER_LEASE_SECS: u64 = 600;
+
+/// The authority for this session's private browser: Diagnostics' sign-in while it is still
+/// valid for this caller, so the signed-in browser keeps its profile; otherwise a signed-out
+/// authority carrying the agent's allow and block lists.
+async fn server_authority(
+    host: &tools::native_host::Host<'_>,
+    app: &App,
+    sid: &str,
+) -> Result<Value> {
+    use tools::native::NativeHost;
+    let user = host.actor().to_owned();
+    let account = app
+        .store
+        .account_by_id(&user)
+        .await?
+        .ok_or_else(|| anyhow!("Caller unavailable"))?;
+    if let Some(signed) = app
+        .store
+        .get(&format!("administrator_browser:{sid}"))
+        .await?
+    {
+        if signed["user_id"] == user.as_str()
+            && signed["generation"] == account["generation"]
+            && signed["expires_at"].as_u64().unwrap_or(0) > now() + 5
+        {
+            return Ok(signed);
+        }
+    }
+    let (_, _, visibility, _) = host.ability_controls(sid).await?;
+    let settings = &visibility["settings"][rules::SERVER_ABILITY];
+    let list = |key: &str| rules::server_sites(settings[key].as_str().unwrap_or(""));
+    Ok(json!({
+        "session_id": sid,
+        "user_id": user,
+        "agent_id": host.session_agent_id(sid).await?,
+        "generation": account["generation"],
+        "expires_at": now() + SERVER_LEASE_SECS,
+        "allowed_session_ids": [sid],
+        "sites": {"allow": list("allow_sites"), "block": list("block_sites")},
+    }))
+}
+
+/// Save one browser screenshot as an attachment of this run's reply.
+async fn attach_screenshot(
+    app: &App,
+    call: tools::native::Call<'_>,
+    authority: &Value,
+    id: &str,
+    cancel: CancellationToken,
+) -> Result<Value> {
+    let image = tools::execute_trusted(
+        "administrator_artifact_get",
+        &json!({"artifact_id": id}),
+        call.sid,
+        &app.tool_socket,
+        Some(authority.clone()),
+        cancel,
+    )
+    .await?;
+    let data = image["png_base64"]
+        .as_str()
+        .ok_or_else(|| anyhow!("Screenshot bytes unavailable"))?;
+    let name = format!("screenshot-{}.png", id.get(..8).unwrap_or(id));
+    crate::api::uploads::publish_reply_file(
+        app,
+        call.sid,
+        call.run_id,
+        id,
+        &name,
+        "image/png",
+        data,
+    )
+    .await
+    .map_err(|error| anyhow!(error.1))
+}
+
+/// Run a Browser Control tool in the worker's private browser. Screenshots, and recorded
+/// frames when recording stops, are attached to the reply so the user sees them after the
+/// browser closes; a failed attachment keeps the result and says why.
+async fn execute_server(
+    app: &App,
+    call: tools::native::Call<'_>,
+    name: &str,
+    args: &Value,
+    cancel: CancellationToken,
+) -> Result<Value> {
+    use tools::native::NativeHost;
+    let host = tools::native_host::Host(app);
+    host.authorize(call, name, args, &cancel).await?;
+    let authority = server_authority(&host, app, call.sid).await?;
+    let mut output = tools::execute_trusted(
+        name,
+        args,
+        call.sid,
+        &app.tool_socket,
+        Some(authority.clone()),
+        cancel.clone(),
+    )
+    .await?;
+    let ids: Vec<String> = if output["status"] != "success" {
+        Vec::new()
+    } else if name == "browser_read" && args["action"] == "screenshot" {
+        output["artifact_id"]
+            .as_str()
+            .map(str::to_owned)
+            .into_iter()
+            .collect()
+    } else if name == "browser_record" && args["action"] == "stop" {
+        output["artifacts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|frame| frame["artifact_id"].as_str().map(str::to_owned))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    for (index, id) in ids.iter().enumerate() {
+        match attach_screenshot(app, call, &authority, id, cancel.clone()).await {
+            Ok(file) if name == "browser_read" => output["attachment"] = file,
+            Ok(file) => output["artifacts"][index]["attachment"] = file,
+            Err(error) => output["attachment_error"] = json!(error.to_string()),
+        }
+    }
+    Ok(output)
+}
+
+/// Run a browser tool: Browser Control's in the worker, the extension's for the chatting user.
 pub(crate) async fn execute(
     app: &App,
     call: tools::native::Call<'_>,
@@ -360,6 +492,9 @@ pub(crate) async fn execute(
     cancel: CancellationToken,
 ) -> Result<Value> {
     use tools::native::NativeHost;
+    if rules::SERVER_TOOLS.contains(&name) {
+        return execute_server(app, call, name, args, cancel).await;
+    }
     let host = tools::native_host::Host(app);
     host.authorize(call, name, args, &cancel).await?;
     // The person in the chat, also in a shared conversation: only their browser is used.

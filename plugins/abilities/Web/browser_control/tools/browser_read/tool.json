@@ -1,12 +1,10 @@
 {
-  "name": "dev_browser_action",
-  "description": "Operate the current caller's private V3 development browser: navigate, read rendered text, measure element sizes and positions, sample rendered pixel colours, read page-load timing, wait for and time conditions, inspect animations, scroll, click, type, press keys, emulate phone/desktop and dark mode, and take screenshots that attach to the reply",
-  "effect": "write",
-  "retry_risk": "none",
-  "retry_hint": "read the page again to see whether the earlier click or typing already took effect; every click or type needs its own fresh read, so input cannot repeat blindly",
+  "name": "browser_read",
+  "description": "Look at web pages in a private server browser: navigate, read rendered text, measure element sizes and positions, sample rendered pixel colours, read page-load timing, wait for and time conditions, inspect animations, scroll, emulate phone/desktop and dark mode, and take screenshots that attach to the reply. Signed out on public sites; clicking and typing use browser_input",
+  "effect": "read",
   "default_access": {
     "operator": "auto",
-    "member": "deny",
+    "member": "ask",
     "visitor": "deny"
   },
   "parameters": {
@@ -17,42 +15,25 @@
         "enum": [
           "navigate",
           "read",
-          "click",
-          "type",
-          "screenshot",
-          "viewport",
           "measure",
+          "pixels",
+          "performance",
           "wait_for",
           "animations",
           "scroll",
-          "press",
+          "viewport",
           "emulate",
-          "pixels",
-          "performance",
+          "screenshot",
           "close"
         ]
       },
-      "path": {
-        "type": "string"
+      "url": {
+        "type": "string",
+        "description": "navigate only: signed out, a full http or https URL; signed in through Diagnostics, a development route such as /app?tab=agents"
       },
       "selector": {
         "type": "string",
-        "description": "CSS selector. read/measure/animations/wait_for: every match. click/type/press: the target, inside the region your last read covered. scroll: element to bring into view or whose scroll container to scroll. pixels: sample the centre of the first rendered match"
-      },
-      "text": {
-        "type": "string",
-        "description": "type: literal text to type. wait_for condition text: the text to wait for"
-      },
-      "preset": {
-        "type": "string",
-        "enum": [
-          "phone",
-          "phone_small",
-          "tablet",
-          "desktop",
-          "desktop_wide"
-        ],
-        "description": "viewport only: phone 390x844, phone_small 360x640 and tablet 768x1024 emulate touch devices; desktop 1280x900, desktop_wide 1440x900; navigate again afterwards"
+        "description": "CSS selector. read/measure/animations/wait_for: every match. scroll: element to bring into view or whose scroll container to scroll. pixels: sample the centre of the first rendered match"
       },
       "offset": {
         "type": "integer",
@@ -70,6 +51,10 @@
           "network_idle"
         ],
         "description": "wait_for only: visible/hidden need selector; text needs text; quiet waits until the page stops changing for quiet_ms; animations_done ignores endless animations; network_idle waits until no request finished for quiet_ms"
+      },
+      "text": {
+        "type": "string",
+        "description": "wait_for condition text only: the text to wait for"
       },
       "timeout_ms": {
         "type": "integer",
@@ -95,24 +80,16 @@
         "maximum": 20000,
         "description": "scroll only: vertical pixels"
       },
-      "key": {
+      "preset": {
         "type": "string",
         "enum": [
-          "Tab",
-          "Shift+Tab",
-          "Enter",
-          "Escape",
-          "Space",
-          "ArrowUp",
-          "ArrowDown",
-          "ArrowLeft",
-          "ArrowRight",
-          "Home",
-          "End",
-          "PageUp",
-          "PageDown"
+          "phone",
+          "phone_small",
+          "tablet",
+          "desktop",
+          "desktop_wide"
         ],
-        "description": "press only: sent to selector, or to the focused element"
+        "description": "viewport only: phone 390x844, phone_small 360x640 and tablet 768x1024 emulate touch devices; desktop 1280x900, desktop_wide 1440x900; navigate again afterwards"
       },
       "color_scheme": {
         "type": "string",

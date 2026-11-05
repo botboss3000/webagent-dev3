@@ -2,7 +2,7 @@
 //! `plugins/abilities/Administrator/<ability>/tools/<tool>/`.
 
 /// Every Administrator native tool.
-pub const TOOLS: [&str; 50] = [
+pub const TOOLS: [&str; 48] = [
     "code_index_scan",
     "code_index_lookup",
     "code_index_coverage",
@@ -47,8 +47,6 @@ pub const TOOLS: [&str; 50] = [
     "login_as_current_user",
     "login_as_current_user_v3",
     "dev_browser_url",
-    "dev_browser_action",
-    "dev_browser_record",
     "start_tunnel",
     "get_tunnel_url",
     "build_work",

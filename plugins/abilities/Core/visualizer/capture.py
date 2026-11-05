@@ -19,7 +19,7 @@ def render(request, factory=None):
             or type(clicks) is not list or len(clicks)>10
             or any(type(s) is not str or not s or len(s)>200 for s in clicks)):
         raise ValueError("Invalid bounded mini app capture")
-    path=Path(__file__).resolve().parents[2]/"Administrator/diagnostics/adapter.py"
+    path=Path(__file__).resolve().parents[2]/"Web/browser_control/adapter.py"
     spec=importlib.util.spec_from_file_location("core_visual_browser",path)
     backend=importlib.util.module_from_spec(spec)
     spec.loader.exec_module(backend)
