@@ -21,14 +21,12 @@
 #   1. Make a folder for it, e.g.  mkdir -p ~/webagent-bridge/bin
 #      and save this file there:   ~/webagent-bridge/bin/harness-bridge.py
 #      The client keeps its state in ../work/harness-bridge/ next to that folder
-#      (here ~/webagent-bridge/work/harness-bridge/): link token, per-chat sessions, timing log.
-#   2. Give it the link token from the bridge model's "Link token" field in WebAgent (Models page
-#      -> the bridge model -> Generate link, then Save the model). One token = one running client.
-#      Either export HARNESS_BRIDGE_TOKEN=<token>, or write it to the token file:
-#        mkdir -p ~/webagent-bridge/work/harness-bridge
-#        printf '%s' '<token>' > ~/webagent-bridge/work/harness-bridge/link-token
-#        chmod 600 ~/webagent-bridge/work/harness-bridge/link-token
-#      Treat the token like a password: never print it, commit it or paste it into chats.
+#      (here ~/webagent-bridge/work/harness-bridge/): client secret, per-chat sessions, timing log.
+#   2. Pair it: in WebAgent open the bridge model on the Models page, press "Pair a client" and run
+#      the command it shows within 10 minutes, for example
+#        python3 ~/webagent-bridge/bin/harness-bridge.py pair https://dev.webagent.live ABCD-EFGH --name "My laptop"
+#      The code works once. The client saves its own secret to work/harness-bridge/client.json
+#      (mode 0600); treat that file like a password. Revoke a client from the same Models page.
 #   3. Check the install:  python3 ~/webagent-bridge/bin/harness-bridge.py selftest
 #   4. Run it and keep it running (it long-polls forever; WebAgent shows the bridge offline
 #      within about a minute of it stopping):
@@ -49,21 +47,24 @@
 #   5. Verify: send a message in WebAgent with the bridge model; the reply should arrive and
 #      `python3 harness-bridge.py stats` should count the call.
 #
-# Options: HARNESS_BRIDGE_URL=<origin> for another WebAgent server. To serve two bridges (for
-# example a Claude Bridge and an OpenCode Bridge with different tokens), run two copies, each in
-# its own folder so their work/harness-bridge/ state and token stay separate.
+# Options: HARNESS_BRIDGE_URL=<origin> overrides the paired server. Any number of clients, and
+# processes of one client, may serve the same bridge model: each call runs on exactly one of them.
+# To serve two bridge models (for example a Claude Bridge and an OpenCode Bridge), pair a copy in
+# its own folder for each, so their work/harness-bridge/ state stays separate.
 # Updating: download the file again from the Models page and restart the client.
 # ============================================================================================
-"""Harness bridge client: answer WebAgent v3 model calls for one bridge link token.
+"""Harness bridge client: answer WebAgent v3 model calls for one paired bridge model.
 
 Common to every bridge provider (Claude Bridge, OpenCode Bridge, Muse Bridge).
 Download it from a bridge model's settings on the Models page and run it on the
-computer that answers the calls (Python 3 standard library only). One link token
-links one running client. WebAgent sends each call's full chat-completions body
+computer that answers the calls (Python 3 standard library only), then pair it.
+Every call is acknowledged before it runs, so any number of clients may serve one
+model. WebAgent sends each call's full chat-completions body
 and the bridge provider it is for; this client saves it, works out what is new
 since the previous call of the same WebAgent chat, and runs that provider's
 harness (HARNESSES below).
 
+    pair  URL CODE [--name NAME]  pair this client with a bridge model using the Models page's one-time code
     next  [--session ID]          wait for the next call; save it, print the delta
     reply CALL_ID FILE|-          post {"content": str, "tool_calls": [{"name", "arguments": {..}}]}
     auto  [--session ID]          answer every call with its provider's harness, resumed per WebAgent chat:
@@ -76,18 +77,23 @@ harness (HARNESSES below).
     stats [HOURS]                 summarize auto-mode call timing (work/harness-bridge/timing.jsonl), default 24 h
 
 Files live in ../work/harness-bridge/ relative to this script's folder (below: work/harness-bridge/).
-Link token: $HARNESS_BRIDGE_TOKEN or work/harness-bridge/link-token (mode 0600).
-Server: $HARNESS_BRIDGE_URL (default https://dev.webagent.live).
+Client secret and server: work/harness-bridge/client.json (mode 0600), written by `pair`.
+Server override: $HARNESS_BRIDGE_URL.
 Per-chat files: work/harness-bridge/sessions/<webagent-session>/.
 """
-import base64, hashlib, json, os, re, shutil, subprocess, sys, tempfile, time, urllib.error, urllib.request, uuid
-from concurrent.futures import ThreadPoolExecutor
+import base64, hashlib, json, os, re, shutil, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request, uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent / "work" / "harness-bridge"
 SESSIONS = ROOT / "sessions"
 TIMING = ROOT / "timing.jsonl"
-URL = os.environ.get("HARNESS_BRIDGE_URL", "https://dev.webagent.live").rstrip("/")
+CLIENT = ROOT / "client.json"
+SAVED = json.loads(CLIENT.read_text()) if CLIENT.exists() else {}
+URL = (os.environ.get("HARNESS_BRIDGE_URL") or SAVED.get("url") or "https://dev.webagent.live").rstrip("/")
+# Names this process to WebAgent: only the process a call was offered to can take and answer it.
+INSTANCE = str(uuid.uuid4())
+# WebAgent fails an acknowledged call at 30 minutes; a harness stops at 28 and reports it.
+HARNESS_SECS = 28 * 60
 # Under the server's 60 s offline window (and over its 25 s hold), so a poll that hangs in the
 # network path is retried before a waiting call is declared offline.
 POLL_TIMEOUT = 35
@@ -125,43 +131,66 @@ def opencode_config(work):
                                       "permission": {"*": "ask", MCP_PREFIX + "*": "allow"}}}})
 
 
-def token():
-    value = os.environ.get("HARNESS_BRIDGE_TOKEN") or (ROOT / "link-token").read_text().strip()
-    if not value:
-        sys.exit("no link token: set HARNESS_BRIDGE_TOKEN or write work/harness-bridge/link-token")
-    return value
+def secret():
+    if not SAVED.get("secret"):
+        sys.exit("not paired: run `harness-bridge.py pair URL CODE` with the code from the Models page")
+    return SAVED["secret"]
 
 
 class Transient(Exception):
     """A gateway or network failure worth retrying."""
 
 
-def post(path, body, timeout=60):
-    request = urllib.request.Request(URL + path, json.dumps(body).encode(), method="POST", headers={
-        "Authorization": "Bearer " + token(), "Content-Type": "application/json", "User-Agent": "harness-bridge/1"})
+class Gone(Exception):
+    """The call is no longer this process's: offered elsewhere, finished or revoked."""
+
+
+def post(path, body, timeout=60, url=None):
+    headers = {"Content-Type": "application/json", "User-Agent": "harness-bridge/2"}
+    if url is None:
+        headers["Authorization"] = "Bearer " + secret()
+    # A manual `reply` answers as the process that fetched the call (saved with it).
+    request = urllib.request.Request((url or URL) + path, json.dumps({"instance": INSTANCE, **body}).encode(),
+                                     method="POST", headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.load(response)
     except urllib.error.HTTPError as error:
         if error.code in (502, 503, 504):
             raise Transient(f"HTTP {error.code}")
-        sys.exit(f"{path}: HTTP {error.code} {error.read()[:300].decode(errors='replace')}")
+        detail = error.read()[:300].decode(errors="replace")
+        if error.code in (404, 409):
+            raise Gone(f"HTTP {error.code} {detail}")
+        sys.exit(f"{path}: HTTP {error.code} {detail}")
     except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
         raise Transient(str(error))
 
 
 def fetch(session=None):
-    """Long-poll until a call arrives; ride out gateway restarts and network blips."""
+    """Long-poll until a call arrives and this process takes it; ride out gateway restarts and network blips.
+    An unacknowledged call returns to WebAgent's queue after a minute, so a lost response or ack only delays it."""
     while True:
         try:
             call = post("/api/v3/harness-bridge/next", {"session": session} if session else {}, timeout=POLL_TIMEOUT)["call"]
-        except Transient as error:
+            if call:
+                post("/api/v3/harness-bridge/ack", {"id": call["id"]})
+        except (Transient, Gone) as error:
             print(f"poll failed ({error}); retrying in 2 s", file=sys.stderr)
             time.sleep(2)
             continue
         if call:
             call["fetched_at"] = time.time()
+            call["instance"] = INSTANCE
             return call
+
+
+def cmd_pair(url, code, name):
+    reply = post("/api/v3/harness-bridge/pair", {"code": code, "name": name}, url=url.rstrip("/"))
+    ROOT.mkdir(parents=True, exist_ok=True)
+    fd = os.open(CLIENT, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as file:
+        json.dump({"url": url.rstrip("/"), "client_id": reply["client_id"], "secret": reply["secret"]}, file)
+    print(f"paired as client {reply['client_id']}; run `harness-bridge.py auto` to answer calls")
 
 
 def digest(value):
@@ -331,7 +360,8 @@ def find_call(call_id):
 def cmd_reply(call_id, source):
     raw = sys.stdin.read() if source == "-" else Path(source).read_text()
     call = find_call(call_id)
-    print(post("/api/v3/harness-bridge/reply", {"id": call_id, "message": parse_reply(raw, call["body"])}))
+    print(post("/api/v3/harness-bridge/reply", {"id": call_id, "instance": call.get("instance"),
+                                                "message": parse_reply(raw, call["body"])}))
 
 
 def prompt_for(call, delta, fresh):
@@ -387,7 +417,7 @@ def mcp_stub(work):
 def opencode_turn(command, prompt, work):
     """Run one `opencode run`; return its session id, the final text and token usage."""
     # The prompt goes on stdin: a fresh session's full history can exceed the 128 KiB argument cap.
-    result = subprocess.run(command, input=prompt, cwd=work, capture_output=True, text=True, timeout=1800,
+    result = subprocess.run(command, input=prompt, cwd=work, capture_output=True, text=True, timeout=HARNESS_SECS,
                             env={**os.environ, "OPENCODE_CONFIG_CONTENT": opencode_config(work)})
     session, texts, usage, errors = None, {}, {"input": 0, "output": 0}, []
     for line in result.stdout.splitlines():
@@ -445,13 +475,20 @@ def answer_opencode(call, folder, state, delta):
 
 
 def answer(call):
-    harness = HARNESSES.get(call.get("provider"))
-    if not harness:
-        # Unanswered, the call times out in WebAgent as a failed provider request.
-        print(f"{call['id']}: no harness for {call.get('provider')} on this client", file=sys.stderr)
-        return
-    folder, state, delta = remember(call)
-    return harness(call, folder, state, delta)
+    """Run the call's harness; on any failure tell WebAgent at once, so the run retries instead of waiting."""
+    try:
+        harness = HARNESSES.get(call.get("provider"))
+        if not harness:
+            raise RuntimeError(f"no harness for {call.get('provider')} on this client")
+        folder, state, delta = remember(call)
+        harness(call, folder, state, delta)
+    except (Exception, SystemExit) as error:
+        detail = str(error)[:300] or type(error).__name__
+        print(f"{call['id']}: {detail}", file=sys.stderr)
+        try:
+            post("/api/v3/harness-bridge/reply", {"id": call["id"], "error": detail})
+        except (Transient, Gone) as failure:
+            print(f"{call['id']}: could not report the failure ({failure})", file=sys.stderr)
 
 
 def answer_claude(call, folder, state, delta):
@@ -473,16 +510,14 @@ def answer_claude(call, folder, state, delta):
     # Prompt on stdin: a fresh chat's full history exceeds Linux's 128 KiB single-argument limit.
     prompt = prompt_for(call, delta, fresh)
     started = time.time()
-    result = subprocess.run(command, input=prompt, cwd=folder, capture_output=True, text=True, timeout=1800)
+    result = subprocess.run(command, input=prompt, cwd=folder, capture_output=True, text=True, timeout=HARNESS_SECS)
     ended = time.time()
     try:
         output = json.loads(result.stdout)
     except ValueError:
-        print(f"{call['id']}: claude failed ({result.returncode}): {result.stderr[:300]}", file=sys.stderr)
-        return
+        raise RuntimeError(f"claude failed ({result.returncode}): {result.stderr[:300]}")
     if output.get("is_error"):
-        print(f"{call['id']}: claude error: {str(output.get('result'))[:300]}", file=sys.stderr)
-        return
+        raise RuntimeError(f"claude error: {str(output.get('result'))[:300]}")
     calls = [json.loads(line) for line in (folder / "calls.jsonl").read_text().splitlines()] \
         if (folder / "calls.jsonl").exists() else []
     message = parse_reply(json.dumps({"content": output.get("result") or "", "tool_calls": calls}), body)
@@ -510,7 +545,7 @@ MUSE_PROMPT = ("You are the language model behind a WebAgent agent. Act exactly 
     "handoff before answering. Images appear as [image: /absolute/path] lines; you may view those files. "
     "Write only the reply JSON to the reply path named in the handoff: "
     "{\"content\": str, \"tool_calls\": [{\"name\": str, \"arguments\": {...}}]}.")
-MUSE_WAIT_SECS = 25 * 60  # WebAgent fails a claimed call at 30 minutes; stop waiting at 25.
+MUSE_WAIT_SECS = 25 * 60  # WebAgent fails an acknowledged call at 30 minutes; stop waiting at 25.
 
 
 def answer_muse(call, folder, state, delta):
@@ -541,13 +576,11 @@ def answer_muse(call, folder, state, delta):
         time.sleep(2)
     ended = time.time()
     if raw is None:
-        print(f"{call['id']}: muse harness did not answer within {MUSE_WAIT_SECS // 60} minutes", file=sys.stderr)
-        return
+        raise RuntimeError(f"muse harness did not answer within {MUSE_WAIT_SECS // 60} minutes")
     try:
         message = parse_reply(raw, body)
     except (SystemExit, ValueError, KeyError, TypeError):
-        print(f"{call['id']}: muse reply failed validation against the call's tools", file=sys.stderr)
-        return
+        raise RuntimeError("muse reply failed validation against the call's tools")
     # The Muse runtime does not expose per-turn token counts to the answering agent, so
     # usage is None (the reply endpoint accepts that) rather than invented numbers.
     post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": None})
@@ -563,9 +596,9 @@ HARNESSES = {"claude_bridge": answer_claude, "opencode_bridge": answer_opencode,
 
 
 def cmd_auto(session):
-    with ThreadPoolExecutor(4) as pool:
-        while True:
-            pool.submit(answer, fetch(session)).add_done_callback(lambda f: f.exception() and print(f.exception(), file=sys.stderr))
+    # One thread per call, no cap: each call already holds its own harness process.
+    while True:
+        threading.Thread(target=answer, args=(fetch(session),), daemon=True).start()
 
 
 def selftest():
@@ -597,10 +630,9 @@ def selftest():
     assert not row["user_turn"] and 2.9 < row["gap_s"] < 3.5 and state["replied_at"] >= fetched
     cmd_stats(1)
     # Muse: a stand-in agent answers the handoff (a partial write first); the reply is posted.
-    import threading
     global post
     posted, real_post = [], post
-    post = lambda path, payload, timeout=60: posted.append((path, payload))
+    post = lambda path, payload, timeout=60, url=None: posted.append((path, payload))
     muse_call = {"id": "m", "session": "s", "provider": "muse_bridge", "body": body, "fetched_at": time.time()}
     reply = folder / "s" / "muse-inbox" / "m.reply.json"
 
@@ -613,10 +645,13 @@ def selftest():
     threading.Thread(target=agent, daemon=True).start()
     try:
         answer(muse_call)
+        # A harness failure is reported at once instead of leaving the call to time out.
+        answer({"id": "x", "session": "s", "provider": "unknown_bridge", "body": body})
     finally:
         post = real_post
     assert posted and posted[0][0] == "/api/v3/harness-bridge/reply"
     assert posted[0][1]["message"]["tool_calls"][0]["function"]["name"] == "file_list"
+    assert posted[1][1] == {"id": "x", "error": "no harness for unknown_bridge on this client"}
     print("selftest ok")
 
 
@@ -627,7 +662,9 @@ if __name__ == "__main__":
         index = args.index("--session")
         session = args[index + 1]
         del args[index:index + 2]
-    if args[:1] == ["next"]:
+    if args[:1] == ["pair"] and len(args) in (3, 5) and (len(args) == 3 or args[3] == "--name"):
+        cmd_pair(args[1], args[2], args[4] if len(args) == 5 else "")
+    elif args[:1] == ["next"]:
         cmd_next(session)
     elif args[:1] == ["reply"] and len(args) == 3:
         cmd_reply(args[1], args[2])

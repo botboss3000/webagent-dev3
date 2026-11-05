@@ -194,13 +194,9 @@ pub struct BridgeCall {
     pub body: Value,
     pub cancel: CancellationToken,
 }
-/// Storage identity of a bridge link token; the token itself is a bearer secret.
-pub fn bridge_link_id(token: &str) -> String {
-    webagent_configuration::digest(token)
-}
-/// Store key that admits a link token at the harness bridge client endpoints.
-pub fn bridge_link_key(token: &str) -> String {
-    format!("harness_bridge_link:{}", bridge_link_id(token))
+/// Storage identity of a bridge connection's link secret, which never leaves the server.
+pub fn bridge_link_id(secret: &str) -> String {
+    webagent_configuration::digest(secret)
 }
 /// Host-owned queue that hands a call to a linked client and returns its reply:
 /// `{"message": <chat-completions assistant message>, "usage": <optional usage>}`.

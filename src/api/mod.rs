@@ -422,6 +422,8 @@ pub(super) fn router(app: App) -> Router {
         .route("/api/v3/auth/login",post(login))
         .route("/api/v3/harness-bridge/next",post(crate::harness_bridge::next))
         .route("/api/v3/harness-bridge/reply",post(crate::harness_bridge::reply))
+        .route("/api/v3/harness-bridge/ack",post(crate::harness_bridge::ack))
+        .route("/api/v3/harness-bridge/pair",post(crate::harness_bridge::pair))
         .route("/api/v3/auth/register",post(registration::register))
         .route("/api/v3/auth/guest-login",post(registration::guest_login))
         .route("/api/v3/auth/access-mode",get(registration::access_mode))

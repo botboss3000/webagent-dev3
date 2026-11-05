@@ -189,6 +189,10 @@ export function createModelAdapter(request, agentId, onAssignment) {
     },
     // Named API keys live in this agent's vault; values come back only to their owner.
     listCredentials:()=>request(vault),
+    // Bridge models: clients pair with one-time codes; each paired client can be revoked alone.
+    bridgeClients:connectionId=>request('/models/connections/'+encodeURIComponent(connectionId)+'/bridge-clients'),
+    pairBridge:connectionId=>request('/models/connections/'+encodeURIComponent(connectionId)+'/bridge-pairing','POST'),
+    revokeBridgeClient:(connectionId,clientId)=>request('/models/connections/'+encodeURIComponent(connectionId)+'/bridge-clients/'+encodeURIComponent(clientId),'DELETE'),
     loadCredential:label=>request(vault+'/load','POST',{label}),
     saveCredential:({label,provider,base_url,api_key})=>request(vault,'PUT',{label,provider,base_url,api_key}),
     deleteCredential:label=>request(vault,'DELETE',{label}),

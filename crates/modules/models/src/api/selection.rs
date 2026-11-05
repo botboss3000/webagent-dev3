@@ -716,20 +716,36 @@ pub async fn connection_key<C: RuntimeStorage>(
     app.store
         .put(&reference, &json!({"api_key":body.api_key}))
         .await?;
-    // The harness bridge client endpoints admit only tokens saved on a bridge connection.
-    if connection.transport.provider_id().is_bridge() {
-        app.store
-            .put(
-                &crate::transport::bridge_link_key(&body.api_key),
-                &json!({"owner_id":caller.user_id}),
-            )
-            .await?;
-    }
     connection.credential_ref = reference;
     app.store
         .save_model_catalog(&catalog, catalog.revision)
         .await?;
     Ok(Json(json!({"saved":true})))
+}
+/// The saved link secret of a bridge connection the caller owns. Only the host's bridge queue
+/// uses it; clients pair with one-time codes and hold their own secrets instead.
+pub async fn bridge_link_secret<C: RuntimeStorage>(
+    app: &Runtime<'_, C>,
+    identity: &Value,
+    id: &str,
+) -> Result<String, ApiError> {
+    let caller = principal(app, identity).await?;
+    let catalog = app.store.model_catalog().await?;
+    let connection = catalog
+        .connections
+        .get(id)
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Connection not found".into()))?;
+    if connection.owner_id != caller.user_id {
+        return Err(denied());
+    }
+    if connection.revoked || !connection.transport.provider_id().is_bridge() {
+        return Err(super::conflict("Not an active bridge connection"));
+    }
+    app.store
+        .get(&connection.credential_ref)
+        .await?
+        .and_then(|v| v["api_key"].as_str().map(str::to_owned))
+        .ok_or_else(|| super::conflict("Save the bridge model before pairing a client"))
 }
 pub async fn discover<C: RuntimeStorage>(
     app: &Runtime<'_, C>,
