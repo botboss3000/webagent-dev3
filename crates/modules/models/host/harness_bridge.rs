@@ -1,7 +1,8 @@
 //! Harness bridge, common to every bridge provider (Claude, OpenCode, Muse): a model call waits in
 //! the shared application store until a paired client fetches it, runs it with the harness its
 //! `provider` names, and posts the reply. Any number of clients, and processes of one client, may
-//! serve a connection: a fetched call is only offered until one process acknowledges it, so a
+//! serve one user's bridge provider (all of their models of it, on one link): a fetched call is
+//! only offered until one process acknowledges it, so a
 //! lost poll response returns the call to the queue instead of stranding it.
 //! The API (client endpoints) and the loop (calls) are separate processes; both
 //! poll the same sealed documents, so a restart simply drops waiting calls.
@@ -340,25 +341,25 @@ pub async fn reply(
     Ok(Json(json!({"accepted":true})))
 }
 
-/// The link of a bridge connection the signed-in caller owns.
-async fn owned_link(app: &App, identity: &Value, connection: &str) -> Result<String, ApiError> {
+/// The signed-in caller's link for one bridge provider, shared by all their models of it.
+async fn owned_link(app: &App, identity: &Value, provider: &str) -> Result<String, ApiError> {
     let secret = webagent_models::api::selection::bridge_link_secret(
         &app.models_runtime(),
         identity,
-        connection,
+        provider,
     )
     .await
     .map_err(ApiError::from)?;
     Ok(link_id(&secret))
 }
 
-/// Issue a one-time code that pairs a new client with this connection.
+/// Issue a one-time code that pairs a new client with the caller's models of this provider.
 pub async fn pairing(
     State(app): State<App>,
     Extension(identity): Extension<Value>,
-    Path(connection): Path<String>,
+    Path(provider): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let link = owned_link(&app, &identity, &connection).await?;
+    let link = owned_link(&app, &identity, &provider).await?;
     let code = pairing_code();
     app.store
         .put(
@@ -419,14 +420,14 @@ pub async fn pair(
     Ok(Json(json!({"client_id":client,"secret":secret})))
 }
 
-/// The clients paired with this connection, with when each last polled and how many of its
+/// The clients paired with this provider, with when each last polled and how many of its
 /// processes are running.
 pub async fn clients(
     State(app): State<App>,
     Extension(identity): Extension<Value>,
-    Path(connection): Path<String>,
+    Path(provider): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let link = owned_link(&app, &identity, &connection).await?;
+    let link = owned_link(&app, &identity, &provider).await?;
     let at = now();
     let clients: Vec<Value> = app
         .store
@@ -447,9 +448,9 @@ pub async fn clients(
 pub async fn revoke(
     State(app): State<App>,
     Extension(identity): Extension<Value>,
-    Path((connection, client)): Path<(String, String)>,
+    Path((provider, client)): Path<(String, String)>,
 ) -> Result<Json<Value>, ApiError> {
-    let link = owned_link(&app, &identity, &connection).await?;
+    let link = owned_link(&app, &identity, &provider).await?;
     let key = format!("{CLIENTS}{link}:{client}");
     let _guard = app.gate.lock().await;
     let record = app

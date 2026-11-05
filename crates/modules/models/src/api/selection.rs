@@ -711,10 +711,17 @@ pub async fn connection_key<C: RuntimeStorage>(
     if !connection.transport.uses_api_key() {
         return Err(super::bad("This connection does not use an API key"));
     }
+    // A bridge model joins its provider's shared link; the browser's value is not used.
+    let provider = connection.transport.provider_id();
+    let api_key = if provider.is_bridge() {
+        bridge_provider_secret(&app, &caller.user_id, provider).await?
+    } else {
+        body.api_key
+    };
     let reference = format!("provider_credential:{}", uuid::Uuid::new_v4().to_string());
     // Store the secret only in the encrypted credential plane. No key in catalog/events.
     app.store
-        .put(&reference, &json!({"api_key":body.api_key}))
+        .put(&reference, &json!({"api_key":api_key}))
         .await?;
     connection.credential_ref = reference;
     app.store
@@ -722,30 +729,62 @@ pub async fn connection_key<C: RuntimeStorage>(
         .await?;
     Ok(Json(json!({"saved":true})))
 }
-/// The saved link secret of a bridge connection the caller owns. Only the host's bridge queue
-/// uses it; clients pair with one-time codes and hold their own secrets instead.
+/// The caller's link secret for one bridge provider, created on first use. All of the caller's
+/// models of that provider share it, so one paired client serves every one of them. Only the
+/// host's bridge queue uses it; clients pair with one-time codes and hold their own secrets.
+/// The caller holds `app.gate`.
+async fn bridge_provider_secret<C: RuntimeStorage>(
+    app: &Runtime<'_, C>,
+    owner: &str,
+    provider: crate::provider::ProviderId,
+) -> Result<String, ApiError> {
+    let name = serde_json::to_value(provider).map_err(anyhow::Error::from)?;
+    let key = format!(
+        "harness_bridge_provider:{owner}:{}",
+        name.as_str().unwrap_or("")
+    );
+    if let Some(secret) = app
+        .store
+        .get(&key)
+        .await?
+        .and_then(|v| v["secret"].as_str().map(str::to_owned))
+    {
+        return Ok(secret);
+    }
+    let secret = format!(
+        "hbl_{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    app.store.put(&key, &json!({"secret":secret})).await?;
+    Ok(secret)
+}
+/// The caller's link secret for a bridge provider named like `opencode_bridge`. Models of that
+/// provider saved before the secret existed are moved onto it, so pairing covers all of them.
 pub async fn bridge_link_secret<C: RuntimeStorage>(
     app: &Runtime<'_, C>,
     identity: &Value,
-    id: &str,
+    provider: &str,
 ) -> Result<String, ApiError> {
     let caller = principal(app, identity).await?;
+    let provider = serde_json::from_value::<crate::provider::ProviderId>(json!(provider))
+        .ok()
+        .filter(|p| p.is_bridge())
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Not a bridge provider".into()))?;
+    let _guard = app.gate.lock().await;
+    let secret = bridge_provider_secret(app, &caller.user_id, provider).await?;
     let catalog = app.store.model_catalog().await?;
-    let connection = catalog
-        .connections
-        .get(id)
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Connection not found".into()))?;
-    if connection.owner_id != caller.user_id {
-        return Err(denied());
+    for connection in catalog.connections.values().filter(|c| {
+        c.owner_id == caller.user_id && !c.revoked && c.transport.provider_id() == provider
+    }) {
+        let saved = app.store.get(&connection.credential_ref).await?;
+        if saved.as_ref().and_then(|v| v["api_key"].as_str()) != Some(secret.as_str()) {
+            app.store
+                .put(&connection.credential_ref, &json!({"api_key":secret}))
+                .await?;
+        }
     }
-    if connection.revoked || !connection.transport.provider_id().is_bridge() {
-        return Err(super::conflict("Not an active bridge connection"));
-    }
-    app.store
-        .get(&connection.credential_ref)
-        .await?
-        .and_then(|v| v["api_key"].as_str().map(str::to_owned))
-        .ok_or_else(|| super::conflict("Save the bridge model before pairing a client"))
+    Ok(secret)
 }
 pub async fn discover<C: RuntimeStorage>(
     app: &Runtime<'_, C>,

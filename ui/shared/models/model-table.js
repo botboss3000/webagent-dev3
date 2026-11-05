@@ -598,10 +598,11 @@ export function mountModelTable(host, opts = {}) {
   const bridgeClientRow = document.createElement('div');
   bridgeClientRow.className = 'ac-ability-row ac-model-cfg-row ac-model-cfg-stacked ac-row-static';
   bridgeClientRow.hidden = true;
-  bridgeClientRow.innerHTML = '<span class="ac-ability-label"><span class="ac-ability-name">Bridge client</span></span>'
-    + `<span class="ac-model-cfg-control"><a class="ac-btn ac-btn-ghost ac-btn-sm" style="display:inline-flex;align-items:center;gap:6px;" download="harness-bridge.py" title="Download the bridge client" href="${esc(new URL('harness-bridge.py', import.meta.url).href)}">${icon('download', { size: '16px' })}<span>harness-bridge.py</span></a>`
-    + '<span class="ac-hint" style="margin:0;">Add this model, then open it in the list and press <strong>Pair a client</strong>. Run the command it shows on each computer that answers; any number of clients can serve one model.</span></span>';
-  // Above the hidden link secret: download the client first, then pair it once the model is saved.
+  // Filled with the chosen provider's Bridge clients section: pair first, then add its models.
+  const renderBridgeClients = () => {
+    if (!isBridgeProvider() || typeof adapter.bridgeClients !== 'function') return bridgeClientRow.replaceChildren();
+    bridgeClientRow.replaceChildren(bridgeClientsSection(S.currentProvider));
+  };
   table.insertBefore(bridgeClientRow, keyRow);
 
   // Saved-key controls get their own row so the API key input keeps the full width.
@@ -2088,6 +2089,97 @@ export function mountModelTable(host, opts = {}) {
     await loadSavedDetail(provider, body, stats[0], stats[1], stats[2], false);
     return body.querySelector('.ac-model-meta-nameline');
   }
+  // BRIDGE-CLIENTS: clients pair once per bridge provider with one-time codes and answer every
+  // model of that provider the user adds, before or after pairing. Each client holds its own
+  // secret and can be revoked alone.
+  function bridgeClientsSection(provider) {
+    const section = document.createElement('div');
+    section.className = 'model-bridge-clients';
+    section.style.cssText = 'margin-top:12px;display:flex;flex-direction:column;gap:8px;';
+    const head = document.createElement('div'); head.className = 'ac-model-meta-line';
+    head.innerHTML = '<span class="ac-model-meta-k">Bridge clients:</span>';
+    const list = document.createElement('div');
+    list.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;align-items:center;';
+    const pairBtn = document.createElement('button');
+    pairBtn.type = 'button'; pairBtn.className = 'ac-btn ac-btn-ghost ac-btn-sm'; pairBtn.textContent = 'Pair a client';
+    const download = document.createElement('a');
+    download.className = 'ac-btn ac-btn-ghost ac-btn-sm'; download.style.cssText = 'display:inline-flex;align-items:center;gap:6px;';
+    download.download = 'harness-bridge.py'; download.href = new URL('harness-bridge.py', import.meta.url).href;
+    download.title = 'Download the bridge client';
+    download.innerHTML = `${icon('download', { size: '16px' })}<span>harness-bridge.py</span>`;
+    actions.append(pairBtn, download);
+    const pairing = document.createElement('div');
+    pairing.className = 'ac-hint'; pairing.style.cssText = 'margin:0;overflow-wrap:anywhere;'; pairing.hidden = true;
+    const ago = seconds => seconds < 90 ? 'just now' : seconds < 5400 ? `${Math.round(seconds / 60)} min ago`
+      : seconds < 172800 ? `${Math.round(seconds / 3600)} h ago` : `${Math.round(seconds / 86400)} days ago`;
+    async function loadClients() {
+      let clients;
+      try { ({ clients } = await adapter.bridgeClients(provider)); } catch (error) {
+        list.textContent = error?.message || 'Paired clients are unavailable';
+        return;
+      }
+      list.replaceChildren();
+      if (!clients.length) {
+        const none = document.createElement('div'); none.className = 'ac-hint'; none.style.margin = '0';
+        none.textContent = 'No clients paired yet.';
+        list.appendChild(none);
+      }
+      const now = Date.now() / 1000;
+      clients.forEach(client => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;';
+        const name = document.createElement('span'); name.className = 'ac-model-meta-v'; name.textContent = client.name;
+        const state = document.createElement('span'); state.className = 'ac-model-meta-k';
+        state.textContent = client.processes > 1 ? `running (${client.processes} processes)`
+          : client.processes === 1 ? 'running' : client.last_seen ? `last seen ${ago(now - client.last_seen)}` : 'never connected';
+        const revoke = document.createElement('button');
+        revoke.type = 'button'; revoke.className = 'ac-btn ac-btn-ghost ac-btn-sm';
+        revoke.style.color = 'var(--danger)'; revoke.textContent = 'Revoke';
+        revoke.addEventListener('click', async event => {
+          event.stopPropagation();
+          if (!window.confirm(`Revoke ${client.name}? It stops answering until it is paired again.`)) return;
+          revoke.disabled = true;
+          try { await adapter.revokeBridgeClient(provider, client.id); } catch (error) {
+            revoke.disabled = false;
+            _flashSaveCheck(row, false, error?.message || 'Revoke failed');
+            return;
+          }
+          loadClients();
+        });
+        row.append(name, state, revoke);
+        list.appendChild(row);
+      });
+    }
+    let refresh = null;
+    pairBtn.addEventListener('click', async event => {
+      event.stopPropagation();
+      pairBtn.disabled = true;
+      try {
+        const { code, expires_in: expires } = await adapter.pairBridge(provider);
+        const command = `python3 harness-bridge.py pair ${location.origin} ${code} --name "My computer"`;
+        pairing.innerHTML = `Code <strong>${esc(code)}</strong>, valid once for ${Math.round(expires / 60)} minutes. `
+          + `On the computer that answers, run <code>${esc(command)}</code>, then <code>python3 harness-bridge.py auto</code>.`;
+        pairing.hidden = false;
+        // Show the new client as soon as it pairs and polls, while the code is valid.
+        clearInterval(refresh);
+        const until = Date.now() + expires * 1000;
+        refresh = setInterval(() => {
+          if (!section.isConnected || Date.now() > until) { clearInterval(refresh); return; }
+          loadClients();
+        }, 5000);
+      } catch (error) {
+        _flashSaveCheck(actions, false, error?.message || 'Pairing failed');
+      } finally {
+        pairBtn.disabled = false;
+      }
+    });
+    section.append(head, list, actions, pairing);
+    loadClients();
+    return section;
+  }
+
   async function loadSavedDetail(p, body, statIn, statOut, statCost, readOnly) {
     await fillUsage(p, statIn, statOut, statCost, readOnly);
     const usage = usageCache[_usageKey(p, readOnly)] || {};
@@ -2480,94 +2572,9 @@ export function mountModelTable(host, opts = {}) {
       credentialRow.append(credentialState, removeCredential); body.appendChild(credentialRow);
     }
 
-    // BRIDGE-CLIENTS: a bridge model's calls are answered by clients paired here with one-time
-    // codes. Each client holds its own secret and can be revoked alone.
-    if (p.provider?.endsWith('_bridge') && p.connection_id && typeof adapter.bridgeClients === 'function') {
-      const section = document.createElement('div');
-      section.className = 'model-bridge-clients';
-      section.style.cssText = 'margin-top:12px;display:flex;flex-direction:column;gap:8px;';
-      const head = document.createElement('div'); head.className = 'ac-model-meta-line';
-      head.innerHTML = '<span class="ac-model-meta-k">Bridge clients:</span>';
-      const list = document.createElement('div');
-      list.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
-      const actions = document.createElement('div');
-      actions.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;align-items:center;';
-      const pairBtn = document.createElement('button');
-      pairBtn.type = 'button'; pairBtn.className = 'ac-btn ac-btn-ghost ac-btn-sm'; pairBtn.textContent = 'Pair a client';
-      const download = document.createElement('a');
-      download.className = 'ac-btn ac-btn-ghost ac-btn-sm'; download.style.cssText = 'display:inline-flex;align-items:center;gap:6px;';
-      download.download = 'harness-bridge.py'; download.href = new URL('harness-bridge.py', import.meta.url).href;
-      download.title = 'Download the bridge client';
-      download.innerHTML = `${icon('download', { size: '16px' })}<span>harness-bridge.py</span>`;
-      actions.append(pairBtn, download);
-      const pairing = document.createElement('div');
-      pairing.className = 'ac-hint'; pairing.style.cssText = 'margin:0;overflow-wrap:anywhere;'; pairing.hidden = true;
-      const ago = seconds => seconds < 90 ? 'just now' : seconds < 5400 ? `${Math.round(seconds / 60)} min ago`
-        : seconds < 172800 ? `${Math.round(seconds / 3600)} h ago` : `${Math.round(seconds / 86400)} days ago`;
-      async function loadClients() {
-        let clients;
-        try { ({ clients } = await adapter.bridgeClients(p.connection_id)); } catch (error) {
-          list.textContent = error?.message || 'Paired clients are unavailable';
-          return;
-        }
-        list.replaceChildren();
-        if (!clients.length) {
-          const none = document.createElement('div'); none.className = 'ac-hint'; none.style.margin = '0';
-          none.textContent = 'No clients paired yet.';
-          list.appendChild(none);
-        }
-        const now = Date.now() / 1000;
-        clients.forEach(client => {
-          const row = document.createElement('div');
-          row.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;';
-          const name = document.createElement('span'); name.className = 'ac-model-meta-v'; name.textContent = client.name;
-          const state = document.createElement('span'); state.className = 'ac-model-meta-k';
-          state.textContent = client.processes > 1 ? `running (${client.processes} processes)`
-            : client.processes === 1 ? 'running' : client.last_seen ? `last seen ${ago(now - client.last_seen)}` : 'never connected';
-          const revoke = document.createElement('button');
-          revoke.type = 'button'; revoke.className = 'ac-btn ac-btn-ghost ac-btn-sm';
-          revoke.style.color = 'var(--danger)'; revoke.textContent = 'Revoke';
-          revoke.addEventListener('click', async event => {
-            event.stopPropagation();
-            if (!window.confirm(`Revoke ${client.name}? It stops answering until it is paired again.`)) return;
-            revoke.disabled = true;
-            try { await adapter.revokeBridgeClient(p.connection_id, client.id); } catch (error) {
-              revoke.disabled = false;
-              _flashSaveCheck(row, false, error?.message || 'Revoke failed');
-              return;
-            }
-            loadClients();
-          });
-          row.append(name, state, revoke);
-          list.appendChild(row);
-        });
-      }
-      let refresh = null;
-      pairBtn.addEventListener('click', async event => {
-        event.stopPropagation();
-        pairBtn.disabled = true;
-        try {
-          const { code, expires_in: expires } = await adapter.pairBridge(p.connection_id);
-          const command = `python3 harness-bridge.py pair ${location.origin} ${code} --name "My computer"`;
-          pairing.innerHTML = `Code <strong>${esc(code)}</strong>, valid once for ${Math.round(expires / 60)} minutes. `
-            + `On the computer that answers, run <code>${esc(command)}</code>, then <code>python3 harness-bridge.py auto</code>.`;
-          pairing.hidden = false;
-          // Show the new client as soon as it pairs and polls, while the code is valid.
-          clearInterval(refresh);
-          const until = Date.now() + expires * 1000;
-          refresh = setInterval(() => {
-            if (!section.isConnected || Date.now() > until) { clearInterval(refresh); return; }
-            loadClients();
-          }, 5000);
-        } catch (error) {
-          _flashSaveCheck(actions, false, error?.message || 'Pairing failed');
-        } finally {
-          pairBtn.disabled = false;
-        }
-      });
-      section.append(head, list, actions, pairing);
-      body.appendChild(section);
-      loadClients();
+    // BRIDGE-CLIENTS: the provider's paired clients answer this model's calls.
+    if (p.provider?.endsWith('_bridge') && typeof adapter.bridgeClients === 'function') {
+      body.appendChild(bridgeClientsSection(p.provider));
     }
 
     // Display name lives in the unified list above as ONE editable row. Clicking
@@ -3523,6 +3530,7 @@ export function mountModelTable(host, opts = {}) {
     if (!isSubscriptionProvider() && !isBridgeProvider()) showCredentialPicker({ quiet: true });
     // A bridge's link secret is never typed or shown: generate it with the provider choice.
     if (isBridgeProvider()) generateLinkBtn.click();
+    renderBridgeClients();
     loadModels();
     autosaveSingle(provCheck);
   });

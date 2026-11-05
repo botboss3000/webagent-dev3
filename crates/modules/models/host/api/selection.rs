@@ -321,15 +321,15 @@ pub fn router() -> Router<App> {
             axum::routing::put(connection_key),
         )
         .route(
-            "/connections/{id}/bridge-pairing",
+            "/bridge/{provider}/pairing",
             axum::routing::post(crate::harness_bridge::pairing),
         )
         .route(
-            "/connections/{id}/bridge-clients",
+            "/bridge/{provider}/clients",
             get(crate::harness_bridge::clients),
         )
         .route(
-            "/connections/{id}/bridge-clients/{client}",
+            "/bridge/{provider}/clients/{client}",
             axum::routing::delete(crate::harness_bridge::revoke),
         )
         .route(

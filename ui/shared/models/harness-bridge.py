@@ -22,8 +22,8 @@
 #      and save this file there:   ~/webagent-bridge/bin/harness-bridge.py
 #      The client keeps its state in ../work/harness-bridge/ next to that folder
 #      (here ~/webagent-bridge/work/harness-bridge/): client secret, per-chat sessions, timing log.
-#   2. Pair it: in WebAgent open the bridge model on the Models page, press "Pair a client" and run
-#      the command it shows within 10 minutes, for example
+#   2. Pair it: on WebAgent's Models page start adding a model, choose the bridge provider (for
+#      example OpenCode Bridge), press "Pair a client" and run the command it shows within 10 minutes:
 #        python3 ~/webagent-bridge/bin/harness-bridge.py pair https://dev.webagent.live ABCD-EFGH --name "My laptop"
 #      The code works once. The client saves its own secret to work/harness-bridge/client.json
 #      (mode 0600); treat that file like a password. Revoke a client from the same Models page.
@@ -48,15 +48,15 @@
 #      `python3 harness-bridge.py stats` should count the call.
 #
 # Options: HARNESS_BRIDGE_URL=<origin> overrides the paired server. Any number of clients, and
-# processes of one client, may serve the same bridge model: each call runs on exactly one of them.
-# To serve two bridge models (for example a Claude Bridge and an OpenCode Bridge), pair a copy in
-# its own folder for each, so their work/harness-bridge/ state stays separate.
+# processes of one client, may serve the same bridge provider: each call runs on exactly one of them.
+# To serve two bridge providers (for example Claude Bridge and OpenCode Bridge), pair a copy in its
+# own folder for each, so their work/harness-bridge/ state stays separate.
 # Updating: download the file again from the Models page and restart the client.
 # ============================================================================================
-"""Harness bridge client: answer WebAgent v3 model calls for one paired bridge model.
+"""Harness bridge client: answer WebAgent v3 model calls for one paired bridge provider.
 
 Common to every bridge provider (Claude Bridge, OpenCode Bridge, Muse Bridge).
-Download it from a bridge model's settings on the Models page and run it on the
+Download it from a bridge provider on the Models page and run it on the
 computer that answers the calls (Python 3 standard library only), then pair it.
 Every call is acknowledged before it runs, so any number of clients may serve one
 model. WebAgent sends each call's full chat-completions body
@@ -64,7 +64,7 @@ and the bridge provider it is for; this client saves it, works out what is new
 since the previous call of the same WebAgent chat, and runs that provider's
 harness (HARNESSES below).
 
-    pair  URL CODE [--name NAME]  pair this client with a bridge model using the Models page's one-time code
+    pair  URL CODE [--name NAME]  pair this client with a bridge provider (all of its models) using the Models page's code
     next  [--session ID]          wait for the next call; save it, print the delta
     reply CALL_ID FILE|-          post {"content": str, "tool_calls": [{"name", "arguments": {..}}]}
     auto  [--session ID]          answer every call with its provider's harness, resumed per WebAgent chat:
