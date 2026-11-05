@@ -1,6 +1,6 @@
 {
   "name": "dev_browser_action",
-  "description": "Operate the current caller development browser: navigate, read, measure layout, wait for and time conditions, inspect animations, scroll, click, type, press keys, emulate viewport and media, screenshot; input requires a fresh observation and approval",
+  "description": "Operate the current caller's private V3 development browser: navigate, read rendered text, measure element sizes and positions, sample rendered pixel colours, read page-load timing, wait for and time conditions, inspect animations, scroll, click, type, press keys, emulate phone/desktop and dark mode, and take screenshots that attach to the reply",
   "effect": "write",
   "retry_risk": "none",
   "retry_hint": "read the page again to see whether the earlier click or typing already took effect; every click or type needs its own fresh read, so input cannot repeat blindly",
@@ -27,6 +27,8 @@
           "scroll",
           "press",
           "emulate",
+          "pixels",
+          "performance",
           "close"
         ]
       },
@@ -35,7 +37,7 @@
       },
       "selector": {
         "type": "string",
-        "description": "read/measure/animations/wait_for: CSS selector (every match). click/type/press: the target, inside the region your last read covered. scroll: element to bring into view, or to scroll by dx/dy"
+        "description": "CSS selector. read/measure/animations/wait_for: every match. click/type/press: the target, inside the region your last read covered. scroll: element to bring into view or whose scroll container to scroll. pixels: sample the centre of the first rendered match"
       },
       "text": {
         "type": "string",
@@ -55,7 +57,7 @@
       "offset": {
         "type": "integer",
         "minimum": 0,
-        "description": "read only: character offset of the next page; use next_offset from a truncated read"
+        "description": "read: character offset; measure: element offset. Use next_offset from the previous result"
       },
       "condition": {
         "type": "string",
@@ -128,6 +130,33 @@
           "default"
         ],
         "description": "emulate only: prefers-reduced-motion"
+      },
+      "styles": {
+        "type": "boolean",
+        "description": "measure only: include computed CSS for each element (5 elements per call)"
+      },
+      "points": {
+        "type": "array",
+        "maxItems": 20,
+        "items": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "y": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "x",
+            "y"
+          ],
+          "additionalProperties": false
+        },
+        "description": "pixels only: viewport points in CSS px"
       }
     },
     "required": [

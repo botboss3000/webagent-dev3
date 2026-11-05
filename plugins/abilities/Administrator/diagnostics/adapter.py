@@ -5,6 +5,7 @@ There is no caller-supplied JavaScript, origin, profile or filesystem path.
 """
 from __future__ import annotations
 import asyncio
+import base64
 import contextlib
 import hashlib
 import json
@@ -19,6 +20,7 @@ import subprocess
 import threading
 import time
 import uuid
+import zlib
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -45,6 +47,8 @@ TOUCH_VIEWPORTS={"phone","phone_small","tablet"}
 IGNORED_PAGE_ERRORS=("static.cloudflareinsights.com",)
 MAX_PAGE_ERRORS=20
 MAX_ELEMENTS=50
+MEASURE_PAGE=20
+MAX_PIXELS=20
 MAX_SCROLL=20000
 WAIT_CONDITIONS={"visible","hidden","text","quiet","animations_done","network_idle"}
 # WebDriver key codes; only navigation and activation keys, never text or shortcuts.
@@ -83,22 +87,29 @@ return {text:text.slice(offset,end),missing:false,truncated:truncated,matches:ro
 """
 MEASURE_SCRIPT=r"""
 /* V3_MEASURE */
-// Boxes and a fixed style subset for rendered matches; labels never come from inputs or secret nodes.
+// Rendered matches only. `checks` sorts first in results, so its page-level facts survive any cut.
+const sel=arguments[0],limit=arguments[1],offset=arguments[2],withStyles=arguments[3];
 const vw=innerWidth,vh=innerHeight,r=v=>Math.round(v*10)/10,root=document.documentElement;
-const all=[...document.querySelectorAll(arguments[0])];
+const all=[...document.querySelectorAll(sel)];
 const nodes=all.filter(n=>n.checkVisibility({checkVisibilityCSS:true}));
 const props=['display','position','zIndex','fontSize','fontWeight','lineHeight','color','backgroundColor','borderRadius',
  'borderTopWidth','paddingTop','paddingRight','paddingBottom','paddingLeft','marginTop','marginRight','marginBottom','marginLeft',
  'overflowX','overflowY','opacity','textOverflow','whiteSpace'];
-return {viewport:{width:vw,height:vh,scroll_x:r(scrollX),scroll_y:r(scrollY)},
- page_overflow_x:Math.max(0,root.scrollWidth-root.clientWidth),matches:all.length,rendered:nodes.length,
- elements:nodes.slice(0,arguments[1]).map(n=>{const b=n.getBoundingClientRect(),s=getComputedStyle(n),style={};
-  for(const p of props)style[p]=s[p];
-  const secret=n.closest('[data-secret],[data-sensitive]')!==null||n.matches('input,textarea,select');
-  return {tag:n.tagName.toLowerCase(),id:n.id||null,label:secret?'':(n.getAttribute('aria-label')||n.innerText||'').trim().slice(0,60),
-   box:{x:r(b.x),y:r(b.y),width:r(b.width),height:r(b.height)},
-   in_viewport:b.left>=0&&b.top>=0&&b.right<=vw+0.5&&b.bottom<=vh+0.5,
-   overflow:{x:Math.max(0,n.scrollWidth-n.clientWidth),y:Math.max(0,n.scrollHeight-n.clientHeight)},style:style};})};
+const label=n=>(n.closest('[data-secret],[data-sensitive]')||n.matches('input,textarea,select'))?'':
+ (n.getAttribute('aria-label')||n.innerText||n.getAttribute('title')||'').trim().replace(/\s+/g,' ').slice(0,60);
+const rows=nodes.map(n=>{const b=n.getBoundingClientRect();
+ return {node:n,tag:n.tagName.toLowerCase(),id:n.id||null,label:label(n),box:{x:r(b.x),y:r(b.y),width:r(b.width),height:r(b.height)},
+  in_viewport:b.left>=-0.5&&b.top>=-0.5&&b.right<=vw+0.5&&b.bottom<=vh+0.5,
+  overflow:{x:Math.max(0,n.scrollWidth-n.clientWidth),y:Math.max(0,n.scrollHeight-n.clientHeight)}};});
+const brief=x=>({label:x.label,id:x.id,width:x.box.width,height:x.box.height});
+const small=rows.filter(x=>x.box.width<44||x.box.height<44).sort((a,b)=>Math.min(a.box.width,a.box.height)-Math.min(b.box.width,b.box.height));
+const clipped=rows.filter(x=>x.overflow.x>0||x.overflow.y>0);
+const page=rows.slice(offset,offset+limit).map(x=>{const out={tag:x.tag,id:x.id,label:x.label,box:x.box,in_viewport:x.in_viewport,overflow:x.overflow};
+ if(withStyles){const st=getComputedStyle(x.node),style={};for(const p of props)style[p]=st[p];out.style=style;}return out;});
+return {checks:{viewport:{width:vw,height:vh},page_overflow_x:Math.max(0,root.scrollWidth-root.clientWidth),
+  matches:all.length,rendered:rows.length,under_44px:{count:small.length,smallest:small.slice(0,5).map(brief)},
+  outside_viewport:rows.filter(x=>!x.in_viewport).length,content_overflowing:{count:clipped.length,first:clipped.slice(0,5).map(brief)}},
+ elements:page,next_offset:offset+limit<rows.length?offset+limit:null};
 """
 ANIMATIONS_SCRIPT=r"""
 /* V3_ANIMATIONS */
@@ -161,6 +172,30 @@ if (!n||n===document.body) return {tag:'body',id:null,label:'',secret:false};
 const secret=n.matches('input[type=password],input[type=file]')||n.closest('[data-secret],[data-sensitive]')!==null||
  /password|secret|token|credential|api.?key/i.test([n.id,n.name,n.autocomplete].join(' '));
 return {tag:n.tagName.toLowerCase(),id:n.id||null,label:(n.getAttribute('aria-label')||(n.matches('input,textarea,select')?'':n.innerText)||'').trim().slice(0,60),secret:secret};
+"""
+PERFORMANCE_SCRIPT=r"""
+/* V3_PERFORMANCE */
+// Browser-recorded milestones for the current document, in ms from the start of navigation.
+return new Promise(resolve=>{
+ const nav=performance.getEntriesByType('navigation')[0],paint=Object.fromEntries(performance.getEntriesByType('paint').map(e=>[e.name,e.startTime]));
+ const found={lcp:null,cls:0,long:0,longest:0},r=v=>v==null?null:Math.round(v);
+ const watch=(type,fn)=>{try{new PerformanceObserver(list=>list.getEntries().forEach(fn)).observe({type,buffered:true});}catch(error){}};
+ watch('largest-contentful-paint',e=>{found.lcp=e.startTime;});
+ watch('layout-shift',e=>{if(!e.hadRecentInput)found.cls+=e.value;});
+ watch('longtask',e=>{found.long++;found.longest=Math.max(found.longest,e.duration);});
+ setTimeout(()=>resolve({url_path:location.pathname,since_navigation_ms:r(performance.now()),
+  time_to_first_byte_ms:r(nav&&nav.responseStart),dom_content_loaded_ms:r(nav&&nav.domContentLoadedEventEnd),load_ms:r(nav&&nav.loadEventEnd||null),
+  first_paint_ms:r(paint['first-paint']),first_contentful_paint_ms:r(paint['first-contentful-paint']),largest_contentful_paint_ms:r(found.lcp),
+  layout_shift_score:Math.round(found.cls*1000)/1000,long_tasks:found.long,longest_task_ms:r(found.longest),
+  resources:performance.getEntriesByType('resource').length}),100);
+});
+"""
+CENTER_SCRIPT=r"""
+/* V3_CENTER */
+const n=[...document.querySelectorAll(arguments[0])].find(x=>x.checkVisibility({checkVisibilityCSS:true}));
+if (!n) return null;
+const b=n.getBoundingClientRect();
+return {x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2)};
 """
 TARGET_SCRIPT="""
 /* V3_TARGET */
@@ -261,9 +296,9 @@ def validate_args(name,args):
         allowed={"path"};action="login"
     elif name=="dev_browser_action":
         allowed={"action","path","selector","text","preset","offset","condition","timeout_ms","quiet_ms","dx","dy","key",
-            "color_scheme","reduced_motion","expected_sequence"};action=args.get("action")
+            "color_scheme","reduced_motion","styles","points","expected_sequence"};action=args.get("action")
         if action not in {"navigate","read","click","type","screenshot","viewport","close","measure","wait_for","animations",
-            "scroll","press","emulate"}:raise Rejected("Unsupported browser action")
+            "scroll","press","emulate","pixels","performance"}:raise Rejected("Unsupported browser action")
     elif name=="dev_browser_record":
         allowed={"action"};action=args.get("action")
         if action not in {"start","stop","status"}:raise Rejected("Unsupported recorder action")
@@ -271,7 +306,7 @@ def validate_args(name,args):
     if set(args)-allowed:raise Rejected("Unknown browser argument")
     permitted={"login":{"path"},"navigate":{"path"},"read":{"selector","offset"},"click":{"selector"},
         "type":{"selector","text"},"screenshot":set(),"viewport":{"preset"},"close":set(),"start":set(),"stop":set(),"status":set(),
-        "measure":{"selector"},"wait_for":{"condition","selector","text","timeout_ms","quiet_ms"},"animations":{"selector"},
+        "measure":{"selector","offset","styles"},"pixels":{"points","selector"},"performance":set(),"wait_for":{"condition","selector","text","timeout_ms","quiet_ms"},"animations":{"selector"},
         "scroll":{"selector","dx","dy"},"press":{"key","selector"},"emulate":{"color_scheme","reduced_motion"}}
     for key in list(args):
         if key not in ({"action"}|permitted[action]):
@@ -279,7 +314,7 @@ def validate_args(name,args):
                 del args[key];continue
             if args[key] not in ("",None):raise Rejected("Arguments do not apply to this action")
             del args[key]
-    if action in {"read","animations","scroll","press","wait_for"} and args.get("selector") in ("",None):args.pop("selector",None)
+    if action in {"read","animations","scroll","press","wait_for","pixels"} and args.get("selector") in ("",None):args.pop("selector",None)
     if action=="login" and args.get("path") in ("",None):args.pop("path",None)
     if "selector" in args and (not isinstance(args["selector"],str) or not 1<=len(args["selector"])<=256 or "\0" in args["selector"]):
         raise Rejected("Invalid bounded CSS selector")
@@ -289,7 +324,15 @@ def validate_args(name,args):
     if action=="type" and "text" not in args:raise Rejected("Type requires literal text")
     if action=="viewport" and args.get("preset") not in VIEWPORTS:raise Rejected("Viewport preset must be one of "+", ".join(VIEWPORTS))
     if "offset" in args and (type(args["offset"]) is not int or not 0<=args["offset"]<=MAX_READ_OFFSET):raise Rejected("Read offset must be a whole number of characters")
-    if action=="measure" and not args.get("selector"):raise Rejected("Measure requires a selector")
+    if action=="measure":
+        if not args.get("selector"):raise Rejected("Measure requires a selector")
+        if "styles" in args and type(args["styles"]) is not bool:raise Rejected("styles must be true or false")
+    if action=="pixels":
+        points=args.get("points")
+        if points in (None,[]) and not args.get("selector"):raise Rejected("Pixels needs points or a selector")
+        if points not in (None,[]) and (not isinstance(points,list) or len(points)>MAX_PIXELS or any(not isinstance(p,dict) or set(p)!={"x","y"}
+            or type(p["x"]) is not int or type(p["y"]) is not int or not 0<=p["x"]<1600 or not 0<=p["y"]<1200 for p in points)):
+            raise Rejected("points must be up to 20 objects with whole-pixel x and y inside the viewport")
     if action=="wait_for":
         if args.get("condition") not in WAIT_CONDITIONS:raise Rejected("Wait condition must be one of "+", ".join(sorted(WAIT_CONDITIONS)))
         if args["condition"] in {"visible","hidden"} and not args.get("selector"):raise Rejected("This wait condition requires a selector")
@@ -314,6 +357,17 @@ def png_metadata(data):
     if not 1<=width<=1600 or not 1<=height<=1200:raise Rejected("Screenshot dimensions exceed viewport bounds")
     return {"media_type":"image/png","bytes":len(data),"width":width,"height":height,
         "sha256":hashlib.sha256(data).hexdigest()}
+def png_pixel(data):
+    """The first pixel of a PNG. One pixel has no left or upper neighbour, so every row filter leaves it unchanged."""
+    if data[:8]!=b"\x89PNG\r\n\x1a\n" or data[12:16]!=b"IHDR" or data[24]!=8 or data[25] not in (2,6):
+        raise Rejected("Unsupported pixel capture")
+    position,idat=8,b""
+    while position<len(data):
+        length=struct.unpack(">I",data[position:position+4])[0];kind=data[position+4:position+8]
+        if kind==b"IDAT":idat+=data[position+8:position+8+length]
+        position+=12+length
+    row=zlib.decompress(idat)
+    return tuple(row[1:4])
 def process_stamp(pid):
     """Read process start time to avoid signalling a reused PID during stale-profile cleanup."""
     try:
@@ -569,6 +623,25 @@ class BrowserService:
         now=time.monotonic()
         return {"condition":args["condition"],"met":met,"elapsed_ms":round((now-started)*1000),"last_action":state.last_action or None,
             "since_last_action_ms":round((now-state.last_action_at)*1000) if state.last_action_at else None}
+    def pixels(self,state,args):
+        """Rendered colours at viewport points, each from a 1x1 capture with the screenshot masks applied."""
+        points=args.get("points") or []
+        if not points:
+            center=state.driver.execute_script(CENTER_SCRIPT,args["selector"])
+            if not isinstance(center,dict):raise Rejected("No rendered element matches the selector")
+            points=[{"x":int(center["x"]),"y":int(center["y"])}]
+        self.apply_viewport(state)
+        try:
+            state.driver.execute_script(MASK_SCRIPT,state.cookie,state.csrf)
+            samples=[]
+            for point in points:
+                shot=state.driver.execute_cdp_cmd("Page.captureScreenshot",{"format":"png","captureBeyondViewport":False,
+                    "clip":{"x":point["x"],"y":point["y"],"width":1,"height":1,"scale":1}})
+                rgb=png_pixel(base64.b64decode(shot["data"]))
+                samples.append({"x":point["x"],"y":point["y"],"color":"#%02x%02x%02x"%rgb,"rgb":list(rgb)})
+        finally:
+            with contextlib.suppress(Exception):state.driver.execute_script(UNMASK_SCRIPT)
+        return {"pixels":samples,"masked_color":"#555555"}
     def screenshot(self,state):
         """Mask credentials and editable content, capture a PNG, and invalidate the prior observation."""
         self.apply_viewport(state)
@@ -643,9 +716,15 @@ class BrowserService:
                 state.observed=None
                 result={"viewport":args["preset"],"width":width,"height":height,"navigate_required":True}
             elif action=="measure":
-                result=state.driver.execute_script(MEASURE_SCRIPT,args["selector"],MAX_ELEMENTS)
+                # Styles are about 2 KB per element, so a styled page holds fewer elements.
+                result=state.driver.execute_script(MEASURE_SCRIPT,args["selector"],5 if args.get("styles") else MEASURE_PAGE,args.get("offset",0),args.get("styles",False))
                 if not isinstance(result,dict) or not isinstance(result.get("elements"),list):raise Rejected("Invalid bounded layout result")
-                for element in result["elements"]:element["label"]=self.redact(state,element.get("label",""))
+                for row in result["elements"]+result["checks"]["under_44px"]["smallest"]+result["checks"]["content_overflowing"]["first"]:
+                    row["label"]=self.redact(state,row.get("label",""))
+            elif action=="pixels":result=self.pixels(state,args)
+            elif action=="performance":
+                result=state.driver.execute_script(PERFORMANCE_SCRIPT)
+                if not isinstance(result,dict):raise Rejected("Invalid bounded performance result")
             elif action=="animations":
                 result=state.driver.execute_script(ANIMATIONS_SCRIPT,args.get("selector",""),MAX_ELEMENTS)
                 if not isinstance(result,dict) or not isinstance(result.get("animations"),list):raise Rejected("Invalid bounded animation result")

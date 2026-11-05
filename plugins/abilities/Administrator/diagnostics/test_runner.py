@@ -153,11 +153,17 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_measure_wait_animations_scroll_press_and_emulate(self):
         import types
         await self.call("login_as_current_user")
-        driver=self.drivers[0];original=driver.execute_script;polls=[];focus={"tag":"button","id":"next","label":"Next","secret":False}
+        driver=self.drivers[0];original=driver.execute_script;polls=[];focus={"tag":"button","id":"next","label":"Next","secret":False};measured_args=[]
         cookie=self.trusted["cookie"]
         def script(source,*args):
-            if "V3_MEASURE" in source:return {"viewport":{"width":390,"height":844},"page_overflow_x":0,"matches":1,"rendered":1,
-                "elements":[{"tag":"button","label":"Save "+cookie,"box":{"x":0,"y":0,"width":40,"height":32}}]}
+            if "V3_MEASURE" in source:
+                measured_args.append(args)
+                return {"checks":{"viewport":{"width":390,"height":844},"page_overflow_x":0,"matches":1,"rendered":1,
+                    "under_44px":{"count":1,"smallest":[{"label":"Save "+cookie,"width":40,"height":32}]},"outside_viewport":0,
+                    "content_overflowing":{"count":0,"first":[]}},
+                    "elements":[{"tag":"button","label":"Save "+cookie,"box":{"x":0,"y":0,"width":40,"height":32}}],"next_offset":None}
+            if "V3_CENTER" in source:return None if args[0]=="#none" else {"x":20,"y":16}
+            if "V3_PERFORMANCE" in source:return {"time_to_first_byte_ms":80,"first_contentful_paint_ms":420}
             if "V3_ANIMATIONS" in source:return {"missing":False,"count":1,"animations":[{"type":"CSSTransition","name":"opacity","duration_ms":200}]}
             if "V3_CHECK" in source:polls.append(args);return len(polls)>=3
             if "V3_SCROLL" in source:return {"missing":args[0]=="#none","scroll_y":args[2]}
@@ -170,6 +176,29 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         measured=await self.call(action="measure",selector="button")
         self.assertEqual(measured["elements"][0]["box"]["height"],32)
         self.assertEqual(measured["elements"][0]["label"],"Save [redacted]")
+        self.assertEqual(measured["checks"]["under_44px"]["smallest"][0]["label"],"Save [redacted]")
+        self.assertEqual(measured_args[-1],("button",20,0,False))
+        await self.call(action="measure",selector="button",offset=20,styles=True)
+        self.assertEqual(measured_args[-1],("button",5,20,True))
+        self.assertIn("styles must be",(await self.call(action="measure",selector="button",styles="yes"))["output"])
+        self.assertEqual((await self.call(action="performance"))["first_contentful_paint_ms"],420)
+        # Pixels: one 1x1 capture per point, decoded from the PNG, under the screenshot masks.
+        import struct as _struct,zlib as _zlib
+        def chunk(kind,body):return _struct.pack(">I",len(body))+kind+body+_struct.pack(">I",_zlib.crc32(kind+body))
+        one=b"\x89PNG\r\n\x1a\n"+chunk(b"IHDR",_struct.pack(">IIBBBBB",1,1,8,6,0,0,0))+chunk(b"IDAT",_zlib.compress(b"\x04\x12\x34\x56\xff"))+chunk(b"IEND",b"")
+        captured=[]
+        def cdp(command,params):
+            captured.append((command,params));driver.cdp.append((command,params))
+            return {"data":base64.b64encode(one).decode()} if command=="Page.captureScreenshot" else {}
+        driver.execute_cdp_cmd=cdp
+        shot=await self.call(action="pixels",points=[{"x":5,"y":7},{"x":0,"y":0}])
+        self.assertEqual([p["color"] for p in shot["pixels"]],["#123456","#123456"])
+        self.assertEqual(captured[0][1]["clip"],{"x":5,"y":7,"width":1,"height":1,"scale":1})
+        self.assertEqual(driver.masked_secrets,(cookie,driver.csrf))
+        self.assertEqual((await self.call(action="pixels",selector="button"))["pixels"][0]["x"],20)
+        self.assertIn("No rendered element",(await self.call(action="pixels",selector="#none"))["output"])
+        self.assertIn("points must be",(await self.call(action="pixels",points=[{"x":-1,"y":0}]))["output"])
+        self.assertIn("points or a selector",(await self.call(action="pixels"))["output"])
         self.assertEqual((await self.call(action="animations"))["animations"][0]["duration_ms"],200)
         self.assertIn("requires a selector",(await self.call(action="wait_for",condition="visible"))["output"])
         self.assertIn("timeout_ms",(await self.call(action="wait_for",condition="quiet",timeout_ms=99999))["output"])
