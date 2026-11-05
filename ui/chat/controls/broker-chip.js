@@ -46,6 +46,111 @@ const ICONS = {running:'loader-circle', done:'circle-check', error:'circle-alert
 const LABELS = {queued:'Queued', running:'Running', needs_decision:'Needs a decision', completed:'Completed', failed:'Failed',
   stale:'Stale', cancelled:'Cancelled', uncertain:'Uncertain — needs reconciliation', interrupted:'Interrupted'};
 
+const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+const icon = state => { const s = el('span', 'chip-status broker-icon broker-' + state); s.innerHTML = `<i data-lucide="${ICONS[state]}"></i>`; return s; };
+const draw = () => window.lucide?.createIcons();
+
+// Long-press (touch) or right-click opens a context menu; a plain click does `tap`.
+function pressable(node, tap, hold) {
+  let timer = null, held = false;
+  node.addEventListener('pointerdown', e => { if (e.button) return; held = false; clearTimeout(timer);
+    timer = setTimeout(() => { held = true; try { requestTouchVibration(); } catch {} hold(e); }, HOLD_MS); });
+  for (const type of ['pointerup', 'pointerleave', 'pointercancel']) node.addEventListener(type, () => clearTimeout(timer));
+  node.addEventListener('contextmenu', e => { e.preventDefault(); clearTimeout(timer); held = true; hold(e); });
+  node.addEventListener('click', e => { e.stopPropagation(); if (held) { held = false; return; } tap(e); });
+}
+
+function stageRows(snapshot, age, slowNow) {
+  const table = el('div', 'broker-stages'); table.setAttribute('role', 'table');
+  const head = el('div', 'broker-stage broker-stage-head'); head.setAttribute('role', 'row');
+  for (const label of ['#', 'Stage', 'Time', 'Normal (min)', 'Status']) head.append(el('span', '', label));
+  table.append(head);
+  const rows = [...(snapshot.finished_stages || []).map(s => [s, 'done']), ...(snapshot.running_stages || []).map(s => [s, 'running']), ...(snapshot.upcoming_stages || []).map(s => [s, 'upcoming'])];
+  for (const [stage, state] of rows) {
+    const row = el('div', 'broker-stage broker-stage-' + state); row.setAttribute('role', 'row');
+    const time = el('span', 'broker-time');
+    if (state === 'running') { time.dataset.base = stage.seconds || 0; slowNow.push([stage, row]); }
+    time.textContent = state === 'upcoming' ? '—' : minutes(state === 'running' ? (stage.seconds || 0) + age : stage.seconds) + ' min';
+    const normal = stage.normal ? minutes(stage.normal[0]) + '–' + minutes(stage.normal[1]) : (stage.samples ? '' : 'no history');
+    row.append(el('span', 'broker-id', stage.id || ''), el('span', 'broker-name', stage.stage), time, el('span', 'broker-normal', normal),
+      el('span', 'broker-state', state === 'running' ? stageVerdict(stage, (stage.seconds || 0) + age) : state));
+    table.append(row);
+  }
+  return table;
+}
+
+/** One task's card: its newest build (or newest job) with stages and Background, and the
+ * other jobs under Advanced. `hold(job)` opens a job's menu on long-press; `pageLink` adds a
+ * link to the task's Broker card page (ui/broker-card.html). Returns the
+ * element, a `tick` that recomputes the counters, and whether the job is still active. */
+export function renderCard(task, detail, hold = () => {}, {pageLink = false} = {}) {
+  const box = el('div', 'sub-chip-menu broker-card'); box.setAttribute('role', 'dialog'); box.setAttribute('aria-label', 'Broker task ' + (task.name || task.task_id));
+  const jobs = detail.task.jobs || [];
+  const main = jobs.find(job => job.kind === 'build') || jobs[0];
+  const checks = jobs.filter(job => job !== main);
+  const offset = (detail.now || Date.now() / 1000) - Date.now() / 1000;
+  const head = el('div', 'broker-card-head');
+  head.append(icon(taskIcon(detail.task)), el('strong', 'broker-card-title', task.name || task.task_id));
+  box.append(head);
+  if (!main) { box.append(el('p', 'broker-note', 'No job yet.')); return {box, tick() {}}; }
+  const snapshot = main.snapshot || {}, live = ACTIVE.includes(main.status);
+  const age = live ? liveSeconds(0, main.snapshot_at, offset) : 0;
+  const job = el('div', 'broker-job');
+  const title = el('div', 'broker-job-title', (main.kind === 'check' ? 'Check ' + (main.check || '') : 'Build') + ' ' + main.job_id.slice(0, 8) + ' · ' + (LABELS[main.status] || main.status));
+  pressable(title, () => {}, () => hold(main));
+  const line = el('div', 'broker-summary');
+  job.append(title, line);
+  if (detail.task.warning === 'broker_unresponsive') job.append(el('p', 'broker-warning', 'Broker not responding — the job’s state is unknown.'));
+  else if (detail.task.warning === 'stalled') job.append(el('p', 'broker-warning', 'Stalled — no progress for ' + minutes(snapshot.idle_seconds) + ' min.'));
+  const behind = (snapshot.queued_behind || []).map(o => o.task_id + (o.session ? ' (session ' + o.session + ')' : ''));
+  if (main.status === 'queued' && behind.length) job.append(el('p', 'broker-note', 'Queued behind ' + behind.join(', ')));
+  const slow = [];
+  if (snapshot.finished_stages || snapshot.running_stages) job.append(stageRows(snapshot, age, slow));
+  if ((snapshot.background || []).length) {
+    const bg = el('div', 'broker-background'); bg.append(el('strong', '', 'Background'));
+    for (const work of snapshot.background) bg.append(el('div', '', work.name + ' · ' + (work.status || 'running') + ' · ' + minutes(work.seconds) + ' min' + (work.result ? ' (' + work.result + ')' : '')));
+    job.append(bg);
+  }
+  const stale = el('p', 'broker-stale'); job.append(stale);
+  box.append(job);
+  if (checks.length) {
+    const advanced = el('details', 'broker-advanced'); advanced.append(el('summary', '', 'Advanced · ' + checks.length + ' more job' + (checks.length === 1 ? '' : 's')));
+    for (const other of checks) {
+      const row = el('div', 'broker-check');
+      const seconds = other.snapshot?.job_seconds;
+      row.append(icon(taskIcon(other)), el('span', '', (other.kind === 'check' ? (other.check || 'check') : 'build') + ' ' + other.job_id.slice(0, 8)),
+        el('span', 'broker-normal', (LABELS[other.status] || other.status) + (seconds != null ? ' · ' + minutes(seconds) + ' min' : '')));
+      pressable(row, () => {}, () => hold(other));
+      advanced.append(row);
+    }
+    box.append(advanced);
+  }
+  if (pageLink) {
+    const link = el('a', 'broker-page-link', 'Task progress page');
+    link.href = '/v3-ui/broker-card.html?task_id=' + encodeURIComponent(task.task_id);
+    box.append(link);
+  }
+  // Recomputes every counter from the snapshot and the time since it was read.
+  function tick() {
+    const since = live ? liveSeconds(0, main.snapshot_at, offset) : 0;
+    const parts = [];
+    if (snapshot.job_seconds != null) parts.push('Elapsed ' + minutes(snapshot.job_seconds + since) + ' min');
+    if (snapshot.job_normal) parts.push('normal ' + minutes(snapshot.job_normal[0]) + '–' + minutes(snapshot.job_normal[1]));
+    const left = live ? remaining(snapshot.remaining_seconds, since) : null; if (left) parts.push(left);
+    line.textContent = parts.join(' · ');
+    for (const [stage, row] of slow) {
+      const seconds = (stage.seconds || 0) + since;
+      row.querySelector('.broker-time').textContent = minutes(seconds) + ' min';
+      const verdict = stageVerdict(stage, seconds);
+      row.querySelector('.broker-state').textContent = verdict;
+      row.classList.toggle('broker-slow', verdict === 'slow');
+    }
+    stale.textContent = live && since > STALE_SECONDS ? 'Updated ' + minutes(since) + ' min ago' : '';
+  }
+  tick();
+  return {box, tick, live};
+}
+
 /** Mounts the chip into the header session-tabs row and returns its session lifecycle. */
 export function createBrokerChip({request, note = () => {}, family = () => []}) {
   const tabs = document.getElementById('chat-sub-header');
@@ -54,9 +159,6 @@ export function createBrokerChip({request, note = () => {}, family = () => []}) 
   chip.setAttribute('aria-haspopup', 'dialog'); chip.setAttribute('aria-expanded', 'false');
   let sid = '', tasks = [], popup = null, cardTimer = null, tickTimer = null, epoch = 0, pending = null;
 
-  const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
-  const icon = state => { const s = el('span', 'chip-status broker-icon broker-' + state); s.innerHTML = `<i data-lucide="${ICONS[state]}"></i>`; return s; };
-  const draw = () => window.lucide?.createIcons();
   const path = (id, rest = '') => '/sessions/' + encodeURIComponent(id) + '/build-tasks' + rest;
 
   function close() {
@@ -74,15 +176,6 @@ export function createBrokerChip({request, note = () => {}, family = () => []}) 
     document.addEventListener('pointerdown', outside, true);
   }
 
-  // Long-press (touch) or right-click opens a context menu; a plain click does `tap`.
-  function pressable(node, tap, hold) {
-    let timer = null, held = false;
-    node.addEventListener('pointerdown', e => { if (e.button) return; held = false; clearTimeout(timer);
-      timer = setTimeout(() => { held = true; try { requestTouchVibration(); } catch {} hold(e); }, HOLD_MS); });
-    for (const type of ['pointerup', 'pointerleave', 'pointercancel']) node.addEventListener(type, () => clearTimeout(timer));
-    node.addEventListener('contextmenu', e => { e.preventDefault(); clearTimeout(timer); held = true; hold(e); });
-    node.addEventListener('click', e => { e.stopPropagation(); if (held) { held = false; return; } tap(e); });
-  }
 
   function renderChip() {
     tabs?.toggleAttribute('data-broker', tasks.length > 0);
@@ -179,94 +272,14 @@ export function createBrokerChip({request, note = () => {}, family = () => []}) 
     show(box);
   }
 
-  function stageRows(snapshot, age, slowNow) {
-    const table = el('div', 'broker-stages'); table.setAttribute('role', 'table');
-    const head = el('div', 'broker-stage broker-stage-head'); head.setAttribute('role', 'row');
-    for (const label of ['#', 'Stage', 'Time', 'Normal (min)', 'Status']) head.append(el('span', '', label));
-    table.append(head);
-    const rows = [...(snapshot.finished_stages || []).map(s => [s, 'done']), ...(snapshot.running_stages || []).map(s => [s, 'running']), ...(snapshot.upcoming_stages || []).map(s => [s, 'upcoming'])];
-    for (const [stage, state] of rows) {
-      const row = el('div', 'broker-stage broker-stage-' + state); row.setAttribute('role', 'row');
-      const time = el('span', 'broker-time');
-      if (state === 'running') { time.dataset.base = stage.seconds || 0; slowNow.push([stage, row]); }
-      time.textContent = state === 'upcoming' ? '—' : minutes(state === 'running' ? (stage.seconds || 0) + age : stage.seconds) + ' min';
-      const normal = stage.normal ? minutes(stage.normal[0]) + '–' + minutes(stage.normal[1]) : (stage.samples ? '' : 'no history');
-      row.append(el('span', 'broker-id', stage.id || ''), el('span', 'broker-name', stage.stage), time, el('span', 'broker-normal', normal),
-        el('span', 'broker-state', state === 'running' ? stageVerdict(stage, (stage.seconds || 0) + age) : state));
-      table.append(row);
-    }
-    return table;
-  }
 
-  function card(task, detail) {
-    const box = el('div', 'sub-chip-menu broker-card'); box.setAttribute('role', 'dialog'); box.setAttribute('aria-label', 'Broker task ' + (task.name || task.task_id));
-    const jobs = detail.task.jobs || [];
-    const main = jobs.find(job => job.kind === 'build') || jobs[0];
-    const checks = jobs.filter(job => job !== main);
-    const offset = (detail.now || Date.now() / 1000) - Date.now() / 1000;
-    const head = el('div', 'broker-card-head');
-    head.append(icon(taskIcon(detail.task)), el('strong', 'broker-card-title', task.name || task.task_id));
-    box.append(head);
-    if (!main) { box.append(el('p', 'broker-note', 'No job yet.')); return {box, tick() {}}; }
-    const snapshot = main.snapshot || {}, live = ACTIVE.includes(main.status);
-    const age = live ? liveSeconds(0, main.snapshot_at, offset) : 0;
-    const job = el('div', 'broker-job');
-    const title = el('div', 'broker-job-title', (main.kind === 'check' ? 'Check ' + (main.check || '') : 'Build') + ' ' + main.job_id.slice(0, 8) + ' · ' + (LABELS[main.status] || main.status));
-    pressable(title, () => {}, () => jobMenu(task, main, detail.can_control));
-    const line = el('div', 'broker-summary');
-    job.append(title, line);
-    if (detail.task.warning === 'broker_unresponsive') job.append(el('p', 'broker-warning', 'Broker not responding — the job’s state is unknown.'));
-    else if (detail.task.warning === 'stalled') job.append(el('p', 'broker-warning', 'Stalled — no progress for ' + minutes(snapshot.idle_seconds) + ' min.'));
-    const behind = (snapshot.queued_behind || []).map(o => o.task_id + (o.session ? ' (session ' + o.session + ')' : ''));
-    if (main.status === 'queued' && behind.length) job.append(el('p', 'broker-note', 'Queued behind ' + behind.join(', ')));
-    const slow = [];
-    if (snapshot.finished_stages || snapshot.running_stages) job.append(stageRows(snapshot, age, slow));
-    if ((snapshot.background || []).length) {
-      const bg = el('div', 'broker-background'); bg.append(el('strong', '', 'Background'));
-      for (const work of snapshot.background) bg.append(el('div', '', work.name + ' · ' + (work.status || 'running') + ' · ' + minutes(work.seconds) + ' min' + (work.result ? ' (' + work.result + ')' : '')));
-      job.append(bg);
-    }
-    const stale = el('p', 'broker-stale'); job.append(stale);
-    box.append(job);
-    if (checks.length) {
-      const advanced = el('details', 'broker-advanced'); advanced.append(el('summary', '', 'Advanced · ' + checks.length + ' more job' + (checks.length === 1 ? '' : 's')));
-      for (const other of checks) {
-        const row = el('div', 'broker-check');
-        const seconds = other.snapshot?.job_seconds;
-        row.append(icon(taskIcon(other)), el('span', '', (other.kind === 'check' ? (other.check || 'check') : 'build') + ' ' + other.job_id.slice(0, 8)),
-          el('span', 'broker-normal', (LABELS[other.status] || other.status) + (seconds != null ? ' · ' + minutes(seconds) + ' min' : '')));
-        pressable(row, () => {}, () => jobMenu(task, other, detail.can_control));
-        advanced.append(row);
-      }
-      box.append(advanced);
-    }
-    // Recomputes every counter from the snapshot and the time since it was read.
-    function tick() {
-      const since = live ? liveSeconds(0, main.snapshot_at, offset) : 0;
-      const parts = [];
-      if (snapshot.job_seconds != null) parts.push('Elapsed ' + minutes(snapshot.job_seconds + since) + ' min');
-      if (snapshot.job_normal) parts.push('normal ' + minutes(snapshot.job_normal[0]) + '–' + minutes(snapshot.job_normal[1]));
-      const left = live ? remaining(snapshot.remaining_seconds, since) : null; if (left) parts.push(left);
-      line.textContent = parts.join(' · ');
-      for (const [stage, row] of slow) {
-        const seconds = (stage.seconds || 0) + since;
-        row.querySelector('.broker-time').textContent = minutes(seconds) + ' min';
-        const verdict = stageVerdict(stage, seconds);
-        row.querySelector('.broker-state').textContent = verdict;
-        row.classList.toggle('broker-slow', verdict === 'slow');
-      }
-      stale.textContent = live && since > STALE_SECONDS ? 'Updated ' + minutes(since) + ' min ago' : '';
-    }
-    tick();
-    return {box, tick, live};
-  }
 
   async function openCard(task) {
     const opened = sid;
     let detail;
     try { detail = await request(path(task.sid, '/' + encodeURIComponent(task.task_id))); } catch (error) { note(error.message); return; }
     if (sid !== opened) return;
-    let view = card(task, detail);
+    let view = renderCard(task, detail, job => jobMenu(task, job, detail.can_control), {pageLink: detail.can_control});
     show(view.box);
     tickTimer = setInterval(view.tick, 1000);
     if (view.live) cardTimer = setInterval(async () => {
@@ -275,7 +288,7 @@ export function createBrokerChip({request, note = () => {}, family = () => []}) 
       try {
         const next = await request(path(task.sid, '/' + encodeURIComponent(task.task_id)));
         if (popup !== view.box) return;
-        const fresh = card(task, next);
+        const fresh = renderCard(task, next, job => jobMenu(task, job, next.can_control), {pageLink: next.can_control});
         if (open) fresh.box.querySelector('details')?.setAttribute('open', '');
         // Replace in place: same position, timers moved to the fresh card.
         fresh.box.style.top = view.box.style.top; fresh.box.style.left = view.box.style.left;

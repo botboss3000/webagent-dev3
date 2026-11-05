@@ -208,6 +208,7 @@ pub(super) fn router(app: App) -> Router {
             "/admin/builds/{job_id}/result",
             get(build_dashboard::result),
         )
+        .route("/admin/builds/tasks/{task_id}", get(build_dashboard::task))
         .route(
             "/admin/builds/{job_id}/cancel",
             post(build_dashboard::cancel),

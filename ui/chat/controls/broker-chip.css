@@ -71,3 +71,9 @@
   .broker-stage .broker-normal:not(:empty)::before { content: 'normal '; }
   .broker-stage-head span:nth-child(n+4) { display: none; }
 }
+
+/* Standalone card page (ui/broker-card.html): the card sits in the page flow. */
+body.broker-page { margin: 0; padding: 12px 8px; background: var(--bg-0); color: var(--fg-1); font-family: var(--font-sans, system-ui); }
+.broker-page .broker-card { position: static; margin: 0 auto; max-height: none; width: min(560px, 100%); box-sizing: border-box; }
+.broker-page .broker-note a { color: var(--brand); }
+.broker-page-link { display: inline-block; margin-top: 8px; color: var(--brand); }

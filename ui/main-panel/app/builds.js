@@ -309,6 +309,14 @@ export function mountBuilds(panel, onStatus = () => {}) {
       about.className = 'build-card-about';
       about.textContent = [owner(origin.origin || job.origin, origin.session), origin.text].filter(Boolean).join(' · ');
       card.append(about);
+      if (job.task_id) {
+        // The task's Broker card page: its build and checks with live stage times.
+        const page = document.createElement('a');
+        page.className = 'build-card-link';
+        page.href = '/v3-ui/broker-card.html?task_id=' + encodeURIComponent(job.task_id);
+        page.textContent = 'Task progress';
+        card.append(page);
+      }
       const cancellation = job.cancellation || {};
       if (cancellation.available || (cancellation.requested && !stoppedStatuses.has(job.status) && job.status !== 'completed')) {
         const cancel = document.createElement('button');
