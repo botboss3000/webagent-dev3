@@ -56,6 +56,9 @@ pub struct PauseDetection {
     pub min_speech_seconds: f32,
     /// Unbroken speech is cut into phrases of at most this length so text keeps coming.
     pub max_phrase_seconds: f32,
+    /// Audio before each detected phrase that is transcribed with it, so a soft first word
+    /// (heard before the detector is sure of speech) is kept.
+    pub lead_in_seconds: f32,
 }
 
 /// Agent voice replies (Kokoro).
@@ -89,6 +92,7 @@ impl Default for VoiceSettings {
                     min_silence_seconds: 0.4,
                     min_speech_seconds: 0.25,
                     max_phrase_seconds: 10.0,
+                    lead_in_seconds: 0.5,
                 },
             },
             speech: Speech {
@@ -158,6 +162,10 @@ impl VoiceSettings {
             (
                 (2.0..=30.0).contains(&p.max_phrase_seconds),
                 "pause_detection.max_phrase_seconds is 2-30",
+            ),
+            (
+                (0.0..=2.0).contains(&p.lead_in_seconds),
+                "pause_detection.lead_in_seconds is 0-2",
             ),
             (
                 s.idle_unload_minutes <= 1440,

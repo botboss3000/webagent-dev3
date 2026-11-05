@@ -88,8 +88,9 @@ export function createAudioCapture({send,onState,onText,onComplete,onError,onLag
       // Ready before the microphone prompt resolves, so recording begins with the first sample.
    c.context=new Context();const resumed=c.context.resume();
    onState('requesting_microphone');pump(c);
-   await c.context.audioWorklet.addModule(WORKLET);if(!valid(c)){stop(c);return false;}
-   c.stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+      // The microphone opens while the worklet loads, so recording begins as early as the browser allows.
+   const mic=navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true}}).then(stream=>{c.stream=stream;if(!valid(c))stop(c);});
+   await Promise.all([mic,c.context.audioWorklet.addModule(WORKLET)]);
    if(!valid(c)){stop(c);return false;}
       // Emits downsampled PCM only for the current capture and stops accepting samples after finish has collected the last block.
    c.source=c.context.createMediaStreamSource(c.stream);c.node=new window.AudioWorkletNode(c.context,'dictation-capture');c.sink=c.context.createGain();c.sink.gain.value=0;

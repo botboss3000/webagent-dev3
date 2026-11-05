@@ -91,8 +91,8 @@ fn speech_is_sent_in_sentence_groups_starting_short() {
     let text = [sentence; 14].join(" ");
     let chunks = speech_chunks(&text);
     let lengths: Vec<usize> = chunks.iter().map(|c| c.chars().count()).collect();
-    // 120 characters fit two sentences plus a space; later groups fit nine.
-    assert_eq!(lengths, vec![81, 368, 122]);
+    // 120 characters fit two sentences, 240 fit five and 400 fit nine.
+    assert_eq!(lengths, vec![81, 204, 286]);
     assert_eq!(chunks.join(" "), text);
     assert_eq!(
         speech_chunks("One long sentence without a stop"),

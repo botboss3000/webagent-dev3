@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 use std::ffi::{c_char, c_float, c_void, CStr, CString};
 use std::io::{self, BufRead, Write};
+use std::ops::Range;
 use std::path::Path;
 
 use base64::engine::general_purpose::STANDARD;
@@ -330,6 +331,8 @@ pub struct Parakeet {
     vad: ffi::VadModelConfig,
     /// Owns the strings `vad` points to.
     _vad_strings: Vec<CString>,
+    /// Samples of audio before each detected phrase that are transcribed with it.
+    lead_in: usize,
 }
 
 /// One open dictation: its pause detector and the phrases transcribed so far.
@@ -337,6 +340,26 @@ pub struct ParakeetDictation {
     vad: Handle,
     destroy: unsafe extern "C" fn(Handle),
     phrases: Vec<String>,
+    /// This dictation's audio not yet transcribed, kept so a phrase can include its lead-in.
+    pending: Vec<f32>,
+    /// Position of `pending[0]` among all of the dictation's samples.
+    start: usize,
+}
+
+/// Where a phrase lies in `pending` (which begins at sample `start`): the detector found it at
+/// `phrase_start` with `len` samples. The span reaches back `lead_in` samples, because the detector
+/// marks speech only once it is sure (a soft first word comes earlier), but never into audio an
+/// earlier phrase used.
+fn phrase_span(
+    phrase_start: usize,
+    len: usize,
+    lead_in: usize,
+    start: usize,
+    pending: usize,
+) -> Range<usize> {
+    let end = (phrase_start + len).saturating_sub(start).min(pending);
+    let from = phrase_start.saturating_sub(lead_in).max(start) - start;
+    from.min(end)..end
 }
 
 impl Drop for ParakeetDictation {
@@ -470,6 +493,7 @@ impl Parakeet {
             recognizer,
             vad,
             _vad_strings: vec![silero],
+            lead_in: (pauses.lead_in_seconds * SAMPLE_RATE as f32) as usize,
         };
         parakeet.open().ok_or("Silero VAD model failed to load")?;
         Ok(parakeet)
@@ -511,20 +535,37 @@ impl Parakeet {
         // destroyed before the detector pops it.
         while unsafe { (api.vad_empty)(dictation.vad) } == 0 {
             // SAFETY: as above; the segment's sample pointer covers `n` floats until it is destroyed.
-            let samples = unsafe {
+            let (phrase_start, detected) = unsafe {
                 let segment = (api.vad_front)(dictation.vad);
-                let samples = if segment.is_null() || (*segment).samples.is_null() {
-                    Vec::new()
+                let found = if segment.is_null() || (*segment).samples.is_null() {
+                    (0, Vec::new())
                 } else {
-                    std::slice::from_raw_parts((*segment).samples, (*segment).n.max(0) as usize)
-                        .to_vec()
+                    let samples = (*segment).samples;
+                    let n = (*segment).n.max(0) as usize;
+                    let start = (*segment).start.max(0) as usize;
+                    (start, std::slice::from_raw_parts(samples, n).to_vec())
                 };
                 if !segment.is_null() {
                     (api.destroy_segment)(segment);
                 }
                 (api.vad_pop)(dictation.vad);
-                samples
+                found
             };
+            let span = phrase_span(
+                phrase_start,
+                detected.len(),
+                self.lead_in,
+                dictation.start,
+                dictation.pending.len(),
+            );
+            // The detector's own copy is used only if this dictation's audio no longer covers it.
+            let samples = if span.end - span.start >= detected.len() {
+                dictation.pending[span.clone()].to_vec()
+            } else {
+                detected
+            };
+            dictation.pending.drain(..span.end);
+            dictation.start += span.end;
             let phrase = self.transcribe(&samples);
             if !phrase.is_empty() {
                 dictation.phrases.push(phrase);
@@ -545,10 +586,18 @@ impl Transcriber for Parakeet {
             vad,
             destroy: self.api.destroy_vad,
             phrases: Vec::new(),
+            pending: Vec::new(),
+            start: 0,
         })
     }
 
     fn push(&self, dictation: &mut ParakeetDictation, samples: &[f32]) -> Option<String> {
+        dictation.pending.extend_from_slice(samples);
+        // Keep no more than the detector can hold for a phrase, plus its lead-in.
+        let keep = VAD_BUFFER_SECONDS as usize * SAMPLE_RATE as usize + self.lead_in;
+        let excess = dictation.pending.len().saturating_sub(keep);
+        dictation.pending.drain(..excess);
+        dictation.start += excess;
         for window in samples.chunks(VAD_WINDOW) {
             // SAFETY: a live detector; `window` outlives the call, which copies it.
             unsafe { (self.api.vad_accept)(dictation.vad, window.as_ptr(), window.len() as i32) };
@@ -599,6 +648,39 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
+    }
+
+    /// A first word spoken softly (the first 0.8 s at 5% volume, as when a phone's gain is still
+    /// settling) is lost without a lead-in and kept with the default 0.5 s; runs only with the
+    /// real model.
+    #[test]
+    fn a_soft_first_word_is_kept_when_installed() {
+        let Ok(root) = std::env::var("WEBAGENT_VOICE_ROOT") else {
+            return;
+        };
+        let wav = std::fs::read(Path::new(&root).join("models/parakeet/test_wavs/en.wav")).unwrap();
+        let mut audio = samples(&wav[44..]);
+        audio[..12800].iter_mut().for_each(|sample| *sample *= 0.05);
+        let settings = crate::settings::VoiceSettings::default().dictation;
+        let parakeet = Parakeet::load(Path::new(&root), &settings).unwrap();
+        let mut dictation = parakeet.open().unwrap();
+        for batch in audio.chunks(1600) {
+            parakeet.push(&mut dictation, batch);
+        }
+        let text = parakeet.finish(dictation);
+        assert!(text.starts_with("Ask not what"), "{text}");
+    }
+
+    #[test]
+    fn phrases_reach_back_for_their_lead_in_but_not_into_the_last_phrase() {
+        // Pending audio starts at sample 1000 and holds 5000 samples.
+        assert_eq!(phrase_span(3000, 1000, 800, 1000, 5000), 1200..3000);
+        // The lead-in stops at the first pending sample.
+        assert_eq!(phrase_span(1200, 1000, 800, 1000, 5000), 0..1200);
+        // A phrase reported past the kept audio is clamped.
+        assert_eq!(phrase_span(5500, 1000, 0, 1000, 5000), 4500..5000);
+        // A phrase entirely before the kept audio is empty.
+        assert_eq!(phrase_span(0, 500, 0, 1000, 5000), 0..0);
     }
 
     #[test]

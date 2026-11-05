@@ -3,9 +3,11 @@
 //! Also the Kokoro voice catalog and the per-agent voice output setting it validates.
 
 /// The first group of sentences holds at most this many characters (unless one sentence is
-/// longer), so playback starts after about one sentence.
+/// longer), so playback starts after about one sentence. Each later group may be twice as long
+/// as the one before, up to [`CHUNK_CHARS`], so it is synthesized before the one before it has
+/// finished playing.
 const FIRST_CHUNK_CHARS: usize = 120;
-/// Later groups hold at most this many characters.
+/// Longest group of sentences.
 const CHUNK_CHARS: usize = 400;
 
 /// Replace fenced code with a short notice, read Markdown as plain text (link text without its URL),
@@ -75,7 +77,7 @@ pub fn speech_chunks(text: &str) -> Vec<String> {
     for sentence in sentences {
         if !group.is_empty() && group.chars().count() + sentence.chars().count() > limit {
             chunks.push(std::mem::take(&mut group));
-            limit = CHUNK_CHARS;
+            limit = (limit * 2).min(CHUNK_CHARS);
         }
         group = format!("{group} {sentence}").trim().to_owned();
     }
