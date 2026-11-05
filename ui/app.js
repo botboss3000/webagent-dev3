@@ -593,8 +593,9 @@ async function boot(){
     poll=setInterval(()=>refresh().then(()=>issues.resolve('status_poll')).catch(error=>issues.fail('status_poll',error)),3000);
   };
   // Phase C: the active page and the transcript open independently of each other.
-  // A session deep link paints first; its tab loads only when the user switches back to it.
-  const pageReady=chatFirst?Promise.resolve():ensureMainPage(activeMainPage).catch(()=>{});
+  // On a phone a session deep link shows only the chat, so its tab loads when the user switches
+  // back to it; on desktop both panels are visible, so the page loads beside the transcript.
+  const pageReady=chatFirst&&mobileLayout.matches?Promise.resolve():ensureMainPage(activeMainPage).catch(()=>{});
   if(!chatFirst&&mobileLayout.matches)showMobileView('main');
   if(chatFirst){
     void openChatSurface().catch(error=>note(error.message)).finally(bootReady);
