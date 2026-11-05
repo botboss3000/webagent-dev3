@@ -24,7 +24,9 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 ORIGIN=os.environ.get("V3_PUBLIC_ORIGIN","https://dev.webagent.live")
 PRIVATE_ROOT=Path("/run/v3/worker/browser")
-MAX_TEXT=16384
+# One read page; small enough that the result is never cut off in the agent's context.
+MAX_TEXT=12000
+MAX_READ_OFFSET=1_000_000
 MAX_PNG=1024*1024
 MAX_ARTIFACTS=40
 MAX_SESSIONS=2
@@ -36,47 +38,51 @@ PAGE_TIMEOUT=10
 CALL_TIMEOUT=20
 # URL parameters the app itself writes. Invite and embed authentication parameters stay excluded.
 APP_PARAMS={"tab","agent","agentView","agentScope","appView","session_id","article","path","job_id","theme","window"}
-VIEWPORTS={"phone":(390,844),"desktop":(1280,900)}
+# Presets with a touch screen also emulate mobile media queries.
+VIEWPORTS={"phone":(390,844),"phone_small":(360,640),"tablet":(768,1024),"desktop":(1280,900),"desktop_wide":(1440,900)}
+TOUCH_VIEWPORTS={"phone","phone_small","tablet"}
+# Cloudflare injects its analytics beacon at the edge; the app's own CSP blocks it. Not an app error.
+IGNORED_PAGE_ERRORS=("static.cloudflareinsights.com",)
 MAX_PAGE_ERRORS=20
 
 # Fixed native scripts only. Model text can enter a CSS selector or literal
 # send_keys argument, never script source. Every browser output is untrusted.
-OBSERVE_SCRIPT="""
-/* V3_OBSERVE */
-if (!window.__v3DiagnosticObservation) {
- const state={revision:0};
- new MutationObserver(()=>{state.revision++;}).observe(document.documentElement,
-  {subtree:true,childList:true,attributes:true,characterData:true});
- window.__v3DiagnosticObservation=state;
-}
-return window.__v3DiagnosticObservation.revision;
-"""
 READ_SCRIPT=r"""
 /* V3_READ */
-const root=document.querySelector(arguments[0]||'body');
-if (!root) return {text:'',missing:true,truncated:false};
-const walk=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
-let text='',count=0,truncated=false,node;
-while ((node=walk.nextNode())) {
- if (++count>5000) {truncated=true;break;}
- const parent=node.parentElement;
- if (!parent || parent.closest('script,style,input,textarea,[data-secret],[data-sensitive]')) continue;
- const style=getComputedStyle(parent);
- if (style.display==='none'||style.visibility==='hidden') continue;
- let chunk=node.nodeValue.replaceAll(arguments[1],'[redacted]');
- if (text.length+chunk.length>arguments[2]) {text+=chunk.slice(0,arguments[2]-text.length);truncated=true;break;}
- text+=chunk+'\n';
+// Every match of the selector, outermost only, in document order; rendered text only.
+const roots=[...document.querySelectorAll(arguments[0]||'body')].filter((node,i,all)=>!all.some(other=>other!==node&&other.contains(node)));
+if (!roots.length) return {text:'',missing:true,truncated:false,matches:0};
+const offset=arguments[3],end=offset+arguments[2];
+let text='',count=0,truncated=false;
+for (const root of roots) {
+ const walk=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let node;
+ while ((node=walk.nextNode())) {
+  if (++count>20000) {truncated=true;break;}
+  const parent=node.parentElement;
+  if (!parent || parent.closest('script,style,input,textarea,[data-secret],[data-sensitive]')) continue;
+  // checkVisibility also covers hidden, display:none and visibility:hidden ancestors.
+  if (!parent.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) continue;
+  const chunk=node.nodeValue.replaceAll(arguments[1],'[redacted]').trim();
+  if (!chunk) continue;
+  text+=chunk+'\n';
+  if (text.length>end) {truncated=true;break;}
+ }
+ if (truncated) break;
 }
-return {text:text.slice(0,arguments[2]),missing:false,truncated:truncated};
+return {text:text.slice(offset,end),missing:false,truncated:truncated,matches:roots.length,
+ next_offset:truncated?Math.min(end,text.length):null};
 """
 TARGET_SCRIPT="""
 /* V3_TARGET */
 const target=document.querySelector(arguments[0]);
-const observed=document.querySelector(arguments[1]||'body');
-if (!target||!observed||!observed.contains(target)) return {allowed:false};
+// The target must lie inside a region the agent read; other parts of the page may change freely.
+const observed=[...document.querySelectorAll(arguments[1]||'body')];
+if (!target||!target.isConnected||!observed.some(region=>region.contains(target))) return {allowed:false};
 const secret=target.matches('input[type=password],input[type=file]') || target.closest('[data-secret],[data-sensitive]')!==null ||
  /password|secret|token|credential|api.?key/i.test([target.id,target.name,target.autocomplete].join(' '));
-return {allowed:true,secret:secret,href:target.closest('a[href]')?.href||'',tag:target.tagName.toLowerCase()};
+// The visible label (never an input value) lets the result say what was actually used.
+const label=(target.getAttribute('aria-label')||target.innerText||'').trim().slice(0,80);
+return {allowed:true,secret:secret,href:target.closest('a[href]')?.href||'',tag:target.tagName.toLowerCase(),label:label};
 """
 MASK_SCRIPT="""
 /* V3_MASK */
@@ -164,14 +170,14 @@ def validate_args(name,args):
     if name in {"login_as_current_user","login_as_current_user_v3"}:
         allowed={"path"};action="login"
     elif name=="dev_browser_action":
-        allowed={"action","path","selector","text","preset","expected_sequence"};action=args.get("action")
+        allowed={"action","path","selector","text","preset","offset","expected_sequence"};action=args.get("action")
         if action not in {"navigate","read","click","type","screenshot","viewport","close"}:raise Rejected("Unsupported browser action")
     elif name=="dev_browser_record":
         allowed={"action"};action=args.get("action")
         if action not in {"start","stop","status"}:raise Rejected("Unsupported recorder action")
     else:raise Rejected("Unknown Diagnostics browser tool")
     if set(args)-allowed:raise Rejected("Unknown browser argument")
-    permitted={"login":{"path"},"navigate":{"path"},"read":{"selector"},"click":{"selector"},
+    permitted={"login":{"path"},"navigate":{"path"},"read":{"selector","offset"},"click":{"selector"},
         "type":{"selector","text"},"screenshot":set(),"viewport":{"preset"},"close":set(),"start":set(),"stop":set(),"status":set()}
     for key in list(args):
         if key not in ({"action"}|permitted[action]):
@@ -187,7 +193,8 @@ def validate_args(name,args):
         raise Rejected("Literal text exceeds limit")
     if action in {"click","type"} and not args.get("selector"):raise Rejected("Action requires a selector")
     if action=="type" and "text" not in args:raise Rejected("Type requires literal text")
-    if action=="viewport" and args.get("preset") not in VIEWPORTS:raise Rejected("Viewport preset must be phone or desktop")
+    if action=="viewport" and args.get("preset") not in VIEWPORTS:raise Rejected("Viewport preset must be one of "+", ".join(VIEWPORTS))
+    if "offset" in args and (type(args["offset"]) is not int or not 0<=args["offset"]<=MAX_READ_OFFSET):raise Rejected("Read offset must be a whole number of characters")
     return action
 def png_metadata(data):
     """Verify PNG bytes and dimensions before storing or serving a private screenshot."""
@@ -272,7 +279,7 @@ class BrowserState:
         self.cookie=cookie;self.csrf="";self.expires=expires;self.driver=driver;self.directory=directory
         self.lock=threading.RLock();self.cancelled=threading.Event()
         self.touched=time.monotonic();self.observed=None;self.observed_url=""
-        self.observed_selector="";self.observed_at=0
+        self.observed_selector="";self.observed_at=0;self.viewport=None
 
 # @code-index {"version":1,"feature":"diagnostics-private-browser","aliases":["login as current user","private development browser"],"purpose":"Confines Diagnostics browser actions and artifacts to worker-bound current-caller authority; resource defaults live in this package and worker provisioning","span_lines":80,"configuration":{"status":"not_applicable","references":[],"opportunities":[],"rationale":"Current-caller ownership and fixed-origin confinement are enforced security invariants."}}
 class BrowserService:
@@ -419,12 +426,20 @@ class BrowserService:
         errors=[]
         for entry in entries:
             if not isinstance(entry,dict) or entry.get("level")!="SEVERE":continue
+            if any(noise in str(entry.get("message","")) for noise in IGNORED_PAGE_ERRORS):continue
             text=str(entry.get("message","")).replace(state.cookie,"[redacted]")
             if state.csrf:text=text.replace(state.csrf,"[redacted]")
             errors.append(text[:300])
         return errors[-MAX_PAGE_ERRORS:]
+    def apply_viewport(self,state):
+        """Re-apply the chosen preset; device emulation does not reliably survive navigation."""
+        if not state.viewport:return
+        width,height=VIEWPORTS[state.viewport];touch=state.viewport in TOUCH_VIEWPORTS
+        state.driver.execute_cdp_cmd("Emulation.setDeviceMetricsOverride",{"width":width,"height":height,"deviceScaleFactor":1,"mobile":touch})
+        state.driver.execute_cdp_cmd("Emulation.setTouchEmulationEnabled",{"enabled":touch})
     def screenshot(self,state):
         """Mask credentials and editable content, capture a PNG, and invalidate the prior observation."""
+        self.apply_viewport(state)
         try:
             state.driver.execute_script(MASK_SCRIPT,state.cookie,state.csrf)
             return self.artifact(state,state.driver.get_screenshot_as_png())
@@ -432,20 +447,21 @@ class BrowserService:
             with contextlib.suppress(Exception):state.driver.execute_script(UNMASK_SCRIPT)
             state.observed=None
     def fresh_target(self,state,selector):
-        """Require unchanged recent DOM evidence before permitting visible non-secret input."""
+        """Require a recent read of this URL whose region holds the target, then re-check the target itself at dispatch."""
         if state.observed is None or time.monotonic()-state.observed_at>READ_FRESH_SECONDS or state.driver.current_url!=state.observed_url:
-            raise Rejected("Read the current page before each input action")
-        current=state.driver.execute_script(OBSERVE_SCRIPT)
-        if current!=state.observed:state.observed=None;raise Rejected("Page changed; read it again before input")
+            raise Rejected("Read the current page (a region containing the target) before each input action")
         target=state.driver.execute_script(TARGET_SCRIPT,selector,state.observed_selector)
-        if not target.get("allowed") or target.get("secret"):raise Rejected("Target is unavailable or contains private credentials")
+        if not target.get("allowed"):raise Rejected("Target is not in the region last read; read a selector that contains it")
+        if target.get("secret"):raise Rejected("Target contains private credentials")
         if target.get("href"):
             parsed=urlsplit(target["href"])
             if urlunsplit((parsed.scheme,parsed.netloc,"","",""))!=self.origin:raise Rejected("External navigation is unavailable")
             validate_path(urlunsplit(("","",parsed.path,parsed.query,"")),{"session_id":state.sid,"agent_id":state.agent})
         element=state.driver.find_element("css selector",selector)
         if not element.is_displayed() or not element.is_enabled():raise Rejected("Input target is not visible and enabled")
-        return element
+        label=str(target.get("label","")).replace(state.cookie,"[redacted]")
+        if state.csrf:label=label.replace(state.csrf,"[redacted]")
+        return element,{"tag":str(target.get("tag","")),"label":label}
     def run(self,name,args,base,trusted):
         """Execute one validated action with serialized profile access and no automatic input replay."""
         trusted=validate_trusted(base,trusted);action=validate_args(name,args)
@@ -465,35 +481,33 @@ class BrowserService:
             if action not in {"login","navigate"}:self.safe_url(state)
             if action in {"login","navigate"}:
                 route=validate_path(args.get("path","/app"),trusted)
-                state.observed=None;state.driver.get(self.origin+route);self.safe_url(state)
+                state.observed=None;state.driver.get(self.origin+route);self.apply_viewport(state);self.safe_url(state)
                 result={"path":route,"identity_verified":True,"user_id":state.user}
             elif action=="read":
-                before=state.driver.execute_script(OBSERVE_SCRIPT)
-                result=state.driver.execute_script(READ_SCRIPT,args.get("selector","body"),state.cookie,MAX_TEXT)
-                if not isinstance(result,dict) or not isinstance(result.get("text"),str):raise Rejected("Invalid bounded DOM result")
-                result["text"]=result["text"][:MAX_TEXT].replace(state.cookie,"[redacted]")
-                if state.csrf:result["text"]=result["text"].replace(state.csrf,"[redacted]")
-                after=state.driver.execute_script(OBSERVE_SCRIPT)
-                if before==after and not result.get("truncated") and not result.get("missing"):
-                    state.observed=after;state.observed_url=state.driver.current_url
+                read=state.driver.execute_script(READ_SCRIPT,args.get("selector","body"),state.cookie,MAX_TEXT,args.get("offset",0))
+                if not isinstance(read,dict) or not isinstance(read.get("text"),str):raise Rejected("Invalid bounded DOM result")
+                read["text"]=read["text"][:MAX_TEXT].replace(state.cookie,"[redacted]")
+                if state.csrf:read["text"]=read["text"].replace(state.csrf,"[redacted]")
+                # Any read that found its region permits input inside that region until navigation or input.
+                if not read.get("missing"):
+                    state.observed=True;state.observed_url=state.driver.current_url
                     state.observed_selector=args.get("selector","body");state.observed_at=time.monotonic()
                 else:state.observed=None
-                result["fresh_for_input"]=state.observed is not None
-                result["page_errors"]=self.page_errors(state)
+                # Errors first, so a long page never pushes them out of view.
+                result={"page_errors":self.page_errors(state),**read,"fresh_for_input":state.observed is not None}
             elif action in {"click","type"}:
-                target=self.fresh_target(state,args["selector"]);state.observed=None
+                target,used=self.fresh_target(state,args["selector"]);state.observed=None
                 try:
                     if action=="click":target.click()
                     else:target.send_keys(args["text"])
                     self.safe_url(state)
                 except Exception:raise Uncertain("Input outcome is uncertain; inspect the page before another action") from None
-                result={"action":action,"applied":True,"read_required":True}
+                result={"action":action,"applied":True,"target":used,"read_required":True}
             elif action=="screenshot":result=self.screenshot(state)
             elif action=="viewport":
                 # Device emulation changes width, touch and mobile media queries; navigate again so boot-time layout reruns.
-                width,height=VIEWPORTS[args["preset"]];phone=args["preset"]=="phone"
-                state.driver.execute_cdp_cmd("Emulation.setDeviceMetricsOverride",{"width":width,"height":height,"deviceScaleFactor":1,"mobile":phone})
-                state.driver.execute_cdp_cmd("Emulation.setTouchEmulationEnabled",{"enabled":phone})
+                state.viewport=args["preset"];self.apply_viewport(state)
+                width,height=VIEWPORTS[state.viewport]
                 state.observed=None
                 result={"viewport":args["preset"],"width":width,"height":height,"navigate_required":True}
             else:raise Rejected("Recorder actions use the recorder interface")

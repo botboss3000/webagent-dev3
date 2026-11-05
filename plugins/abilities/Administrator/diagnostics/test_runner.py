@@ -131,13 +131,25 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(driver.cdp,[("Emulation.setDeviceMetricsOverride",{"width":390,"height":844,"deviceScaleFactor":1,"mobile":True}),
             ("Emulation.setTouchEmulationEnabled",{"enabled":True})])
         self.assertEqual((await self.call(action="viewport",preset="desktop"))["width"],1280)
-        self.assertIn("phone or desktop",(await self.call(action="viewport",preset="tablet"))["output"])
+        self.assertIn("one of phone",(await self.call(action="viewport",preset="watch"))["output"])
+        self.assertEqual((await self.call(action="viewport",preset="tablet"))["width"],768)
+        self.assertEqual(driver.cdp[-1],("Emulation.setTouchEmulationEnabled",{"enabled":True}))
+        # The preset is re-applied after navigation and before a screenshot.
+        driver.cdp.clear()
+        await self.call(action="navigate",path="/app?tab=app")
+        self.assertEqual(driver.cdp[0][1]["width"],768)
+        driver.cdp.clear();await self.call(action="screenshot")
+        self.assertEqual(driver.cdp[0][1]["width"],768)
         self.assertEqual((await self.call(action="viewport"))["status"],"error")
         driver.get_log=lambda kind:[{"level":"SEVERE","message":"app.js 455 Uncaught TypeError "+self.trusted["cookie"]},
             {"level":"INFO","message":"ignored"},{"level":"SEVERE","message":"x"*400}]
         errors=(await self.call(action="read"))["page_errors"]
         self.assertEqual(errors[0],"app.js 455 Uncaught TypeError [redacted]");self.assertEqual(len(errors),2);self.assertEqual(len(errors[1]),300)
         self.assertNotIn(self.trusted["cookie"],json.dumps(errors))
+        self.assertIn("whole number",(await self.call(action="read",offset=-1))["output"])
+        self.assertEqual((await self.call(action="read",offset=12000))["status"],"success")
+        clicked=await self.call(action="click",selector="#button")
+        self.assertEqual(clicked["target"],{"tag":"input","label":""})
     async def test_fresh_read_before_each_input_and_secret_targets_blocked(self):
         self.assertEqual((await self.call(action="click",selector="#button"))["status"],"error")
         read=await self.call(action="read")
@@ -146,9 +158,10 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(read["fresh_for_input"])
         self.assertEqual((await self.call(action="click",selector="#button"))["status"],"success")
         self.assertEqual((await self.call(action="type",selector="#text",text="x"))["status"],"error")
+        # Unrelated page changes after a read (live timestamps) no longer block input.
         await self.call(action="read")
         self.drivers[0].revision+=1
-        self.assertEqual((await self.call(action="click",selector="#button"))["status"],"error")
+        self.assertEqual((await self.call(action="click",selector="#button"))["status"],"success")
         await self.call(action="read")
         self.assertEqual((await self.call(action="type",selector="#password",text="secret"))["status"],"error")
         await self.call(action="read")

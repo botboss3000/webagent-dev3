@@ -118,9 +118,10 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(read["fresh_for_input"])
         self.assertEqual((await self.call(action="click",selector="#button"))["status"],"success")
         self.assertEqual((await self.call(action="type",selector="#text",text="x"))["status"],"error")
+        # Unrelated page changes after a read (live timestamps) no longer block input.
         await self.call(action="read")
         self.drivers[0].revision+=1
-        self.assertEqual((await self.call(action="click",selector="#button"))["status"],"error")
+        self.assertEqual((await self.call(action="click",selector="#button"))["status"],"success")
         await self.call(action="read")
         self.assertEqual((await self.call(action="type",selector="#password",text="secret"))["status"],"error")
         await self.call(action="read")

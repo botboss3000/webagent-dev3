@@ -244,6 +244,25 @@ pub fn schemas() -> Vec<Value> {
     schemas.extend(crate::ability_plugins::current_schemas());
     schemas
 }
+/// Declare the reserved `_repeat_of` on repeat-guarded tools: tool bridges that enforce a
+/// schema drop undeclared fields, which would leave a held repeat impossible to confirm.
+/// Strict schemas are left alone, since strict mode requires every declared field.
+fn advertise_repeat(schemas: &mut [Value]) {
+    use webagent_engine::tools::retry_guard::{Risk, REPEAT_ARG};
+    for schema in schemas {
+        let Some(name) = schema["name"].as_str().map(str::to_owned) else {
+            continue;
+        };
+        if schema["strict"] == true || matches!(retry(&name).risk, Risk::None | Risk::Exempt) {
+            continue;
+        }
+        if let Some(properties) = schema["parameters"]["properties"].as_object_mut() {
+            properties.entry(REPEAT_ARG).or_insert_with(|| {
+                json!({"type":"string","description":"Only to repeat an earlier identical call on purpose: that call's ID, as the repeat guard's result names it."})
+            });
+        }
+    }
+}
 pub(crate) fn native_schemas() -> Vec<Value> {
     let mut schemas = native_schemas_without_administrator();
     schemas.extend(administrator::schemas());
@@ -347,6 +366,7 @@ pub use webagent_engine::tools::transport::{execute, execute_host_trusted, execu
 
 /// Apply existing fixed action/nullable-optional transformations before catalog identity is computed.
 pub(crate) fn normalize_native_schemas(mut schemas: Vec<Value>) -> Vec<Value> {
+    advertise_repeat(&mut schemas);
     for schema in &mut schemas {
         if crate::actions::supported(schema["name"].as_str().unwrap_or("")) {
             schema["parameters"]["properties"]["_action"] = json!({"type":["object","null"],
@@ -403,5 +423,25 @@ mod definition_tests {
     #[test]
     fn every_folder_handler_and_definition_match() {
         assert_eq!(super::definition_problems(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn guarded_tools_declare_repeat_of_and_reads_do_not() {
+        let mut schemas = vec![
+            serde_json::json!({"name":"file_write","parameters":{"properties":{"path":{}}}}),
+            serde_json::json!({"name":"file_read","parameters":{"properties":{"path":{}}}}),
+            serde_json::json!({"name":"file_write","strict":true,"parameters":{"properties":{"path":{}}}}),
+        ];
+        super::advertise_repeat(&mut schemas);
+        assert_eq!(
+            schemas[0]["parameters"]["properties"]["_repeat_of"]["type"],
+            "string"
+        );
+        assert!(schemas[1]["parameters"]["properties"]
+            .get("_repeat_of")
+            .is_none());
+        assert!(schemas[2]["parameters"]["properties"]
+            .get("_repeat_of")
+            .is_none());
     }
 }
