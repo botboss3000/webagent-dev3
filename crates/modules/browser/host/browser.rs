@@ -1,4 +1,4 @@
-//! Root adapter for Browser Control: device linking, the extension's action queue and the
+//! Root adapter for Browser Extension: device linking, the extension's action queue and the
 //! `browser_backend`/`browser_action` tools. Rules live in `webagent_browser`.
 //!
 //! The API (extension endpoints) and the loop (tools) are separate processes; both read the
@@ -385,7 +385,7 @@ pub(crate) async fn execute(
     }
     if sites.is_empty() {
         return Ok(
-            json!({"status":"denied","output":"No sites are allowed for this agent yet; an operator adds them in the Browser Control ability settings"}),
+            json!({"status":"denied","output":"No sites are allowed for this agent yet; an operator adds them in the Browser Extension ability settings"}),
         );
     }
     if let Err(error) = rules::check_action(args, &sites) {

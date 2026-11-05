@@ -1,7 +1,7 @@
 {
-  "display_name": "Browser Control",
+  "display_name": "Browser Extension",
   "kind": "ability",
-  "description": "Act in the user's own Chrome through the WebAgent browser extension: open allowed sites, read pages, click, type and press keys while the user watches and can take over.",
+  "description": "Work in the chatting user's own Chrome through the WebAgent browser extension only (no server or headless browser): open allowed sites, read pages, click, type and press keys while the user watches and can take over.",
   "icon": "mouse-pointer-2",
   "color": "#9ece6a",
   "order": 1,

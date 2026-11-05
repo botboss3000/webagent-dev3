@@ -220,7 +220,7 @@ pub(super) fn router(app: App) -> Router {
         .route_layer(middleware::from_fn_with_state(app.clone(), admin_auth));
     // Model handlers enforce tenant authority themselves; all retain browser auth and CSRF.
     let api = Router::new()
-        // Browser Control: the chat panel links the extension to whoever is signed in.
+        // Browser Extension: the chat panel links the extension to whoever is signed in.
         .route("/browser/link-code", post(crate::browser::link_code))
         .route("/browser/devices", get(crate::browser::devices))
         .route(

@@ -74,7 +74,7 @@ pub fn check_action(args: &Value, sites: &[String]) -> Result<()> {
         "open" | "navigate" => {
             let url = args["url"].as_str().unwrap_or("");
             if !site_allowed(url, sites) {
-                bail!("{url} is not on this agent's browser site list; an operator adds sites in the Browser Control ability settings");
+                bail!("{url} is not on this agent's browser site list; an operator adds sites in the Browser Extension ability settings");
             }
         }
         "click" if !has("ref") => bail!("click needs ref from your last read"),

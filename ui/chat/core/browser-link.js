@@ -1,4 +1,4 @@
-// Silent Browser Control linking. The WebAgent browser extension's content script runs on
+// Silent Browser Extension linking. The WebAgent browser extension's content script runs on
 // this origin and answers a hello with the account it is linked to; when that is not the
 // signed-in account, a one-time code from the server relinks it. Messages stay inside this
 // window: the content script and this module both ignore other frames, so a page that

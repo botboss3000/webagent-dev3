@@ -39,7 +39,7 @@ The protected broker publishes this complete protocol-1 native package. Rust ret
 
 Results identify plugin_revision, implementation_version and implementation_sha256. Capacity, startup, authentication, invalid-request and backend errors have distinct sanitized error_kind values. Transport loss during input remains uncertain and never authorizes replay. Artifact reads use a short-lived process without opening a browser or consuming a browser slot. Restart discards authenticated profiles; artifacts retain their existing session ownership and access checks.
 
-This is the private fixed-origin Diagnostics browser, not Web Browser Control or a personal-device browser. It does not emulate a phone operating system keyboard.
+This is the private fixed-origin Diagnostics browser, not the Browser Extension ability (the user's own Chrome). It does not emulate a phone operating system keyboard.
 
 ## Runtime tool execution
 

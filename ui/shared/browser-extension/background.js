@@ -1,4 +1,4 @@
-// WebAgent Browser Control service worker.
+// WebAgent Browser Extension service worker.
 //
 // Linking: the content script on WebAgent's pages passes a one-time code; it is traded for
 // this device's secret. Work: long-poll the server for the linked account's actions, run
