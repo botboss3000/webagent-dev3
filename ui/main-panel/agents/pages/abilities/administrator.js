@@ -158,7 +158,7 @@ function buildOptimizationControls({ ability, data, request, scope, levelId, pre
 }
 
 // Abilities whose manifest settings save as one object through the generic validator.
-const manifestSettings = new Set(['agent_management']);
+const manifestSettings = new Set(['agent_management', 'browser_control']);
 // The Default Agent reaches all owned sessions and may delegate unless its owner changes it.
 const defaultAgentSettings = { session_scope: 'owned', allow_delegation: true };
 function buildManifestSettings({ ability, data, request, scope, levelId, previewUser, status, rerender }) {
@@ -183,6 +183,9 @@ function buildManifestSettings({ ability, data, request, scope, levelId, preview
         const option = node('option', '', choice.label); option.value = choice.value; control.append(option);
       }
       control.value = value(item);
+    } else if (item.type === 'text') {
+      control = node('textarea', 'ac-input'); control.setAttribute('aria-label', item.label);
+      control.rows = 3; control.maxLength = item.max_length || 2000; control.value = String(value(item) ?? '');
     } else {
       control = field(item.label, String(value(item)), 'number');
       if (item.min !== undefined) control.min = String(item.min);
@@ -194,7 +197,7 @@ function buildManifestSettings({ ability, data, request, scope, levelId, preview
     panel.append(row(item.label, control, item.hint || ''));
   }
   const read = ([item, control]) => item.type === 'boolean' ? control.checked
-    : item.type === 'select' ? control.value : Number(control.value);
+    : item.type === 'select' || item.type === 'text' ? control.value : Number(control.value);
   // One revision covers the whole settings object; each change saves every value.
   const save = async () => {
     if (!enabled || controls.some(([, control]) => control.disabled)) return;

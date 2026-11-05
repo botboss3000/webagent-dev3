@@ -19,6 +19,7 @@ import {mountVoiceReply} from '../controls/voice-reply.js';
 import {mountSessionControls} from '../controls/session-controls.js';
 import {mountChatActionPanel,createChatAction} from './chat-action-panel.js';
 import {mountUsageStats} from '../controls/usage-stats.js';
+import {mountBrowserLink} from './browser-link.js';
 import {createMessageRow as createMessage,updateAdmission} from './message-view.js';
 import {closeGutterOverlays,updateGutterTimes} from './bubble-gutters.js';
 import {mountComposerProgress} from './composer-progress.js';
@@ -102,6 +103,7 @@ const disposeHeaderGestures=forwardFooterGestures({
 });
 // Diagnostics ui_trace collection runs only while that category is enabled.
 const uiTrace=mountUiTrace({request,getSessionId:()=>session});
+mountBrowserLink({request});
 // Pinch / Ctrl+wheel zoom scales only the transcript content; destroy removes its listeners and chip.
 const disposeZoom=mountChatZoom({root,scroller:$('chat-messages'),inner:$('chat-messages-inner'),header:$('chat-header')});
 // Progress visibility is filtered using the current account's administrator identity.

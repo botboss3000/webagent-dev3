@@ -78,7 +78,17 @@ impl
                 generation: &generation,
                 pending_id: &pending_id,
             };
-            if tools::native::visual_capture::owns(&name) {
+            if crate::browser::owns(&name) {
+                // Boxed so this branch does not grow the shared dispatch future's stack frame.
+                Box::pin(crate::browser::execute(
+                    &app,
+                    native_call,
+                    &name,
+                    &args,
+                    cancel,
+                ))
+                .await
+            } else if tools::native::visual_capture::owns(&name) {
                 tools::native::visual_capture::execute(
                     &tools::native_host::Host(&app),
                     native_call,

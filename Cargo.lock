@@ -2397,6 +2397,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "webagent-browser"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "webagent-capability-context"
 version = "0.1.0"
 dependencies = [
@@ -2945,6 +2955,7 @@ dependencies = [
  "webagent-background-dispatch",
  "webagent-boot-contracts",
  "webagent-boot-supervisor",
+ "webagent-browser",
  "webagent-capability-context",
  "webagent-capability-contracts",
  "webagent-chat",

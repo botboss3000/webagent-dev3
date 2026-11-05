@@ -220,6 +220,13 @@ pub(super) fn router(app: App) -> Router {
         .route_layer(middleware::from_fn_with_state(app.clone(), admin_auth));
     // Model handlers enforce tenant authority themselves; all retain browser auth and CSRF.
     let api = Router::new()
+        // Browser Control: the chat panel links the extension to whoever is signed in.
+        .route("/browser/link-code", post(crate::browser::link_code))
+        .route("/browser/devices", get(crate::browser::devices))
+        .route(
+            "/browser/devices/{id}",
+            axum::routing::delete(crate::browser::revoke),
+        )
         // Every signed-in caller reads the Wiki; its handlers keep writes to administrators.
         .route("/wiki", get(wiki::list))
         .route("/wiki/search", get(wiki::search))
@@ -424,6 +431,11 @@ pub(super) fn router(app: App) -> Router {
         .route("/api/v3/harness-bridge/reply",post(crate::harness_bridge::reply))
         .route("/api/v3/harness-bridge/ack",post(crate::harness_bridge::ack))
         .route("/api/v3/harness-bridge/pair",post(crate::harness_bridge::pair))
+        .route("/api/v3/browser/link",post(crate::browser::link))
+        .route("/api/v3/browser/unlink",post(crate::browser::unlink))
+        .route("/api/v3/browser/next",post(crate::browser::next))
+        .route("/api/v3/browser/ack",post(crate::browser::ack))
+        .route("/api/v3/browser/result",post(crate::browser::result))
         .route("/api/v3/auth/register",post(registration::register))
         .route("/api/v3/auth/guest-login",post(registration::guest_login))
         .route("/api/v3/auth/access-mode",get(registration::access_mode))

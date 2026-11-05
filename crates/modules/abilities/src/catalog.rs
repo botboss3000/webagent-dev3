@@ -151,6 +151,12 @@ fn optional_setting_value_valid(declaration: &Value, value: &Value) -> bool {
                 .iter()
                 .any(|o| o["value"] == *value && value.is_string())
         }),
+        // Free text such as a site list; `max_length` (characters, default 2000) bounds it.
+        Some("text") => value.as_str().is_some_and(|text| {
+            let limit = declaration["max_length"].as_u64().unwrap_or(2000);
+            u64::try_from(text.chars().count()).is_ok_and(|count| count <= limit)
+                && !text.chars().any(|c| c.is_control() && c != '\n')
+        }),
         Some("number" | "integer") => {
             let Some(number) = value.as_i64() else {
                 return false;
@@ -3657,14 +3663,14 @@ pub mod registered_tests {
                     .iter()
                     .filter(|entry| Catalog::<H>::executable(entry))
                     .count(),
-                21
+                22
             );
             assert_eq!(
                 ordinary
                     .iter()
                     .filter(|entry| entry.readiness == Readiness::Ready)
                     .count(),
-                22
+                23
             );
             assert_eq!(
                 catalog

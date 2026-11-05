@@ -138,7 +138,7 @@ migration does not deploy or activate new functionality.
 
 ### Web
 
-- `browser_control`: ability; pending. Adapt independently in a later functional wave.
+- `browser_control`: ability; ready. Compiled module `crates/modules/browser` drives the user's own Chrome through the WebAgent extension (`ui/shared/browser-extension`).
 - `host_management`: ability; pending. Adapt independently in a later functional wave.
 - `ssh_control`: ability; pending. Adapt independently in a later functional wave.
 - `web_access`: ability; pending. Adapt independently in a later functional wave.

@@ -151,6 +151,7 @@ pub(crate) fn folder_handlers() -> impl Iterator<Item = &'static str> {
         native::visualizer::TOOLS,
         native::vault::TOOLS,
         native::visual_capture::TOOLS,
+        webagent_browser::TOOLS,
     ]
     .into_iter()
     .flatten()
@@ -338,6 +339,7 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         schemas.extend(native::schemas(native::visualizer::TOOLS));
         schemas.extend(native::schemas(native::vault::TOOLS));
         schemas.extend(native::schemas(native::visual_capture::TOOLS));
+        schemas.extend(native::schemas(webagent_browser::TOOLS));
         schemas.extend(native::session::schemas());
         schemas.extend(crate::main_chat::schemas());
         schemas.extend(core_skills::schemas());

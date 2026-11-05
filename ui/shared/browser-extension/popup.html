@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WebAgent Browser Control</title>
+<style>
+  body{margin:0;width:300px;font:13px/1.45 system-ui,sans-serif;background:#1f1d2b;color:#f2f1f7}
+  main{padding:14px 16px;display:grid;gap:10px}
+  h1{font-size:15px;margin:0}
+  p{margin:0;color:#c9c6d9}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  button{font:inherit;border:1px solid #7c5cff;background:transparent;color:#fff;border-radius:8px;padding:6px 12px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  button:hover,button:focus-visible{background:#7c5cff;outline:none}
+  button:active{transform:scale(.97)}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+  <h1>WebAgent Browser Control</h1>
+  <p id="status">Checking…</p>
+  <p>The agent works only in its own purple “WebAgent” tab group, on the sites your organization allows. Click or type in its window to take over at any time.</p>
+  <div class="row">
+    <button id="hand-back" type="button" hidden>Hand back to agent</button>
+    <button id="unlink" type="button" hidden>Unlink this browser</button>
+  </div>
+</main>
+<script src="popup.js"></script>
+</body>
+</html>
