@@ -11,7 +11,7 @@ recipient answer, a particular response, or immediate completion.
 | --- | --- | --- |
 | message_session | session_id UUID of a session in the agent's scope, nonempty text up to 65536 UTF-8 bytes, delivery steer (default), queue or interrupt | One attributed message admitted to another owner-private session. |
 | start_spawn | text; optional agent_id, optional title | One sub agent session (parent_session_id set, shown as a tab of the sender) and its first message. Its run ends send the sender a notice. |
-| start_session | text; optional agent_id, title, notify (default false) | Without agent_id (or with the sender's agent): a fork carrying the sender's history through its last completed reply. With another agent_id: a fresh session of that agent, only when the sender's `allow_delegation` setting is on. started_by_session_id is set. |
+| start_session | text; optional agent_id, title, notify (default false) | Without agent_id (or with the sender's agent): a fork carrying the sender's history through its last completed reply. With another agent_id: a fresh session of that agent, only when the sender's `allow_delegation` setting is on; when it is off the model's schema omits `agent_id` and preflight refuses one with a fixed reason. started_by_session_id is set. |
 | delegate_to_agent | text, agent_id, optional title | A fresh session of that agent and a browser handoff request. |
 
 Session scope (`agent_management.session_scope`): `started` reaches the sender's

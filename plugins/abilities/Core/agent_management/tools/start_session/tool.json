@@ -1,6 +1,6 @@
 {
   "name": "start_session",
-  "description": "Start a separate session in the user's list. Without agent_id it is a fork of this agent carrying this conversation's history up to the last completed reply. With agent_id it delegates to that agent with fresh context (needs delegation enabled). notify (default false) sends you its final reply when it finishes.",
+  "description": "Start a separate session in the user's list. By default it is a fork of this agent carrying this conversation's history up to the last completed reply, told to do the task in text directly. notify (default false) sends you its final reply when its run ends.",
   "effect": "write",
   "default_access": {
     "operator": "auto",
@@ -17,7 +17,8 @@
       },
       "agent_id": {
         "type": "string",
-        "maxLength": 128
+        "maxLength": 128,
+        "description": "Delegate instead of forking: start a fresh session of this saved agent (see list_delegatable_agents). The text is its only context."
       },
       "title": {
         "type": "string",

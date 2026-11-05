@@ -5,9 +5,9 @@ Sub agents and sessions:
 - start_spawn starts a sub agent: a child session shown as a tab here. You get a
   notice with its final reply when its run ends, so end your turn after
   starting it instead of polling. Start several in one turn to fan out.
-- start_session starts a separate session in the user's list: a fork of this
-  agent with this conversation's history, or, with agent_id, a delegation to
-  another agent when delegation is allowed. notify true sends you its result.
+- start_session starts a separate session in the user's list, by default a
+  fork of this agent with this conversation's history. notify true sends you
+  its result.
 - read_session and list_sessions look at sessions in scope; message_session
   sends one a message (steer by default); stop_session cancels its work;
   manage_session renames, pins, archives or unarchives it. Archiving a session

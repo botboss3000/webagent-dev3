@@ -133,9 +133,9 @@ async fn settings(host: &dyn NativeHost, sid: &str) -> Result<(Value, String)> {
 /// its settings say otherwise.
 pub async fn allow_delegation(host: &dyn NativeHost, sid: &str) -> Result<bool> {
     let (settings, agent) = settings(host, sid).await?;
-    Ok(settings["allow_delegation"]
-        .as_bool()
-        .unwrap_or(agent == "shared_default"))
+    Ok(webagent_abilities::controls::delegation_allowed(
+        &settings, &agent,
+    ))
 }
 
 /// Whether session `sid` reaches every owner-private session, not only those it started.

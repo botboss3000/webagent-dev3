@@ -1994,6 +1994,23 @@ impl<
                         &ability_state,
                     )
                     .into_iter()
+                    .map(|mut schema| {
+                        // Without delegation, start_session only forks: the agent never
+                        // sees an agent_id to pass. Messaging preflight still refuses it.
+                        if schema["name"] == "start_session"
+                            && !webagent_abilities::controls::delegation_allowed(
+                                &visibility["settings"]["agent_management"],
+                                run["agent_id"].as_str().unwrap_or("shared_default"),
+                            )
+                        {
+                            if let Some(properties) =
+                                schema["parameters"]["properties"].as_object_mut()
+                            {
+                                properties.remove("agent_id");
+                            }
+                        }
+                        schema
+                    })
                     .filter(|schema| {
                         let name = schema["name"].as_str().unwrap_or("");
                         if run["post_run_followup"] == true
