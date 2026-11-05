@@ -666,6 +666,15 @@ pub(crate) async fn delete_session_api(
     Json(body): Json<crate::store::session::SessionLifecycle>,
 ) -> Api {
     let request = body.client_request_id.clone();
+    // Automations go first: the service refuses a call scoped to a deleted session.
+    if app
+        .store
+        .get(&key("session", &id))
+        .await?
+        .is_some_and(|s| s["status"] == "archived")
+    {
+        crate::modules::cancel_session_automations(&app, &id).await?;
+    }
     let deleted = delete_one(app.clone(), id.clone(), body).await?;
     // Sub agents go with their parent: archive any still active, then delete each.
     archive_children(&app, &id, &request).await?;
@@ -691,7 +700,6 @@ pub(crate) async fn delete_session_api(
             tracing::warn!("Sub agent deletion deferred");
         }
     }
-    crate::modules::cancel_session_automations(&app, &id).await?;
     Ok(deleted)
 }
 async fn delete_one(app: App, id: String, body: crate::store::session::SessionLifecycle) -> Api {

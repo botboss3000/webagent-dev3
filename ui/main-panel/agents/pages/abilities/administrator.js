@@ -182,7 +182,7 @@ function buildManifestSettings({ ability, data, request, scope, levelId, preview
       // The page's shared switch: a full-size touch target, like the tool rows below.
       control = field(item.label, '', 'checkbox'); control.className = 'conn-toggle';
       control.checked = value(item) === true;
-      slot = node('label', 'conn-toggle-wrap');
+      slot = node('label', 'conn-toggle-wrap ac-ability-toggle-wrap');
       slot.append(control, node('span', 'conn-toggle-track'));
     } else if (item.type === 'select') {
       control = node('select', 'ac-input ac-config-sel'); control.setAttribute('aria-label', item.label);

@@ -169,7 +169,9 @@ export async function renderAbilities(host, request, options) {
     }
     if (ability.id === "git_control" && canManage) tools.append(buildSourceControlControls({ data: sourceSites, request, scope, enabled: levelId === "operator" && !previewUser, status, rerender }));
     const administrator = buildAdministratorControls({ ability, data, repository, request, scope,
-      levelId, previewUser, status, rerender });
+      levelId, previewUser, status,
+      // A settings save re-renders the page; keep this ability open, like the tool rows do.
+      rerender: options => { expandedAbility = ability.id; return rerender(options); } });
     if (administrator) {
       for (const setting of administrator.querySelectorAll(':scope > .ac-ability-row')) tools.append(setting);
     }
