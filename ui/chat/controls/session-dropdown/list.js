@@ -104,7 +104,8 @@ export function createSessionList(root, {guard, refresh, select, client, archive
   function label() {
     const item = items.find(s => s.id === selected);
     const label = root.querySelector('#session-dropdown-label');
-    if (label) label.textContent = item?.title || 'New Session';
+    // A selected session whose row has not loaded yet is not a new session; never claim it is.
+    if (label) label.textContent = item?.title || (selected ? '\u2014' : 'New Session');
     root.dataset.loaded = 'true';
     for (const id of ['icon','label','status','kebab','delete']) {
       const node = root.querySelector('#session-dropdown-' + id);
