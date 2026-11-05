@@ -19,5 +19,5 @@
       }
     ]
   },
-  "skill_summary": "Operate the chatting user's own browser on the agent's allowed sites; check browser_backend first."
+  "skill_summary": "Operate the chatting user's own browser on the agent's allowed sites; check browser_extension_status first."
 }

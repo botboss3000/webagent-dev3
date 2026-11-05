@@ -1,7 +1,7 @@
 //! Browser control through the user's own browser extension.
 //!
 //! The extension links to one WebAgent account and long-polls for queued actions; the
-//! agent's `browser_action` tool queues one action and waits for its result. This crate
+//! agent's `browser_extension_action` tool queues one action and waits for its result. This crate
 //! holds the pure rules: which sites an agent may control, action admission, link codes
 //! and the queued call's lifecycle. The root adapter (`host/browser.rs`) owns storage,
 //! routes and tool dispatch.
@@ -9,9 +9,9 @@ use anyhow::{bail, Result};
 use serde_json::Value;
 
 /// Tools served by this module.
-pub const TOOLS: &[&str] = &["browser_backend", "browser_action"];
+pub const TOOLS: &[&str] = &["browser_extension_status", "browser_extension_action"];
 /// The ability whose per-agent settings hold the site allowlist.
-pub const ABILITY: &str = "browser_control";
+pub const ABILITY: &str = "browser_extension";
 
 /// A queued action nobody fetches within this window fails as not started.
 pub const OFFLINE_SECS: u64 = 30;
@@ -64,7 +64,7 @@ pub fn site_allowed(url: &str, sites: &[String]) -> bool {
         .any(|site| host == *site || host.ends_with(&format!(".{site}")))
 }
 
-/// Admit one `browser_action` call: required fields per action and, for actions that
+/// Admit one `browser_extension_action` call: required fields per action and, for actions that
 /// load a page, an allowlisted address. The extension checks the tab's current site again
 /// before acting, since a page can redirect anywhere.
 pub fn check_action(args: &Value, sites: &[String]) -> Result<()> {

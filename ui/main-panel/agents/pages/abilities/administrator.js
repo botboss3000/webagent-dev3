@@ -160,7 +160,7 @@ function buildOptimizationControls({ ability, data, request, scope, levelId, pre
 }
 
 // Abilities whose manifest settings save as one object through the generic validator.
-const manifestSettings = new Set(['agent_management', 'browser_control']);
+const manifestSettings = new Set(['agent_management', 'browser_extension']);
 // The Default Agent reaches all owned sessions and may delegate unless its owner changes it.
 const defaultAgentSettings = { session_scope: 'owned', allow_delegation: true };
 function buildManifestSettings({ ability, data, request, scope, levelId, previewUser, status, rerender }) {

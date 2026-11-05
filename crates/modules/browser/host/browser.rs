@@ -1,5 +1,5 @@
 //! Root adapter for Browser Extension: device linking, the extension's action queue and the
-//! `browser_backend`/`browser_action` tools. Rules live in `webagent_browser`.
+//! `browser_extension_status`/`browser_extension_action` tools. Rules live in `webagent_browser`.
 //!
 //! The API (extension endpoints) and the loop (tools) are separate processes; both read the
 //! shared application store, the same way the harness bridge does. A device belongs to one
@@ -351,7 +351,7 @@ fn install_url() -> String {
     )
 }
 
-/// Run `browser_backend` or `browser_action` for the chatting user.
+/// Run `browser_extension_status` or `browser_extension_action` for the chatting user.
 pub(crate) async fn execute(
     app: &App,
     call: tools::native::Call<'_>,
@@ -367,7 +367,7 @@ pub(crate) async fn execute(
     let sites = agent_sites(&host, call.sid).await?;
     let devices = device_list(&app.store, &user).await?;
     let online = devices.iter().any(|d| d["online"] == true);
-    if name == "browser_backend" {
+    if name == "browser_extension_status" {
         let status = match (devices.is_empty(), online) {
             (true, _) => "not_linked",
             (false, true) => "online",
@@ -393,12 +393,16 @@ pub(crate) async fn execute(
     }
     // One document per tool call: a retried call finds its earlier action instead of
     // queuing it again.
-    let id = digest(&json!(["browser_action", call.sid, call.pending_id]));
+    let id = digest(&json!([
+        "browser_extension_action",
+        call.sid,
+        call.pending_id
+    ]));
     let key = format!("{CALLS}{user}:{id}");
     if app.store.get(&key).await?.is_none() {
         if !online {
             return Ok(
-                json!({"status":"failed","output":"The user's browser extension is not connected; call browser_backend for setup steps"}),
+                json!({"status":"failed","output":"The user's browser extension is not connected; call browser_extension_status for setup steps"}),
             );
         }
         app.store
