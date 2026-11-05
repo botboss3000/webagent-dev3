@@ -1,6 +1,6 @@
 {
-  "name": "manage_user_session",
-  "description": "Rename, pin, archive or unarchive a caller-owned session. Request: expected_revision plus title/pinned for update. Archiving is reversible.",
+  "name": "manage_session",
+  "description": "Rename, pin, archive or unarchive a session in scope. Request: expected_revision plus title/pinned for update. Archiving is reversible and also archives its spawns.",
   "effect": "write",
   "default_access": {
     "operator": "auto",

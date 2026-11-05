@@ -22,7 +22,7 @@ async function moduleAt(file,host){
 test('messaging approval exposes destination and remembers only an explicit checkbox across polling',async()=>{
  const host=new E(),{api,root}=await moduleAt('notification-panel.js',host);
  const ui=api.mountNotificationPanel({root,guard:fn=>fn}),calls=[];
- const approval={id:'approve-one',name:'message_other_session',new_intent_confirmation:true,messaging_can_remember:true,messaging_binding:{source_title:'Source',target_title:'Destination',target_session_id:'target',target_agent_id:'agent',delivery:'steer'}};
+ const approval={id:'approve-one',name:'message_session',new_intent_confirmation:true,messaging_can_remember:true,messaging_binding:{source_title:'Source',target_title:'Destination',target_session_id:'target',target_agent_id:'agent',delivery:'steer'}};
  const show=()=>ui.showTool({approval,run:{id:'run'},expanded:new Set(),decide:(...args)=>calls.push(args)});
  show();assert.match(flat(host),/Source.*Destination.*steer/);
  let checkbox=host.querySelector('input');assert.equal(checkbox.checked,false);checkbox.checked=true;checkbox.onchange();

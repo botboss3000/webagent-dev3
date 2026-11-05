@@ -199,7 +199,10 @@ impl NotificationEffects for Store {
     where
         'c: 'a,
     {
-        StoreCore::stage_run_notification(self, tx, run)
+        async move {
+            StoreCore::stage_run_notification(self, tx, run).await?;
+            self.stage_session_notice(tx, run).await
+        }
     }
     fn stage_notification<'a, 'c>(
         &'a self,

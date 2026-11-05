@@ -1637,7 +1637,7 @@
       "sub_agent_tabs": {
         "_instructions": "ability_groups: Required ability-group capabilities in the inherited tier-gate schema; runtime authorization remains authoritative.",
         "ability_groups": [
-          "agent_orchestration"
+          "agent_management"
         ]
       }
     },

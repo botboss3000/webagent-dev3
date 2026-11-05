@@ -1,0 +1,41 @@
+{
+  "name": "read_session",
+  "description": "Read a session in scope: its status, current turn count and a range of turns (last 20 by default). brief cuts each item to about 200 characters; full keeps up to 4000. Optional; use it to look in on long runs.",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "session_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "from": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "to": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "all": {
+        "type": "boolean"
+      },
+      "detail": {
+        "type": "string",
+        "enum": [
+          "brief",
+          "full"
+        ]
+      }
+    },
+    "required": [
+      "session_id"
+    ],
+    "additionalProperties": false
+  }
+}

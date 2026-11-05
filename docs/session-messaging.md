@@ -1,6 +1,6 @@
 # Native session messaging
 
-Base exposes two distinct native host tools. They reuse Rust session preparation,
+Agent Management exposes these native host tools. They reuse Rust session preparation,
 permission/approval checks and the durable follow-up queue; they are not HTTP
 loopback tools or executable ability plugins. Admission does not promise a
 recipient answer, a particular response, or immediate completion.
@@ -9,12 +9,26 @@ recipient answer, a particular response, or immediate completion.
 
 | Tool | Inputs | Outcome |
 | --- | --- | --- |
-| message_other_session | target_session_id UUID, nonempty text up to 65536 UTF-8 bytes, delivery queue (default), steer or interrupt | One attributed message admitted to another owner-private session. |
-| start_session | text; optional agent_id (sender agent by default), optional title | One new owner-private session and its first attributed message committed together. |
+| message_session | session_id UUID of a session in the agent's scope, nonempty text up to 65536 UTF-8 bytes, delivery steer (default), queue or interrupt | One attributed message admitted to another owner-private session. |
+| start_spawn | text; optional agent_id, optional title | One sub agent session (parent_session_id set, shown as a tab of the sender) and its first message. Its run ends send the sender a notice. |
+| start_session | text; optional agent_id, title, notify (default false) | Without agent_id (or with the sender's agent): a fork carrying the sender's history through its last completed reply. With another agent_id: a fresh session of that agent, only when the sender's `allow_delegation` setting is on. started_by_session_id is set. |
+| delegate_to_agent | text, agent_id, optional title | A fresh session of that agent and a browser handoff request. |
 
-Both return session_id, message_id, submission_id, delivery_state queued,
+Session scope (`agent_management.session_scope`): `started` reaches the sender's
+sub agents and the sessions it started; `owned` adds every owner-private session.
+The Default Agent defaults to `owned` and to delegation allowed.
+
+Notices: when a run of a sub agent (or a start_session session with notify) ends
+or waits for an approval, the run save stages `session_notice:<parent>:<event>`
+in the same transaction. The follow-up scheduler delivers all staged notices for a
+parent as one steer message (`platform_notice`), committing
+`receipt:session_notice:<event>` with it so a retry never repeats one. A parent
+that is archived or deleted drops its notices. Archiving a session archives its
+sub agents; deleting it deletes them and cancels automations delivering into it.
+
+All return session_id, message_id, submission_id, delivery_state queued,
 run_id null and session_created. The recipient resolves its own model, abilities,
-policy and execution mode. New sessions start with fresh context and a separate
+policy and execution mode. New sessions other than forks start with fresh context and a separate
 workspace identity: no parent transcript, credentials, loaded abilities or
 approval grants are copied. An omitted title uses normal session preparation.
 
@@ -42,7 +56,7 @@ foreign, deleted/archived sessions, inactive recipients, sharing-enabled agents,
 admin-view/admin-join agents and participant-bearing shared sessions. Live access,
 mode, capability catalog and session lifecycle revisions bind the approval and
 remembered route. A changed binding invalidates approval; it does not silently
-broaden the old grant. Ordinary Base/tool visibility and explicit Deny remain
+broaden the old grant. Ordinary ability/tool visibility and explicit Deny remain
 in force. The dedicated read-only sender exception applies only to these two
 write-classified tools; it grants no other write tool.
 
@@ -53,7 +67,7 @@ eligible queue/steer routes; a remembered route binds later sends to its
 revocation. Polling preserves the explicit checkbox choice; interrupt,
 new-session and onward requests cannot grant a reusable route.
 
-Config: the built-in Base ability (crates/modules/abilities/src/base.rs) lists the native tools.
+Config: the Agent Management ability (plugins/abilities/Core/agent_management) holds the tool folders and settings.
 Tool schemas live in session_messaging::schemas; discovery is filtered by live
 ability access and policy. Agent policy rules and runtime access assignments are
 revisioned host state, not a new source JSON switch. policy_defaults fills absent

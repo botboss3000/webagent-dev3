@@ -146,6 +146,11 @@ pub struct Catalog<H: Host> {
 fn optional_setting_value_valid(declaration: &Value, value: &Value) -> bool {
     match declaration["type"].as_str() {
         Some("boolean") => value.is_boolean(),
+        Some("select") => declaration["options"].as_array().is_some_and(|options| {
+            options
+                .iter()
+                .any(|o| o["value"] == *value && value.is_string())
+        }),
         Some("number" | "integer") => {
             let Some(number) = value.as_i64() else {
                 return false;
@@ -1233,7 +1238,6 @@ impl<H: Host> Catalog<H> {
     /// This metadata validator grants neither executable tools nor tenant authority.
     pub fn validate_optional_settings(&self, id: &str, settings: &Value) -> Option<bool> {
         let ability = self.abilities.iter().find(|ability| ability.id == id)?;
-        ability.required_module.as_ref()?;
         if !Self::present(ability) {
             return Some(false);
         }
@@ -3628,7 +3632,7 @@ pub mod registered_tests {
                 .iter()
                 .filter(|entry| !matches!(entry.id.as_str(), "optimization" | "mcp"))
                 .collect::<Vec<_>>();
-            assert_eq!(ordinary.len(), 80);
+            assert_eq!(ordinary.len(), 79);
             assert_eq!(
                 catalog
                     .abilities
@@ -3653,14 +3657,14 @@ pub mod registered_tests {
                     .iter()
                     .filter(|entry| Catalog::<H>::executable(entry))
                     .count(),
-                22
+                21
             );
             assert_eq!(
                 ordinary
                     .iter()
                     .filter(|entry| entry.readiness == Readiness::Ready)
                     .count(),
-                23
+                22
             );
             assert_eq!(
                 catalog
@@ -3698,7 +3702,7 @@ pub mod registered_tests {
                 .find(|entry| entry.id == "base")
                 .unwrap();
             assert_eq!(base.tools, crate::base::TOOLS);
-            assert!(base.tools.len() >= 42);
+            assert!(base.tools.len() >= 40);
             let p2p = catalog.abilities.iter().find(|a| a.id == "p2p").unwrap();
             assert_eq!(p2p.readiness, Readiness::Pending);
             assert!(!Catalog::<H>::executable(p2p));
@@ -3942,7 +3946,7 @@ pub mod registered_tests {
             );
             assert_eq!(
                 catalog.validate_optional_settings("codebase_admin", &settings),
-                None
+                Some(false)
             );
         }
 

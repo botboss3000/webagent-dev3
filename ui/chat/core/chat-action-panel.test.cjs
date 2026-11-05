@@ -32,7 +32,7 @@ test('empty or revoked routes never show an idle permission card; real approvals
  const ui=api.mountChatActionPanel({root,guard:fn=>fn,request:async()=>({routes}),note:()=>{}});
  ui.messagingRoutes.open('new-chat',true);assert.equal(host.children[2].children[0].hidden,true);await ui.messagingRoutes.refresh();
  assert.equal(host.children[2].hidden,true);assert.equal(host.children[2].children[0].hidden,true);
- ui.showTool({approval:{id:'approval',name:'message_other_session',messaging_binding:{target_title:'Destination'},arguments:{}},run:{id:'run'},expanded:new Set(),decide:()=>{}});
+ ui.showTool({approval:{id:'approval',name:'message_session',messaging_binding:{target_title:'Destination'},arguments:{}},run:{id:'run'},expanded:new Set(),decide:()=>{}});
  assert.equal(host.children[1].children.length,1);assert.equal(host.children[1].children[0].hidden,false);
  routes=[{revoked:true}];ui.messagingRoutes.open('existing',true);await ui.messagingRoutes.refresh();assert.equal(host.children[2].hidden,true);
  ui.destroy();
@@ -42,7 +42,7 @@ test('saved routes remain revocable and revoking the last route hides the entire
  const calls=[],route={key:'route',revision:3,target_title:'Destination',scope:{target_session_id:'target'}};
  const ui=api.mountChatActionPanel({root,guard:fn=>fn,request:async(...args)=>{calls.push(args);if(args[1]==='POST')revoked=true;return {routes:revoked?[]:[route]};},note:()=>{}});
  ui.messagingRoutes.open('source',true);await ui.messagingRoutes.refresh();const slot=host.children[2],card=slot.children[0];assert.equal(slot.hidden,true);assert.equal(card.hidden,true);
- ui.showTool({approval:{id:'approval',name:'message_other_session',messaging_binding:{target_title:'Destination'},arguments:{}},run:{id:'run'},expanded:new Set(),decide:()=>{}});assert.equal(slot.hidden,false);assert.equal(card.hidden,false);
+ ui.showTool({approval:{id:'approval',name:'message_session',messaging_binding:{target_title:'Destination'},arguments:{}},run:{id:'run'},expanded:new Set(),decide:()=>{}});assert.equal(slot.hidden,false);assert.equal(card.hidden,false);
  await card.querySelector('button').onclick();await card.querySelector('.chat-action-deny').onclick();
  assert.equal(calls.find(c=>c[1]==='POST')[2].expected_revision,3);assert.equal(slot.hidden,true);assert.equal(card.hidden,true);
  ui.destroy();

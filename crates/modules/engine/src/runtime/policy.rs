@@ -426,7 +426,7 @@ pub fn default_policy<A: crate::tools::execution::ActionCatalog, X: NativePolicy
             "require_approval"
         });
     }
-    for name in ["message_other_session", "start_session"] {
+    for name in ["message_session", "start_session", "start_spawn"] {
         policy["rules"][name] = json!("allow");
     }
     // Visitor escalation actions only store a staff message, notify staff or show reply

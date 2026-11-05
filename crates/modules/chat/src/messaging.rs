@@ -1,4 +1,4 @@
-//! Native Base cross-session delivery schemas, argument validation and deterministic identity helpers.
+//! Agent Management cross-session delivery: argument validation and deterministic identity helpers.
 use crate::{digest, RecordCodec};
 use anyhow::{anyhow, bail, Result};
 use serde::Deserialize;
@@ -6,23 +6,16 @@ use serde_json::{json, Value};
 use sqlx::{Sqlite, Transaction};
 
 pub fn starts(name: &str) -> bool {
-    matches!(
-        name,
-        "start_session" | "spawn_agent" | "delegate_task_to_agent" | "delegate_to_agent"
-    )
+    matches!(name, "start_session" | "start_spawn" | "delegate_to_agent")
 }
 
 pub fn owns(name: &str) -> bool {
-    starts(name)
-        || matches!(
-            name,
-            "message_other_session" | "kick_user_session" | "message_spawn"
-        )
+    starts(name) || name == "message_session"
 }
 
 /// Project defaults for legacy saved policies; explicit denials remain authoritative.
 pub fn policy_defaults(mut policy: Value) -> Value {
-    for name in ["message_other_session", "start_session"] {
+    for name in ["message_session", "start_session", "start_spawn"] {
         if policy["rules"].get(name).is_none() {
             policy["rules"][name] = json!("allow");
         }
@@ -30,19 +23,12 @@ pub fn policy_defaults(mut policy: Value) -> Value {
     policy
 }
 
-pub fn schemas() -> Vec<Value> {
-    vec![
-        json!({"type":"function","name":"message_other_session","description":"Send an attributed agent message to another owner-private session. Queue by default; steer at the next boundary; interrupt at the current one. Returns admission, not the recipient answer.","parameters":{"type":"object","properties":{"target_session_id":{"type":"string","format":"uuid"},"text":{"type":"string","minLength":1,"maxLength":65536},"delivery":{"type":"string","enum":["queue","steer","interrupt"]}},"required":["target_session_id","text"],"additionalProperties":false}}),
-        json!({"type":"function","name":"start_session","description":"Create an owner-private session and its first attributed agent message atomically. Fresh context; omitted agent_id uses this agent. Returns admission, not the answer.","parameters":{"type":"object","properties":{"text":{"type":"string","minLength":1,"maxLength":65536},"agent_id":{"type":"string","maxLength":128},"title":{"type":"string","maxLength":200}},"required":["text"],"additionalProperties":false}}),
-    ]
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MessageArgs {
-    pub target_session_id: String,
+    pub session_id: String,
     pub text: String,
-    #[serde(default = "queue")]
+    #[serde(default = "steer")]
     pub delivery: String,
 }
 
@@ -52,10 +38,13 @@ pub struct StartArgs {
     pub text: String,
     pub agent_id: Option<String>,
     pub title: Option<String>,
+    /// Send the starting session the new session's result when its runs end.
+    #[serde(default)]
+    pub notify: bool,
 }
 
-fn queue() -> String {
-    "queue".into()
+fn steer() -> String {
+    "steer".into()
 }
 
 pub fn checked_text(text: &str) -> Result<()> {

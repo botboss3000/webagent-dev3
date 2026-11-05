@@ -1,20 +1,104 @@
 {
   "display_name": "Agent Management",
   "kind": "ability",
-  "description": "Manage caller-owned agents and conversations through the V3 owning APIs, with live tenant authority and exact revisions. Session watches use the installed Automation service.",
+  "description": "Start and coordinate sub agents and sessions, and manage caller-owned agents, through the V3 owning APIs with live tenant authority and exact revisions. Sub agents report back with a completion notice.",
   "icon": "users",
   "color": "#9ece6a",
   "order": 1,
   "placeholder": false,
   "readiness": "ready",
   "config": {
+    "bias": {
+      "key": "delegation_level",
+      "default": "balanced",
+      "levels": {
+        "conservative": "DELEGATION POSTURE — Conservative: strongly prefer doing the work yourself in this session. Only start a sub agent when the task genuinely cannot proceed without one (e.g. truly independent parallel work). Default to NOT spawning.",
+        "balanced": "",
+        "eager": "DELEGATION POSTURE — Eager: delegation is your DEFAULT working style. Before you build or write anything, break the task into separable units and start a sub agent for each unit that can run on its own. Keep a piece for yourself only when it shares tight state with everything else. When in doubt, spawn."
+      }
+    },
     "settings": [
+      {
+        "key": "session_scope",
+        "label": "Session scope",
+        "type": "select",
+        "default": "started",
+        "options": [
+          {
+            "value": "started",
+            "label": "Sessions this conversation started"
+          },
+          {
+            "value": "owned",
+            "label": "All of the user's private sessions"
+          }
+        ],
+        "hint": "Which sessions read_session, list_sessions, message_session, stop_session and manage_session may reach. Started means this conversation's sub agents and the sessions it started. Owned adds every private session the user owns; shared sessions are never included. The Default Agent uses Owned unless changed."
+      },
+      {
+        "key": "allow_delegation",
+        "label": "Allow delegation",
+        "type": "boolean",
+        "default": false,
+        "hint": "Whether start_session may start a session of another agent. Off keeps this agent working with its own sub agents and forks. The Default Agent allows delegation unless changed."
+      },
       {
         "key": "allow_session_watch",
         "label": "Allow Session Watching",
         "type": "boolean",
         "default": true,
-        "hint": "Whether an agent can arm a session watch (watch_sessions), which triggers it when one of your sessions settles — a turn that was running stops. When off, the tool refuses platform-wide. Note this only controls ARMING: the agent still needs the Automation ability enabled for the platform to deliver the events. Per-agent control is the normal tool permission dial — deny watch_sessions on every agent except the one you want watching."
+        "hint": "Whether watch_sessions may arm a watch that triggers this agent when one of your sessions settles. Sub agent notices do not need it. The agent also needs the Automation ability for watches to be delivered."
+      },
+      {
+        "key": "delegation_level",
+        "label": "Delegation",
+        "type": "select",
+        "default": "balanced",
+        "options": [
+          {
+            "value": "conservative",
+            "label": "Conservative — do it yourself"
+          },
+          {
+            "value": "balanced",
+            "label": "Balanced (default)"
+          },
+          {
+            "value": "eager",
+            "label": "Eager — delegate by default"
+          }
+        ],
+        "hint": "How readily this agent hands work to sub agents. A posture note in the prompt, not a hard rule."
+      },
+      {
+        "key": "max_concurrent_spawns",
+        "label": "Max concurrent sub agents",
+        "type": "number",
+        "default": 10,
+        "min": 1,
+        "max": 20,
+        "step": 1,
+        "hint": "Most sub agents one conversation may have working at once. Finished sub agents free their slot."
+      },
+      {
+        "key": "max_spawns_per_spawn",
+        "label": "Max sub agents per sub agent",
+        "type": "number",
+        "default": 1,
+        "min": 0,
+        "max": 10,
+        "step": 1,
+        "hint": "How many sub agents a sub agent may start. 0 stops sub agents from starting their own."
+      },
+      {
+        "key": "max_spawn_depth",
+        "label": "Max sub agent depth",
+        "type": "number",
+        "default": 2,
+        "min": 0,
+        "max": 5,
+        "step": 1,
+        "hint": "How many levels of sub agents within sub agents are allowed. The main conversation is level 0."
       }
     ]
   },

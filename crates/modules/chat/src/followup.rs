@@ -119,6 +119,10 @@ pub fn legacy_message_meta_doc(
                 .unwrap_or("conversation")
         ));
     }
+    if let Some(label) = entry["platform_notice"]["label"].as_str() {
+        meta["message_kind"] = json!("agent_message");
+        meta["author_name"] = json!(label);
+    }
     if eligible {
         meta["context_content"] = entry["context_content"].clone();
     }

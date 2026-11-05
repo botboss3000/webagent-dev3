@@ -695,10 +695,10 @@ mod messaging {
         );
         assert_eq!(stable_id("d", &json!([1])), stable_id("d", &json!([1])));
         assert!(uuid::Uuid::parse_str(&stable_id("d", &json!([1]))).is_ok());
-        assert!(owns("message_other_session") && starts("start_session") && !owns("file_read"));
+        assert!(owns("message_session") && starts("start_spawn") && !owns("file_read"));
         assert_eq!(
             policy_defaults(json!({"rules":{"start_session":"deny"}}))["rules"],
-            json!({"start_session":"deny","message_other_session":"allow"})
+            json!({"start_session":"deny","message_session":"allow","start_spawn":"allow"})
         );
     }
 }

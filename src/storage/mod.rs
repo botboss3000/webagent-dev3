@@ -1308,6 +1308,7 @@ impl Store {
             if key.starts_with("run:") {
                 self.index_run(&mut tx, &value).await?;
                 self.stage_run_notification(&mut tx, &value).await?;
+                self.stage_session_notice(&mut tx, &value).await?;
             }
         }
         if matches!(kind, "message" | "manager_submission" | "human_message")

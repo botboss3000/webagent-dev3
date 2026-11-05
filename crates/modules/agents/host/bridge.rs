@@ -1,10 +1,10 @@
 //! Borrow existing root resources; Access/Models/Storage/Engine retain their authority.
-use webagent_accounts_host::AccountsStore;
 use crate::{App, Store};
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
 use webagent_access::{Principal, Relationship};
+use webagent_accounts_host::AccountsStore;
 
 pub(super) struct Bridge<'a> {
     pub app: &'a App,
@@ -127,13 +127,20 @@ impl webagent_agents::service::Effects for Bridge<'_> {
                 if session["agent_id"] != agent || session["status"] == "deleted" {
                     continue;
                 }
+                // Stop its runs, sub agents, background work and automations first.
+                let _ =
+                    crate::api::session_stop::stop_session_work(&caller, sid, "agent-delete").await;
                 crate::api::quiesce(&caller, sid).await;
                 caller.store.delete_agent_session(sid).await?;
             }
         }
         store.shared_schema().await?;
         let mut tx = store.app_pool.begin().await?;
-        for table in ["shared_participants", "shared_invitations", "shared_observation_audit"] {
+        for table in [
+            "shared_participants",
+            "shared_invitations",
+            "shared_observation_audit",
+        ] {
             sqlx::query(&format!("DELETE FROM {table} WHERE session_id IN (SELECT session_id FROM shared_sessions WHERE agent_id=?)"))
                 .bind(agent)
                 .execute(&mut *tx)
@@ -147,7 +154,9 @@ impl webagent_agents::service::Effects for Bridge<'_> {
         // The catalog reads every referenced roster from its agent database, so prune it first.
         let mut catalog = store.model_catalog().await?;
         let assignments = catalog.assignments.len();
-        catalog.assignments.retain(|_, assignment| assignment.agent_id != agent);
+        catalog
+            .assignments
+            .retain(|_, assignment| assignment.agent_id != agent);
         let pruned = catalog.agent_models.remove(agent).is_some();
         if pruned || assignments != catalog.assignments.len() {
             let revision = catalog.revision;

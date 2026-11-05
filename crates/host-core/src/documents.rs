@@ -177,6 +177,26 @@ impl StoreCore {
         Ok(values)
     }
 
+    /// The last `limit` model interactions of session `sid`, oldest first, as
+    /// `(seq, run_id, item)`. Callers check session authority first.
+    pub async fn session_interactions(
+        &self,
+        sid: &str,
+        limit: i64,
+    ) -> Result<Vec<(i64, String, Value)>> {
+        let rows: Vec<(i64, String, Vec<u8>)> = sqlx::query_as(
+            "SELECT seq,run_id,item FROM interactions WHERE session_id=? ORDER BY seq DESC LIMIT ?",
+        )
+        .bind(sid)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .rev()
+            .map(|(seq, run, item)| Ok((seq, run, self.unseal(&item)?)))
+            .collect()
+    }
+
     /// Drop the document's cache entry and, for a session, its assembled context.
     pub fn invalidate_document(&self, key: &str) {
         self.cache

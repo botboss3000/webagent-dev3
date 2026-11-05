@@ -1,0 +1,32 @@
+{
+  "name": "start_spawn",
+  "description": "Start a sub agent: a child session shown as a tab in this conversation. It runs the task in text with this agent or agent_id, and you get a notice with its final reply when it finishes. End your turn after starting it; do not poll.",
+  "effect": "write",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "ask"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 65536
+      },
+      "agent_id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "title": {
+        "type": "string",
+        "maxLength": 200
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "additionalProperties": false
+  }
+}

@@ -157,8 +157,73 @@ function buildOptimizationControls({ ability, data, request, scope, levelId, pre
   return panel;
 }
 
+// Abilities whose manifest settings save as one object through the generic validator.
+const manifestSettings = new Set(['agent_management']);
+// The Default Agent reaches all owned sessions and may delegate unless its owner changes it.
+const defaultAgentSettings = { session_scope: 'owned', allow_delegation: true };
+function buildManifestSettings({ ability, data, request, scope, levelId, previewUser, status, rerender }) {
+  const declared = Array.isArray(ability.config?.settings) ? ability.config.settings : [];
+  if (!declared.length) return null;
+  const panel = node('div', 'ac-list v3-administrator-settings');
+  const enabled = !levelId && !previewUser;
+  panel.append(node('p', 'ac-hint', enabled
+    ? 'Agent settings save as soon as you change them.'
+    : 'Agent settings are read-only while previewing a user or capability level.'));
+  const saved = data.settings?.[ability.id] || {};
+  const fallback = data.agent_id === 'shared_default' ? defaultAgentSettings : {};
+  const value = item => item.key in saved ? saved[item.key] : item.key in fallback ? fallback[item.key] : item.default;
+  const controls = [];
+  for (const item of declared) {
+    let control;
+    if (item.type === 'boolean') {
+      control = field(item.label, '', 'checkbox'); control.checked = value(item) === true;
+    } else if (item.type === 'select') {
+      control = node('select', 'ac-input ac-config-sel'); control.setAttribute('aria-label', item.label);
+      for (const choice of item.options || []) {
+        const option = node('option', '', choice.label); option.value = choice.value; control.append(option);
+      }
+      control.value = value(item);
+    } else {
+      control = field(item.label, String(value(item)), 'number');
+      if (item.min !== undefined) control.min = String(item.min);
+      if (item.max !== undefined) control.max = String(item.max);
+      control.step = String(item.step || 1);
+    }
+    control.disabled = !enabled;
+    controls.push([item, control]);
+    panel.append(row(item.label, control, item.hint || ''));
+  }
+  const read = ([item, control]) => item.type === 'boolean' ? control.checked
+    : item.type === 'select' ? control.value : Number(control.value);
+  // One revision covers the whole settings object; each change saves every value.
+  const save = async () => {
+    if (!enabled || controls.some(([, control]) => control.disabled)) return;
+    const settings = {};
+    for (const entry of controls) settings[entry[0].key] = read(entry);
+    if (controls.some(([item, control]) => item.type === 'number' && (control.value === '' || !Number.isInteger(Number(control.value))
+      || (item.min !== undefined && Number(control.value) < item.min) || (item.max !== undefined && Number(control.value) > item.max)))) {
+      status.textContent = 'Use a whole number within each setting\'s range.';
+      return;
+    }
+    for (const [, control] of controls) control.disabled = true;
+    status.textContent = 'Saving agent settings…';
+    try {
+      await request(scope + '/abilities/' + encodeURIComponent(ability.id) + '/settings', 'PUT',
+        { expected_revision: data.revision, settings });
+      await rerender({ administratorNotice: 'Agent settings saved.' });
+    } catch (error) {
+      status.textContent = message(error);
+      for (const [, control] of controls) control.disabled = false;
+    }
+  };
+  for (const [, control] of controls) control.onchange = save;
+  return panel;
+}
 export function buildAdministratorControls({ ability, data, repository, request, scope,
   levelId, previewUser, status, rerender }) {
+  if (manifestSettings.has(ability.id) && data.authority?.can_manage === true) {
+    return buildManifestSettings({ ability, data, request, scope, levelId, previewUser, status, rerender });
+  }
   if (ability.id === 'optimization' && data.authority?.can_manage === true) {
     return buildOptimizationControls({ ability, data, request, scope, levelId, previewUser, status, rerender });
   }

@@ -89,7 +89,6 @@
     "operator": {
       "ability_permissions": {
         "agent_management": "auto",
-        "agent_orchestration": "auto",
         "app_control": "auto",
         "automation": "auto",
         "base": "auto",

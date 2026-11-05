@@ -7,8 +7,9 @@ use axum::{body::Body, Extension};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-/// Tool folders of the ability; their schemas live in `tools/<tool>/tool.json`.
-/// `kick_user_session` is served by Chat, the rest by the plugin.
+/// Tool folders of the ability the plugin serves; their schemas live in
+/// `tools/<tool>/tool.json`. The session and sub agent tools in the same folder are served
+/// by Chat and Orchestration and listed in `orchestration::TOOLS`.
 pub const TOOLS: &[&str] = &[
     "list_agent_templates",
     "list_my_agents",
@@ -21,16 +22,13 @@ pub const TOOLS: &[&str] = &[
     "set_agent_ability",
     "manage_agent_skills",
     "manage_agent_chat_config",
-    "list_user_sessions",
-    "manage_user_session",
-    "kick_user_session",
+    "manage_session",
     "watch_sessions",
-    "create_user_session",
 ];
 
 /// Whether the plugin serves `name`.
 pub fn owns(name: &str) -> bool {
-    name != "kick_user_session" && TOOLS.contains(&name)
+    TOOLS.contains(&name)
 }
 
 pub fn schemas() -> Vec<Value> {

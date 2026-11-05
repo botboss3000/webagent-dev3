@@ -80,7 +80,6 @@ impl webagent_engine::runtime::ports::NativePolicy for NativePolicy {
             .chain(tools::native::compaction::schemas())
             .chain(tools::native::recall::schemas())
             .chain(tools::native::self_edit::schemas())
-            .chain(crate::session_messaging::schemas())
             .chain(crate::main_chat::schemas())
             .chain(tools::native::task::schemas())
             .chain(tools::native::tool_search::schemas())

@@ -1,6 +1,6 @@
 {
-  "name": "list_task_delegatable_agents",
-  "description": "List accessible private agents eligible for a child task, with current model assignment status.",
+  "name": "list_delegatable_agents",
+  "description": "List accessible private agents you can delegate to with start_session or delegate_to_agent; reports whether a Standard model is assigned.",
   "effect": "read",
   "default_access": {
     "operator": "auto",

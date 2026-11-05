@@ -618,11 +618,83 @@ pub(crate) async fn archive_session_api(
 ) -> Api {
     lifecycle_session_api(app, id, body, false).await
 }
+/// Sub agent sessions of `sid` that are not deleted.
+async fn spawn_children(app: &App, sid: &str) -> Result<Vec<Value>, ApiError> {
+    Ok(app
+        .store
+        .list("session:")
+        .await?
+        .into_iter()
+        .filter(|s| {
+            s["parent_session_id"] == sid
+                && matches!(s["status"].as_str(), Some("active" | "archived"))
+        })
+        .collect())
+}
+/// A short request ID for the cascade step on `child` caused by request `request`.
+fn cascade_request(request: &str, child: &str) -> String {
+    format!("cascade-{}", &digest(&json!([request, child]))[..32])
+}
+/// Archive sub agents with their parent, recursively. Separate sessions it started keep
+/// running. A child that cannot be archived now is left for the user.
+async fn archive_children(app: &App, sid: &str, request: &str) -> Result<(), ApiError> {
+    for child in spawn_children(app, sid).await? {
+        let Some(id) = child["id"].as_str().filter(|_| child["status"] == "active") else {
+            continue;
+        };
+        let body = crate::store::session::SessionLifecycle {
+            client_request_id: cascade_request(request, id),
+            expected_revision: child["metadata_revision"].as_u64().unwrap_or(0),
+        };
+        if Box::pin(lifecycle_session_api(
+            app.clone(),
+            id.to_owned(),
+            body,
+            false,
+        ))
+        .await
+        .is_err()
+        {
+            tracing::warn!("Sub agent archive deferred");
+        }
+    }
+    Ok(())
+}
 pub(crate) async fn delete_session_api(
     State(app): State<App>,
     Path(id): Path<String>,
     Json(body): Json<crate::store::session::SessionLifecycle>,
 ) -> Api {
+    let request = body.client_request_id.clone();
+    let deleted = delete_one(app.clone(), id.clone(), body).await?;
+    // Sub agents go with their parent: archive any still active, then delete each.
+    archive_children(&app, &id, &request).await?;
+    for child in spawn_children(&app, &id).await? {
+        let Some(child_id) = child["id"]
+            .as_str()
+            .filter(|_| child["status"] == "archived")
+        else {
+            continue;
+        };
+        let child_body = crate::store::session::SessionLifecycle {
+            client_request_id: cascade_request(&request, child_id),
+            expected_revision: child["metadata_revision"].as_u64().unwrap_or(0),
+        };
+        if Box::pin(delete_session_api(
+            State(app.clone()),
+            Path(child_id.to_owned()),
+            Json(child_body),
+        ))
+        .await
+        .is_err()
+        {
+            tracing::warn!("Sub agent deletion deferred");
+        }
+    }
+    crate::modules::cancel_session_automations(&app, &id).await?;
+    Ok(deleted)
+}
+async fn delete_one(app: App, id: String, body: crate::store::session::SessionLifecycle) -> Api {
     use crate::store::session::SessionPatchOutcome;
     let _guard = app.gate.lock().await;
     let validation = crate::store::session::SessionPatch {
@@ -681,6 +753,7 @@ async fn lifecycle_session_api(
                 // Run cancels take the gate; archive then stops sub-agents, automations and resources.
                 drop(guard);
                 crate::api::session_stop::stop_session_work(&app, &id, "archive").await?;
+                archive_children(&app, &id, &body.client_request_id).await?;
             }
             Ok(Json(value))
         }

@@ -192,6 +192,9 @@ async fn review_entry(app: App, s: String, e: Value) -> Result<()> {
     Ok(())
 }
 pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
+    if let Err(error) = crate::session_messaging::deliver_notices(app).await {
+        tracing::warn!("Session notice delivery deferred: {error}");
+    }
     let queues = app.store.list("followup_queue:").await?;
     for q in queues {
         let s = q["session_id"].as_str().unwrap_or("").to_owned();

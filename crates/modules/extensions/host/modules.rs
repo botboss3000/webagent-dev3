@@ -839,6 +839,32 @@ pub(crate) async fn session_automations(app: &App, sid: &str) -> Result<Vec<Valu
         .cloned()
         .collect())
 }
+/// Cancel every automation that delivers into deleted conversation `sid`.
+pub(crate) async fn cancel_session_automations(app: &App, sid: &str) -> Result<()> {
+    let envelope = app.store.module_state("automation").await?;
+    let definitions = envelope["state"]["definitions"].as_object();
+    for d in definitions.into_iter().flat_map(|items| items.values()) {
+        if d["destination"]["session_id"] != sid
+            || !matches!(d["status"].as_str(), Some("active" | "paused"))
+        {
+            continue;
+        }
+        let args = json!({"id":d["id"],"expected_revision":d["revision"]});
+        let scope = json!({"agent_id":d["agent_id"],"session_id":sid});
+        perform(
+            app,
+            "automation",
+            "cancel_automation",
+            args,
+            None,
+            None,
+            false,
+            scope,
+        )
+        .await?;
+    }
+    Ok(())
+}
 /// Pause this conversation's active automations; the agent resumes them after user confirmation.
 pub(crate) async fn pause_session_automations(app: &App, sid: &str) -> Result<Vec<Value>> {
     let mut paused = Vec::new();

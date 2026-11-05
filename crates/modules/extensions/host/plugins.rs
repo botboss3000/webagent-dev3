@@ -264,6 +264,19 @@ impl Host<'_> {
             .map_err(|error| error.to_string())?;
         let result = match kind {
             Kind::Route(method, template) => {
+                // manage_session reaches only sessions in the agent's session scope.
+                if request.name.starts_with("sessions.")
+                    && request.name != "sessions.read"
+                    && request.name != "sessions.watch"
+                {
+                    tools::native::orchestration::in_scope(
+                        &tools::native_host::Host(self.call.app),
+                        self.call.sid,
+                        request.params["session_id"].as_str().unwrap_or(""),
+                    )
+                    .await
+                    .map_err(|error| format!("{error:#}"))?;
+                }
                 let path =
                     requests::path(template, &request.params).map_err(|error| error.to_string())?;
                 let body = object(request.body)?;

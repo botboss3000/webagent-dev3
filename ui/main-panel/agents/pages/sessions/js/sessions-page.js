@@ -474,7 +474,7 @@ const _expandedGroups = new Set();
 // Spawned helper sessions belong beneath their orchestrator's avatar, never in
 // the root list. This matches the chat session dropdown's authoritative
 // `spawn-*` rule and remains correct even when an old parent was deleted.
-function _isChildSpawnSession() { return false; }
+function _isChildSpawnSession(s) { return !!s?.parent_session_id; }
 
 // Narrow title-only viewer: set by _wireSelectionColumnToggle; re-measured by startSessions
 // on every tab activation (the tab is display:none until active, so resize

@@ -2092,9 +2092,9 @@
       "id": "native-session-messaging-admission",
       "aliases": [
         "native session messaging admission",
-        "message_other_session"
+        "message_session"
       ],
-      "purpose": "Native Base message_other_session/start_session schemas, private authority, exact approval and receipt-bound admission. Config: plugins/abilities/Core/base/base.json -> /tools registers the tools; live policy and access remain host-owned.",
+      "purpose": "Native Base message_session/start_session schemas, private authority, exact approval and receipt-bound admission. Config: plugins/abilities/Core/base/base.json -> /tools registers the tools; live policy and access remain host-owned.",
       "configuration": {
         "status": "configured",
         "references": [

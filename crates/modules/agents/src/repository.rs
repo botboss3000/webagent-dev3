@@ -152,6 +152,25 @@ impl<'a, C: RecordCodec> Repository<'a, C> {
     }
 }
 
+/// Agent Management tools a new agent starts with turned off: creating and editing agents
+/// and arming session watches. The Default Agent keeps them; owners turn them on per agent.
+pub const NEW_AGENT_TOOL_MODES: [&str; 14] = [
+    "list_agent_templates",
+    "list_my_agents",
+    "get_agent",
+    "list_agent_tools",
+    "create_agent",
+    "update_agent",
+    "set_agent_tool",
+    "edit_agent_prompt",
+    "set_agent_ability",
+    "manage_agent_skills",
+    "manage_agent_chat_config",
+    "promote_spawn",
+    "run_optimizer",
+    "watch_sessions",
+];
+
 /// Create/reconcile an unregistered row using Storage's existing creation pool.
 /// Registered records use tenant encoding; pre-registration records retain the published shared encoding.
 pub async fn create_record<C: RecordCodec>(
@@ -187,7 +206,7 @@ pub async fn create_record<C: RecordCodec>(
         bail!("Registered agent record missing");
     }
     let metadata = codec.seal(&json!({"owner_id":owner,"ability_modes":{"codebase_admin":"off"},
-        "skill_modes":{},"tool_modes":{},"ability_revision":0,
+        "skill_modes":{},"tool_modes":NEW_AGENT_TOOL_MODES.iter().map(|tool|(tool.to_string(),json!("off"))).collect::<serde_json::Map<_,_>>(),"ability_revision":0,
         "member_access":{"visitor_access":false,"app_login_members":true,"conversation_privacy":"operator_reviewable"},
         "creation_digest":digest}))?;
     sqlx::query("INSERT INTO agents(id,name,description,provider,model,status,metadata,revision,created_at,updated_at) VALUES(?,?,?,'openai_subscription','','active',?,1,?,?)")
