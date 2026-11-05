@@ -1,8 +1,9 @@
-//! Composer dictation with a local recognizer, and agent voice output.
+//! Composer dictation with a shared local recognizer, and agent voice output.
 //! Capture, dictation sequencing and speech formatting live in `webagent_media`; this root-bound
 //! adapter supplies the HTTP handlers, App/Store, the session gate and model lanes.
-//! Dictation runs local Kroko recognition (`listen.py`) and voice output local Kokoro speech
-//! (`speak.py`); both are packaged by the `voice` stage of the Dockerfile.
+//! Dictation runs on one shared Parakeet recognizer (`webagent_media::recognizer`, this binary
+//! started with `--voice-service`) and voice output on local Kokoro speech (`speak.py`); the
+//! `voice` stage of the Dockerfile packages their libraries and models.
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::{Arc, OnceLock};
@@ -19,9 +20,8 @@ use base64::Engine;
 use futures_util::stream;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::{watch, Mutex, OwnedSemaphorePermit, Semaphore};
-use tokio::task::JoinHandle;
+use tokio::process::{Child, ChildStdout, Command};
+use tokio::sync::{mpsc, oneshot, watch, Mutex, OwnedSemaphorePermit, Semaphore};
 use webagent_media::capture::{self, Capture, Chunk};
 use webagent_media::speech::{sample_text, speech_text};
 
@@ -38,27 +38,35 @@ pub(crate) async fn quiesce(app: &App, sid: &str) {
 fn dictation_key(app: &App, sid: &str) -> String {
     format!("{}\0{sid}", app.store.current_user_id())
 }
-/// One composer dictation: frame sequencing and its local recognizer. Dropping it kills the
-/// recognizer and frees its slot.
+/// One composer dictation: frame sequencing and its stream in the shared recognizer. Dropping
+/// an unfinished one cancels that stream and frees its slot.
 struct Dictation {
     capture: Capture,
-    listener: Option<Listener>,
-    /// The latest transcript so far, written by the listener's output reader.
+    requests: mpsc::UnboundedSender<String>,
+    routes: Routes,
+    /// The latest transcript so far, written by the service reader.
     text: watch::Receiver<String>,
-    reader: Option<JoinHandle<()>>,
+    /// Receives the final transcript; taken by the first finish.
+    finished: Option<oneshot::Receiver<String>>,
     used: Instant,
     /// The final transcript, kept so a retried finish replays it.
     done: Option<String>,
-    /// Held while the recognizer runs; released at finish.
+    /// Held while the dictation is open; released at finish.
     slot: Option<OwnedSemaphorePermit>,
 }
 
-/// A recognizer process waiting for or receiving audio.
-struct Listener {
-    child: Child,
-    stdin: ChildStdin,
-    /// Taken by the transcript reader when the dictation starts.
-    stdout: Option<ChildStdout>,
+impl Drop for Dictation {
+    fn drop(&mut self) {
+        if let Ok(mut routes) = self.routes.lock() {
+            routes.remove(&self.capture.id);
+        }
+        if self.done.is_none() {
+            send(
+                &self.requests,
+                json!({"op": "cancel", "id": self.capture.id}),
+            );
+        }
+    }
 }
 
 type Dictations = HashMap<String, Arc<Mutex<Dictation>>>;
@@ -68,19 +76,27 @@ fn dictations() -> &'static Mutex<Dictations> {
     ALL.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// The local Kroko recognizer; its packaging is the `voice` stage of the Dockerfile.
+/// The shared recognizer: this binary in its `--voice-service` role.
 #[cfg(not(test))]
-const LISTENER: [&str; 3] = ["/opt/voice/venv/bin/python", "-I", "/opt/voice/listen.py"];
-/// Stands in for the recognizer: reads the whole dictation, then prints one transcript line.
+fn recognizer() -> std::io::Result<Command> {
+    let mut command = Command::new(std::env::current_exe()?);
+    command.arg("--voice-service");
+    Ok(command)
+}
+/// Stands in for the service: ignores audio and answers each `finish` with one transcript.
 #[cfg(test)]
-const LISTENER: [&str; 3] = [
-    "/bin/sh",
-    "-c",
-    r#"cat >/dev/null; echo '{"text":"Hello there."}'"#,
-];
-/// Recognizers decoding at once; each uses one core, and builds share the host.
-const MAX_DICTATIONS: usize = 2;
-/// A dictation with no frames for this long was abandoned; its recognizer has exited.
+fn recognizer() -> std::io::Result<Command> {
+    let mut command = Command::new("/bin/sh");
+    command.args([
+        "-c",
+        r#"while read -r line; do case "$line" in *'"op":"finish"'*) id=${line#*'"id":"'}; echo "{\"id\":\"${id%%\"*}\",\"final\":\"Hello there.\"}";; esac; done"#,
+    ]);
+    Ok(command)
+}
+/// Dictations open at once; the shared service decodes their phrases one at a time (about
+/// 0.3 s each on two threads), so this bounds how long a phrase can wait.
+const MAX_DICTATIONS: usize = 4;
+/// A dictation with no frames for this long was abandoned; dropping it cancels its stream.
 const DICTATION_IDLE: Duration = Duration::from_secs(90);
 const DICTATION_STOPPED: &str = "Dictation stopped; start it again";
 
@@ -91,60 +107,101 @@ fn dictation_slots() -> Arc<Semaphore> {
         .clone()
 }
 
-fn spawn_listener() -> std::io::Result<Listener> {
-    let mut child = Command::new(LISTENER[0])
-        .args(&LISTENER[1..])
+/// Transcript updates and the final result of one open dictation, filled by the service reader.
+struct Route {
+    text: watch::Sender<String>,
+    done: Option<oneshot::Sender<String>>,
+}
+type Routes = Arc<std::sync::Mutex<HashMap<String, Route>>>;
+
+/// The running recognizer service. Requests go through `requests` to the task that owns its
+/// stdin, so frames from every dictation reach it in the order they were accepted.
+struct Service {
+    requests: mpsc::UnboundedSender<String>,
+    routes: Routes,
+    child: Child,
+}
+
+/// Queue one request line for the service; false once its input has closed.
+fn send(requests: &mpsc::UnboundedSender<String>, request: Value) -> bool {
+    requests.send(format!("{request}\n")).is_ok()
+}
+
+/// The running service, started when missing or exited. The models load in a few seconds;
+/// requests queue in its input meanwhile. Replacing an exited service drops its dictations, so
+/// their clients restart them with the whole recording.
+async fn running_service() -> std::io::Result<(mpsc::UnboundedSender<String>, Routes)> {
+    static SERVICE: OnceLock<Mutex<Option<Service>>> = OnceLock::new();
+    let mut slot = SERVICE.get_or_init(|| Mutex::new(None)).lock().await;
+    if let Some(service) = slot.as_mut() {
+        if matches!(service.child.try_wait(), Ok(None)) && !service.requests.is_closed() {
+            return Ok((service.requests.clone(), service.routes.clone()));
+        }
+    }
+    let mut child = recognizer()?
         .env_clear()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true)
         .spawn()?;
-    let missing = || std::io::Error::other("listener pipes unavailable");
-    let stdin = child.stdin.take().ok_or_else(missing)?;
+    let missing = || std::io::Error::other("recognizer pipes unavailable");
+    let mut stdin = child.stdin.take().ok_or_else(missing)?;
     let stdout = child.stdout.take().ok_or_else(missing)?;
-    Ok(Listener {
-        child,
-        stdin,
-        stdout: Some(stdout),
-    })
-}
-
-/// A recognizer for a new dictation. The model takes seconds to load, so one spare is kept
-/// loaded and waiting; it is handed out and replaced in the background.
-async fn take_listener() -> std::io::Result<Listener> {
-    static SPARE: OnceLock<Mutex<Option<Listener>>> = OnceLock::new();
-    let spare = SPARE.get_or_init(|| Mutex::new(None));
-    let warm = spare.lock().await.take();
-    let listener = match warm {
-        Some(mut l) => match l.child.try_wait() {
-            Ok(None) => l,
-            _ => spawn_listener()?,
-        },
-        None => spawn_listener()?,
-    };
+    let (requests, mut queue) = mpsc::unbounded_channel::<String>();
     tokio::spawn(async move {
-        let mut slot = spare.lock().await;
-        if slot.is_none() {
-            *slot = spawn_listener().ok();
-        }
-    });
-    Ok(listener)
-}
-
-/// Publish each transcript line the recognizer writes until it closes its output.
-fn read_transcripts(stdout: ChildStdout, text: watch::Sender<String>) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if let Some(latest) = serde_json::from_str::<Value>(&line)
-                .ok()
-                .and_then(|v| v["text"].as_str().map(str::to_owned))
-            {
-                text.send_replace(latest);
+        while let Some(line) = queue.recv().await {
+            if stdin.write_all(line.as_bytes()).await.is_err() {
+                break;
             }
         }
-    })
+    });
+    let routes = Routes::default();
+    tokio::spawn(read_replies(stdout, routes.clone()));
+    *slot = Some(Service {
+        requests: requests.clone(),
+        routes: routes.clone(),
+        child,
+    });
+    Ok((requests, routes))
+}
+
+/// Route each service reply to its dictation until the service closes its output, then drop
+/// every route so waiting finishes fail instead of hanging.
+async fn read_replies(stdout: ChildStdout, routes: Routes) {
+    let mut lines = BufReader::new(stdout).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        route_reply(&routes, &line);
+    }
+    if let Ok(mut routes) = routes.lock() {
+        routes.clear();
+    }
+}
+
+/// Apply one reply: `text` is the transcript so far, `final` completes the dictation, and
+/// `error` ends it. Replies for unknown or closed dictations are ignored.
+fn route_reply(routes: &Routes, line: &str) {
+    let Ok(reply) = serde_json::from_str::<Value>(line) else {
+        return;
+    };
+    let (Some(id), Ok(mut routes)) = (reply["id"].as_str(), routes.lock()) else {
+        return;
+    };
+    let Some(route) = routes.get_mut(id) else {
+        return;
+    };
+    if let Some(text) = reply["text"].as_str() {
+        route.text.send_replace(text.to_owned());
+    }
+    if let Some(text) = reply["final"].as_str() {
+        route.text.send_replace(text.to_owned());
+        if let Some(done) = route.done.take() {
+            let _ = done.send(text.to_owned());
+        }
+        routes.remove(id);
+    } else if reply.get("error").is_some() {
+        routes.remove(id);
+    }
 }
 
 fn dictation_unavailable() -> ApiError {
@@ -154,9 +211,14 @@ fn dictation_unavailable() -> ApiError {
     )
 }
 
-/// Composer dictation: `start` opens a capture with a local recognizer, each `chunk` streams a
-/// PCM frame and returns the transcript so far, `finish` returns the final transcript and
-/// `cancel` discards it. Nothing is stored; the client types the text into the composer.
+fn dictation_stopped() -> ApiError {
+    ApiError(StatusCode::SERVICE_UNAVAILABLE, DICTATION_STOPPED.into())
+}
+
+/// Composer dictation: `start` opens a capture in the shared recognizer, each `chunk` streams a
+/// PCM frame and returns the transcript so far (it grows phrase by phrase at pauses), `finish`
+/// returns the final transcript and `cancel` discards it. Nothing is stored; the client types
+/// the text into the composer.
 pub(crate) async fn voice_audio(
     State(app): State<App>,
     Path(sid): Path<String>,
@@ -188,23 +250,33 @@ pub(crate) async fn voice_audio(
                 "Dictation is busy; try again shortly".into(),
             )
         })?;
-        let mut listener = take_listener().await.map_err(|_| dictation_unavailable())?;
-        let (sender, text) = watch::channel(String::new());
-        let stdout = listener.stdout.take().ok_or_else(dictation_unavailable)?;
-        let reader = read_transcripts(stdout, sender);
+        let (requests, routes) = running_service()
+            .await
+            .map_err(|_| dictation_unavailable())?;
         let id = uuid();
-        all.insert(
-            k,
-            Arc::new(Mutex::new(Dictation {
-                capture: Capture::new(id.clone()),
-                listener: Some(listener),
-                text,
-                reader: Some(reader),
-                used: now,
-                done: None,
-                slot: Some(slot),
-            })),
+        let (sender, text) = watch::channel(String::new());
+        let (done, finished) = oneshot::channel();
+        routes.lock().map_err(|_| dictation_unavailable())?.insert(
+            id.clone(),
+            Route {
+                text: sender,
+                done: Some(done),
+            },
         );
+        let dictation = Dictation {
+            capture: Capture::new(id.clone()),
+            requests,
+            routes,
+            text,
+            finished: Some(finished),
+            used: now,
+            done: None,
+            slot: Some(slot),
+        };
+        if !send(&dictation.requests, json!({"op": "open", "id": id})) {
+            return Err(dictation_unavailable());
+        }
+        all.insert(k, Arc::new(Mutex::new(dictation)));
         return Ok(Json(
             json!({"capture_id": id, "sample_rate": capture::SAMPLE_RATE, "ephemeral": true}),
         ));
@@ -244,14 +316,11 @@ pub(crate) async fn voice_audio(
             Err(_) => return Err(bad("PCM sequence or dictation length limit exceeded")),
         };
         if !replayed {
-            let listener = d.listener.as_mut().ok_or_else(dictation_unavailable)?;
-            if listener.stdin.write_all(&bytes).await.is_err() {
+            // The validated base64 frame goes to the service as received.
+            if !send(&d.requests, json!({"op": "audio", "id": id, "pcm": data})) {
                 drop(d);
                 dictations().lock().await.remove(&k);
-                return Err(ApiError(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    DICTATION_STOPPED.into(),
-                ));
+                return Err(dictation_stopped());
             }
             d.used = Instant::now();
         }
@@ -274,26 +343,22 @@ pub(crate) async fn voice_audio(
             "replayed": true,
         })));
     }
-    // Closing the recognizer's input flushes the model; it writes the final line and exits.
-    let mut listener = d.listener.take().ok_or_else(dictation_unavailable)?;
-    drop(listener.stdin);
-    let flushed = match d.reader.take() {
-        Some(reader) => tokio::time::timeout(Duration::from_secs(15), reader)
+    // The service decodes the last phrase after the frames queued before this request.
+    let finished = d.finished.take().ok_or_else(dictation_unavailable)?;
+    let text = if send(&d.requests, json!({"op": "finish", "id": id})) {
+        tokio::time::timeout(Duration::from_secs(15), finished)
             .await
-            .is_ok_and(|joined| joined.is_ok()),
-        None => false,
+            .ok()
+            .and_then(Result::ok)
+    } else {
+        None
     };
-    let _ = listener.child.start_kill();
-    d.slot = None;
-    if !flushed {
+    let Some(text) = text else {
         drop(d);
         dictations().lock().await.remove(&k);
-        return Err(ApiError(
-            StatusCode::SERVICE_UNAVAILABLE,
-            DICTATION_STOPPED.into(),
-        ));
-    }
-    let text = d.text.borrow().clone();
+        return Err(dictation_stopped());
+    };
+    d.slot = None;
     d.done = Some(text.clone());
     Ok(Json(
         json!({"text": text, "capture_id": id, "ephemeral": true}),
@@ -500,6 +565,29 @@ mod voice_output_tests {
     // Test code may unwrap (the standard's `allow-unwrap-in-tests`).
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn service_replies_reach_only_their_dictation() {
+        let routes = Routes::default();
+        let (text, seen) = watch::channel(String::new());
+        let (done, mut finished) = oneshot::channel();
+        routes.lock().unwrap().insert(
+            "a".into(),
+            Route {
+                text,
+                done: Some(done),
+            },
+        );
+        route_reply(&routes, r#"{"id":"b","text":"Not mine."}"#);
+        route_reply(&routes, "not json");
+        assert_eq!(*seen.borrow(), "");
+        route_reply(&routes, r#"{"id":"a","text":"Hello."}"#);
+        assert_eq!(*seen.borrow(), "Hello.");
+        assert!(finished.try_recv().is_err());
+        route_reply(&routes, r#"{"id":"a","final":"Hello there."}"#);
+        assert_eq!(finished.try_recv().unwrap(), "Hello there.");
+        assert!(routes.lock().unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn speaker_chunks_are_length_prefixed_and_bounded() {

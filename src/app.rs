@@ -802,6 +802,13 @@ async fn run_process() -> Result<()> {
         #[cfg(feature = "live-context")]
         anyhow::bail!("Linked boot planner unavailable in live core");
     }
+    if std::env::args().nth(1).as_deref() == Some("--voice-service") {
+        // The shared dictation recognizer, started by the API as a child process.
+        return webagent_media::recognizer::run(std::path::Path::new(
+            webagent_media::recognizer::VOICE_ROOT,
+        ))
+        .map_err(anyhow::Error::msg);
+    }
     if std::env::args().any(|argument| argument == "--context-smoke") {
         println!("{}", crate::engine_components::context_smoke().await?);
         return Ok(());

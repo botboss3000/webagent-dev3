@@ -74,13 +74,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 python3
     && printf '%s  %s\n' 6e742170d309016e5891a994e1ce1559c702a2ccd0075e67ef7157974f6406cb kokoro-v1.0.int8.onnx \
         bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d voices-v1.0.bin | sha256sum -c - \
     && chmod -R a+rX /opt/voice
-# Composer dictation: sherpa-onnx with the Kroko streaming English model (CC-BY-SA community model).
-RUN /opt/voice/venv/bin/pip install --no-cache-dir sherpa-onnx==2.0.1 \
-    && cd /tmp && curl -fsSLo kroko.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06.tar.bz2 \
-    && printf '%s  %s\n' c8676e5ff9ac2a85296e53ee0fd4d5fb1db6770e7a7647166eeafe349ade6834 kroko.tar.bz2 | sha256sum -c - \
-    && /opt/voice/venv/bin/python -c "import tarfile; tarfile.open('kroko.tar.bz2').extractall()" && mkdir /opt/voice/models/kroko \
-    && cd sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06 && mv encoder.onnx decoder.onnx joiner.onnx tokens.txt README.md /opt/voice/models/kroko/ \
-    && cd /tmp && rm -rf kroko.tar.bz2 sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06 \
+# Composer dictation (webagent_media::recognizer loads these at run time): the sherpa-onnx 2.0.1
+# C API with ONNX Runtime (Apache-2.0/MIT, the version its C layouts mirror), NVIDIA Parakeet TDT
+# 0.6B v2 int8 in sherpa-onnx form (CC-BY-4.0, attribution in models/NOTICE) and Silero VAD (MIT).
+RUN cd /tmp && curl -fsSLo sherpa.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/sherpa-onnx-v2.0.1-linux-x64-shared-lib.tar.bz2 \
+    && printf '%s  %s\n' 532c45bbd41036d83cd70606797529aa8086c2053395a58967736c727625b120 sherpa.tar.bz2 | sha256sum -c - \
+    && python3 -c "import tarfile; tarfile.open('sherpa.tar.bz2').extractall()" \
+    && mkdir /opt/voice/lib && mv sherpa-onnx-v2.0.1-linux-x64-shared-lib/lib/libsherpa-onnx-c-api.so sherpa-onnx-v2.0.1-linux-x64-shared-lib/lib/libonnxruntime.so /opt/voice/lib/ \
+    && rm -rf sherpa.tar.bz2 sherpa-onnx-v2.0.1-linux-x64-shared-lib \
+    && curl -fsSLo parakeet.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2 \
+    && curl -fsSLo /opt/voice/models/silero_vad.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx \
+    && printf '%s  %s\n' 157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad parakeet.tar.bz2 \
+        9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6 /opt/voice/models/silero_vad.onnx | sha256sum -c - \
+    && python3 -c "import tarfile; tarfile.open('parakeet.tar.bz2').extractall()" \
+    && mv sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8 /opt/voice/models/parakeet && rm parakeet.tar.bz2 \
+    && printf '%s\n' 'parakeet/: NVIDIA parakeet-tdt-0.6b-v2 (https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2), CC-BY-4.0, converted by k2-fsa/sherpa-onnx.' \
+        'silero_vad.onnx: Silero VAD (https://github.com/snakers4/silero-vad), MIT.' > /opt/voice/models/NOTICE \
     && chmod -R a+rX /opt/voice
 
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS api
@@ -118,9 +127,10 @@ COPY --from=tested_builder /out/webagent-capability-service /usr/local/lib/webag
 COPY --from=tested_builder /out/webagent-provider-service /usr/local/lib/webagent/engine/provider-projection/webagent-provider-service
 COPY v3/plugins/gates /opt/v3/plugins/gates
 # Agent voice output and composer dictation (crates/modules/media/host/voice.rs): the pinned
-# Kokoro/Kroko venv and checked models come from the `voice` stage, prepared once as a dependency base.
+# Kokoro venv, the sherpa-onnx library and checked models come from the `voice` stage, prepared
+# once as a dependency base.
 COPY --from=voice /opt/voice /opt/voice
-COPY --chmod=0644 v3/crates/modules/media/voice/speak.py v3/crates/modules/media/voice/listen.py /opt/voice/
+COPY --chmod=0644 v3/crates/modules/media/voice/speak.py /opt/voice/
 RUN chmod -R a+rX /opt/v3/plugins
 RUN chmod 0755 /opt/v3 /opt/v3/plugins /opt/v3/plugins/gates /opt/v3/plugins/gates/publication_size_guard_v1 && chmod 0444 /opt/v3/plugins/gates/publication_size_guard_v1/gate.json
 RUN chmod a+r /opt/v3/*.py && python3 -c "import os,pathlib; os.setgid(1100); os.setuid(1101); files=[pathlib.Path('/opt/v3/plugins/abilities/Core/create_tools/runtime.py'),pathlib.Path('/opt/v3/plugins/abilities/Core/visualizer/capture.py')]; [compile(p.read_text(),str(p),'exec') for p in files]"
