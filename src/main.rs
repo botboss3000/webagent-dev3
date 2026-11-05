@@ -68,7 +68,6 @@ mod session_messaging;
 mod shared_chat;
 #[path = "../crates/modules/chat/host/shared_projection.rs"]
 mod shared_projection;
-#[path = "../plugins/abilities/Administrator/git_control/remote/mod.rs"]
 mod source_control;
 mod tool_execution;
 mod usage_reports;

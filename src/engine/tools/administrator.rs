@@ -537,6 +537,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(administrator_pack), ignore = "needs the Administrator pack")]
     fn process_schemas_cover_every_administrator_tool() {
         let names: Vec<_> = schemas()
             .iter()

@@ -4,4 +4,10 @@ fn main() {
     if std::path::Path::new("src/diagnostics_plugin/mod.rs").is_file() {
         println!("cargo:rustc-cfg=diagnostics_plugin");
     }
+    // The Administrator pack is optional: without it the app builds as a non-coding platform.
+    println!("cargo:rustc-check-cfg=cfg(administrator_pack)");
+    println!("cargo:rerun-if-changed=plugins/abilities/Administrator/git_control/remote");
+    if std::path::Path::new("plugins/abilities/Administrator/git_control/remote/mod.rs").is_file() {
+        println!("cargo:rustc-cfg=administrator_pack");
+    }
 }

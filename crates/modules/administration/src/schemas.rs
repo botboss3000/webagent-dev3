@@ -27,22 +27,16 @@ pub struct Loaded {
 
 /// Read the Administrator tool schemas under `abilities` (a catalog root).
 ///
-/// A tool whose folder is missing, invalid or duplicated is left out, so the model never
-/// sees it; tool folders that are not Administrator native tools are ignored. Schemas
+/// Without the Administrator group (the pack is not installed) nothing loads and nothing is
+/// a problem. A tool whose folder is missing, invalid or duplicated is left out, so the model
+/// never sees it; tool folders that are not Administrator native tools are ignored. Schemas
 /// come back in [`TOOLS`] order, so a catalog digest over them is stable.
 pub fn load(abilities: &Path) -> Result<Loaded> {
     let group = abilities.join(GROUP);
     let entries = match fs::read_dir(&group) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            return Ok(Loaded {
-                schemas: Vec::new(),
-                problems: vec![format!(
-                    "No Administrator tool folders under {}",
-                    abilities.display()
-                )],
-            });
-        }
+        // The Administrator pack is optional: without it there are no tools and no problems.
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Loaded::default()),
         Err(error) => {
             return Err(error)
                 .with_context(|| format!("Cannot read Administrator tools: {}", group.display()))
@@ -114,6 +108,9 @@ mod tests {
     fn checkout_folders_hold_every_administrator_tool() {
         let abilities =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../plugins/abilities");
+        if !abilities.join(GROUP).is_dir() {
+            return; // Built without the optional Administrator pack.
+        }
         let loaded = load(&abilities).expect("checkout tool folders");
         assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
         let names: Vec<_> = loaded
@@ -157,10 +154,10 @@ mod tests {
     }
 
     #[test]
-    fn a_root_without_the_group_has_no_schemas() {
+    fn a_root_without_the_group_has_no_schemas_and_no_problems() {
         let root = tempfile::tempdir().expect("root");
         let loaded = load(root.path()).expect("loaded");
         assert!(loaded.schemas.is_empty());
-        assert_eq!(loaded.problems.len(), 1);
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
     }
 }

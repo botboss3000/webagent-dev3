@@ -172,8 +172,16 @@ pub(crate) fn folder_schemas(names: &[&str]) -> Vec<Value> {
 /// definition has a compiled handler. Each problem disables only its own tool.
 pub(crate) fn definition_problems() -> Vec<String> {
     use webagent_abilities::tool_definitions as definitions;
+    // Without the optional Administrator pack its compiled tools have no folders by design.
+    let administrator = webagent_administration::tools::TOOLS
+        .iter()
+        .any(|name| definitions::get(name).is_some());
     let handlers: std::collections::BTreeSet<_> = folder_handlers()
-        .chain(webagent_administration::tools::TOOLS)
+        .chain(
+            webagent_administration::tools::TOOLS
+                .into_iter()
+                .filter(|_| administrator),
+        )
         .chain(
             webagent_abilities::package::AUTOMATION_TOOLS
                 .iter()
