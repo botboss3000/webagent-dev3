@@ -373,7 +373,7 @@ impl Kokoro {
         let models = root.join("models/kokoro");
         let model = |name: &str| c_text(&models.join(name).to_string_lossy());
         let (onnx, voices, tokens) = (
-            model("model.int8.onnx")?,
+            model("model.onnx")?,
             model("voices.bin")?,
             model("tokens.txt")?,
         );

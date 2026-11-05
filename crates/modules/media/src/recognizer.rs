@@ -27,6 +27,10 @@ pub const VOICE_ROOT: &str = "/opt/voice";
 /// The only sherpa-onnx release whose C layouts [`ffi`] mirrors.
 const LIBRARY_VERSION: &str = "2.0.1";
 const SAMPLE_RATE: i32 = 16000;
+/// Samples the pause detector examines at a time. Audio is handed to it one window at a time:
+/// sherpa-onnx dates a phrase's start from the end of the audio it was just given, so a larger
+/// batch (a backlog the browser sends at once) would cut off the phrase's first words.
+const VAD_WINDOW: usize = 512;
 /// Audio the detector may hold for a phrase in progress, in seconds.
 const VAD_BUFFER_SECONDS: f32 = 60.0;
 
@@ -455,7 +459,7 @@ impl Parakeet {
             threshold: pauses.threshold,
             min_silence_duration: pauses.min_silence_seconds,
             min_speech_duration: pauses.min_speech_seconds,
-            window_size: 512,
+            window_size: VAD_WINDOW as i32,
             max_speech_duration: pauses.max_phrase_seconds,
         };
         vad.sample_rate = SAMPLE_RATE;
@@ -545,8 +549,10 @@ impl Transcriber for Parakeet {
     }
 
     fn push(&self, dictation: &mut ParakeetDictation, samples: &[f32]) -> Option<String> {
-        // SAFETY: a live detector; `samples` outlives the call, which copies them.
-        unsafe { (self.api.vad_accept)(dictation.vad, samples.as_ptr(), samples.len() as i32) };
+        for window in samples.chunks(VAD_WINDOW) {
+            // SAFETY: a live detector; `window` outlives the call, which copies it.
+            unsafe { (self.api.vad_accept)(dictation.vad, window.as_ptr(), window.len() as i32) };
+        }
         self.drain(dictation).then(|| dictation.phrases.join(" "))
     }
 
@@ -638,6 +644,8 @@ mod tests {
 
     /// Loads the real library and models when `WEBAGENT_VOICE_ROOT` names a `voice` stage copy
     /// with the model's sample recordings; the broker's test run has none, so it is skipped there.
+    /// Audio goes in one-second batches, as a browser backlog sends it, and the opening words
+    /// must survive.
     #[test]
     fn parakeet_transcribes_recordings_when_installed() {
         let Ok(root) = std::env::var("WEBAGENT_VOICE_ROOT") else {
@@ -646,19 +654,19 @@ mod tests {
         let defaults = crate::settings::VoiceSettings::default();
         let parakeet = Parakeet::load(Path::new(&root), &defaults.dictation).unwrap();
         for (language, word) in [
-            ("en", "country"),
-            ("de", "Wurst"),
-            ("fr", "pays"),
-            ("es", "país"),
+            ("en", "Ask not"),
+            ("de", "Alles hat"),
+            ("fr", "Ne vous"),
+            ("es", "No preguntes"),
         ] {
             let wav = Path::new(&root).join(format!("models/parakeet/test_wavs/{language}.wav"));
             let wav = std::fs::read(wav).unwrap();
             let mut dictation = parakeet.open().unwrap();
-            for frame in samples(&wav[44..]).chunks(1600) {
-                parakeet.push(&mut dictation, frame);
+            for batch in samples(&wav[44..]).chunks(16000) {
+                parakeet.push(&mut dictation, batch);
             }
             let text = parakeet.finish(dictation);
-            assert!(text.contains(word), "{language}: {text}");
+            assert!(text.starts_with(word), "{language}: {text}");
         }
     }
 }
