@@ -26,3 +26,14 @@ test('parallel failure metadata retains the tool and call reference without pend
  const f=render(null,{tool_failure:{version:1,stage:'response_read',code:'disconnected_response',tool:'build_work',call_id:'parallel-call-2',delivery:'possibly_sent',elapsed_ms:9}});
  assert.match(f.text,/build_work/);assert.match(f.text,/Call: parallel-call-2/);
 });
+
+test('each uncertain parallel call shows its tool, arguments and IDs and resolves by call ID',()=>{
+ const f=render(null,{uncertain_calls:[
+  {call_id:'call-a',name:'dev_browser_action',arguments:{action:'navigate',path:'/app'},interaction_id:'pend-a',transport_request_id:'req-a'},
+  {call_id:'call-b',name:'dev_browser_action',arguments:{action:'read'},interaction_id:'pend-b'}]});
+ assert.match(f.text,/Tool: dev_browser_action/);assert.match(f.text,/"path": "\/app"/);
+ assert.match(f.text,/Call: call-a · Interaction: pend-a · Request: req-a/);assert.match(f.text,/Call: call-b · Interaction: pend-b/);
+ const sections=f.root.children.filter(n=>n.className==='recovery-call');assert.equal(sections.length,2);
+ sections[1].children.at(-1).children[1].click();assert.deepEqual(f.decisions,[['retry',undefined,'call-b']]);
+ const last=f.root.children.at(-1).children;assert.deepEqual(last.map(x=>x.textContent),['Abandon run']);
+});

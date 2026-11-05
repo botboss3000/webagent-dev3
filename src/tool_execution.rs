@@ -59,6 +59,24 @@ mod tests {
     use super::*;
     use serde_json::json;
     #[test]
+    fn interrupted_parallel_writes_wait_for_review_only_when_high_risk() {
+        let mut run = json!({"batch":[
+            {"state":"executing","pending":{"name":"shell","call_id":"a","arguments":{"command":"x"}}},
+            {"state":"executing","pending":{"name":"commit_and_push","call_id":"b","arguments":{}}}]});
+        assert!(crate::parallel_batch::mark_uncertain_writes(&mut run));
+        assert_eq!(run["batch"][0]["state"], "done");
+        assert_eq!(run["batch"][0]["result"]["error_kind"], "outcome_unknown");
+        assert_eq!(run["batch"][1]["state"], "uncertain");
+        assert!(run["retry_guard"]["actions"]
+            .as_object()
+            .unwrap()
+            .values()
+            .any(|entry| entry["call_id"] == "a" && entry["state"] == "uncertain"));
+        let mut low = json!({"batch":[
+            {"state":"executing","pending":{"name":"shell","call_id":"a","arguments":{}}}]});
+        assert!(!crate::parallel_batch::mark_uncertain_writes(&mut low));
+    }
+    #[test]
     fn repeat_policy_defaults_follow_tool_class() {
         use webagent_engine::tools::execution::ActionCatalog;
         use webagent_engine::tools::retry_guard::Risk;

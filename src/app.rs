@@ -214,11 +214,30 @@ fn public_code_index_retrieval(run: &Value) -> Value {
     json!({"status":status,"stage":stage})
 }
 // Project existing public run fields and fixed host component-pause metadata without private context.
+/// Parallel calls awaiting recovery review: what ran, with which arguments, and the IDs
+/// needed to diagnose it and to resolve each call separately.
+fn uncertain_calls(run: &Value) -> Value {
+    let calls = run["batch"].as_array().map_or_else(Vec::new, |items| {
+        items
+            .iter()
+            .filter(|item| item["state"] == "uncertain")
+            .map(|item| {
+                let pending = &item["pending"];
+                json!({"call_id":pending["call_id"],"name":pending["name"],
+                    "arguments":pending["arguments"],"interaction_id":pending["id"],
+                    "transport_request_id":pending["failure"]["transport_request_id"]})
+            })
+            .collect()
+    });
+    json!(calls)
+}
+
 fn public_run(run: &Value) -> Value {
     json!({"id":run["id"],"session_id":run["session_id"],"status":run["status"],"error":run["error"],
         "component_pause":if run["status"]=="paused"&&run["component_pause"]["version"]==1&&run["component_pause"]["component"].as_str().is_some_and(crate::engine_components::working_component) {json!({"version":1,"component":run["component_pause"]["component"],"reason":"component_unavailable"})}else{Value::Null},
         "code_index_retrieval":public_code_index_retrieval(run),
         "pending":run["pending"],"uncertain":run["uncertain"],"turns":run["turns"],
+        "uncertain_calls":uncertain_calls(run),
         "tool_failure":tools::failure::project(&run["latest_tool_failure"]),
         "attachments":run["attachments"].as_array().cloned().unwrap_or_default(),
         "model":public_run_model(run),

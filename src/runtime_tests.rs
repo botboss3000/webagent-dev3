@@ -1402,11 +1402,11 @@ async fn recovery_holds_uncertain_writes_and_requeues_safe_reads() {
     running(&app, &id, "first").await;
     let mut run = app.run(&id).await.unwrap();
     run["phase"] = json!("tools");
-    run["pending"] = json!({"name":"shell","state":"executing"});
+    run["pending"] = json!({"name":"file_write","state":"executing"});
     workflow::record(
         &mut run,
         &workflow::Policy::resolve(None).unwrap(),
-        &checkpoint_pre_tool("shell"),
+        &checkpoint_pre_tool("file_write"),
         workflow::Decision::Pass,
     )
     .unwrap();

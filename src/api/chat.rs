@@ -971,13 +971,13 @@ pub(crate) async fn control(State(app): State<App>, Json(body): Json<Value>) -> 
                     let mut run = user_app.run(id).await?;
                     run["status"] = json!("stopped");
                     run["error"] = json!("Stopped by global shutoff");
-                    if (run["pending"]["state"] == "executing"
+                    let single = run["pending"]["state"] == "executing"
                         && !tools::is_read(run["pending"]["name"].as_str().unwrap_or(""))
-                        && run["pending"]["external_job"]["kind"] != "v3_build")
-                        || parallel_batch::executing_write(&run)
-                    {
-                        run["uncertain"] = json!(true);
-                        parallel_batch::mark_uncertain_writes(&mut run);
+                        && run["pending"]["external_job"]["kind"] != "v3_build";
+                    if single || parallel_batch::executing_write(&run) {
+                        // Only high-risk parallel writes stay uncertain; see mark_uncertain_writes.
+                        let review = parallel_batch::mark_uncertain_writes(&mut run);
+                        run["uncertain"] = json!(single || review);
                     }
                     user_app.save_override(&mut run).await?;
                 }
@@ -1054,11 +1054,12 @@ pub(crate) async fn command(
                     run["status"] = json!("cancelled");
                 } else if (run["pending"]["state"] == "executing"
                     && !tools::is_read(run["pending"]["name"].as_str().unwrap_or("")))
-                    || parallel_batch::executing_write(&run)
+                    || (parallel_batch::executing_write(&run)
+                        && parallel_batch::mark_uncertain_writes(&mut run))
                 {
+                    parallel_batch::mark_uncertain_writes(&mut run);
                     run["status"] = json!("recovery");
                     run["uncertain"] = json!(true);
-                    parallel_batch::mark_uncertain_writes(&mut run);
                 } else {
                     run["status"] = json!("cancelled");
                 }
@@ -1141,7 +1142,10 @@ pub(crate) async fn command(
                     .filter(|(_, item)| item["state"] == "uncertain")
                     .map(|(idx, _)| idx)
                     .collect::<Vec<_>>();
-                let idx = if let Some(call_id) = body["call_id"].as_str() {
+                // Abandoning ends the whole run, so it names no call.
+                let idx = if body["decision"] == "abandon" {
+                    0
+                } else if let Some(call_id) = body["call_id"].as_str() {
                     uncertain
                         .iter()
                         .copied()

@@ -89,16 +89,34 @@ pub fn uncertain_count(run: &Value) -> usize {
         })
         .unwrap_or(0)
 }
-pub fn mark_uncertain_writes<A: tool_execution::ActionCatalog>(run: &mut Value) {
+/// Settle parallel writes cut off by a stop, restart or revocation. A high-risk write is
+/// held for review; any other write completes as "outcome unknown", which the repeat guard
+/// records so the agent cannot blindly repeat it. Returns whether a review is needed.
+pub fn mark_uncertain_writes<A: tool_execution::ActionCatalog>(run: &mut Value) -> bool {
+    let mut review = false;
+    let mut settled = Vec::new();
     if let Some(items) = run["batch"].as_array_mut() {
         for item in items {
-            if item["state"] == "executing"
-                && !A::is_read(item["pending"]["name"].as_str().unwrap_or(""))
-            {
+            let name = item["pending"]["name"].as_str().unwrap_or("").to_owned();
+            if item["state"] != "executing" || A::is_read(&name) {
+                continue;
+            }
+            let retry = A::retry(&name);
+            if retry.risk == tools::retry_guard::Risk::High {
                 item["state"] = json!("uncertain");
+                review = true;
+            } else {
+                item["result"] = tools::retry_guard::outcome_unknown(&retry);
+                item["state"] = json!("done");
+                settled.push((name, item["pending"].clone(), retry));
             }
         }
     }
+    for (name, pending, retry) in settled {
+        let call_id = pending["call_id"].as_str().unwrap_or("");
+        tools::retry_guard::record(run, &name, &pending["arguments"], call_id, None, &retry);
+    }
+    review || uncertain_count(run) > 0
 }
 
 impl<
@@ -535,11 +553,12 @@ impl<
                         }
                         Err(_) => true,
                     };
-                // Only a user stop leaves an interrupted write for review; otherwise the
+                // A stop or shutdown leaves only a high-risk write for review; otherwise the
                 // agent receives the outcome and the repeat guard records it.
                 if interrupted
                     && cancel.is_cancelled()
                     && !tool_execution::settles_on_interrupt::<A>(&name)
+                    && A::retry(&name).risk == tools::retry_guard::Risk::High
                 {
                     current["batch"][idx]["state"] = json!("uncertain");
                     current["uncertain"] = json!(true);

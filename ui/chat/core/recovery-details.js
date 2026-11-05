@@ -23,9 +23,23 @@ export function createRecoveryDetails(run,{expanded,button,decide,code}) {
   if(detail){const timing=document.createElement('p');const delivery={not_sent:'Request not sent',possibly_sent:'Request may have been sent',response_received:'Response received'};timing.textContent=(delivery[detail.delivery]||'Delivery unknown')+(Number.isSafeInteger(detail.elapsed_ms)&&detail.elapsed_ms>=0?' · '+detail.elapsed_ms+' ms':'');details.append(timing);}
   // The panel's optional code adapter adds a capped, scrollable surface with a top-right Copy control.
   if(p.arguments){const text=JSON.stringify(p.arguments,null,2);if(typeof code==='function')details.append(code(text));else{const args=document.createElement('pre');args.textContent=text;details.append(args);}}
-  const reference=document.createElement('p');reference.className='recovery-reference';reference.textContent='Run: '+run.id+((p.call_id||identifier(detail?.call_id))?' · Call: '+(p.call_id||identifier(detail?.call_id)):'');details.append(reference);
-  const output=document.createElement('textarea');output.placeholder='Known result to accept';output.setAttribute('aria-label','Known action result');details.append(output);
+  const reference=document.createElement('p');reference.className='recovery-reference';reference.textContent='Run: '+run.id+((p.call_id||identifier(detail?.call_id))?' · Call: '+(p.call_id||identifier(detail?.call_id)):'')+(identifier(p.id)?' · Interaction: '+p.id:'');details.append(reference);
+  const labelsFor={accept:'Accept known result',retry:'Authorize retry',abandon:'Abandon run'};
+  // Parallel calls are resolved one by one: each shows what ran and the IDs to diagnose it.
+  const calls=Array.isArray(run.uncertain_calls)?run.uncertain_calls.filter(call=>identifier(call?.call_id)):[];
+  for(const call of calls){
+    const section=document.createElement('div');section.className='recovery-call';
+    const head=document.createElement('p');head.className='recovery-call-tool';head.textContent='Tool: '+(identifier(call.name)||'unknown');section.append(head);
+    if(call.arguments!=null){const text=JSON.stringify(call.arguments,null,2);if(typeof code==='function')section.append(code(text));else{const args=document.createElement('pre');args.textContent=text;section.append(args);}}
+    const ids=document.createElement('p');ids.className='recovery-reference';ids.textContent='Call: '+call.call_id+(identifier(call.interaction_id)?' · Interaction: '+call.interaction_id:'')+(identifier(call.transport_request_id)?' · Request: '+call.transport_request_id:'');section.append(ids);
+    const known=document.createElement('textarea');known.placeholder='Known result to accept';known.setAttribute('aria-label','Known result for '+call.call_id);section.append(known);
+    const row=document.createElement('div');row.className='recovery-actions';
+    for(const decision of ['accept','retry'])row.append(button(labelsFor[decision],()=>decide(decision,known.value,call.call_id)));
+    section.append(row);details.append(section);
+  }
+  const output=document.createElement('textarea');output.placeholder='Known result to accept';output.setAttribute('aria-label','Known action result');
+  if(!calls.length)details.append(output);
   const actions=document.createElement('div');actions.className='recovery-actions';
-  for(const decision of ['accept','retry','abandon'])actions.append(button({accept:'Accept known result',retry:'Authorize retry',abandon:'Abandon run'}[decision],()=>decide(decision,output.value)));
+  for(const decision of calls.length?['abandon']:['accept','retry','abandon'])actions.append(button(labelsFor[decision],()=>decide(decision,output.value)));
   details.append(actions);return details;
 }

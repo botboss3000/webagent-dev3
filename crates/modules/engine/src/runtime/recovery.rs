@@ -9,6 +9,7 @@ use super::ports::{
 use super::Runtime;
 use crate::context::abilities::Catalog;
 use crate::ports::{AdmissionEffects, ChatEffects, NotificationEffects, ToolJournal, UsageEffects};
+use crate::tools;
 use crate::{now, status};
 use anyhow::bail;
 use anyhow::{anyhow, Result};
@@ -513,11 +514,42 @@ impl<
                         .actions
                         .interrupt_run(user_app.store.records(), &run)
                         .await?;
+                    let mut review = super::batch::mark_uncertain_writes::<A>(&mut run);
+                    let name = run["pending"]["name"].as_str().unwrap_or("").to_owned();
+                    if run["pending"]["state"] == "executing" && !A::is_read(&name) {
+                        let retry = A::retry(&name);
+                        if retry.risk == tools::retry_guard::Risk::High {
+                            review = true;
+                        } else {
+                            // A restart cut off a low-risk write: the agent gets an
+                            // outcome-unknown result and the repeat guard remembers it.
+                            let call_id =
+                                run["pending"]["call_id"].as_str().unwrap_or("").to_owned();
+                            let args = run["pending"]["arguments"].clone();
+                            tools::retry_guard::record(
+                                &mut run, &name, &args, &call_id, None, &retry,
+                            );
+                            Self::append_tool(
+                                &mut run,
+                                &tools::retry_guard::outcome_unknown(&retry),
+                            )?;
+                        }
+                    }
                     run["status"] = json!("recovery");
                     run["uncertain"] = json!(true);
-                    super::batch::mark_uncertain_writes::<A>(&mut run);
                     run["error"] = json!("Tool outcome is uncertain after interruption");
-                    if user_app
+                    if !review {
+                        run["uncertain"] = json!(false);
+                        let permitted = resume
+                            && !app.shutoff().await?
+                            && user_app.run_model_authorized(&run).await
+                            && user_app
+                                .chat
+                                .participation_allows_run(user_app.store.records(), &run)
+                                .await?;
+                        run["status"] = json!(if permitted { "queued" } else { "stopped" });
+                        run["error"] = Value::Null;
+                    } else if user_app
                         .actions
                         .recover_results(user_app.store.records(), &mut run)
                         .await?

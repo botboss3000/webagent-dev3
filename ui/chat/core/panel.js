@@ -368,7 +368,7 @@ for(const run of relevant){
   }
   chatActions.showRun({run,active,canControl:sharedAccess?.can_control!==false,expanded:expandedRecovery,renderRecovery:createRecoveryDetails,
     cancel:()=>cancel(run.id),
-    recover:async(decision,output)=>{await client.recover(run.id,{decision,output,client_request_id:keyId('recovery:'+run.id+':'+decision+':'+output)});await refresh();}
+    recover:async(decision,output,call_id)=>{await client.recover(run.id,{decision,output,...(call_id?{call_id}:{}),client_request_id:keyId('recovery:'+run.id+':'+(call_id||'')+':'+decision+':'+output)});await refresh();}
   });
 }
 // Remove cards whose run or approval was not shown in this refresh; unchanged cards keep their nodes.
