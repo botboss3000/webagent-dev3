@@ -220,7 +220,11 @@ fn uncertain_calls(run: &Value) -> Value {
     let calls = run["batch"].as_array().map_or_else(Vec::new, |items| {
         items
             .iter()
-            .filter(|item| item["state"] == "uncertain")
+            // A call a restart left executing in a run under review is unresolved too.
+            .filter(|item| {
+                item["state"] == "uncertain"
+                    || (item["state"] == "executing" && run["status"] == "recovery")
+            })
             .map(|item| {
                 let pending = &item["pending"];
                 json!({"call_id":pending["call_id"],"name":pending["name"],

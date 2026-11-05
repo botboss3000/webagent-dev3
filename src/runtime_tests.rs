@@ -12460,3 +12460,32 @@ async fn same_response_tool_result_is_saved_after_its_call() {
         .collect();
     assert_eq!(kinds, ["tool_call", "tool_result"]);
 }
+
+#[tokio::test]
+async fn recovery_sorts_calls_a_restart_left_executing() {
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    let id = queued(&app, &sid).await;
+    let mut run = app.run(&id).await.unwrap();
+    run["status"] = json!("recovery");
+    run["uncertain"] = json!(true);
+    run["batch"] = json!([
+        {"state":"executing","pending":{"id":"p1","call_id":"c1","name":"shell","arguments":{"command":"x"}}},
+        {"state":"executing","pending":{"id":"p2","call_id":"c2","name":"file_read","arguments":{}}}
+    ]);
+    app.save(&mut run).await.unwrap();
+    // Low-risk writes and reads need no review: any decision resumes the run.
+    command(
+        State(app.clone()),
+        Path((id.clone(), "recovery".into())),
+        Json(json!({"client_request_id":"sort-executing","decision":"retry"})),
+    )
+    .await
+    .unwrap();
+    let run = app.run(&id).await.unwrap();
+    assert_eq!(run["status"], "queued");
+    assert_eq!(run["uncertain"], false);
+    assert_eq!(run["batch"][0]["state"], "done");
+    assert_eq!(run["batch"][0]["result"]["error_kind"], "outcome_unknown");
+    assert_eq!(run["batch"][1]["state"], "requested");
+}

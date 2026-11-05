@@ -1131,7 +1131,32 @@ pub(crate) async fn command(
             if run["uncertain"] != true {
                 return Err(conflict("Run does not require recovery review"));
             }
-            if run["batch"].is_array() {
+            // A stop or restart can leave parallel calls recorded as executing. Sort them
+            // now: reads run again, low-risk writes settle as outcome unknown, and only
+            // high-risk writes stay for review.
+            let mut settled_all = false;
+            if run["batch"].is_array() && !app.active.lock().await.contains_key(&id) {
+                if let Some(items) = run["batch"].as_array_mut() {
+                    for item in items {
+                        if item["state"] == "executing"
+                            && tools::is_read(item["pending"]["name"].as_str().unwrap_or(""))
+                        {
+                            item["state"] = json!("requested");
+                        }
+                    }
+                }
+                settled_all = !parallel_batch::mark_uncertain_writes(&mut run)
+                    && body["decision"] != "abandon";
+            }
+            if settled_all {
+                if app.shutoff().await? {
+                    return Err(conflict("Clear global shutoff first"));
+                }
+                run["uncertain"] = json!(false);
+                run["status"] = json!("queued");
+                run["pending"] = Value::Null;
+                run["error"] = Value::Null;
+            } else if run["batch"].is_array() {
                 // RECOVERY-PER-CALL: the reviewer names the uncertain call when
                 // more than one write was in flight. No other call is retried.
                 let uncertain = run["batch"]
