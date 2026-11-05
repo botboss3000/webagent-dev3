@@ -44,6 +44,15 @@ TOUCH_VIEWPORTS={"phone","phone_small","tablet"}
 # Cloudflare injects its analytics beacon at the edge; the app's own CSP blocks it. Not an app error.
 IGNORED_PAGE_ERRORS=("static.cloudflareinsights.com",)
 MAX_PAGE_ERRORS=20
+MAX_ELEMENTS=50
+MAX_SCROLL=20000
+WAIT_CONDITIONS={"visible","hidden","text","quiet","animations_done","network_idle"}
+# WebDriver key codes; only navigation and activation keys, never text or shortcuts.
+KEYS={"Tab":"\ue004","Shift+Tab":"\ue008\ue004","Enter":"\ue007","Escape":"\ue00c","Space":" ",
+    "ArrowUp":"\ue013","ArrowDown":"\ue015","ArrowLeft":"\ue012","ArrowRight":"\ue014",
+    "Home":"\ue011","End":"\ue010","PageUp":"\ue00e","PageDown":"\ue00f"}
+COLOR_SCHEMES={"light":"light","dark":"dark","default":""}
+REDUCED_MOTION={"reduce":"reduce","default":""}
 
 # Fixed native scripts only. Model text can enter a CSS selector or literal
 # send_keys argument, never script source. Every browser output is untrusted.
@@ -71,6 +80,87 @@ for (const root of roots) {
 }
 return {text:text.slice(offset,end),missing:false,truncated:truncated,matches:roots.length,
  next_offset:truncated?Math.min(end,text.length):null};
+"""
+MEASURE_SCRIPT=r"""
+/* V3_MEASURE */
+// Boxes and a fixed style subset for rendered matches; labels never come from inputs or secret nodes.
+const vw=innerWidth,vh=innerHeight,r=v=>Math.round(v*10)/10,root=document.documentElement;
+const all=[...document.querySelectorAll(arguments[0])];
+const nodes=all.filter(n=>n.checkVisibility({checkVisibilityCSS:true}));
+const props=['display','position','zIndex','fontSize','fontWeight','lineHeight','color','backgroundColor','borderRadius',
+ 'borderTopWidth','paddingTop','paddingRight','paddingBottom','paddingLeft','marginTop','marginRight','marginBottom','marginLeft',
+ 'overflowX','overflowY','opacity','textOverflow','whiteSpace'];
+return {viewport:{width:vw,height:vh,scroll_x:r(scrollX),scroll_y:r(scrollY)},
+ page_overflow_x:Math.max(0,root.scrollWidth-root.clientWidth),matches:all.length,rendered:nodes.length,
+ elements:nodes.slice(0,arguments[1]).map(n=>{const b=n.getBoundingClientRect(),s=getComputedStyle(n),style={};
+  for(const p of props)style[p]=s[p];
+  const secret=n.closest('[data-secret],[data-sensitive]')!==null||n.matches('input,textarea,select');
+  return {tag:n.tagName.toLowerCase(),id:n.id||null,label:secret?'':(n.getAttribute('aria-label')||n.innerText||'').trim().slice(0,60),
+   box:{x:r(b.x),y:r(b.y),width:r(b.width),height:r(b.height)},
+   in_viewport:b.left>=0&&b.top>=0&&b.right<=vw+0.5&&b.bottom<=vh+0.5,
+   overflow:{x:Math.max(0,n.scrollWidth-n.clientWidth),y:Math.max(0,n.scrollHeight-n.clientHeight)},style:style};})};
+"""
+ANIMATIONS_SCRIPT=r"""
+/* V3_ANIMATIONS */
+const scope=arguments[0]?[...document.querySelectorAll(arguments[0])]:null;
+if (scope&&!scope.length) return {missing:true,count:0,animations:[]};
+const list=scope?[...new Set(scope.flatMap(n=>n.getAnimations({subtree:true})))]:document.getAnimations();
+const name=n=>!n?'':n.tagName.toLowerCase()+(n.id?'#'+n.id:'')+(typeof n.className==='string'&&n.className.trim()?'.'+n.className.trim().split(/\s+/).slice(0,2).join('.'):'');
+return {missing:false,count:list.length,animations:list.slice(0,arguments[1]).map(a=>{
+ const e=a.effect,t=e&&e.getTiming?e.getTiming():{},c=e&&e.getComputedTiming?e.getComputedTiming():{};
+ return {type:a.constructor.name,name:a.animationName||a.transitionProperty||a.id||'',target:name(e&&e.target),
+  play_state:a.playState,duration_ms:typeof t.duration==='number'?t.duration:null,delay_ms:t.delay||0,easing:t.easing||'',
+  iterations:t.iterations===Infinity?'infinite':t.iterations,progress:c.progress==null?null:Math.round(c.progress*1000)/1000,
+  current_ms:a.currentTime==null?null:Math.round(a.currentTime)};})};
+"""
+CHECK_SCRIPT=r"""
+/* V3_CHECK */
+// One poll of a wait condition; the first call starts the page-change clock.
+if (!window.__v3Quiet) {
+ window.__v3Quiet={last:performance.now()};
+ new MutationObserver(()=>{window.__v3Quiet.last=performance.now();}).observe(document.documentElement,
+  {subtree:true,childList:true,attributes:true,characterData:true});
+}
+const condition=arguments[0],selector=arguments[1],text=arguments[2],quiet=arguments[3],now=performance.now();
+const pick=()=>[...document.querySelectorAll(selector||'body')];
+const shown=n=>n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});
+if (condition==='visible') return pick().some(shown);
+if (condition==='hidden') return !pick().some(shown);
+if (condition==='text') return pick().some(n=>shown(n)&&n.innerText.includes(text));
+if (condition==='quiet') return now-window.__v3Quiet.last>=quiet;
+// Endless animations such as spinners never finish, so only finite running ones count.
+if (condition==='animations_done') return (selector?pick().flatMap(n=>n.getAnimations({subtree:true})):document.getAnimations())
+ .every(a=>a.playState!=='running'||(a.effect&&a.effect.getTiming().iterations===Infinity));
+if (condition==='network_idle') {
+ const last=Math.max(0,...performance.getEntriesByType('resource').map(e=>e.responseEnd));
+ return document.readyState==='complete'&&now-last>=quiet;
+}
+return false;
+"""
+SCROLL_SCRIPT=r"""
+/* V3_SCROLL */
+// The app scrolls inside panels, so act on the target's nearest scroll container and say which it was.
+const el=arguments[0]?document.querySelector(arguments[0]):null,dx=arguments[1],dy=arguments[2];
+if (arguments[0]&&!el) return {missing:true};
+const scroller=n=>{for(let x=n;x&&x!==document.body&&x!==document.documentElement;x=x.parentElement){
+ const st=getComputedStyle(x);if(/(auto|scroll)/.test(st.overflowY+' '+st.overflowX)&&(x.scrollHeight>x.clientHeight||x.scrollWidth>x.clientWidth))return x;}
+ return document.scrollingElement;};
+const s=el?scroller(el):document.scrollingElement;
+if (el&&!dx&&!dy) el.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
+else s.scrollBy({left:dx,top:dy,behavior:'instant'});
+const name=n=>n===document.scrollingElement?'page':n.tagName.toLowerCase()+(n.id?'#'+n.id:'')+(typeof n.className==='string'&&n.className.trim()?'.'+n.className.trim().split(/\s+/)[0]:'');
+const b=el?el.getBoundingClientRect():null;
+return {missing:false,container:name(s),scroll_x:Math.round(s.scrollLeft),scroll_y:Math.round(s.scrollTop),
+ max_x:Math.max(0,s.scrollWidth-s.clientWidth),max_y:Math.max(0,s.scrollHeight-s.clientHeight),
+ target_box:b?{x:Math.round(b.x),y:Math.round(b.y),width:Math.round(b.width),height:Math.round(b.height)}:null};
+"""
+FOCUS_SCRIPT=r"""
+/* V3_FOCUS */
+const n=document.activeElement;
+if (!n||n===document.body) return {tag:'body',id:null,label:'',secret:false};
+const secret=n.matches('input[type=password],input[type=file]')||n.closest('[data-secret],[data-sensitive]')!==null||
+ /password|secret|token|credential|api.?key/i.test([n.id,n.name,n.autocomplete].join(' '));
+return {tag:n.tagName.toLowerCase(),id:n.id||null,label:(n.getAttribute('aria-label')||(n.matches('input,textarea,select')?'':n.innerText)||'').trim().slice(0,60),secret:secret};
 """
 TARGET_SCRIPT="""
 /* V3_TARGET */
@@ -170,22 +260,26 @@ def validate_args(name,args):
     if name in {"login_as_current_user","login_as_current_user_v3"}:
         allowed={"path"};action="login"
     elif name=="dev_browser_action":
-        allowed={"action","path","selector","text","preset","offset","expected_sequence"};action=args.get("action")
-        if action not in {"navigate","read","click","type","screenshot","viewport","close"}:raise Rejected("Unsupported browser action")
+        allowed={"action","path","selector","text","preset","offset","condition","timeout_ms","quiet_ms","dx","dy","key",
+            "color_scheme","reduced_motion","expected_sequence"};action=args.get("action")
+        if action not in {"navigate","read","click","type","screenshot","viewport","close","measure","wait_for","animations",
+            "scroll","press","emulate"}:raise Rejected("Unsupported browser action")
     elif name=="dev_browser_record":
         allowed={"action"};action=args.get("action")
         if action not in {"start","stop","status"}:raise Rejected("Unsupported recorder action")
     else:raise Rejected("Unknown Diagnostics browser tool")
     if set(args)-allowed:raise Rejected("Unknown browser argument")
     permitted={"login":{"path"},"navigate":{"path"},"read":{"selector","offset"},"click":{"selector"},
-        "type":{"selector","text"},"screenshot":set(),"viewport":{"preset"},"close":set(),"start":set(),"stop":set(),"status":set()}
+        "type":{"selector","text"},"screenshot":set(),"viewport":{"preset"},"close":set(),"start":set(),"stop":set(),"status":set(),
+        "measure":{"selector"},"wait_for":{"condition","selector","text","timeout_ms","quiet_ms"},"animations":{"selector"},
+        "scroll":{"selector","dx","dy"},"press":{"key","selector"},"emulate":{"color_scheme","reduced_motion"}}
     for key in list(args):
         if key not in ({"action"}|permitted[action]):
             if key=="expected_sequence" and type(args[key]) is int and args[key]==0:
                 del args[key];continue
             if args[key] not in ("",None):raise Rejected("Arguments do not apply to this action")
             del args[key]
-    if action=="read" and args.get("selector") in ("",None):args.pop("selector",None)
+    if action in {"read","animations","scroll","press","wait_for"} and args.get("selector") in ("",None):args.pop("selector",None)
     if action=="login" and args.get("path") in ("",None):args.pop("path",None)
     if "selector" in args and (not isinstance(args["selector"],str) or not 1<=len(args["selector"])<=256 or "\0" in args["selector"]):
         raise Rejected("Invalid bounded CSS selector")
@@ -195,6 +289,22 @@ def validate_args(name,args):
     if action=="type" and "text" not in args:raise Rejected("Type requires literal text")
     if action=="viewport" and args.get("preset") not in VIEWPORTS:raise Rejected("Viewport preset must be one of "+", ".join(VIEWPORTS))
     if "offset" in args and (type(args["offset"]) is not int or not 0<=args["offset"]<=MAX_READ_OFFSET):raise Rejected("Read offset must be a whole number of characters")
+    if action=="measure" and not args.get("selector"):raise Rejected("Measure requires a selector")
+    if action=="wait_for":
+        if args.get("condition") not in WAIT_CONDITIONS:raise Rejected("Wait condition must be one of "+", ".join(sorted(WAIT_CONDITIONS)))
+        if args["condition"] in {"visible","hidden"} and not args.get("selector"):raise Rejected("This wait condition requires a selector")
+        if args["condition"]=="text" and not args.get("text"):raise Rejected("A text wait requires the text to wait for")
+        for key,low,high in (("timeout_ms",100,10000),("quiet_ms",100,3000)):
+            if key in args and (type(args[key]) is not int or not low<=args[key]<=high):raise Rejected(key+" must be a whole number from "+str(low)+" to "+str(high))
+    if action=="scroll":
+        for key in ("dx","dy"):
+            if key in args and (type(args[key]) is not int or not -MAX_SCROLL<=args[key]<=MAX_SCROLL):raise Rejected("Scroll distances must be whole pixels within 20000")
+        if not args.get("selector") and not args.get("dx") and not args.get("dy"):raise Rejected("Scroll needs a selector to bring into view or a distance")
+    if action=="press" and args.get("key") not in KEYS:raise Rejected("Key must be one of "+", ".join(KEYS))
+    if action=="emulate":
+        if not ({"color_scheme","reduced_motion"}&set(args)):raise Rejected("Emulate needs color_scheme or reduced_motion")
+        if "color_scheme" in args and args["color_scheme"] not in COLOR_SCHEMES:raise Rejected("color_scheme must be light, dark or default")
+        if "reduced_motion" in args and args["reduced_motion"] not in REDUCED_MOTION:raise Rejected("reduced_motion must be reduce or default")
     return action
 def png_metadata(data):
     """Verify PNG bytes and dimensions before storing or serving a private screenshot."""
@@ -280,6 +390,7 @@ class BrowserState:
         self.lock=threading.RLock();self.cancelled=threading.Event()
         self.touched=time.monotonic();self.observed=None;self.observed_url=""
         self.observed_selector="";self.observed_at=0;self.viewport=None
+        self.media={};self.last_action="";self.last_action_at=None
 
 # @code-index {"version":1,"feature":"diagnostics-private-browser","aliases":["login as current user","private development browser"],"purpose":"Confines Diagnostics browser actions and artifacts to worker-bound current-caller authority; resource defaults live in this package and worker provisioning","span_lines":80,"configuration":{"status":"not_applicable","references":[],"opportunities":[],"rationale":"Current-caller ownership and fixed-origin confinement are enforced security invariants."}}
 class BrowserService:
@@ -432,11 +543,32 @@ class BrowserService:
             errors.append(text[:300])
         return errors[-MAX_PAGE_ERRORS:]
     def apply_viewport(self,state):
-        """Re-apply the chosen preset; device emulation does not reliably survive navigation."""
-        if not state.viewport:return
-        width,height=VIEWPORTS[state.viewport];touch=state.viewport in TOUCH_VIEWPORTS
-        state.driver.execute_cdp_cmd("Emulation.setDeviceMetricsOverride",{"width":width,"height":height,"deviceScaleFactor":1,"mobile":touch})
-        state.driver.execute_cdp_cmd("Emulation.setTouchEmulationEnabled",{"enabled":touch})
+        """Re-apply the chosen preset and media features; device emulation does not reliably survive navigation."""
+        if state.viewport:
+            width,height=VIEWPORTS[state.viewport];touch=state.viewport in TOUCH_VIEWPORTS
+            state.driver.execute_cdp_cmd("Emulation.setDeviceMetricsOverride",{"width":width,"height":height,"deviceScaleFactor":1,"mobile":touch})
+            state.driver.execute_cdp_cmd("Emulation.setTouchEmulationEnabled",{"enabled":touch})
+        if state.media:
+            state.driver.execute_cdp_cmd("Emulation.setEmulatedMedia",{"features":[
+                {"name":"prefers-color-scheme","value":COLOR_SCHEMES[state.media.get("color_scheme","default")]},
+                {"name":"prefers-reduced-motion","value":REDUCED_MOTION[state.media.get("reduced_motion","default")]}]})
+    def redact(self,state,text):
+        """Remove the browser's own credentials from page-derived text."""
+        text=str(text).replace(state.cookie,"[redacted]")
+        return text.replace(state.csrf,"[redacted]") if state.csrf else text
+    def acted(self,state,action):
+        """Start the clock wait_for reports as since_last_action_ms."""
+        state.last_action=action;state.last_action_at=time.monotonic()
+    def wait_for(self,state,args):
+        """Poll one fixed condition every 50 ms until it holds or the bounded timeout ends."""
+        started=time.monotonic();deadline=started+args.get("timeout_ms",5000)/1000;met=False
+        while True:
+            met=state.driver.execute_script(CHECK_SCRIPT,args["condition"],args.get("selector",""),args.get("text",""),args.get("quiet_ms",500)) is True
+            if met or time.monotonic()>=deadline or state.cancelled.is_set():break
+            time.sleep(0.05)
+        now=time.monotonic()
+        return {"condition":args["condition"],"met":met,"elapsed_ms":round((now-started)*1000),"last_action":state.last_action or None,
+            "since_last_action_ms":round((now-state.last_action_at)*1000) if state.last_action_at else None}
     def screenshot(self,state):
         """Mask credentials and editable content, capture a PNG, and invalidate the prior observation."""
         self.apply_viewport(state)
@@ -481,7 +613,7 @@ class BrowserService:
             if action not in {"login","navigate"}:self.safe_url(state)
             if action in {"login","navigate"}:
                 route=validate_path(args.get("path","/app"),trusted)
-                state.observed=None;state.driver.get(self.origin+route);self.apply_viewport(state);self.safe_url(state)
+                state.observed=None;state.driver.get(self.origin+route);self.acted(state,"navigate");self.apply_viewport(state);self.safe_url(state)
                 result={"path":route,"identity_verified":True,"user_id":state.user}
             elif action=="read":
                 read=state.driver.execute_script(READ_SCRIPT,args.get("selector","body"),state.cookie,MAX_TEXT,args.get("offset",0))
@@ -500,7 +632,7 @@ class BrowserService:
                 try:
                     if action=="click":target.click()
                     else:target.send_keys(args["text"])
-                    self.safe_url(state)
+                    self.acted(state,action);self.safe_url(state)
                 except Exception:raise Uncertain("Input outcome is uncertain; inspect the page before another action") from None
                 result={"action":action,"applied":True,"target":used,"read_required":True}
             elif action=="screenshot":result=self.screenshot(state)
@@ -510,6 +642,40 @@ class BrowserService:
                 width,height=VIEWPORTS[state.viewport]
                 state.observed=None
                 result={"viewport":args["preset"],"width":width,"height":height,"navigate_required":True}
+            elif action=="measure":
+                result=state.driver.execute_script(MEASURE_SCRIPT,args["selector"],MAX_ELEMENTS)
+                if not isinstance(result,dict) or not isinstance(result.get("elements"),list):raise Rejected("Invalid bounded layout result")
+                for element in result["elements"]:element["label"]=self.redact(state,element.get("label",""))
+            elif action=="animations":
+                result=state.driver.execute_script(ANIMATIONS_SCRIPT,args.get("selector",""),MAX_ELEMENTS)
+                if not isinstance(result,dict) or not isinstance(result.get("animations"),list):raise Rejected("Invalid bounded animation result")
+            elif action=="wait_for":result=self.wait_for(state,args)
+            elif action=="scroll":
+                result=state.driver.execute_script(SCROLL_SCRIPT,args.get("selector",""),args.get("dx",0),args.get("dy",0))
+                if not isinstance(result,dict):raise Rejected("Invalid bounded scroll result")
+                if result.get("missing"):raise Rejected("Scroll target does not exist")
+                self.acted(state,"scroll")
+            elif action=="press":
+                # A key is input: it needs a fresh read like a click, and never reaches a credential field.
+                if args.get("selector"):target,used=self.fresh_target(state,args["selector"])
+                else:
+                    if state.observed is None or time.monotonic()-state.observed_at>READ_FRESH_SECONDS or state.driver.current_url!=state.observed_url:
+                        raise Rejected("Read the current page before pressing a key")
+                    focus=state.driver.execute_script(FOCUS_SCRIPT)
+                    if not isinstance(focus,dict) or focus.get("secret"):raise Rejected("The focused element contains private credentials")
+                    target=state.driver.switch_to.active_element;used={"tag":str(focus.get("tag","")),"label":self.redact(state,focus.get("label",""))}
+                state.observed=None
+                try:
+                    target.send_keys(KEYS[args["key"]]);self.acted(state,"press");self.safe_url(state)
+                except Exception:raise Uncertain("Key outcome is uncertain; inspect the page before another action") from None
+                focus=state.driver.execute_script(FOCUS_SCRIPT)
+                focused={"tag":str(focus.get("tag","")),"id":focus.get("id"),"label":"" if focus.get("secret") else self.redact(state,focus.get("label",""))} if isinstance(focus,dict) else None
+                result={"action":"press","key":args["key"],"applied":True,"target":used,"focused":focused,"read_required":True}
+            elif action=="emulate":
+                for key in ("color_scheme","reduced_motion"):
+                    if key in args:state.media[key]=args[key]
+                self.apply_viewport(state);state.observed=None
+                result={"color_scheme":state.media.get("color_scheme","default"),"reduced_motion":state.media.get("reduced_motion","default")}
             else:raise Rejected("Recorder actions use the recorder interface")
             if state.cancelled.is_set():raise Uncertain("Browser action cancelled; inspect the outcome before retrying")
             return {"status":"success","application":"v3","backend":"private_chromium","session_id":state.sid,

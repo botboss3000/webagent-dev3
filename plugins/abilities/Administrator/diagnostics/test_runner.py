@@ -150,6 +150,55 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.call(action="read",offset=12000))["status"],"success")
         clicked=await self.call(action="click",selector="#button")
         self.assertEqual(clicked["target"],{"tag":"input","label":""})
+    async def test_measure_wait_animations_scroll_press_and_emulate(self):
+        import types
+        await self.call("login_as_current_user")
+        driver=self.drivers[0];original=driver.execute_script;polls=[];focus={"tag":"button","id":"next","label":"Next","secret":False}
+        cookie=self.trusted["cookie"]
+        def script(source,*args):
+            if "V3_MEASURE" in source:return {"viewport":{"width":390,"height":844},"page_overflow_x":0,"matches":1,"rendered":1,
+                "elements":[{"tag":"button","label":"Save "+cookie,"box":{"x":0,"y":0,"width":40,"height":32}}]}
+            if "V3_ANIMATIONS" in source:return {"missing":False,"count":1,"animations":[{"type":"CSSTransition","name":"opacity","duration_ms":200}]}
+            if "V3_CHECK" in source:polls.append(args);return len(polls)>=3
+            if "V3_SCROLL" in source:return {"missing":args[0]=="#none","scroll_y":args[2]}
+            if "V3_FOCUS" in source:return focus
+            return original(source,*args)
+        driver.execute_script=script
+        driver.cdp=[];driver.execute_cdp_cmd=lambda command,params:driver.cdp.append((command,params))
+        driver.switch_to=types.SimpleNamespace(active_element=Element(driver,"active"))
+        self.assertIn("requires a selector",(await self.call(action="measure"))["output"])
+        measured=await self.call(action="measure",selector="button")
+        self.assertEqual(measured["elements"][0]["box"]["height"],32)
+        self.assertEqual(measured["elements"][0]["label"],"Save [redacted]")
+        self.assertEqual((await self.call(action="animations"))["animations"][0]["duration_ms"],200)
+        self.assertIn("requires a selector",(await self.call(action="wait_for",condition="visible"))["output"])
+        self.assertIn("timeout_ms",(await self.call(action="wait_for",condition="quiet",timeout_ms=99999))["output"])
+        self.assertIn("one of",(await self.call(action="wait_for",condition="forever"))["output"])
+        waited=await self.call(action="wait_for",condition="quiet",quiet_ms=200)
+        self.assertEqual((waited["met"],waited["last_action"],len(polls)),(True,"navigate",3))
+        self.assertIsInstance(waited["since_last_action_ms"],int)
+        self.assertEqual(polls[0],("quiet","","",200))
+        self.assertIn("does not exist",(await self.call(action="scroll",selector="#none"))["output"])
+        self.assertIn("selector to bring into view",(await self.call(action="scroll"))["output"])
+        self.assertEqual((await self.call(action="scroll",dy=600))["scroll_y"],600)
+        self.assertIn("Read the current page",(await self.call(action="press",key="Tab"))["output"])
+        await self.call(action="read")
+        self.assertIn("Key must be one of",(await self.call(action="press",key="a"))["output"])
+        pressed=await self.call(action="press",key="Tab")
+        self.assertEqual((pressed["applied"],pressed["focused"]["label"]),(True,"Next"))
+        self.assertEqual(driver.typed[-1],"\ue004")
+        self.assertIn("Read the current page",(await self.call(action="press",key="Tab"))["output"])
+        focus["secret"]=True;await self.call(action="read")
+        self.assertIn("private credentials",(await self.call(action="press",key="Enter"))["output"])
+        self.assertIn("color_scheme must be",(await self.call(action="emulate",color_scheme="sepia"))["output"])
+        self.assertIn("needs color_scheme",(await self.call(action="emulate"))["output"])
+        emulated=await self.call(action="emulate",color_scheme="dark",reduced_motion="reduce")
+        self.assertEqual((emulated["color_scheme"],emulated["reduced_motion"]),("dark","reduce"))
+        self.assertEqual(driver.cdp[-1],("Emulation.setEmulatedMedia",{"features":[{"name":"prefers-color-scheme","value":"dark"},
+            {"name":"prefers-reduced-motion","value":"reduce"}]}))
+        # Media emulation is re-applied after navigation, like the viewport.
+        driver.cdp.clear();await self.call(action="navigate",path="/app?tab=app")
+        self.assertEqual(driver.cdp[-1][0],"Emulation.setEmulatedMedia")
     async def test_fresh_read_before_each_input_and_secret_targets_blocked(self):
         self.assertEqual((await self.call(action="click",selector="#button"))["status"],"error")
         read=await self.call(action="read")
