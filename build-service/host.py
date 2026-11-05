@@ -260,6 +260,11 @@ def validate_codebase_package(folder):
 RUST_UI_FIXTURES = {"v3/ui/chat/chat_ui.json"}
 ASSET_ROOT = STATE / "ui-assets"
 TARGETS = (CONFIG["api_container"], CONFIG["loop_container"])
+# On SIGTERM the loop drains runs for up to its own `drain_timeout_seconds`
+# (loop-runtime.json, default 180) before shutting down; this is the backstop.
+LOOP_DRAIN_STOP_SECONDS = 240
+# The app names a planned restart's deploy job and session in cut-off tool results.
+RESTART_CAUSE = Path(CONFIG["checkout_root"]) / "runtime" / "control" / "restart-cause.json"
 # Replacement phases before any new consumer has passed its health check.
 AUTO_RESTORE_PHASES = {"stopping_loop", "stopping_api", "switching_ui", "renaming_api", "activating_api", "starting_api",
                        "renaming_loop", "activating_loop", "starting_loop", "checking_api"}
@@ -2504,8 +2509,8 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             except FileNotFoundError:
                 pass
 
-    def stop(self, name):
-        self.command(["docker", "stop", "--time", "30", name], timeout=60)
+    def stop(self, name, seconds=30):
+        self.command(["docker", "stop", "--time", str(seconds), name], timeout=seconds + 30)
 
     def rename(self, name, target):
         self.command(["docker", "rename", name, target], timeout=30)
@@ -6678,6 +6683,19 @@ class Broker:
             self.pool.submit(self._run, job, blob)
             return self._view(job)
 
+    def _record_restart_cause(self, job):
+        """Best effort: tell the app which deploy and session restart it (read at recovery)."""
+        task = next((item for item in self.work.values() if item.get("task_id") == job.get("task_id")), {})
+        summary = task.get("summary") or ""
+        found = re.search(r"session=([^;\]]{1,80})", summary)
+        cause = {"job_id": job["job_id"], "session": found.group(1).strip() if found else None}
+        with contextlib.suppress(OSError):
+            temporary = RESTART_CAUSE.with_suffix(".tmp")
+            temporary.write_text(json.dumps(cause))
+            os.chown(temporary, CONFIG["app_uid"], CONFIG["app_gid"])
+            os.chmod(temporary, 0o640)
+            os.replace(temporary, RESTART_CAUSE)
+
     def _phase(self, job, phase):
         with self.lock:
             self._batch_lease(job)
@@ -7080,7 +7098,7 @@ class Broker:
                     self._batch_lease(job)
                     # The API cannot renew while it replaces itself. A bounded
                     # commit lease covers container health and keeps revocation live.
-                    job["lease_until"] = max(job["lease_until"], time.time() + 180)
+                    job["lease_until"] = max(job["lease_until"], time.time() + 180 + LOOP_DRAIN_STOP_SECONDS)
                     for member_id in job.get("batch_members", []):
                         member = self.jobs[member_id]
                         member["lease_until"] = max(member["lease_until"], job["lease_until"])
@@ -7089,7 +7107,8 @@ class Broker:
                     self._save(job)
                 mutated = True
                 with host_phase(job,"stopping_loop"):
-                    self.runner.stop(TARGETS[1])
+                    self._record_restart_cause(job)
+                    self.runner.stop(TARGETS[1], LOOP_DRAIN_STOP_SECONDS)
                 self._phase(job, "stopping_api")
                 with host_phase(job,"stopping_api"):
                     self.runner.stop(TARGETS[0])

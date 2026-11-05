@@ -110,7 +110,7 @@ class FakeRunner:
             self.export_release.wait(5)
         destination.write_bytes(b"rollback image fixture")
 
-    def stop(self, name):
+    def stop(self, name, seconds=30):
         self.calls.append(("stop", name))
         self.containers[name]["State"]["Status"] = "exited"
         if self.stop_entered:
