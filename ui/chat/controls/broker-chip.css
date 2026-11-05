@@ -1,0 +1,73 @@
+/* Broker chip (broker-chip.js): the header chip beside Spawns, its task list, task and job
+   menus, and the stage card. Chip and menu rows reuse the shared .sub-chip,
+   .sub-chip-menu and .family-menu-item skins. */
+#chat-sub-header .sub-chip.chip-broker .broker-icon svg { width: 12px; height: 12px; }
+.broker-running svg { animation: broker-spin 1s linear infinite; }
+.broker-done { color: var(--success, #2e9d5b); }
+.broker-error { color: var(--danger, #d04545); }
+.broker-warning, .broker-warning svg { color: var(--warning, #c98a1b); }
+@keyframes broker-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .broker-running svg { animation: none; } }
+
+.broker-menu { min-width: 200px; }
+.broker-menu .chip-status svg, .broker-list .chip-status svg { width: 14px; height: 14px; }
+.broker-menu .broker-confirm { color: var(--danger, #d04545); }
+.broker-list { max-height: min(60vh, 420px); overflow-y: auto; }
+.broker-row .family-menu-text small { color: var(--fg-2); }
+
+.broker-card {
+  width: min(460px, calc(100vw - 16px));
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.broker-card-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.broker-card-head svg { width: 14px; height: 14px; }
+.broker-card-title { overflow-wrap: anywhere; }
+.broker-job-title { font-weight: 600; margin-bottom: 2px; -webkit-touch-callout: none; user-select: none; }
+.broker-summary, .broker-note, .broker-stale { color: var(--fg-2); margin: 2px 0; }
+.broker-card p { margin: 4px 0; }
+
+.broker-stages { display: grid; gap: 1px; margin: 6px 0; }
+.broker-stage {
+  display: grid;
+  grid-template-columns: 2.2em minmax(0, 1fr) 5.5em 6.5em 6.5em;
+  gap: 6px;
+  padding: 3px 0;
+  border-bottom: var(--border-width) solid color-mix(in oklab, var(--fg-1) 10%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+.broker-stage-head { color: var(--fg-2); font-weight: 600; }
+.broker-stage .broker-name { overflow-wrap: anywhere; }
+.broker-stage-upcoming { color: var(--fg-2); }
+.broker-stage-running .broker-state { color: var(--brand); }
+.broker-stage-running.broker-slow .broker-state { color: var(--warning, #c98a1b); font-weight: 600; }
+.broker-normal { color: var(--fg-2); }
+.broker-background { display: grid; gap: 2px; margin-top: 6px; color: var(--fg-2); }
+.broker-background strong { color: var(--fg-1); }
+.broker-advanced { margin-top: 8px; }
+.broker-advanced summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+.broker-check {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+.broker-check svg { width: 12px; height: 12px; }
+
+/* Phone widths: a full-width panel under the header; stage rows stack on two lines. */
+@media (max-width: 600px) {
+  .broker-card, .broker-list { left: 8px !important; right: 8px; width: auto; max-width: none; }
+  .broker-stage { grid-template-columns: 2.2em minmax(0, 1fr) auto; row-gap: 0; }
+  /* Second line: the normal range under the name, the status under the time. */
+  .broker-stage .broker-normal { grid-column: 2; font-size: 11px; }
+  .broker-stage .broker-state { grid-column: 3; font-size: 11px; }
+  .broker-stage .broker-time, .broker-stage .broker-state { justify-self: end; text-align: right; }
+  .broker-stage .broker-normal:not(:empty)::before { content: 'normal '; }
+  .broker-stage-head span:nth-child(n+4) { display: none; }
+}

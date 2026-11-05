@@ -361,6 +361,77 @@ async fn session_delete(
         .await
         .into_response()
 }
+/// The Broker chip's session scope: anyone who can view the session reads it; clearing,
+/// stopping and cancelling need send access (broker actions also check Administrator
+/// ability permissions).
+async fn chip_app(app: App, sid: &str, write: bool) -> Result<App, crate::ApiError> {
+    let app = session_app(app, sid).await?;
+    guard_access(&app, write, false)?;
+    Ok(app)
+}
+async fn build_tasks_list(Extension(app): Extension<App>, Path(sid): Path<String>) -> Response {
+    match chip_app(app, &sid, false).await {
+        Ok(app) => crate::api::build_tasks::list(&app, &sid)
+            .await
+            .into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+async fn build_tasks_clear(Extension(app): Extension<App>, Path(sid): Path<String>) -> Response {
+    match chip_app(app, &sid, true).await {
+        Ok(app) => crate::api::build_tasks::clear(&app, &sid, None)
+            .await
+            .into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+async fn build_task_detail(
+    Extension(app): Extension<App>,
+    Path((sid, task_id)): Path<(String, String)>,
+) -> Response {
+    match chip_app(app, &sid, false).await {
+        Ok(app) => {
+            let can_write = guard_access(&app, true, false).is_ok();
+            crate::api::build_tasks::detail(&app, &sid, &task_id, can_write)
+                .await
+                .into_response()
+        }
+        Err(error) => error.into_response(),
+    }
+}
+async fn build_task_clear(
+    Extension(app): Extension<App>,
+    Path((sid, task_id)): Path<(String, String)>,
+) -> Response {
+    match chip_app(app, &sid, true).await {
+        Ok(app) => crate::api::build_tasks::clear(&app, &sid, Some(&task_id))
+            .await
+            .into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+async fn build_task_cancel(
+    Extension(app): Extension<App>,
+    Path((sid, task_id)): Path<(String, String)>,
+) -> Response {
+    match chip_app(app, &sid, true).await {
+        Ok(app) => crate::api::build_tasks::cancel(&app, &sid, &task_id)
+            .await
+            .into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+async fn build_job_stop(
+    Extension(app): Extension<App>,
+    Path((sid, task_id, job_id)): Path<(String, String, String)>,
+) -> Response {
+    match chip_app(app, &sid, true).await {
+        Ok(app) => crate::api::build_tasks::stop(&app, &sid, &task_id, &job_id)
+            .await
+            .into_response(),
+        Err(error) => error.into_response(),
+    }
+}
 path_json!(session_patch => patch_session_api, String, crate::store::session::SessionPatch);
 path_arg!(diagnostics => run_diagnostics_api, (String, String));
 path_arg!(progress => run_progress_api, (String, String));
@@ -716,6 +787,24 @@ pub(crate) fn router() -> Router<App> {
             get(context_snapshot),
         )
         .route("/sessions/{sid}/runs/{rid}/progress", get(progress))
+        .route("/sessions/{sid}/build-tasks", get(build_tasks_list))
+        .route("/sessions/{sid}/build-tasks/clear", post(build_tasks_clear))
+        .route(
+            "/sessions/{sid}/build-tasks/{task_id}",
+            get(build_task_detail),
+        )
+        .route(
+            "/sessions/{sid}/build-tasks/{task_id}/clear",
+            post(build_task_clear),
+        )
+        .route(
+            "/sessions/{sid}/build-tasks/{task_id}/cancel",
+            post(build_task_cancel),
+        )
+        .route(
+            "/sessions/{sid}/build-tasks/{task_id}/jobs/{job_id}/stop",
+            post(build_job_stop),
+        )
         .route("/sessions/{sid}/runs/{rid}/logs", get(run_logs))
         .route(
             "/sessions/{sid}/background-tasks/{task_id}",

@@ -1,3 +1,4 @@
+use super::build_tasks;
 use super::config;
 use super::models::ModelRecords;
 use super::ports::{
@@ -80,14 +81,15 @@ impl<
         ) && run["pending"]["arguments"]["action"] == "finish"
             && run["pending"]["state"] == "executing"
     }
-    /// A pending broker call whose job the run is waiting on: a finish, or a queued check.
+    /// A pending broker call whose job the run is waiting on: a finish, a queued check, or
+    /// a `wait` that follows a job an earlier call returned early from.
     fn pending_build_job(run: &Value) -> bool {
         matches!(
             run["pending"]["name"].as_str(),
             Some("v3_build_work" | "build_work")
         ) && matches!(
             run["pending"]["arguments"]["action"].as_str(),
-            Some("finish" | "check")
+            Some("finish" | "check" | "wait")
         ) && run["pending"]["state"] == "executing"
     }
     pub fn attach_external_build_result(run: &mut Value, result: &Value) -> Result<()> {
@@ -102,18 +104,146 @@ impl<
         run["error"] = Value::Null;
         Ok(())
     }
-    async fn build_result(app: &Self, run: &Value) -> Result<BuildPoll> {
+    /// Record one poll of a build-waiting run's job for the Broker chip and act on it. An
+    /// alert (slow, stalled, broker unreadable) posts one chat line and returns the waiting
+    /// call early, so the agent decides; a job that ends without completing posts a line,
+    /// and its end becomes the call's result.
+    async fn follow_build(app: &Self, run: &mut Value, poll: Result<BuildPoll>) -> Result<()> {
+        let rid = run["id"].as_str().unwrap_or_default().to_owned();
+        let sid = run["session_id"].as_str().unwrap_or_default().to_owned();
+        let now = now();
+        match poll {
+            Ok(BuildPoll::Waiting(None)) => Ok(()),
+            Ok(BuildPoll::Waiting(Some(progress))) => {
+                let Some(job_id) = progress["job_id"].as_str().map(str::to_owned) else {
+                    return Ok(());
+                };
+                let seen = run.clone();
+                let (alert, resumed, task, unnamed) =
+                    build_tasks::update(app.store.records(), &sid, |record| {
+                        let job = job_entry(record, &seen, &job_id, now);
+                        let resumed = build_tasks::broker_answered(job);
+                        build_tasks::snapshot(job, &progress, now);
+                        let alert = build_tasks::alert(job, &progress);
+                        let task = build_tasks::task_of(record, &job_id);
+                        let unnamed = task
+                            .as_deref()
+                            .is_some_and(|task| !build_tasks::named(record, task));
+                        build_tasks::trim(record);
+                        (alert, resumed, task, unnamed)
+                    })
+                    .await?;
+                if let Some(task) = task.as_deref().filter(|_| unnamed) {
+                    let summary = tokio::time::timeout(
+                        Duration::from_secs(3),
+                        Self::task_summary(app, run, task),
+                    )
+                    .await;
+                    if let Ok(Ok(Some(summary))) = summary {
+                        build_tasks::update(app.store.records(), &sid, |record| {
+                            build_tasks::name_task(record, task, &summary);
+                        })
+                        .await?;
+                    }
+                }
+                if let Some(text) = resumed {
+                    Self::build_line(app, run, &job_id, "resumed", &text).await?;
+                }
+                if let Some((reason, text)) = alert {
+                    Self::build_line(app, run, &job_id, reason.as_str(), &text).await?;
+                    let result =
+                        build_tasks::early_result(&reason, &text, &job_id, task.as_deref());
+                    Self::return_build_result(app, run, &result).await?;
+                }
+                Ok(())
+            }
+            Ok(BuildPoll::Done(result)) => {
+                let output = &result["output"];
+                if let Some(job_id) = output["job_id"].as_str() {
+                    let seen = run.clone();
+                    build_tasks::update(app.store.records(), &sid, |record| {
+                        let job = job_entry(record, &seen, job_id, now);
+                        build_tasks::broker_answered(job);
+                        if output["stages"].is_object() {
+                            build_tasks::snapshot(job, &output["stages"], now);
+                        }
+                        job["status"] = output["status"].clone();
+                        build_tasks::trim(record);
+                    })
+                    .await?;
+                    if let Some(text) = build_tasks::ended_line(output) {
+                        Self::build_line(app, run, job_id, "ended", &text).await?;
+                    }
+                }
+                Self::return_build_result(app, run, &result).await
+            }
+            Err(error) => {
+                tracing::warn!(run_id=%rid,"Build receipt reconciliation deferred: {error}");
+                let Some(job_id) = run["pending"]["external_job"]["job_id"]
+                    .as_str()
+                    .map(str::to_owned)
+                else {
+                    return Ok(());
+                };
+                let seen = run.clone();
+                let (alert, task) = build_tasks::update(app.store.records(), &sid, |record| {
+                    let alert = build_tasks::broker_failed(job_entry(record, &seen, &job_id, now));
+                    (alert, build_tasks::task_of(record, &job_id))
+                })
+                .await?;
+                if let Some((reason, text)) = alert {
+                    Self::build_line(app, run, &job_id, reason.as_str(), &text).await?;
+                    let result =
+                        build_tasks::early_result(&reason, &text, &job_id, task.as_deref());
+                    Self::return_build_result(app, run, &result).await?;
+                }
+                Ok(())
+            }
+        }
+    }
+    /// Post one build chat line, keyed by job, kind and time so each is posted once.
+    async fn build_line(
+        app: &Self,
+        run: &mut Value,
+        job_id: &str,
+        kind: &str,
+        text: &str,
+    ) -> Result<()> {
+        let rid = run["id"].as_str().unwrap_or_default().to_owned();
+        let short = job_id.get(..8).unwrap_or(job_id);
+        let message_id = format!("working:{rid}:build:{short}:{kind}:{}", now());
+        app.store
+            .save_run_override_observed(
+                run,
+                "working_message",
+                &json!({"id":message_id,"text":text}),
+            )
+            .await
+    }
+    /// Give the waiting build call its result and queue the run so the agent continues.
+    async fn return_build_result(app: &Self, run: &mut Value, result: &Value) -> Result<()> {
+        let rid = run["id"].as_str().unwrap_or_default().to_owned();
+        Self::attach_external_build_result(run, result)?;
+        app.store
+            .save_run_override(
+                run,
+                "tool_result",
+                &json!({"run_id":rid,"name":"v3_build_work","result":result}),
+            )
+            .await
+    }
+    /// The trusted identity and socket a build-waiting run reads its broker job with.
+    async fn broker_identity(app: &Self, run: &Value) -> Result<(Value, std::path::PathBuf)> {
         let sid = run["session_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing session"))?;
         let rid = run["id"].as_str().ok_or_else(|| anyhow!("Missing run"))?;
-        let task = finish_task(run);
-        let check = run["pending"]["arguments"]["action"] == "check";
-        let authority = match (run["pending"]["name"] == "build_work", check) {
-            (true, true) => "build_work",
-            (true, false) => "build_work_finish",
-            (false, true) => "v3_build_work",
-            (false, false) => "v3_build_work_finish",
+        let finish = run["pending"]["arguments"]["action"] == "finish";
+        let authority = match (run["pending"]["name"] == "build_work", finish) {
+            (true, false) => "build_work",
+            (true, true) => "build_work_finish",
+            (false, false) => "v3_build_work",
+            (false, true) => "v3_build_work_finish",
         };
         let fingerprint = app
             .native
@@ -121,7 +251,34 @@ impl<
             .await?;
         let trusted = json!({"user_id":app.store.current_user_id(),"session_id":sid,
         "lease_until":now()+30,"access_fingerprint":fingerprint});
-        let socket_path = app.native.recovery_build_socket(app.native_view());
+        Ok((trusted, app.native.recovery_build_socket(app.native_view())))
+    }
+    /// The broker summary of one of the run's tasks, for the Broker chip's task name.
+    async fn task_summary(app: &Self, run: &Value, task: &str) -> Result<Option<String>> {
+        let sid = run["session_id"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing session"))?;
+        let (trusted, socket) = Self::broker_identity(app, run).await?;
+        let status = crate::tools::transport::execute_host_trusted(
+            "v3_build_work",
+            &json!({"action":"status","task_id":task}),
+            sid,
+            &socket,
+            Some(trusted),
+            CancellationToken::new(),
+        )
+        .await?;
+        Ok(status["output"]["own"]
+            .as_array()
+            .and_then(|items| items.iter().find(|item| item["task_id"] == task))
+            .and_then(|item| item["summary"].as_str().map(str::to_owned)))
+    }
+    async fn build_result(app: &Self, run: &Value) -> Result<BuildPoll> {
+        let sid = run["session_id"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing session"))?;
+        let task = finish_task(run);
+        let (trusted, socket_path) = Self::broker_identity(app, run).await?;
         let socket = &socket_path;
         let mut job_id = run["pending"]["external_job"]["job_id"]
             .as_str()
@@ -206,7 +363,7 @@ impl<
         // The broker commits a completed release and frees its claims right after it
         // finishes; wait briefly so the result carries that commit.
         let closing = state == "completed"
-            && !check
+            && job["operation"] != "check"
             && job["rebuild_closeout"].is_null()
             && job["finished_at"]
                 .as_f64()
@@ -336,42 +493,13 @@ impl<
                         user_app.save_override(&mut run).await?;
                         continue;
                     }
-                    match tokio::time::timeout(
+                    let poll = tokio::time::timeout(
                         Duration::from_secs(3),
                         Self::build_result(&user_app, &run),
                     )
                     .await
-                    {
-                        Ok(Ok(BuildPoll::Waiting(Some(progress)))) => {
-                            if let Some((key, text)) = progress_notice(&run, &progress) {
-                                run["pending"]["external_job"]["progress_key"] = json!(key);
-                                let message_id = format!("working:{id}:build:{key}");
-                                user_app
-                                    .store
-                                    .save_run_override_observed(
-                                        &mut run,
-                                        "working_message",
-                                        &json!({"id":message_id,"text":text}),
-                                    )
-                                    .await?;
-                            }
-                        }
-                        Ok(Ok(BuildPoll::Done(result))) => {
-                            Self::attach_external_build_result(&mut run, &result)?;
-                            user_app
-                                .store
-                                .save_run_override(
-                                    &mut run,
-                                    "tool_result",
-                                    &json!({"run_id":id,"name":"v3_build_work","result":result}),
-                                )
-                                .await?;
-                        }
-                        Ok(Err(error)) => {
-                            tracing::warn!(run_id=%id,"Build receipt reconciliation deferred: {error}");
-                        }
-                        _ => {}
-                    }
+                    .unwrap_or_else(|_| Err(anyhow!("Broker read timed out")));
+                    Self::follow_build(&user_app, &mut run, poll).await?;
                     continue;
                 }
                 if status(&run) != "running" {
@@ -445,12 +573,12 @@ impl<
 }
 
 /// Whether a broker reply leaves the call waiting on its job: an accepted finish, or a
-/// check that is still queued or running. The run then waits like it does for a finish,
-/// with stage lines, instead of the model polling the job.
+/// check or `wait` whose job is still queued or running. The run then waits like it does
+/// for a finish, instead of the model polling the job.
 pub(crate) fn awaits_broker_job(action: &Value, output: &Value) -> bool {
     match action.as_str() {
         Some("finish") => output["status"] == "closed",
-        Some("check") => {
+        Some("check" | "wait") => {
             output["job_id"].is_string()
                 && matches!(output["status"].as_str(), Some("queued" | "running"))
         }
@@ -468,6 +596,43 @@ fn finish_task(run: &Value) -> Option<&str> {
         .or_else(|| args["broker_id"].as_str().filter(|id| *id != "new"))
 }
 
+/// The Broker chip entry for `job_id`: under the task the record already files it under,
+/// else the task the pending call names. A check records which check it ran.
+fn job_entry<'a>(record: &'a mut Value, run: &Value, job_id: &str, now: u64) -> &'a mut Value {
+    let args = &run["pending"]["arguments"];
+    let task = build_tasks::task_of(record, job_id)
+        .or_else(|| finish_task(run).map(str::to_owned))
+        .unwrap_or_else(|| format!("job-{}", job_id.get(..8).unwrap_or(job_id)));
+    let check = args["action"] == "check";
+    let kind = build_tasks::JobKind {
+        kind: if check { "check" } else { "build" },
+        check: check.then(|| args["check"].as_str().unwrap_or("check")),
+    };
+    let rid = run["id"].as_str().unwrap_or_default();
+    build_tasks::job(record, &task, job_id, rid, &kind, now)
+}
+
+/// Show a job on the Broker chip as soon as its call starts waiting on it; the first
+/// recovery poll adds its stages and task name. The chip is a view, so a failed write is
+/// only logged.
+pub(super) async fn note_build_job<S: super::ports::ScopedStorage>(
+    store: &S,
+    run: &Value,
+    output: &Value,
+) {
+    let (Some(sid), Some(job_id)) = (run["session_id"].as_str(), output["job_id"].as_str()) else {
+        return;
+    };
+    let written = build_tasks::update(store, sid, |record| {
+        job_entry(record, run, job_id, now());
+        build_tasks::trim(record);
+    })
+    .await;
+    if let Err(error) = written {
+        tracing::warn!("Broker chip record not written: {error}");
+    }
+}
+
 /// How long a finished release's result waits for the broker's commit and claim release.
 const CLOSEOUT_WAIT_SECONDS: f64 = 120.0;
 
@@ -479,173 +644,9 @@ enum BuildPoll {
     Waiting(Option<Value>),
 }
 
-/// The chat line for a build stage change, keyed so each change is posted once. A
-/// verdict change counts, so a stage running past its normal range is reported too.
-///
-/// Stages that run at the same time share a number with letters (3a, 3b), as in the
-/// broker's own tables; work the broker starts beside the stages (early UI tests,
-/// rollback save) follows as a short background sentence.
-fn progress_notice(run: &Value, progress: &Value) -> Option<(String, String)> {
-    let job = progress["job_id"].as_str()?;
-    let short = job.get(..8).unwrap_or(job);
-    let stage = progress["stage"].as_str().unwrap_or("queued");
-    let verdict = progress["verdict"].as_str().unwrap_or("");
-    let finished = list(&progress["finished_stages"]);
-    let running = list(&progress["running_stages"]);
-    let key = format!("{short}:{}:{stage}:{verdict}", finished.len()).replace(' ', "-");
-    if run["pending"]["external_job"]["progress_key"] == key.as_str() {
-        return None;
-    }
-    let mut text = format!("Build {short}: ");
-    let count = stage_count(progress);
-    if running.len() > 1 {
-        let ids: Vec<&str> = running.iter().filter_map(|s| s["id"].as_str()).collect();
-        let stages: Vec<String> = running.iter().map(running_stage).collect();
-        text += &format!(
-            "stages {} of {count}, {}",
-            ids.join("+"),
-            stages.join(" and ")
-        );
-    } else {
-        if count > 0 {
-            let id = progress["stage_id"]
-                .as_str()
-                .map_or_else(|| progress["stage_index"].to_string(), str::to_owned);
-            text += &format!("stage {id} of {count}, ");
-        }
-        text += stage;
-        if let Some(seconds) = progress["stage_seconds"].as_u64().filter(|s| *s > 0) {
-            text += &format!(" running {}", minutes(seconds));
-        }
-        if !progress["stage_normal"].is_null() {
-            text += &format!(" (normal {})", range(&progress["stage_normal"]));
-        }
-    }
-    let behind: Vec<String> = list(&progress["queued_behind"])
-        .iter()
-        .map(|other| {
-            let task = other["task_id"].as_str().unwrap_or("another task");
-            match other["session"].as_str() {
-                Some(session) => format!("{task} (session \"{session}\")"),
-                None => task.to_owned(),
-            }
-        })
-        .collect();
-    if !behind.is_empty() {
-        text += &format!(" behind {}", behind.join(", "));
-    }
-    text += &format!(", {verdict}.");
-    if let Some(last) = finished.last() {
-        text += &format!(
-            " Last finished: {} in {} (normal {}).",
-            last["stage"].as_str().unwrap_or("stage"),
-            minutes(last["seconds"].as_u64().unwrap_or(0)),
-            range(&last["normal"])
-        );
-    }
-    if let [low, high] = list(&progress["remaining_seconds"]) {
-        text += &format!(
-            " About {}–{} left.",
-            minutes(low.as_u64().unwrap_or(0)),
-            minutes(high.as_u64().unwrap_or(0))
-        );
-    }
-    let background: Vec<String> = list(&progress["background"])
-        .iter()
-        .map(background_work)
-        .collect();
-    if !background.is_empty() {
-        text += &format!(" Background: {}.", background.join("; "));
-    }
-    Some((key, text))
-}
-
-fn list(value: &Value) -> &[Value] {
-    value.as_array().map_or(&[][..], Vec::as_slice)
-}
-
-/// Distinct stage numbers (3a and 3b count once), or the broker's plain count.
-fn stage_count(progress: &Value) -> usize {
-    let mut numbers: Vec<&str> = ["finished_stages", "running_stages", "upcoming_stages"]
-        .iter()
-        .flat_map(|field| list(&progress[*field]))
-        .filter_map(|stage| stage["id"].as_str())
-        .map(|id| id.trim_end_matches(|c: char| c.is_ascii_alphabetic()))
-        .collect();
-    numbers.sort_unstable();
-    numbers.dedup();
-    if numbers.is_empty() {
-        progress["stage_count"]
-            .as_u64()
-            .and_then(|count| usize::try_from(count).ok())
-            .unwrap_or(0)
-    } else {
-        numbers.len()
-    }
-}
-
-fn running_stage(stage: &Value) -> String {
-    let mut text = format!(
-        "{} {}",
-        stage["stage"].as_str().unwrap_or("stage"),
-        minutes(stage["seconds"].as_u64().unwrap_or(0))
-    );
-    if !stage["normal"].is_null() {
-        text += &format!(" (normal {})", range(&stage["normal"]));
-    }
-    text
-}
-
-fn background_work(work: &Value) -> String {
-    let state = match work["status"].as_str() {
-        Some("completed") => "done",
-        Some(other) => other,
-        None => "running",
-    };
-    let mut text = format!(
-        "{} {state} {}",
-        work["name"].as_str().unwrap_or("early work"),
-        minutes(work["seconds"].as_u64().unwrap_or(0))
-    );
-    if let Some(result) = work["result"].as_str() {
-        text += &format!(" ({result})");
-    }
-    text
-}
-
-fn minutes(seconds: u64) -> String {
-    if seconds < 60 {
-        format!("{seconds}s")
-    } else {
-        format!("{}m", (seconds + 30) / 60)
-    }
-}
-
-/// A stage's normal p50–p90 range, or a note that its class has no history yet.
-fn range(normal: &Value) -> String {
-    match normal.as_array().map(Vec::as_slice) {
-        Some([low, high]) => format!(
-            "{}–{}",
-            minutes(low.as_u64().unwrap_or(0)),
-            minutes(high.as_u64().unwrap_or(0))
-        ),
-        _ => "no history".to_owned(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn progress(stage: &str, finished: usize, verdict: &str) -> Value {
-        let done: Vec<Value> = (0..finished)
-            .map(|_| json!({"stage":"compile tests","seconds":480,"normal":[540,1140]}))
-            .collect();
-        json!({"job_id":"0420b7ab-6855-409a-9dc3-6ab5efc3890f","stage":stage,
-            "stage_index":finished + 1,"stage_count":6,"stage_seconds":125,
-            "stage_normal":[300,600],"verdict":verdict,"finished_stages":done,
-            "remaining_seconds":[900,3300]})
-    }
 
     #[test]
     fn finishes_and_unfinished_checks_wait_for_their_job() {
@@ -669,6 +670,15 @@ mod tests {
             &json!({"status":"completed","job_id":"j"})
         ));
         assert!(!awaits_broker_job(&check, &json!({"status":"queued"})));
+        let wait = json!("wait");
+        assert!(awaits_broker_job(
+            &wait,
+            &json!({"status":"running","job_id":"j"})
+        ));
+        assert!(!awaits_broker_job(
+            &wait,
+            &json!({"status":"failed","job_id":"j"})
+        ));
         assert!(!awaits_broker_job(
             &json!("status"),
             &json!({"status":"queued","job_id":"j"})
@@ -684,62 +694,5 @@ mod tests {
         assert_eq!(finish_task(&run), Some("broker-abc"));
         assert_eq!(finish_task(&named(json!({"broker_id":"new"}))), None);
         assert_eq!(finish_task(&named(json!({}))), None);
-    }
-
-    #[test]
-    fn each_stage_change_is_posted_once() {
-        let mut run = json!({"pending":{"external_job":{"kind":"v3_build"}}});
-        let (key, text) = progress_notice(&run, &progress("run tests", 2, "on track")).unwrap();
-        assert_eq!(
-            text,
-            "Build 0420b7ab: stage 3 of 6, run tests running 2m (normal 5m–10m), on track. \
-             Last finished: compile tests in 8m (normal 9m–19m). About 15m–55m left."
-        );
-        assert!(!key.contains(' '));
-        run["pending"]["external_job"]["progress_key"] = json!(key);
-        assert!(progress_notice(&run, &progress("run tests", 2, "on track")).is_none());
-        assert!(progress_notice(&run, &progress("run tests", 2, "slow, past p90")).is_some());
-        assert!(progress_notice(&run, &progress("release build", 3, "on track")).is_some());
-    }
-
-    #[test]
-    fn parallel_stages_queue_and_background_read_in_one_line() {
-        let run = json!({"pending":{"external_job":{}}});
-        let both = json!({"job_id":"fa109e1e-eb03","stage":"release build","stage_id":"3b",
-            "stage_index":4,"stage_count":7,"stage_seconds":54,"stage_normal":null,
-            "verdict":"no baseline",
-            "finished_stages":[{"stage":"dependencies","id":"1","seconds":6,"normal":null},
-                {"stage":"compile tests","id":"2","seconds":62,"normal":[60,120]}],
-            "running_stages":[{"stage":"run tests","id":"3a","seconds":63,"normal":[120,180]},
-                {"stage":"release build","id":"3b","seconds":54,"normal":null}],
-            "upcoming_stages":[{"stage":"package release","id":"4"},
-                {"stage":"UI build and tests","id":"5"},{"stage":"deploy and health checks","id":"6"}],
-            "remaining_seconds":[300,600],
-            "background":[{"name":"early UI tests","status":"running","seconds":125},
-                {"name":"rollback save","status":"completed","seconds":12,"result":"used"}]});
-        let (_, text) = progress_notice(&run, &both).unwrap();
-        assert_eq!(
-            text,
-            "Build fa109e1e: stages 3a+3b of 6, run tests 1m (normal 2m–3m) and release build \
-             54s, no baseline. Last finished: compile tests in 1m (normal 1m–2m). About 5m–10m \
-             left. Background: early UI tests running 2m; rollback save done 12s (used)."
-        );
-        let queued = json!({"job_id":"abc","stage":"queued","stage_count":0,"verdict":"no baseline",
-            "queued_behind":[{"task_id":"bridge-form","session":"Check out webagent"}]});
-        let (_, text) = progress_notice(&run, &queued).unwrap();
-        assert_eq!(
-            text,
-            "Build abc: queued behind bridge-form (session \"Check out webagent\"), no baseline."
-        );
-    }
-
-    #[test]
-    fn a_queued_job_without_history_still_reads_plainly() {
-        let run = json!({"pending":{"external_job":{}}});
-        let queued = json!({"job_id":"abc","stage":"queued","stage_index":1,"stage_count":0,
-            "stage_seconds":0,"stage_normal":null,"verdict":"no baseline","finished_stages":[]});
-        let (_, text) = progress_notice(&run, &queued).unwrap();
-        assert_eq!(text, "Build abc: queued, no baseline.");
-        assert!(progress_notice(&run, &json!({})).is_none());
     }
 }

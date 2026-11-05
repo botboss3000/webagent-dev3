@@ -24,6 +24,7 @@ mod app_pages;
 #[path = "../../crates/modules/configuration/host/app_settings.rs"]
 mod app_settings;
 mod build_dashboard;
+pub(crate) mod build_tasks;
 pub(crate) mod chat;
 #[path = "../../crates/modules/chat/host/api/chat_controls.rs"]
 mod chat_controls;

@@ -1423,6 +1423,7 @@ impl<
                             "job_id":value["output"]["job_id"],"submitted_at":now()});
                     run["status"] = json!("waiting_external");
                     run["error"] = Value::Null;
+                    super::recovery::note_build_job(app.store.records(), &run, &value["output"]).await;
                     app.save(&mut run).await?;
                     return Ok(std::ops::ControlFlow::Break(()));
                 }

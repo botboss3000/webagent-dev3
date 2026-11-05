@@ -37,7 +37,9 @@
           "pause",
           "resume",
           "priority",
-          "reconcile"
+          "reconcile",
+          "wait",
+          "cancel"
         ]
       },
       "task_id": {
@@ -70,7 +72,8 @@
         "minimum": 0
       },
       "job_id": {
-        "type": "string"
+        "type": "string",
+        "description": "Broker Job ID. status inspects it; wait follows it again after an early still_running result (returning at the next alert or its end); cancel stops it and keeps the task for a fix."
       },
       "request_id": {
         "type": "string"

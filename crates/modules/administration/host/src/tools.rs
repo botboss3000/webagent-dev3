@@ -60,7 +60,20 @@ pub async fn execute(
             if request["request_id"].is_null() {
                 request["request_id"] = json!(arguments::retry_id(sid, pending_id));
             }
-            broker_call(host, sid, run_id, name, &request, cancel).await
+            let request_id = request["request_id"].as_str().unwrap_or_default();
+            match args["action"].as_str() {
+                // A read of the job; the run then follows it like a finish (engine recovery).
+                Some("wait") => {
+                    let job_id = job_argument(args)?;
+                    let status = json!({"action":"status","job_id":job_id,"request_id":request_id});
+                    broker_call(host, sid, run_id, name, &status, cancel).await
+                }
+                Some("cancel") => {
+                    let job_id = job_argument(args)?;
+                    stop_job(host, sid, run_id, job_id, request_id, cancel).await
+                }
+                _ => broker_call(host, sid, run_id, name, &request, cancel).await,
+            }
         }
         "performance_work" => performance(host, sid, run_id, args, cancel).await,
         "repository_access" => repository_access(host, sid, args, cancel).await,
@@ -198,6 +211,123 @@ async fn broker_call(
     let identity = trusted(host.actor(), sid, &json!(fingerprint));
     host.broker(name, &forwarded, sid, Some(identity), cancel)
         .await
+}
+
+/// The `job_id` a `wait` or `cancel` names: a broker Job ID, never a task ID.
+fn job_argument(args: &Value) -> Result<&str> {
+    args["job_id"]
+        .as_str()
+        .filter(|id| id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'))
+        .ok_or_else(|| anyhow!("wait and cancel need the Broker Job ID as job_id"))
+}
+
+/// Stop one broker job this session owns, under `build_work` authority in run `run_id`.
+/// The task stays, so it can be reopened and fixed; a job that already started deploying
+/// is recorded by the broker as uncertain rather than stopped.
+pub async fn stop_job(
+    host: &dyn AdministrationHost,
+    sid: &str,
+    run_id: &str,
+    job_id: &str,
+    request_id: &str,
+    cancel: CancellationToken,
+) -> Result<Value> {
+    let args = json!({"action":"cancel","job_id":job_id});
+    let fingerprint = host.admit(sid, run_id, "build_work", &args).await?;
+    let identity = trusted(host.actor(), sid, &json!(fingerprint));
+    // Unbatched jobs stop alone; the broker refuses if the job joined a batch meanwhile.
+    let request = json!({"job_id":job_id,"request_id":request_id,"expected_job_ids":[job_id]});
+    host.broker("v3_build_cancel", &request, sid, Some(identity), cancel)
+        .await
+}
+
+/// Job states after which a task's job no longer runs.
+const STOPPED: &[&str] = &[
+    "completed",
+    "failed",
+    "stale",
+    "cancelled",
+    "uncertain",
+    "interrupted",
+];
+
+/// Cancel a whole broker task from the chat: stop its running or queued job, then abandon
+/// the task, discarding its unreleased edits and freeing its reservations. A job that
+/// takes longer than about 40 s to stop is left `stopping` (repeat the request once it
+/// has stopped); an uncertain job is never abandoned, since its effects need reconciling.
+pub async fn cancel_task(
+    host: &dyn AdministrationHost,
+    sid: &str,
+    run_id: &str,
+    task_id: &str,
+    job_id: Option<&str>,
+    request_id: &str,
+) -> Result<Value> {
+    if let Some(job_id) = job_id {
+        let read = |job_id: &str| {
+            let status = json!({"action":"status","job_id":job_id,"request_id":request_id});
+            async move {
+                let reply = broker_call(
+                    host,
+                    sid,
+                    run_id,
+                    "build_work",
+                    &status,
+                    CancellationToken::new(),
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(reply["output"]["status"].as_str().map(str::to_owned))
+            }
+        };
+        let mut state = read(job_id).await?;
+        if !state.as_deref().is_some_and(|s| STOPPED.contains(&s)) {
+            let stop_id = format!("{request_id}-stop");
+            let reply = stop_job(
+                host,
+                sid,
+                run_id,
+                job_id,
+                &stop_id,
+                CancellationToken::new(),
+            )
+            .await?;
+            if reply["status"] != "success" {
+                return Ok(reply);
+            }
+            for _ in 0..20 {
+                state = read(job_id).await?;
+                if state.as_deref().is_some_and(|s| STOPPED.contains(&s)) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+        match state.as_deref() {
+            Some("uncertain") => {
+                return Ok(json!({"status":"success","output":{"state":"uncertain",
+                    "job_id":job_id,"reason":"The job had started deploying; reconcile it before abandoning"}}));
+            }
+            Some(s) if STOPPED.contains(&s) => {}
+            _ => {
+                return Ok(json!({"status":"success","output":{"state":"stopping",
+                    "job_id":job_id,"reason":"Stop requested; cancel the task again once it has stopped"}}));
+            }
+        }
+    }
+    let abandon = json!({"action":"abandon","task_id":task_id,"request_id":request_id});
+    let reply = broker_call(
+        host,
+        sid,
+        run_id,
+        "build_work",
+        &abandon,
+        CancellationToken::new(),
+    )
+    .await?;
+    if reply["status"] != "success" {
+        return Ok(reply);
+    }
+    Ok(json!({"status":"success","output":{"state":"abandoned","task_id":task_id}}))
 }
 
 /// Save a successful screenshot as an attachment of this run's reply while the browser

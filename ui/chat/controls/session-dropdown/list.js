@@ -47,14 +47,16 @@ export function createSessionList(root, {guard, refresh, select, client, archive
     const members = [], walk = id => { for (const child of kids.get(id) || []) { members.push(child); walk(child.id); } };
     walk(rootId);
     const wrap = tabs.querySelector('#chat-sub-scroll-wrap');
-    wrap.replaceChildren();
+    // The Broker chip (broker-chip.js) stays after Spawns.
+    const broker = wrap.querySelector('#chat-broker-chip');
+    wrap.replaceChildren(...(broker ? [broker] : []));
     tabs.toggleAttribute('data-empty', !members.length);
     if (!members.length) return;
     const chip = button(`${members.length} sub-agent session${members.length === 1 ? '' : 's'}`,'git-branch',() => familyMenu(chip,items.find(s => s.id === rootId),members),'sub-chip chip-spawn-menu');
     chip.firstChild.replaceWith(Object.assign(document.createElement('span'),{className:'chip-status',innerHTML:icon('git-branch')}));
     chip.append(`Spawns (${members.length})`);
     chip.setAttribute('aria-haspopup','menu'); chip.setAttribute('aria-expanded','false');
-    wrap.append(chip); window.lucide?.createIcons();
+    wrap.prepend(chip); window.lucide?.createIcons();
   }
   /** Opens the family menu under its chip; choosing a row opens that session. */
   function familyMenu(chip, main, members) {
@@ -417,6 +419,8 @@ export function createSessionList(root, {guard, refresh, select, client, archive
   const tick = setInterval(() => { for (const node of [...menu.querySelectorAll('[data-ts]'),...root.querySelectorAll('[data-ts]')]) node.textContent = elapsed(Number(node.dataset.ts)); },1000);
   // Public lifecycle API keeps selected rows, configuration, search state and timers in sync.
   return {
+    /** Loaded sub-agent sessions under `id`, as [{id, label: 'Spawn n'}], for the Broker chip. */
+    family(id) { const kids = childrenOf(), out = [], walk = parent => { for (const child of kids.get(parent) || []) { out.push({id:child.id,label:'Spawn ' + (out.length + 1)}); walk(child.id); } }; walk(id); return out; },
     // Replace authoritative rows/selection and drop checkbox IDs no longer present.
     update(rows,id) { items = rows; if (id !== selected) for (const parent of ancestors(id)) expanded.add(parent); selected = id; for (const id of checked) if (!items.some(item => item.id === id)) checked.delete(id); label(); renderTabs(); render(); },
     // Reapply menu options; disabling batch delete also clears its transient selection.
