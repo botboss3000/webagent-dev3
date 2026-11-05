@@ -2,7 +2,11 @@
 use super::*;
 pub(crate) async fn overview(State(app): State<App>) -> Api {
     // Installation status must not reveal another owner\'s device authorization code.
-    let operator=app.store.agent_authority(app.store.current_user_id(),app.store.current_agent_id()).await.is_ok_and(|r|r["can_manage"]==true);
+    let operator = app
+        .store
+        .agent_authority(app.store.current_user_id(), app.store.current_agent_id())
+        .await
+        .is_ok_and(|r| r["can_manage"] == true);
     let login=app.login.read().await.clone().filter(|_|operator).filter(|v|v["connection_id"].is_null()).map(|v|json!({"verification_url":v["verification_url"],"user_code":v["user_code"],"status":v["status"]}));
     let mut runs = app.store.active_runs().await?;
     runs.extend(app.store.recent_runs(None).await?);
@@ -12,34 +16,42 @@ pub(crate) async fn overview(State(app): State<App>) -> Api {
         "model":if operator {app.store.agent_model().await?["model"].clone()}else{Value::Null},"policy":app.store.get("policy").await?,"runs":runs}),
     ))
 }
-pub(crate) fn requested_selection(body: &Value) -> std::result::Result<provider::ProviderSelection, ApiError> {
+pub(crate) fn requested_selection(
+    body: &Value,
+) -> std::result::Result<provider::ProviderSelection, ApiError> {
     required(body, "model", 128)?;
     provider::ProviderSelection::parse(body, DEFAULT_AGENT_MODEL)
         .map_err(|_| bad("Invalid model or unsupported provider"))
 }
 pub(crate) async fn settings(State(app): State<App>, Json(body): Json<Value>) -> Api {
-    require_agent_operator(&app,app.store.current_agent_id()).await?;
+    require_agent_operator(&app, app.store.current_agent_id()).await?;
     let selection = requested_selection(&body)?;
     let _guard = app.gate.lock().await;
     let value = selection.value();
     app.store.save_agent_model(&value).await?;
     Ok(Json(value))
 }
-pub(crate) async fn admin_agent_view(app:&App,id:&str) -> std::result::Result<App,ApiError> {
-    let mut scoped=app.clone();
-    scoped.store=app.store.for_agent(id).await
-        .map_err(|_|ApiError(StatusCode::NOT_FOUND,"Agent not found".into()))?;
-    let exists:Option<String>=sqlx::query_scalar("SELECT id FROM agents WHERE id=?")
-        .bind(id).fetch_optional(&scoped.store.agent_pool).await.map_err(anyhow::Error::from)?;
+pub(crate) async fn admin_agent_view(app: &App, id: &str) -> std::result::Result<App, ApiError> {
+    let mut scoped = app.clone();
+    scoped.store = app
+        .store
+        .for_agent(id)
+        .await
+        .map_err(|_| ApiError(StatusCode::NOT_FOUND, "Agent not found".into()))?;
+    let exists: Option<String> = sqlx::query_scalar("SELECT id FROM agents WHERE id=?")
+        .bind(id)
+        .fetch_optional(&scoped.store.agent_pool)
+        .await
+        .map_err(anyhow::Error::from)?;
     if exists.is_none() {
-        return Err(ApiError(StatusCode::NOT_FOUND,"Agent not found".into()));
+        return Err(ApiError(StatusCode::NOT_FOUND, "Agent not found".into()));
     }
     Ok(scoped)
 }
 // Model-only persisted settings retain the original subscription default.
 pub(crate) async fn agent_model(State(app): State<App>, Path(id): Path<String>) -> Api {
-    require_agent_operator(&app,&id).await?;
-    let app=admin_agent_view(&app,&id).await?;
+    require_agent_operator(&app, &id).await?;
+    let app = admin_agent_view(&app, &id).await?;
     let mut value = app.selection().await?.value();
     value["id"] = json!(id);
     Ok(Json(value))
@@ -49,8 +61,8 @@ pub(crate) async fn agent_model_set(
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Api {
-    require_agent_operator(&app,&id).await?;
-    let app=admin_agent_view(&app,&id).await?;
+    require_agent_operator(&app, &id).await?;
+    let app = admin_agent_view(&app, &id).await?;
     let selection = requested_selection(&body)?;
     let _guard = app.gate.lock().await;
     let value = selection.value();
@@ -89,10 +101,18 @@ pub(crate) async fn migrate_tool_policy_defaults(store: &Store) -> Result<()> {
     let defaults = policy_default();
     let mut changed = false;
     if policy["rules"]["build_work"].is_null() {
-        let old=[policy_decision(&policy,"v3_build_work"),policy_decision(&policy,"v3_worker_submit")];
-        policy["rules"]["build_work"]=json!(if old.contains(&"deny") {"deny"}
-            else if old.contains(&"require_approval") {"require_approval"} else {"allow"});
-        changed=true;
+        let old = [
+            policy_decision(&policy, "v3_build_work"),
+            policy_decision(&policy, "v3_worker_submit"),
+        ];
+        policy["rules"]["build_work"] = json!(if old.contains(&"deny") {
+            "deny"
+        } else if old.contains(&"require_approval") {
+            "require_approval"
+        } else {
+            "allow"
+        });
+        changed = true;
     }
     for (name, _) in defaults["rules"].as_object().unwrap() {
         if policy["rules"][name].is_null() {
@@ -118,7 +138,7 @@ pub(crate) async fn ability_catalog(State(app): State<App>) -> Api {
         "abilities":app.abilities.catalog_with(&policy, &visibility, &Value::Null)})))
 }
 pub(crate) async fn agent_ability_catalog(State(app): State<App>, Path(id): Path<String>) -> Api {
-    let app=admin_agent_view(&app,&id).await?;
+    let app = admin_agent_view(&app, &id).await?;
     let visibility = agent_abilities(&app).await?;
     let policy = app
         .store
@@ -136,11 +156,18 @@ pub(crate) async fn agent_ability_catalog(State(app): State<App>, Path(id): Path
 pub(crate) fn estimated_tokens(text: &str) -> usize {
     text.chars().count().div_ceil(4)
 }
-pub(crate) async fn agent_context_composition(State(app): State<App>, Path(id): Path<String>) -> Api {
-    let app=admin_agent_view(&app,&id).await?;
+pub(crate) async fn agent_context_composition(
+    State(app): State<App>,
+    Path(id): Path<String>,
+) -> Api {
+    let app = admin_agent_view(&app, &id).await?;
     let slots = app.store.list_prompt_slots().await?;
     let visibility = agent_abilities(&app).await?;
-    let policy = app.store.get("policy").await?.unwrap_or_else(policy_default);
+    let policy = app
+        .store
+        .get("policy")
+        .await?
+        .unwrap_or_else(policy_default);
     let mut prompt_sources = vec![json!({"label":"Base instructions",
         "tokens":estimated_tokens(provider::DEFAULT_INSTRUCTIONS)})];
     for slot in slots {
@@ -150,18 +177,28 @@ pub(crate) async fn agent_context_composition(State(app): State<App>, Path(id): 
                 "tokens":estimated_tokens(content)}));
         }
     }
-    let guidance = app.abilities.visible_guidance(&policy, &visibility, &Value::Null);
-    let skill_sources = if guidance.is_empty() { Vec::new() } else {
+    let guidance = app
+        .abilities
+        .visible_guidance(&policy, &visibility, &Value::Null);
+    let skill_sources = if guidance.is_empty() {
+        Vec::new()
+    } else {
         vec![json!({"label":"Visible ability guidance","tokens":estimated_tokens(&guidance)})]
     };
-    let tool_sources = app.abilities.schemas_with(
-        &policy, &json!([]), &visibility, &Value::Null)
-        .into_iter().map(|schema| {
+    let tool_sources = app
+        .abilities
+        .schemas_with(&policy, &json!([]), &visibility, &Value::Null)
+        .into_iter()
+        .map(|schema| {
             let name = schema["name"].as_str().unwrap_or("Tool");
             json!({"label":name,"tokens":estimated_tokens(&schema.to_string())})
-        }).collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
     let sum = |sources: &Vec<Value>| -> usize {
-        sources.iter().map(|source| source["tokens"].as_u64().unwrap_or(0) as usize).sum()
+        sources
+            .iter()
+            .map(|source| source["tokens"].as_u64().unwrap_or(0) as usize)
+            .sum()
     };
     let prompt_tokens = sum(&prompt_sources);
     let skill_tokens = sum(&skill_sources);
@@ -186,7 +223,7 @@ pub(crate) async fn agent_ability_visibility_set(
     Path((id, ability_id)): Path<(String, String)>,
     Json(body): Json<AbilityVisibilityBody>,
 ) -> Api {
-    let app=admin_agent_view(&app,&id).await?;
+    let app = admin_agent_view(&app, &id).await?;
     if !app.abilities.known(&ability_id) {
         return Err(bad("Unknown ability ID"));
     }
@@ -206,8 +243,13 @@ pub(crate) async fn agent_ability_visibility_set(
     }
     value["revision"] = json!(body.expected_revision + 1);
     value["visibility"][&ability_id] = json!(body.visibility);
-    app.store.save_agent_abilities(&value, body.expected_revision).await?;
-    phase3_api::quiesce_agent(&app,&id).await?;
+    app.store
+        .save_agent_abilities(&value, body.expected_revision)
+        .await?;
+    // Configuration applies at the next step: policy and tool decisions are re-read per
+    // model call and before every tool, so running work is not stopped; only approvals
+    // waiting under the old settings are revoked.
+    phase3_api::revoke_waiting_approvals(&app, Some(&id)).await?;
     Ok(Json(value))
 }
 pub(crate) async fn agent_ability_skill_visibility_set(
@@ -215,7 +257,7 @@ pub(crate) async fn agent_ability_skill_visibility_set(
     Path((id, ability_id)): Path<(String, String)>,
     Json(body): Json<AbilityVisibilityBody>,
 ) -> Api {
-    let app=admin_agent_view(&app,&id).await?;
+    let app = admin_agent_view(&app, &id).await?;
     if !app.abilities.known(&ability_id) {
         return Err(bad("Unknown ability ID"));
     }
@@ -227,14 +269,21 @@ pub(crate) async fn agent_ability_skill_visibility_set(
     if value["revision"] != body.expected_revision {
         return Err(conflict("Agent ability revision changed"));
     }
-    let old = value["skill_visibility"][&ability_id].as_str().unwrap_or("visible");
+    let old = value["skill_visibility"][&ability_id]
+        .as_str()
+        .unwrap_or("visible");
     if old == body.visibility {
         return Ok(Json(value));
     }
     value["revision"] = json!(body.expected_revision + 1);
     value["skill_visibility"][&ability_id] = json!(body.visibility);
-    app.store.save_agent_abilities(&value, body.expected_revision).await?;
-    phase3_api::quiesce_agent(&app,&id).await?;
+    app.store
+        .save_agent_abilities(&value, body.expected_revision)
+        .await?;
+    // Configuration applies at the next step: policy and tool decisions are re-read per
+    // model call and before every tool, so running work is not stopped; only approvals
+    // waiting under the old settings are revoked.
+    phase3_api::revoke_waiting_approvals(&app, Some(&id)).await?;
     Ok(Json(value))
 }
 pub(crate) async fn agent_tool_mode_set(
@@ -242,7 +291,7 @@ pub(crate) async fn agent_tool_mode_set(
     Path((id, ability_id, tool_name)): Path<(String, String, String)>,
     Json(body): Json<AbilityVisibilityBody>,
 ) -> Api {
-    let app=admin_agent_view(&app,&id).await?;
+    let app = admin_agent_view(&app, &id).await?;
     if !app.abilities.has_tool(&ability_id, &tool_name) {
         return Err(bad("Unknown ability tool"));
     }
@@ -259,37 +308,75 @@ pub(crate) async fn agent_tool_mode_set(
     }
     value["revision"] = json!(body.expected_revision + 1);
     value["tool_modes"][&tool_name] = json!(body.visibility);
-    app.store.save_agent_abilities(&value, body.expected_revision).await?;
-    phase3_api::quiesce_agent(&app,&id).await?;
+    app.store
+        .save_agent_abilities(&value, body.expected_revision)
+        .await?;
+    // Configuration applies at the next step: policy and tool decisions are re-read per
+    // model call and before every tool, so running work is not stopped; only approvals
+    // waiting under the old settings are revoked.
+    phase3_api::revoke_waiting_approvals(&app, Some(&id)).await?;
     Ok(Json(value))
 }
-pub(crate) async fn policy_get(State(app):State<App>)->Api {
-    let policy=app.store.get("policy").await?.unwrap_or_else(policy_default);
-    let names:std::collections::BTreeSet<String>=app.abilities.all_schemas().iter()
-        .chain(crate::mcp::all_schemas().iter()).filter_map(|s|s["name"].as_str().map(str::to_owned))
-        .chain(["list_abilities","load_ability"].into_iter().map(str::to_owned)).collect();
-    Ok(Json(json!({"version":policy["version"],"rules":policy["rules"],"catalog_names":names})))
+pub(crate) async fn policy_get(State(app): State<App>) -> Api {
+    let mut policy = app
+        .store
+        .get("policy")
+        .await?
+        .unwrap_or_else(policy_default);
+    let names: std::collections::BTreeSet<String> = app
+        .abilities
+        .all_schemas()
+        .iter()
+        .chain(crate::mcp::all_schemas().iter())
+        .filter_map(|s| s["name"].as_str().map(str::to_owned))
+        .chain(
+            ["list_abilities", "load_ability"]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .collect();
+    // Show unnamed tools with the template rule the runtime applies to them.
+    let template = policy_default();
+    for name in &names {
+        if policy["rules"].get(name).is_none() {
+            policy["rules"][name] = template["rules"].get(name).cloned().unwrap_or_else(|| {
+                json!(if crate::tools::is_read(name) {
+                    "allow"
+                } else {
+                    "require_approval"
+                })
+            });
+        }
+    }
+    Ok(Json(
+        json!({"version":policy["version"],"rules":policy["rules"],"catalog_names":names}),
+    ))
 }
-/// Save a complete policy for the request-pinned live catalog and quiesce affected runs.
+/// Save a complete policy for the request-pinned live catalog; running work picks it up at its next step.
 pub(crate) async fn policy_set(State(app): State<App>, Json(body): Json<Value>) -> Api {
     let rules = body["rules"]
         .as_object()
         .ok_or_else(|| bad("rules required"))?;
     // Discovery is dispatched by Rust rather than tools::execute, but its
     // installation rules are still required by the same live permission check.
-    let names: std::collections::BTreeSet<String> = app.abilities.all_schemas().into_iter()
+    let names: std::collections::BTreeSet<String> = app
+        .abilities
+        .all_schemas()
+        .into_iter()
         .chain(crate::mcp::all_schemas())
         .filter_map(|schema| schema["name"].as_str().map(str::to_owned))
-        .chain(["list_abilities", "load_ability"].into_iter().map(str::to_owned))
+        .chain(
+            ["list_abilities", "load_ability"]
+                .into_iter()
+                .map(str::to_owned),
+        )
         .collect();
     if rules.len() != names.len() {
         return Err(bad("Specify every tool policy"));
     }
     for name in &names {
         if !matches!(
-            rules
-                .get(name)
-                .and_then(Value::as_str),
+            rules.get(name).and_then(Value::as_str),
             Some("allow" | "deny" | "require_approval")
         ) {
             return Err(bad("Invalid policy rule"));
@@ -297,13 +384,23 @@ pub(crate) async fn policy_set(State(app): State<App>, Json(body): Json<Value>) 
     }
     let _guard = app.gate.lock().await;
     let old = app.store.get("policy").await?.unwrap();
-    if body.get("expected_version").is_some_and(|v|v!=&old["version"]){return Err(conflict("Installation policy changed; reload before saving"));}
+    if body
+        .get("expected_version")
+        .is_some_and(|v| v != &old["version"])
+    {
+        return Err(conflict(
+            "Installation policy changed; reload before saving",
+        ));
+    }
     let value = json!({"version":old["version"].as_u64().unwrap()+1,"rules":rules});
     app.store.put("policy", &value).await?;
     app.store
         .event("", "policy_changed", &json!({"version":value["version"]}))
         .await?;
-    for user_id in app.store.all_user_ids().await? {phase3_api::quiesce_user(&app,&user_id,None).await?;}
+    // Configuration applies at the next step: policy and tool decisions are re-read per
+    // model call and before every tool, so running work is not stopped; only approvals
+    // waiting under the old settings are revoked.
+    phase3_api::revoke_waiting_approvals(&app, None).await?;
     Ok(Json(value))
 }
 #[cfg(test)]
@@ -318,18 +415,45 @@ mod policy_tests {
         body["rules"]["shell"] = json!("require_approval");
         body["rules"]["python"] = json!("deny");
         body["rules"]["load_ability"] = json!("require_approval");
-        let saved = policy_set(State(app.clone()), Json(body.clone())).await.unwrap().0;
+        let saved = policy_set(State(app.clone()), Json(body.clone()))
+            .await
+            .unwrap()
+            .0;
         assert_eq!(saved["rules"], body["rules"]);
         assert_eq!(saved["version"], 2);
         assert_eq!(app.store.get("policy").await.unwrap().unwrap(), saved);
-        let access = app.store.live_access("admin", "shared_default").await.unwrap();
-        for (name, expected) in [("file_write", access::Permission::Auto),
-            ("shell", access::Permission::Ask), ("python", access::Permission::Deny)] {
-            let permission = access::Permission::from_policy(policy_decision(&saved, name)).unwrap();
-            assert_eq!(access.tool_decision(name, permission, true, true, false, false).permission, expected);
+        let access = app
+            .store
+            .live_access("admin", "shared_default")
+            .await
+            .unwrap();
+        for (name, expected) in [
+            ("file_write", access::Permission::Auto),
+            ("shell", access::Permission::Ask),
+            ("python", access::Permission::Deny),
+        ] {
+            let permission =
+                access::Permission::from_policy(policy_decision(&saved, name)).unwrap();
+            assert_eq!(
+                access
+                    .tool_decision(name, permission, true, true, false, false)
+                    .permission,
+                expected
+            );
         }
-        assert_eq!(access.tool_decision("file_write", access::Permission::Auto,
-            true, true, true, false).permission, access::Permission::Deny);
+        assert_eq!(
+            access
+                .tool_decision(
+                    "file_write",
+                    access::Permission::Auto,
+                    true,
+                    true,
+                    true,
+                    false
+                )
+                .permission,
+            access::Permission::Deny
+        );
 
         for name in ["file_read", "list_abilities", "load_ability"] {
             let mut missing = body.clone();
@@ -337,7 +461,10 @@ mod policy_tests {
             assert!(policy_set(State(app.clone()), Json(missing)).await.is_err());
         }
         let mut unknown = body.clone();
-        unknown["rules"].as_object_mut().unwrap().remove("load_ability");
+        unknown["rules"]
+            .as_object_mut()
+            .unwrap()
+            .remove("load_ability");
         unknown["rules"]["unknown_tool"] = json!("allow");
         assert!(policy_set(State(app.clone()), Json(unknown)).await.is_err());
         let mut invalid = body;
@@ -350,15 +477,28 @@ mod policy_tests {
 // Tenant connections are the sole credential authority after the catalog migration.
 // Retire the global route so installation oversight cannot bypass connection ownership.
 pub(crate) async fn provider_start(State(app): State<App>) -> Api {
-    require_agent_operator(&app,"shared_default").await?;
-    Err(conflict("Use the selected agent's Models page to authorize a connection"))
+    require_agent_operator(&app, "shared_default").await?;
+    Err(conflict(
+        "Use the selected agent's Models page to authorize a connection",
+    ))
 }
 /// A device authorization belongs to one connection. Never copy subscription tokens.
-pub(crate) async fn provider_start_for(app:App,credential_ref:String,connection_id:Option<String>)->Api { app.models_runtime().provider_start_for(credential_ref,connection_id).await.map_err(Into::into) }
+pub(crate) async fn provider_start_for(
+    app: App,
+    credential_ref: String,
+    connection_id: Option<String>,
+) -> Api {
+    app.models_runtime()
+        .provider_start_for(credential_ref, connection_id)
+        .await
+        .map_err(Into::into)
+}
 pub(crate) async fn provider_logout(State(app): State<App>) -> Api {
-    require_agent_operator(&app,"shared_default").await?;
+    require_agent_operator(&app, "shared_default").await?;
     // Revocation belongs to the owner-scoped catalog, never a global token deletion.
-    Err(conflict("Use the selected agent's Models page to revoke a connection"))
+    Err(conflict(
+        "Use the selected agent's Models page to revoke a connection",
+    ))
 }
 
 #[cfg(test)]
@@ -367,19 +507,34 @@ mod legacy_credential_tests {
     // Installation-only legacy routes cannot change credentials behind an explicit role plan.
     #[tokio::test]
     async fn legacy_provider_routes_cannot_bypass_connection_ownership() {
-        let (_root,app)=crate::runtime_tests::fixture().await;
-        let before=app.store.get("provider_tokens").await.unwrap();
-        *app.login.write().await=Some(json!({"connection_id":"tenant-connection","status":"pending"}));
-        assert!(matches!(provider_start(State(app.clone())).await,Err(ApiError(StatusCode::CONFLICT,_))));
-        assert!(matches!(provider_logout(State(app.clone())).await,Err(ApiError(StatusCode::CONFLICT,_))));
-        assert_eq!(app.store.get("provider_tokens").await.unwrap(),before);
-        assert_eq!(app.login.read().await.as_ref().unwrap()["connection_id"],"tenant-connection");
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let before = app.store.get("provider_tokens").await.unwrap();
+        *app.login.write().await =
+            Some(json!({"connection_id":"tenant-connection","status":"pending"}));
+        assert!(matches!(
+            provider_start(State(app.clone())).await,
+            Err(ApiError(StatusCode::CONFLICT, _))
+        ));
+        assert!(matches!(
+            provider_logout(State(app.clone())).await,
+            Err(ApiError(StatusCode::CONFLICT, _))
+        ));
+        assert_eq!(app.store.get("provider_tokens").await.unwrap(), before);
+        assert_eq!(
+            app.login.read().await.as_ref().unwrap()["connection_id"],
+            "tenant-connection"
+        );
     }
 }
 
-async fn require_agent_operator(app:&App,agent:&str)->Result<(),ApiError> {
-    if !app.store.agent_authority(app.store.current_user_id(),agent).await.is_ok_and(|r|r["can_manage"]==true) {
-        return Err(ApiError(StatusCode::NOT_FOUND,"Agent not found".into()));
+async fn require_agent_operator(app: &App, agent: &str) -> Result<(), ApiError> {
+    if !app
+        .store
+        .agent_authority(app.store.current_user_id(), agent)
+        .await
+        .is_ok_and(|r| r["can_manage"] == true)
+    {
+        return Err(ApiError(StatusCode::NOT_FOUND, "Agent not found".into()));
     }
     Ok(())
 }

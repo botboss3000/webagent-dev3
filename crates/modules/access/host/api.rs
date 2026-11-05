@@ -49,14 +49,13 @@ async fn agent_operator(app: &App, identity: &Value, agent: &str) -> Result<(), 
     }
     Ok(())
 }
-/// Called while holding App.gate after an access mutation.
-pub(crate) async fn quiesce_user(
-    app: &App,
-    user_id: &str,
+/// Stop `caller`'s active runs in `statuses` (for `agent_filter` only, when given). An
+/// in-flight or uncertain write goes to recovery instead, so its effect can be reconciled.
+async fn stop_runs(
+    caller: &App,
     agent_filter: Option<&str>,
+    statuses: &[&str],
 ) -> Result<(), ApiError> {
-    let mut caller = app.clone();
-    caller.store = app.store.for_user(user_id).await?;
     for view in caller.store.active_runs().await? {
         let id = view["id"].as_str().unwrap_or("");
         let mut run = caller.run(id).await?;
@@ -64,13 +63,10 @@ pub(crate) async fn quiesce_user(
         if agent_filter.is_some_and(|filter| filter != agent_id) {
             continue;
         }
-        if !matches!(
-            crate::status(&run),
-            "queued" | "running" | "waiting_approval" | "waiting_external"
-        ) {
+        if !statuses.contains(&crate::status(&run)) {
             continue;
         }
-        if let Some(token) = app.active.lock().await.get(id) {
+        if let Some(token) = caller.active.lock().await.get(id) {
             token.cancel();
         }
         // Low-risk parallel writes settle as outcome unknown; only high-risk ones need review.
@@ -92,6 +88,37 @@ pub(crate) async fn quiesce_user(
         }
         caller.save_override(&mut run).await?;
     }
+    Ok(())
+}
+
+/// Stop runs waiting for an approval after a configuration change: the approval was bound to
+/// the old settings. Running and queued work continues and reads the change at its next step.
+pub(crate) async fn revoke_waiting_approvals(
+    app: &App,
+    agent_filter: Option<&str>,
+) -> Result<(), ApiError> {
+    for user_id in app.store.all_user_ids().await? {
+        let mut caller = app.clone();
+        caller.store = app.store.for_user(&user_id).await?;
+        stop_runs(&caller, agent_filter, &["waiting_approval"]).await?;
+    }
+    Ok(())
+}
+
+/// Called while holding App.gate after an access mutation.
+pub(crate) async fn quiesce_user(
+    app: &App,
+    user_id: &str,
+    agent_filter: Option<&str>,
+) -> Result<(), ApiError> {
+    let mut caller = app.clone();
+    caller.store = app.store.for_user(user_id).await?;
+    stop_runs(
+        &caller,
+        agent_filter,
+        &["queued", "running", "waiting_approval", "waiting_external"],
+    )
+    .await?;
     let mut closure_error = None;
     for session in caller.store.list("session:").await? {
         let agent = session["agent_id"].as_str().unwrap_or("shared_default");

@@ -399,7 +399,10 @@ pub(crate) async fn level_set(
         .save_capability_level(&id, body.level, body.expected_revision)
         .await
         .map_err(update_error)?;
-    phase3_api::quiesce_agent(&app, &id).await?;
+    // Configuration applies at the next step: policy and tool decisions are re-read per
+    // model call and before every tool, so running work is not stopped; only approvals
+    // waiting under the old settings are revoked.
+    phase3_api::revoke_waiting_approvals(&app, Some(&id)).await?;
     Ok(Json(json!({"capability_levels":saved})))
 }
 #[derive(Deserialize)]
@@ -486,7 +489,10 @@ pub(crate) async fn permissions_set(
         )
         .await
         .map_err(update_error)?;
-    phase3_api::quiesce_agent(&app, &id).await?;
+    // Configuration applies at the next step: policy and tool decisions are re-read per
+    // model call and before every tool, so running work is not stopped; only approvals
+    // waiting under the old settings are revoked.
+    phase3_api::revoke_waiting_approvals(&app, Some(&id)).await?;
     Ok(Json(value))
 }
 async fn visibility(
@@ -550,7 +556,10 @@ async fn visibility(
         .store
         .save_agent_abilities(&value, body.expected_revision)
         .await?;
-    phase3_api::quiesce_agent(&app, &id).await?;
+    // Configuration applies at the next step: policy and tool decisions are re-read per
+    // model call and before every tool, so running work is not stopped; only approvals
+    // waiting under the old settings are revoked.
+    phase3_api::revoke_waiting_approvals(&app, Some(&id)).await?;
     Ok(Json(value))
 }
 pub(crate) async fn visibility_set(
@@ -1359,7 +1368,10 @@ pub(crate) async fn settings_set(
         .store
         .save_agent_abilities(&value, body.expected_revision)
         .await?;
-    phase3_api::quiesce_agent(&app, &id).await?;
+    // Configuration applies at the next step: policy and tool decisions are re-read per
+    // model call and before every tool, so running work is not stopped; only approvals
+    // waiting under the old settings are revoked.
+    phase3_api::revoke_waiting_approvals(&app, Some(&id)).await?;
     Ok(Json(value))
 }
 #[cfg(test)]

@@ -18,6 +18,12 @@
 .agent-manager-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .agent-manager-switch::after { transition: none; } }
 
+/* Agent settings: the label and full hint take the whole line and the control sits
+   below, so phone width never clips a label or hint. */
+.v3-setting-stacked .ac-ability-name { flex: 1 1 100%; white-space: normal; }
+.v3-setting-stacked > .ac-config-control { margin-left: 0; }
+.v3-setting-stacked .ac-ability-desc { display: block; -webkit-line-clamp: unset; white-space: normal; }
+
 /* Create agent: full hints; the submit sits apart from the last field. */
 #create-agent-page .ac-model-cfg-row > .ac-ability-label { flex-basis: 100%; }
 #create-agent-page .ac-ability-desc { display: block; -webkit-line-clamp: unset; white-space: normal; }

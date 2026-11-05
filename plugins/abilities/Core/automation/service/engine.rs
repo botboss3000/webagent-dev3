@@ -14,7 +14,7 @@ struct State {
     #[serde(default)]
     revision: u64,
     #[serde(default)]
-    main_notes_cursors: BTreeMap<String,u64>,
+    main_notes_cursors: BTreeMap<String, u64>,
     #[serde(default)]
     definitions: BTreeMap<String, Definition>,
     #[serde(default)]
@@ -31,9 +31,13 @@ struct Definition {
     #[serde(default)]
     reminder: bool,
     destination: Value,
+    /// Conversation that created this automation; archiving or deleting it stops the
+    /// automation wherever it delivers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    origin_session_id: Option<String>,
     #[serde(default)]
     creation_digest: String,
-    #[serde(default,skip_serializing_if="Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     main_notes_intent: Option<String>,
     trigger: Value,
     status: String,
@@ -428,42 +432,101 @@ fn reduce(state: &mut State, r: &Request) -> Result<(Value, Vec<Value>, bool), S
             return Ok((json!({"inactive":true}), vec![], true));
         }
         "bootstrap_main" => {
-            let id=string(a,"id")?;
-            if !id.starts_with("main-notes-review-"){return Err("invalid_main_notes_identity".into());}
-            let sid=string(a,"session_id")?;
-            if let Some(definition)=state.definitions.get_mut(&id) {
-                if definition.agent_id!=string(&r.context,"agent_id")?||definition.trigger["kind"]!="main_notes"{return Err("main_notes_agent_mismatch".into());}
-                if definition.destination["session_id"]==sid{return Ok((json!({"registered":true}),vec![],false));}
-                definition.destination["session_id"]=json!(sid);
-                definition.revision+=1;
+            let id = string(a, "id")?;
+            if !id.starts_with("main-notes-review-") {
+                return Err("invalid_main_notes_identity".into());
+            }
+            let sid = string(a, "session_id")?;
+            if let Some(definition) = state.definitions.get_mut(&id) {
+                if definition.agent_id != string(&r.context, "agent_id")?
+                    || definition.trigger["kind"] != "main_notes"
+                {
+                    return Err("main_notes_agent_mismatch".into());
+                }
+                if definition.destination["session_id"] == sid {
+                    return Ok((json!({"registered":true}), vec![], false));
+                }
+                definition.destination["session_id"] = json!(sid);
+                definition.revision += 1;
                 // Retarget retained actions once, invalidating queued old-destination work.
-                for action in state.definitions.values_mut().filter(|d|d.agent_id==r.context["agent_id"]&&d.id.starts_with("main-notes-action-")){
-                    action.destination["session_id"]=json!(sid);action.revision+=1;
+                for action in state.definitions.values_mut().filter(|d| {
+                    d.agent_id == r.context["agent_id"] && d.id.starts_with("main-notes-action-")
+                }) {
+                    action.destination["session_id"] = json!(sid);
+                    action.revision += 1;
                 }
                 // Only unadmitted work transfers. Keep its occurrence identity, so
                 // a consumed one-shot survives without another scheduling request.
-                for occurrence in state.occurrences.values_mut().filter(|o|["queued","retry_wait"].contains(&o.status.as_str())) {
-                    if let Some(definition)=state.definitions.get(&occurrence.automation_id) {
-                        if definition.agent_id==r.context["agent_id"]&&(definition.id==id||definition.id.starts_with("main-notes-action-"))
-                            && occurrence.revision.checked_add(1)==Some(definition.revision){occurrence.revision=definition.revision;}
+                for occurrence in state
+                    .occurrences
+                    .values_mut()
+                    .filter(|o| ["queued", "retry_wait"].contains(&o.status.as_str()))
+                {
+                    if let Some(definition) = state.definitions.get(&occurrence.automation_id) {
+                        if definition.agent_id == r.context["agent_id"]
+                            && (definition.id == id
+                                || definition.id.starts_with("main-notes-action-"))
+                            && occurrence.revision.checked_add(1) == Some(definition.revision)
+                        {
+                            occurrence.revision = definition.revision;
+                        }
                     }
                 }
-                return Ok((json!({"registered":true}),vec![],true));
+                return Ok((json!({"registered":true}), vec![], true));
             }
-            let cfg=settings(&r.context);
-            if cfg["allow_event_subscriptions"]==false {return Err("event_subscriptions_disabled".into());}
-            let cap=cfg["max_automations_per_user"].as_u64().unwrap_or(20).min(LIMIT as u64) as usize;
-            if state.definitions.values().filter(|d|!["cancelled","recycled","completed"].contains(&d.status.as_str())).count()>=cap {return Err("automation_capacity".into());}
-            state.definitions.insert(id.clone(),Definition {
-                id:id.clone(),revision:1,agent_id:string(&r.context,"agent_id")?,
-                prompt:"Main Notes update received.".into(),
-                reminder:false,destination:json!({"type":"existing_chat","session_id":sid}),
-                creation_digest:"main-notes-review-v1".into(),main_notes_intent:None,trigger:json!({"kind":"main_notes","source":"main_notes.updated"}),
-                status:if cfg["require_approval"]==true {"paused"}else{"active"}.into(),next_ms:None,
-                created_ms:now,expires_ms:None,daily_cap:cfg["max_events_per_subscription"].as_u64().unwrap_or(50).min(1000),
-                retry_limit:0,failure_limit:5,failures:0,memory:Value::Null,armed_by_user:false,last_error:None,activation_seq:None,
-            });
-            return Ok((json!({"registered":true}),vec![],true));
+            let cfg = settings(&r.context);
+            if cfg["allow_event_subscriptions"] == false {
+                return Err("event_subscriptions_disabled".into());
+            }
+            let cap = cfg["max_automations_per_user"]
+                .as_u64()
+                .unwrap_or(20)
+                .min(LIMIT as u64) as usize;
+            if state
+                .definitions
+                .values()
+                .filter(|d| !["cancelled", "recycled", "completed"].contains(&d.status.as_str()))
+                .count()
+                >= cap
+            {
+                return Err("automation_capacity".into());
+            }
+            state.definitions.insert(
+                id.clone(),
+                Definition {
+                    id: id.clone(),
+                    revision: 1,
+                    agent_id: string(&r.context, "agent_id")?,
+                    prompt: "Main Notes update received.".into(),
+                    reminder: false,
+                    destination: json!({"type":"existing_chat","session_id":sid}),
+                    origin_session_id: None,
+                    creation_digest: "main-notes-review-v1".into(),
+                    main_notes_intent: None,
+                    trigger: json!({"kind":"main_notes","source":"main_notes.updated"}),
+                    status: if cfg["require_approval"] == true {
+                        "paused"
+                    } else {
+                        "active"
+                    }
+                    .into(),
+                    next_ms: None,
+                    created_ms: now,
+                    expires_ms: None,
+                    daily_cap: cfg["max_events_per_subscription"]
+                        .as_u64()
+                        .unwrap_or(50)
+                        .min(1000),
+                    retry_limit: 0,
+                    failure_limit: 5,
+                    failures: 0,
+                    memory: Value::Null,
+                    armed_by_user: false,
+                    last_error: None,
+                    activation_seq: None,
+                },
+            );
+            return Ok((json!({"registered":true}), vec![], true));
         }
         "probe" => json!({"protocol":1,"package":"automation","ready":true}),
         "list_event_sources" => {
@@ -541,11 +604,12 @@ fn reduce(state: &mut State, r: &Request) -> Result<(Value, Vec<Value>, bool), S
                 id: id.clone(),
                 revision: 1,
                 creation_digest: digest,
-                main_notes_intent:a["main_notes_intent"].as_str().map(str::to_owned),
+                main_notes_intent: a["main_notes_intent"].as_str().map(str::to_owned),
                 agent_id: string(&r.context, "agent_id")?,
                 prompt: string(a, "prompt")?,
                 reminder,
                 destination: destination(a, &r.context, reminder)?,
+                origin_session_id: r.context["session_id"].as_str().map(str::to_owned),
                 trigger: t,
                 status: if cfg["require_approval"] == true {
                     "paused"
@@ -686,7 +750,9 @@ fn reduce(state: &mut State, r: &Request) -> Result<(Value, Vec<Value>, bool), S
                     d.memory = a["memory"].clone();
                 }
                 "update_automation" => {
-                    if let Some(intent)=a["main_notes_intent"].as_str(){d.main_notes_intent=Some(intent.to_owned());}
+                    if let Some(intent) = a["main_notes_intent"].as_str() {
+                        d.main_notes_intent = Some(intent.to_owned());
+                    }
                     if d.status == "completed" {
                         d.status = "paused".into();
                     }
@@ -853,30 +919,74 @@ fn tick(state: &mut State, r: &Request) -> Result<(Value, Vec<Value>, bool), Str
             settings(&r.context)
         };
         !(d.trigger["kind"] == "cron" && cfg["allow_recurring_schedules"] == false
-            || matches!(d.trigger["kind"].as_str(),Some("event"|"main_notes")) && cfg["allow_event_subscriptions"] == false
+            || matches!(d.trigger["kind"].as_str(), Some("event" | "main_notes"))
+                && cfg["allow_event_subscriptions"] == false
             || cfg["require_approval"] == true && !d.armed_by_user)
     };
-    for mut d in definitions.iter().filter(|d|d.trigger["kind"]=="main_notes"&&d.status=="active"&&allowed(d)).cloned() {
-        let input=&r.args["main_notes_agents"][&d.agent_id];
-        if input["enabled"]!=true||input["session_id"]!=d.destination["session_id"]{continue;}
-        let cursor=state.main_notes_cursors.get(&d.agent_id).copied().unwrap_or(0);
-        let cfg=if r.args["agent_settings"].is_object(){&r.args["agent_settings"][&d.agent_id]}else{settings(&r.context)};
-        d.daily_cap=d.daily_cap.min(cfg["max_events_per_subscription"].as_u64().unwrap_or(50));
-        let changes:Vec<Value>=input["changes"].as_array().into_iter().flatten().filter(|c|c["version"].as_u64().is_some_and(|v|v>cursor)).take(128).cloned().collect();
-        if let Some(last)=changes.last().and_then(|c|c["version"].as_u64()) {
-            let actionable:Vec<_>=changes.iter().filter(|c|c["review_required"]==true).cloned().collect();
-            if actionable.is_empty(){state.main_notes_cursors.insert(d.agent_id.clone(),last);}
-            else {
-                let event=json!({"kind":"main_notes.updated","agent_id":d.agent_id,"version":last,"changes":actionable});
-                match queue(state,&d,now,format!("{}:version:{last}",d.id),event,vec![]) {
-                    Ok(())=>{state.main_notes_cursors.insert(d.agent_id.clone(),last);},
-                    Err(error)=>errors.push(json!({"id":d.id,"error":error})),
+    for mut d in definitions
+        .iter()
+        .filter(|d| d.trigger["kind"] == "main_notes" && d.status == "active" && allowed(d))
+        .cloned()
+    {
+        let input = &r.args["main_notes_agents"][&d.agent_id];
+        if input["enabled"] != true || input["session_id"] != d.destination["session_id"] {
+            continue;
+        }
+        let cursor = state
+            .main_notes_cursors
+            .get(&d.agent_id)
+            .copied()
+            .unwrap_or(0);
+        let cfg = if r.args["agent_settings"].is_object() {
+            &r.args["agent_settings"][&d.agent_id]
+        } else {
+            settings(&r.context)
+        };
+        d.daily_cap = d
+            .daily_cap
+            .min(cfg["max_events_per_subscription"].as_u64().unwrap_or(50));
+        let changes: Vec<Value> = input["changes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|c| c["version"].as_u64().is_some_and(|v| v > cursor))
+            .take(128)
+            .cloned()
+            .collect();
+        if let Some(last) = changes.last().and_then(|c| c["version"].as_u64()) {
+            let actionable: Vec<_> = changes
+                .iter()
+                .filter(|c| c["review_required"] == true)
+                .cloned()
+                .collect();
+            if actionable.is_empty() {
+                state.main_notes_cursors.insert(d.agent_id.clone(), last);
+            } else {
+                let event = json!({"kind":"main_notes.updated","agent_id":d.agent_id,"version":last,"changes":actionable});
+                match queue(
+                    state,
+                    &d,
+                    now,
+                    format!("{}:version:{last}", d.id),
+                    event,
+                    vec![],
+                ) {
+                    Ok(()) => {
+                        state.main_notes_cursors.insert(d.agent_id.clone(), last);
+                    }
+                    Err(error) => errors.push(json!({"id":d.id,"error":error})),
                 }
             }
         }
     }
     for d in &definitions {
-        if (d.trigger["kind"]=="main_notes"||d.id.starts_with("main-notes-action-"))&&(r.args["main_notes_agents"][&d.agent_id]["enabled"]!=true||r.args["main_notes_agents"][&d.agent_id]["session_id"]!=d.destination["session_id"]) {continue;}
+        if (d.trigger["kind"] == "main_notes" || d.id.starts_with("main-notes-action-"))
+            && (r.args["main_notes_agents"][&d.agent_id]["enabled"] != true
+                || r.args["main_notes_agents"][&d.agent_id]["session_id"]
+                    != d.destination["session_id"])
+        {
+            continue;
+        }
 
         if d.status != "active" || !allowed(d) {
             continue;
@@ -948,11 +1058,24 @@ fn tick(state: &mut State, r: &Request) -> Result<(Value, Vec<Value>, bool), Str
                 if !settled && d.trigger["source"] != source {
                     continue;
                 }
-                if source=="main_notes.updated"&&(event["agent_id"]!=d.agent_id||event["payload"]["review_required"]!=true){continue;}
+                if source == "main_notes.updated"
+                    && (event["agent_id"] != d.agent_id
+                        || event["payload"]["review_required"] != true)
+                {
+                    continue;
+                }
                 // A named sibling-session watch can share the same agent; its own destination remains excluded.
-                let sibling_watch=d.destination["kind"]=="existing_chat"&&d.trigger["filter"]["session_id"].as_str().is_some_and(|target|
-                    event["session_id"]==target&&d.destination["session_id"]!=target);
-                if event["agent_id"] == d.agent_id && source!="main_notes.updated" && source!="webhook.received" && !sibling_watch {
+                let sibling_watch = d.destination["kind"] == "existing_chat"
+                    && d.trigger["filter"]["session_id"]
+                        .as_str()
+                        .is_some_and(|target| {
+                            event["session_id"] == target && d.destination["session_id"] != target
+                        });
+                if event["agent_id"] == d.agent_id
+                    && source != "main_notes.updated"
+                    && source != "webhook.received"
+                    && !sibling_watch
+                {
                     continue;
                 }
                 let chain: Vec<String> = event["causal_chain"]
@@ -1009,8 +1132,15 @@ fn tick(state: &mut State, r: &Request) -> Result<(Value, Vec<Value>, bool), Str
         let Some(d) = state.definitions.get(&o.automation_id) else {
             continue;
         };
-        if o.status != "queued" || d.status != "active" || !allowed(d) || busy.contains(&d.id)
-            || (d.trigger["kind"]=="main_notes"||d.id.starts_with("main-notes-action-"))&&(r.args["main_notes_agents"][&d.agent_id]["enabled"]!=true||r.args["main_notes_agents"][&d.agent_id]["session_id"]!=d.destination["session_id"]) {
+        if o.status != "queued"
+            || d.status != "active"
+            || !allowed(d)
+            || busy.contains(&d.id)
+            || (d.trigger["kind"] == "main_notes" || d.id.starts_with("main-notes-action-"))
+                && (r.args["main_notes_agents"][&d.agent_id]["enabled"] != true
+                    || r.args["main_notes_agents"][&d.agent_id]["session_id"]
+                        != d.destination["session_id"])
+        {
             continue;
         }
         if o.revision != d.revision {
@@ -1159,21 +1289,46 @@ mod tests {
     }
     #[test]
     fn explicit_sibling_watch_accepts_same_agent_without_waking_itself() {
-        let created=call(json!({}),"event_subscribe",json!({"request_id":"watch","source":"session_settled","prompt":"check child","destination":{"kind":"existing_chat","session_id":"parent"},"filter":{"session_id":"child"}}),NOW);
-        assert_eq!(created["ok"],true);
-        let events=json!({"events":[{"id":"child-done","seq":1,"kind":"run.completed","agent_id":"a","session_id":"child"},{"id":"parent-done","seq":2,"kind":"run.completed","agent_id":"a","session_id":"parent"},{"id":"cycle","seq":3,"kind":"run.completed","agent_id":"a","session_id":"child","causal_chain":["watch"]}]});
-        let tick=call(created["state"].clone(),"tick",events,NOW);
-        assert_eq!(tick["state"]["occurrences"].as_object().unwrap().len(),1);
-        let self_watch=call(json!({}),"event_subscribe",json!({"request_id":"self-watch","source":"session_settled","prompt":"p","destination":{"kind":"existing_chat","session_id":"parent"},"filter":{"session_id":"parent"}}),NOW);
-        let tick=call(self_watch["state"].clone(),"tick",json!({"events":[{"id":"parent","seq":1,"kind":"run.completed","agent_id":"a","session_id":"parent"}]}),NOW);
-        assert_eq!(tick["state"]["occurrences"].as_object().unwrap().len(),0);
+        let created = call(
+            json!({}),
+            "event_subscribe",
+            json!({"request_id":"watch","source":"session_settled","prompt":"check child","destination":{"kind":"existing_chat","session_id":"parent"},"filter":{"session_id":"child"}}),
+            NOW,
+        );
+        assert_eq!(created["ok"], true);
+        let events = json!({"events":[{"id":"child-done","seq":1,"kind":"run.completed","agent_id":"a","session_id":"child"},{"id":"parent-done","seq":2,"kind":"run.completed","agent_id":"a","session_id":"parent"},{"id":"cycle","seq":3,"kind":"run.completed","agent_id":"a","session_id":"child","causal_chain":["watch"]}]});
+        let tick = call(created["state"].clone(), "tick", events, NOW);
+        assert_eq!(tick["state"]["occurrences"].as_object().unwrap().len(), 1);
+        let self_watch = call(
+            json!({}),
+            "event_subscribe",
+            json!({"request_id":"self-watch","source":"session_settled","prompt":"p","destination":{"kind":"existing_chat","session_id":"parent"},"filter":{"session_id":"parent"}}),
+            NOW,
+        );
+        let tick = call(
+            self_watch["state"].clone(),
+            "tick",
+            json!({"events":[{"id":"parent","seq":1,"kind":"run.completed","agent_id":"a","session_id":"parent"}]}),
+            NOW,
+        );
+        assert_eq!(tick["state"]["occurrences"].as_object().unwrap().len(), 0);
     }
     #[test]
-    fn private_webhook_metadata_can_wake_its_agent_with_an_exact_inbox_filter(){
-        let created=call(json!({}),"event_subscribe",json!({"request_id":"hook-sub","source":"webhook.received","prompt":"read inbox","filter":{"webhook_id":"inbox"},"destination":{"kind":"existing_chat","session_id":"s"}}),NOW);
-        assert_eq!(created["ok"],true);
-        let tick=call(created["state"].clone(),"tick",json!({"events":[{"id":"hook-event","seq":1,"kind":"webhook.received","agent_id":"a","session_id":"s","webhook_id":"inbox"},{"id":"other-inbox","seq":2,"kind":"webhook.received","agent_id":"a","session_id":"s","webhook_id":"other"}]}),NOW);
-        assert_eq!(tick["state"]["occurrences"].as_object().unwrap().len(),1);
+    fn private_webhook_metadata_can_wake_its_agent_with_an_exact_inbox_filter() {
+        let created = call(
+            json!({}),
+            "event_subscribe",
+            json!({"request_id":"hook-sub","source":"webhook.received","prompt":"read inbox","filter":{"webhook_id":"inbox"},"destination":{"kind":"existing_chat","session_id":"s"}}),
+            NOW,
+        );
+        assert_eq!(created["ok"], true);
+        let tick = call(
+            created["state"].clone(),
+            "tick",
+            json!({"events":[{"id":"hook-event","seq":1,"kind":"webhook.received","agent_id":"a","session_id":"s","webhook_id":"inbox"},{"id":"other-inbox","seq":2,"kind":"webhook.received","agent_id":"a","session_id":"s","webhook_id":"other"}]}),
+            NOW,
+        );
+        assert_eq!(tick["state"]["occurrences"].as_object().unwrap().len(), 1);
     }
     #[test]
     fn unsafe_retry_is_not_replayed() {
@@ -1985,22 +2140,77 @@ mod acceptance_boundary_tests {
 #[cfg(test)]
 mod main_notes_tests {
     use super::*;
-    fn call(state:Value,op:&str,args:Value,agent:&str)->Value {dispatch(json!({"protocol":1,"operation":op,"state":state,"args":args,"now_ms":1792310000000i64,"context":{"user_id":"admin","agent_id":agent,"session_id":"main","settings":{}}}))}
-    fn input(enabled:bool,version:u64,review:bool)->Value{json!({"enabled":enabled,"session_id":"main","changes":[{"version":version,"review_required":review,"entry_id":"a"}]})}
+    fn call(state: Value, op: &str, args: Value, agent: &str) -> Value {
+        dispatch(
+            json!({"protocol":1,"operation":op,"state":state,"args":args,"now_ms":1792310000000i64,"context":{"user_id":"admin","agent_id":agent,"session_id":"main","settings":{}}}),
+        )
+    }
+    fn input(enabled: bool, version: u64, review: bool) -> Value {
+        json!({"enabled":enabled,"session_id":"main","changes":[{"version":version,"review_required":review,"entry_id":"a"}]})
+    }
     #[test]
     fn bootstrap_recovery_agent_cursors_dedup_pause_and_retarget() {
-        let initial=call(json!({}),"bootstrap_main",json!({"id":"main-notes-review-one","session_id":"main"}),"one");assert_eq!(initial["ok"],true);
-        let duplicate=call(initial["state"].clone(),"bootstrap_main",json!({"id":"main-notes-review-one","session_id":"main"}),"one");assert_eq!(duplicate["state"]["definitions"].as_object().unwrap().len(),1);
-        let two=call(duplicate["state"].clone(),"bootstrap_main",json!({"id":"main-notes-review-two","session_id":"main"}),"two");assert_eq!(two["ok"],true);
-        let args=json!({"main_notes_agents":{"one":input(true,1,true),"two":input(true,1,true)},"agent_allowed":{"one":true,"two":true}});
-        let tick=call(two["state"].clone(),"tick",args.clone(),"one");assert_eq!(tick["ok"],true);assert_eq!(tick["state"]["main_notes_cursors"]["one"],1);assert_eq!(tick["state"]["main_notes_cursors"]["two"],1);
-        assert_eq!(tick["state"]["occurrences"].as_object().unwrap().len(),2);
-        let repeat=call(tick["state"].clone(),"tick",args,"one");assert_eq!(repeat["state"]["occurrences"].as_object().unwrap().len(),2);
-        let paused=call(repeat["state"].clone(),"tick",json!({"main_notes_agents":{"one":input(false,2,true),"two":input(false,2,true)}}),"one");
-        assert_eq!(paused["admissions"].as_array().unwrap().len(),0);assert_eq!(paused["state"]["main_notes_cursors"]["one"],1);
-        let resumed=call(paused["state"].clone(),"tick",json!({"main_notes_agents":{"one":input(true,2,false)}}),"one");assert_eq!(resumed["state"]["main_notes_cursors"]["one"],2);
-        let fresh=call(resumed["state"].clone(),"bootstrap_main",json!({"id":"main-notes-review-one","session_id":"fresh"}),"one");
-        assert_eq!(fresh["state"]["definitions"]["main-notes-review-one"]["destination"]["session_id"],"fresh");assert_eq!(fresh["state"]["definitions"].as_object().unwrap().len(),2);
-        assert_eq!(fresh["state"]["definitions"]["main-notes-review-two"]["destination"]["session_id"],"main");
+        let initial = call(
+            json!({}),
+            "bootstrap_main",
+            json!({"id":"main-notes-review-one","session_id":"main"}),
+            "one",
+        );
+        assert_eq!(initial["ok"], true);
+        let duplicate = call(
+            initial["state"].clone(),
+            "bootstrap_main",
+            json!({"id":"main-notes-review-one","session_id":"main"}),
+            "one",
+        );
+        assert_eq!(
+            duplicate["state"]["definitions"].as_object().unwrap().len(),
+            1
+        );
+        let two = call(
+            duplicate["state"].clone(),
+            "bootstrap_main",
+            json!({"id":"main-notes-review-two","session_id":"main"}),
+            "two",
+        );
+        assert_eq!(two["ok"], true);
+        let args = json!({"main_notes_agents":{"one":input(true,1,true),"two":input(true,1,true)},"agent_allowed":{"one":true,"two":true}});
+        let tick = call(two["state"].clone(), "tick", args.clone(), "one");
+        assert_eq!(tick["ok"], true);
+        assert_eq!(tick["state"]["main_notes_cursors"]["one"], 1);
+        assert_eq!(tick["state"]["main_notes_cursors"]["two"], 1);
+        assert_eq!(tick["state"]["occurrences"].as_object().unwrap().len(), 2);
+        let repeat = call(tick["state"].clone(), "tick", args, "one");
+        assert_eq!(repeat["state"]["occurrences"].as_object().unwrap().len(), 2);
+        let paused = call(
+            repeat["state"].clone(),
+            "tick",
+            json!({"main_notes_agents":{"one":input(false,2,true),"two":input(false,2,true)}}),
+            "one",
+        );
+        assert_eq!(paused["admissions"].as_array().unwrap().len(), 0);
+        assert_eq!(paused["state"]["main_notes_cursors"]["one"], 1);
+        let resumed = call(
+            paused["state"].clone(),
+            "tick",
+            json!({"main_notes_agents":{"one":input(true,2,false)}}),
+            "one",
+        );
+        assert_eq!(resumed["state"]["main_notes_cursors"]["one"], 2);
+        let fresh = call(
+            resumed["state"].clone(),
+            "bootstrap_main",
+            json!({"id":"main-notes-review-one","session_id":"fresh"}),
+            "one",
+        );
+        assert_eq!(
+            fresh["state"]["definitions"]["main-notes-review-one"]["destination"]["session_id"],
+            "fresh"
+        );
+        assert_eq!(fresh["state"]["definitions"].as_object().unwrap().len(), 2);
+        assert_eq!(
+            fresh["state"]["definitions"]["main-notes-review-two"]["destination"]["session_id"],
+            "main"
+        );
     }
 }

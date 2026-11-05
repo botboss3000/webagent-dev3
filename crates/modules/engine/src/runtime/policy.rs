@@ -91,12 +91,18 @@ impl<
                 policy["rules"][name] = json!("allow");
             }
         }
-        for name in ["task_status", "task_wait", "task_cancel"] {
+        policy = H::messaging_policy_defaults(policy);
+        // A tool the saved policy does not name takes its template rule, never an implicit
+        // deny; every saved rule, including deny, wins.
+        let template = self.policy_default();
+        for schema in C::schemas()? {
+            let Some(name) = schema["name"].as_str() else {
+                continue;
+            };
             if policy["rules"].get(name).is_none() {
-                policy["rules"][name] = json!("allow");
+                policy["rules"][name] = template_rule::<A>(&template, name);
             }
         }
-        policy = H::messaging_policy_defaults(policy);
         if mode["mode"] == "read_only" {
             for schema in C::schemas()? {
                 let name = schema["name"].as_str().unwrap_or("");
@@ -407,6 +413,21 @@ pub fn default_session_mode() -> Value {
 pub fn default_session_abilities() -> Value {
     json!({"revision":0,"active":[],"suppressed":[]})
 }
+/// Tool `name`'s rule in the `template` policy, or allow for a read and require approval
+/// for a write when the template does not name it.
+pub fn template_rule<A: crate::tools::execution::ActionCatalog>(
+    template: &Value,
+    name: &str,
+) -> Value {
+    template["rules"].get(name).cloned().unwrap_or_else(|| {
+        json!(if A::is_read(name) {
+            "allow"
+        } else {
+            "require_approval"
+        })
+    })
+}
+
 pub fn policy_decision<'a>(policy: &'a Value, name: &str) -> &'a str {
     policy["rules"][name].as_str().unwrap_or("deny")
 }

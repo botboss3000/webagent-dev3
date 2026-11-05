@@ -823,7 +823,7 @@ async fn perform(
     }
     Ok(public)
 }
-/// Active automations that deliver into `sid`; Main Notes bootstraps stay with their owner.
+/// Active automations that deliver into or were created by `sid`; Main Notes bootstraps stay with their owner.
 pub(crate) async fn session_automations(app: &App, sid: &str) -> Result<Vec<Value>> {
     let envelope = app.store.module_state("automation").await?;
     let definitions = envelope["state"]["definitions"].as_object();
@@ -832,19 +832,19 @@ pub(crate) async fn session_automations(app: &App, sid: &str) -> Result<Vec<Valu
         .flat_map(|items| items.values())
         .filter(|d| {
             d["status"] == "active"
-                && d["destination"]["session_id"] == sid
+                && (d["destination"]["session_id"] == sid || d["origin_session_id"] == sid)
                 && d["trigger"]["kind"] != "main_notes"
                 && !d["id"].as_str().unwrap_or("").starts_with("main-notes-")
         })
         .cloned()
         .collect())
 }
-/// Cancel every automation that delivers into deleted conversation `sid`.
+/// Cancel every automation that delivers into, or was created by, deleted conversation `sid`.
 pub(crate) async fn cancel_session_automations(app: &App, sid: &str) -> Result<()> {
     let envelope = app.store.module_state("automation").await?;
     let definitions = envelope["state"]["definitions"].as_object();
     for d in definitions.into_iter().flat_map(|items| items.values()) {
-        if d["destination"]["session_id"] != sid
+        if (d["destination"]["session_id"] != sid && d["origin_session_id"] != sid)
             || !matches!(d["status"].as_str(), Some("active" | "paused"))
         {
             continue;

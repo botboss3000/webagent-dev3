@@ -3,8 +3,8 @@ import { buildConfigRow } from '../../../../shared/ability-row-controls.js';
 const node = (tag, cls = '', text = '') => {
   const el = document.createElement(tag); el.className = cls; el.textContent = text; return el;
 };
-const row = (name, control, hint = '') => {
-  return buildConfigRow({ name, desc: hint, descTitle: hint, control });
+const row = (name, control, hint = '', className = '') => {
+  return buildConfigRow({ name, desc: hint, descTitle: hint, control, className });
 };
 const field = (name, value = '', type = 'text', maxLength = 2048) => {
   const input = node('input', 'ac-input'); input.type = type; input.value = value;
@@ -14,6 +14,8 @@ const message = error => error?.status === 409
   ? 'Configuration changed. Reload abilities before saving again.'
   : 'Configuration could not be saved. Check the fields and your agent authority.';
 const cautions = ['cautious', 'balanced', 'trusted'];
+// Agent settings are edited at the agent's own (Operator) level; other levels and user previews are read-only.
+const editable = (levelId, previewUser) => (!levelId || levelId === 'operator') && !previewUser;
 const settingsSpec = {
   terminal_control: ['terminal_caution', 'Terminal caution'],
   codebase_admin: ['destructive_caution', 'Destructive operation caution'],
@@ -21,7 +23,7 @@ const settingsSpec = {
 };
 function buildCodeIndexControls({ ability, data, request, scope, levelId, previewUser, status, rerender }) {
   const panel = node('div', 'ac-list v3-administrator-settings');
-  const enabled = !levelId && !previewUser;
+  const enabled = editable(levelId, previewUser);
   panel.append(node('p', 'ac-hint', enabled
     ? 'Automatic retrieval runs once for each new user message, uses the Code Index and Jev Decision ability, and sends only bounded source excerpts to scoring.'
     : 'Code Index retrieval settings are read-only while previewing a user or capability level.'));
@@ -77,7 +79,7 @@ function buildCodeIndexControls({ ability, data, request, scope, levelId, previe
 
 function buildOptimizationControls({ ability, data, request, scope, levelId, previewUser, status, rerender }) {
   const panel = node('div', 'ac-list v3-administrator-settings');
-  const enabled = !levelId && !previewUser;
+  const enabled = editable(levelId, previewUser);
   panel.append(node('p', 'ac-hint', enabled
     ? 'Defaults for explicit /optimize requests. Command overrides apply to that request only. Experiments produce a candidate for review.'
     : 'Optimization settings are read-only while previewing a user or capability level.'));
@@ -165,7 +167,7 @@ function buildManifestSettings({ ability, data, request, scope, levelId, preview
   const declared = Array.isArray(ability.config?.settings) ? ability.config.settings : [];
   if (!declared.length) return null;
   const panel = node('div', 'ac-list v3-administrator-settings');
-  const enabled = !levelId && !previewUser;
+  const enabled = editable(levelId, previewUser);
   panel.append(node('p', 'ac-hint', enabled
     ? 'Agent settings save as soon as you change them.'
     : 'Agent settings are read-only while previewing a user or capability level.'));
@@ -175,8 +177,13 @@ function buildManifestSettings({ ability, data, request, scope, levelId, preview
   const controls = [];
   for (const item of declared) {
     let control;
+    let slot = null;
     if (item.type === 'boolean') {
-      control = field(item.label, '', 'checkbox'); control.checked = value(item) === true;
+      // The page's shared switch: a full-size touch target, like the tool rows below.
+      control = field(item.label, '', 'checkbox'); control.className = 'conn-toggle';
+      control.checked = value(item) === true;
+      slot = node('label', 'conn-toggle-wrap');
+      slot.append(control, node('span', 'conn-toggle-track'));
     } else if (item.type === 'select') {
       control = node('select', 'ac-input ac-config-sel'); control.setAttribute('aria-label', item.label);
       for (const choice of item.options || []) {
@@ -203,7 +210,7 @@ function buildManifestSettings({ ability, data, request, scope, levelId, preview
       stacked.append(node('div', 'ac-gate-param-name', item.label), slot, hint);
       panel.append(stacked);
     } else {
-      panel.append(row(item.label, control, item.hint || ''));
+      panel.append(row(item.label, slot || control, item.hint || '', 'v3-setting-stacked'));
     }
   }
   const read = ([item, control]) => item.type === 'boolean' ? control.checked
@@ -246,7 +253,7 @@ export function buildAdministratorControls({ ability, data, repository, request,
   const spec = settingsSpec[ability.id];
   if (!spec || data.authority?.can_manage !== true) return null;
   const panel = node('div', 'ac-list v3-administrator-settings');
-  const enabled = !levelId && !previewUser;
+  const enabled = editable(levelId, previewUser);
   panel.append(node('p', 'ac-hint', enabled
     ? 'Agent settings. Caution never raises access above installation, account tier or capability policy.'
     : 'Agent settings are read-only while previewing a user or capability level.'));
