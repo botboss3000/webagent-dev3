@@ -1046,7 +1046,7 @@ async fn run_process() -> Result<()> {
         app.ready.store(true, Ordering::Release);
         let mut scheduler = tokio::spawn(futures_util::FutureExt::boxed(scheduler_with_progress(
             app.clone(),
-            progress,
+            progress.clone(),
         )));
         let mut signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         tokio::select! {
@@ -1058,7 +1058,16 @@ async fn run_process() -> Result<()> {
                 return Err(anyhow!("Loop dispatcher exited unexpectedly: {}", if result.is_err() {"task failure"} else {"early return"}));
             }
         }
+        // Drain: clearing `ready` stops dispatch and pauses each run before its next
+        // step, so a planned restart cuts off only calls that outlast the timeout.
         app.ready.store(false, Ordering::Release);
+        let drain = Duration::from_secs(app.runtime.read().await.scheduler.drain_timeout_seconds);
+        let deadline = tokio::time::Instant::now() + drain;
+        while !app.active.lock().await.is_empty() && tokio::time::Instant::now() < deadline {
+            // The dispatcher has stopped; keep the stall watchdog from exiting mid-drain.
+            progress.at(agent_loop::watchdog::Stage::Idle);
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
         app.stop.cancel();
         for token in app.active.lock().await.values() {
             token.cancel();

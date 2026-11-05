@@ -397,6 +397,21 @@ impl<
         }
         Ok(BuildPoll::Done(json!({"status":"success","output":output})))
     }
+    /// The deploy job and owning session the broker recorded before a planned restart
+    /// (`restart-cause.json` in the control directory), when written in the last hour.
+    fn restart_cause(app: &Self) -> Option<Value> {
+        let path = app.handles.control_dir.join("restart-cause.json");
+        let fresh = std::fs::metadata(&path)
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|at| at.elapsed().ok())
+            .is_some_and(|age| age.as_secs() < 3600);
+        if !fresh {
+            return None;
+        }
+        let cause: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+        cause["job_id"].is_string().then_some(cause)
+    }
     /// Window during which a cancellation-caused context pause is still reclaimed.
     const CANCELLED_PAUSE_RECLAIM_SECS: i64 = 24 * 60 * 60;
     /// Runs paused only because their context preparation was cancelled by a
@@ -514,26 +529,25 @@ impl<
                         .actions
                         .interrupt_run(user_app.store.records(), &run)
                         .await?;
-                    let mut review = super::batch::mark_uncertain_writes::<A>(&mut run);
+                    // A restart cut off a write: the agent gets a result naming the cause
+                    // and asking it to check for a partial effect; the repeat guard
+                    // remembers the call. No write waits for a review card.
+                    if run["restart_interruption"].is_null() {
+                        run["restart_interruption"] =
+                            json!({"kind":"unexpected_restart","recorded_at":now()});
+                    } else if let Some(cause) = Self::restart_cause(app) {
+                        run["restart_interruption"]["cause"] = cause;
+                    }
+                    super::batch::settle_cut_off_writes::<A>(&mut run);
+                    let review = false;
                     let name = run["pending"]["name"].as_str().unwrap_or("").to_owned();
                     if run["pending"]["state"] == "executing" && !A::is_read(&name) {
                         let retry = A::retry(&name);
-                        if retry.risk == tools::retry_guard::Risk::High {
-                            review = true;
-                        } else {
-                            // A restart cut off a low-risk write: the agent gets an
-                            // outcome-unknown result and the repeat guard remembers it.
-                            let call_id =
-                                run["pending"]["call_id"].as_str().unwrap_or("").to_owned();
-                            let args = run["pending"]["arguments"].clone();
-                            tools::retry_guard::record(
-                                &mut run, &name, &args, &call_id, None, &retry,
-                            );
-                            Self::append_tool(
-                                &mut run,
-                                &tools::retry_guard::outcome_unknown(&retry),
-                            )?;
-                        }
+                        let call_id = run["pending"]["call_id"].as_str().unwrap_or("").to_owned();
+                        let args = run["pending"]["arguments"].clone();
+                        tools::retry_guard::record(&mut run, &name, &args, &call_id, None, &retry);
+                        let result = super::batch::cut_off_result(&run, &retry);
+                        Self::append_tool(&mut run, &result)?;
                     }
                     run["status"] = json!("recovery");
                     run["uncertain"] = json!(true);
@@ -584,17 +598,16 @@ impl<
                             }
                         }
                     }
-                    // Keep a recorded failure visible while the run retries.
-                    if !resume
-                        || !run["error"]
-                            .as_str()
-                            .is_some_and(|e| e.starts_with("Retrying"))
+                    // Keep a recorded failure visible while the run retries. A clean
+                    // resume clears the pause note, so the restart leaves no trace.
+                    if !resume {
+                        run["error"] =
+                            json!("Automatic startup resume is disabled; explicit resume required");
+                    } else if !run["error"]
+                        .as_str()
+                        .is_some_and(|e| e.starts_with("Retrying"))
                     {
-                        run["error"] = json!(if !resume {
-                            "Automatic startup resume is disabled; explicit resume required"
-                        } else {
-                            "Recovered after interruption"
-                        });
+                        run["error"] = Value::Null;
                     }
                 }
                 user_app.save_override(&mut run).await?;

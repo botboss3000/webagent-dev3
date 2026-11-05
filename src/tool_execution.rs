@@ -84,6 +84,28 @@ mod tests {
         assert_eq!(held["batch"][1]["state"], "uncertain");
     }
     #[test]
+    fn restart_settles_every_cut_off_write_with_its_cause() {
+        use webagent_engine::tools::execution::ActionCatalog;
+        let mut run = json!({"restart_interruption":{"kind":"runtime_restart",
+            "cause":{"job_id":"j1","session":"S"}},"batch":[
+            {"state":"executing","pending":{"name":"commit_and_push","call_id":"b","arguments":{}}},
+            {"state":"uncertain","pending":{"name":"shell","call_id":"a","arguments":{}}},
+            {"state":"executing","pending":{"name":"file_read","call_id":"r","arguments":{}}}]});
+        webagent_engine::runtime::batch::settle_cut_off_writes::<NativeActions>(&mut run);
+        assert_eq!(run["batch"][0]["state"], "done");
+        assert_eq!(run["batch"][1]["state"], "done");
+        assert_eq!(run["batch"][2]["state"], "executing");
+        let output = run["batch"][0]["result"]["output"].as_str().unwrap();
+        assert!(output.contains("deploy job j1") && output.contains("needs reversing"));
+        let crash = json!({});
+        let retry = NativeActions::retry("shell");
+        let result = webagent_engine::runtime::batch::cut_off_result(&crash, &retry);
+        assert!(result["output"]
+            .as_str()
+            .unwrap()
+            .contains("unexpected app restart"));
+    }
+    #[test]
     fn repeat_policy_defaults_follow_tool_class() {
         use webagent_engine::tools::execution::ActionCatalog;
         use webagent_engine::tools::retry_guard::Risk;

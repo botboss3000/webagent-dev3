@@ -1395,14 +1395,14 @@ async fn changed_policy_invalidates_pending_action_approval() {
 }
 
 #[tokio::test]
-async fn recovery_holds_uncertain_writes_and_requeues_safe_reads() {
+async fn recovery_settles_cut_off_writes_and_requeues_safe_reads() {
     let (root, app) = fixture().await;
     let sid = conversation(&app).await;
     let id = queued(&app, &sid).await;
     running(&app, &id, "first").await;
     let mut run = app.run(&id).await.unwrap();
     run["phase"] = json!("tools");
-    run["pending"] = json!({"name":"file_write","state":"executing"});
+    run["pending"] = json!({"name":"file_write","state":"executing","call_id":"c1"});
     workflow::record(
         &mut run,
         &workflow::Policy::resolve(None).unwrap(),
@@ -1413,10 +1413,11 @@ async fn recovery_holds_uncertain_writes_and_requeues_safe_reads() {
     let receipt = run["workflow"]["receipts"]["pre_tool"].clone();
     app.save(&mut run).await.unwrap();
     recover(&app, true).await.unwrap();
+    // A cut-off write resumes with a result asking the agent to check it; no review card.
     let run = app.run(&id).await.unwrap();
-    assert_eq!(run["status"], "recovery");
-    assert_eq!(run["uncertain"], true);
-    assert_eq!(run["pending"]["state"], "executing");
+    assert_eq!(run["status"], "queued");
+    assert_eq!(run["uncertain"], false);
+    assert!(run.to_string().contains("unexpected app restart"));
     assert_eq!(run["workflow"]["receipts"]["pre_tool"], receipt);
     let sid2 = conversation(&app).await;
     let id2 = queued(&app, &sid2).await;
@@ -1428,7 +1429,7 @@ async fn recovery_holds_uncertain_writes_and_requeues_safe_reads() {
     let read = app.run(&id2).await.unwrap();
     assert_eq!(read["status"], "queued");
     assert_eq!(read["pending"]["state"], "requested");
-    assert_eq!(app.run(&id).await.unwrap()["status"], "recovery");
+    assert_eq!(app.run(&id).await.unwrap()["status"], "queued");
     let reopened = Store::open(root.path()).await.unwrap();
     let durable = reopened.get(&key("run", &id)).await.unwrap().unwrap();
     assert_eq!(durable["workflow"]["receipts"]["pre_tool"], receipt);
@@ -1554,7 +1555,7 @@ async fn interrupted_build_finish_waits_for_receipt_without_replaying_write() {
 }
 
 #[tokio::test]
-async fn startup_resume_setting_stops_safe_runs_but_preserves_uncertain_writes() {
+async fn startup_resume_setting_stops_safe_runs_and_settled_writes() {
     let (_root, app) = fixture().await;
     crate::services::save_boot_orphan_resume(&app.store, "admin", false, 0)
         .await
@@ -1569,17 +1570,16 @@ async fn startup_resume_setting_stops_safe_runs_but_preserves_uncertain_writes()
     let write_id = queued(&app, &sid2).await;
     running(&app, &write_id, "write-generation").await;
     let mut write = app.run(&write_id).await.unwrap();
-    write["pending"] = json!({"name":"file_write","state":"executing"});
+    write["pending"] = json!({"name":"file_write","state":"executing","call_id":"c1"});
     app.save(&mut write).await.unwrap();
     recover(&app, true).await.unwrap();
     let stopped = app.run(&read_id).await.unwrap();
     assert_eq!(stopped["status"], "stopped");
     assert_eq!(stopped["pending"]["state"], "requested");
     assert!(stopped["error"].as_str().unwrap().contains("disabled"));
-    let uncertain = app.run(&write_id).await.unwrap();
-    assert_eq!(uncertain["status"], "recovery");
-    assert_eq!(uncertain["uncertain"], true);
-    assert_eq!(uncertain["pending"]["state"], "executing");
+    let settled = app.run(&write_id).await.unwrap();
+    assert_eq!(settled["status"], "stopped");
+    assert_eq!(settled["uncertain"], false);
     // Non-startup recovery must still repair expired read leases.
     let sid3 = conversation(&app).await;
     let lease_id = queued(&app, &sid3).await;
@@ -1596,12 +1596,12 @@ async fn startup_resume_setting_stops_safe_runs_but_preserves_uncertain_writes()
         .execute(&app.store.app_pool)
         .await
         .unwrap();
-    for (name, expected) in [("file_read", "stopped"), ("file_write", "recovery")] {
+    for (name, expected) in [("file_read", "stopped"), ("file_write", "stopped")] {
         let sid = conversation(&app).await;
         let id = queued(&app, &sid).await;
         running(&app, &id, "corrupt-config-generation").await;
         let mut run = app.run(&id).await.unwrap();
-        run["pending"] = json!({"name":name,"state":"executing"});
+        run["pending"] = json!({"name":name,"state":"executing","call_id":"c1"});
         app.save(&mut run).await.unwrap();
         recover(&app, true).await.unwrap();
         assert_eq!(app.run(&id).await.unwrap()["status"], expected);

@@ -542,11 +542,15 @@ impl<
     // Process shutdown is not an intentional run stop. Keep the claimed checkpoint
     // recoverable; startup owns access checks, safe-read retry and uncertain writes.
     pub async fn preserve_restart_interruption(app: &Self, run: &mut Value) -> Result<bool> {
-        if !app.stop.is_cancelled() || status(run) != "running" || app.shutoff().await? {
+        let draining = !app.ready.load(std::sync::atomic::Ordering::Acquire);
+        if !(app.stop.is_cancelled() || draining)
+            || status(run) != "running"
+            || app.shutoff().await?
+        {
             return Ok(false);
         }
         run["restart_interruption"] = json!({"kind":"runtime_restart","recorded_at":now()});
-        run["error"] = json!("Interrupted by runtime restart; awaiting startup recovery");
+        run["error"] = json!("Paused for app update; resumes automatically");
         app.save(run).await?;
         Ok(true)
     }
@@ -1591,7 +1595,8 @@ impl<
             if Self::settle_followup_interrupt(&app, &mut run).await? {
                 return Ok(());
             }
-            if cancel.is_cancelled() {
+            // A drain (SIGTERM clears `ready`) pauses between steps; startup resumes it silently.
+            if cancel.is_cancelled() || !app.ready.load(std::sync::atomic::Ordering::Acquire) {
                 Self::preserve_restart_interruption(&app, &mut run).await?;
                 return Ok(());
             }

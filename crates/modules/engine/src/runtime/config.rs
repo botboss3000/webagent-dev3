@@ -34,6 +34,12 @@ pub struct Scheduler {
     /// Background fallback only; task hints and earlier lease deadlines still wake immediately.
     #[serde(default = "default_background_rescan_interval_ms")]
     pub background_rescan_interval_ms: u64,
+    /// On SIGTERM, how long running steps may finish before cut-off (planned restarts).
+    #[serde(default = "default_drain_timeout_seconds")]
+    pub drain_timeout_seconds: u64,
+}
+fn default_drain_timeout_seconds() -> u64 {
+    180
 }
 /// Existing runtime JSON keeps the deployed five-second default without a rewrite.
 fn default_background_rescan_interval_ms() -> u64 {
@@ -162,6 +168,7 @@ impl<C: SchemaCatalog> Default for Config<C> {
                 poll_interval_ms: 300,
                 recovery_interval_ms: 10000,
                 background_rescan_interval_ms: default_background_rescan_interval_ms(),
+                drain_timeout_seconds: default_drain_timeout_seconds(),
             },
             context: Context {
                 max_context_bytes: 262144,
@@ -236,6 +243,7 @@ impl<C: SchemaCatalog> Config<C> {
             || self.scheduler.max_unresolved_runs > 200
             || !(10..=60000).contains(&self.scheduler.poll_interval_ms)
             || !(1000..=3600000).contains(&self.scheduler.recovery_interval_ms)
+            || self.scheduler.drain_timeout_seconds > 1800
             || self.cache.document_budget_bytes > 268435456
             || self.cache.context_budget_bytes > 67108864
         {

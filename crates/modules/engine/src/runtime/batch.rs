@@ -89,6 +89,59 @@ pub fn uncertain_count(run: &Value) -> usize {
         })
         .unwrap_or(0)
 }
+/// The tool result an interrupted write gets after a restart, naming the restart's cause
+/// (`restart_interruption`) so the agent checks for a partial effect instead of resending.
+#[must_use]
+pub fn cut_off_result(run: &Value, retry: &tools::retry_guard::Retry) -> Value {
+    let interruption = &run["restart_interruption"];
+    let cause = match (
+        interruption["kind"].as_str(),
+        interruption["cause"]["job_id"].as_str(),
+    ) {
+        (Some("runtime_restart"), Some(job)) => format!(
+            "an app restart for deploy job {job} (session \"{}\")",
+            interruption["cause"]["session"]
+                .as_str()
+                .unwrap_or("unknown")
+        ),
+        (Some("runtime_restart"), None) => "a planned app restart".to_owned(),
+        _ => "an unexpected app restart".to_owned(),
+    };
+    let mut result = tools::retry_guard::outcome_unknown(retry);
+    result["output"] = json!(format!(
+        "Interrupted by {cause} while this call was running; its outcome is unknown. \
+         Check whether it made a partial change that needs reversing before continuing; \
+         do not simply resend it. {}",
+        result["output"].as_str().unwrap_or("")
+    ));
+    result
+}
+/// Restart recovery: every parallel write cut off by the restart, or still held as
+/// uncertain, completes with `cut_off_result` whatever its risk. Nothing waits for review.
+pub fn settle_cut_off_writes<A: tool_execution::ActionCatalog>(run: &mut Value) {
+    let mut settled = Vec::new();
+    let mut results = Vec::new();
+    if let Some(items) = run["batch"].as_array() {
+        for (index, item) in items.iter().enumerate() {
+            let name = item["pending"]["name"].as_str().unwrap_or("");
+            if matches!(item["state"].as_str(), Some("executing" | "uncertain"))
+                && !A::is_read(name)
+            {
+                let retry = A::retry(name);
+                results.push((index, cut_off_result(run, &retry)));
+                settled.push((name.to_owned(), item["pending"].clone(), retry));
+            }
+        }
+    }
+    for (index, result) in results {
+        run["batch"][index]["result"] = result;
+        run["batch"][index]["state"] = json!("done");
+    }
+    for (name, pending, retry) in settled {
+        let call_id = pending["call_id"].as_str().unwrap_or("");
+        tools::retry_guard::record(run, &name, &pending["arguments"], call_id, None, &retry);
+    }
+}
 /// Settle parallel writes cut off by a stop, restart or revocation, or still held as
 /// uncertain. A high-risk write is
 /// held for review; any other write completes as "outcome unknown", which the repeat guard

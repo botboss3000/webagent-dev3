@@ -9,6 +9,7 @@
   },
   "scheduler": {
     "background_rescan_interval_ms": 5000,
+    "drain_timeout_seconds": 180,
     "max_active_runs": 5,
     "max_unresolved_runs": 200,
     "poll_interval_ms": 300,
