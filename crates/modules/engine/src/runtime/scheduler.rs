@@ -502,31 +502,6 @@ impl<
                                     let watcher_id = id.clone();
                                     let watcher_generation = generation.clone();
                                     let watcher_cancel = cancel.clone();
-                                    let interrupt_app = cloned.clone();
-                                    let interrupt_id = id.clone();
-                                    let interrupt_cancel = cancel.clone();
-                                    let interrupt_watcher = tokio::spawn(async move {
-                                        loop {
-                                            tokio::select! {
-                                                _=interrupt_cancel.cancelled()=>break,
-                                                _=tokio::time::sleep(Duration::from_millis(250))=>{},
-                                            }
-                                            match crate::send_future(
-                                                interrupt_app.interrupt_requested(&interrupt_id),
-                                            )
-                                            .await
-                                            {
-                                                Ok(true) => {
-                                                    interrupt_cancel.cancel();
-                                                    break;
-                                                }
-                                                Ok(false) => {}
-                                                Err(error) => {
-                                                    tracing::warn!(run_id=%interrupt_id,"Interrupt observation deferred: {error}")
-                                                }
-                                            }
-                                        }
-                                    });
                                     let watcher = tokio::spawn(async move {
                                         loop {
                                             crate::send_future(tokio::time::sleep(
@@ -600,7 +575,6 @@ impl<
                                         }
                                     }
                                     cancel.cancel();
-                                    interrupt_watcher.abort();
                                     watcher.abort();
                                     crate::send_future(cloned.active.lock()).await.remove(&id);
                                     drop(permit);

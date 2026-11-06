@@ -111,7 +111,7 @@ pub fn admit(
     if args[REPEAT_ARG].as_str() != Some(prior.as_str()) || state == "running" {
         let what = match state.as_str() {
             "completed" => format!("already completed in this run as call {prior}"),
-            "running" => format!("is already being run in this turn as call {prior}"),
+            "running" => format!("is still running as call {prior}"),
             _ => format!(
                 "ended in this run as call {prior} with an unknown outcome; it may already \
                  have taken effect"
@@ -218,6 +218,19 @@ pub fn record(
         json!({"call_id":call_id,"state":state,"tool":name});
 }
 
+/// Record a call that is still running in the background (detached for a user message),
+/// so an identical call is held with "wait for its result" until its result is recorded.
+pub fn mark_running(run: &mut Value, name: &str, args: &Value, call_id: &str, retry: &Retry) {
+    if matches!(retry.risk, Risk::None | Risk::Exempt) {
+        return;
+    }
+    if !run["retry_guard"].is_object() {
+        run["retry_guard"] = json!({"actions":{},"decisions":[]});
+    }
+    run["retry_guard"]["actions"][key(name, args)] =
+        json!({"call_id":call_id,"state":"running","tool":name});
+}
+
 /// The agent-facing result for a write whose outcome is unknown.
 #[must_use]
 pub fn outcome_unknown(retry: &Retry) -> Value {
@@ -284,6 +297,37 @@ mod tests {
         Retry::default()
     }
 
+    #[test]
+    fn detached_call_holds_repeats_until_its_result_is_recorded() {
+        let mut run = json!({});
+        let args = json!({"command":"cargo test"});
+        mark_running(&mut run, "shell", &args, "c1", &high());
+        let Admission::Held(result) = admit(&mut run, "shell", &args, "c2", &high(), None) else {
+            panic!("expected a held repeat while the detached call runs");
+        };
+        assert!(result["output"]
+            .as_str()
+            .unwrap()
+            .contains("still running as call c1"));
+        // Naming the running call does not release it either.
+        let named = json!({"command":"cargo test","_repeat_of":"c1"});
+        assert!(matches!(
+            admit(&mut run, "shell", &named, "c3", &high(), None),
+            Admission::Held(_)
+        ));
+        record(
+            &mut run,
+            "shell",
+            &args,
+            "c1",
+            Some(&json!({"status":"success"})),
+            &high(),
+        );
+        assert_eq!(
+            run["retry_guard"]["actions"][key("shell", &args)]["state"],
+            "completed"
+        );
+    }
     #[test]
     fn first_call_runs_and_identical_completed_call_is_held() {
         let mut run = json!({});

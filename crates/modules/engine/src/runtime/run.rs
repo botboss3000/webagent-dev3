@@ -762,6 +762,33 @@ impl<
     ) -> Value {
         Self::followup_interruption_result(executing, completed)
     }
+    /// Give a detached call its stand-in result; the repeat guard holds an identical call
+    /// until the real result arrives.
+    async fn detached_result(
+        app: &Self,
+        mut run: Value,
+        name: &str,
+        args: &Value,
+        id: &str,
+        task_id: &str,
+    ) -> Result<std::ops::ControlFlow<()>> {
+        let call_id = run["pending"]["call_id"].as_str().unwrap_or("").to_owned();
+        tools::retry_guard::mark_running(&mut run, name, args, &call_id, &A::retry(name));
+        let result = json!({"status":"running","task_id":task_id,"output":format!(
+            "Still running as background task {task_id}: the user sent a message, so this \
+             call continues in the background while you answer it. Its result is delivered \
+             to you automatically when it finishes. Do not repeat this call; if the user \
+             asks to stop it, cancel it with task_cancel.")});
+        Self::append_tool(&mut run, &result)?;
+        app.store
+            .save_run_observed(
+                &mut run,
+                "tool_result",
+                &json!({"run_id":id,"name":name,"result":result}),
+            )
+            .await?;
+        Ok(std::ops::ControlFlow::Continue(()))
+    }
     // Keep tool execution in its own poll frame; the model phase retains its own loop state.
     async fn execute_tool_step(
         app: &Self,
@@ -775,6 +802,31 @@ impl<
         cancel: &CancellationToken,
         agent_id: &str,
     ) -> Result<std::ops::ControlFlow<()>> {
+        // A user message arrived before these calls started: skip every remaining call so
+        // the model sees the message first and re-issues whatever still applies.
+        if run["pending"].is_null() && run["batch"].is_null() && app.message_pending(&run).await? {
+            let idx = run["call_index"]
+                .as_u64()
+                .expect("run counters are numbers") as usize;
+            let calls = run["calls"].as_array().cloned().unwrap_or_default();
+            for call in calls.iter().skip(idx) {
+                let result = json!({"status":"not_run","output":
+                    "Requested but not run: the user sent a message before this call started. \
+                     Read the message, then issue the call again if it still applies."});
+                run["pending"] = json!({"call_id":call["call_id"]});
+                Self::append_tool(&mut run, &result)?;
+                app.store
+                    .save_run_observed(
+                        &mut run,
+                        "tool_result",
+                        &json!({"run_id":id,"name":call["name"],"result":result}),
+                    )
+                    .await?;
+            }
+            if idx < calls.len() {
+                return Ok(std::ops::ControlFlow::Continue(()));
+            }
+        }
         if run["calls"].as_array().is_some_and(|calls| {
             calls.len() > 1
                 && !calls
@@ -1262,6 +1314,17 @@ impl<
             }
             let retry = A::retry(&name);
             let call_id = run["pending"]["call_id"].as_str().unwrap_or("").to_owned();
+            // A call detached from an earlier run is still running: hold its repeat here too.
+            let same = tools::retry_guard::key(&name, &args);
+            for task in app.store.background_scan(Some(sid)).await? {
+                if task["detached"] == true
+                    && task["status"] == "running"
+                    && tools::retry_guard::key(&name, &task["arguments"]) == same
+                {
+                    let prior = task["call_id"].as_str().unwrap_or("");
+                    tools::retry_guard::mark_running(&mut run, &name, &args, prior, &retry);
+                }
+            }
             match tools::retry_guard::admit(&mut run, &name, &args, &call_id, &retry, None) {
                 tools::retry_guard::Admission::Run => {}
                 tools::retry_guard::Admission::Approve => {
@@ -1350,6 +1413,8 @@ impl<
         // call on its own ordinary executor stack; the one-child scope aborts on drop.
         let tool_started = std::time::Instant::now();
         let mut tool_task = tokio::task::JoinSet::new();
+        // The call has its own token: once detached it outlives this run step.
+        let call_cancel = app.stop.child_token();
         tool_task.spawn(app.clone().call(
             sid.clone(),
             id.clone(),
@@ -1358,9 +1423,65 @@ impl<
             args.clone(),
             pending_id.clone(),
             run["pending"]["policy_version"].as_u64().unwrap_or(0),
-            cancel.clone(),
+            call_cancel.clone(),
         ));
-        let result = match tool_task.join_next().await {
+        // Build calls keep their broker-job path; compaction must finish inside its step.
+        let detachable = !matches!(
+            name.as_str(),
+            "v3_build_work" | "build_work" | "compact_context"
+        );
+        let grace =
+            Duration::from_millis(app.runtime.read().await.scheduler.message_detach_grace_ms);
+        let mut message_since: Option<std::time::Instant> = None;
+        let joined = loop {
+            tokio::select! {
+                joined = tool_task.join_next() => break Some(joined),
+                _ = cancel.cancelled(), if !call_cancel.is_cancelled() => call_cancel.cancel(),
+                _ = tokio::time::sleep(Duration::from_millis(250)), if detachable => {
+                    if app.message_pending(&run).await.unwrap_or(false) {
+                        let since = *message_since.get_or_insert_with(std::time::Instant::now);
+                        if since.elapsed() >= grace {
+                            break None;
+                        }
+                    } else {
+                        message_since = None;
+                    }
+                }
+            }
+        };
+        let joined = match joined {
+            Some(joined) => joined,
+            None => {
+                // A user message is waiting: answer it now and let the call finish in the
+                // background. Its result reaches the model at a later step.
+                let _guard = app.handles.gate.lock().await;
+                let current = app.run(&id).await?;
+                if current["generation"] != *generation
+                    || current["pending"]["id"] != pending_id
+                    || current["pending"]["state"] != "executing"
+                    || status(&current) != "running"
+                {
+                    call_cancel.cancel();
+                    return Ok(std::ops::ControlFlow::Break(()));
+                }
+                match app
+                    .background_detach_record(&current, &args, Value::Null)
+                    .await?
+                {
+                    Some(task_id) => {
+                        app.background_follow_detached(task_id.clone(), tool_task, call_cancel);
+                        return Self::detached_result(app, current, &name, &args, id, &task_id)
+                            .await;
+                    }
+                    // No task capacity: keep waiting for the call as before.
+                    None => {
+                        drop(_guard);
+                        tool_task.join_next().await
+                    }
+                }
+            }
+        };
+        let result = match joined {
             Some(Ok(result)) => result,
             Some(Err(error)) => Err(tools::failure::task_error(Some(&error), tool_started)),
             None => Err(tools::failure::task_error(None, tool_started)),

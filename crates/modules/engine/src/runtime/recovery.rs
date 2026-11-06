@@ -202,6 +202,71 @@ impl<
             }
         }
     }
+    /// A user message arrived during a build wait: give the build call a stand-in result
+    /// and continue the run; the job is followed as a detached task and its result
+    /// delivered later. False when no task could be recorded (the wait continues).
+    async fn detach_build(app: &Self, run: &mut Value) -> Result<bool> {
+        let pending = run["pending"].clone();
+        let args = pending["arguments"].clone();
+        let Some(task_id) = app
+            .background_detach_record(run, &args, pending.clone())
+            .await?
+        else {
+            return Ok(false);
+        };
+        let name = pending["name"]
+            .as_str()
+            .unwrap_or("v3_build_work")
+            .to_owned();
+        let call_id = pending["call_id"].as_str().unwrap_or("").to_owned();
+        tools::retry_guard::mark_running(run, &name, &args, &call_id, &A::retry(&name));
+        let job = pending["external_job"]["job_id"]
+            .as_str()
+            .unwrap_or("unknown");
+        let result = json!({"status":"running","task_id":task_id,"output":format!(
+            "Build job {job} is still running as background task {task_id}: the user sent a \
+             message, so you can answer it now. The build result is delivered to you \
+             automatically when the job ends. Do not submit this build again.")});
+        Self::append_tool(run, &result)?;
+        run["status"] = json!("queued");
+        run["error"] = Value::Null;
+        let rid = run["id"].as_str().unwrap_or_default().to_owned();
+        app.store
+            .save_run_override(
+                run,
+                "tool_result",
+                &json!({"run_id":rid,"name":name,"result":result}),
+            )
+            .await?;
+        Ok(true)
+    }
+    /// Complete detached build tasks whose broker job has ended.
+    async fn follow_detached_builds(app: &Self) -> Result<()> {
+        for mut task in app.store.background_scan(None).await? {
+            if task["detached"] != true
+                || task["status"] != "running"
+                || !task["external_pending"].is_object()
+            {
+                continue;
+            }
+            let follow = json!({"id":task["run_id"],"session_id":task["session_id"],
+                "pending":task["external_pending"]});
+            let poll =
+                tokio::time::timeout(Duration::from_secs(3), Self::build_result(app, &follow))
+                    .await;
+            let Ok(Ok(BuildPoll::Done(result))) = poll else {
+                continue;
+            };
+            let revision = task["revision"].as_u64().unwrap_or(0);
+            task["result"] = result;
+            task["status"] = json!("completed");
+            task["completed_at"] = json!(now());
+            task["lease_until"] = json!(0);
+            app.store.background_cas(&task, Some(revision)).await?;
+            crate::wake::notify(&app.control_dir).await;
+        }
+        Ok(())
+    }
     /// Post one build chat line, keyed by job, kind and time so each is posted once.
     async fn build_line(
         app: &Self,
@@ -503,6 +568,12 @@ impl<
                         user_app.save_override(&mut run).await?;
                         continue;
                     }
+                    if status(&run) == "waiting_external"
+                        && user_app.message_pending(&run).await.unwrap_or(false)
+                        && Self::detach_build(&user_app, &mut run).await?
+                    {
+                        continue;
+                    }
                     let poll = tokio::time::timeout(
                         Duration::from_secs(3),
                         Self::build_result(&user_app, &run),
@@ -611,6 +682,7 @@ impl<
                 }
                 user_app.save_override(&mut run).await?;
             }
+            Self::follow_detached_builds(&user_app).await?;
         }
         if startup {
             let _ = std::fs::remove_file(app.handles.control_dir.join("restart-cause.json"));

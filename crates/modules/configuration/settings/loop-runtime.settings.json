@@ -50,6 +50,7 @@
     "/scheduler/background_rescan_interval_ms": "Scheduler internals; not offered in v1.",
     "/scheduler/drain_timeout_seconds": "Scheduler internals; not offered in v1.",
     "/scheduler/max_unresolved_runs": "Scheduler internals; not offered in v1.",
+    "/scheduler/message_detach_grace_ms": "Scheduler internals; not offered in v1.",
     "/scheduler/poll_interval_ms": "Scheduler internals; not offered in v1.",
     "/scheduler/recovery_interval_ms": "Scheduler internals; not offered in v1.",
     "/schema_version": "File format version.",

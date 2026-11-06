@@ -12,7 +12,8 @@ export function mountFollowupQueue({root,client,getSession,guard,note,keyId,forg
   const busy=new Set();
   const terminal=new Set(['delivered','cancelled','rejected']);
   // Translate durable queue states into short status text for transcript controls.
-  const label=entry=>held&&['pending','held'].includes(entry.status)&&entry.choice!=='interrupt'?'Held'+(reason?': '+reason:''):({pending:entry.choice==='interrupt'?'Interrupting…':entry.choice==='steer'?'Steering — next turn':'Queued',reviewing:'Reviewing…',held:'Held — waiting to resume',interrupting:'Interrupting…',delivered:'Delivered',cancelled:'Cancelled',rejected:'Not sent — rejected'})[entry.status]||entry.status;
+  // Every message joins the conversation at the agent's next step; running tools continue.
+  const label=entry=>held&&['pending','held'].includes(entry.status)?'Held'+(reason?': '+reason:''):({pending:'Sending — next step',reviewing:'Reviewing…',held:'Held — waiting to resume',delivered:'Delivered',cancelled:'Cancelled',rejected:'Not sent — rejected'})[entry.status]||entry.status;
   // Create a text-only action button and pass its callback through the panel guard.
   function makeButton(text,action){const b=document.createElement('button');b.type='button';b.textContent=text;b.onclick=guard(action);return b;}
   // Reconcile visible delivery rows from the current queue while retaining focused controls.
@@ -30,13 +31,12 @@ export function mountFollowupQueue({root,client,getSession,guard,note,keyId,forg
       box.queuePaintKey=paintKey;box.replaceChildren();row.dataset.deliveryStatus=entry.status;
       const status=document.createElement('p');status.className='followup-delivery-status';status.setAttribute('role','status');status.setAttribute('aria-live','polite');status.textContent=label(entry);box.append(status);
       if(entry.reason){const reason=document.createElement('p');reason.textContent=entry.reason;box.append(reason);}
-      const locked=entry.status==='interrupting'||entry.choice==='interrupt';
-      if(terminal.has(entry.status)||(locked&&!held)){if(focused){status.tabIndex=-1;status.focus({preventScroll:true});}continue;}
+      if(terminal.has(entry.status)){if(focused){status.tabIndex=-1;status.focus({preventScroll:true});}continue;}
       const actions=document.createElement('div');actions.className='followup-delivery-actions';actions.setAttribute('aria-label','Message delivery');
       // A held queue is resumed from its pending message; there is no separate banner.
-      const choices=[...(held?[['resume','Resume']]:[]),...(locked?[]:[['interrupt','Interrupt'],['steer','Steer'],['queue','Queue'],['cancel','Cancel']])];
+      const choices=[...(held?[['resume','Resume']]:[]),['cancel','Cancel']];
       for(const [choice,text] of choices){
-        const button=makeButton(text,choice==='resume'?resume:()=>change(entry,choice));button.dataset.deliveryChoice=choice;button.disabled=!canWrite()||busy.has(entry.id);if(choice!=='resume')button.setAttribute('aria-pressed',String(entry.choice===choice));actions.append(button);
+        const button=makeButton(text,choice==='resume'?resume:()=>change(entry,choice));button.dataset.deliveryChoice=choice;button.disabled=!canWrite()||busy.has(entry.id);actions.append(button);
       }
       box.append(actions);
       if(focused){const replacement=[...actions.children].find(button=>button.dataset.deliveryChoice===focused.dataset.deliveryChoice&&!button.disabled);if(replacement)replacement.focus({preventScroll:true});else{status.tabIndex=-1;status.focus({preventScroll:true});}}

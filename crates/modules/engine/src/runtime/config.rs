@@ -37,6 +37,10 @@ pub struct Scheduler {
     /// On SIGTERM, how long running steps may finish before cut-off (planned restarts).
     #[serde(default = "default_drain_timeout_seconds")]
     pub drain_timeout_seconds: u64,
+    /// How long a running tool call may keep a newly arrived user message waiting before
+    /// it is detached into a background task and the model answers the message.
+    #[serde(default)]
+    pub message_detach_grace_ms: u64,
 }
 fn default_drain_timeout_seconds() -> u64 {
     180
@@ -169,6 +173,7 @@ impl<C: SchemaCatalog> Default for Config<C> {
                 recovery_interval_ms: 10000,
                 background_rescan_interval_ms: default_background_rescan_interval_ms(),
                 drain_timeout_seconds: default_drain_timeout_seconds(),
+                message_detach_grace_ms: 0,
             },
             context: Context {
                 max_context_bytes: 262144,

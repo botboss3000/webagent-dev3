@@ -12,6 +12,7 @@
     "drain_timeout_seconds": 180,
     "max_active_runs": 5,
     "max_unresolved_runs": 200,
+    "message_detach_grace_ms": 0,
     "poll_interval_ms": 300,
     "recovery_interval_ms": 10000
   },

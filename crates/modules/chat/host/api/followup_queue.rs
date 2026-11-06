@@ -15,10 +15,8 @@ pub(crate) async fn delivery(
     let revision = body["expected_revision"]
         .as_u64()
         .ok_or_else(|| bad("expected_revision required"))?;
-    if !matches!(
-        body["choice"].as_str(),
-        Some("queue" | "steer" | "interrupt" | "cancel")
-    ) {
+    // Messages always join the conversation at the next step; only cancelling is a choice.
+    if body["choice"].as_str() != Some("cancel") {
         return Err(bad("Invalid delivery choice"));
     }
     if body.as_object().is_none_or(|m| {

@@ -89,7 +89,8 @@ pub(crate) async fn submit(
         ));
     }
     let prepared = api::chat::prepare_followup(app, s, body).await?;
-    let (e, docs) = prepared_entry(prepared, "queue");
+    // Delivered at the run's next model step; a running tool call is detached for it.
+    let (e, docs) = prepared_entry(prepared, "steer");
     let id = e["id"].as_str().unwrap().to_owned();
     let result = json!({"run_id":null,"submission_id":id,"message_id":e["message_id"],"delivery_state":"queued","queue_entry":public_entry(&e),"attachments":e["attachments"]});
     let message_id = e["message_id"].clone();
