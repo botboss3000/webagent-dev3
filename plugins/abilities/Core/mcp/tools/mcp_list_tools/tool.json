@@ -1,0 +1,23 @@
+{
+  "name": "mcp_list_tools",
+  "description": "Read the explicitly permitted schemas for one enabled MCP connection",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "connection_id": {
+        "type": "string",
+        "maxLength": 80
+      }
+    },
+    "required": [
+      "connection_id"
+    ],
+    "additionalProperties": false
+  }
+}

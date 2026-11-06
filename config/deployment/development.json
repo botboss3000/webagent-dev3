@@ -2298,11 +2298,12 @@
   },
   "plugins": {
     "mcp": {
-      "source": "src/plugin_packages/mcp",
+      "source": "plugins/abilities/Core/mcp/service",
+      "install": "plugins/abilities/Core/mcp/package",
       "executable": "webagent-mcp",
       "source_assets": [
         "plugin.json",
-        "mcp.json"
+        "servers.json"
       ],
       "configuration": {
         "plugin.json": {
@@ -2311,7 +2312,7 @@
           "executable": "webagent-mcp",
           "protocol": 1
         },
-        "mcp.json": {
+        "servers.json": {
           "version": 1,
           "servers": [
             {

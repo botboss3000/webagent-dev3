@@ -94,10 +94,6 @@ pub fn is_read(name: &str) -> bool {
         || crate::modules::is_read(name)
         || matches!(
             name,
-            "mcp_list_connections" | "mcp_search_servers" | "mcp_inspect_server" | "mcp_list_tools"
-        )
-        || matches!(
-            name,
             "task_status"
                 | "task_wait"
                 | "task_cancel"
@@ -184,6 +180,7 @@ pub(crate) fn definition_problems() -> Vec<String> {
                 .iter()
                 .copied(),
         )
+        .chain(crate::mcp::TOOLS.iter().copied())
         .collect();
     let mut problems = definitions::problems().to_vec();
     problems.extend(

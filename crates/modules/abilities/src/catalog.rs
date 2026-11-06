@@ -494,7 +494,7 @@ impl<H: Host> Catalog<H> {
                 if !valid_id(&id) || !ids.insert(id.clone()) {
                     bail!("Invalid or duplicate ability identifier: {id}");
                 }
-                if matches!(id.as_str(), "optimization" | "mcp" | crate::base::ID) {
+                if matches!(id.as_str(), "optimization" | crate::base::ID) {
                     bail!("Ability ID is reserved for its executable plugin");
                 }
                 let ability_path = folder.path();
@@ -782,41 +782,6 @@ impl<H: Host> Catalog<H> {
                 .collect(),
             selectable_skills: BTreeMap::new(),
         });
-        abilities.push(Ability {
-            id: "mcp".into(),
-            path: H::mcp_folder(),
-            manifest_digest: "mcp-v1".into(),
-            manifest_bytes_digest: String::new(),
-            tool_folders: None,
-            plugin: None,
-            frozen: false,
-            group: "Connections".into(),
-            group_name: "Connections".into(),
-            group_order: 90,
-            name: "MCP".into(),
-            description:
-                "Connect this agent to external MCP servers and explicitly permitted operations."
-                    .into(),
-            skill_summary: Some(
-                "Discover MCP servers, manage agent connections and call permitted remote tools."
-                    .into(),
-            ),
-            migration_note: None,
-            required_module: None,
-            icon: Some("plug".into()),
-            color: None,
-            order: 1,
-            kind: EntryKind::Ability,
-            readiness: Readiness::Ready,
-            config: json!({}),
-            tools: H::mcp_schemas()
-                .iter()
-                .filter_map(|s| s["name"].as_str().map(str::to_owned))
-                .collect(),
-            skill: Some(H::mcp_guidance().into()),
-            tool_skills: BTreeMap::new(),
-            selectable_skills: BTreeMap::new(),
-        });
         abilities.sort_by(|a, b| {
             (a.group_order, &a.group_name, a.order, &a.name, &a.id).cmp(&(
                 b.group_order,
@@ -901,8 +866,9 @@ impl<H: Host> Catalog<H> {
                 }) && read_bytes(&folder.join("runner.py"), 2 * 1024 * 1024).is_ok();
             }
         }
-        if ability.id == "mcp" {
-            return H::mcp_available();
+        // MCP tools work only while its separately installed package is present.
+        if ability.id == "mcp" && !H::mcp_available() {
+            return false;
         }
         if ability.id == crate::base::ID {
             return true;
@@ -985,13 +951,6 @@ impl<H: Host> Catalog<H> {
                 _ => false,
             };
             return declared.then_some(Cow::Borrowed(cached));
-        }
-        if ability.id == "mcp" {
-            return (H::mcp_available()
-                && kind == "ability"
-                && name == "mcp"
-                && cached == H::mcp_guidance())
-            .then_some(Cow::Borrowed(cached));
         }
         if ability.id == "optimization" {
             return (kind == "ability" && name == "optimization")
@@ -3636,7 +3595,7 @@ pub mod registered_tests {
             let ordinary = catalog
                 .abilities
                 .iter()
-                .filter(|entry| !matches!(entry.id.as_str(), "optimization" | "mcp"))
+                .filter(|entry| entry.id != "optimization")
                 .collect::<Vec<_>>();
             assert!(!ordinary.is_empty());
             assert_eq!(
@@ -3665,11 +3624,9 @@ pub mod registered_tests {
                     .count(),
                 0
             );
-            for ability in catalog
-                .abilities
-                .iter()
-                .filter(|a| a.group == "Core" && !matches!(a.id.as_str(), "p2p" | "automation"))
-            {
+            for ability in catalog.abilities.iter().filter(|a| {
+                a.group == "Core" && !matches!(a.id.as_str(), "p2p" | "automation" | "mcp")
+            }) {
                 for name in &ability.tools {
                     assert!(
                         Catalog::<H>::supported(name) || is_discovery(name),

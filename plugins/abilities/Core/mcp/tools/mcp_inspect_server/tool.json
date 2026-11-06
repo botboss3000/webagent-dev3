@@ -1,0 +1,23 @@
+{
+  "name": "mcp_inspect_server",
+  "description": "Inspect a public HTTPS MCP server before adding it; never accepts credentials",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "endpoint": {
+        "type": "string",
+        "maxLength": 2048
+      }
+    },
+    "required": [
+      "endpoint"
+    ],
+    "additionalProperties": false
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "mcp_list_connections",
+  "description": "List this agent's enabled MCP connections and their revision",
+  "effect": "read",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  }
+}

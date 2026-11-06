@@ -538,7 +538,7 @@ async fn search_with_registry<F: std::future::Future<Output = Result<Value>>>(
     budget: Duration,
 ) -> Result<Value> {
     let mut servers = Vec::new();
-    let catalog_path = root.join("mcp.json");
+    let catalog_path = root.join("servers.json");
     if let Ok(metadata) = tokio::fs::metadata(&catalog_path).await {
         if metadata.len() > MAX as u64 {
             bail!("Catalog rejected")
@@ -828,7 +828,7 @@ mod tests {
     #[tokio::test]
     async fn slow_registry_returns_curated_results_before_ipc_timeout() {
         let root = tempfile::tempdir().unwrap();
-        std::fs::write(root.path().join("mcp.json"), serde_json::to_vec(&json!({"version":1,"servers":[{"name":"DeepWiki","description":"GitHub repository documentation","remotes":[{"type":"streamable-http","url":"https://mcp.deepwiki.com/mcp"}]}]})).unwrap()).unwrap();
+        std::fs::write(root.path().join("servers.json"), serde_json::to_vec(&json!({"version":1,"servers":[{"name":"DeepWiki","description":"GitHub repository documentation","remotes":[{"type":"streamable-http","url":"https://mcp.deepwiki.com/mcp"}]}]})).unwrap()).unwrap();
         let result = tokio::time::timeout(
             Duration::from_secs(1),
             search_with_registry(

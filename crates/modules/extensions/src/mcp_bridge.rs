@@ -24,11 +24,12 @@ static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 const FRAME_LIMIT: usize = 1024 * 1024;
 const BINARY_LIMIT: u64 = 32 * 1024 * 1024;
 
+/// The installed package: root-owned, git-ignored and never captured as a source input.
 pub fn folder() -> PathBuf {
     PathBuf::from(
         std::env::var("V3_PLUGIN_TEST_ROOT").unwrap_or_else(|_| "/live-checkout/plugins".into()),
     )
-    .join("mcp")
+    .join("abilities/Core/mcp/package")
 }
 
 // Check every path component, including the installation parent: resolving a

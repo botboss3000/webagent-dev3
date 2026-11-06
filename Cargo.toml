@@ -120,7 +120,7 @@ path = "src/boot_host_main.rs"
 
 [[bin]]
 name = "webagent-mcp"
-path = "src/plugin_packages/mcp/main.rs"
+path = "plugins/abilities/Core/mcp/service/main.rs"
 
 [[bin]]
 name = "webagent-diagnostics"

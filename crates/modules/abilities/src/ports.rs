@@ -15,10 +15,7 @@ pub trait Host: Clone + Send + Sync + 'static {
     fn optimization_available() -> bool;
     fn optimization_generation() -> Option<String>;
     fn optimization_guidance() -> Option<String>;
-    fn mcp_folder() -> PathBuf;
     fn mcp_available() -> bool;
-    fn mcp_schemas() -> Vec<Value>;
-    fn mcp_guidance() -> &'static str;
     /// The live checkout's drift from the running release; none unless the host compares them.
     fn drift() -> std::sync::Arc<crate::drift::Drift> {
         std::sync::Arc::default()

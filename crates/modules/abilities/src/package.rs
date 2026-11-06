@@ -494,10 +494,7 @@ impl Package {
         let schema_bytes = read(&relative(root, &manifest["schemas"])?, 256 * 1024)?;
         let schemas: Vec<Value> = serde_json::from_slice(&schema_bytes)?;
         let mut names = std::collections::BTreeSet::new();
-        let native = H::native_schemas()
-            .into_iter()
-            .chain(H::mcp_schemas())
-            .collect::<Vec<_>>();
+        let native = H::native_schemas();
         for schema in &schemas {
             let name = schema["name"]
                 .as_str()

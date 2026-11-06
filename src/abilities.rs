@@ -46,17 +46,8 @@ impl webagent_abilities::Host for NativeHost {
     fn optimization_guidance() -> Option<String> {
         crate::optimization::guidance()
     }
-    fn mcp_folder() -> PathBuf {
-        crate::mcp::bridge::folder()
-    }
     fn mcp_available() -> bool {
         crate::mcp::bridge::available()
-    }
-    fn mcp_schemas() -> Vec<Value> {
-        crate::mcp::all_schemas()
-    }
-    fn mcp_guidance() -> &'static str {
-        crate::mcp::GUIDANCE
     }
     fn drift() -> std::sync::Arc<webagent_abilities::drift::Drift> {
         crate::ability_drift::current()
