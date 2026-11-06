@@ -71,7 +71,8 @@ harness (HARNESSES below).
                                   claude_bridge: headless `claude -p` (needs `claude` signed in);
                                   bare: no CLAUDE.md, settings, hooks, memory, skills.
                                   opencode_bridge: `opencode run` (needs `opencode` signed in);
-                                  its tools stay listed (free models require it) but every use is rejected.
+                                  its own tools stay listed but rejected for free models (they require them)
+                                  and are hidden for paid ones.
                                   muse_bridge: hands each turn to a live Muse agent through files in the
                                   chat's muse-inbox/ (see answer_muse).
     stats [HOURS]                 summarize auto-mode call timing (work/harness-bridge/timing.jsonl), default 24 h
@@ -113,6 +114,7 @@ OPENCODE_PROMPT = ("You are the language model behind a WebAgent agent. Act exac
     "agent instructions and conversation you are given and decide the next assistant turn. WebAgent's tools are "
     "your webagent_* tools (webagent_<name> for a tool listed as <name>). Calling one hands it to WebAgent, which "
     "runs it and sends the result in your next message, so after your tool calls end your turn without waiting. "
+    "To run a command use webagent_shell, never bash; to read or write files use WebAgent's file tools. "
     "Never use your other tools: every use is rejected, and this computer is not the agent's workspace.")
 # The installer puts opencode in ~/.opencode/bin, which a systemd PATH usually lacks.
 OPENCODE = shutil.which("opencode") or str(Path.home() / ".opencode" / "bin" / "opencode")
@@ -120,15 +122,18 @@ OPENCODE_HOME = Path.home() / ".cache" / "opencode-bridge"
 MCP_PREFIX = "webagent_"
 
 
-def opencode_config(work):
-    """Free OpenCode models answer only while the harness lists its own tools, so they stay listed but "ask"
-    makes the headless run reject every use (never pass --auto). WebAgent's tools come from this script's
-    MCP stub, which records each call for the reply instead of running it."""
+def opencode_config(work, model):
+    """Free OpenCode models answer only while the harness lists its own tools, so for them they stay listed
+    but "ask" makes the headless run reject every use (never pass --auto). Paid models get "deny", which
+    hides them, so the model cannot pick bash over webagent_shell. WebAgent's tools come from this script's
+    MCP stub, which records each call for the reply instead of running it; WebAgent's own policy and
+    approvals are their only gate."""
+    own = "ask" if model.startswith("opencode/") else "deny"
     return json.dumps({
         "mcp": {"webagent": {"type": "local", "enabled": True,
                              "command": [sys.executable, "-B", str(Path(__file__).resolve()), "mcp", str(work)]}},
         "agent": {"webagent-bridge": {"mode": "primary", "prompt": OPENCODE_PROMPT,
-                                      "permission": {"*": "ask", MCP_PREFIX + "*": "allow"}}}})
+                                      "permission": {"*": own, "execute": "allow", MCP_PREFIX + "*": "allow"}}}})
 
 
 def secret():
@@ -414,11 +419,11 @@ def mcp_stub(work):
         print(json.dumps({"jsonrpc": "2.0", "id": rid, "result": result}), flush=True)
 
 
-def opencode_turn(command, prompt, work):
+def opencode_turn(command, prompt, work, model):
     """Run one `opencode run`; return its session id, the final text and token usage."""
     # The prompt goes on stdin: a fresh session's full history can exceed the 128 KiB argument cap.
     result = subprocess.run(command, input=prompt, cwd=work, capture_output=True, text=True, timeout=HARNESS_SECS,
-                            env={**os.environ, "OPENCODE_CONFIG_CONTENT": opencode_config(work)})
+                            env={**os.environ, "OPENCODE_CONFIG_CONTENT": opencode_config(work, model)})
     session, texts, usage, errors = None, {}, {"input": 0, "output": 0}, []
     for line in result.stdout.splitlines():
         try:
@@ -457,7 +462,7 @@ def answer_opencode(call, folder, state, delta):
     (work / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
     (work / "calls.jsonl").unlink(missing_ok=True)
     started = time.time()
-    session, text, usage = opencode_turn(command, prompt, work)
+    session, text, usage = opencode_turn(command, prompt, work, body.get("model", ""))
     ended = time.time()
     calls = [json.loads(line) for line in (work / "calls.jsonl").read_text().splitlines()] \
         if (work / "calls.jsonl").exists() else []
