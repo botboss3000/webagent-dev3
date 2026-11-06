@@ -310,6 +310,30 @@ class MonitorTests(unittest.TestCase):
         code, out = self.run_monitor([self.progress(running=[stuck], idle_seconds=901)], job="job-2")
         self.assertEqual(code, 4); self.assertIn("no progress for 901s", out)
 
+    def test_late_wakes_floor_at_a_minute_then_every_five(self):
+        tiny = {"stage": "deploy", "id": "2", "seconds": 30, "late": 5, "samples": 30}
+        code, _ = self.run_monitor([self.progress(running=[tiny]), self.progress(status="failed")])
+        self.assertEqual(code, 1)  # p95 5 s, but nothing before a minute
+        self.state.joinpath("job-1.json").unlink(missing_ok=True)
+        code, _ = self.run_monitor([self.progress(running=[dict(tiny, seconds=61)])])
+        self.assertEqual(code, 4)
+        code, _ = self.run_monitor([self.progress(running=[dict(tiny, seconds=200)]), self.progress(status="failed")])
+        self.assertEqual(code, 1)  # next check-in is at 6 minutes
+        code, _ = self.run_monitor([self.progress(running=[dict(tiny, seconds=361)])])
+        self.assertEqual(code, 4)
+
+    def test_queued_job_wakes_after_a_minute_then_every_five(self):
+        queued = lambda seconds: self.progress(status="queued", job_seconds=seconds)
+        code, _ = self.run_monitor([queued(30), queued(30), self.progress(status="failed")])
+        self.assertEqual(code, 1)
+        self.state.joinpath("job-1.json").unlink(missing_ok=True)
+        code, out = self.run_monitor([queued(61), queued(61)])
+        self.assertEqual(code, 4); self.assertIn("still queued after", out)
+        code, _ = self.run_monitor([queued(200), self.progress(status="failed")])
+        self.assertEqual(code, 1)
+        code, _ = self.run_monitor([queued(361)])
+        self.assertEqual(code, 4)
+
     def test_unresponsive_broker_backs_off_then_wakes_with_four_and_names_it(self):
         calls, pauses = [], []
         def request(name, arguments):
@@ -339,7 +363,7 @@ class MonitorTests(unittest.TestCase):
 
     def test_queued_job_names_what_it_waits_behind(self):
         ahead = [{"job_id": "abcdef12-0000", "task_id": "other-task", "session": "Fix login", "phase": "building_api"}]
-        queued = self.progress(status="queued", queued_behind=ahead)
+        queued = self.progress(status="queued", queued_behind=ahead, job_seconds=10)
         code, out = self.run_monitor([queued, self.progress(running=[{"stage": "dependencies", "id": "1", "seconds": 1}])])
         self.assertEqual(code, 3)
         self.assertIn('queued behind other-task (session "Fix login", job abcdef12, building_api)', out)

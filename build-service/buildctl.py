@@ -367,6 +367,7 @@ def watch(job_id, step=False, request=call, pause=time.sleep):
 
 STALL_SECONDS = 900
 LATE_EVERY = 300
+LATE_FLOOR = 60  # never call a stage or queue wait late before a minute, however small its p95
 UNRESPONSIVE_TRIES = 3  # reply timeouts in a row before monitor reports the broker unresponsive
 PARALLEL_HOLD = 120
 MONITOR_TIMEOUT = 3600
@@ -378,9 +379,9 @@ def monitor(task_id=None, job_id=None, request=call, pause=time.sleep, clock=tim
     Exit 0 completed with healthy containers; 1 failed, cancelled, uncertain, interrupted, needs a decision,
     or completed unhealthy; 2 no job appeared for the task within timeout; 3 the job queued, its queue
     changed, it started, or a stage finished (it waits up to PARALLEL_HOLD for a parallel partner to start,
-    so 3a and 3b show together); 4 a running stage passed the high end of its normal range (p95, needing
-    5 recent jobs) or its live step reported nothing for STALL_SECONDS, then at check-ins every
-    min(p95, LATE_EVERY) while it runs. State between relaunches lives under ~/.cache/webagent-buildctl/monitor/."""
+    so 3a and 3b show together); 4 a running stage passed max(p95, LATE_FLOOR) (p95 needs 5 recent jobs),
+    a job stayed queued LATE_FLOOR, or a live step reported nothing for STALL_SECONDS; late wakes repeat
+    every LATE_EVERY while the stage runs or the job stays queued. State between relaunches lives under ~/.cache/webagent-buildctl/monitor/."""
     state_root = Path(state_root or BEATS / "monitor")
     state_path = state_root / ((task_id or job_id) + ".json")
     started = clock()
@@ -447,15 +448,17 @@ def monitor(task_id=None, job_id=None, request=call, pause=time.sleep, clock=tim
         for stage in progress.get("running_stages", []):
             name, seconds, late = stage["stage"], stage.get("seconds") or 0, stage.get("late")
             stall = stage["stage"] == progress.get("stage") and (progress.get("idle_seconds") or 0) > STALL_SECONDS and name not in stalled
-            due = late and stage.get("samples", 0) >= 5 and seconds >= late + alerted.get(name, 0) * min(late, LATE_EVERY)
+            due = late and stage.get("samples", 0) >= 5 and late_due(seconds, late, alerted, name)
             if stall or due:
                 if stall:
                     stalled.append(name)
-                if due:
-                    alerted[name] = int((seconds - late) // min(late, LATE_EVERY)) + 1
                 print(f"{'no progress for ' + str(progress.get('idle_seconds')) + 's in' if stall else 'past its normal range:'} "
                       f"{stage.get('id')} {name} at {minutes(seconds)} (late after {minutes(late)})")
                 save(current);show(progress);return DECISION_EXIT
+        waited = progress.get("job_seconds") or 0
+        if status == "queued" and late_due(waited, 0, alerted, "queued"):
+            print(f"still queued after {minutes(waited)}")
+            save(current);show(progress);return DECISION_EXIT
         idle = progress.get("idle_seconds") or 0
         if status == "running" and not progress.get("running_stages") and idle > STALL_SECONDS and "between stages" not in stalled:
             # No command running and nothing reported: the runner never started its next step.
@@ -463,6 +466,15 @@ def monitor(task_id=None, job_id=None, request=call, pause=time.sleep, clock=tim
             print(f"no command or progress for {idle}s after {progress.get('stage')}")
             save(current);show(progress);return DECISION_EXIT
         pause(POLL_SECONDS)
+
+
+def late_due(seconds, late, alerted, name):
+    """True once seconds reach max(late, LATE_FLOOR), then every LATE_EVERY; records the check-in in alerted."""
+    first = max(late, LATE_FLOOR)
+    if seconds < first + alerted.get(name, 0) * LATE_EVERY:
+        return False
+    alerted[name] = int((seconds - first) // LATE_EVERY) + 1
+    return True
 
 
 IGNORED = ("__pycache__", ".pytest_cache", "target")
