@@ -388,6 +388,20 @@ pub fn emit<S: SnapshotStore>(recorder: Option<&Recorder<S>>, event: Value) {
     }
 }
 
+/// A loop lifecycle event (drain start/end) in the recovery category; no run content.
+pub fn lifecycle<S: SnapshotStore>(recorder: Option<&Recorder<S>>, message: &str, fields: Value) {
+    let Some(s) = settings(recorder).filter(|s| bridge::available() && permits(s, "recovery"))
+    else {
+        return;
+    };
+    let mut event = json!({"category":"recovery","level":"info","owner":"admin",
+        "config_digest":s.digest,"message":message});
+    if let (Some(event), Value::Object(fields)) = (event.as_object_mut(), fields) {
+        event.extend(fields);
+    }
+    emit(recorder, event);
+}
+
 pub fn provider_enabled<S: SnapshotStore>(recorder: Option<&Recorder<S>>, store: &S) -> bool {
     scope(store)
         && bridge::available()

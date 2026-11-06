@@ -7,8 +7,8 @@ pub mod server;
 pub mod ui_trace;
 use anyhow::Result;
 pub use recorder::{
-    assembly, committed, context, failure, init, provider_enabled, read, scope, settings, status,
-    summary, validation, Filter, Recorder, Settings,
+    assembly, committed, context, failure, init, lifecycle, provider_enabled, read, scope,
+    settings, status, summary, validation, Filter, Recorder, Settings,
 };
 use serde_json::Value;
 use std::future::Future;

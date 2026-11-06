@@ -35,6 +35,9 @@ fn api_error(error: package::Error) -> crate::ApiError {
 pub(crate) async fn init(root: &Path, _store: &Store, role: &str) {
     package::init(&RECORDER, root, role).await
 }
+pub(crate) fn lifecycle(message: &str, fields: Value) {
+    package::lifecycle(RECORDER.get(), message, fields)
+}
 pub(crate) fn provider_enabled(store: &Store) -> bool {
     package::provider_enabled(RECORDER.get(), store)
 }

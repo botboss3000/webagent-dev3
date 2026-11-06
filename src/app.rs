@@ -1061,13 +1061,28 @@ async fn run_process() -> Result<()> {
         // Drain: clearing `ready` stops dispatch and pauses each run before its next
         // step, so a planned restart cuts off only calls that outlast the timeout.
         app.ready.store(false, Ordering::Release);
+        // Mark this restart as planned for startup recovery, unless the broker already
+        // recorded its deploy job there.
+        let cause = app.control_dir.join("restart-cause.json");
+        if !cause.exists() {
+            let _ = std::fs::write(&cause, br#"{"planned":true}"#);
+        }
         let drain = Duration::from_secs(app.runtime.read().await.scheduler.drain_timeout_seconds);
-        let deadline = tokio::time::Instant::now() + drain;
-        while !app.active.lock().await.is_empty() && tokio::time::Instant::now() < deadline {
-            // The dispatcher has stopped; keep the stall watchdog from exiting mid-drain.
-            progress.at(agent_loop::watchdog::Stage::Idle);
+        let started = tokio::time::Instant::now();
+        let active = app.active.lock().await.len();
+        crate::diagnostics::lifecycle(
+            "Loop drain started",
+            json!({"active_runs":active,"drain_timeout_seconds":drain.as_secs()}),
+        );
+        while !app.active.lock().await.is_empty() && started.elapsed() < drain {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
+        let remaining = app.active.lock().await.len();
+        crate::diagnostics::lifecycle(
+            "Loop drain ended",
+            json!({"reason":if remaining == 0 {"all_paused"} else {"timeout"},
+                "seconds":started.elapsed().as_secs(),"cut_off_runs":remaining}),
+        );
         app.stop.cancel();
         for token in app.active.lock().await.values() {
             token.cancel();

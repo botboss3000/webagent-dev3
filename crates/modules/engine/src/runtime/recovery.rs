@@ -397,20 +397,14 @@ impl<
         }
         Ok(BuildPoll::Done(json!({"status":"success","output":output})))
     }
-    /// The deploy job and owning session the broker recorded before a planned restart
-    /// (`restart-cause.json` in the control directory), when written in the last hour.
+    /// A planned restart's mark (`restart-cause.json` in the control directory): written by
+    /// the loop on SIGTERM, or first by the broker with its deploy job and owning session.
+    /// Startup recovery deletes it, so a later crash is never mistaken for a planned restart.
     fn restart_cause(app: &Self) -> Option<Value> {
         let path = app.handles.control_dir.join("restart-cause.json");
-        let fresh = std::fs::metadata(&path)
-            .and_then(|meta| meta.modified())
+        serde_json::from_slice::<Value>(&std::fs::read(path).ok()?)
             .ok()
-            .and_then(|at| at.elapsed().ok())
-            .is_some_and(|age| age.as_secs() < 3600);
-        if !fresh {
-            return None;
-        }
-        let cause: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-        cause["job_id"].is_string().then_some(cause)
+            .filter(Value::is_object)
     }
     /// Window during which a cancellation-caused context pause is still reclaimed.
     const CANCELLED_PAUSE_RECLAIM_SECS: i64 = 24 * 60 * 60;
@@ -532,11 +526,16 @@ impl<
                     // A restart cut off a write: the agent gets a result naming the cause
                     // and asking it to check for a partial effect; the repeat guard
                     // remembers the call. No write waits for a review card.
-                    if run["restart_interruption"].is_null() {
-                        run["restart_interruption"] =
-                            json!({"kind":"unexpected_restart","recorded_at":now()});
-                    } else if let Some(cause) = Self::restart_cause(app) {
-                        run["restart_interruption"]["cause"] = cause;
+                    match Self::restart_cause(app) {
+                        Some(cause) => {
+                            run["restart_interruption"] =
+                                json!({"kind":"runtime_restart","cause":cause,"recorded_at":now()});
+                        }
+                        None if run["restart_interruption"].is_null() => {
+                            run["restart_interruption"] =
+                                json!({"kind":"unexpected_restart","recorded_at":now()});
+                        }
+                        None => {}
                     }
                     super::batch::settle_cut_off_writes::<A>(&mut run);
                     let review = false;
@@ -612,6 +611,9 @@ impl<
                 }
                 user_app.save_override(&mut run).await?;
             }
+        }
+        if startup {
+            let _ = std::fs::remove_file(app.handles.control_dir.join("restart-cause.json"));
         }
         Ok(())
     }

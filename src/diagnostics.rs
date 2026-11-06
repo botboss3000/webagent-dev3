@@ -11,6 +11,8 @@ pub(crate) fn failure(_: &crate::Store, _: &serde_json::Value, _: &anyhow::Error
 #[cfg(not(diagnostics_plugin))]
 pub(crate) fn committed(_: &crate::Store, _: &serde_json::Value, _: &str, _: bool) {}
 #[cfg(not(diagnostics_plugin))]
+pub(crate) fn lifecycle(_: &str, _: serde_json::Value) {}
+#[cfg(not(diagnostics_plugin))]
 pub(crate) fn backend_error() {}
 #[cfg(not(diagnostics_plugin))]
 pub(crate) fn router() -> axum::Router<crate::App> {
@@ -101,15 +103,33 @@ impl crate::Store {
 }
 
 #[cfg(not(diagnostics_plugin))]
-pub(crate) fn background_router() -> axum::Router<crate::App> { axum::Router::new() }
+pub(crate) fn background_router() -> axum::Router<crate::App> {
+    axum::Router::new()
+}
 
 impl webagent_engine::runtime::ports::RunObservation for crate::Store {
- fn committed(&self,run:&serde_json::Value,kind:&str,override_save:bool) {committed(self,run,kind,override_save)}
+    fn committed(&self, run: &serde_json::Value, kind: &str, override_save: bool) {
+        committed(self, run, kind, override_save)
+    }
 }
 
 pub(crate) struct EngineModelDiagnostics;
-impl Clone for EngineModelDiagnostics {fn clone(&self)->Self {Self}}
+impl Clone for EngineModelDiagnostics {
+    fn clone(&self) -> Self {
+        Self
+    }
+}
 impl webagent_engine::runtime::ports::ModelDiagnostics<crate::Store> for EngineModelDiagnostics {
- fn provider_enabled(&self,store:&crate::Store)->bool {provider_enabled(store)}
- fn failure(&self,store:&crate::Store,evidence:&serde_json::Value,error:&anyhow::Error,action:&str) {failure(store,evidence,error,action)}
+    fn provider_enabled(&self, store: &crate::Store) -> bool {
+        provider_enabled(store)
+    }
+    fn failure(
+        &self,
+        store: &crate::Store,
+        evidence: &serde_json::Value,
+        error: &anyhow::Error,
+        action: &str,
+    ) {
+        failure(store, evidence, error, action)
+    }
 }

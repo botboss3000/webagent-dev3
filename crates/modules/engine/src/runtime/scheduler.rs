@@ -246,8 +246,15 @@ impl<
             let mut last_heartbeat = 0;
             let mut last_recovery = 0;
             loop {
-                if app.stop.is_cancelled() || !app.ready.load(Ordering::Acquire) {
+                if app.stop.is_cancelled() {
                     break;
+                }
+                // A drain (SIGTERM cleared `ready`) dispatches and recovers nothing, but this
+                // loop stays alive so heartbeats and running runs' lease watchers keep going.
+                if !app.ready.load(Ordering::Acquire) {
+                    progress.at(Stage::Idle);
+                    crate::send_future(crate::wake::wait(1000, &app.stop)).await;
+                    continue;
                 }
                 // Adopt scheduler and cache limits without replacing active runs.
                 match config::Config::<C>::read(&app.runtime_path) {
