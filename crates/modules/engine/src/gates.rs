@@ -743,7 +743,7 @@ pub mod protocol {
     };
 
     pub const MODULE_ID: &str = "publication_size_guard_v1";
-    pub const SOCKET_PATH: &str = "/run/v3/gate/gate.sock";
+    pub const SOCKET_PATH: &str = "/runtime/gate/gate.sock";
     const PROTOCOL_VERSION: u32 = 1;
     const MAX_FRAME: usize = 16 * 1024;
     const GATE_UID: u32 = 1102;

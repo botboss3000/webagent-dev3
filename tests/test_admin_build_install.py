@@ -364,17 +364,17 @@ class GateSecurityTests(unittest.TestCase):
             'Mounts':[{'Type':'bind','Source':str(root/'gate-runtime'),'Destination':'/run/v3/gate','RW':True}], 'State':{'Status':'running','Health':{'Status':'healthy'}}}
     def test_gate_isolation_refuses_each_authority_expansion(self):
         import copy
-        root=Path('/fixture');before=self.gate(root);self.lifecycle.gate_boundary(before,root)
+        root=Path('/fixture');before=self.gate(root);self.lifecycle.gate_boundary(before,root/'gate-runtime')
         changes=[('ReadonlyRootfs',False),('NetworkMode','host'),('Privileged',True),('CapAdd',['SYS_ADMIN']),('Devices',[{}]),('DeviceRequests',[{}]),('CapDrop',[]),('SecurityOpt',[]),('Memory',0),('PidsLimit',0),('NanoCpus',0)]
         for field,value in changes:
             with self.subTest(field=field):
                 changed=copy.deepcopy(before);changed['HostConfig'][field]=value
-                with self.assertRaises(ValueError):self.lifecycle.gate_boundary(changed,root)
+                with self.assertRaises(ValueError):self.lifecycle.gate_boundary(changed,root/'gate-runtime')
         for change in ('identity','mount'):
             changed=copy.deepcopy(before)
             if change=='identity':changed['Config']['User']='0:0'
             else:changed['Mounts'].append({'Type':'bind','Source':'/','Destination':'/host','RW':True})
-            with self.assertRaises(ValueError):self.lifecycle.gate_boundary(changed,root)
+            with self.assertRaises(ValueError):self.lifecycle.gate_boundary(changed,root/'gate-runtime')
     def test_replacement_preserves_captured_configuration(self):
         import copy
         before=self.gate(Path('/fixture'));original=copy.deepcopy(before)

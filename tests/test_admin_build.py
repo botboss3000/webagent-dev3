@@ -815,14 +815,14 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(previous["Memory"], mounted["Memory"])
         self.assertEqual(previous["Mounts"], mounted["Mounts"][:-1])
         self.assertEqual({"Type": "bind", "Source": str(host.SOURCE / "plugins"),
-                          "Target": "/live-checkout/plugins", "ReadOnly": True},
+                          "Target": "/code/plugins", "ReadOnly": True},
                          mounted["Mounts"][-1])
-        self.assertFalse(any(m["Target"] == "/live-checkout" for m in mounted["Mounts"]))
+        self.assertFalse(any(m["Target"] == "/code" for m in mounted["Mounts"]))
 
     def test_loop_live_plugin_mount_replaces_both_inherited_forms(self):
         previous = {"Mounts": [{"Type": "bind", "Source": "/wrong",
-                               "Target": "/live-checkout/plugins", "ReadOnly": False}],
-                    "Binds": ["/wrong:/live-checkout/plugins:rw", "/state:/state:rw"]}
+                               "Target": "/code/plugins", "ReadOnly": False}],
+                    "Binds": ["/wrong:/code/plugins:rw", "/state:/state:rw"]}
         first = host.loop_plugin_mounts(previous)
         second = host.loop_plugin_mounts(first)
         self.assertEqual(first, second)
@@ -858,14 +858,14 @@ class BuildTests(unittest.TestCase):
         (root / "ui/favicon.svg").write_text("svg")
         api = {"Mounts": [
             {"Type": "bind", "Source": "/old", "Target": "/live-v3"},
-            {"Type": "bind", "Source": "/checkout", "Target": "/live-checkout"},
+            {"Type": "bind", "Source": "/checkout", "Target": "/code"},
             {"Type": "bind", "Source": "/old/ui", "Target": "/opt/v3/ui"},
             {"Type": "bind", "Source": "/state", "Target": "/state"}]}
         mounted = host.release.release_mounts(api, root)["Mounts"]
         by_target = {item["Target"]: item for item in mounted}
         self.assertEqual(str(root / "v3"), by_target["/live-v3"]["Source"])
         self.assertTrue(by_target["/live-v3"]["ReadOnly"])
-        self.assertEqual("/checkout", by_target["/live-checkout"]["Source"])
+        self.assertEqual("/checkout", by_target["/code"]["Source"])
         self.assertEqual("/state", by_target["/state"]["Source"])
         loop = {"Mounts": [{"Type": "bind", "Source": "/old/abilities",
                             "Target": "/opt/v3/plugins/abilities"}]}
@@ -921,7 +921,7 @@ class BuildTests(unittest.TestCase):
         (snapshot / "v3").mkdir(parents=True)
         api = {"Mounts": [
             {"Type": "bind", "Source": "/old", "Target": "/live-v3"},
-            {"Type": "bind", "Source": "/checkout", "Target": "/live-checkout"},
+            {"Type": "bind", "Source": "/checkout", "Target": "/code"},
             {"Type": "bind", "Source": "/old/ui", "Target": "/opt/v3/ui"},
             {"Type": "bind", "Source": "/state", "Target": "/state"}]}
         mounted = release.release_mounts(api, snapshot, root)["Mounts"]
@@ -2285,7 +2285,7 @@ class BuildTests(unittest.TestCase):
         original = self.runner.create
         def reject_loop(name, *args, **kwargs):
             if name == host.TARGETS[1]:
-                raise RuntimeError("development container create failed (400): Duplicate mount point: /live-checkout")
+                raise RuntimeError("development container create failed (400): Duplicate mount point: /code")
             return original(name, *args, **kwargs)
         self.runner.create = reject_loop
         deployed = self.wait(self.deploy(built))

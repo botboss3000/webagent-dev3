@@ -373,8 +373,17 @@ def compensating_candidate(before_blob,after_blob,live_blob,owned_paths,validate
     return candidate(archive(after,validate),archive(reverse,validate),live_blob,validate)
 
 
-def release_mounts(previous, root, asset_root=None):
-    """Pin code mounts and expose the read-only active guidance snapshot to API and loop."""
+LEGACY_TARGETS = {"/live-checkout": "/code", "/live-checkout/plugins": "/code/plugins",
+                  "/run/v3": "/runtime", "/run/v3/gate": "/runtime/gate"}
+
+
+def release_mounts(previous, root, asset_root=None, layout=None):
+    """Pin code mounts and expose the read-only active guidance snapshot to API and loop.
+
+    Earlier containers used /live-checkout and /run/v3; their mounts move to /code and
+    /runtime. With `layout` (config.layout), live folders follow the installation config
+    instead of the previous container, so a folder move needs only a config change.
+    """
     mapping = {
         "/live-v3": "v3",
         "/opt/v3/config": "v3/config",
@@ -387,10 +396,12 @@ def release_mounts(previous, root, asset_root=None):
         "/opt/v3/shared-ui/favicon.svg": "ui/favicon.svg",
     }
     host = dict(previous)
+    host["Mounts"] = [dict(item, Target=LEGACY_TARGETS.get(item.get("Target"), item.get("Target")))
+                      for item in host.get("Mounts") or []]
     mounts = []
     seen = set()
     # Only the API mounts the checkout writable; the loop's read-only checkout is for live files.
-    api = any(item.get("Target") == "/live-checkout" and not item.get("ReadOnly")
+    api = any(item.get("Target") == "/code" and not item.get("ReadOnly")
               for item in host.get("Mounts") or [])
     legacy_assets = {"/opt/v3/ui", "/opt/v3/shared-ui/shared/css",
                      "/opt/v3/shared-ui/main-panel/agents",
@@ -398,18 +409,21 @@ def release_mounts(previous, root, asset_root=None):
                      "/opt/v3/shared-ui/vendor/lucide",
                      "/opt/v3/shared-ui/favicon.svg"}
     # A loop created after the first conversion already has the whole checkout.
-    whole_checkout = any(item.get("Target") == "/live-checkout" for item in host.get("Mounts") or [])
+    whole_checkout = any(item.get("Target") == "/code" for item in host.get("Mounts") or [])
     for mount in host.get("Mounts") or []:
         mount = dict(mount)
         target = mount.get("Target")
         if api and asset_root is not None and target in legacy_assets:
             continue
-        if target == "/live-checkout/plugins" and whole_checkout:
-            # Docker rejects a duplicate /live-checkout target; the nested read-only mount is redundant.
+        if target == "/code/plugins" and whole_checkout:
+            # Docker rejects a duplicate /code target; the nested read-only mount is redundant.
             continue
-        if target == "/live-checkout/plugins":
+        if target == "/code/plugins":
             # The loop reads live files anywhere in the checkout and never writes it.
-            mount.update(Source=str(Path(mount["Source"]).parent), Target="/live-checkout", ReadOnly=True)
+            mount.update(Source=str(Path(mount["Source"]).parent), Target="/code", ReadOnly=True)
+            target = "/code"
+        if layout is not None and target in layout:
+            mount["Source"] = str(layout[target])
         if asset_root is not None and target == "/opt/v3/assets":
             mount["Source"] = str(asset_root)
             mount["ReadOnly"] = True

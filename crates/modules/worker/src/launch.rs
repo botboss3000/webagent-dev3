@@ -20,7 +20,7 @@ const APP_UID: u32 = 1100;
 const APP_GID: u32 = 1100;
 const OWNER_UID: u32 = 1000;
 const APP_BINARY: &str = "/usr/local/bin/webagent-v3";
-const PROMOTE_SOCKET: &str = "/run/v3/promote/promote.sock";
+const PROMOTE_SOCKET: &str = "/runtime/promote/promote.sock";
 /// The workers keep the checkout owner's identity and no capabilities, so files the
 /// application alone owns, such as the encryption key, stay unreadable to tools.
 const WORKER_IDENTITY: [&str; 8] = [
@@ -154,16 +154,16 @@ fn launch() -> io::Result<i32> {
     directory("/state", APP_UID, 0o770)?;
     directory("/workspaces", 1101, 0o770)?;
     for folder in [
-        "/run/v3",
-        "/run/v3/control",
-        "/run/v3/worker",
-        "/run/v3/worker-legacy",
-        "/run/v3/promote",
+        "/runtime",
+        "/runtime/control",
+        "/runtime/worker",
+        "/runtime/worker-legacy",
+        "/runtime/promote",
     ] {
         directory(folder, 0, 0o700)?;
     }
     for (name, content) in [("dispatch.lock", ""), ("shutoff", "1")] {
-        let file = format!("/run/v3/control/{name}");
+        let file = format!("/runtime/control/{name}");
         if Path::new(&file).exists() {
             chown(&file, 0, 0)?;
         }
@@ -189,17 +189,17 @@ fn launch() -> io::Result<i32> {
     if unsafe { libc::listen(listener.as_raw_fd(), 8) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    let lock = File::open("/run/v3/control/dispatch.lock")?;
-    let shutoff = File::open("/run/v3/control/shutoff")?;
+    let lock = File::open("/runtime/control/dispatch.lock")?;
+    let shutoff = File::open("/runtime/control/shutoff")?;
     for name in ["dispatch.lock", "shutoff"] {
-        chown(&format!("/run/v3/control/{name}"), APP_UID, APP_GID)?;
+        chown(&format!("/runtime/control/{name}"), APP_UID, APP_GID)?;
     }
-    directory("/run/v3/control", APP_UID, 0o750)?;
-    directory("/run/v3/worker", OWNER_UID, 0o750)?;
+    directory("/runtime/control", APP_UID, 0o750)?;
+    directory("/runtime/worker", OWNER_UID, 0o750)?;
     // Only the worker identity reaches the Python worker, through the Rust front.
-    directory("/run/v3/worker-legacy", OWNER_UID, 0o700)?;
-    directory("/run/v3/promote", APP_UID, 0o700)?;
-    directory("/run/v3", APP_UID, 0o755)?;
+    directory("/runtime/worker-legacy", OWNER_UID, 0o700)?;
+    directory("/runtime/promote", APP_UID, 0o700)?;
+    directory("/runtime", APP_UID, 0o755)?;
 
     // The broker keeps only the checkout owner's identity and these inherited handles.
     let handed: [RawFd; 3] = [listener.as_raw_fd(), lock.as_raw_fd(), shutoff.as_raw_fd()];
@@ -242,14 +242,14 @@ fn launch() -> io::Result<i32> {
         &[
             ("PATH", "/usr/bin:/bin"),
             ("LANG", "C.UTF-8"),
-            ("V3_TOOL_SOCKET", "/run/v3/worker-legacy/tools.sock"),
+            ("V3_TOOL_SOCKET", "/runtime/worker-legacy/tools.sock"),
             ("V3_TOOL_CLIENT_UID", "1000"),
             ("V3_WORKSPACE_ROOT", "/workspaces"),
             ("V3_CODE_TEMPLATE", "/opt/v3/assets/current/v3"),
         ],
     )?;
     wait_for(
-        "/run/v3/worker-legacy/tools.sock",
+        "/runtime/worker-legacy/tools.sock",
         &mut legacy,
         &mut broker,
         "Python tool worker",
@@ -259,13 +259,13 @@ fn launch() -> io::Result<i32> {
         &[
             ("PATH", "/usr/bin:/bin"),
             ("LANG", "C.UTF-8"),
-            ("V3_TOOL_SOCKET", "/run/v3/worker/tools.sock"),
-            ("V3_LEGACY_TOOL_SOCKET", "/run/v3/worker-legacy/tools.sock"),
+            ("V3_TOOL_SOCKET", "/runtime/worker/tools.sock"),
+            ("V3_LEGACY_TOOL_SOCKET", "/runtime/worker-legacy/tools.sock"),
             ("V3_TOOL_CLIENT_UID", "1100"),
         ],
     )?;
     wait_for(
-        "/run/v3/worker/tools.sock",
+        "/runtime/worker/tools.sock",
         &mut tools,
         &mut broker,
         "tool worker",

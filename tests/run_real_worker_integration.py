@@ -18,8 +18,8 @@ import subprocess
 import sys
 import time
 
-SOCKET = Path("/run/v3/worker/tools.sock")
-CONTROL = Path("/run/v3/control")
+SOCKET = Path("/runtime/worker/tools.sock")
+CONTROL = Path("/runtime/control")
 WORKSPACES = Path("/workspaces")
 TEST_NAME = "runtime_tests::real_worker_coding_gates_are_end_to_end"
 

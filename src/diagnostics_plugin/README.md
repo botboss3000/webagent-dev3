@@ -10,7 +10,7 @@ Package build inputs and installation details are in
 ## Configuration
 
 `config/diagnostics.json` is the checked-in template. Install the package with
-`plugins/diagnostics/diagnostics.json`; the API reads `/live-checkout/plugins/diagnostics/diagnostics.json`.
+`plugins/diagnostics/diagnostics.json`; the API reads `/code/plugins/diagnostics/diagnostics.json`.
 The loop reads these settings through the UID-checked plugin socket because it has no checkout mount. Use atomic replacement to edit it. Reload occurs within five seconds; missing or
 invalid settings disable new capture without stopping chat. Configuration
 `version` is 1 and `capture_scope` must be `fixed_admin`. The fixed account ID

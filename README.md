@@ -657,8 +657,8 @@ authorize tools or publish a terminal assistant reply.
 
 The API and loop share `v3/runtime` for local control and worker sockets, and
 `v3/data` for durable state. The loop and gate share only
-`v3/gate-runtime`, mounted at `/run/v3/gate`. The gate socket is
-`/run/v3/gate/gate.sock` (mode 0660); the Rust client verifies gate UID 1102
+`v3/gate-runtime`, mounted at `/runtime/gate`. The gate socket is
+`/runtime/gate/gate.sock` (mode 0660); the Rust client verifies gate UID 1102
 and the gate verifies loop UID 1100. Requests and responses use a versioned,
 16 KiB bounded protocol with a one-second client deadline. The gate receives
 the final reply's byte count and digest, never its text. Its first installed

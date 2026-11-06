@@ -19,15 +19,15 @@ import tempfile
 import uuid
 from pathlib import Path
 
-CONTROL = Path("/run/v3/control")
+CONTROL = Path("/runtime/control")
 LIMIT = 1024 * 1024
-CONTEXT_CONFIG_PATH = Path("/live-checkout/crates/modules/context/context-compaction.json")
+CONTEXT_CONFIG_PATH = Path("/code/crates/modules/context/context-compaction.json")
 ROOT = Path(os.environ.get("V3_WORKSPACE_ROOT", "/workspaces"))
-SOCKET = os.environ.get("V3_TOOL_SOCKET", "/run/v3/worker/tools.sock")
+SOCKET = os.environ.get("V3_TOOL_SOCKET", "/runtime/worker/tools.sock")
 # The Rust tool worker front is the only caller in the container; tests call directly.
 CLIENT_UID = int(os.environ.get("V3_TOOL_CLIENT_UID", "1100"))
 TEMPLATE = Path(os.environ.get("V3_CODE_TEMPLATE", "/opt/v3/source-template"))
-LIVE_CHECKOUT = Path("/live-checkout")
+LIVE_CHECKOUT = Path("/code")
 
 
 def search_limits():
@@ -688,9 +688,10 @@ def runner(argv):
     # workspace; state, other workspaces, control sockets and checkout runtime folders stay
     # out, as in the Rust runner. Internal seed and index invocations keep their narrow grants.
     if not read_paths:
-        hidden={"state","workspaces","live-checkout","run"}
+        # live-checkout is the image's compatibility link to /code; granting it grants all of /code.
+        hidden={"state","workspaces","code","live-checkout","runtime","run"}
         private={"data","workspaces","target","build-jobs","deployment-secrets","runtime","rollback","gate-runtime"}
-        checkout=Path("/live-checkout")
+        checkout=Path("/code")
         read_paths=tuple(p for p in Path("/").iterdir() if p.name not in hidden)+(tuple(p for p in checkout.iterdir() if p.name not in private) if checkout.is_dir() else ())
     child = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
                              preexec_fn=lambda: restrict(Path.cwd(), read_paths=read_paths,deny_unix=True))

@@ -10,7 +10,8 @@ import stat
 import uuid
 from pathlib import Path
 
-ROOT = Path("/live-checkout")
+ROOT = Path("/code")
+# The Files page's stored repository identifier; it predates the /code mount name.
 VIRTUAL = "/live-checkout"
 MAX_FILE = 1024 * 1024
 MAX_ENTRIES = 2000

@@ -5,7 +5,7 @@ V3 source and runtime storage live at `/home/ar/webagent-dev3`. V2 stays at
 containers with their existing names, users, limits, capabilities and networks.
 The API exposes port 8081; the named development tunnel keeps its destination.
 
-The writable `/live-checkout` mount contains only the independent V3 root.
+The writable `/code` mount contains only the independent V3 root.
 Runtime code and UI remain pinned to frozen release snapshots. Shared V2 UI
 assets enter the explicit build allowlist as read-only inputs; V3 containers do
 not receive the writable V2 checkout. Never read session databases directly.

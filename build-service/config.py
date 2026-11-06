@@ -39,7 +39,7 @@ def scheduler_defaults():
 def validate(value):
  """Validate installation authority, topology and the bounded API process/thread budget."""
  if not isinstance(value,dict):raise ValueError("Configuration must be an object")
- allowed={"instance","checkout_root","service_account","source_owner","state_root","workspace_root","runtime_root","install_root","service_dir","app_uid","app_gid","worker_uid","worker_gid","api_container","loop_container","gate_container","bind_address","port","public_origin","worker_control","api_pids_limit","scheduler","code_index_ledger_max_bytes"}
+ allowed={"instance","checkout_root","service_account","source_owner","state_root","workspace_root","runtime_root","app_state_root","install_root","service_dir","app_uid","app_gid","worker_uid","worker_gid","api_container","loop_container","gate_container","bind_address","port","public_origin","worker_control","api_pids_limit","scheduler","code_index_ledger_max_bytes"}
  if set(value)-allowed:raise ValueError("Unknown installation field")
  v=dict(value)
  # Ledger capacity is protected installation policy, never a caller override.
@@ -93,7 +93,9 @@ def validate(value):
  account=pwd.getpwnam(v.get("service_account","webagent-build"));owner=pwd.getpwnam(v.get("source_owner",account.pw_name))
  if account.pw_uid==0 or owner.pw_uid==0:raise ValueError("Non-root service and source identities required")
  v.update(service_uid=account.pw_uid,service_gid=account.pw_gid,service_home=account.pw_dir,source_uid=owner.pw_uid)
- for k in ("checkout_root","state_root","workspace_root","runtime_root","install_root","service_dir","worker_control"):
+ # The app's /state folder sits beside the checkout once it moves; legacy configs keep it inside.
+ v.setdefault("app_state_root",str(Path(str(v.get("checkout_root")))/"data"))
+ for k in ("checkout_root","state_root","workspace_root","runtime_root","app_state_root","install_root","service_dir","worker_control"):
   raw=v.get(k)
   if not isinstance(raw,str) or not raw.startswith("/") or ".." in Path(raw).parts or any(c in raw for c in "\n\r\0,:") or any(c.isspace() for c in raw) or str(Path(raw))!=raw:raise ValueError("Invalid installation path: "+k)
   cursor=Path(raw)
@@ -120,7 +122,17 @@ def defaults(root=None):
  try:user=pwd.getpwuid(os.getuid()).pw_name if os.getuid()!=0 else "webagent-build"
  except KeyError:user="webagent-build"
  install=Path("/var/lib/webagent/development/build-service")
- return dict(scheduler=scheduler_defaults(),api_pids_limit=256,code_index_ledger_max_bytes=768*1024**2,instance="development",checkout_root=str(root),service_account=user,source_owner=user,state_root=str(root/"build-jobs"),workspace_root=str(root/"workspaces"),runtime_root=str(root/"runtime/build"),install_root=str(install),service_dir=str(install/"releases/bootstrap"),app_uid=1100,app_gid=1100,worker_uid=1000,worker_gid=1000,api_container="webagent-dev-v3",loop_container="webagent-dev-v3-loop",gate_container="webagent-dev-v3-gate",bind_address="127.0.0.1",port=8081,public_origin="http://127.0.0.1:8081",worker_control="/var/lib/webagent-v3-build-worker/control.sock")
+ return dict(scheduler=scheduler_defaults(),api_pids_limit=256,code_index_ledger_max_bytes=768*1024**2,instance="development",checkout_root=str(root),service_account=user,source_owner=user,state_root=str(root/"build-jobs"),workspace_root=str(root/"workspaces"),runtime_root=str(root/"runtime/build"),app_state_root=str(root/"data"),install_root=str(install),service_dir=str(install/"releases/bootstrap"),app_uid=1100,app_gid=1100,worker_uid=1000,worker_gid=1000,api_container="webagent-dev-v3",loop_container="webagent-dev-v3-loop",gate_container="webagent-dev-v3-gate",bind_address="127.0.0.1",port=8081,public_origin="http://127.0.0.1:8081",worker_control="/var/lib/webagent-v3-build-worker/control.sock")
+def layout(c):
+ """Host folder for each app container mount point. The gate's sockets live beside runtime/.
+
+ Missing keys take the legacy places inside the checkout, as validate() does.
+ """
+ checkout=Path(c["checkout_root"])
+ runtime=Path(c.get("runtime_root") or checkout/"runtime/build").parent
+ return {"/code":str(checkout),"/state":str(c.get("app_state_root") or checkout/"data"),
+  "/workspaces":str(c.get("workspace_root") or checkout/"workspaces"),
+  "/runtime":str(runtime),"/runtime/gate":str(runtime.parent/"gate-runtime")}
 def load(path=None):
  path=path or os.environ.get("WEBAGENT_BUILD_CONFIG")
  if path:

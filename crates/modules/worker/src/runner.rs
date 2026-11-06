@@ -68,7 +68,16 @@ pub fn supervise_plugin(spec_json: &str) -> i32 {
 /// and the checkout's runtime folders stay out. Checkout writes go through checkout_edit
 /// or broker tasks.
 fn command_read_paths() -> Vec<PathBuf> {
-    const HIDDEN: [&str; 4] = ["state", "workspaces", "live-checkout", "run"];
+    // `live-checkout` is the image's compatibility link to `/code`: granting it would grant all
+    // of `/code`, hidden folders included.
+    const HIDDEN: [&str; 6] = [
+        "state",
+        "workspaces",
+        "code",
+        "live-checkout",
+        "runtime",
+        "run",
+    ];
     let entries = |folder: &str, skip: &[&str]| -> Vec<PathBuf> {
         std::fs::read_dir(folder)
             .into_iter()
@@ -79,7 +88,7 @@ fn command_read_paths() -> Vec<PathBuf> {
             .collect()
     };
     let mut paths = entries("/", &HIDDEN);
-    paths.extend(entries("/live-checkout", &crate::files::CHECKOUT_HIDDEN));
+    paths.extend(entries("/code", &crate::files::CHECKOUT_HIDDEN));
     paths
 }
 

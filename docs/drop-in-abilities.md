@@ -77,7 +77,7 @@ binary through the root Cargo feature `stable-abilities`.
 
 ## Checkout edits
 
-The running app compares `/live-checkout/plugins/abilities` with the published release
+The running app compares `/code/plugins/abilities` with the published release
 it runs (`crates/modules/abilities/src/drift.rs`, rechecked at most every five seconds).
 Edits to a tool's description or `default_access`, and changed guidance text
 (`tool.skill.md`, `<id>.skill.md`, `skills/*.skill.md`), apply at once with no notice.

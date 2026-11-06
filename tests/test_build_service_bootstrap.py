@@ -17,7 +17,7 @@ class BootstrapTests(unittest.TestCase):
    initialize.assert_called_once_with(root,value)
    launch=calls[-1]
    self.assertIn("type=bind,src="+str(root)+",dst=/live-v3,readonly",launch)
-   self.assertIn("type=bind,src="+str(root)+",dst=/live-checkout",launch)
+   self.assertIn("type=bind,src="+str(root)+",dst=/code",launch)
    self.assertIn("V3_SOURCE_OWNER_UID=2402",launch)
    self.assertIn("isolated-api",launch)
 

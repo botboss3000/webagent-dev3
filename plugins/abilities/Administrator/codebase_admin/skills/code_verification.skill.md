@@ -168,7 +168,7 @@ inspect receipts and effects rather than blindly repeating the operation.
 
 ### Shell, Python and additional checks
 
-shell and python start from /live-checkout, subject to current policy and OS
+shell and python start from /code, subject to current policy and OS
 mount permissions. They are not automatically scoped to a broker task and are
 not isolated from sibling v3 workspaces. Inspect proposed effects and coordinate
 shared outputs before running them; never use them to bypass task editing,

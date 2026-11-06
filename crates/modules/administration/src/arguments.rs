@@ -103,6 +103,13 @@ pub fn workspace_action(args: &Value) -> Result<Value> {
 
 /// The source-relative path of a `file_edit`/`file_write` that enters an owned broker
 /// draft, or `None` when the write targets an explicit runtime or workspace path.
+/// The source-relative part of a checkout path. `/live-checkout/` is the image's
+/// compatibility link to `/code/`, still named by stored prompts and history.
+fn checkout_relative(raw: &str) -> Option<&str> {
+    raw.strip_prefix("/code/")
+        .or_else(|| raw.strip_prefix("/live-checkout/"))
+}
+
 pub fn implicit_source_write(name: &str, args: &Value) -> Result<Option<String>> {
     if !matches!(name, "file_edit" | "file_write") {
         return Ok(None);
@@ -110,7 +117,7 @@ pub fn implicit_source_write(name: &str, args: &Value) -> Result<Option<String>>
     let raw = args["path"]
         .as_str()
         .ok_or_else(|| anyhow!("Source write path required"))?;
-    let relative = if let Some(value) = raw.strip_prefix("/live-checkout/") {
+    let relative = if let Some(value) = checkout_relative(raw) {
         value
     } else if raw.starts_with('/') {
         return Ok(None);
@@ -147,8 +154,8 @@ pub fn broker_file(sid: &str, pending_id: &str, name: &str, args: &Value) -> Res
         return Ok(None);
     }
     let raw = args["path"].as_str().unwrap_or("");
-    let path = raw.strip_prefix("/live-checkout/").unwrap_or(raw);
-    if !legacy && !selected && raw.starts_with('/') && !raw.starts_with("/live-checkout/") {
+    let path = checkout_relative(raw).unwrap_or(raw);
+    if !legacy && !selected && raw.starts_with('/') && checkout_relative(raw).is_none() {
         return Ok(None);
     }
     if selected && path.starts_with('/') {

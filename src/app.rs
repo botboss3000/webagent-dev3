@@ -955,7 +955,7 @@ async fn run_process() -> Result<()> {
     };
     // Live configuration files are saved through the broker, before any owner reads them.
     crate::live_files::install(PathBuf::from(
-        std::env::var("V3_BUILD_SOCKET").unwrap_or_else(|_| "/run/v3/build/build.sock".into()),
+        std::env::var("V3_BUILD_SOCKET").unwrap_or_else(|_| "/runtime/build/build.sock".into()),
     ));
     let store = Store::open(&root).await?;
     diagnostics::init(&root, &store, &role).await;
@@ -1026,17 +1026,17 @@ async fn run_process() -> Result<()> {
         stop: CancellationToken::new(),
         login_attempts: webagent_accounts::LoginAttempts::default(),
         control_dir: PathBuf::from(
-            std::env::var("V3_CONTROL_ROOT").unwrap_or_else(|_| "/run/v3/control".into()),
+            std::env::var("V3_CONTROL_ROOT").unwrap_or_else(|_| "/runtime/control".into()),
         ),
         tool_socket: PathBuf::from(
-            std::env::var("V3_TOOL_SOCKET").unwrap_or_else(|_| "/run/v3/worker/tools.sock".into()),
+            std::env::var("V3_TOOL_SOCKET").unwrap_or_else(|_| "/runtime/worker/tools.sock".into()),
         ),
         build_socket: PathBuf::from(
-            std::env::var("V3_BUILD_SOCKET").unwrap_or_else(|_| "/run/v3/build/build.sock".into()),
+            std::env::var("V3_BUILD_SOCKET").unwrap_or_else(|_| "/runtime/build/build.sock".into()),
         ),
         promotion_socket: PathBuf::from(
             std::env::var("V3_PROMOTE_SOCKET")
-                .unwrap_or_else(|_| "/run/v3/promote/promote.sock".into()),
+                .unwrap_or_else(|_| "/runtime/promote/promote.sock".into()),
         ),
         secure: std::env::var("V3_SECURE_COOKIE").unwrap_or_else(|_| "true".into()) != "false",
         // Checkout-relative: read live (`live-files.json`) on every use.

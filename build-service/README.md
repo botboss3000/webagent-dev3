@@ -430,7 +430,7 @@ A task that changes only listed files (plus other hot-lane paths) publishes as
 `plugin_deploy` without a core build, when installed compiler evidence excludes each
 file, refuses a listed `.json` that does not parse, and runs the retained app image's
 `--validate-assets` over the candidate, as a full release does before activation. Both
-validation containers mount the candidate's `v3` tree read-only at `/live-checkout`, so
+validation containers mount the candidate's `v3` tree read-only at `/code`, so
 relative live-file reads (gate manifests, provider files) see the candidate. A listed file the compiler reads, or unavailable evidence, takes
 `build_deploy`, as does a task that also changes code. A new task's tree takes listed files from the checkout, so it starts from their current
 bytes. Creating a file and listing it in the same task is an ordinary change. A rebuild keeps
@@ -438,7 +438,7 @@ the released bytes of listed files. The broker's 60-second maintenance loop comm
 change for 10 seconds) to listed files as one `Live config edit: ...` commit with
 `git commit --only`, so other writers' staged work is never included. The same loop
 makes listed files and their folders readable by the app's UID. Both app containers
-mount the checkout at `/live-checkout` (the loop read-only). The app saves a live file
+mount the checkout at `/code` (the loop read-only). The app saves a live file
 through the broker action `live_file_write {path, content, expected_sha256}`: only a
 listed file, only while its bytes still match the digest the caller loaded (`null` for
 a new file), JSON must parse, written atomically; the app never writes the source tree.

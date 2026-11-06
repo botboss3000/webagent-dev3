@@ -37,7 +37,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl, quote, quote_plus, urlencode, urlsplit, urlunsplit
 
 ORIGIN=os.environ.get("V3_PUBLIC_ORIGIN","https://dev.webagent.live")
-PRIVATE_ROOT=Path("/run/v3/worker/browser")
+PRIVATE_ROOT=Path("/runtime/worker/browser")
 # One read page; small enough that the result is never cut off in the agent's context.
 MAX_TEXT=12000
 MAX_READ_OFFSET=1_000_000

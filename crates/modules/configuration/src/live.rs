@@ -20,7 +20,7 @@ use std::{
 };
 
 /// Mounted checkout in the API and loop containers.
-pub const CHECKOUT: &str = "/live-checkout";
+pub const CHECKOUT: &str = "/code";
 
 /// A file's version from one `stat`. The kernel sets the change time on every write and
 /// no tool can set it back, and a save that replaces the file changes its inode, so a

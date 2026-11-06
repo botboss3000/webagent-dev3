@@ -6,7 +6,7 @@ import unittest
 import uuid
 from pathlib import Path
 
-SOCKET = "/run/v3/worker/tools.sock"
+SOCKET = "/runtime/worker/tools.sock"
 
 
 class ContainerWorkerTests(unittest.IsolatedAsyncioTestCase):
@@ -24,12 +24,12 @@ class ContainerWorkerTests(unittest.IsolatedAsyncioTestCase):
                        "result={'uid':os.getuid(),'groups':os.getgroups()}; "
                        "\ntry: os.listdir('/state'); result['state_access']=True"
                        "\nexcept PermissionError: result['state_access']=False"
-                       "\ntry: os.close(os.open('/run/v3/control/shutoff',os.O_WRONLY)); result['control_write']=True"
+                       "\ntry: os.close(os.open('/runtime/control/shutoff',os.O_WRONLY)); result['control_write']=True"
                        "\nexcept PermissionError: result['control_write']=False"
                        f"\ntry: open('/proc/{app_pid}/environ','rb'); result['app_environ_access']=True"
                        "\nexcept PermissionError: result['app_environ_access']=False"
-                       "\nresult['source_access']=os.path.isfile('/live-checkout/Cargo.toml') and os.path.isdir('/live-checkout/src')"
-                       "\nresult['v2_source_access']=os.path.exists('/live-checkout/app') or os.path.exists('/live-checkout/v3')"
+                       "\nresult['source_access']=os.path.isfile('/code/Cargo.toml') and os.path.isdir('/code/src')"
+                       "\nresult['v2_source_access']=os.path.exists('/code/app') or os.path.exists('/code/v3')"
                        "\nresult['secret_env']=any(k.startswith('V3_ADMIN') for k in os.environ)"
                        "\nprint(json.dumps(result))")},
                    "timeout_seconds": 10}

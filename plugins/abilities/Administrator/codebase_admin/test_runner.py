@@ -17,7 +17,7 @@ class PluginTests(unittest.TestCase):
     def test_source_writes_route_to_broker_and_aliases_cannot_bypass(self):
         """Relative source edits enter drafts and alternate absolute aliases cannot mutate live source."""
         self.assertEqual(runner.route("file_write",{"path":"src/app.rs","content":"draft"})["route"],"broker")
-        self.assertEqual(runner.route("file_edit",{"path":"/live-checkout/src/app.rs","old_text":"a","new_text":"b"})["route"],"broker")
+        self.assertEqual(runner.route("file_edit",{"path":"/code/src/app.rs","old_text":"a","new_text":"b"})["route"],"broker")
         with tempfile.TemporaryDirectory()as directory:
             root=Path(directory);source=root/"source";source.mkdir();(source/"app.rs").write_text("original")
             alias=root/"alias";alias.symlink_to(source,target_is_directory=True)

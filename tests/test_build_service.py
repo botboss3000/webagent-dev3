@@ -132,17 +132,17 @@ class LiveFileAccessTests(unittest.TestCase):
     def test_loop_mounts_whole_checkout_read_only_and_stays_a_loop(self):
         with tempfile.TemporaryDirectory()as folder:
             root=Path(folder)/"release";(root/"v3/plugins/abilities").mkdir(parents=True)
-            loop={"Mounts":[{"Type":"bind","Source":"/checkout/plugins","Target":"/live-checkout/plugins","ReadOnly":True},
+            loop={"Mounts":[{"Type":"bind","Source":"/checkout/plugins","Target":"/code/plugins","ReadOnly":True},
                             {"Type":"bind","Source":"/old","Target":"/opt/v3/plugins/abilities","ReadOnly":True}]}
             mounted=self.release.release_mounts(loop,root)["Mounts"]
-            checkout=next(m for m in mounted if m["Target"]=="/live-checkout")
+            checkout=next(m for m in mounted if m["Target"]=="/code")
             self.assertEqual((checkout["Source"],checkout["ReadOnly"]),("/checkout",True))
             # A read-only checkout does not make the loop look like the API on the next release.
             self.assertEqual(self.release.release_mounts({"Mounts":mounted},root)["Mounts"],mounted)
             # A loop holding both mounts (as deployed) must never produce a duplicate target.
-            both=[*mounted,{"Type":"bind","Source":"/checkout/plugins","Target":"/live-checkout/plugins","ReadOnly":True}]
+            both=[*mounted,{"Type":"bind","Source":"/checkout/plugins","Target":"/code/plugins","ReadOnly":True}]
             targets=[m["Target"]for m in self.release.release_mounts({"Mounts":both},root)["Mounts"]]
-            self.assertEqual(len(targets),len(set(targets)));self.assertIn("/live-checkout",targets)
+            self.assertEqual(len(targets),len(set(targets)));self.assertIn("/code",targets)
     def test_expose_and_write_live_files(self):
         with tempfile.TemporaryDirectory()as folder:
             root=Path(folder);folder_path=root/"crates/x";folder_path.mkdir(parents=True);folder_path.chmod(0o700)
@@ -531,7 +531,7 @@ class CodebasePublicationMetadataTests(unittest.TestCase):
    self.assertIn("sha256:retained-runtime",args)
    self.assertEqual(args[-1],"--validate-assets=/candidate/v3")
    # Relative live-file reads (gate manifests, providers) resolve to the candidate.
-   self.assertIn("type=bind,src="+str(root/"releases"/job/"v3")+",dst=/live-checkout,readonly",args)
+   self.assertIn("type=bind,src="+str(root/"releases"/job/"v3")+",dst=/code,readonly",args)
 
 
 class CodebaseRegisteredGuidanceTests(unittest.TestCase):
@@ -1308,7 +1308,7 @@ class RuntimeReadabilityTests(unittest.TestCase):
         self.config={**fixtures.host.CONFIG,"state_root":str(self.root/"jobs")}
         self.previous={role:{"Id":role+"-before","Image":"sha256:"+("1"if role=="api"else"2")*64,
             "HostConfig":{"Mounts":[{"Type":"bind","Source":str(self.root/"private-data"),"Target":"/state","ReadOnly":False},
-                {"Type":"bind","Source":str(self.root/"live"),"Target":"/live-checkout","ReadOnly":False},
+                {"Type":"bind","Source":str(self.root/"live"),"Target":"/code","ReadOnly":False},
                 {"Type":"bind","Source":str(self.root/"socket"),"Target":"/run/control.sock","ReadOnly":True},
                 {"Type":"bind","Source":str(self.root/"old"),"Target":"/live-v3","ReadOnly":True},
                 {"Type":"bind","Source":str(self.root/"old"),"Target":"/opt/v3/plugins/abilities","ReadOnly":True}]}}for role in ("api","loop")}
@@ -1446,22 +1446,22 @@ class RecoveryDockerBoundaryTests(unittest.TestCase):
   runner.command=Mock(return_value=json.dumps([{"Config":{}}]))
   private="private-env-value-"+uuid.uuid4().hex
   previous={"Image":"sha256:"+"1"*64,"Config":{"Env":["SETTING="+private]},"HostConfig":{}}
-  message="Duplicate mount point: /live-checkout; "+private+" inspected-private-value "+"x"*900
+  message="Duplicate mount point: /code; "+private+" inspected-private-value "+"x"*900
   connection=Mock();response=connection.getresponse.return_value;response.status=400;response.read.return_value=json.dumps({"message":message}).encode()
   with patch.object(fixtures.host,"DockerHTTP",return_value=connection):
    with self.assertRaises(RuntimeError)as caught:runner.create(fixtures.host.TARGETS[1],"sha256:"+"2"*64,previous)
   reason=str(caught.exception)
-  self.assertTrue(reason.startswith("development container create failed (400): Duplicate mount point: /live-checkout"))
+  self.assertTrue(reason.startswith("development container create failed (400): Duplicate mount point: /code"))
   self.assertNotIn(private,reason);self.assertNotIn("inspected-private-value",reason);self.assertLess(len(reason),400)
   # Non-JSON bodies are bounded too, and a duplicate target is refused before Docker is asked.
   response.read.return_value=b"<html>"+private.encode()+b"</html>"
   with patch.object(fixtures.host,"DockerHTTP",return_value=connection):
    with self.assertRaises(RuntimeError)as caught:runner.create(fixtures.host.TARGETS[1],"sha256:"+"2"*64,previous)
   self.assertNotIn(private,str(caught.exception))
-  duplicate={**previous,"HostConfig":{"Mounts":[{"Type":"bind","Source":"/a","Target":"/live-checkout"},{"Type":"bind","Source":"/b","Target":"/live-checkout/"}]}}
+  duplicate={**previous,"HostConfig":{"Mounts":[{"Type":"bind","Source":"/a","Target":"/code"},{"Type":"bind","Source":"/b","Target":"/code/"}]}}
   connection.reset_mock()
   with patch.object(fixtures.host,"DockerHTTP",return_value=connection):
-   with self.assertRaisesRegex(ValueError,"duplicate /live-checkout"):runner.create(fixtures.host.TARGETS[0],"sha256:"+"2"*64,duplicate)
+   with self.assertRaisesRegex(ValueError,"duplicate /code"):runner.create(fixtures.host.TARGETS[0],"sha256:"+"2"*64,duplicate)
   connection.request.assert_not_called()
 
  def test_consecutive_releases_inherit_stable_mounts_and_settings(self):
@@ -1480,7 +1480,8 @@ class RecoveryDockerBoundaryTests(unittest.TestCase):
    common=[bind(first/"v3/config","/opt/v3/config",True),bind(checkout/"workspaces","/workspaces"),bind(checkout/"runtime","/run/v3"),
            bind(assets,"/opt/v3/assets",True),bind(data,"/state")]
    tmpfs={"/run":"rw,nosuid,nodev,size=16m","/tmp":"rw,nosuid,nodev,size=32m"}
-   # The deployed shapes: the API's writable checkout; the loop's read-only checkout plus nested plugins.
+   # The deployed shapes before the /code and /runtime rename: the API's writable checkout;
+   # the loop's read-only checkout plus nested plugins. Releases move them to the new targets.
    containers={"api":{"Mounts":[*common,bind(first/"v3","/live-v3",True),bind(checkout,"/live-checkout")],"Tmpfs":tmpfs,"PidsLimit":10},
                "loop":{"Mounts":[*common,bind(checkout/"gate-runtime","/run/v3/gate"),bind(first/"v3/plugins/abilities","/opt/v3/plugins/abilities",True),
                                  bind(checkout,"/live-checkout",True),bind(checkout/"plugins","/live-checkout/plugins",True)],"Tmpfs":tmpfs,"Memory":5}}
@@ -1489,7 +1490,9 @@ class RecoveryDockerBoundaryTests(unittest.TestCase):
              for role,host in containers.items()}
    runner=fixtures.host.Runner();runner.command=Mock(return_value=json.dumps([{"Config":image}]))
    generations=[]
-   with patch.object(fixtures.host,"SOURCE",checkout),patch.object(fixtures.host,"ASSET_ROOT",assets):
+   layout={"checkout_root":str(checkout),"app_state_root":str(data),"workspace_root":str(checkout/"workspaces"),
+           "runtime_root":str(checkout/"runtime/build")}
+   with patch.object(fixtures.host,"SOURCE",checkout),patch.object(fixtures.host,"ASSET_ROOT",assets),patch.dict(fixtures.host.CONFIG,layout):
     for _ in range(3):
      job=str(uuid.uuid4());runner.job_context.job={"job_id":job}
      with patch.object(runner,"published_runtime_source",return_value=published(job)):
@@ -1511,9 +1514,12 @@ class RecoveryDockerBoundaryTests(unittest.TestCase):
     self.assertIn("SETTING=kept",shapes[2][2])
    job,configs=generations[2]
    loop={m[0]:m[1:]for m in shape(job,configs["loop"])[0]}
-   self.assertEqual(loop["/live-checkout"],(str(checkout),True));self.assertEqual(loop["/live-checkout/plugins"],(str(checkout/"plugins"),True))
+   self.assertEqual(loop["/code"],(str(checkout),True));self.assertEqual(loop["/code/plugins"],(str(checkout/"plugins"),True))
    api={m[0]:m[1:]for m in shape(job,configs["api"])[0]}
-   self.assertEqual(api["/live-checkout"],(str(checkout),False))
+   self.assertEqual(api["/code"],(str(checkout),False))
+   self.assertEqual(loop["/runtime/gate"],(str(checkout/"gate-runtime"),False));self.assertEqual(api["/runtime"][0],str(checkout/"runtime"))
+   for mounts in (loop,api):
+    self.assertFalse({"/live-checkout","/live-checkout/plugins","/run/v3","/run/v3/gate"}&set(mounts))
    self.assertEqual(["CAP_KILL"],configs["api"]["HostConfig"]["CapAdd"])
    self.assertNotIn("CapAdd",configs["loop"]["HostConfig"])
 

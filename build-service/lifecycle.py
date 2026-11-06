@@ -227,14 +227,14 @@ GATE_INPUTS=("gate_worker.py","tests/test_gate_worker.py","plugins/gates/publica
 def gate_recipe():
  """Refresh only the gate OS image while retaining the captured gate implementation."""
  return ("FROM "+GATE_BASE+"\nRUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 ca-certificates libpcre2-8-0 perl-base libexpat1 && rm -rf /var/lib/apt/lists/* && groupadd -g 1100 v3 && useradd -u 1102 -g 1100 -M -s /usr/sbin/nologin v3gate\nCOPY . /opt/v3/\nRUN chmod -R a+rX /opt/v3 && python3 -B -m unittest discover -s /opt/v3/tests -p test_gate_worker.py\nUSER 1102:1100\nENV V3_GATE_SOCKET=/run/v3/gate/gate.sock\nHEALTHCHECK --interval=10s --timeout=2s --start-period=5s --retries=3 CMD python3 -c 'import os,socket; p=os.environ[\"V3_GATE_SOCKET\"]; assert os.path.exists(p) and socket.socket(socket.AF_UNIX).connect_ex(p)==0'\nCMD [\"/usr/bin/python3\",\"-I\",\"/opt/v3/gate_worker.py\"]\n")
-def gate_boundary(value,root):
+def gate_boundary(value,gate):
  """Refuse unfamiliar gate authority instead of widening an existing container's access."""
  h=value["HostConfig"];mounts=value["Mounts"]
  if (value["Config"]["User"]!="1102:1100"or not h["ReadonlyRootfs"]or h["NetworkMode"]!="none"
      or h.get("Privileged")or h.get("CapAdd")or h.get("Devices")or h.get("DeviceRequests")
      or h.get("CapDrop")!=["ALL"]or h.get("SecurityOpt")!=["no-new-privileges:true"]
      or h.get("Memory")!=64*1024**2 or h.get("PidsLimit")!=32 or h.get("NanoCpus")!=250000000
-     or len(mounts)!=1 or any(mounts[0].get(k)!=v for k,v in {"Type":"bind","Source":str(Path(root)/"gate-runtime"),"Destination":"/run/v3/gate","RW":True}.items())):
+     or len(mounts)!=1 or any(mounts[0].get(k)!=v for k,v in {"Type":"bind","Source":str(gate),"Destination":"/run/v3/gate","RW":True}.items())):
   raise ValueError("Gate isolation differs from the fixed maintenance contract")
 def gate_container_config(previous,image,request_id):
  """Retain the captured runtime contract; only image and receipt identity change."""
@@ -288,7 +288,7 @@ def gate_security(config_path,task_id,request_id,dry_run=False,rollback=False):
    if v["State"]["Status"]=="running"and v["State"].get("Health",{}).get("Status")=="healthy":return
    time.sleep(1)
   raise RuntimeError("Gate health was not confirmed")
- name=c["gate_container"];old=inspect(name);gate_boundary(old,c["checkout_root"])
+ name=c["gate_container"];old=inspect(name);gate_boundary(old,cfg.layout(c)["/runtime/gate"])
  if dry_run:return {"status":"validated","task_id":task_id,"gate_image":old["Image"],"retained_services":[c["api_container"],c["loop_container"]],"compile_required":False}
  parent=Path(c["install_root"]).parent/"gate-security";secure_dirs(parent)
  root=parent/request_id
@@ -375,7 +375,7 @@ def gate_security(config_path,task_id,request_id,dry_run=False,rollback=False):
    if response.status!=201:raise RuntimeError("Gate container creation rejected")
    candidate=value['Id'];record['candidate_id']=candidate;save(record)
   finally:conn.close()
-  command(["docker","start",candidate]);healthy(name,image);gate_boundary(inspect(name),c['checkout_root']);retained()
+  command(["docker","start",candidate]);healthy(name,image);gate_boundary(inspect(name),cfg.layout(c)["/runtime/gate"]);retained()
   record.update(status="completed",completed_at=time.time());save(record)
   return {'status':'completed','receipt_id':request_id,'image':image,'rollback_container':backup,'retained_api_loop':True}
  except BaseException:

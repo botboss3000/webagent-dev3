@@ -68,7 +68,7 @@ class TaskFileTests(unittest.TestCase):
 
     def test_paths_binary_and_symlink_are_rejected(self):
         for path in ["data/user_data/admin/admin.db","data/agent_data/shared_default/shared_default.db",
-                     "data/encryption.key","../outside","/live-checkout/src/main.rs"]:
+                     "data/encryption.key","../outside","/code/src/main.rs"]:
             with self.assertRaises(ValueError):
                 self.call("file_write", {"task_id":"invalid-path-01","path":path,"content":"x","request_id":"invalid-request"})
         self.assertEqual(self.broker.work,{})

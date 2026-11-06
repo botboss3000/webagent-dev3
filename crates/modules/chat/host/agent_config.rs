@@ -1,11 +1,11 @@
 //! Per-agent chat configuration overlays: agent-plane storage, effective documents for
 //! enforcement and UI serving, and the agent-manager API. Chat owns the merge rules.
-#[cfg(test)]
-use webagent_accounts_host::AccountsStore;
 use crate::{
     admin_agent_view, bad, conflict, json, now, Api, ApiError, App, Deserialize, Json, Path,
     PathBuf, Result, State, StatusCode, Store, Value,
 };
+#[cfg(test)]
+use webagent_accounts_host::AccountsStore;
 use webagent_chat::agent_config::{self as overlays, Change, SaveError};
 use webagent_chat::configuration::{
     parse_chat_preferences, read_chat_document, ChatModePreferences,
@@ -55,7 +55,7 @@ pub(crate) async fn apply_to_ui_config(
 fn session_dropdown_base(_state: &std::path::Path) -> Value {
     let ui = webagent_webapp::configuration::live_root(
         std::path::Path::new(webagent_webapp::configuration::LIVE_SETTINGS),
-        std::path::Path::new("/live-checkout/ui"),
+        std::path::Path::new("/code/ui"),
     )
     .unwrap_or_else(|| {
         PathBuf::from(std::env::var("V3_UI_ROOT").unwrap_or_else(|_| "/opt/v3/ui".into()))

@@ -968,13 +968,14 @@ class DockerHTTP(http.client.HTTPConnection):
 def loop_plugin_mounts(previous):
     """Expose live removable packages without granting checkout write access."""
     host = dict(previous)
-    target = "/live-checkout/plugins"
+    target = "/code/plugins"
+    stale = {target, "/live-checkout/plugins"}
     host["Mounts"] = [dict(item) for item in host.get("Mounts") or []
-                      if item.get("Target") != target]
+                      if item.get("Target") not in stale]
     # Replace either Docker mount representation to prevent inherited shadowing.
     if host.get("Binds") is not None:
         host["Binds"] = [item for item in host["Binds"]
-                         if len(item.split(":")) < 2 or item.split(":")[1] != target]
+                         if len(item.split(":")) < 2 or item.split(":")[1] not in stale]
     host["Mounts"].append({"Type": "bind", "Source": str(SOURCE / "plugins"),
                            "Target": target, "ReadOnly": True})
     return host
@@ -1163,8 +1164,8 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 elif not source.resolve().is_relative_to(root.resolve()):raise ValueError("Runtime source mount outside exact publication")
                 mounts.append((str(source),target))
             mounts.extend([(str(root),"/opt/v3/assets/releases/"+selected),(str(ASSET_ROOT/"artifacts"),"/opt/v3/assets/artifacts")])
-            # Validators read live files relative to /live-checkout, as the consumers do from the checkout.
-            mounts.append((str(root/"v3"),"/live-checkout"));plans.append({"role":role,"mounts":mounts})
+            # Validators read live files relative to /code, as the consumers do from the checkout.
+            mounts.append((str(root/"v3"),"/code"));plans.append({"role":role,"mounts":mounts})
             checks=[("application",CONFIG["app_uid"],CONFIG["app_gid"],images[role],"/usr/local/bin/webagent-v3",["--validate-assets=/opt/v3/assets/current/v3"])]
             if role=="api":
                 checks.append(("worker_catalog",CONFIG["worker_uid"],CONFIG["worker_gid"],images[role],"/usr/local/bin/webagent-v3",["--validate-assets=/opt/v3/assets/current/v3"]))
@@ -2029,7 +2030,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 "--user",str(CONFIG["app_uid"])+":"+str(CONFIG["app_gid"]),
                 "--pids-limit","64","--memory","256m","--tmpfs","/tmp:rw,size=64m,mode=1777",
                 "--mount","type=bind,src="+str(root)+",dst=/candidate,readonly",
-                "--mount","type=bind,src="+str(root/"v3")+",dst=/live-checkout,readonly",
+                "--mount","type=bind,src="+str(root/"v3")+",dst=/code,readonly",
                 "--mount","type=bind,src="+str(ASSET_ROOT/"artifacts")+",dst=/opt/v3/assets/artifacts,readonly",
                 "--entrypoint","/usr/local/bin/webagent-v3",image,"--validate-assets=/candidate/v3"],timeout=30)
             receipt=json.loads(result)
@@ -2565,7 +2566,8 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 # No process reads past file modes (the launcher checks worker sockets as
                 # their owner), so CAP_DAC_READ_SEARCH is removed from earlier configs.
                 host["CapAdd"]=sorted((set(host.get("CapAdd")or[])-{"CAP_DAC_READ_SEARCH"})|{"CAP_KILL"})
-            host = release.release_mounts(host, self.published_runtime_source(release_root), ASSET_ROOT)
+            host = release.release_mounts(host, self.published_runtime_source(release_root), ASSET_ROOT,
+                                          _config_module.layout(CONFIG))
             if name in TARGETS:
                 env = [value for value in config.get("Env", [])
                        if not value.startswith(("V3_UI_ROOT=", "V3_SHARED_UI_ROOT="))]

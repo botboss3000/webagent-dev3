@@ -26,8 +26,8 @@ LIMIT=1024*1024
 # Matches the broker read bound so one file_read cannot flood the model context.
 READ_LIMIT=16000
 FRAME_LIMIT=8*LIMIT
-CONTEXT_CONFIG_PATH=Path("/live-checkout/crates/modules/context/context-compaction.json")
-LIVE_CHECKOUT=Path("/live-checkout")
+CONTEXT_CONFIG_PATH=Path("/code/crates/modules/context/context-compaction.json")
+LIVE_CHECKOUT=Path("/code")
 def search_limits():
     """The live compaction file (live-files.json) is read on every search, without a restart."""
     try:
@@ -357,7 +357,7 @@ def file_operation(request, base, args, name):
                                 break
                             names.append(entry.name)
                     for entry in sorted(names):
-                        if depth == 0 and raw in {"/live-checkout", "/live-checkout/v3"} and entry in {
+                        if depth == 0 and raw in {"/code", "/code/v3", "/live-checkout", "/live-checkout/v3"} and entry in {
                                 "build-jobs", "workspaces", "target", "v2_ref", "data",
                                 "rollback", "runtime", "gate-runtime", "host-build-service"}:
                             continue
@@ -422,7 +422,7 @@ def route(name,args):
     if name=="checkout_edit":
         raw=args.get("path")
         if not isinstance(raw,str)or not raw:raise ValueError("path is required")
-        relative=raw.removeprefix(str(LIVE_CHECKOUT)+"/")
+        relative=raw.removeprefix(str(LIVE_CHECKOUT)+"/").removeprefix("/live-checkout/")
         if relative.startswith("/")or any(p in ("",".","..")for p in relative.split("/"))or relative.split("/")[0]in CHECKOUT_PRIVATE:
             raise ValueError("Path must be a live-checkout source path outside runtime state")
         if ("content" in args)==("old_text" in args):raise ValueError("Pass content to write a file, or old_text and new_text to edit one")
@@ -431,8 +431,9 @@ def route(name,args):
         return {"route":"command","argv":["/bin/sh","-c",args["command"]] if name=="shell" else ["/usr/bin/python3","-I","-c",args["code"]]}
     if name in ("file_edit","file_write"):
         raw=args.get("path","")
-        if isinstance(raw,str)and(raw.startswith("/live-checkout/")or(raw and not raw.startswith("/"))):
-            relative=raw.removeprefix("/live-checkout/")
+        # /live-checkout is the image's compatibility link to /code.
+        if isinstance(raw,str)and(raw.startswith(("/code/","/live-checkout/"))or(raw and not raw.startswith("/"))):
+            relative=raw.removeprefix("/code/").removeprefix("/live-checkout/")
             if any(p in ("",".","..")for p in relative.split("/"))or relative.split("/")[0]in {"data","workspaces","target",".git","build-jobs","deployment-secrets"}:
                 raise ValueError("Source path excluded; use the owning runtime/workspace API")
             return {"route":"broker","arguments":{k:v for k,v in args.items()if v is not None}|{"path":relative}}

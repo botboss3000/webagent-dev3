@@ -20,10 +20,8 @@ pub(crate) const FILES: [&str; 6] = [
     "workload.py",
 ];
 pub(crate) fn folder() -> PathBuf {
-    PathBuf::from(
-        std::env::var("V3_PLUGIN_TEST_ROOT").unwrap_or_else(|_| "/live-checkout/plugins".into()),
-    )
-    .join("optimization")
+    PathBuf::from(std::env::var("V3_PLUGIN_TEST_ROOT").unwrap_or_else(|_| "/code/plugins".into()))
+        .join("optimization")
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FileIdentity {
@@ -66,27 +64,76 @@ static PACKAGE_CACHE: PackageCache = std::sync::Mutex::new(None);
 /// The installed declaration may change presentation, never executable ownership.
 fn valid_declaration(value: &Value) -> bool {
     const SETTINGS: &[&str] = &[
-        "priority", "attempts", "total_seconds", "profiling", "cpu_cores", "ram_mb",
-        "coverage", "max_slowdown_percent", "max_memory_regression_percent", "allow_dependencies",
+        "priority",
+        "attempts",
+        "total_seconds",
+        "profiling",
+        "cpu_cores",
+        "ram_mb",
+        "coverage",
+        "max_slowdown_percent",
+        "max_memory_regression_percent",
+        "allow_dependencies",
     ];
-    let Some(object) = value.as_object() else { return false; };
-    if object.keys().any(|key| !matches!(key.as_str(), "display_name" | "kind" | "description"
-        | "tools" | "readiness" | "skill_summary" | "migration_note" | "icon" | "color" | "order" | "config"))
-        || value["kind"] != "ability" || value["readiness"] != "ready"
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    if object.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "display_name"
+                | "kind"
+                | "description"
+                | "tools"
+                | "readiness"
+                | "skill_summary"
+                | "migration_note"
+                | "icon"
+                | "color"
+                | "order"
+                | "config"
+        )
+    }) || value["kind"] != "ability"
+        || value["readiness"] != "ready"
         || value["tools"] != json!(["performance_work"])
-        || value["display_name"].as_str().is_none_or(|text| text.is_empty() || text.len() > 100)
-        || value["description"].as_str().is_none_or(|text| text.is_empty() || text.len() > 1000)
-        || value.get("order").is_some_and(|number| number.as_i64().is_none_or(|number| i32::try_from(number).is_err())) {
+        || value["display_name"]
+            .as_str()
+            .is_none_or(|text| text.is_empty() || text.len() > 100)
+        || value["description"]
+            .as_str()
+            .is_none_or(|text| text.is_empty() || text.len() > 1000)
+        || value.get("order").is_some_and(|number| {
+            number
+                .as_i64()
+                .is_none_or(|number| i32::try_from(number).is_err())
+        })
+    {
         return false;
     }
-    for (key, limit) in [("skill_summary", 2000), ("migration_note", 2000), ("icon", 100), ("color", 100)] {
-        if value.get(key).is_some_and(|field| !field.is_null()
-            && field.as_str().is_none_or(|text| text.len() > limit)) { return false; }
+    for (key, limit) in [
+        ("skill_summary", 2000),
+        ("migration_note", 2000),
+        ("icon", 100),
+        ("color", 100),
+    ] {
+        if value.get(key).is_some_and(|field| {
+            !field.is_null() && field.as_str().is_none_or(|text| text.len() > limit)
+        }) {
+            return false;
+        }
     }
-    let Some(config) = value["config"].as_object() else { return false; };
-    let Some(settings) = config.get("settings").and_then(Value::as_array) else { return false; };
-    config.len() == 1 && settings.len() == SETTINGS.len()
-        && settings.iter().zip(SETTINGS).all(|(value, expected)| value.as_str() == Some(*expected))
+    let Some(config) = value["config"].as_object() else {
+        return false;
+    };
+    let Some(settings) = config.get("settings").and_then(Value::as_array) else {
+        return false;
+    };
+    config.len() == 1
+        && settings.len() == SETTINGS.len()
+        && settings
+            .iter()
+            .zip(SETTINGS)
+            .all(|(value, expected)| value.as_str() == Some(*expected))
 }
 
 /// Return one identity-pinned declaration even before its optional worker is ready.
@@ -98,7 +145,8 @@ pub(crate) fn declaration() -> anyhow::Result<Option<(String, Value)>> {
         Err(error) => return Err(error.into()),
         Ok(_) => {}
     }
-    let package = package(&folder).ok_or_else(|| anyhow::anyhow!("Optimization declaration unavailable"))?;
+    let package =
+        package(&folder).ok_or_else(|| anyhow::anyhow!("Optimization declaration unavailable"))?;
     Ok(Some((package.0.clone(), package.3.clone())))
 }
 
@@ -201,7 +249,9 @@ fn package_cached_inner(path: &Path, cache: &PackageCache) -> Option<ValidatedPa
         }
         if *name == "optimization.json" {
             declaration = serde_json::from_slice(&bytes).ok()?;
-            if !valid_declaration(&declaration) { return None; }
+            if !valid_declaration(&declaration) {
+                return None;
+            }
         }
         if *name == "optimization.skill.md" {
             guidance = std::str::from_utf8(&bytes).ok()?.to_owned();
@@ -220,7 +270,12 @@ fn package_cached_inner(path: &Path, cache: &PackageCache) -> Option<ValidatedPa
     if !identities_still_match(path, &directory, &files, &identity) {
         return None;
     }
-    let validated = std::sync::Arc::new((hex::encode(hash.finalize()), executable, guidance, declaration));
+    let validated = std::sync::Arc::new((
+        hex::encode(hash.finalize()),
+        executable,
+        guidance,
+        declaration,
+    ));
     *cached = Some((identity, validated.clone()));
     Some(validated)
 }

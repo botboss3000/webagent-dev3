@@ -1,4 +1,4 @@
-//! The running app's view of checkout drift: `/live-checkout/plugins/abilities` compared
+//! The running app's view of checkout drift: `/code/plugins/abilities` compared
 //! with the published release it runs. Rechecked at most every five seconds, and only
 //! recomputed when a file in either tree changed. Without a publication (tests, local
 //! runs) there is no drift.

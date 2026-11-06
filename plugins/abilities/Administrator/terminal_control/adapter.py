@@ -190,7 +190,7 @@ async def execute(name, arguments, base):
                 json.dumps({"base": str(base), "command": command, "cols": cols, "rows": rows, "worker_pid": os.getpid()}),
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                cwd=Path("/live-checkout") if Path("/live-checkout").is_dir() else base,
+                cwd=Path("/code") if Path("/code").is_dir() else base,
                 env=env, start_new_session=True))
             try:
                 process = await asyncio.shield(spawn)

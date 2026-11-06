@@ -104,15 +104,15 @@ impl Roots {
     /// The container layout; `V3_WORKSPACE_ROOT` overrides the workspace root.
     #[must_use]
     pub fn container() -> Self {
-        let live_checkout = PathBuf::from("/live-checkout");
+        let live_checkout = PathBuf::from("/code");
         Self {
             workspaces: PathBuf::from(
                 std::env::var("V3_WORKSPACE_ROOT").unwrap_or_else(|_| "/workspaces".into()),
             ),
             context_config: live_checkout.join("crates/modules/context/context-compaction.json"),
             live_checkout,
-            control: PathBuf::from("/run/v3/control"),
-            port_claims: PathBuf::from("/run/v3/worker/port-claims"),
+            control: PathBuf::from("/runtime/control"),
+            port_claims: PathBuf::from("/runtime/worker/port-claims"),
         }
     }
 }

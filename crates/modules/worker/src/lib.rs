@@ -61,8 +61,8 @@ impl Config {
             .parse()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid client UID"))?;
         Ok(Self {
-            socket: path("V3_TOOL_SOCKET", "/run/v3/worker/tools.sock"),
-            legacy_socket: path("V3_LEGACY_TOOL_SOCKET", "/run/v3/worker-legacy/tools.sock"),
+            socket: path("V3_TOOL_SOCKET", "/runtime/worker/tools.sock"),
+            legacy_socket: path("V3_LEGACY_TOOL_SOCKET", "/runtime/worker-legacy/tools.sock"),
             client_uid,
             files: files::Roots::container(),
             // The app executable's supervisor mode, dispatched before its async runtime.

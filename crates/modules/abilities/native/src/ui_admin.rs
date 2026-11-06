@@ -44,7 +44,10 @@ struct Args {
     limit: Option<u64>,
 }
 pub fn path(raw: &str, directory: bool) -> Result<String> {
-    let value = raw.strip_prefix("/live-checkout/").unwrap_or(raw);
+    let value = raw
+        .strip_prefix("/code/")
+        .or_else(|| raw.strip_prefix("/live-checkout/"))
+        .unwrap_or(raw);
     let value = if value == "ui" || value.starts_with("ui/") {
         value.to_owned()
     } else {
@@ -231,7 +234,7 @@ fn published_read(read: bool, forwarded: &Value) -> Option<Value> {
     }
     let mut live = forwarded.clone();
     live["path"] = json!(format!(
-        "/live-checkout/{}",
+        "/code/{}",
         forwarded["path"].as_str().unwrap_or("ui")
     ));
     Some(live)
@@ -244,7 +247,7 @@ mod tests {
         let read = json!({"path":"ui/chat","query":"scrollbar"});
         assert_eq!(
             published_read(true, &read).unwrap()["path"],
-            "/live-checkout/ui/chat"
+            "/code/ui/chat"
         );
         assert!(published_read(true, &json!({"path":"ui","broker_id":"b"})).is_none());
         assert!(published_read(false, &read).is_none());

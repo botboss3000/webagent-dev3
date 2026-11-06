@@ -160,9 +160,9 @@ pub(super) async fn page(
         webagent_webapp::configuration::LIVE_SETTINGS,
     ))
     .is_ok_and(|s| s["development"]["live_ui_editing"] == true)
-        && std::path::Path::new("/live-checkout/ui/embed/embed.html").is_file()
+        && std::path::Path::new("/code/ui/embed/embed.html").is_file()
     {
-        "/live-checkout/ui".into()
+        "/code/ui".into()
     } else {
         root
     };

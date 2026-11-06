@@ -1,4 +1,3 @@
-use webagent_accounts_host::AccountsStore;
 use axum::{
     extract::{Path as RoutePath, Request, State},
     http::StatusCode,
@@ -9,6 +8,7 @@ use axum::{
 use serde_json::Value;
 use std::path::Path;
 use tower::ServiceExt;
+use webagent_accounts_host::AccountsStore;
 
 pub(super) async fn live_ui(
     State(_app): State<crate::App>,
@@ -22,7 +22,7 @@ pub(super) async fn live_ui(
     {
         if let Some(ui) = webagent_webapp::configuration::live_root(
             Path::new(webagent_webapp::configuration::LIVE_SETTINGS),
-            Path::new("/live-checkout/ui"),
+            Path::new("/code/ui"),
         ) {
             return webagent_webapp::pages::routes(&ui)
                 .oneshot(request)
@@ -35,7 +35,7 @@ pub(super) async fn live_ui(
 pub async fn catalog(State(_app): State<crate::App>) -> Result<Json<Value>, (StatusCode, String)> {
     let ui = webagent_webapp::configuration::live_root(
         Path::new(webagent_webapp::configuration::LIVE_SETTINGS),
-        Path::new("/live-checkout/ui"),
+        Path::new("/code/ui"),
     )
     .unwrap_or_else(|| {
         std::path::PathBuf::from(

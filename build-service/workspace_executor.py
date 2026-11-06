@@ -7,7 +7,7 @@ worker=importlib.util.module_from_spec(spec);sys.modules[spec.name]=worker;spec.
 async def main():
  request=json.loads(sys.argv[1]);name=request["name"];args=request["arguments"]
  sid=str(uuid.UUID(request["workspace"]));base=Path("/workspaces")/sid
- control=Path("/run/v3/control");control.mkdir(parents=True)
+ control=Path("/runtime/control");control.mkdir(parents=True)
  (control/"dispatch.lock").touch();(control/"shutoff").write_text("0");worker.CONTROL=control
  adapter=worker.administrator_plugin("v3_workspace")
  if name=="v3_cargo_task":

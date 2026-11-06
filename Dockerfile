@@ -183,6 +183,9 @@ RUN chmod -R a+rX /opt/v3/plugins
 RUN chmod 0755 /opt/v3 /opt/v3/plugins /opt/v3/plugins/gates /opt/v3/plugins/gates/publication_size_guard_v1 && chmod 0444 /opt/v3/plugins/gates/publication_size_guard_v1/gate.json
 ENV V3_PROCESS_ROLE=loop V3_STATE_ROOT=/state V3_WORKSPACE_ROOT=/workspaces
 WORKDIR /state
+# The checkout is mounted at /code. Stored prompts, history and Files page rows still name
+# /live-checkout, so it stays as a link; tool sandboxes never grant the link itself.
+RUN ln -s /code /live-checkout
 USER 1100:1100
 HEALTHCHECK --interval=5s --timeout=3s --start-period=20s --retries=3 CMD ["env","V3_PROCESS_ROLE=health","/usr/local/bin/webagent-v3"]
 ENTRYPOINT ["/usr/bin/tini","--"]
