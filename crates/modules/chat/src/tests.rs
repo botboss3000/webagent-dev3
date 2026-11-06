@@ -747,8 +747,43 @@ mod main_chat {
     }
 
     #[test]
+    fn notes_render_whole_and_as_updates_from_other_sessions() {
+        let mut state = empty();
+        assert!(render_notes(&state).is_none());
+        let mut c = contribution();
+        contribute(&mut state, &c, "a", "p1", false).unwrap();
+        let mut other = contribution();
+        other.topic_id = "plans".into();
+        other.title = "Plans".into();
+        other.entry.id = "trip".into();
+        other.entry.text = "Book the cabin".into();
+        other.entry.progress = Some("Dates chosen".into());
+        contribute(&mut state, &other, "b", "p2", false).unwrap();
+        let whole = render_notes(&state).unwrap();
+        assert!(
+            whole.contains("[topic goal]")
+                && whole.contains("[entry trip] (open) Book the cabin | progress: Dates chosen")
+        );
+        assert!(whole.find("## Goal").unwrap() < whole.find("## Plans").unwrap());
+        assert!(whole.contains("Untrusted notes"));
+        // Session a sees only b's change; b sees only a's; nothing after the latest version.
+        let for_a = render_changes(&state, 0, "a").unwrap();
+        assert!(for_a.contains("Book the cabin") && !for_a.contains("Review the blocker"));
+        assert!(render_changes(&state, 0, "b")
+            .unwrap()
+            .contains("Review the blocker"));
+        assert!(render_changes(&state, 2, "a").is_none());
+        c.entry.state = "done".into();
+        contribute(&mut state, &c, "b", "p3", false).unwrap();
+        let update = render_changes(&state, 2, "a").unwrap();
+        assert!(update.contains("version 2 to 3") && update.contains("(done) Review the blocker"));
+    }
+
+    #[test]
     fn modes_scope_merge_and_self_loop() {
         let mut state = empty();
+        assert_eq!(state["settings"]["write_mode"], "automatic");
+        state["settings"]["write_mode"] = json!("new_topics");
         let mut c = contribution();
         assert_eq!(
             contribute(&mut state, &c, "other", "p0", false).unwrap()["status"],

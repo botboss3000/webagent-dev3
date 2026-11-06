@@ -3,7 +3,7 @@
 //! messaging, which calls [`in_scope`], [`allow_delegation`] and [`spawn_limits`] here.
 use std::collections::HashMap;
 
-use crate::{Call, NativeHost};
+use crate::{text_search, Call, NativeHost};
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -34,6 +34,7 @@ pub fn owns(name: &str) -> bool {
         name,
         "list_sessions"
             | "read_session"
+            | "search_sessions"
             | "stop_session"
             | "list_delegatable_agents"
             | "run_optimizer"
@@ -49,6 +50,7 @@ pub const TOOLS: &[&str] = &[
     "message_session",
     "list_sessions",
     "read_session",
+    "search_sessions",
     "stop_session",
     "list_delegatable_agents",
     "promote_spawn",
@@ -65,6 +67,7 @@ struct Args {
     detail: Option<String>,
     cursor: Option<usize>,
     limit: Option<usize>,
+    query: Option<String>,
     prompt: Option<String>,
     purpose: Option<String>,
     name: Option<String>,
@@ -216,11 +219,11 @@ fn run_status(host: &dyn NativeHost, active: &[Value], sid: &str) -> String {
         .to_owned()
 }
 
-/// One page of the sessions `sid` may reach, newest first.
-async fn list_sessions(host: &dyn NativeHost, sid: &str, q: &Args) -> Result<Value> {
+/// The active sessions other than `sid` that `sid` may reach, newest first, as list rows
+/// without run status, and whether the owned scope applies.
+async fn reachable(host: &dyn NativeHost, sid: &str) -> Result<(Vec<Value>, bool)> {
     owner_required(host)?;
     let owned = owned_scope(host, sid).await?;
-    let active = host.active_runs().await?;
     let mut admitted: HashMap<String, bool> = HashMap::new();
     let mut rows = Vec::new();
     for session in host.store().list("session:").await? {
@@ -247,10 +250,24 @@ async fn list_sessions(host: &dyn NativeHost, sid: &str, q: &Args) -> Result<Val
         if allowed {
             rows.push(json!({"session_id":id,"title":session["title"],"agent_id":agent,
                 "last_active_at":session["last_active_at"].as_i64().or(session["created_at"].as_i64()),
-                "run_status":run_status(host,&active,id),"relation":relation.unwrap_or("owned")}));
+                "relation":relation.unwrap_or("owned")}));
         }
     }
     rows.sort_by_key(|r| std::cmp::Reverse(r["last_active_at"].as_i64().unwrap_or(0)));
+    Ok((rows, owned))
+}
+
+/// One page of the sessions `sid` may reach, newest first.
+async fn list_sessions(host: &dyn NativeHost, sid: &str, q: &Args) -> Result<Value> {
+    let (mut rows, owned) = reachable(host, sid).await?;
+    let active = host.active_runs().await?;
+    for row in &mut rows {
+        row["run_status"] = json!(run_status(
+            host,
+            &active,
+            row["session_id"].as_str().unwrap_or("")
+        ));
+    }
     let start = q.cursor.unwrap_or(0);
     let limit = q.limit.unwrap_or(20).clamp(1, 50);
     let page: Vec<Value> = rows.iter().skip(start).take(limit).cloned().collect();
@@ -374,6 +391,78 @@ async fn read_session(host: &dyn NativeHost, sid: &str, target: &str, q: &Args) 
         "authority":"untrusted_session_observation"}))
 }
 
+/// Interactions one `search_sessions` call reads across all sessions; older sessions past
+/// it are left out and reported.
+const MAX_SEARCH_ITEMS: usize = 50_000;
+
+/// Ranked excerpts of the user and agent messages in the sessions `sid` may reach, with
+/// the turn numbers `read_session` uses.
+async fn search_sessions(host: &dyn NativeHost, sid: &str, q: &Args) -> Result<Value> {
+    let query = q.query.as_deref().unwrap_or("");
+    if query.trim().is_empty() || query.chars().count() > 500 || query.chars().any(char::is_control)
+    {
+        return Err(anyhow!("query must be 1-500 characters of text"));
+    }
+    let terms = text_search::query_terms(query);
+    if terms.is_empty() {
+        return Err(anyhow!(
+            "query needs at least one word that is not a common stopword"
+        ));
+    }
+    let (settings, _) = settings(host, sid).await?;
+    let mut limits = text_search::Limits::from_settings(&settings);
+    if let Some(limit) = q.limit {
+        limits.total = limit.clamp(1, limits.total);
+    }
+    let (sessions, owned) = reachable(host, sid).await?;
+    let mut texts: Vec<(usize, usize, &'static str, String)> = Vec::new();
+    let mut scanned = 0usize;
+    let mut searched = 0usize;
+    for (index, session) in sessions.iter().enumerate() {
+        if scanned >= MAX_SEARCH_ITEMS {
+            break;
+        }
+        let target = session["session_id"].as_str().unwrap_or("");
+        let items = host
+            .store()
+            .session_interactions(target, (MAX_SEARCH_ITEMS - scanned) as i64)
+            .await?;
+        scanned += items.len();
+        searched += 1;
+        for turn in turns(&items, usize::MAX) {
+            let role = match turn["kind"].as_str() {
+                Some("user") => "user",
+                Some("agent") => "agent",
+                _ => continue,
+            };
+            if let (Some(number), Some(text)) = (turn["turn"].as_u64(), turn["text"].as_str()) {
+                texts.push((index, number as usize, role, text.to_owned()));
+            }
+        }
+    }
+    // Newest sessions first, and within a session newest turns first, so ties favour recent text.
+    texts.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+    let docs: Vec<text_search::Doc<'_>> = texts
+        .iter()
+        .map(|(index, turn, role, text)| {
+            let session = &sessions[*index];
+            text_search::Doc {
+                group: session["session_id"].as_str().unwrap_or(""),
+                meta: json!({"session_id":session["session_id"],"title":session["title"],
+                    "agent_id":session["agent_id"],"last_active_at":session["last_active_at"],
+                    "turn":turn,"role":role}),
+                text,
+            }
+        })
+        .collect();
+    let results = text_search::search(&terms, &docs, &limits);
+    Ok(json!({"results":results,"sessions_searched":searched,
+        "sessions_skipped":sessions.len()-searched,
+        "scope":if owned {"owned"} else {"started"},"limits":limits.describe(),
+        "read_more":"read_session with session_id and a from/to range around turn",
+        "authority":"untrusted_session_observation"}))
+}
+
 /// Run tool `name` with `args` at `call`'s position.
 pub async fn execute(
     host: &dyn NativeHost,
@@ -394,6 +483,7 @@ pub async fn execute(
     let request_id = digest(&json!([sid, rid, pending]));
     let output = match name {
         "list_sessions" => list_sessions(host, sid, &q).await?,
+        "search_sessions" => search_sessions(host, sid, &q).await?,
         "list_delegatable_agents" => {
             let all = host
                 .agent_request("GET", "/models/agents".into(), json!({}))
@@ -631,7 +721,7 @@ mod tests {
         ] {
             assert!(TOOLS.contains(&name) && !owns(name));
         }
-        assert!(TOOLS.iter().filter(|name| owns(name)).count() == 6);
+        assert!(TOOLS.iter().filter(|name| owns(name)).count() == 7);
         assert!(valid_queue_id("queued-1_A"));
         assert!(!valid_queue_id("a/b"));
         assert!(!valid_queue_id(&"a".repeat(129)));

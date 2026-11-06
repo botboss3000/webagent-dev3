@@ -109,8 +109,6 @@ pub fn is_read(name: &str) -> bool {
                 | "load_skill"
                 | "context_assets"
                 | "read_own_prompt"
-                | "session_search"
-                | "similar_sessions"
                 | "get_task_checkpoint"
                 | "compact_context"
                 | "recall_compacted"
@@ -346,7 +344,6 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         schemas.extend(core_skills::schemas());
         schemas.extend(native::context_assets::schemas());
         schemas.extend(native::prompt::schemas());
-        schemas.extend(native::search::schemas());
         schemas.extend(native::tool_search::schemas());
         schemas.extend(native::self_edit::schemas());
         schemas.extend(native::task::schemas());

@@ -33,7 +33,47 @@
             "label": "All of the user's private sessions"
           }
         ],
-        "hint": "Which sessions read_session, list_sessions, message_session, stop_session and manage_session may reach. Started means this conversation's sub agents and the sessions it started. Owned adds every private session the user owns; shared sessions are never included. The Default Agent uses Owned unless changed."
+        "hint": "Which sessions read_session, list_sessions, search_sessions, message_session, stop_session and manage_session may reach. Started means this conversation's sub agents and the sessions it started. Owned adds every private session the user owns; shared sessions are never included. The Default Agent uses Owned unless changed."
+      },
+      {
+        "key": "search_context_chars",
+        "label": "Search context characters",
+        "type": "number",
+        "default": 500,
+        "min": 50,
+        "max": 2000,
+        "step": 50,
+        "hint": "Characters search_sessions and search_this_session show on each side of a match."
+      },
+      {
+        "key": "search_max_result_chars",
+        "label": "Search result length",
+        "type": "number",
+        "default": 2000,
+        "min": 200,
+        "max": 8000,
+        "step": 100,
+        "hint": "Longest excerpt one result may have. Matches close together merge into one excerpt up to this length; more start a new result."
+      },
+      {
+        "key": "search_results_per_session",
+        "label": "Search results per session",
+        "type": "number",
+        "default": 3,
+        "min": 1,
+        "max": 10,
+        "step": 1,
+        "hint": "Most results search_sessions returns from one session. A merged excerpt counts as one."
+      },
+      {
+        "key": "search_results_total",
+        "label": "Search results in total",
+        "type": "number",
+        "default": 8,
+        "min": 1,
+        "max": 20,
+        "step": 1,
+        "hint": "Most results one search returns."
       },
       {
         "key": "allow_delegation",

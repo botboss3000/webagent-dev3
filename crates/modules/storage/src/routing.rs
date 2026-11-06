@@ -57,6 +57,7 @@ pub fn plane_for(key: &str) -> Plane {
         || key.starts_with("compaction_segment:")
         || key.starts_with("session_ability_state:")
         || key.starts_with("session_context_assets:")
+        || key.starts_with("session_main_notes:")
         || key.starts_with("action:")
         || key.starts_with("background_task:")
         || key.starts_with("run:")
@@ -92,6 +93,7 @@ pub fn always_sealed(key: &str) -> bool {
         || key.starts_with("module_state:")
         || key.starts_with("receipt:module:")
         || key.starts_with("session_context_assets:")
+        || key.starts_with("session_main_notes:")
 }
 
 /// Reject document access naming an agent other than the handle's bound agent.

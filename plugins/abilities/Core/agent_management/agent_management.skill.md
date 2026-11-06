@@ -8,7 +8,8 @@ Sub agents and sessions:
 - start_session starts a separate session in the user's list, by default a
   fork of this agent with this conversation's history. notify true sends you
   its result.
-- read_session and list_sessions look at sessions in scope; message_session
+- read_session and list_sessions look at sessions in scope; search_sessions
+  finds messages in them by keyword and names the turn to read; message_session
   sends one a message (steer by default); stop_session cancels its work;
   manage_session renames, pins, archives or unarchives it. Archiving a session
   also archives its sub agents.

@@ -1,9 +1,10 @@
 //! Native reads are confined to the caller-owned session supplied by Rust.
 //! No tool argument can select a different user, session, database or private interaction.
-use crate::{Call, NativeHost};
+use crate::{text_search, Call, NativeHost};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use tokio_util::sync::CancellationToken;
 use webagent_files::{attachment_key, uploads};
 use webagent_host_core::StoreCore;
@@ -18,7 +19,7 @@ pub fn owns(name: &str) -> bool {
 pub fn schemas() -> Vec<Value> {
     [
         ("read_attachment", "Read a bounded Unicode-character page of a current-session text attachment", json!({"attachment_id":{"type":"string","format":"uuid"},"offset_chars":{"type":"integer","minimum":0},"limit_chars":{"type":"integer","minimum":1,"maximum":4096}}), vec!["attachment_id"]),
-        ("search_this_session", "Search a bounded page of current-session public chat by case-sensitive literal text; continue with next_seq", json!({"query":{"type":"string","minLength":1,"maxLength":256},"after_seq":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":20}}), vec!["query"]),
+        ("search_this_session", "Search this conversation's user and assistant messages by keywords; words match by stem (garden finds gardening), so add related words to the query (feline cat). Nearby matches merge into one excerpt", json!({"query":{"type":"string","minLength":1,"maxLength":500},"limit":{"type":"integer","minimum":1,"maximum":20}}), vec!["query"]),
     ].into_iter().map(|(name,description,properties,required)|json!({
         "type":"function","name":name,"description":description,
         "parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}
@@ -27,9 +28,9 @@ pub fn schemas() -> Vec<Value> {
 fn attachment_limit() -> usize {
     4096
 }
-fn search_limit() -> usize {
-    10
-}
+/// Chat rows `search_this_session` reads per page and in total.
+const SEARCH_PAGE: i64 = 50;
+const SEARCH_ROWS: usize = 5000;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AttachmentArgs {
@@ -44,9 +45,7 @@ struct AttachmentArgs {
 struct SearchArgs {
     query: String,
     #[serde(default)]
-    after_seq: i64,
-    #[serde(default = "search_limit")]
-    limit: usize,
+    limit: Option<usize>,
 }
 fn attachment_page(record: Value, args: &AttachmentArgs) -> Result<Value> {
     if !(1..=4096).contains(&args.limit_chars) {
@@ -79,66 +78,44 @@ fn attachment_page(record: Value, args: &AttachmentArgs) -> Result<Value> {
         "total_chars":total,"has_more":next<total,"source_kind":"untrusted_attachment"}),
     )
 }
-fn search_args(args: &SearchArgs) -> Result<()> {
+fn search_args(args: &SearchArgs) -> Result<BTreeSet<String>> {
     if args.query.trim().is_empty()
-        || args.query.len() > 256
+        || args.query.chars().count() > 500
         || args.query.chars().any(char::is_control)
-        || args.after_seq < 0
-        || !(1..=20).contains(&args.limit)
+        || args.limit.is_some_and(|limit| !(1..=20).contains(&limit))
     {
         bail!("Invalid session search arguments");
     }
-    Ok(())
-}
-fn snippet(content: &str, at: usize) -> String {
-    let before: Vec<char> = content[..at].chars().rev().take(120).collect();
-    before
-        .into_iter()
-        .rev()
-        .chain(content[at..].chars().take(392))
-        .collect()
-}
-fn search_page(page: Value, args: &SearchArgs) -> Result<Value> {
-    search_args(args)?;
-    let rows = page["messages"]
-        .as_array()
-        .context("Chat page unavailable")?;
-    if rows.len() > 50 {
-        bail!("Chat scan exceeds limit");
+    let terms = text_search::query_terms(&args.query);
+    if terms.is_empty() {
+        bail!("Session search needs at least one word that is not a common stopword");
     }
-    let mut results = Vec::new();
-    let mut next = args.after_seq;
-    let mut scanned = 0usize;
-    for message in rows {
-        let seq = message["seq"].as_i64().context("Chat cursor unavailable")?;
-        if seq <= next {
-            bail!("Chat cursor order conflict");
-        }
-        next = seq;
-        scanned += 1;
+    Ok(terms)
+}
+/// Ranked excerpts of the published user and assistant rows in `rows`, oldest first.
+fn search_rows(
+    rows: &[Value],
+    terms: &BTreeSet<String>,
+    mut limits: text_search::Limits,
+) -> Vec<Value> {
+    // One conversation: the per-session limit does not apply.
+    limits.per_session = limits.total;
+    let docs: Vec<text_search::Doc<'_>> = rows
+        .iter()
+        .rev()
         // Search only published user/assistant chat. Private tool evidence never
         // enters this helper, and unknown row roles cannot expand that contract.
-        if !matches!(message["role"].as_str(), Some("user" | "assistant")) {
-            continue;
-        }
-        let Some(content) = message["content"].as_str() else {
-            continue;
-        };
-        let Some(at) = content.find(&args.query) else {
-            continue;
-        };
-        let preview = snippet(content, at);
-        results.push(json!({"seq":seq,"id":message["id"],"run_id":message["run_id"],
-            "role":message["role"],"created_at":message["created_at"],
-            "content_preview":preview,"preview_truncated":preview.chars().count()<content.chars().count()}));
-        if results.len() == args.limit {
-            break;
-        }
-    }
-    Ok(json!({"messages":results,"next_seq":next,
-        "has_more":scanned<rows.len() || page["has_more"]==true,
-        "scanned":scanned,"scan_limit":50,"case_sensitive":true,
-        "source_kind":"public_chat"}))
+        .filter(|row| matches!(row["role"].as_str(), Some("user" | "assistant")))
+        .filter_map(|row| {
+            Some(text_search::Doc {
+                group: "",
+                meta: json!({"seq":row["seq"],"id":row["id"],"run_id":row["run_id"],
+                    "role":row["role"],"created_at":row["created_at"]}),
+                text: row["content"].as_str()?,
+            })
+        })
+        .collect();
+    text_search::search(terms, &docs, &limits)
 }
 /// The sent attachment `id` of session `sid`, as the attachment API serves it: the
 /// encrypted record only for its owning session, never an unsent draft.
@@ -176,12 +153,46 @@ async fn work(host: &dyn NativeHost, sid: &str, name: &str, args: &Value) -> Res
         "search_this_session" => {
             let query: SearchArgs =
                 serde_json::from_value(args.clone()).context("Invalid session search arguments")?;
-            search_args(&query)?;
-            let page = host
-                .model_chat_page(host.store(), sid, query.after_seq, 50)
+            let terms = search_args(&query)?;
+            // The settings only bound excerpt sizes and counts; without readable ability
+            // controls (no account record) the defaults apply and the read stays authorized.
+            let settings = host
+                .ability_controls(sid)
                 .await
-                .context("Current-session chat unavailable")?;
-            search_page(page, &query)
+                .map(|(_, _, visibility, _)| visibility["settings"]["agent_management"].clone())
+                .unwrap_or_default();
+            let mut limits = text_search::Limits::from_settings(&settings);
+            if let Some(limit) = query.limit {
+                limits.total = limit.min(limits.total);
+            }
+            let mut rows = Vec::new();
+            let mut after = 0;
+            let mut complete = false;
+            while rows.len() < SEARCH_ROWS {
+                let page = host
+                    .model_chat_page(host.store(), sid, after, SEARCH_PAGE)
+                    .await
+                    .context("Current-session chat unavailable")?;
+                let messages = page["messages"]
+                    .as_array()
+                    .context("Chat page unavailable")?;
+                for message in messages {
+                    let seq = message["seq"].as_i64().context("Chat cursor unavailable")?;
+                    if seq <= after {
+                        bail!("Chat cursor order conflict");
+                    }
+                    after = seq;
+                    rows.push(message.clone());
+                }
+                if messages.is_empty() || page["has_more"] != true {
+                    complete = true;
+                    break;
+                }
+            }
+            Ok(
+                json!({"results":search_rows(&rows,&terms,limits),"scanned":rows.len(),
+                "scan_complete":complete,"limits":limits.describe(),"source_kind":"public_chat"}),
+            )
         }
         _ => bail!("Unknown session read tool"),
     }
@@ -265,42 +276,30 @@ mod tests {
         assert_eq!(page["has_more"], false);
     }
     #[test]
-    fn search_is_literal_bounded_and_keeps_unreturned_matches_after_cursor() {
-        let rows = (1..=50)
-            .map(|n| {
-                json!({"seq":n,"id":format!("m{n}"),"run_id":"r",
-            "role":if n==1 {"tool"} else {"assistant"},"created_at":1,
-            "content":format!("{}needle[.*]{}", "é".repeat(600),"z".repeat(600))})
-            })
-            .collect::<Vec<_>>();
+    fn search_ranks_public_rows_and_validates_arguments() {
+        let rows = [
+            json!({"seq":1,"id":"m1","run_id":"r","role":"tool","created_at":1,"content":"gardening secret"}),
+            json!({"seq":2,"id":"m2","run_id":"r","role":"user","created_at":2,"content":"Planning the garden beds"}),
+            json!({"seq":3,"id":"m3","run_id":"r","role":"assistant","created_at":3,"content":"Gardening tips: water early"}),
+        ];
         let args = SearchArgs {
-            query: "needle[.*]".into(),
-            after_seq: 0,
-            limit: 2,
+            query: "gardens".into(),
+            limit: None,
         };
-        let page = search_page(json!({"messages":rows,"has_more":false}), &args).unwrap();
-        assert_eq!(page["messages"].as_array().unwrap().len(), 2);
-        assert_eq!(page["next_seq"], 3);
-        assert_eq!(page["has_more"], true);
-        assert_eq!(page["scanned"], 3);
-        assert!(page["messages"][0]["content_preview"]
-            .as_str()
-            .unwrap()
-            .contains("needle[.*]"));
-        assert!(
-            page["messages"][0]["content_preview"]
-                .as_str()
-                .unwrap()
-                .chars()
-                .count()
-                <= 512
-        );
-        assert!(search_page(json!({"messages":vec![json!({"seq":1});51]}), &args).is_err());
-        assert!(search_args(&SearchArgs {
-            query: "".into(),
-            ..args
-        })
-        .is_err());
+        let terms = search_args(&args).unwrap();
+        let limits = text_search::Limits::from_settings(&json!({"search_results_per_session":1}));
+        let hits = search_rows(&rows, &terms, limits);
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().all(|hit| hit["role"] != "tool"));
+        assert!(hits[0]["excerpt"].as_str().unwrap().contains("arden"));
+        for bad in [
+            json!({"query":""}),
+            json!({"query":"the"}),
+            json!({"query":"x","limit":0}),
+        ] {
+            let parsed: SearchArgs = serde_json::from_value(bad).unwrap();
+            assert!(search_args(&parsed).is_err());
+        }
         assert!(
             serde_json::from_value::<SearchArgs>(json!({"query":"x","session_id":"foreign"}))
                 .is_err()

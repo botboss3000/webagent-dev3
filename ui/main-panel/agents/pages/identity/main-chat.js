@@ -19,6 +19,7 @@ export async function renderMainChat(host, request, {agentId,canManage=false}={}
   expand.addEventListener('click',()=>expanded(body.hidden));
   section.addEventListener('click',event=>{if(event.target.closest('button:not(:disabled),input[type=checkbox]:not(:disabled)'))requestTouchVibration(event);},{capture:true});
   const hint=document.createElement('p');hint.className='ac-hint';hint.textContent='Applies to all sessions for this agent. Changes apply after Save. Main Chat uses the same context settings as this agent’s other chats.';body.append(hint);
+  const size=document.createElement('p');size.className='ac-hint main-chat-notes-size';body.append(size);
   const form=document.createElement('form');body.append(form);
   const fields=new Map([['enabled',enabled]]),editors=new Map();
   /** Build labeled fields without treating editable names as canonical session identity. */
@@ -30,7 +31,7 @@ export async function renderMainChat(host, request, {agentId,canManage=false}={}
     wrap.append(text,input);fields.set(key,input);form.append(wrap);
   }
   field('chat_name','Main Chat name');field('notes_name','Main Notes name');
-  field('write_mode','Notes write approval',[['every_write','Approve every write or edit'],['new_topics','Approve new topics and scope changes'],['automatic','Automatic writes and edits']]);
+  field('write_mode','Notes write approval',[['automatic','Automatic writes and edits (default)'],['new_topics','Approve new topics and scope changes'],['every_write','Approve every write or edit']]);
   for(const [key,title,description]of [['contribute','Contribute to Main Notes','Included automatically in this agent’s working sessions while enabled.'],['review','Coordinate Main Notes','Included automatically in this agent’s Main Chat while enabled.']]){
     const card=document.createElement('details');card.className='ac-row main-chat-skill';card.dataset.mainChatSkill=key;
     const summary=document.createElement('summary');summary.className='ac-ability-row';summary.style.cssText='cursor:pointer;padding:8px 0;min-height:32px';summary.textContent=title;card.append(summary);
@@ -67,6 +68,8 @@ export async function renderMainChat(host, request, {agentId,canManage=false}={}
     state=data;pending=null;
     for(const [key,input]of fields){if(key==='enabled')input.checked=data.settings.enabled===true;else input.value=data.settings[key]||'';}
     for(const [key,{input}]of editors){input.value=typeof data.skills[key]?.override==='string'?data.skills[key].override:'';input.placeholder=typeof data.skills[key]?.fallback==='string'?data.skills[key].fallback:'';}
+    const topics=Object.keys(data.topics||{}).length;
+    size.textContent=topics?'Main Notes in every session’s context: '+topics+(topics===1?' topic':' topics')+', about '+Number(data.notes_context_tokens||0).toLocaleString()+' tokens.':'Main Notes are empty. Once agents add notes, every session carries them in its context.';
     open.hidden=!data.session_id;if(data.session_id)open.href='/app?session_id='+encodeURIComponent(data.session_id);warnings();lock(false);save.textContent='Save Main Chat';
   }
   /** Explicit reload reconciles conflicts; detached navigation cannot repaint another agent. */

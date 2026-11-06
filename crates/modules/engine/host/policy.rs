@@ -76,7 +76,6 @@ impl webagent_engine::runtime::ports::NativePolicy for NativePolicy {
         tools::administrator::schemas()
             .into_iter()
             .chain(tools::native::mode::schemas())
-            .chain(tools::native::search::schemas())
             .chain(tools::native::compaction::schemas())
             .chain(tools::native::recall::schemas())
             .chain(tools::native::self_edit::schemas())
@@ -172,6 +171,16 @@ impl webagent_engine::runtime::ports::MainGuidance<Store> for NativePolicy {
         sid: &'a str,
     ) -> impl std::future::Future<Output = Result<Option<String>>> + Send + 'a {
         crate::main_chat::guidance_store(store, agent, sid)
+    }
+    fn main_notes<'a>(
+        &'a self,
+        store: &'a Store,
+        agent: &'a str,
+        sid: &'a str,
+        requester: &'a str,
+        basis: &'a str,
+    ) -> impl std::future::Future<Output = Result<Vec<(String, String)>>> + Send + 'a {
+        crate::main_chat::notes_context_store(store, agent, sid, requester, basis)
     }
 }
 

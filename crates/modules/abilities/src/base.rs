@@ -25,8 +25,6 @@ pub const TOOLS: &[&str] = &[
     "get_date",
     "calculate",
     "read_attachment",
-    "session_search",
-    "similar_sessions",
     "compact_context",
     "recall_compacted",
     "search_this_session",
