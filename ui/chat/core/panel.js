@@ -29,6 +29,7 @@ import {closeChatElementFullView} from './full-view.js';
 import {currentChatProfile} from '../controls/chat-config.js';
 import { applyChatConfig, setChatConfigAgent } from '../controls/chat-config.js';
 import { readDraft, saveDraft, adoptNewDraft } from './composer-draft.js';
+import { shouldCreateSession } from './session-start.js';
 import { mountSessionDropdown } from '../controls/session-dropdown/controller.js';
 import { createSessionList } from '../controls/session-dropdown/list.js';
 import { createBrokerChip } from '../controls/broker-chip.js';
@@ -405,14 +406,21 @@ async function ensureSession(){
   })().finally(()=>{creatingSession=null;});
   return creatingSession;
 }
+// One New-session request at a time; an unused open conversation is reused instead of duplicated.
+let newSessionBusy=false;
+/** Collects the selected conversation's content needed to decide whether New should start another. */
+const newSessionState=()=>({session,ready:historyReady,lastSeq:historyLastSeq,runs:activityRuns.length,rows:$('chat-messages-inner').children.length,draft:$('chat-input').value,attachments:media?.count||0});
 // Creates a fresh session from the New control and restores the initiating focus choice.
 $('new').onclick=guard(async()=>{
+  if(newSessionBusy)return;
+  if(!shouldCreateSession(newSessionState())){$('chat-input').focus({preventScroll:true});return;}
   const focusWatch=watchFocus();
+  newSessionBusy=true;
   try{
     const item=await client.create({agent_id:getAgentId(),client_request_id:crypto.randomUUID()});
     await sessions();
     await open(item.id,'push','new_session',focusWatch);
-  }finally{focusWatch.stop();}
+  }finally{newSessionBusy=false;focusWatch.stop();}
 });
 let elementContext='';
 // Network errors, timeouts, rate limits and 5xx are retried with the same client_message_id;
@@ -480,8 +488,12 @@ $('chat-stop-btn').onclick=guard(()=>$('chat-stop-btn').dataset.run?cancel($('ch
   /** Creates and opens a new conversation, rejecting while a message or upload is pending. */
   async function newSession(){
     if(submitting||media.uploading)throw Error('Wait for the pending message or upload');
-    const item=await client.create({agent_id:getAgentId(),client_request_id:crypto.randomUUID()});
-    await sessions();await open(item.id);return {session_id:item.id};
+    if(newSessionBusy||!shouldCreateSession(newSessionState()))return {session_id:session};
+    newSessionBusy=true;
+    try{
+      const item=await client.create({agent_id:getAgentId(),client_request_id:crypto.randomUUID()});
+      await sessions();await open(item.id);return {session_id:item.id};
+    }finally{newSessionBusy=false;}
   }
   /** Returns a run from the selected conversation or throws when it is absent. */
   function selectedRun(id){const run=activityRuns.find(r=>r.id===id);if(!run)throw Error('Run is not in the selected conversation');return run;}
