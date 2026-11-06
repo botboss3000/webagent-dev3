@@ -3252,8 +3252,14 @@ impl<
                     }
                     Ok(response) => {
                         X::record_usage(&mut run, &response);
+                        // A completed reply ends this call's failover attempt: the next
+                        // call starts with a fresh retry budget and no carried-over
+                        // response or tool-effect flags. The pinned candidate and its
+                        // history stay; a live uncertain effect is checked at failure.
                         if run["failover_state"].is_object() {
-                            run["failover_state"]["response_started"] = json!(true);
+                            run["failover_state"]["retries"] = json!(0);
+                            run["failover_state"]["response_started"] = json!(false);
+                            run["failover_state"]["uncertain_tool_effect"] = json!(false);
                         }
                         let mut output = response["output"]
                             .as_array()
