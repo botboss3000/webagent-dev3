@@ -279,3 +279,53 @@ fn resolution_keeps_missing_tails_and_applies_parent_steps() {
     );
     assert_eq!(resolve(Path::new("/")), PathBuf::from("/"));
 }
+
+#[test]
+fn decision_candidates_page_glob_and_excerpt() {
+    let fixture = fixture();
+    for (path, content) in [
+        ("d/a.md", "alpha"),
+        ("d/b.txt", "beta"),
+        ("d/sub/c.md", "gamma"),
+    ] {
+        fixture.call(
+            "file_write",
+            json!({"path":fixture.path(path),"content":content}),
+        );
+    }
+    let folder = fixture.path("d");
+    let all = fixture.call("decision_candidates", json!({"path":folder}));
+    assert_eq!(all["status"], "success", "{all}");
+    assert_eq!(
+        all["output"],
+        json!([{"name":"a.md","kind":"file"},{"name":"b.txt","kind":"file"},
+            {"name":"sub","kind":"directory"}])
+    );
+    assert_eq!(all["next_offset"], Value::Null);
+    assert!(all.get("implementation_version").is_none());
+    let deep = fixture.call(
+        "decision_candidates",
+        json!({"path":folder,"file_glob":"*.md","recursive":true,"include_content":true}),
+    );
+    assert_eq!(
+        deep["output"],
+        json!([{"name":"a.md","kind":"file","snippet":"alpha","content_truncated":false},
+            {"name":"sub/c.md","kind":"file","snippet":"gamma","content_truncated":false}])
+    );
+    let refused = fixture.call(
+        "decision_candidates",
+        json!({"path":folder,"recursive":true}),
+    );
+    assert_eq!(
+        refused["output"],
+        "recursive and include_content require file_glob"
+    );
+    let refused = fixture.call(
+        "decision_candidates",
+        json!({"path":folder,"file_glob":"a/b"}),
+    );
+    assert_eq!(
+        refused["output"],
+        "file_glob must be a basename pattern of at most 128 characters"
+    );
+}

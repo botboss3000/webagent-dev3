@@ -1,5 +1,6 @@
-//! File tools run inside the worker: list, read, search, edit and write, plus the
-//! Administrator's direct live-checkout edit. Ported from the Codebase Admin runner
+//! File tools run inside the worker: list, read, search, edit and write, the
+//! Administrator's direct live-checkout edit, and directory-decision candidates
+//! ([`decision`]). Ported from the Codebase Admin runner
 //! (`plugins/abilities/Administrator/codebase_admin/runner.py`), which started a Python
 //! process for every call; argument checks, limits, routing refusals and result fields are
 //! unchanged. Paths are walked one component at a time from `/` with `O_NOFOLLOW`, so a
@@ -22,8 +23,11 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+mod decision;
+
 /// The tools this module runs; everything else goes to the Python worker.
-pub const TOOLS: [&str; 6] = [
+pub const TOOLS: [&str; 7] = [
+    "decision_candidates",
     "file_list",
     "file_read",
     "file_search",
@@ -154,6 +158,14 @@ pub fn call(roots: &Roots, request: &Value) -> Value {
         Ok(admitted) => admitted,
         Err(failure) => return failed(&failure),
     };
+    if name == "decision_candidates" {
+        // A worker tool of its own, not a Codebase Admin one: no routing or runner fields.
+        return match args {
+            Value::Object(args) => decision::candidates(roots, &base, args),
+            _ => Err(rejected("Unsupported decision arguments")),
+        }
+        .unwrap_or_else(|failure| failed(&failure));
+    }
     let mut result =
         match route(roots, name, args).and_then(|args| operation(roots, &base, &args, name)) {
             Ok(result) => result,
