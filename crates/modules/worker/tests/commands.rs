@@ -251,3 +251,79 @@ async fn a_quiesce_stops_the_workspace_commands() {
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert!(!marker.exists(), "the command outlived the quiesce");
 }
+
+const DOUBLE_FORK: &str = "import os,time\n\
+if os.fork()==0:\n os.setsid()\n if os.fork()!=0: os._exit(0)\n \
+time.sleep(2); open('detached-survived','w').write('bad'); os._exit(0)\n";
+
+#[tokio::test]
+async fn a_cancelled_command_takes_its_double_forked_new_session_child_with_it() {
+    if !sandbox_available() {
+        return;
+    }
+    let worker = worker().await;
+    let (stream, ()) = worker
+        .send(
+            "python",
+            json!({"code":format!("{DOUBLE_FORK}time.sleep(30)\n")}),
+            60,
+        )
+        .await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    drop(stream);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(!worker.workspace().join("detached-survived").exists());
+}
+
+#[tokio::test]
+async fn a_finished_command_leaves_no_detached_child_behind() {
+    if !sandbox_available() {
+        return;
+    }
+    let worker = worker().await;
+    let result = worker.call("python", json!({"code":DOUBLE_FORK}), 30).await;
+    assert_eq!(result["status"], "success", "{result}");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(!worker.workspace().join("detached-survived").exists());
+}
+
+#[tokio::test]
+async fn commands_read_outside_their_workspace_but_cannot_change_it() {
+    if !sandbox_available() {
+        return;
+    }
+    let worker = worker().await;
+    let private = worker.dir.path().join("unrelated-private");
+    std::fs::write(&private, "PRIVATE_FIXTURE").expect("fixture");
+    let read = worker
+        .call(
+            "shell",
+            json!({"command":format!("cat {}", private.display())}),
+            30,
+        )
+        .await;
+    assert_eq!(read["output"], "PRIVATE_FIXTURE", "{read}");
+    let write = worker
+        .call(
+            "shell",
+            json!({"command":format!("echo changed > {}", private.display())}),
+            30,
+        )
+        .await;
+    assert_eq!(write["status"], "failed");
+    assert_eq!(
+        std::fs::read_to_string(&private).expect("fixture"),
+        "PRIVATE_FIXTURE"
+    );
+}
+
+#[tokio::test]
+async fn shutoff_stops_commands_before_they_start() {
+    let worker = worker().await;
+    std::fs::write(worker.dir.path().join("control/shutoff"), "1").expect("shutoff");
+    let result = worker
+        .call("shell", json!({"command":"touch forbidden"}), 30)
+        .await;
+    assert_eq!(result["output"], "execution disabled");
+    assert!(!worker.workspace().join("forbidden").exists());
+}

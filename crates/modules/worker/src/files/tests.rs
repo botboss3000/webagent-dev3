@@ -329,3 +329,53 @@ fn decision_candidates_page_glob_and_excerpt() {
         "file_glob must be a basename pattern of at most 128 characters"
     );
 }
+
+#[test]
+fn reads_page_beyond_the_first_mebibyte() {
+    let fixture = fixture();
+    let content: String = (0..70000)
+        .map(|index| format!("line-{index:05}: source context\n"))
+        .collect();
+    assert!(content.len() > LIMIT);
+    std::fs::create_dir_all(&fixture.workspace).expect("workspace");
+    std::fs::write(fixture.workspace.join("deep.rs"), &content).expect("file");
+    let path = fixture.path("deep.rs");
+    let page = fixture.call("file_read", json!({"path":path,"offset":60001,"limit":3}));
+    let expected: String = (60000..60003)
+        .map(|index| format!("line-{index:05}: source context\n"))
+        .collect();
+    assert_eq!(page["output"], expected);
+    assert_eq!(page["total_lines"], 70000);
+    assert_eq!(page["next_offset"], 60004);
+    assert_eq!(page["truncated"], true);
+    let next = fixture.call("file_read", json!({"path":path,"offset":60004,"limit":2}));
+    assert!(next["output"]
+        .as_str()
+        .expect("text")
+        .contains("line-60003"));
+    assert_eq!(next["next_offset"], 60006);
+    let bad = fixture.call("file_read", json!({"path":path,"limit":2001}));
+    assert_eq!(bad["output"], "limit must be between 1 and 2000 lines");
+}
+
+#[test]
+fn search_and_listing_stop_at_their_budgets() {
+    let fixture = fixture();
+    std::fs::create_dir_all(&fixture.workspace).expect("workspace");
+    let big = vec![b'x'; LIMIT];
+    for index in 0..34 {
+        std::fs::write(fixture.workspace.join(format!("{index:02}.txt")), &big).expect("file");
+    }
+    let found = fixture.call(
+        "file_search",
+        json!({"path":fixture.workspace.to_string_lossy(),"query":"missing"}),
+    );
+    assert_eq!(found["truncated"], true, "{found}");
+    let many = fixture.workspace.join("many");
+    std::fs::create_dir_all(&many).expect("folder");
+    for index in 0..10001 {
+        std::fs::write(many.join(index.to_string()), "").expect("file");
+    }
+    let listed = fixture.call("file_list", json!({"path":many.to_string_lossy()}));
+    assert_eq!(listed["truncated"], true);
+}
