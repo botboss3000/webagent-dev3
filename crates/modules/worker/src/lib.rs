@@ -1,11 +1,13 @@
-//! The v3 tool worker front. It owns the tool socket the API and loop call, accepts only
-//! the application identity, and forwards each request unchanged to the Python worker on
-//! a private socket. Tool groups move from the Python worker into this crate one at a time
-//! (Rust conversion item A2); until then every request passes through.
+//! The v3 tool worker. It owns the tool socket the API and loop call and accepts only the
+//! application identity. File tools run here ([`files`]); every other request is forwarded
+//! unchanged to the Python worker on a private socket. Tool groups move from the Python
+//! worker into this crate one at a time (Rust conversion item A2).
+pub mod files;
+
 use serde_json::{json, Value};
 use std::io;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -24,6 +26,8 @@ pub struct Config {
     pub legacy_socket: PathBuf,
     /// The only caller UID served; other callers are disconnected unanswered.
     pub client_uid: u32,
+    /// Where the native file tools work.
+    pub files: files::Roots,
 }
 
 impl Config {
@@ -44,6 +48,7 @@ impl Config {
             socket: path("V3_TOOL_SOCKET", "/run/v3/worker/tools.sock"),
             legacy_socket: path("V3_LEGACY_TOOL_SOCKET", "/run/v3/worker-legacy/tools.sock"),
             client_uid,
+            files: files::Roots::container(),
         })
     }
 }
@@ -74,18 +79,19 @@ pub async fn serve(config: Config) -> io::Result<()> {
         {
             continue;
         }
-        let legacy = config.legacy_socket.clone();
+        let config = config.clone();
         tokio::spawn(async move {
             // A failed write means the caller left; there is nobody to tell.
-            let _ = forward(stream, &legacy).await;
+            let _ = handle(stream, &config).await;
         });
     }
 }
 
-/// Relays one call: the request line to the Python worker, then its reply back. A caller
-/// that hangs up (or sends more) before the reply ends the forwarded connection, which
-/// cancels the call exactly as a direct disconnect would.
-async fn forward(client: UnixStream, legacy: &Path) -> io::Result<()> {
+/// Answers one call: a file tool runs here, anything else goes to the Python worker. A
+/// caller that hangs up (or sends more) before a forwarded reply ends the forwarded
+/// connection, which cancels the call exactly as a direct disconnect would. A native file
+/// call always completes, so a write is never left half done.
+async fn handle(client: UnixStream, config: &Config) -> io::Result<()> {
     let (client_read, mut client_write) = client.into_split();
     let mut client_read = BufReader::new(client_read);
     let mut request = Vec::new();
@@ -102,7 +108,23 @@ async fn forward(client: UnixStream, legacy: &Path) -> io::Result<()> {
     if let Some(problem) = problem {
         return reply(&mut client_write, None, problem).await;
     }
-    let upstream = match UnixStream::connect(legacy).await {
+    let parsed = serde_json::from_slice::<Value>(&request).ok();
+    if let Some(parsed) = parsed.filter(|request| {
+        request["version"] == 2 && request["name"].as_str().is_some_and(files::handles)
+    }) {
+        let roots = config.files.clone();
+        let id = parsed["id"].clone();
+        let result = tokio::task::spawn_blocking(move || files::call(&roots, &parsed))
+            .await
+            .unwrap_or_else(|_| json!({"status":"failed","output":"File tool failed"}));
+        let mut line = json!({"version":2,"id":id,"result":result})
+            .to_string()
+            .into_bytes();
+        line.push(b'\n');
+        client_write.write_all(&line).await?;
+        return client_write.shutdown().await;
+    }
+    let upstream = match UnixStream::connect(&config.legacy_socket).await {
         Ok(upstream) => upstream,
         Err(_) => {
             let id = serde_json::from_slice::<Value>(&request)
@@ -145,6 +167,7 @@ async fn reply(
 mod tests {
     use super::*;
     use std::os::unix::fs::MetadataExt;
+    use std::path::Path;
 
     struct Fixture {
         _dir: tempfile::TempDir,
@@ -156,7 +179,18 @@ mod tests {
         let dir = tempfile::tempdir().expect("temporary directory");
         let socket = dir.path().join("tools.sock");
         let legacy = dir.path().join("legacy.sock");
+        let control = dir.path().join("control");
+        std::fs::create_dir_all(&control).expect("control");
+        std::fs::write(control.join("dispatch.lock"), "").expect("lock");
+        std::fs::write(control.join("shutoff"), "0").expect("shutoff");
+        std::fs::create_dir_all(dir.path().join("workspaces")).expect("workspaces");
         let config = Config {
+            files: files::Roots {
+                workspaces: dir.path().join("workspaces"),
+                live_checkout: dir.path().join("absent-checkout"),
+                control,
+                context_config: dir.path().join("absent-context.json"),
+            },
             socket: socket.clone(),
             legacy_socket: legacy.clone(),
             // The test process owns the directory it just created.
@@ -210,12 +244,28 @@ mod tests {
         });
         let mut client = connect(&fixture.socket).await;
         client
-            .write_all(b"{\"version\":2,\"id\":\"a\",\"name\":\"file_read\"}\n")
+            .write_all(b"{\"version\":2,\"id\":\"a\",\"name\":\"terminal_read\"}\n")
             .await
             .expect("request");
         let reply = read_line(&mut client).await;
         assert_eq!(reply["id"], "a");
-        assert_eq!(reply["result"]["output"], "file_read");
+        assert_eq!(reply["result"]["output"], "terminal_read");
+    }
+
+    #[tokio::test]
+    async fn a_file_tool_runs_in_the_worker_without_the_python_worker() {
+        let fixture = fixture();
+        let mut client = connect(&fixture.socket).await;
+        let request = json!({"version":2,"id":"n","name":"file_list",
+            "workspace":"2244991a-c2e3-415b-ae5c-054570c91d32","arguments":{"path":"."}});
+        client
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .expect("request");
+        let reply = read_line(&mut client).await;
+        assert_eq!(reply["id"], "n");
+        assert_eq!(reply["result"]["status"], "success", "{reply}");
+        assert_eq!(reply["result"]["implementation_version"], "2.0.0");
     }
 
     #[tokio::test]

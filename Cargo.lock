@@ -3028,9 +3028,13 @@ dependencies = [
 name = "webagent-worker"
 version = "0.1.0"
 dependencies = [
+ "hex",
+ "rustix",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
