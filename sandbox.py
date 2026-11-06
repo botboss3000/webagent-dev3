@@ -56,7 +56,9 @@ def restrict(base, read_paths=(), deny_unix=False):
         raise RuntimeError("workspace sandbox requires Landlock ABI 6 or newer")
     # Handle every filesystem right supported through ABI 8, deny unlisted
     # paths, and isolate signals and abstract Unix sockets from other domains.
-    attr = Ruleset((1 << 16) - 1, 1, 3)
+    # Commands under the Unix socket fence also connect over TCP only to web ports, their
+    # own preview ports and the ephemeral range, as in the Rust sandbox.
+    attr = Ruleset((1 << 16) - 1, 3 if deny_unix else 1, 3)
     ruleset = call(444, ctypes.byref(attr), ctypes.sizeof(attr), 0)
     try:
         def allow(path, rights):
@@ -90,13 +92,17 @@ def restrict(base, read_paths=(), deny_unix=False):
             raise ValueError("invalid trusted workspace listen ports")
         # Ephemeral listeners used by test fixtures stay outside the reserved
         # preview range; Linux intersects per-socket ranges with this ceiling.
-        lower=int(Path("/proc/sys/net/ipv4/ip_local_port_range").read_text().split()[0])
+        lower,upper=map(int,Path("/proc/sys/net/ipv4/ip_local_port_range").read_text().split()[:2])
         if lower<=29999: raise RuntimeError("ephemeral ports overlap workspace previews")
         ephemeral=PortRule(1,0)
         call(445,ruleset,2,ctypes.byref(ephemeral),0)
         for port in ports:
-            rule = PortRule(1, int(port))
+            rule = PortRule(3 if deny_unix else 1, int(port))
             call(445, ruleset, 2, ctypes.byref(rule), 0)
+        if deny_unix:
+            for port in (80, 443, *range(lower, upper + 1)):
+                rule = PortRule(2, port)
+                call(445, ruleset, 2, ctypes.byref(rule), 0)
 
         if libc.prctl(38, 1, 0, 0, 0) != 0:
             raise OSError(ctypes.get_errno(), "cannot set no_new_privs")

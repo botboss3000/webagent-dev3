@@ -304,6 +304,48 @@ async fn commands_read_outside_their_workspace_but_cannot_change_it() {
     );
 }
 
+async fn commands_connect_only_to_web_preview_and_ephemeral_ports() {
+    if !sandbox_available() {
+        return;
+    }
+    let worker = worker().await;
+    // A fixture listener on an ephemeral port is reachable; one on an internal-service style
+    // port outside the allowed ports is not.
+    let open = std::net::TcpListener::bind("127.0.0.1:0").expect("ephemeral listener");
+    let blocked = (15000..15200)
+        .find_map(|port| std::net::TcpListener::bind(("127.0.0.1", port)).ok())
+        .expect("blocked-port listener");
+    let probe = |port: u16| {
+        format!(
+            "import socket\ntry:\n socket.create_connection(('127.0.0.1',{port}),2).close();print('open')\nexcept OSError as e:print('denied',e.errno)"
+        )
+    };
+    let reached = worker
+        .call(
+            "python",
+            json!({"code":probe(open.local_addr().expect("address").port())}),
+            30,
+        )
+        .await;
+    assert_eq!(
+        reached["output"].as_str().map(str::trim),
+        Some("open"),
+        "{reached}"
+    );
+    let refused = worker
+        .call(
+            "python",
+            json!({"code":probe(blocked.local_addr().expect("address").port())}),
+            30,
+        )
+        .await;
+    assert_eq!(
+        refused["output"].as_str().map(str::trim),
+        Some("denied 13"),
+        "{refused}"
+    );
+}
+
 async fn shutoff_stops_commands_before_they_start() {
     let worker = worker().await;
     std::fs::write(worker.dir.path().join("control/shutoff"), "1").expect("shutoff");
@@ -350,6 +392,10 @@ fn main() {
         (
             "commands_read_outside_their_workspace_but_cannot_change_it",
             || Box::pin(commands_read_outside_their_workspace_but_cannot_change_it()),
+        ),
+        (
+            "commands_connect_only_to_web_preview_and_ephemeral_ports",
+            || Box::pin(commands_connect_only_to_web_preview_and_ephemeral_ports()),
         ),
         ("shutoff_stops_commands_before_they_start", || {
             Box::pin(shutoff_stops_commands_before_they_start())

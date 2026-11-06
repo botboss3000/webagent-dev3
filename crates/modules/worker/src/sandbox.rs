@@ -98,7 +98,9 @@ pub fn abi() -> io::Result<i64> {
 
 /// Builds the boundary for a child in `base` that may also read `read_paths` and bind
 /// `ports` (at most four, 20000–29999). `deny_unix` adds the Unix socket fence commands
-/// get; ability plugins run without it, as before.
+/// get; ability plugins run without it, as before. Commands under the fence also connect
+/// over TCP only to web ports, their own preview ports and the ephemeral range (test
+/// fixtures), so they cannot reach the app API, SSH or other host and session services.
 ///
 /// # Errors
 /// When Landlock ABI 6 is unavailable, a rule cannot be added, the ports are invalid or the
@@ -119,7 +121,7 @@ pub fn prepare(
     // isolate signals and abstract Unix sockets from other domains.
     let attr = RulesetAttr {
         handled_access_fs: (1 << 16) - 1,
-        handled_access_net: 1,
+        handled_access_net: if deny_unix { 1 | 2 } else { 1 },
         scoped: 3,
     };
     // SAFETY: `attr` outlives the call and its size is passed with it.
@@ -194,17 +196,32 @@ pub fn prepare(
     }
     // Ephemeral listeners used by test fixtures stay outside the reserved preview range.
     let range = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")?;
-    let lower: u32 = range
+    let mut bounds = range
         .split_whitespace()
-        .next()
-        .and_then(|lower| lower.parse().ok())
-        .ok_or_else(|| unavailable("ephemeral port range unreadable"))?;
+        .map(|value| value.parse::<u16>().ok());
+    let (Some(Some(lower)), Some(Some(upper))) = (bounds.next(), bounds.next()) else {
+        return Err(unavailable("ephemeral port range unreadable"));
+    };
     if lower <= 29999 {
         return Err(unavailable("ephemeral ports overlap workspace previews"));
     }
-    for port in std::iter::once(0).chain(ports.iter().copied()) {
+    // Bind (1) port 0 and the previews; with the fence, connect (2) to web ports, the
+    // previews and the ephemeral range only.
+    let connect: Vec<(u16, u64)> = if deny_unix {
+        [80, 443]
+            .into_iter()
+            .chain(lower..=upper)
+            .map(|port| (port, 2))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let previews = ports
+        .iter()
+        .map(|port| (*port, if deny_unix { 1 | 2 } else { 1 }));
+    for (port, access) in std::iter::once((0, 1)).chain(previews).chain(connect) {
         let rule = NetPort {
-            allowed_access: 1,
+            allowed_access: access,
             port: u64::from(port),
         };
         // SAFETY: `rule` outlives the call.
