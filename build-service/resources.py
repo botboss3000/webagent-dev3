@@ -162,7 +162,12 @@ class Resources:
         phase_weights=self.policy.get("cpu_phase_weights")or{}
         weights={n:(1+max(0,r["priority"])+min(2,int((self.clock()-r["started"])/900)))*phase_weights.get(r["phase"],1)for n,r in running.items()}
         for name,row in running.items():
-            self.allocate_cpu(name,self.cpu_floor(row["phase"])+int(extra*weights[name]/sum(weights.values())))
+            try:
+                self.allocate_cpu(name,self.cpu_floor(row["phase"])+int(extra*weights[name]/sum(weights.values())))
+            except RuntimeError as error:
+                # A short phase can exit before its row leaves "running"; its own completion
+                # cleans up. Any other failure still stops the caller.
+                if "Build container not running" not in str(error):raise
 
     def enter(self,name,job,phase,profile,kind,timeout=None,hard_cap=None):
         """Wait for measured admission outside the broker lock; revocation still interrupts waiting."""

@@ -154,6 +154,9 @@ COPY ui/vendor/fonts /opt/v3/shared-ui/vendor/fonts
 COPY ui/vendor/lucide /opt/v3/shared-ui/vendor/lucide
 COPY ui/favicon.svg /opt/v3/shared-ui/
 ENV PATH=/opt/rust/bin:$PATH
+# The checkout is mounted at /code. Stored prompts, history and Files page rows still name
+# /live-checkout, so it stays as a link; tool sandboxes never grant the link itself.
+RUN ln -s /code /live-checkout
 ENV V3_LISTEN=0.0.0.0:8080 V3_STATE_ROOT=/state V3_WORKSPACE_ROOT=/workspaces V3_SECURE_COOKIE=true
 WORKDIR /state
 EXPOSE 8080

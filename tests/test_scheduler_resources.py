@@ -56,6 +56,23 @@ class ResourceTests(unittest.TestCase):
             self.assertEqual((self.scheduler.rows["suite"]["cpu_millis"],self.scheduler.rows["release"]["cpu_millis"]),(1000+5933,100+2966))
             self.assertEqual(self.scheduler.cpu_floor("plugin_compile"),100)
 
+    def test_rebalance_skips_a_phase_that_already_exited(self):
+        from unittest.mock import patch
+        with patch.object(m.os,"cpu_count",return_value=4):
+            self.phase("package","compile_release")
+            # A short test phase beside it whose container has already exited.
+            self.scheduler.rows["short"]={**self.scheduler.rows["package"],"phase":"test"}
+            real=self.runner.resource_request
+            def exited(value):
+                if value["operation"]=="cpu"and value["container"]=="short":
+                    raise RuntimeError("Protected resource operation cpu failed: ValueError: Build container not running")
+                return real(value)
+            with patch.object(self.runner,"resource_request",side_effect=exited):
+                self.scheduler.rebalance_cpu()
+            self.assertIn("cpu_millis",self.scheduler.rows["package"])
+            with patch.object(self.runner,"resource_request",side_effect=RuntimeError("lost acknowledgment")):
+                with self.assertRaises(RuntimeError):self.scheduler.rebalance_cpu()
+
     def test_cpu_policy_failure_can_reconcile_and_floors_cannot_be_removed(self):
         from unittest.mock import patch
         with patch.object(m.os,"cpu_count",return_value=4):
