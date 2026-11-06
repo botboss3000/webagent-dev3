@@ -3029,6 +3029,7 @@ name = "webagent-worker"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "libc",
  "rustix",
  "serde_json",
  "sha2",

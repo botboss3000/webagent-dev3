@@ -22,6 +22,7 @@ fn fixture() -> Fixture {
         live_checkout: dir.path().join("absent-checkout"),
         control,
         context_config: dir.path().join("absent-context.json"),
+        port_claims: dir.path().join("port-claims"),
     };
     Fixture {
         workspace: std::fs::canonicalize(&workspaces)

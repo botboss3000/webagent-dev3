@@ -1,16 +1,23 @@
 //! The v3 tool worker. It owns the tool socket the API and loop call and accepts only the
-//! application identity. File tools run here ([`files`]); every other request is forwarded
-//! unchanged to the Python worker on a private socket. Tool groups move from the Python
-//! worker into this crate one at a time (Rust conversion item A2).
+//! application identity. File tools ([`files`]) and workspace commands ([`commands`]) run
+//! here; every other request is forwarded unchanged to the Python worker on a private
+//! socket. Tool groups move from the Python worker into this crate one at a time (Rust
+//! conversion item A2).
+pub mod commands;
 pub mod files;
+pub mod runner;
+pub mod sandbox;
 
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::Notify;
 
 /// Longest request line accepted, matching the Python worker's stream limit.
 const REQUEST_LIMIT: u64 = 2 * 1024 * 1024;
@@ -28,6 +35,8 @@ pub struct Config {
     pub client_uid: u32,
     /// Where the native file tools work.
     pub files: files::Roots,
+    /// The per-command supervisor: its executable and leading arguments.
+    pub runner: Vec<String>,
 }
 
 impl Config {
@@ -49,6 +58,8 @@ impl Config {
             legacy_socket: path("V3_LEGACY_TOOL_SOCKET", "/run/v3/worker-legacy/tools.sock"),
             client_uid,
             files: files::Roots::container(),
+            // The app executable's supervisor mode, dispatched before its async runtime.
+            runner: vec!["/usr/local/bin/webagent-v3".into(), "--tool-runner".into()],
         })
     }
 }
@@ -64,6 +75,7 @@ pub async fn serve(config: Config) -> io::Result<()> {
     }
     let listener = UnixListener::bind(&config.socket)?;
     std::fs::set_permissions(&config.socket, std::fs::Permissions::from_mode(0o660))?;
+    let active = Arc::new(Active::default());
     loop {
         let stream = match listener.accept().await {
             Ok((stream, _)) => stream,
@@ -80,18 +92,82 @@ pub async fn serve(config: Config) -> io::Result<()> {
             continue;
         }
         let config = config.clone();
+        let active = Arc::clone(&active);
         tokio::spawn(async move {
             // A failed write means the caller left; there is nobody to tell.
-            let _ = handle(stream, &config).await;
+            let _ = handle(stream, &config, &active).await;
         });
     }
 }
 
-/// Answers one call: a file tool runs here, anything else goes to the Python worker. A
-/// caller that hangs up (or sends more) before a forwarded reply ends the forwarded
-/// connection, which cancels the call exactly as a direct disconnect would. A native file
-/// call always completes, so a write is never left half done.
-async fn handle(client: UnixStream, config: &Config) -> io::Result<()> {
+/// The commands running in each workspace, so a quiesce can stop them.
+/// A running command's workspace and its stop signal.
+type Running = (String, Arc<Notify>);
+
+#[derive(Default)]
+struct Active {
+    /// The last call number handed out, and the running commands by number.
+    calls: Mutex<(u64, HashMap<u64, Running>)>,
+}
+
+impl Active {
+    fn start(&self, workspace: &str) -> (u64, Arc<Notify>) {
+        let mut calls = self.calls.lock().unwrap_or_else(PoisonError::into_inner);
+        calls.0 += 1;
+        let (id, stop) = (calls.0, Arc::new(Notify::new()));
+        calls
+            .1
+            .insert(id, (workspace.to_owned(), Arc::clone(&stop)));
+        (id, stop)
+    }
+
+    fn end(&self, id: u64) {
+        let mut calls = self.calls.lock().unwrap_or_else(PoisonError::into_inner);
+        calls.1.remove(&id);
+    }
+
+    /// Stops every command in `workspace`; a stop sent before the command waits is kept.
+    fn stop(&self, workspace: &str) {
+        let calls = self.calls.lock().unwrap_or_else(PoisonError::into_inner);
+        for (owner, stop) in calls.1.values() {
+            if owner == workspace {
+                stop.notify_one();
+            }
+        }
+    }
+}
+
+/// Removes a command from [`Active`] however its call ends.
+struct Registered<'a> {
+    active: &'a Active,
+    id: u64,
+}
+
+impl Drop for Registered<'_> {
+    fn drop(&mut self) {
+        self.active.end(self.id);
+    }
+}
+
+async fn write_reply(
+    writer: &mut (impl tokio::io::AsyncWrite + Unpin),
+    id: &Value,
+    result: Value,
+) -> io::Result<()> {
+    let mut line = json!({"version":2,"id":id,"result":result})
+        .to_string()
+        .into_bytes();
+    line.push(b'\n');
+    writer.write_all(&line).await?;
+    writer.shutdown().await
+}
+
+/// Answers one call: file tools and commands run here, anything else goes to the Python
+/// worker. A caller that hangs up (or sends more) before a forwarded reply ends the
+/// forwarded connection, which cancels the call exactly as a direct disconnect would; a
+/// command is stopped the same way. A native file call always completes, so a write is
+/// never left half done.
+async fn handle(client: UnixStream, config: &Config, active: &Active) -> io::Result<()> {
     let (client_read, mut client_write) = client.into_split();
     let mut client_read = BufReader::new(client_read);
     let mut request = Vec::new();
@@ -108,21 +184,39 @@ async fn handle(client: UnixStream, config: &Config) -> io::Result<()> {
     if let Some(problem) = problem {
         return reply(&mut client_write, None, problem).await;
     }
-    let parsed = serde_json::from_slice::<Value>(&request).ok();
-    if let Some(parsed) = parsed.filter(|request| {
-        request["version"] == 2 && request["name"].as_str().is_some_and(files::handles)
-    }) {
+    let parsed = serde_json::from_slice::<Value>(&request)
+        .ok()
+        .filter(|request| request["version"] == 2);
+    let name = parsed
+        .as_ref()
+        .and_then(|request| request["name"].as_str())
+        .unwrap_or_default();
+    if let Some(parsed) = parsed.as_ref().filter(|_| files::handles(name)) {
         let roots = config.files.clone();
-        let id = parsed["id"].clone();
-        let result = tokio::task::spawn_blocking(move || files::call(&roots, &parsed))
+        let request = parsed.clone();
+        let result = tokio::task::spawn_blocking(move || files::call(&roots, &request))
             .await
             .unwrap_or_else(|_| json!({"status":"failed","output":"File tool failed"}));
-        let mut line = json!({"version":2,"id":id,"result":result})
-            .to_string()
-            .into_bytes();
-        line.push(b'\n');
-        client_write.write_all(&line).await?;
-        return client_write.shutdown().await;
+        return write_reply(&mut client_write, &parsed["id"], result).await;
+    }
+    if let Some(parsed) = parsed.as_ref().filter(|_| commands::handles(name)) {
+        let workspace = parsed["workspace"].as_str().unwrap_or_default();
+        let (id, stop) = active.start(workspace);
+        let _registered = Registered { active, id };
+        // Dropping the call (hang-up or quiesce) ends the command's session.
+        let result = tokio::select! {
+            result = commands::call(&config.files, &config.runner, parsed) => result,
+            () = hang_up(&mut client_read) => return Ok(()),
+            // As the Python worker answers a call its quiesce cancelled.
+            () = stop.notified() => json!({"status":"failed","output":"Session not found"}),
+        };
+        return write_reply(&mut client_write, &parsed["id"], result).await;
+    }
+    if name == "administrator_quiesce" {
+        // Commands run here now; stop them before the Python worker quiesces the rest.
+        if let Some(workspace) = parsed.as_ref().and_then(|p| p["workspace"].as_str()) {
+            active.stop(workspace);
+        }
     }
     let upstream = match UnixStream::connect(&config.legacy_socket).await {
         Ok(upstream) => upstream,
@@ -190,7 +284,9 @@ mod tests {
                 live_checkout: dir.path().join("absent-checkout"),
                 control,
                 context_config: dir.path().join("absent-context.json"),
+                port_claims: dir.path().join("port-claims"),
             },
+            runner: vec!["/nonexistent-runner".into()],
             socket: socket.clone(),
             legacy_socket: legacy.clone(),
             // The test process owns the directory it just created.
@@ -273,7 +369,7 @@ mod tests {
         let fixture = fixture();
         let mut client = connect(&fixture.socket).await;
         client
-            .write_all(b"{\"version\":2,\"id\":\"b\",\"name\":\"shell\"}\n")
+            .write_all(b"{\"version\":2,\"id\":\"b\",\"name\":\"terminal_send\"}\n")
             .await
             .expect("request");
         let reply = read_line(&mut client).await;
@@ -298,7 +394,7 @@ mod tests {
         });
         let mut client = connect(&fixture.socket).await;
         client
-            .write_all(b"{\"version\":2,\"id\":\"c\",\"name\":\"shell\"}\n")
+            .write_all(b"{\"version\":2,\"id\":\"c\",\"name\":\"terminal_send\"}\n")
             .await
             .expect("request");
         drop(client);

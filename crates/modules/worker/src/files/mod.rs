@@ -32,7 +32,7 @@ pub const TOOLS: [&str; 6] = [
     "checkout_edit",
 ];
 /// Reported in every result, replacing the Python runner's 1.1.0.
-const IMPLEMENTATION_VERSION: &str = "2.0.0";
+pub(crate) const IMPLEMENTATION_VERSION: &str = "2.0.0";
 const LIMIT: usize = 1024 * 1024;
 /// Matches the broker read bound so one file_read cannot flood the model context.
 const READ_LIMIT: usize = 16000;
@@ -80,6 +80,8 @@ pub struct Roots {
     pub control: PathBuf,
     /// The live context configuration holding the search output limits.
     pub context_config: PathBuf,
+    /// Workspace preview-port claims, shared with the Python worker's terminals.
+    pub port_claims: PathBuf,
 }
 
 impl Roots {
@@ -94,13 +96,14 @@ impl Roots {
             context_config: live_checkout.join("crates/modules/context/context-compaction.json"),
             live_checkout,
             control: PathBuf::from("/run/v3/control"),
+            port_claims: PathBuf::from("/run/v3/worker/port-claims"),
         }
     }
 }
 
 /// Why a call failed; its text is the tool's output.
 #[derive(Debug)]
-enum Failure {
+pub(crate) enum Failure {
     Rejected(String),
     Io(io::Error),
 }
@@ -161,7 +164,7 @@ pub fn call(roots: &Roots, request: &Value) -> Value {
     result
 }
 
-fn failed(failure: &Failure) -> Value {
+pub(crate) fn failed(failure: &Failure) -> Value {
     let text = failure.to_string();
     let cut = text
         .char_indices()
@@ -172,7 +175,10 @@ fn failed(failure: &Failure) -> Value {
 
 /// Holds the dispatch lock while checking the shutoff switch and the workspace, as the
 /// Python worker does; the lock is released before any file effect.
-fn admit<'a>(roots: &Roots, request: &'a Value) -> Outcome<(PathBuf, &'a str, &'a Value)> {
+pub(crate) fn admit<'a>(
+    roots: &Roots,
+    request: &'a Value,
+) -> Outcome<(PathBuf, &'a str, &'a Value)> {
     let lock = File::open(roots.control.join("dispatch.lock"))?;
     flock(&lock, FlockOperation::LockExclusive)?;
     if std::fs::read_to_string(roots.control.join("shutoff"))?.trim() != "0" {

@@ -186,9 +186,16 @@ mod manager;
 use agent_loop::*;
 // Choose one role for this process. The API serves requests; the loop owns
 // recovery and execution; health only checks a recent loop heartbeat.
-#[tokio::main]
-async fn main() -> Result<()> {
-    run_process().await
+fn main() -> Result<()> {
+    // The tool worker's per-command supervisor starts without the async runtime's threads.
+    if std::env::args().nth(1).as_deref() == Some("--tool-runner") {
+        let argv = std::env::args().nth(2).unwrap_or_default();
+        std::process::exit(webagent_worker::runner::supervise(&argv));
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run_process())
 }
 #[cfg(test)]
 mod tests {
