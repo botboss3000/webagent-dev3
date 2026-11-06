@@ -28,3 +28,7 @@ harness = false
 [[test]]
 name = "plugins"
 harness = false
+
+[[test]]
+name = "git"
+harness = false

@@ -15,11 +15,13 @@ fn exe() -> String {
 }
 
 /// The command supervisor's command line: this executable in runner mode.
+#[allow(dead_code, reason = "not every test file starts commands")]
 pub fn runner() -> Vec<String> {
     vec![exe(), "--runner".into()]
 }
 
 /// The plugin supervisor's command line: this executable in plugin mode.
+#[allow(dead_code, reason = "not every test file starts plugins")]
 pub fn plugin_runner() -> Vec<String> {
     vec![exe(), "--plugin".into()]
 }

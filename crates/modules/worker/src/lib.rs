@@ -5,6 +5,7 @@
 //! conversion item A2).
 pub mod commands;
 pub mod files;
+pub mod git;
 pub mod launch;
 pub mod plugins;
 pub mod runner;
@@ -210,6 +211,18 @@ async fn handle(client: UnixStream, config: &Config, active: &Active) -> io::Res
             .unwrap_or_else(|_| json!({"status":"failed","output":"File tool failed"}));
         return write_reply(&mut client_write, &parsed["id"], result).await;
     }
+    if let Some(parsed) = parsed.as_ref().filter(|_| git::handles(name)) {
+        let workspace = parsed["workspace"].as_str().unwrap_or_default();
+        let (id, stop) = active.start(workspace);
+        let _registered = Registered { active, id };
+        let result = tokio::select! {
+            result = git_call(&config.files, parsed) => result,
+            () = hang_up(&mut client_read) => return Ok(()),
+            // As the Python worker answers a call its quiesce cancelled.
+            () = stop.notified() => json!({"status":"failed","output":"Session not found"}),
+        };
+        return write_reply(&mut client_write, &parsed["id"], result).await;
+    }
     if let Some(parsed) = parsed.as_ref().filter(|_| commands::handles(name)) {
         let workspace = parsed["workspace"].as_str().unwrap_or_default();
         let (id, stop) = active.start(workspace);
@@ -258,6 +271,38 @@ async fn handle(client: UnixStream, config: &Config, active: &Active) -> io::Res
         }
         () = hang_up(&mut client_read) => Ok(()),
     }
+}
+
+/// Admits and runs one Git Control request or repository watch.
+async fn git_call(roots: &files::Roots, request: &Value) -> Value {
+    let admitted = {
+        let roots = roots.clone();
+        let request = request.clone();
+        tokio::task::spawn_blocking(move || {
+            files::admit(&roots, &request)
+                .map(|(base, _, _)| base)
+                .map_err(|failure| files::failed(&failure))
+        })
+        .await
+    };
+    let base = match admitted {
+        Ok(Ok(base)) => base,
+        Ok(Err(failed)) => return failed,
+        Err(_) => return json!({"status":"failed","output":"Git admission failed"}),
+    };
+    if request["name"] == "administrator_git_watch" {
+        return git::watch(&base).await;
+    }
+    let name = request["name"].as_str().unwrap_or_default();
+    let empty = json!({});
+    let args = request.get("arguments").unwrap_or(&empty);
+    git::execute(
+        &base,
+        name,
+        args,
+        request.get("trusted").unwrap_or(&Value::Null),
+    )
+    .await
 }
 
 /// Admits and runs one `ability_plugin_invoke` request.

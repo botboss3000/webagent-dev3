@@ -455,12 +455,6 @@ async def execute_locked(request, lock):
         if result["status"] != "success":
             return result
         return json.loads(result["output"])
-    if name == "administrator_git_watch":
-        module=administrator_plugin("git_control").adapter
-        value=await module.snapshot(base)
-        return {"status":"success","output":module.notice(value)}
-    if name in ("git_tool", "resolve_conflict", "commit_and_push"):
-        return await administrator_plugin("git_control").execute(name, args, base, request.get("trusted"))
     if name == "administrator_file_manager":
         return await synchronous(git_file_manager().execute, args)
     if name == "administrator_file_git":
