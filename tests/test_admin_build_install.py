@@ -50,7 +50,8 @@ class InstallTests(unittest.TestCase):
         self.fake = FakePrivileges()
         self.patches = [patch.object(installer.shutil, "disk_usage", return_value=types.SimpleNamespace(free=5*1024*1024*1024)),
                         patch.object(installer, "PRIVILEGES", self.fake),
-                        patch.object(installer, "V3", self.v3), patch.object(installer, "SOURCE", self.source),
+                        patch.object(installer, "V3", self.v3), patch.object(installer, "INSTANCE", self.v3),
+                        patch.object(installer, "SOURCE", self.source),
                         patch.object(installer, "SERVICE", self.v3 / "host-build-service"),
                         patch.object(installer, "JOBS", self.v3 / "build-jobs"),
                         patch.object(installer, "ARCHIVES", self.v3 / "rollback/administrator")]

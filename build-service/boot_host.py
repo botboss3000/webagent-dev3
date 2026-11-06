@@ -315,7 +315,7 @@ def serve(cfg):
     libc=ctypes.CDLL(None,use_errno=True);fd=libc.inotify_init1(os.O_NONBLOCK|os.O_CLOEXEC)
     if fd<0:raise OSError("Boot event watch unavailable")
     watches={}
-    for kind,path in [("publication",Path(cfg["state_root"])/"ui-assets"),("controls",Path(cfg["checkout_root"])/"data/config"),("jobs",Path(cfg["state_root"]))]:
+    for kind,path in [("publication",Path(cfg["state_root"])/"ui-assets"),("controls",Path(cfg.get("app_state_root") or Path(cfg["checkout_root"])/"data")/"config"),("jobs",Path(cfg["state_root"]))]:
         watch=libc.inotify_add_watch(fd,os.fsencode(path),0x00000008|0x00000080|0x00000100|0x00000200)
         if watch<0:raise OSError("Boot watch registration failed")
         watches[watch]=kind

@@ -265,7 +265,8 @@ TARGETS = (CONFIG["api_container"], CONFIG["loop_container"])
 # (loop-runtime.json, default 180) before shutting down; this is the backstop.
 LOOP_DRAIN_STOP_SECONDS = 240
 # The app names a planned restart's deploy job and session in cut-off tool results.
-RESTART_CAUSE = Path(CONFIG["checkout_root"]) / "runtime" / "control" / "restart-cause.json"
+# The app's /runtime folder: the parent of the broker's runtime_root, beside the checkout.
+RESTART_CAUSE = Path(CONFIG["runtime_root"]).parent / "control" / "restart-cause.json"
 # Replacement phases before any new consumer has passed its health check.
 ADOPTABLE_PHASES = ("promoting_checkout", "checking_api", "checking_loop")
 AUTO_RESTORE_PHASES = {"stopping_loop", "stopping_api", "switching_ui", "renaming_api", "activating_api", "starting_api",

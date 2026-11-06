@@ -46,7 +46,9 @@ SOURCE=V3/"build-service"
 SERVICE=Path(CONFIG["service_dir"])
 RUNTIME=Path(CONFIG["runtime_root"])
 JOBS=Path(CONFIG["state_root"])
-ARCHIVES=V3/"rollback/administrator"
+# Rollback archives live beside the checkout, next to build-jobs, not inside the code folder.
+INSTANCE=Path(CONFIG["state_root"]).parent
+ARCHIVES=INSTANCE/"rollback/administrator"
 MAX_IMAGES = 16 * 1024 * 1024 * 1024
 RESERVE = 512 * 1024 * 1024
 
@@ -306,7 +308,7 @@ def archive_rollbacks():
     if PRIVILEGES.owner(jobs_info) != CONFIG["service_uid"] or jobs_info.st_mode & 0o077:
         os.close(jobs)
         raise PermissionError("private ar job state required")
-    base = directory(V3)
+    base = directory(INSTANCE)
     rollback = protected_directory(base, "rollback", 0o700)
     archives = protected_directory(rollback, "administrator", 0o700)
     copied = failed = 0
