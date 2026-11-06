@@ -1473,8 +1473,9 @@ impl<
                     .await?;
             }
             Err(_) => {
-                if A::is_read(&name) && Self::preserve_restart_interruption(&app, &mut run).await? {
-                    // Retain the pending read and its original call ID for startup retry.
+                if Self::preserve_restart_interruption(&app, &mut run).await? {
+                    // Retain the pending call and its original call ID: startup retries a
+                    // read and gives a cut-off write its outcome-unknown result.
                     return Ok(std::ops::ControlFlow::Break(()));
                 }
                 if matches!(name.as_str(), "v3_build_work" | "build_work")
