@@ -1,5 +1,4 @@
 // Saved site sign-ins belong to the signed-in user; cookies and vault values never come back from the API.
-import { buildConfigRow } from '../../../../shared/ability-row-controls.js';
 import { requestTouchVibration } from '../../../../shared/vibrate.js';
 const node = (tag, cls = '', text = '') => {
   const el = document.createElement(tag); el.className = cls; el.textContent = text; return el;
@@ -8,13 +7,13 @@ const when = seconds => seconds ? new Date(seconds * 1000).toLocaleString() : 'n
 const states = { signed_in: 'Signed in', expired: 'Needs sign-in again', failed: 'Sign-in failed' };
 
 export function buildBrowserSites({ request }) {
-  const content = node('div', 'ac-list');
+  const content = node('div');
   content.style.overflowWrap = 'anywhere';
   content.append(
     node('p', 'ac-hint', 'Sites the browser stays signed in to for you. The WebAgent app always signs in by itself (Sign in to WebAgent above).'),
     node('p', 'ac-hint', 'To add one, ask the agent in a chat to set up your sign-in for the site. It asks you to save your user name, password and any authenticator secret in the private credential panel, signs in with them, then asks you to approve saving the sign-in.'),
     node('p', 'ac-hint', 'The agent only names vault entries and never sees a password, code or cookie. Each value is typed only into sign-in fields on its own site, and each saved sign-in opens only its own site. Removing a site deletes its saved sign-in; your vault entries stay.'));
-  const list = node('div', 'ac-list');
+  const list = node('div');
   const notice = node('p', 'ac-hint', 'Loading signed-in sites…');
   notice.setAttribute('role', 'status');
   content.append(list, notice);
@@ -46,5 +45,9 @@ export function buildBrowserSites({ request }) {
     }
   };
   load();
-  return buildConfigRow({ name: 'Signed-in sites', control: content, className: 'v3-setting-stacked' });
+  // Name above its content, like the text settings, so the explanation wraps on phones.
+  const stacked = node('div', 'ac-gate-param'), slot = node('div', 'ac-gate-param-control');
+  slot.append(content);
+  stacked.append(node('div', 'ac-gate-param-name', 'Signed-in sites'), slot);
+  return stacked;
 }
