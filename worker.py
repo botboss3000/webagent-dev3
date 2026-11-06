@@ -26,6 +26,8 @@ LIMIT = 1024 * 1024
 CONTEXT_CONFIG_PATH = Path("/live-checkout/crates/modules/context/context-compaction.json")
 ROOT = Path(os.environ.get("V3_WORKSPACE_ROOT", "/workspaces"))
 SOCKET = os.environ.get("V3_TOOL_SOCKET", "/run/v3/worker/tools.sock")
+# The Rust tool worker front is the only caller in the container; tests call directly.
+CLIENT_UID = int(os.environ.get("V3_TOOL_CLIENT_UID", "1100"))
 TEMPLATE = Path(os.environ.get("V3_CODE_TEMPLATE", "/opt/v3/source-template"))
 LIVE_CHECKOUT = Path("/live-checkout")
 
@@ -761,7 +763,7 @@ async def execute(request):
 
 async def client(reader, writer):
     peer = writer.get_extra_info("socket").getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
-    if struct.unpack("3i", peer)[1] != 1100:
+    if struct.unpack("3i", peer)[1] != CLIENT_UID:
         writer.close()
         await writer.wait_closed()
         return

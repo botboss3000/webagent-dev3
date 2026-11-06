@@ -13,7 +13,10 @@ class ContainerWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def test_worker_identity_and_live_source_access(self):
         if os.getuid() != 1100:
             self.skipTest("run as application uid 1100 inside v3 container")
-        app_pid = next(int(p.name) for p in Path("/proc").iterdir() if p.name.isdigit() and (p / "comm").read_text().strip() == "webagent-v3")
+        # The Rust tool worker runs the same executable as uid 1000; the app is uid 1100.
+        app_pid = next(int(p.name) for p in Path("/proc").iterdir() if p.name.isdigit()
+                       and (p / "comm").read_text().strip() == "webagent-v3"
+                       and "\nUid:\t1100\t" in (p / "status").read_text())
         reader, writer = await asyncio.open_unix_connection(SOCKET)
         request = {"version": 2, "id": "isolation-test", "workspace": str(uuid.uuid4()),
                    "name": "python", "arguments": {"code": (

@@ -1,8 +1,8 @@
-"""Start the web container's three local processes.
+"""Start the web container's four local processes.
 
 A short-lived privileged setup creates protected directories and sockets.
-The broker, tool worker, and API then run under restricted identities. The
-separate Rust loop and Python gate have their own containers.
+The broker, Rust and Python tool workers, and API then run under restricted
+identities. The separate Rust loop and Python gate have their own containers.
 """
 import ctypes
 import os
@@ -35,6 +35,7 @@ directory("/workspaces", 1101, 0o770)
 directory("/run/v3", 0, 0o700)
 directory("/run/v3/control", 0, 0o700)
 directory("/run/v3/worker", 0, 0o700)
+directory("/run/v3/worker-legacy", 0, 0o700)
 directory("/run/v3/promote", 0, 0o700)
 for name, content in [("dispatch.lock", ""), ("shutoff", "1")]:
     path = "/run/v3/control/" + name
@@ -57,6 +58,8 @@ for name in ("dispatch.lock", "shutoff"):
     os.chown("/run/v3/control/" + name, 1100, 1100)
 directory("/run/v3/control", 1100, 0o750)
 directory("/run/v3/worker", 1000, 0o750)
+# Only the worker identity reaches the Python worker, through the Rust front.
+directory("/run/v3/worker-legacy", 1000, 0o700)
 directory("/run/v3/promote", 1100, 0o700)
 directory("/run/v3", 1100, 0o755)
 
@@ -83,28 +86,41 @@ if broker.poll() is not None:
 os.setgroups([])
 os.setgid(1100)
 # Workspace seeds follow the frozen UI release served by the API container.
-# The worker keeps the checkout owner's identity plus one ambient capability,
+# The workers keep the checkout owner's identity plus one ambient capability,
 # CAP_DAC_READ_SEARCH, so Codebase Admin reads every file including state.
 # Landlock still confines command writes to the session workspace.
-worker = subprocess.Popen(["/usr/bin/setpriv", "--reuid=1000", "--regid=1100", "--groups=1001",
-                           "--inh-caps=-all,+dac_read_search",
-                           "--ambient-caps=-all,+dac_read_search", "--no-new-privs", "--",
-                           "/usr/bin/python3", "-I", "/opt/v3/worker.py"],
+WORKER_IDENTITY = ["/usr/bin/setpriv", "--reuid=1000", "--regid=1100", "--groups=1001",
+                   "--inh-caps=-all,+dac_read_search",
+                   "--ambient-caps=-all,+dac_read_search", "--no-new-privs", "--"]
+
+
+def wait_for(path, process, name):
+    for _ in range(100):
+        if Path(path).exists():
+            return
+        if process.poll() is not None:
+            raise RuntimeError(name + " failed")
+        if broker.poll() is not None:
+            raise RuntimeError("promotion broker failed")
+        time.sleep(0.05)
+    process.terminate()
+    raise RuntimeError(name + " startup timed out")
+
+
+# The Python worker serves the tools the Rust worker does not run itself yet.
+legacy = subprocess.Popen(WORKER_IDENTITY + ["/usr/bin/python3", "-I", "/opt/v3/worker.py"],
                           env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8",
-                               "V3_TOOL_SOCKET": "/run/v3/worker/tools.sock",
+                               "V3_TOOL_SOCKET": "/run/v3/worker-legacy/tools.sock",
+                               "V3_TOOL_CLIENT_UID": "1000",
                                "V3_WORKSPACE_ROOT": "/workspaces",
                                "V3_CODE_TEMPLATE": "/opt/v3/assets/current/v3"})
-for _ in range(100):
-    if Path("/run/v3/worker/tools.sock").exists():
-        break
-    if worker.poll() is not None:
-        raise RuntimeError("tool worker failed")
-    if broker.poll() is not None:
-        raise RuntimeError("promotion broker failed")
-    time.sleep(0.05)
-else:
-    worker.terminate()
-    raise RuntimeError("tool worker startup timed out")
+wait_for("/run/v3/worker-legacy/tools.sock", legacy, "Python tool worker")
+worker = subprocess.Popen(WORKER_IDENTITY + ["/usr/local/bin/webagent-v3", "--tool-worker"],
+                          env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8",
+                               "V3_TOOL_SOCKET": "/run/v3/worker/tools.sock",
+                               "V3_LEGACY_TOOL_SOCKET": "/run/v3/worker-legacy/tools.sock",
+                               "V3_TOOL_CLIENT_UID": "1100"})
+wait_for("/run/v3/worker/tools.sock", worker, "tool worker")
 app = subprocess.Popen(["/usr/local/bin/webagent-v3"], preexec_fn=lambda: drop(1100))
 # Supervisor itself drops to the application identity; it retains no root privileges.
 drop(1100)
@@ -116,8 +132,9 @@ def stop(_signum, _frame):
 
 
 signal.signal(signal.SIGTERM, stop)
-while app.poll() is None and worker.poll() is None and broker.poll() is None:
+while (app.poll() is None and worker.poll() is None and legacy.poll() is None
+       and broker.poll() is None):
     time.sleep(0.2)
 if app.poll() is None:
     app.terminate()
-raise SystemExit(app.poll() or worker.poll() or broker.poll() or 1)
+raise SystemExit(app.poll() or worker.poll() or legacy.poll() or broker.poll() or 1)

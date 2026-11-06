@@ -2998,6 +2998,7 @@ dependencies = [
  "webagent-usage-reports",
  "webagent-web-search",
  "webagent-webapp",
+ "webagent-worker",
 ]
 
 [[package]]
@@ -3021,6 +3022,15 @@ dependencies = [
  "tower",
  "tower-http",
  "webagent-configuration",
+]
+
+[[package]]
+name = "webagent-worker"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
