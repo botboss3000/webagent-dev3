@@ -23,12 +23,12 @@ export function mountAgentsFeedback(root) {
   const active = () => root.isConnected && !root.hidden;
   const resetHold = event => { const tab = event.target.closest?.('[role="tab"]'); if (tab) heldTabs.delete(tab); };
   const rememberHold = event => { const tab = event.target.closest?.('[role="tab"].dragging'); if (tab) heldTabs.add(tab); };
-  const vibrate = event => {
+  const vibrate = (event, stage) => {
     const path = event.composedPath(), target = path.find(node => node?.matches?.(AGENT_ACTIONS));
     if (!target || path.some(node => node?.matches?.('.ac-saved-drag-handle, .ac-tri-disabled, .ac-tri[tabindex="-1"]'))) return;
     if (target.matches('[role="tab"]') && heldTabs.has(target)) { heldTabs.delete(target); return; }
     if (target.matches('th.col-sortable.col-resizable') && event.clientX >= target.getBoundingClientRect().right - 8) return;
-    requestTouchVibration(event);
+    requestTouchVibration(event, stage);
   };
   const add = surface => {
     if (surfaces.has(surface)) return;

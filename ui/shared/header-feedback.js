@@ -22,10 +22,10 @@ export function mountHeaderFeedback(doc = document) {
   // Capture before the tab strip removes its dragging class on pointerup.
   header.addEventListener('pointerdown', resetHold, true);
   header.addEventListener('pointerup', rememberHold, true);
-  const vibrate = event => {
+  const vibrate = (event, stage) => {
     const tab = event.target.closest?.('.main-tab');
     if (tab && heldTabs.has(tab)) { heldTabs.delete(tab); return; }
-    requestTouchVibration(event);
+    requestTouchVibration(event, stage);
   };
   const dispose = [header, doc.getElementById('user-dropdown-menu')]
     .filter(Boolean).map(root => mountControlFeedback(root, {vibrate}));

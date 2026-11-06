@@ -1,4 +1,5 @@
 {
   "enabled": true,
-  "duration_ms": 30
+  "impact": { "enabled": true, "duration_ms": 10 },
+  "release": { "enabled": true, "duration_ms": 30 }
 }

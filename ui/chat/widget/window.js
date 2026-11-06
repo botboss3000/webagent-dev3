@@ -163,17 +163,29 @@ function wireLauncherFeatures({element,button,profile,onAction,onPickup,error,st
 export function mergeProfile(base,override){const result={...base};for(const [key,value] of Object.entries(override||{}))result[key]=value&&typeof value==='object'&&!Array.isArray(value)?mergeProfile(base?.[key]||{},value):value;return result;}
 
 // @code-index {"version":1,"feature":"ui-vibration","aliases":["chat touch feedback","chat control haptics"],"purpose":"Shared optional touch-feedback factories and bounded gesture ownership. Config: ui/vibrate.json -> enabled, duration_ms, supplied by the native helper or validated iframe configuration bridge. This widget asset remains dependency-free for external embedding.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
+/** Accepts one stage object; a missing or malformed stage falls back to the legacy single duration. */
+function stageTiming(config, stage) {
+  const value = config?.[stage];
+  if (value && typeof value === 'object' && typeof value.enabled === 'boolean' && Number.isSafeInteger(value.duration_ms) && value.duration_ms >= 0) return value;
+  if (!value && stage === 'release' && Number.isSafeInteger(config?.duration_ms) && config.duration_ms >= 0) return {enabled: true, duration_ms: config.duration_ms};
+  return null;
+}
+
 /** Builds a synchronous pulse callback from current validated UI settings; unavailable APIs stay quiet.
+ * Stage "impact" fires on touch-down, stage "release" on a completed tap; each carries its own duration.
  * The settings getter is local: embedded hosts receive configuration data, never a forwarded haptic request.
  */
 export function createTouchVibration(getConfig) {
-  return event => {
+  return (event, stage = 'release') => {
     try {
       const config = getConfig();
-      if (config?.enabled !== true || !Number.isSafeInteger(config.duration_ms) || config.duration_ms <= 0 || event.detail === 0) return;
-      const touch = event.pointerType ? event.pointerType === 'touch' : window.matchMedia?.('(pointer: coarse)').matches;
+      if (config?.enabled !== true) return;
+      const timing = stageTiming(config, stage === 'impact' ? 'impact' : 'release');
+      if (!timing || timing.enabled !== true || timing.duration_ms <= 0) return;
+      if (stage !== 'impact' && event?.detail === 0) return;
+      const touch = event?.pointerType ? event.pointerType === 'touch' : window.matchMedia?.('(pointer: coarse)').matches;
       if (!touch || typeof navigator.vibrate !== 'function') return;
-      navigator.vibrate(config.duration_ms);
+      navigator.vibrate(timing.duration_ms);
     } catch { /* Optional feedback cannot block control activation. */ }
   };
 }
@@ -277,12 +289,14 @@ function createRegistry(doc) {
   listen('pointerdown', event => {
     if (event.pointerType !== 'touch') return;
     const path = event.composedPath?.() || [event.target];
-    const control = resolveControl(state, path)?.control;
-    if (!control) return;
+    const resolved = resolveControl(state, path);
+    if (!resolved) return;
+    const control = resolved.control;
     if (state.activePointers.size >= MAX_TRACKED_POINTERS && !state.activePointers.has(event.pointerId)) {
       state.activePointers.delete(state.activePointers.keys().next().value);
     }
     state.activePointers.set(event.pointerId, {pointerId: event.pointerId, x: event.clientX, y: event.clientY, control, moved: false});
+    try { resolved.vibrate(event, 'impact'); } catch { /* Optional feedback cannot block an action. */ }
   });
   listen('pointermove', event => {
     const gesture = state.activePointers.get(event.pointerId);
@@ -308,12 +322,14 @@ function createRegistry(doc) {
   // Track their actual touch sequence rather than guessing from a coarse pointer alone.
   if (!doc.defaultView?.PointerEvent) {
     listen('touchstart', event => {
-      const control = resolveControl(state, event.composedPath())?.control;
-      if (!control) return;
+      const resolved = resolveControl(state, event.composedPath());
+      if (!resolved) return;
+      const control = resolved.control;
       for (const touch of event.changedTouches) {
         if (state.activePointers.size >= MAX_TRACKED_POINTERS) state.activePointers.delete(state.activePointers.keys().next().value);
         state.activePointers.set(touch.identifier, {pointerId: touch.identifier, x: touch.clientX, y: touch.clientY, control, moved: false});
       }
+      try { resolved.vibrate(event, 'impact'); } catch { /* Optional feedback cannot block an action. */ }
     });
     listen('touchmove', event => {
       for (const touch of event.changedTouches) {

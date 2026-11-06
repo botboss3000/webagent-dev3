@@ -20,11 +20,11 @@ export function mountPageControlFeedback(root, {actions = PAGE_ACTIONS, portals 
   const active = () => root.isConnected && !root.hidden && root.getClientRects().length > 0;
   const resetHold = event => { const tab = event.target.closest?.('[role="tab"]');if (tab) held.delete(tab); };
   const rememberHold = event => { const tab = event.target.closest?.('[role="tab"].dragging');if (tab) held.add(tab); };
-  const vibrate = event => {
+  const vibrate = (event, stage) => {
     const path = event.composedPath(), target = path.find(node => node?.matches?.(actions));
     if (!target || path.some(node => node?.matches?.('.ac-saved-drag-handle, .ac-tri-disabled, .ac-tri[tabindex="-1"]'))) return;
     if (target.matches('[role="tab"]') && held.has(target)) { held.delete(target);return; }
-    requestTouchVibration(event);
+    requestTouchVibration(event, stage);
   };
   const add = surface => {
     if (surfaces.has(surface)) return;
