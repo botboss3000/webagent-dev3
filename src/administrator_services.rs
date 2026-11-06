@@ -11,7 +11,14 @@ use webagent_accounts_host::AccountsStore;
 /// Run `pass` for every user every `period` until the application stops.
 async fn every_user(app: App, period: Duration, pass: Pass) {
     while app.ready.load(Ordering::Acquire) && !app.stop.is_cancelled() {
-        if let Ok(users) = app.store.scan_user_ids().await {
+        // Without the Administrator pack there are no jobs or repositories to watch; keep
+        // looping so a pack published later is picked up without a restart.
+        let users = if webagent_administration::tools::installed() {
+            app.store.scan_user_ids().await
+        } else {
+            Ok(Vec::new())
+        };
+        if let Ok(users) = users {
             for uid in users {
                 if let Ok(store) = app.store.for_user(&uid).await {
                     let mut caller = app.clone();

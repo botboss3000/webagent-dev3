@@ -89,6 +89,15 @@ pub fn supported(name: &str) -> bool {
     TOOLS.contains(&name)
 }
 
+/// Whether the optional Administrator pack is installed: any of its tools has a folder
+/// definition in the current catalog root.
+#[must_use]
+pub fn installed() -> bool {
+    TOOLS
+        .iter()
+        .any(|name| webagent_abilities::tool_definitions::get(name).is_some())
+}
+
 /// Whether this module executes `name`.
 #[must_use]
 pub fn owns(name: &str) -> bool {

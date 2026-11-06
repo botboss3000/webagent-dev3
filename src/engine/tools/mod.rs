@@ -173,9 +173,7 @@ pub(crate) fn folder_schemas(names: &[&str]) -> Vec<Value> {
 pub(crate) fn definition_problems() -> Vec<String> {
     use webagent_abilities::tool_definitions as definitions;
     // Without the optional Administrator pack its compiled tools have no folders by design.
-    let administrator = webagent_administration::tools::TOOLS
-        .iter()
-        .any(|name| definitions::get(name).is_some());
+    let administrator = webagent_administration::tools::installed();
     let handlers: std::collections::BTreeSet<_> = folder_handlers()
         .chain(
             webagent_administration::tools::TOOLS
