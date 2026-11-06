@@ -146,7 +146,6 @@ pub(crate) fn folder_handlers() -> impl Iterator<Item = &'static str> {
         core_image_generation::TOOLS,
         native::app_control::TOOLS,
         native::ui_admin::TOOLS,
-        native::functions::TOOLS,
         native::orchestration::TOOLS,
         native::visualizer::TOOLS,
         native::vault::TOOLS,
@@ -338,7 +337,6 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         schemas.extend(core_image_generation::schemas());
         schemas.extend(native::schemas(native::app_control::TOOLS));
         schemas.extend(native::schemas(native::ui_admin::TOOLS));
-        schemas.extend(native::functions::schemas());
         schemas.extend(native::schemas(native::orchestration::TOOLS));
         schemas.extend(native::base_extras::schemas());
         schemas.extend(native::webhooks::schemas());

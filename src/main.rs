@@ -222,7 +222,6 @@ mod tests {
             "prompt_slot_write",
             "workspace_seed",
             "save_file",
-            "create_tool",
             "generate_image",
             "create_agent",
             "edit_agent_prompt",

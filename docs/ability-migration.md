@@ -71,7 +71,7 @@ migration does not deploy or activate new functionality.
 - `app_control`: ability; pending. Adapt independently in a later functional wave.
 - `automation`: ability; pending. Adapt independently in a later functional wave.
 - `base`: virtual_core; pending. Adapt independently in a later functional wave.
-- `create_tools`: ability; pending. Adapt independently in a later functional wave.
+- `create_tools`: removed from v3 (2026-11-06).
 - `image_generation`: ability; pending. Adapt independently in a later functional wave.
 - `image_vision`: ability; pending. Adapt independently in a later functional wave.
 - `model_switcher`: ability; pending. Adapt independently in a later functional wave.

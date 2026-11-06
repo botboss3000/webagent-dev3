@@ -24,7 +24,6 @@ pub mod compaction;
 pub mod context_assets;
 pub mod decision;
 pub mod directory_decision;
-pub mod functions;
 pub mod human_escalation;
 pub mod image_vision;
 pub mod knowledge_files;

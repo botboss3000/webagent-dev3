@@ -49,7 +49,6 @@ pub const TOOLS: &[&str] = &[
     "manage_agent_profiles",
     "rate_skill",
     "request_agent_login",
-    "run_soft_ability",
     "main_notes_read",
     "main_notes_write",
     #[cfg(feature = "test-support")]

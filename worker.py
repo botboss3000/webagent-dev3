@@ -420,22 +420,6 @@ async def execute_locked(request, lock):
             await terminate(process)
             # The browser group may outlive its completed capture-process leader.
             with contextlib.suppress(ProcessLookupError):os.killpg(process.pid,signal.SIGKILL)
-    if request["name"] == "core_function":
-        fcntl.flock(lock, fcntl.LOCK_UN)
-        path = Path(__file__).parent / "plugins/abilities/Core/create_tools/runtime.py"
-        spec = importlib.util.spec_from_file_location("core_pure_functions", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        args = request.get("arguments", {})
-        name, _ = module.parse(args.get("code"))
-        if name != args.get("name"):
-            raise ValueError("function declaration name does not match")
-        operation = args.get("operation")
-        if operation == "validate":
-            return {"status": "success", "output": {"validated": True}}
-        if operation != "invoke":
-            raise ValueError("unknown pure function operation")
-        return {"status": "success", "output": module.invoke(args["code"], args.get("arguments", {}))}
     if request["name"]=="browser_protocol":
         fcntl.flock(lock,fcntl.LOCK_UN)
         return {"status":"success","output":{"protocol":1,"interface":1,"stateful":True}}

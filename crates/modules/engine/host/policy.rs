@@ -94,7 +94,6 @@ impl webagent_engine::runtime::ports::NativePolicy for NativePolicy {
             .chain(tools::core_image_generation::schemas())
             .chain(tools::native::schemas(tools::native::app_control::TOOLS))
             .chain(tools::native::schemas(tools::native::ui_admin::TOOLS))
-            .chain(tools::native::functions::schemas())
             .chain(tools::native::schemas(tools::native::orchestration::TOOLS))
             .chain(tools::native::base_extras::schemas())
             .chain(tools::native::webhooks::schemas())

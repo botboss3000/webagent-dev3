@@ -94,7 +94,6 @@
         "base": "auto",
         "code_index": "auto",
         "codebase_admin": "auto",
-        "create_tools": "auto",
         "decision": "auto",
         "diagnostics": "auto",
         "git_control": "auto",
