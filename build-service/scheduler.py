@@ -773,7 +773,12 @@ class Scheduler:
         if action=="reopen":
             if set(args)!={"action","task_id","expected_revision","expected_epoch","request_id"}:raise ValueError("Exact reopen request required")
             with self.broker.lock:
-                if not self.failed_release(item):raise ValueError("Only a closed task whose latest release failed without deployment effects can reopen")
+                if not self.failed_release(item):
+                    job=self.broker.jobs.get(item.get("job_id"))or{}
+                    hint=(f"job {job['job_id'][:8]} is paused for a decision ({job.get('phase')}), not failed; cancel it (buildctl cancel {job['job_id']}) or decide it, then reopen"
+                          if job.get("status")=="needs_decision"else
+                          f"task is {item.get('status')}, latest job {str(item.get('job_id'))[:8]} is {job.get('status')}; reopen needs a closed task whose release failed or was cancelled before any deployment effect, otherwise begin a new task")
+                    raise ValueError("Cannot reopen: "+hint)
                 current=self.store.get(value["id"])
                 if current["owner"]!=owner or current["revision"]!=revision or current["epoch"]!=epoch:raise ValueError("Stale ownership revision or epoch")
                 # The tree, baseline and any claims still held stay with the task; the next finish

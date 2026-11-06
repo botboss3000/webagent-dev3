@@ -343,7 +343,12 @@ class Ownership:
         """Mutation callers must possess every module and path claim; orphaned owners are fenced."""
         value=self.get(task)
         if value["owner"]!=owner or value["epoch"]!=epoch or value["state"]not in {"owned","validating"}:
-            raise PermissionError("Active matching ownership required")
+            state=value["state"]
+            hint=("its heartbeat lapsed and the broker dropped its claims; begin a new task" if state=="orphaned"
+                  else "it is still waiting for claims; apply again once nothing blocks it" if state=="waiting"
+                  else "a newer owner or epoch holds it; reread the task" if state in {"owned","validating"}
+                  else f"it is {state}; begin a new task")
+            raise PermissionError(f"Active matching ownership required: task is {state}, {hint}")
         for scope in scopes:
             if not any(scope==held or(scope.startswith("path:")and held.startswith("path:")and overlap(held[5:],scope[5:])and(scope==held or scope.startswith(held+"/")))for held in value["scopes"]):
                 raise PermissionError("Source scope not reserved")

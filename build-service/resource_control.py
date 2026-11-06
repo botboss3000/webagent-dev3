@@ -1,5 +1,5 @@
 """Narrow root helper for attributable build containers, never arbitrary host processes."""
-import http.client,json,os,re,socket,struct,subprocess,time,threading,hashlib,importlib.util
+import http.client,json,os,re,socket,struct,subprocess,sys,time,threading,hashlib,importlib.util
 from pathlib import Path
 PHASES={"ui_test","index_scan","fmt","compile_test","compile_release","compile_linked","plugin_compile","plugin_test","test","dependency","package","engine_metadata","linked_smoke","live_smoke"}
 PARKABLE={"compile_test","compile_release","compile_linked","plugin_compile"}
@@ -270,8 +270,11 @@ def serve(listener,stopping,config):
             if len(raw)>2048:raise ValueError("Resource frame oversized")
             result=control.handle(json.loads(raw))
             connection.sendall(json.dumps({"status":"success","output":result},separators=(",",":")).encode()+b"\n")
-        except (OSError,ValueError,PermissionError,RuntimeError,TimeoutError,subprocess.SubprocessError):
-            try:connection.sendall(b'{"status":"failed","output":"Resource control unavailable"}\n')
+        except (OSError,ValueError,PermissionError,RuntimeError,TimeoutError,subprocess.SubprocessError)as error:
+            # A bounded, path-free reason reaches the job; the full error goes to the helper's journal.
+            print("resource request failed:",repr(error)[:2000],file=sys.stderr,flush=True)
+            reason=re.sub(r"/[^\s'\"]+","<path>",type(error).__name__+": "+str(error))[:240]
+            try:connection.sendall(json.dumps({"status":"failed","output":"Resource control unavailable","reason":reason},separators=(",",":")).encode()+b"\n")
             except OSError:pass
         finally:connection.close();slots.release()
     listener.settimeout(.5)

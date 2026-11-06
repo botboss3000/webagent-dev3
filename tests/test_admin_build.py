@@ -660,12 +660,14 @@ class BuildTests(unittest.TestCase):
         self.assertEqual([(b["name"], b["status"], b["seconds"]) for b in value["background"]],
                          [("rollback save", "completed", 12), ("early UI tests", "running", 598)])
         done = dict(job, status="completed", finished_at=now,
-                    early_work={"ui": "fixed command failed: EACCES\nmore"},
+                    early_work={"ui": host.failure_summary("fixed command failed: PASS boot: keeps animation\n"
+                                                           "\u2716 activity groups render\nfailing tests:\n  ui/chat/elements.test.cjs\n")},
                     phase_timings=[{"phase": "early_ui_tests", "started_at": now - 598, "seconds": 3, "outcome": "completed"},
                                    {"phase": "early_rollback_save", "started_at": now - 598, "seconds": 12, "outcome": "completed"},
                                    {"phase": "rollback_export", "seconds": 0.01, "outcome": "completed"}])
         rows = {b["name"]: b for b in host.job_progress(done, {}, now)["background"]}
-        self.assertEqual((rows["early UI tests"]["status"], rows["early UI tests"]["result"]), ("failed", "fixed command failed: EACCES"))
+        self.assertEqual((rows["early UI tests"]["status"], rows["early UI tests"]["result"]), ("failed", "\u2716 activity groups render; ui/chat/elements.test.cjs"))
+        self.assertEqual(host.failure_summary("fixed command failed: docker save failed"), "docker save failed")
         self.assertEqual(rows["rollback save"]["result"], "used")
         # A running job compiles as soon as a compile step appears, before job_class's 30 s mark,
         # and stages outside the class plan keep their pipeline place.

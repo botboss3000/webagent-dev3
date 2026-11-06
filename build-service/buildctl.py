@@ -455,6 +455,13 @@ def monitor(task_id=None, job_id=None, request=call, pause=time.sleep, clock=tim
                 print(f"{'no progress for ' + str(progress.get('idle_seconds')) + 's in' if stall else 'past its normal range:'} "
                       f"{stage.get('id')} {name} at {minutes(seconds)} (late after {minutes(late)})")
                 save(current);show(progress);return DECISION_EXIT
+        # A failed background item (early UI tests, rollback save) wakes at once: it usually means a
+        # later stage repeats the work and may fail the same way.
+        for row in progress.get("background") or []:
+            if row.get("status") == "failed" and row.get("name") not in stalled:
+                stalled.append(row["name"])
+                print(f"background {row['name']} failed: {row.get('result') or 'no detail'}")
+                save(current);show(progress);return DECISION_EXIT
         waited = progress.get("job_seconds") or 0
         if status == "queued" and late_due(waited, 0, alerted, "queued"):
             print(f"still queued after {minutes(waited)}")
@@ -630,7 +637,8 @@ def main():
             print(json.dumps(call("v3_build_adopt_release", {"job_id": args.task_id, "accept_ui_failure": args.accept_ui_failure, "reason": args.reason}), sort_keys=True))
             return 0
         if not args.sync_decision or not args.sync_digest or args.reason:
-            parser.error("decide requires a sync decision and --sync-digest")
+            parser.error("decide takes a sync decision with --sync-digest (or --accept-ui-failure); "
+                         "to cancel a paused job use: buildctl cancel <job-id>")
     if args.command=="check":
         if not 1<=args.timeout<=600:parser.error("--timeout must be between 1 and 600 seconds")
         request={"action":"check","task_id":args.task_id,"check":args.check,"expected_inputs_sha256":args.expected,

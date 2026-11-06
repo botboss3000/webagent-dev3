@@ -361,6 +361,16 @@ class MonitorTests(unittest.TestCase):
         code, _ = self.run_monitor([{"task_id": "t", "status": "abandoned"}], task="t", job=None)
         self.assertEqual(code, 1)
 
+    def test_failed_background_work_wakes_once_with_its_reason(self):
+        failed = self.progress(running=[{"stage": "run tests", "id": "3a", "seconds": 60}],
+                               background=[{"name": "early UI tests", "status": "failed", "seconds": 250, "needed_by": "5",
+                                            "result": "\u2716 activity groups render (timeout waiting for .v2-activity-group)"}])
+        code, out = self.run_monitor([failed])
+        self.assertEqual(code, 4)
+        self.assertIn("background early UI tests failed: \u2716 activity groups render", out)
+        code, _ = self.run_monitor([failed, self.progress(status="failed")])
+        self.assertEqual(code, 1)  # the same failure does not wake twice
+
     def test_queued_job_names_what_it_waits_behind(self):
         ahead = [{"job_id": "abcdef12-0000", "task_id": "other-task", "session": "Fix login", "phase": "building_api"}]
         queued = self.progress(status="queued", queued_behind=ahead, job_seconds=10)

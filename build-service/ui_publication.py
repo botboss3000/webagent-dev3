@@ -290,7 +290,8 @@ class UIPublication:
                     job["ui_test_failure"]={"files":failed,"attempts":2,"output_tail":self.scrub(str(again))[-4000:],"at":time.time(),"inputs_sha256":job["inputs_sha256"],"history":self.history(failed)}
                     job.setdefault("ui_verification_history",[]).append({"attempt":attempt,"base_release_id":revision,"rerun":True,"files":files,"result":{"status":"failed","tests":failed}})
                     job.update(status="needs_decision",phase="awaiting_ui_test_decision",
-                        reason="UI tests failed twice: "+", ".join(failed)+"; no deployment effects started; fix them or an operator may accept exactly these files with a reason")
+                        reason="UI tests failed twice: "+", ".join(failed)+"; "+(next((l.strip()[:200]+"; " for l in str(again).splitlines() if l.strip().startswith("\u2716")),""))
+                        +"no deployment effects started; fix them or an operator may accept exactly these files with a reason")
                     self.broker._save(job)
                 return None
             with self.broker.lock:

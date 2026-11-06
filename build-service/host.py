@@ -1380,7 +1380,8 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 if not part:raise RuntimeError("Protected resource helper unavailable")
                 raw.extend(part)
             result=json.loads(raw)
-            if result.get("status")!="success":raise RuntimeError("Protected resource operation unavailable")
+            if result.get("status")!="success":
+                raise RuntimeError(f"Protected resource operation {args.get('operation')} failed: {str(result.get('reason') or 'no reason given')[:240]}")
             return result["output"]
         finally:connection.close()
     def cleanup_phase(self,name):
@@ -2869,6 +2870,20 @@ def stage_ids(stages, cls):
     return ids
 
 
+def failure_summary(text, limit=300):
+    """The failing lines of a test run, not its first line: node's ✖ lines and "failing tests:" block,
+    Rust's panics and FAILED tests. Falls back to the output's end, where the cause usually is."""
+    text = text.removeprefix("fixed command failed: ")
+    lines = [l.strip() for l in text.splitlines()]
+    keep = [l for i, l in enumerate(lines)
+            if l.startswith("✖") or " FAILED" in l or "panicked at" in l or (i and "panicked at" in lines[i - 1])
+            or "Error:" in l or "Timeout" in l or "timed out" in l]
+    if "failing tests:" in text:
+        keep += [l.strip() for l in text.rsplit("failing tests:", 1)[1].splitlines() if l.strip()][:8]
+    seen = list(dict.fromkeys(l for l in keep if l))
+    return ("; ".join(seen) if seen else " ".join(text.split())[-limit:])[:limit]
+
+
 def early_work(job, now, needed_by):
     """Work started beside the stages (rollback save, UI fixtures), each with its time and result."""
     rows = []
@@ -2882,7 +2897,7 @@ def early_work(job, now, needed_by):
             status = "interrupted"
         result = None
         if isinstance(recorded, str):
-            status, result = "failed", recorded.strip().splitlines()[0][:120] if recorded.strip() else "failed"
+            status, result = "failed", recorded.strip()[:300] or "failed"
         elif key == "ui" and isinstance(recorded, dict):
             evidence = job.get("ui_test_evidence") or {}
             result = f"ran {recorded.get('executed', 0)}"
@@ -6894,16 +6909,28 @@ class Broker:
         if executor is None or job["operation"] != "build_deploy":
             return {}
         # Each records its duration in phase_timings (early_rollback_save, early_ui_tests).
+        def record(key, error):
+            # Record a failure when it happens, so progress and the monitor see it before the join (B1).
+            with self.lock:
+                job.setdefault("early_work", {})[key] = failure_summary(scrub(str(error), self.runner.secrets))
         def rollback():
-            with host_phase(job, "early_rollback_save"):
-                images = [self.runner.inspect(name)["Image"] for name in TARGETS]
-                path = self.state / "execution" / job["job_id"] / "rollback-early.tar"
-                path.parent.mkdir(parents=True, exist_ok=True)
-                self.runner.export(images, path)
-                return images, path
+            try:
+                with host_phase(job, "early_rollback_save"):
+                    images = [self.runner.inspect(name)["Image"] for name in TARGETS]
+                    path = self.state / "execution" / job["job_id"] / "rollback-early.tar"
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    self.runner.export(images, path)
+                    return images, path
+            except Exception as error:
+                record("rollback", error)
+                raise
         def ui():
-            with host_phase(job, "early_ui_tests"):
-                return self.ui_publication.prewarm(job, blob)
+            try:
+                with host_phase(job, "early_ui_tests"):
+                    return self.ui_publication.prewarm(job, blob)
+            except Exception as error:
+                record("ui", error)
+                raise
         early = {"rollback": executor.background(rollback, "early-rollback")}
         if self.ui_publication.enabled(job):
             early["ui"] = executor.background(ui, "early-ui-tests")
@@ -6917,7 +6944,7 @@ class Broker:
                 results[name] = handle.result()
             except Exception as error:
                 with self.lock:
-                    job.setdefault("early_work", {})[name] = scrub(str(error), self.runner.secrets)[:300]
+                    job.setdefault("early_work", {}).setdefault(name, failure_summary(scrub(str(error), self.runner.secrets)))
         ui = results.get("ui")
         if ui:
             with self.lock:
