@@ -35,30 +35,6 @@ class PublicationTests(unittest.TestCase):
         runner.command=command;self.assertTrue(runner.plugin_hot_swappable())
 if __name__=="__main__":unittest.main()
 
-class GenerationTests(unittest.TestCase):
-    def test_declared_helpers_are_pinned_and_legacy_bindings_remain_readable(self):
-        import hashlib,uuid
-        from unittest.mock import patch
-        module=importlib.util.spec_from_file_location("generation_bridge",ROOT/"ability_plugin_worker.py")
-        bridge=importlib.util.module_from_spec(module);module.loader.exec_module(bridge)
-        with tempfile.TemporaryDirectory()as temporary:
-            releases=Path(temporary)/"releases";package=releases/str(uuid.uuid4())/"v3/plugins/abilities/Custom/fixture"
-            package.mkdir(parents=True)
-            manifest={"id":"fixture","dispatch":"isolated","protocol":1,"interface":1,"runtime":"python3","entrypoint":"runner.py","schemas":"schemas.json","effect":"write","tools":["fixture_echo"],"build":{"inputs":["runner.py","helper.py"],"assets":[]}}
-            raw=json.dumps(manifest).encode();code=b"print('fixture')";schemas=b"[]";helper=b"VALUE = 1"
-            for name,value in {"plugin.json":raw,"runner.py":code,"schemas.json":schemas,"helper.py":helper}.items():(package/name).write_bytes(value)
-            hashes=[hashlib.sha256(value).hexdigest()for value in (raw,code,schemas)]
-            files={name:hashlib.sha256(value).hexdigest()for name,value in {"runner.py":code,"helper.py":helper}.items()}
-            identity=lambda value:hashlib.sha256(json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
-            binding={"root":str(package),"id":"fixture","name":"fixture_echo","generation_scheme":2,"generation":identity([hashes,files])}
-            actual=Path
-            with patch.object(bridge,"Path",side_effect=lambda value:releases if str(value)=="/opt/v3/assets/releases"else actual(value)):
-                self.assertEqual(bridge.package(binding)[0],package)
-                legacy={**binding,"generation_scheme":1,"generation":identity(hashes)}
-                self.assertEqual(bridge.package(legacy)[0],package)
-                (package/"helper.py").write_bytes(b"VALUE = 2")
-                with self.assertRaisesRegex(ValueError,"Stale package binding"):bridge.package(binding)
-
 class ArtifactCacheTests(unittest.TestCase):
     def test_runtime_asset_declarations_reuse_the_exact_retained_rust_binary(self):
         import hashlib,uuid

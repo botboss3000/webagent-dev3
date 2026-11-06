@@ -17,10 +17,6 @@ from pathlib import Path
 spec = importlib.util.spec_from_file_location("worker", Path(__file__).parents[1] / "worker.py")
 worker = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(worker)
-plugin_spec=importlib.util.spec_from_file_location("worker_codebase_unit",Path(__file__).parents[1]/"plugins/abilities/Administrator/codebase_admin/runner.py")
-plugin=importlib.util.module_from_spec(plugin_spec);plugin_spec.loader.exec_module(plugin)
-core_file_operation=worker.file_operation
-worker.file_operation=plugin.file_operation
 
 
 
@@ -44,19 +40,14 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         self.tmp.cleanup()
 
     async def run_tool(self, name, args, timeout=120):
-        if name in ("file_list","file_read","file_search","file_edit","file_write"):
-            plugin.LIVE_CHECKOUT=worker.LIVE_CHECKOUT
-            plugin.CONTEXT_CONFIG_PATH=worker.CONTEXT_CONFIG_PATH
-            # Exercise original descriptor/durability fault seams directly.
-            async def unit_call(name,args,base,**kw):
-                return await worker.synchronous(worker.file_operation,{},base,args,name)
-            with mock.patch.object(worker,"codebase_call",new=unit_call):
-                return await worker.execute({"workspace":self.session,"name":name,"arguments":args,"timeout_seconds":timeout})
-        if name=="decision_candidates":
-            with mock.patch.object(worker,"file_operation",new=core_file_operation):
-                return await worker.execute({"workspace":self.session,"name":name,"arguments":args,"timeout_seconds":timeout})
         return await worker.execute({"workspace": self.session, "name": name,
                                      "arguments": args, "timeout_seconds": timeout})
+
+    async def run_command(self, argv, timeout=120):
+        # The supervisor that still runs workspace seeding and Code Index scans.
+        with (worker.CONTROL / "dispatch.lock").open("rb") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            return await worker.command(argv, worker.workspace_path(self.session), timeout, lock)
 
     async def test_code_index_private_dispatch_runs_under_supervisor(self):
         base=worker.workspace_path(self.session)
@@ -103,90 +94,6 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await task
         self.assertTrue(settled.is_set())
-
-    async def test_file_write_prepublication_failures_preserve_original(self):
-        base = worker.workspace_path(self.session)
-        target = base / "source.py"
-        target.write_text("original")
-        target.chmod(0o751)
-        for operation in ("fsync", "replace"):
-            with self.subTest(operation=operation):
-                with mock.patch.object(worker.os, operation, side_effect=OSError("injected failure")):
-                    with self.assertRaises(OSError):
-                        await self.run_tool("file_write", {"path": "source.py", "content": "replacement"})
-                self.assertEqual(target.read_text(), "original")
-                self.assertEqual(target.stat().st_mode & 0o777, 0o751)
-                self.assertEqual(list(base.glob(".v3-write-*")), [])
-
-    async def test_file_write_syncs_content_before_publish_then_directory(self):
-        base = worker.workspace_path(self.session)
-        target = base / "source.py"
-        target.write_text("original")
-        target.chmod(0o751)
-        events = []
-        real_sync, real_replace = os.fsync, os.replace
-
-        def sync(fd):
-            import stat
-            events.append("directory" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file")
-            return real_sync(fd)
-
-        def replace(*args, **kwargs):
-            events.append("publish")
-            return real_replace(*args, **kwargs)
-
-        with mock.patch.object(worker.os, "fsync", side_effect=sync), mock.patch.object(worker.os, "replace", side_effect=replace):
-            result = await self.run_tool("file_write", {"path": "source.py", "content": "replacement"})
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(events, ["file", "publish", "directory"])
-        self.assertEqual(target.read_text(), "replacement")
-        self.assertEqual(target.stat().st_mode & 0o777, 0o751)
-        self.assertEqual(list(base.glob(".v3-write-*")), [])
-
-    async def test_file_write_postpublication_sync_failure_is_uncertain(self):
-        base = worker.workspace_path(self.session)
-        target = base / "source.py"
-        target.write_text("original")
-        real_sync = os.fsync
-
-        def sync(fd):
-            import stat
-            if stat.S_ISDIR(os.fstat(fd).st_mode):
-                raise OSError("directory sync failed")
-            return real_sync(fd)
-
-        with mock.patch.object(worker.os, "fsync", side_effect=sync):
-            result = await self.run_tool("file_write", {"path": "source.py", "content": "replacement"})
-        self.assertEqual(result["status"], "uncertain")
-        self.assertEqual(target.read_text(), "replacement")
-        self.assertEqual(list(base.glob(".v3-write-*")), [])
-
-    async def test_file_write_creation_refuses_concurrent_destination(self):
-        base = worker.workspace_path(self.session)
-        target = base / "new.txt"
-        real_link = os.link
-
-        def competing_create(*args, **kwargs):
-            target.write_text("other writer")
-            return real_link(*args, **kwargs)
-
-        with mock.patch.object(worker.os, "link", side_effect=competing_create):
-            with self.assertRaises(FileExistsError):
-                await self.run_tool("file_write", {"path": "new.txt", "content": "replacement"})
-        self.assertEqual(target.read_text(), "other writer")
-        self.assertEqual(list(base.glob(".v3-write-*")), [])
-
-    async def test_file_write_follows_symlink_and_rejects_oversized_content(self):
-        base = worker.workspace_path(self.session)
-        target = base / "safe.txt"
-        target.write_text("original")
-        (base / "alias").symlink_to(target)
-        await self.run_tool("file_write", {"path": "alias", "content": "replacement"})
-        with self.assertRaises(ValueError):
-            await self.run_tool("file_write", {"path": "safe.txt", "content": "x" * (worker.LIMIT + 1)})
-        self.assertEqual(target.read_text(), "replacement")
-        self.assertTrue((base / "alias").is_symlink())
-        self.assertEqual(list(base.glob(".v3-write-*")), [])
 
     async def test_source_patch_applies_reviewed_multifile_diff(self):
         await self.run_tool("workspace_seed", {})
@@ -469,181 +376,12 @@ print("SEEDED" if result["baseline_commit"] else "FAILED")
             await self.run_tool("workspace_seed", {})
         self.assertFalse((worker.ROOT / self.session / "webagent-v3").exists())
 
-    async def test_files_follow_container_paths(self):
-        await self.run_tool("file_write", {"path": "a/file.txt", "content": "hello"})
-        self.assertEqual((await self.run_tool("file_read", {"path": "a/file.txt"}))["output"], "hello")
-        self.assertIn("a/file.txt:1:hello", (await self.run_tool("file_search", {"query": "hello"}))["output"])
-        outside = Path(self.tmp.name) / "outside.txt"
-        outside.write_text("outside")
-        self.assertEqual((await self.run_tool("file_read", {
-            "path": "../../outside.txt"}))["output"], "outside")
-        (worker.ROOT / self.session / "escape").symlink_to(Path(self.tmp.name))
-        self.assertEqual((await self.run_tool("file_read", {
-            "path": "escape/outside.txt"}))["output"], "outside")
-        checkout = Path(self.tmp.name) / "checkout"
-        checkout.mkdir()
-        (checkout / "v3").mkdir()
-        (checkout / "v3/README.md").write_text("live checkout")
-        with mock.patch.object(worker, "LIVE_CHECKOUT", checkout):
-            self.assertEqual((await self.run_tool("file_read", {
-                "path": "v3/README.md"}))["output"], "live checkout")
-
-    async def test_absolute_container_path_can_be_read_and_edited(self):
-        target = Path(self.tmp.name) / "live-source.rs"
-        target.write_text("old")
-        read = await self.run_tool("file_read", {"path": str(target)})
-        self.assertEqual(read["output"], "old")
-        edited = await self.run_tool("file_edit", {
-            "path": str(target), "old_text": "old", "new_text": "new"})
-        self.assertEqual(edited["status"], "success")
-        self.assertEqual(target.read_text(), "new")
-
-    async def test_file_read_pages_beyond_first_megabyte(self):
-        base = worker.workspace_path(self.session)
-        target = base / "deep.rs"
-        target.write_text("".join(f"line-{index:05}: source context\n" for index in range(70000)))
-        self.assertGreater(target.stat().st_size, worker.LIMIT)
-        page = await self.run_tool("file_read", {
-            "path": "deep.rs", "offset": 60001, "limit": 3})
-        self.assertEqual(page["output"], "".join(
-            f"line-{index:05}: source context\n" for index in range(60000, 60003)))
-        self.assertEqual(page["total_lines"], 70000)
-        self.assertEqual(page["next_offset"], 60004)
-        self.assertTrue(page["truncated"])
-        next_page = await self.run_tool("file_read", {
-            "path": "deep.rs", "offset": page["next_offset"], "limit": 2})
-        self.assertIn("line-60003", next_page["output"])
-        self.assertEqual(next_page["next_offset"], 60006)
-        with self.assertRaisesRegex(ValueError, "offset"):
-            await self.run_tool("file_read", {"path": "deep.rs", "offset": 0})
-        with self.assertRaisesRegex(ValueError, "limit"):
-            await self.run_tool("file_read", {"path": "deep.rs", "limit": 2001})
-
-    async def test_file_search_regex_glob_comments_and_outline(self):
-        base = worker.workspace_path(self.session)
-        (base / "src").mkdir()
-        (base / "target").mkdir()
-        (base / ".git").mkdir()
-        (base / "src/main.rs").write_text(
-            "// TODO: inspect parser\nfn main() {}\nlet text = \"TODO hidden\";\n")
-        (base / "src/other.py").write_text("# TODO: Python\n")
-        (base / "target/generated.rs").write_text("// TODO: ignored\n")
-        (base / ".git/config.rs").write_text("// TODO: ignored\n")
-        outside = Path(self.tmp.name) / "external.rs"
-        outside.write_text("// TODO: external\n")
-        (base / "src/escape.rs").symlink_to(outside)
-        regex = await self.run_tool("file_search", {
-            "path": "src", "query": r"fn\s+main", "regex": True,
-            "file_glob": "*.rs"})
-        self.assertIn("src/main.rs:2:fn main()", regex["output"])
-        comments = await self.run_tool("file_search", {
-            "query": "TODO", "comments_only": True, "file_glob": "*.rs"})
-        self.assertIn("src/main.rs:1:// TODO: inspect parser", comments["output"])
-        self.assertIn("target/generated.rs:1:// TODO: ignored", comments["output"])
-        self.assertIn(".git/config.rs:1:// TODO: ignored", comments["output"])
-        outline = await self.run_tool("file_search", {
-            "path": "src/main.rs", "comments_only": True})
-        self.assertEqual(outline["output"], "src/main.rs:1:// TODO: inspect parser")
-        linked = await self.run_tool("file_search", {
-            "path": "src/escape.rs", "query": "external"})
-        self.assertIn("src/escape.rs:1:// TODO: external", linked["output"])
-        target = await self.run_tool("file_search", {
-            "path": "target", "query": "TODO"})
-        self.assertIn("target/generated.rs:1:// TODO: ignored", target["output"])
-        with self.assertRaisesRegex(ValueError, "directory search"):
-            await self.run_tool("file_search", {"path": "src", "comments_only": True})
-
-    async def test_file_search_reads_live_context_limits(self):
-        import json
-        base = worker.workspace_path(self.session)
-        (base / "many.rs").write_text(("hit " + "x" * 300 + "\n") * 400)
-        config_path = Path(self.tmp.name) / "context-compaction.json"
-        with mock.patch.object(worker, "CONTEXT_CONFIG_PATH", config_path):
-            config_path.write_text(json.dumps({"search_output_bytes": 4096,
-                                               "search_line_bytes": 128}))
-            small = await self.run_tool("file_search", {"query": "hit"})
-            self.assertTrue(small["truncated"])
-            self.assertLessEqual(len(small["output"].encode()), 4096)
-            self.assertIn("[line clipped]", small["output"])
-            config_path.write_text(json.dumps({"search_output_bytes": 8192,
-                                               "search_line_bytes": 256}))
-            large = await self.run_tool("file_search", {"query": "hit"})
-            self.assertGreater(len(large["output"].encode()), len(small["output"].encode()))
-            self.assertLessEqual(len(large["output"].encode()), 8192)
-
-    async def test_file_search_reports_output_truncation(self):
-        base = worker.workspace_path(self.session)
-        (base / "many.rs").write_text("hit\n" * 200000)
-        result = await self.run_tool("file_search", {"query": "hit"})
-        self.assertTrue(result["truncated"])
-        self.assertLessEqual(len(result["output"].encode()), worker.LIMIT)
-
-    async def test_file_edit_exact_match_and_hash(self):
-        path = worker.workspace_path(self.session) / "source.py"
-        path.write_text("first = 1\nsecond = 2\n")
-        original = path.read_bytes()
-        result = await self.run_tool("file_edit", {
-            "path": "source.py", "old_text": "second = 2", "new_text": "second = 3",
-            "expected_sha256": hashlib.sha256(original).hexdigest()})
-        self.assertEqual(result["status"], "success")
-        self.assertEqual(path.read_text(), "first = 1\nsecond = 3\n")
-        self.assertEqual(result["previous_sha256"], hashlib.sha256(original).hexdigest())
-        self.assertEqual(result["sha256"], hashlib.sha256(path.read_bytes()).hexdigest())
-        with self.assertRaisesRegex(ValueError, "changed since inspection"):
-            await self.run_tool("file_edit", {
-                "path": "source.py", "old_text": "second = 3", "new_text": "second = 4",
-                "expected_sha256": result["previous_sha256"]})
-        self.assertEqual(path.read_text(), "first = 1\nsecond = 3\n")
-
-    async def test_file_edit_rejects_ambiguous_and_accepts_container_paths(self):
-        path = worker.workspace_path(self.session) / "source.py"
-        path.write_text("same\nsame\n")
-        with self.assertRaisesRegex(ValueError, "exactly once"):
-            await self.run_tool("file_edit", {
-                "path": "source.py", "old_text": "same", "new_text": "different"})
-        outside = worker.ROOT / "outside.py"
-        outside.write_text("first")
-        await self.run_tool("file_edit", {
-            "path": "../outside.py", "old_text": "first", "new_text": "second"})
-        (worker.ROOT / self.session / "escape").symlink_to(worker.ROOT)
-        await self.run_tool("file_edit", {
-            "path": "escape/outside.py", "old_text": "second", "new_text": "third"})
-        self.assertEqual(outside.read_text(), "third")
-        self.assertEqual(path.read_text(), "same\nsame\n")
-
-    async def test_file_edit_rejects_oversized_result(self):
-        path = worker.workspace_path(self.session) / "source.py"
-        path.write_text("start")
-        with self.assertRaisesRegex(ValueError, "exceeds limit"):
-            await self.run_tool("file_edit", {
-                "path": "source.py", "old_text": "start", "new_text": "x" * (worker.LIMIT + 1)})
-        self.assertEqual(path.read_text(), "start")
-
-    async def test_python_shell_and_environment(self):
-        os.environ["V3_TEST_SECRET"] = "private"
-        result = await self.run_tool("python", {"code": "import os; print(os.getenv('V3_TEST_SECRET', 'absent'))"})
-        self.assertEqual(result["output"].strip(), "absent")
-        result = await self.run_tool("shell", {"command": "printf working"})
-        self.assertEqual(result["output"], "working")
-        checkout = Path(self.tmp.name) / "checkout"
-        checkout.mkdir()
-        with mock.patch.object(worker, "LIVE_CHECKOUT", checkout):
-            result = await self.run_tool("shell", {"command": "pwd"})
-        self.assertEqual(result["output"].strip(), str(worker.ROOT/self.session))
-        with mock.patch.object(worker,"LIVE_CHECKOUT",checkout):
-            (checkout/"README.md").write_text("source")
-            result=await self.run_tool("shell",{"command":"cat "+str(checkout/"README.md")})
-            self.assertEqual(result["output"],"source")
-            result=await self.run_tool("shell",{"command":"echo bypass > "+str(checkout/"README.md")})
-            self.assertEqual(result["status"],"failed")
-        self.assertEqual((checkout/"README.md").read_text(),"source")
-
     async def test_timeout(self):
-        result = await self.run_tool("shell", {"command": "sleep 30"}, 1)
+        result = await self.run_command(["/bin/sh", "-c", "sleep 30"], 1)
         self.assertEqual(result["status"], "timeout")
 
     async def test_cancel_kills_descendant(self):
-        task = asyncio.create_task(self.run_tool("shell", {"command": "sleep 2; touch survived"}))
+        task = asyncio.create_task(self.run_command(["/bin/sh", "-c", "sleep 2; touch survived"]))
         await asyncio.sleep(0.15)
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):
@@ -660,7 +398,7 @@ print("SEEDED" if result["baseline_commit"] else "FAILED")
             " time.sleep(2); open('detached-survived','w').write('bad'); os._exit(0)\n"
             "time.sleep(30)\n"
         )
-        task = asyncio.create_task(self.run_tool("python", {"code": code}))
+        task = asyncio.create_task(self.run_command(["/usr/bin/python3", "-c", code]))
         await asyncio.sleep(0.2)
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):
@@ -670,112 +408,42 @@ print("SEEDED" if result["baseline_commit"] else "FAILED")
 
     async def test_completion_cleans_detached_child(self):
         code = "import os,time\nif os.fork()==0:\n os.setsid(); time.sleep(2); open('orphan-survived','w').write('bad')\n"
-        result = await self.run_tool("python", {"code": code})
+        result = await self.run_command(["/usr/bin/python3", "-c", code])
         self.assertEqual(result["status"], "success")
         await asyncio.sleep(2.1)
         self.assertFalse((worker.ROOT / self.session / "orphan-survived").exists())
 
-    async def test_search_total_scan_budget(self):
-        base = worker.workspace_path(self.session)
-        for index in range(34):
-            (base / f"{index:02}.txt").write_bytes(b"x" * worker.LIMIT)
-        result = await self.run_tool("file_search", {"query": "missing"})
-        self.assertTrue(result["truncated"])
-
-    async def test_listing_entry_budget(self):
-        base = worker.workspace_path(self.session)
-        for index in range(10001):
-            (base / str(index)).touch()
-        result = await self.run_tool("file_list", {})
-        self.assertTrue(result["truncated"])
-        self.assertLessEqual(len(result["output"].splitlines()), 10000)
-
-    async def test_decision_candidates_return_bounded_names_without_contents(self):
-        base = worker.workspace_path(self.session)
-        folder = base / "candidates"
-        folder.mkdir()
-        for index in range(35):
-            (folder / f"{index:02}.rs").write_text("secret content")
-        (folder / "linked").symlink_to(folder / "00.rs")
-        first = await self.run_tool("decision_candidates", {"path": str(folder)})
-        self.assertEqual(first["status"], "success")
-        self.assertEqual(len(first["output"]), 32)
-        self.assertEqual(first["output"][0], {"name": "00.rs", "kind": "file"})
-        self.assertEqual(first["next_offset"], 32)
-        self.assertNotIn("secret content", str(first))
-        second = await self.run_tool("decision_candidates",
-                                     {"path": str(folder), "offset": first["next_offset"]})
-        self.assertEqual(len(second["output"]), 4)
-        self.assertEqual(second["output"][-1], {"name": "linked", "kind": "other"})
-        self.assertIsNone(second["next_offset"])
-
-    async def test_decision_candidates_filter_recursive_js_and_bound_excerpts(self):
-        base = worker.workspace_path(self.session)
-        folder = base / "source"
-        (folder / "nested").mkdir(parents=True)
-        (folder / "app.js").write_text("footer = " + "x" * 1300)
-        (folder / "nested" / "chat.js").write_text("const chatFooter = true")
-        (folder / "nested" / "chat.css").write_text("footer {}")
-        (folder / "link.js").symlink_to(folder / "nested" / "chat.js")
-        result = await self.run_tool("decision_candidates", {
-            "path": str(folder), "file_glob": "*.js",
-            "recursive": True, "include_content": True})
-        self.assertEqual(result["status"], "success")
-        self.assertEqual([item["name"] for item in result["output"]],
-                         ["app.js", "nested/chat.js"])
-        self.assertEqual(len(result["output"][0]["snippet"]), 1024)
-        self.assertTrue(result["output"][0]["content_truncated"])
-        self.assertEqual(result["output"][1]["snippet"], "const chatFooter = true")
-        self.assertFalse(result["output"][1]["content_truncated"])
-        self.assertGreaterEqual(result["entries_examined"], 4)
-        with self.assertRaisesRegex(ValueError, "basename pattern"):
-            await self.run_tool("decision_candidates", {
-                "path": str(folder), "file_glob": "../*.js", "recursive": True})
-
-    async def test_control_lock_released_while_file_operation_runs(self):
+    async def test_control_lock_released_while_source_review_runs(self):
         started, release = threading.Event(), threading.Event()
-        original = worker.file_operation
+        original = worker.source_review
 
         def delayed(*args):
             started.set()
             release.wait(2)
-            return original(*args)
+            return {"status": "success"}
 
-        worker.file_operation = delayed
-        task = asyncio.create_task(self.run_tool("file_list", {}))
-        try:
-            self.assertTrue(await asyncio.to_thread(started.wait, 1))
-            with (worker.CONTROL / "dispatch.lock").open("rb") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                (worker.CONTROL / "shutoff").write_text("1")
-                fcntl.flock(lock, fcntl.LOCK_UN)
-            self.assertFalse(task.done())
-        finally:
-            release.set()
-            await task
-            worker.file_operation = original
+        worker.source_review = delayed
+        with mock.patch.dict(os.environ, {"V3_BUILD_EXECUTOR": "1"}):
+            task = asyncio.create_task(self.run_tool("source_review", {}))
+            try:
+                self.assertTrue(await asyncio.to_thread(started.wait, 1))
+                with (worker.CONTROL / "dispatch.lock").open("rb") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    (worker.CONTROL / "shutoff").write_text("1")
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+                self.assertFalse(task.done())
+            finally:
+                release.set()
+                await task
+                worker.source_review = original
 
     async def test_shutoff(self):
         (worker.CONTROL / "shutoff").write_text("1")
         with self.assertRaisesRegex(ValueError, "disabled"):
-            await self.run_tool("shell", {"command": "touch forbidden"})
-
-    async def test_approved_shell_can_read_outside_session_workspace(self):
-        source=Path(self.tmp.name)/"checkout";source.mkdir()
-        outside=source/"README.md";outside.write_text("LIVE_SOURCE")
-        with mock.patch.object(worker,"LIVE_CHECKOUT",source):
-            result=await self.run_tool("shell",{"command":"cat "+str(outside)})
-        self.assertEqual(result["status"],"success",result);self.assertEqual(result["output"],"LIVE_SOURCE")
-        # Codebase Admin commands read any file but write only their workspace.
-        private=Path(self.tmp.name)/"unrelated-private";private.write_text("PRIVATE_FIXTURE")
-        result=await self.run_tool("shell",{"command":"cat "+str(private)})
-        self.assertEqual(result["output"],"PRIVATE_FIXTURE",result)
-        result=await self.run_tool("shell",{"command":"echo changed > "+str(private)})
-        self.assertEqual(result["status"],"failed")
-        self.assertEqual(private.read_text(),"PRIVATE_FIXTURE")
+            await self.run_tool("terminal_list", {})
 
     async def test_output_is_bounded(self):
-        result = await self.run_tool("python", {"code": "print('x' * 2000000)"})
+        result = await self.run_command(["/usr/bin/python3", "-c", "print('x' * 2000000)"])
         self.assertTrue(result["truncated"])
         self.assertLessEqual(len(result["output"]), worker.LIMIT)
 

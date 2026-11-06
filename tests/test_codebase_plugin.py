@@ -23,33 +23,6 @@ class PackageTests(unittest.TestCase):
             self.assertTrue(fixtures.host.hot_source_path(fixtures.host.CODEBASE_ROOT+name))
         for name in ("worker.py","src/abilities.rs","build-service/host.py","plugins/abilities/Administrator/other/runner.py"):
             self.assertFalse(fixtures.host.hot_source_path("v3/"+name))
-class ProcessBridgeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_worker_dispatch_uses_package_and_returns_bound_identity(self):
-        spec=importlib.util.spec_from_file_location("codebase_worker",ROOT/"worker.py")
-        worker=importlib.util.module_from_spec(spec);spec.loader.exec_module(worker)
-        with tempfile.TemporaryDirectory() as temporary:
-            path=Path(temporary)/"sample";path.write_text("bridge")
-            result=await worker.codebase_call("file_read",{"path":str(path)},Path(temporary))
-            self.assertEqual(result["output"],"bridge")
-            self.assertEqual(len(result["implementation_sha256"]),64)
-    async def test_invalid_protocol_reports_uncertain_writes(self):
-        spec=importlib.util.spec_from_file_location("codebase_worker_bad",ROOT/"worker.py")
-        worker=importlib.util.module_from_spec(spec);spec.loader.exec_module(worker)
-        with tempfile.TemporaryDirectory() as temporary:
-            folder=Path(temporary);(folder/"runner.py").write_text("print('{}')")
-            with patch.object(worker,"codebase_package",return_value=(folder,"f"*64)):
-                result=await worker.codebase_call("file_write",{},folder)
-                self.assertTrue(result["uncertain"]);self.assertEqual(result["status"],"uncertain")
-    async def test_cancellation_reaps_the_plugin(self):
-        spec=importlib.util.spec_from_file_location("codebase_worker_cancel",ROOT/"worker.py")
-        worker=importlib.util.module_from_spec(spec);spec.loader.exec_module(worker)
-        with tempfile.TemporaryDirectory() as temporary:
-            folder=Path(temporary);runner=folder/"runner.py"
-            runner.write_text("import time; time.sleep(60)")
-            with patch.object(worker,"codebase_package",return_value=(folder,"f"*64)):
-                task=asyncio.create_task(worker.codebase_call("file_read",{},folder))
-                await asyncio.sleep(.1);task.cancel()
-                with self.assertRaises(asyncio.CancelledError):await asyncio.wait_for(task,3)
 if __name__=="__main__":unittest.main()
 
 class BrokerLaneTests(unittest.TestCase):

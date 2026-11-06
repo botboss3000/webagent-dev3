@@ -2,7 +2,6 @@
 import asyncio
 import ctypes
 import contextlib
-import fnmatch
 import hashlib
 import fcntl
 import socket
@@ -15,7 +14,6 @@ import importlib.util
 import os
 import select
 import signal
-import stat
 import shutil
 import tempfile
 import uuid
@@ -287,54 +285,6 @@ async def command(argv, base, timeout, lock):
 
 
 
-CODEBASE_TOOLS = ["file_list","file_read","file_search","file_edit","file_write","build_work",
-                 "state_inspect","prompt_slot_read","prompt_slot_write","shell","python","checkout_edit"]
-def codebase_package(revision=None):
-    active=Path("/opt/v3/assets/current")
-    if active.parent.is_dir():
-        selected=(active.parent/"releases"/str(uuid.UUID(revision))).resolve(strict=True) if revision else active.resolve(strict=True)
-        if selected.parent!=Path("/opt/v3/assets/releases"):raise ValueError("Invalid plugin release pointer")
-        folder=selected/"v3/plugins/abilities/Administrator/codebase_admin"
-    else:folder=Path(__file__).parent/"plugins/abilities/Administrator/codebase_admin"
-    for leaf in ("plugin.json","runner.py","codebase_admin.json"):
-        path=folder/leaf
-        if path.is_symlink() or not path.is_file() or path.stat().st_size>2*LIMIT:raise ValueError("Codebase Admin package unavailable")
-    metadata=json.loads((folder/"plugin.json").read_bytes())
-    if (metadata.get("version")!=1 or metadata.get("protocol")!=1 or metadata.get("id")!="codebase_admin"
-        or metadata.get("interface")!=1 or metadata.get("runtime")!="python3" or metadata.get("entrypoint")!="runner.py"
-        or metadata.get("tools")!=CODEBASE_TOOLS):raise ValueError("Codebase Admin package incompatible")
-    if json.loads((folder/"codebase_admin.json").read_bytes()).get("tools")!=CODEBASE_TOOLS:raise ValueError("Codebase Admin catalog incompatible")
-    return folder,hashlib.sha256((folder/"runner.py").read_bytes()).hexdigest()
-async def codebase_call(name,args,base,operation="execute",revision=None):
-    folder,generation=codebase_package(revision)
-    request=json.dumps({"version":1,"name":name,"arguments":args,"operation":operation,"base":str(base)}).encode()
-    if len(request)>8*LIMIT:raise ValueError("Codebase Admin request oversized")
-    process=await asyncio.create_subprocess_exec("/usr/bin/python3","-I","-B",str(folder/"runner.py"),
-        stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,
-        start_new_session=True,env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8"})
-    async def exchange():
-        process.stdin.write(request);await process.stdin.drain();process.stdin.close()
-        chunks=[];size=0
-        while chunk:=await process.stdout.read(65536):
-            size+=len(chunk)
-            if size>8*LIMIT:raise ValueError("Codebase Admin response oversized")
-            chunks.append(chunk)
-        await process.wait()
-        if process.returncode:raise ValueError("Codebase Admin process failed")
-        reply=json.loads(b"".join(chunks))
-        if reply.get("version")!=1 or not isinstance(reply.get("result"),dict):raise ValueError("Codebase Admin response incompatible")
-        result=reply["result"];result["plugin_revision"]=folder.parents[4].name if folder.parents[4].parent.name=="releases" else None;result["implementation_sha256"]=generation
-        return result
-    try:return await asyncio.wait_for(exchange(),30)
-    except (OSError,ValueError,asyncio.TimeoutError):
-        if name in ("file_write","file_edit","checkout_edit") and operation=="execute":
-            return {"status":"uncertain","uncertain":True,"output":"Plugin interrupted; reconcile file contents before retry"}
-        raise
-    finally:
-        await terminate(process)
-        with contextlib.suppress(ProcessLookupError):os.killpg(process.pid,signal.SIGKILL)
-
-
 BROWSER_TOOLS=["browser_read","browser_input","browser_record"]
 BROWSER_MANIFEST={"version":1,"id":"browser_control","protocol":1,"interface":1,"runtime":"python3","entrypoint":"runner.py",
     "tools":BROWSER_TOOLS,"build":{"inputs":["runner.py","adapter.py","egress.py"],"dependencies":[],"toolchain":"image-python3",
@@ -489,14 +439,6 @@ async def execute_locked(request, lock):
     if request["name"]=="browser_protocol":
         fcntl.flock(lock,fcntl.LOCK_UN)
         return {"status":"success","output":{"protocol":1,"interface":1,"stateful":True}}
-    if request["name"]=="ability_plugin_invoke":
-        binding=(request.get("trusted")or{}).get("ability_plugin")
-        if not isinstance(binding,dict):raise ValueError("Trusted plugin binding required")
-        base=workspace_path(request["workspace"])
-        fcntl.flock(lock,fcntl.LOCK_UN)
-        import runpy
-        bridge=runpy.run_path(str(Path(__file__).with_name("ability_plugin_worker.py")))
-        return await bridge["invoke"](binding,request.get("arguments",{}),base,terminate)
     if request["name"]=="ability_plugins_protocol":
         fcntl.flock(lock,fcntl.LOCK_UN)
         return {"status":"success","output":{"protocol":1,"catalog":1,"dispatch":1}}
@@ -508,14 +450,6 @@ async def execute_locked(request, lock):
     base = workspace_path(request["workspace"])
     args = request.get("arguments", {})
     name = request["name"]
-    if name in ("shell","python"):
-        fcntl.flock(lock,fcntl.LOCK_UN)
-        planned=await codebase_call(name,args,base,"plan",revision=(request.get("trusted")or{}).get("codebase_revision"))
-        if planned["status"]!="success" or planned["output"]["route"]!="command":return planned
-        return await command(planned["output"]["argv"],base,min(max(int(request.get("timeout_seconds",120)),1),600),lock)
-    if name in ("file_list","file_read","file_search","file_edit","file_write","checkout_edit"):
-        fcntl.flock(lock,fcntl.LOCK_UN)
-        return await codebase_call(name,args,base,revision=(request.get("trusted") or {}).get("codebase_revision"))
     # The lock covers dispatch only; controls never wait for tool completion.
     fcntl.flock(lock, fcntl.LOCK_UN)
     if name.startswith("code_index_") and name in {
@@ -578,7 +512,7 @@ async def execute_locked(request, lock):
         return await synchronous(source_review, base)
     if name == "source_patch":
         return await synchronous(source_patch, base, args)
-    return await synchronous(file_operation, request, base, args, name)
+    raise ValueError("Unknown tool")
 
 
 def git_capture(source, arguments, limit=LIMIT, acceptable=(0,)):
@@ -628,125 +562,6 @@ def _seed_capture(*args):return workspace_support()._seed_capture(*args)
 def _seed_inner(spec):return workspace_support()._seed_inner(spec)
 def seed_workspace(base):return workspace_support().seed_workspace(base)
 async def seed_workspace_async(base):return await workspace_support().seed_workspace_async(base)
-
-def file_operation(request, base, args, name):
-    raw = args.get("path", ".")
-    relative = Path(raw)
-    # Resolve ordinary container paths, including parent traversal and symlinks.
-    # The OS identity and container mounts determine which targets are reachable.
-    default_root = LIVE_CHECKOUT if LIVE_CHECKOUT.is_dir() else base
-    target = (relative if relative.is_absolute() else default_root / relative).resolve()
-    rootfd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
-    basefd = None
-    directory = None
-    try:
-        basefd = os.dup(rootfd)
-        parts = target.parts[1:]
-        directory = os.dup(basefd)
-        for part in parts[:-1]:
-            nextfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
-            os.close(directory)
-            directory = nextfd
-        leaf = parts[-1] if parts else "."
-        scan_limited = False
-        if name == "decision_candidates":
-            offset = args.get("offset", 0)
-            if type(offset) is not int or not 0 <= offset <= 10000:
-                raise ValueError("offset must be between 0 and 10000")
-            file_glob = args.get("file_glob")
-            recursive = args.get("recursive", False)
-            include_content = args.get("include_content", False)
-            if (file_glob is not None and (not isinstance(file_glob, str)
-                    or not file_glob or len(file_glob) > 128
-                    or "/" in file_glob or "\\" in file_glob or "\0" in file_glob)):
-                raise ValueError("file_glob must be a basename pattern of at most 128 characters")
-            if type(recursive) is not bool or type(include_content) is not bool:
-                raise ValueError("recursive and include_content must be booleans")
-            if (recursive or include_content) and file_glob is None:
-                raise ValueError("recursive and include_content require file_glob")
-            fd = os.open(leaf, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                         dir_fd=directory)
-            try:
-                names, examined = [], 0
-
-                def walk(folder, prefix="", depth=0):
-                    nonlocal examined, scan_limited
-                    with os.scandir(folder) as entries:
-                        for entry in entries:
-                            if examined >= 10000:
-                                scan_limited = True
-                                return
-                            examined += 1
-                            # Do not follow a directory or file symlink while
-                            # collecting candidates for an external model.
-                            try:
-                                relative = prefix + entry.name
-                                if len(relative.encode("utf-8")) > 512:
-                                    scan_limited = True
-                                    continue
-                            except UnicodeEncodeError:
-                                scan_limited = True
-                                continue
-                            kind = ("file" if entry.is_file(follow_symlinks=False)
-                                    else "directory" if entry.is_dir(follow_symlinks=False)
-                                    else "other")
-                            if file_glob is None or (
-                                    kind == "file"
-                                    and fnmatch.fnmatchcase(entry.name, file_glob)):
-                                names.append({"name": relative, "kind": kind})
-                            if recursive and kind == "directory":
-                                if depth >= 8:
-                                    scan_limited = True
-                                    continue
-                                child = os.open(entry.name,
-                                                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                                dir_fd=folder)
-                                try:
-                                    walk(child, relative + "/", depth + 1)
-                                finally:
-                                    os.close(child)
-
-                walk(fd)
-                names.sort(key=lambda item: item["name"])
-                page = names[offset:offset + 32]
-                if include_content:
-                    for item in page:
-                        parts = item["name"].split("/")
-                        folder = os.dup(fd)
-                        try:
-                            for part in parts[:-1]:
-                                nextfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                                 dir_fd=folder)
-                                os.close(folder)
-                                folder = nextfd
-                            source = os.open(parts[-1], os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
-                                             dir_fd=folder)
-                            try:
-                                size = os.fstat(source)
-                                if not stat.S_ISREG(size.st_mode):
-                                    raise ValueError("Candidate changed during inspection")
-                                excerpt = os.read(source, 1024)
-                                item["snippet"] = excerpt.decode("utf-8", errors="replace")
-                                item["content_truncated"] = size.st_size > len(excerpt)
-                            finally:
-                                os.close(source)
-                        finally:
-                            os.close(folder)
-                next_offset = offset + len(page)
-                return {"status": "success", "output": page,
-                        "offset": offset, "next_offset": next_offset if next_offset < len(names) else None,
-                        "total_scanned": len(names), "entries_examined": examined,
-                        "truncated": scan_limited}
-            finally:
-                os.close(fd)
-        raise ValueError("Only core directory decision reads use this helper")
-    finally:
-        if directory is not None:
-            os.close(directory)
-        if basefd is not None:
-            os.close(basefd)
-        os.close(rootfd)
-
 
 async def execute(request):
     task = asyncio.current_task()

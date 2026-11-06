@@ -111,6 +111,36 @@ fn changed_moved_or_foreign_packages_are_refused() {
     assert_eq!(refusal(&binding), "Stale package binding");
 }
 
+/// Ported from the retired Python bridge's generation test: scheme 2 also pins declared
+/// helper files, and scheme 1 bindings stay readable.
+#[test]
+fn declared_helpers_are_pinned_and_legacy_bindings_remain_readable() {
+    let fixture = fixture();
+    let manifest = json!({"id":"echo","protocol":1,"dispatch":"isolated","effect":"write",
+        "runtime":"python3","entrypoint":"runner.py","schemas":"schemas.json",
+        "tools":["echo_text"],"build":{"inputs":["runner.py","helper.py"],"assets":[]}});
+    std::fs::write(fixture.root.join("plugin.json"), manifest.to_string()).expect("manifest");
+    std::fs::write(fixture.root.join("helper.py"), "VALUE = 1").expect("helper");
+    let read = |name: &str| std::fs::read(fixture.root.join(name)).expect("package file");
+    let hashes = json!([
+        hash(&read("plugin.json")),
+        hash(&read("runner.py")),
+        hash(&read("schemas.json"))
+    ]);
+    let files = json!({"helper.py":hash(&read("helper.py")),"runner.py":hash(&read("runner.py"))});
+    let mut binding = fixture.binding();
+    binding["generation_scheme"] = json!(2);
+    binding["generation"] = json!(hash(json!([hashes, files]).to_string().as_bytes()));
+    package(&fixture.packages, &binding).expect("scheme 2 verifies");
+    let mut legacy = binding.clone();
+    legacy["generation_scheme"] = json!(1);
+    legacy["generation"] = json!(hash(hashes.to_string().as_bytes()));
+    package(&fixture.packages, &legacy).expect("scheme 1 verifies");
+    std::fs::write(fixture.root.join("helper.py"), "VALUE = 2").expect("helper");
+    let refusal = package(&fixture.packages, &binding).expect_err("stale");
+    assert_eq!(refusal.to_string(), "Stale package binding");
+}
+
 #[tokio::test]
 async fn one_frame_reaches_the_plugin_and_its_reply_comes_back() {
     if !webagent_worker::sandbox::abi().is_ok_and(|abi| abi >= 6) {
