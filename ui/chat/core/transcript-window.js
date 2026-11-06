@@ -3,7 +3,7 @@
 /** Keeps the transcript DOM to a bounded slice of the session's messages. render(item) draws one row; paint() runs once after a batch. */
 export function mountTranscriptWindow({scroller,inner,getProfile,render,paint,storage=globalThis.localStorage}) {
   const abort=new AbortController();
-  let id=null,all=[],start=0,end=0,busy=false,saveTimer=0;
+  let id=null,all=[],start=0,end=0,busy=false,saveTimer=0,landing=null,landTimers=[];
   // Rows that arrive (for example from a queue refresh) before open() are merged into its window.
   let early=new Map();
   /** Reads the live profile; a missing or disabled section renders every message as before. */
@@ -17,8 +17,11 @@ export function mountTranscriptWindow({scroller,inner,getProfile,render,paint,st
   function draw(from,to){for(let i=from;i<to;i++)render(all[i]);paint();}
   /** Removes all[from,to) rows; paint() then drops their orphaned activity groups. */
   function drop(from,to){for(let i=from;i<to;i++)rowFor(all[i])?.remove();}
-  /** Keeps the scroll offset stable while rows above the viewport change height. */
-  function keepOffset(change){const before=scroller.scrollHeight;change();scroller.scrollTop+=scroller.scrollHeight-before;}
+  /** Keeps the first visible row in place while rows above it change; correct whether or not the browser's own scroll anchoring already adjusted. */
+  function keepOffset(change){const top=scroller.getBoundingClientRect().top,ref=[...inner.querySelectorAll('[data-public-id][data-seq]')].find(node=>node.getBoundingClientRect().bottom>top),before=ref?.getBoundingClientRect().top;
+    change();if(ref?.isConnected)scroller.scrollTop+=ref.getBoundingClientRect().top-before;}
+  /** Stops re-landing a restored position once the reader moves. */
+  function stopLanding(){landing=null;landTimers.forEach(clearTimeout);landTimers=[];}
   /** Opens a session: draws the window around the saved position, or the newest messages. Returns the row to land on, if any. */
   function open(sessionId,messages){
     const merged=new Map([...early.values(),...messages].map(item=>[item.id,item]));early=new Map();
@@ -57,16 +60,19 @@ export function mountTranscriptWindow({scroller,inner,getProfile,render,paint,st
   }
   /** Saves the first visible message, or clears the position when the reader is at the latest message. */
   function save(){
-    if(!id||!config().remember)return;
+    if(!id||landing||!config().remember)return;
     const atTail=end===all.length&&scroller.scrollHeight-scroller.clientHeight-scroller.scrollTop<=config().threshold/4;
     if(atTail){writeSaved(0);return;}
     const top=scroller.getBoundingClientRect().top;
     const row=[...inner.querySelectorAll('[data-public-id][data-seq]')].find(node=>node.getBoundingClientRect().bottom>top);
     writeSaved(row?Number(row.dataset.seq):0);
   }
+  for(const type of ['wheel','touchstart','pointerdown','keydown'])scroller.addEventListener(type,stopLanding,{passive:true,signal:abort.signal});
   scroller.addEventListener('scroll',()=>{update();clearTimeout(saveTimer);saveTimer=setTimeout(save,250);},{passive:true,signal:abort.signal});
   return {open,accept,update,
+    /** Lands a restored row at the top and re-lands it while late layout (images, activity groups) settles, until the reader scrolls. */
+    land(row){stopLanding();landing=row;const go=()=>{if(landing===row&&row.isConnected)row.scrollIntoView({block:'start'});};go();landTimers=[100,300,700,1200].map(ms=>setTimeout(go,ms));landTimers.push(setTimeout(stopLanding,1300));},
     /** Forgets the session; the next open starts a fresh window. */
-    reset(){id=null;all=[];early=new Map();start=end=0;clearTimeout(saveTimer);},
-    destroy(){clearTimeout(saveTimer);abort.abort();}};
+    reset(){stopLanding();id=null;all=[];early=new Map();start=end=0;clearTimeout(saveTimer);},
+    destroy(){stopLanding();clearTimeout(saveTimer);abort.abort();}};
 }

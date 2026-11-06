@@ -6,7 +6,7 @@ function fixture(profile={},saved=new Map()) {
   const inner={get children(){return rows;},querySelectorAll:()=>rows};
   const scroller={scrollTop:0,clientHeight:400,get scrollHeight(){return rows.length*100;},getBoundingClientRect:()=>({top:0}),
     addEventListener(name,fn){listeners[name]=fn;}};
-  const row=item=>{const node={dataset:{publicId:item.id,seq:String(item.seq)},remove(){rows.splice(rows.indexOf(node),1);},getBoundingClientRect:()=>({bottom:rows.indexOf(node)*100+100-scroller.scrollTop})};return node;};
+  const row=item=>{const node={dataset:{publicId:item.id,seq:String(item.seq)},remove(){rows.splice(rows.indexOf(node),1);},get isConnected(){return rows.includes(node);},getBoundingClientRect:()=>({top:rows.indexOf(node)*100-scroller.scrollTop,bottom:rows.indexOf(node)*100+100-scroller.scrollTop})};return node;};
   const render=item=>{if(rows.some(node=>node.dataset.publicId===item.id))return;const at=rows.findIndex(node=>Number(node.dataset.seq)>item.seq);rows.splice(at<0?rows.length:at,0,row(item));};
   let paints=0;const storage={getItem:key=>saved.get(key)??null,setItem:(key,value)=>saved.set(key,value),removeItem:key=>saved.delete(key)};
   const context={AbortController,setTimeout:fn=>{listeners.timer=fn;return 1;},clearTimeout(){},Number,Math,String};
