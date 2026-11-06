@@ -47,6 +47,8 @@ The agent's Browser Control settings hold an allow list and a block list of host
 
 Each successful screenshot is saved as an attachment of your final reply in this run, so the user sees it under that message; the result carries that `attachment`, or `attachment_error` when it could not be saved. Inputs, textareas, secret-marked nodes and credentials are masked before capture. `browser_record` frames attach the same way when recording stops.
 
+`browser_crashed` means the page's tab died (often from running out of memory) and the browser was closed; sign in or navigate again to open a fresh one, and avoid repeating the step that crashed it.
+
 ## Sessions
 
 One browser per chat session, at most two at once on the server; a session closes after 180 seconds idle. After an uncertain input or timeout, read the page before another action; nothing replays clicks, typing or navigation.

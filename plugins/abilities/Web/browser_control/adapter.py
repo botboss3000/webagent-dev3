@@ -45,6 +45,7 @@ IDLE_SECONDS=180
 READ_FRESH_SECONDS=120
 PAGE_TIMEOUT=10
 CALL_TIMEOUT=20
+SETTLE_MS=5000
 # URL parameters the app itself writes. Invite and embed authentication parameters stay excluded.
 APP_PARAMS={"tab","agent","agentView","agentScope","appView","session_id","article","path","job_id","theme","window"}
 # Presets with a touch screen also emulate mobile media queries.
@@ -456,7 +457,9 @@ def chrome_factory(profile,origin,*,offline=False,proxy=None):
     for argument in ("--headless=new","--no-sandbox","--disable-dev-shm-usage",
         "--disable-background-networking","--disable-extensions","--disable-sync",
         "--no-first-run","--no-default-browser-check","--disk-cache-size=1048576",
-        "--media-cache-size=1048576","--window-size=1280,900"):
+        "--media-cache-size=1048576","--window-size=1280,900",
+        # A runaway page then crashes its own tab instead of exhausting the shared container's memory.
+        "--js-flags=--max-old-space-size=512"):
         options.add_argument(argument)
     options.add_argument("--user-data-dir="+str(profile))
     # Unrelated origins cannot receive browser network traffic. Only the fixed
@@ -774,7 +777,10 @@ class BrowserService:
             if action=="login" or (action=="navigate" and state.signed_in):
                 route=validate_url(args["url"],trusted) if action=="navigate" else validate_path(args.get("path","/app"),trusted)
                 state.observed=None;state.driver.get(self.origin+route);self.acted(state,"navigate");self.apply_viewport(state);self.safe_url(state)
-                result={"url":self.origin+route,"signed_in":True,"identity_verified":True,"user_id":state.user}
+                # The app keeps rendering after the load event; reads before it settles can come back empty.
+                settled=self.wait_for(state,{"condition":"quiet","quiet_ms":500,"timeout_ms":SETTLE_MS})
+                result={"url":self.origin+route,"signed_in":True,"identity_verified":True,"user_id":state.user,
+                    "settled":settled["met"],"settle_ms":settled["elapsed_ms"]}
             elif action=="navigate":
                 url=validate_url(args["url"],trusted)
                 state.observed=None;state.driver.get(url);self.acted(state,"navigate");self.apply_viewport(state)
@@ -875,8 +881,12 @@ class BrowserService:
         except Rejected as error:
             # Rejection messages are fixed strings in this file, never page or credential text.
             return {"status":"error","error_kind":"browser_invalid_request","output":"Private browser request rejected: "+str(error)}
-        except Exception:
-            return {"status":"error","error_kind":"browser_backend_failed","output":"Private browser backend failed; credentials were not returned"}
+        except Exception as error:
+            # WebDriver messages can echo page text, so only the exception type and a fixed crash test are used.
+            if "tab crashed" in str(error) or type(error).__name__ in {"InvalidSessionIdException","NoSuchWindowException"}:
+                if isinstance(sid,str):await asyncio.to_thread(self.drop,sid)
+                return {"status":"error","error_kind":"browser_crashed","output":"The browser tab crashed (often out of memory) and was closed; sign in or navigate again to open a fresh one"}
+            return {"status":"error","error_kind":"browser_backend_failed","output":"Private browser backend failed ("+type(error).__name__+"); credentials were not returned"}
         finally:
             if not operation.done():
                 operation.add_done_callback(lambda task:task.exception() if not task.cancelled() else None)

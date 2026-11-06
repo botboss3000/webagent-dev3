@@ -44,6 +44,7 @@ class Driver:
         if "V3_TARGET" in script:
             return {"allowed":True,"secret":args[0]=="#password","href":
                 "https://outside.invalid/" if args[0]=="#external" else "","tag":"input"}
+        if "V3_CHECK" in script:return True
         if "V3_MASK" in script:self.masked_secrets=args;self.revision+=1;return 1
         if "V3_UNMASK" in script:self.revision+=1;return None
         raise AssertionError("Unexpected native script")
@@ -103,6 +104,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         result=await self.call("login_as_current_user",path="/app?tab=agents&agent=shared_default&agentView=abilities")
         self.assertEqual(result["status"],"success")
         self.assertNotIn(self.trusted["cookie"],json.dumps(result))
+        self.assertTrue(result["settled"])
         self.assertEqual(self.drivers[0].cookies[0]["name"],"v3_session")
         self.assertTrue(self.drivers[0].cookies[0]["httpOnly"])
         self.assertTrue(self.drivers[0].cookies[0]["secure"])
@@ -329,6 +331,17 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.call(action="read",user_id="foreign"))["status"],"error")
         self.trusted["expires_at"]=time.time()-1
         self.assertEqual((await self.call(action="read"))["status"],"error")
+    async def test_crashed_tab_is_named_and_closed_and_other_failures_name_their_type(self):
+        await self.call("login_as_current_user")
+        crashed=self.drivers[-1];crashed.execute_script=lambda *args:(_ for _ in ()).throw(RuntimeError("tab crashed"))
+        result=await self.call(action="read")
+        self.assertEqual(result["error_kind"],"browser_crashed")
+        self.assertTrue(crashed.closed);self.assertNotIn(self.sid,self.service.states)
+        await self.call("login_as_current_user")
+        self.drivers[-1].execute_script=lambda *args:(_ for _ in ()).throw(KeyError(self.trusted["cookie"]))
+        result=await self.call(action="read")
+        self.assertEqual(result["error_kind"],"browser_backend_failed");self.assertIn("(KeyError)",result["output"])
+        self.assertNotIn(self.trusted["cookie"],json.dumps(result))
     async def test_recorder_has_real_bounded_frames_and_cancellation_closes(self):
         start=await self.service.record({"action":"start"},self.base,self.trusted)
         self.assertTrue(start["recording"])
