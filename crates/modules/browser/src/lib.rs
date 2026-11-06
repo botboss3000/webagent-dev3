@@ -26,6 +26,12 @@ pub const ABILITY: &str = "browser_extension";
 pub const SERVER_ABILITY: &str = "browser_control";
 /// Most hosts in one Browser Control site list.
 pub const SERVER_SITES_MAX: usize = 200;
+/// Browser Control's setting for signing in to this app on navigation; on unless set to false.
+pub const SIGN_IN_SETTING: &str = "sign_in_app";
+/// How long a signed-in browser session lasts. Each call still gets at most a ten-minute lease.
+pub const SIGN_IN_SECS: u64 = 1800;
+/// A signed-in session this close to its end is replaced by a new one on the next call.
+pub const RENEW_SECS: u64 = 120;
 
 /// A queued action nobody fetches within this window fails as not started.
 pub const OFFLINE_SECS: u64 = 30;
@@ -75,6 +81,17 @@ pub fn server_sites(setting: &str) -> Vec<String> {
         })
         .take(SERVER_SITES_MAX)
         .collect()
+}
+
+/// Whether a Browser Control call opens this app signed in: a `navigate` to a URL on the app's
+/// own `origin`, unless the agent passed `signed_in: false` or the `setting` is off.
+pub fn signs_in(args: &Value, origin: &str, setting: &Value) -> bool {
+    args["action"] == "navigate"
+        && args["signed_in"] != false
+        && *setting != false
+        && args["url"]
+            .as_str()
+            .is_some_and(|url| url == origin || url.starts_with(&format!("{origin}/")))
 }
 
 /// Whether `url` is an http(s) address on one of `sites` or their subdomains.
@@ -177,6 +194,42 @@ mod tests {
             ["example.com", "docs.rs"]
         );
         assert_eq!(super::server_sites(&"a.test ".repeat(300)).len(), 200);
+    }
+    #[test]
+    fn navigation_to_the_app_origin_signs_in_unless_turned_off() {
+        let origin = "https://app.example";
+        let navigate = |url: &str| json!({"action":"navigate","url":url});
+        assert!(signs_in(
+            &navigate("https://app.example/app?tab=builds"),
+            origin,
+            &Value::Null
+        ));
+        assert!(signs_in(
+            &navigate("https://app.example"),
+            origin,
+            &json!(true)
+        ));
+        assert!(!signs_in(
+            &navigate("https://app.example/app"),
+            origin,
+            &json!(false)
+        ));
+        for url in [
+            "https://app.example.evil/app",
+            "https://app.example@evil.test/",
+            "http://app.example/app",
+            "https://other.example/",
+        ] {
+            assert!(!signs_in(&navigate(url), origin, &Value::Null), "{url}");
+        }
+        let signed_out =
+            json!({"action":"navigate","url":"https://app.example/app","signed_in":false});
+        assert!(!signs_in(&signed_out, origin, &Value::Null));
+        assert!(!signs_in(
+            &json!({"action":"read","url":"https://app.example/app"}),
+            origin,
+            &Value::Null
+        ));
     }
     #[test]
     fn sites_accept_pasted_urls_and_wildcards() {

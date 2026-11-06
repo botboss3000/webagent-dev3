@@ -325,7 +325,7 @@ async fn workspace_receipts_run_once_and_replay() {
 }
 
 #[tokio::test]
-async fn diagnostics_and_browser_links_stay_in_the_session() {
+async fn diagnostics_stay_in_the_session() {
     let dir = root();
     let host = Fake::new(dir.path()).await;
     let own = call(&host, "read_diagnostics", json!({})).await.unwrap();
@@ -334,22 +334,6 @@ async fn diagnostics_and_browser_links_stay_in_the_session() {
         .await
         .unwrap();
     assert_eq!(bad["error_kind"], "diagnostics_unavailable");
-    let link = call(&host, "dev_browser_url", json!({})).await.unwrap();
-    assert!(link["output"]["url"]
-        .as_str()
-        .unwrap()
-        .ends_with(&format!("/app?session_id={SID}")));
-    let foreign = json!({"path":"/app?session_id=other"});
-    let rejected = call(&host, "dev_browser_url", foreign).await.unwrap();
-    assert_eq!(rejected["status"], "rejected");
-    assert!(rejected["output"].as_str().unwrap().contains("session_id"));
-    let outside = call(&host, "dev_browser_url", json!({"path":"/"}))
-        .await
-        .unwrap();
-    assert!(outside["output"]
-        .as_str()
-        .unwrap()
-        .contains("outside the allowed routes"));
 }
 
 #[tokio::test]

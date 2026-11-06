@@ -3,15 +3,13 @@
   "kind": "ability",
   "icon": "activity",
   "color": "#e0af68",
-  "description": "Read sanitized V3 run diagnostics, and sign the Browser Control browser in to the V3 development app as the current user so it can inspect the live app: rendered text, sizes, colours, timing, animations and screenshots at phone and desktop sizes.",
-  "skill_summary": "Typed run diagnostics, development app URLs, and sign-in that lets Browser Control inspect the live V3 app as the current user.",
+  "description": "Read sanitized V3 run diagnostics: the current session's runs, checkpoints and context assembly, without model text or credentials.",
+  "skill_summary": "Typed, sanitized run diagnostics for the current session.",
   "migration_note": "Compiled V3 adapter, scoped policy and configuration passed focused tests and authenticated V3 API acceptance. Execution still requires applicable installation, account-tier, agent, membership and session grants.",
   "order": 2,
   "placeholder": false,
   "tools": [
-    "read_diagnostics",
-    "login_as_current_user",
-    "dev_browser_url"
+    "read_diagnostics"
   ],
   "readiness": "ready",
   "config": {}

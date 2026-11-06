@@ -30,6 +30,7 @@ class Element:
 class Driver:
     def __init__(self):self.current_url="";self.identity="admin";self.csrf=str(uuid.uuid4());self.cookies=[];self.revision=0
     clicks=0
+    ready="ready"
     escape_on_click=False
     closed=False
     failure=None
@@ -40,6 +41,7 @@ class Driver:
         return Element(self,selector)
     def execute_script(self,script,*args):
         if "V3_OBSERVE" in script:return self.revision
+        if "V3_BOOT" in script:return self.ready
         if "V3_READ" in script:return {"text":"Visible bounded text "+args[1]+" "+self.csrf,"missing":False,"truncated":False}
         if "V3_TARGET" in script:
             return {"allowed":True,"secret":args[0]=="#password","href":
@@ -70,7 +72,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         if "path" in args and name=="browser_read":args["url"]=args.pop("path")
         return await self.service.call(name,args,self.base,self.trusted)
     async def test_optional_action_schema_defaults_preserve_boundaries(self):
-        self.assertEqual((await self.call("login_as_current_user",path=""))["status"],"success")
+        self.assertEqual((await self.call(action="navigate",url="/app"))["status"],"success")
         for action in ("read","screenshot","close"):
             result=await self.call(action=action,path="",selector="",text="")
             self.assertEqual(result["status"],"success",(action,result))
@@ -92,7 +94,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("text+=chunk+'\\n';",browser.READ_SCRIPT)
         self.assertNotIn("text+=chunk+'\n';",browser.READ_SCRIPT)
     async def test_identity_csrf_is_masked_in_read_and_screenshot(self):
-        await self.call("login_as_current_user",path="/api/v3/auth/me")
+        await self.call(action="navigate",url="/api/v3/auth/me")
         csrf=self.drivers[0].csrf
         read=await self.call(action="read")
         self.assertNotIn(csrf,read["text"])
@@ -101,10 +103,10 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(shot["status"],"success")
         self.assertEqual(self.drivers[0].masked_secrets,(self.trusted["cookie"],csrf))
     async def test_login_private_cookie_fixed_origin_and_current_routes(self):
-        result=await self.call("login_as_current_user",path="/app?tab=agents&agent=shared_default&agentView=abilities")
+        result=await self.call(action="navigate",url="/app?tab=agents&agent=shared_default&agentView=abilities")
         self.assertEqual(result["status"],"success")
         self.assertNotIn(self.trusted["cookie"],json.dumps(result))
-        self.assertTrue(result["settled"])
+        self.assertTrue(result["ready"])
         self.assertEqual(self.drivers[0].cookies[0]["name"],"v3_session")
         self.assertTrue(self.drivers[0].cookies[0]["httpOnly"])
         self.assertTrue(self.drivers[0].cookies[0]["secure"])
@@ -117,7 +119,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.call(action="navigate",path="/api/v3/auth/me"))["status"],"success")
     async def test_current_app_routes_viewport_page_errors_and_named_rejections(self):
         origin=browser.ORIGIN
-        await self.call("login_as_current_user")
+        await self.call(action="navigate",url="/app")
         for path in ["/app?tab=app","/app?tab=builds&job_id=job-1","/app?tab=agents&agent=shared_default&agentView=identity&agentScope=sessions",
                      "/app?tab=app&appView=files&path=/notes/today.md","/app?tab=session-metrics"]:
             self.assertEqual((await self.call(action="navigate",path=path))["status"],"success",path)
@@ -157,7 +159,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(clicked["target"],{"tag":"input","label":""})
     async def test_measure_wait_animations_scroll_press_and_emulate(self):
         import types
-        await self.call("login_as_current_user")
+        await self.call(action="navigate",url="/app")
         driver=self.drivers[0];original=driver.execute_script;polls=[];focus={"tag":"button","id":"next","label":"Next","secret":False};measured_args=[]
         cookie=self.trusted["cookie"]
         def script(source,*args):
@@ -269,11 +271,11 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("browser_input",(await call("browser_read",action="click",selector="#button"))["output"])
         self.assertIn("browser_read",(await call("browser_input",action="read"))["output"])
         self.assertEqual((await call("browser_input",action="click",selector="#button"))["status"],"success")
-        self.assertIn("needs Diagnostics",(await call("login_as_current_user"))["output"])
+        self.assertIn("signed_in must be",(await call("browser_read",action="navigate",url="https://example.com/",signed_in="yes"))["output"])
         # Signing in replaces the signed-out browser with one locked to the development origin.
         self.service.factory=lambda profile,origin,**kwargs:(self.drivers.append(Driver()) or self.drivers[-1])
         self.drivers.append(None);self.drivers.pop()
-        signed=await self.call("login_as_current_user")
+        signed=await self.call(action="navigate",url="/app")
         self.assertEqual(signed["status"],"success",signed);self.assertTrue(signed["signed_in"])
         self.assertIn("Only exact relative",(await self.call(action="navigate",url="https://example.com/"))["output"])
     async def test_fresh_read_before_each_input_and_secret_targets_blocked(self):
@@ -319,7 +321,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
             result=await self.call(action="screenshot")
             self.assertEqual(result["status"],"error")
     async def test_rotation_expiry_unknown_fields_and_errors_never_echo_cookie(self):
-        await self.call("login_as_current_user")
+        await self.call(action="navigate",url="/app")
         original=self.drivers[0]
         self.trusted["cookie"]=str(uuid.uuid4());self.trusted["generation"]="second"
         self.assertEqual((await self.call(action="read"))["status"],"success")
@@ -331,13 +333,24 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.call(action="read",user_id="foreign"))["status"],"error")
         self.trusted["expires_at"]=time.time()-1
         self.assertEqual((await self.call(action="read"))["status"],"error")
+    async def test_signed_in_navigation_waits_for_boot_and_names_where_it_stopped(self):
+        self.assertEqual((await self.call(action="navigate",url="/app"))["ready"],True)
+        self.drivers[-1].ready="signed_out"
+        result=await self.call(action="navigate",url="/app?tab=builds")
+        self.assertEqual(result["error_kind"],"app_signed_out")
+        self.drivers[-1].ready="booting"
+        with mock.patch.object(browser,"READY_MS",300):
+            result=await self.call(action="navigate",url="/app?tab=builds")
+        self.assertEqual(result["error_kind"],"app_boot_stalled");self.assertIn("page_errors",result)
+        # API routes are JSON, not the app, so they do not wait for boot.
+        self.assertNotIn("ready",await self.call(action="navigate",url="/api/v3/auth/me"))
     async def test_crashed_tab_is_named_and_closed_and_other_failures_name_their_type(self):
-        await self.call("login_as_current_user")
+        await self.call(action="navigate",url="/app")
         crashed=self.drivers[-1];crashed.execute_script=lambda *args:(_ for _ in ()).throw(RuntimeError("tab crashed"))
         result=await self.call(action="read")
         self.assertEqual(result["error_kind"],"browser_crashed")
         self.assertTrue(crashed.closed);self.assertNotIn(self.sid,self.service.states)
-        await self.call("login_as_current_user")
+        await self.call(action="navigate",url="/app")
         self.drivers[-1].execute_script=lambda *args:(_ for _ in ()).throw(KeyError(self.trusted["cookie"]))
         result=await self.call(action="read")
         self.assertEqual(result["error_kind"],"browser_backend_failed");self.assertIn("(KeyError)",result["output"])
@@ -361,14 +374,14 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         def wrong(profile,origin):
             driver=Driver();driver.identity="another-user";driver.typed=[];self.drivers.append(driver);return driver
         self.service.factory=wrong
-        result=await self.call("login_as_current_user")
+        result=await self.call(action="navigate",url="/app")
         self.assertEqual(result["status"],"error")
         self.assertTrue(self.drivers[-1].closed)
         folder=self.root/"private"/self.sid/"chrome"
         if folder.exists():
             import shutil;shutil.rmtree(folder)
         folder.symlink_to(self.base,target_is_directory=True)
-        self.assertEqual((await self.call("login_as_current_user"))["status"],"error")
+        self.assertEqual((await self.call(action="navigate",url="/app"))["status"],"error")
         self.assertEqual(list(self.base.iterdir()),[])
 
 @unittest.skipUnless(os.environ.get("V3_BROWSER_REAL_TEST")=="1","requires image Chromium/Selenium; run explicitly")
@@ -382,7 +395,7 @@ class RealBrowserTests(unittest.IsolatedAsyncioTestCase):
                     body=json.dumps({"user_id":"admin" if self.headers.get("Cookie")=="v3_session="+cookie else "unauthenticated"}).encode()
                     media="application/json"
                 elif self.path.startswith("/app"):
-                    body=b'<html><body><p id="text">Fixture ready</p><button id="go" onclick="document.getElementById(\'text\').textContent=\'Clicked\'">Go</button><input id="password" type="password" value="PRIVATE_VALUE"></body></html>'
+                    body=b'<html><body><script>window.__boot={revealed:true}</script><p id="text">Fixture ready</p><button id="go" onclick="document.getElementById(\'text\').textContent=\'Clicked\'">Go</button><input id="password" type="password" value="PRIVATE_VALUE"></body></html>'
                     media="text/html"
                 else:body=b"ready";media="text/plain"
                 self.send_response(200);self.send_header("Content-Type",media);self.end_headers();self.wfile.write(body)
@@ -394,7 +407,7 @@ class RealBrowserTests(unittest.IsolatedAsyncioTestCase):
                 "generation":"fixture","expires_at":time.time()+300,"allowed_session_ids":[sid]}
             service=browser.BrowserService(root/"private",test_origin="http://127.0.0.1:"+str(server.server_port))
             try:
-                login=await service.call("login_as_current_user",{},base,trusted)
+                login=await service.call("browser_read",{"action":"navigate","url":"/app"},base,trusted)
                 self.assertEqual(login["status"],"success",login)
                 self.assertNotIn(cookie,json.dumps(login))
                 read=await service.call("browser_read",{"action":"read"},base,trusted)
@@ -426,12 +439,12 @@ class PackageTests(unittest.IsolatedAsyncioTestCase):
                      "generation":"fixture","expires_at":time.time()+300,"allowed_session_ids":[sid]}
             def broken(*args):raise RuntimeError(trusted["cookie"])
             service=browser.BrowserService(Path(tmp)/"private",driver_factory=broken)
-            failed=await service.call("login_as_current_user",{},base,trusted)
+            failed=await service.call("browser_read",{"action":"navigate","url":"/app"},base,trusted)
             self.assertEqual(failed["error_kind"],"browser_startup_failed")
             self.assertNotIn(trusted["cookie"],json.dumps(failed))
             wrong=Driver();wrong.identity="other"
             service.factory=lambda *args:wrong
-            failed=await service.call("login_as_current_user",{},base,trusted)
+            failed=await service.call("browser_read",{"action":"navigate","url":"/app"},base,trusted)
             self.assertEqual(failed["error_kind"],"browser_authentication_failed")
             self.assertTrue(wrong.closed)
 if __name__=="__main__":unittest.main()

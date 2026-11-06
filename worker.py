@@ -289,8 +289,7 @@ BROWSER_TOOLS=["browser_read","browser_input","browser_record"]
 BROWSER_MANIFEST={"version":1,"id":"browser_control","protocol":1,"interface":1,"runtime":"python3","entrypoint":"runner.py",
     "tools":BROWSER_TOOLS,"build":{"inputs":["runner.py","adapter.py","egress.py"],"dependencies":[],"toolchain":"image-python3",
     "flags":["-I","-B"],"assets":["browser_control.json","browser_control.skill.md","tools"]}}
-# Diagnostics' sign-in runs in the same per-session browser process.
-BROWSER_FRAMES=("login_as_current_user","login_as_current_user_v3",*BROWSER_TOOLS)
+BROWSER_FRAMES=tuple(BROWSER_TOOLS)
 def browser_package():
     """Resolve one immutable native package, checking its full declared executable inputs."""
     releases=Path("/opt/v3/assets/releases")
@@ -383,9 +382,10 @@ class BrowserPackages:
                         self.sessions[sid]=item
                         if self.reaper is None:self.reaper=asyncio.create_task(self.reap())
             async with item["lock"]:
-                item["touched"]=time.monotonic()
+                # Rust renews a signed-in session's lease on each call; the process lives as long as it.
+                item["touched"]=time.monotonic();item["expires"]=trusted["expires_at"]
                 result=await asyncio.wait_for(self.exchange(item,name,args,base,trusted),25)
-                if result["status"]=="uncertain"or result.get("closed")or(result["status"]!="success"and name in ("login_as_current_user","login_as_current_user_v3")):
+                if result["status"]=="uncertain"or result.get("closed")or result.get("error_kind")=="browser_authentication_failed":
                     if not artifact:await self.drop(sid,item)
                 return result
         except asyncio.CancelledError:

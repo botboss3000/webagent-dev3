@@ -5,12 +5,6 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Map, Value};
 use webagent_configuration::digest;
 
-/// The public origin development browser links point at.
-#[must_use]
-pub fn public_origin() -> String {
-    std::env::var("V3_PUBLIC_ORIGIN").unwrap_or_else(|_| "https://dev.webagent.live".into())
-}
-
 /// A caller-chosen idempotency key: 1–80 ASCII letters, digits, `_` or `-`.
 pub fn request_id(args: &Value) -> Result<&str> {
     let value = args["request_id"].as_str().unwrap_or("");
@@ -211,43 +205,6 @@ pub fn live_git_operation(name: &str, args: &Value) -> Result<bool> {
     Ok(true)
 }
 
-/// Checks whether a development browser may open `path` for session `sid` and `agent`:
-/// the app for this session and agent only, the caller's identity, or this session's API.
-/// The error names the cause so the agent can correct its argument.
-pub fn valid_development_path(path: &str, sid: &str, agent: &str) -> Result<(), &'static str> {
-    if path.len() > 1024 {
-        return Err("path is longer than 1024 characters");
-    }
-    if !path.starts_with('/') || path.starts_with("//") {
-        return Err("path must be relative to the app origin and start with a single /");
-    }
-    if path.contains('\\') || path.chars().any(char::is_control) {
-        return Err("path must not contain backslashes or control characters");
-    }
-    if path == "/app" || path.starts_with("/app?") {
-        let url = url::Url::parse(&format!("{}{path}", public_origin()))
-            .map_err(|_| "path is not a valid URL path")?;
-        for (key, value) in url.query_pairs() {
-            if key == "session_id" && value != sid {
-                return Err(
-                    "session_id must be the current session; omit it or use this session's ID",
-                );
-            }
-            if key == "agent" && value != agent {
-                return Err("agent must be the current session's agent");
-            }
-        }
-        return Ok(());
-    }
-    if path == "/api/v3/auth/me" || path.starts_with(&format!("/api/v3/sessions/{sid}/")) {
-        return Ok(());
-    }
-    Err(
-        "path is outside the allowed routes: /app or /app?<query> for this session, \
-         /api/v3/auth/me, or /api/v3/sessions/<current session>/...",
-    )
-}
-
 /// The run `read_diagnostics` targets: the current run for an omitted, empty or
 /// `current` ID, a canonical UUID otherwise, and `None` for anything else.
 #[must_use]
@@ -441,18 +398,6 @@ mod tests {
         assert_eq!(git("push", "webagent-v3").ok(), Some(false));
         assert!(git("add", "__root__").is_err());
         assert!(live_git_operation("commit_and_push", &json!({"repo":"__root__"})).is_err());
-    }
-
-    #[test]
-    fn routes_are_current_session_and_fixed_origin() {
-        assert!(valid_development_path("/app?session_id=own", "own", "agent-a").is_ok());
-        assert!(valid_development_path("/app?session_id=other", "own", "agent-a").is_err());
-        assert!(valid_development_path("//evil/app", "own", "agent-a").is_err());
-        assert!(valid_development_path("/api/v3/sessions/other/", "own", "agent-a").is_err());
-        assert!(
-            valid_development_path("/app?session_id=own&session_id=other", "own", "agent-a")
-                .is_err()
-        );
     }
 
     #[test]

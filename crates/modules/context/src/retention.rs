@@ -255,7 +255,6 @@ pub fn eligible_tools() -> &'static [&'static str] {
         "terminal_list",
         "v3_source_list",
         "v3_source_read",
-        "dev_browser_url",
         "get_tunnel_url",
     ]
 }

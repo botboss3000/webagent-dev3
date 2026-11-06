@@ -56,7 +56,7 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         return await self.bridge.call(name,args,base,trusted)
     async def test_state_recording_hot_revision_and_stateless_artifact(self):
         base,trusted=self.identity()
-        login=await self.call(base,trusted,"login_as_current_user")
+        login=await self.call(base,trusted,action="navigate",url="/app")
         self.assertEqual(login["status"],"success",login);pid=self.bridge.sessions[base.name]["process"].pid
         self.revision="new";self.hash="b"*64
         read=await self.call(base,trusted,action="read");self.assertTrue(read["fresh_for_input"])
@@ -72,16 +72,16 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         got=await self.call(base,trusted,"administrator_artifact_get",artifact_id=artifact)
         self.assertEqual(got["status"],"success",got);self.assertTrue(got["png_base64"])
         self.assertEqual(got["plugin_revision"],"new");self.assertEqual(len(self.bridge.sessions),0)
-        self.assertEqual((await self.call(base,trusted,"login_as_current_user"))["plugin_revision"],"new")
+        self.assertEqual((await self.call(base,trusted,action="navigate",url="/app"))["plugin_revision"],"new")
         self.assertNotEqual(self.bridge.sessions[base.name]["process"].pid,pid)
     async def test_two_sessions_capacity_rotation_expiry_and_quiescence(self):
         first=self.identity();second=self.identity();third=self.identity()
-        for pair in (first,second):self.assertEqual((await self.call(*pair,"login_as_current_user"))["status"],"success")
-        rejected=await self.call(*third,"login_as_current_user")
+        for pair in (first,second):self.assertEqual((await self.call(*pair,action="navigate",url="/app"))["status"],"success")
+        rejected=await self.call(*third,action="navigate",url="/app")
         self.assertEqual(rejected["error_kind"],"browser_capacity")
         base,trusted=first;old=self.bridge.sessions[base.name]["process"]
         trusted["cookie"]=str(uuid.uuid4())
-        self.assertEqual((await self.call(base,trusted,"login_as_current_user"))["status"],"success")
+        self.assertEqual((await self.call(base,trusted,action="navigate",url="/app"))["status"],"success")
         self.assertIsNotNone(old.returncode)
         trusted["expires_at"]=time.time()-1
         self.assertEqual((await self.call(base,trusted,action="read"))["status"],"error")
@@ -89,7 +89,7 @@ class SupervisorTests(unittest.IsolatedAsyncioTestCase):
         base,trusted=second;old=self.bridge.sessions[base.name]["process"]
         await self.bridge.drop(base.name);self.assertIsNotNone(old.returncode)
     async def test_broken_transport_for_input_is_uncertain(self):
-        base,trusted=self.identity();await self.call(base,trusted,"login_as_current_user")
+        base,trusted=self.identity();await self.call(base,trusted,action="navigate",url="/app")
         process=self.bridge.sessions[base.name]["process"]
         process.kill();await process.wait()
         # Break after admission, rather than silently starting a replacement.

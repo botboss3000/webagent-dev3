@@ -29,7 +29,11 @@
       },
       "url": {
         "type": "string",
-        "description": "navigate only: signed out, a full http or https URL; signed in through Diagnostics, a development route such as /app?tab=agents"
+        "description": "navigate only: a full http or https URL. A WebAgent app URL opens signed in as the current user and returns once the app has booted"
+      },
+      "signed_in": {
+        "type": "boolean",
+        "description": "navigate only: false opens the WebAgent app signed out (default true)"
       },
       "selector": {
         "type": "string",

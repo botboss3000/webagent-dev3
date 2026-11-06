@@ -3,8 +3,8 @@
   "kind": "ability",
   "icon": "app-window",
   "color": "#7aa2f7",
-  "description": "Look at public web pages in a private server browser: read rendered text, measure element sizes and positions, sample exact colours, time page loads and interactions, inspect animations, check phone, tablet and desktop sizes and dark mode, click and type with approval, and attach screenshots to the reply. With Diagnostics, the same browser can sign in to the V3 development app.",
-  "skill_summary": "Private server browser: signed out on public sites behind an egress guard, or signed in to the V3 development app through Diagnostics; read, measure, colours, timing, animations, viewport and screenshots.",
+  "description": "Look at web pages in a private server browser: read rendered text, measure element sizes and positions, sample exact colours, time page loads and interactions, inspect animations, check phone, tablet and desktop sizes and dark mode, click and type with approval, and attach screenshots to the reply. Public sites open signed out; the WebAgent app opens signed in as the current user.",
+  "skill_summary": "Private server browser: signed out on public sites behind an egress guard, signed in as the current user on the WebAgent app; read, measure, colours, timing, animations, viewport and screenshots.",
   "order": 2,
   "placeholder": false,
   "readiness": "ready",
@@ -15,6 +15,13 @@
   },
   "config": {
     "settings": [
+      {
+        "key": "sign_in_app",
+        "label": "Sign in to WebAgent",
+        "type": "boolean",
+        "default": true,
+        "hint": "Opening the WebAgent app signs the browser in as the person chatting, with only their own permissions. Turn off to open it signed out."
+      },
       {
         "key": "allow_sites",
         "label": "Allowed sites",

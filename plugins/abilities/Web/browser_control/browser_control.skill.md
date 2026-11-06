@@ -5,7 +5,7 @@ A private Chromium browser on the WebAgent server for looking at web pages: read
 ## Modes
 
 - Signed out (the default): any public `http` or `https` site the agent's site policy allows, with a fresh private profile per chat session and nothing saved. Every request goes through an egress guard that refuses addresses that are not public: the server itself, private networks, Tailscale, cloud metadata and local names. A blocked page is rejected with its reason.
-- Signed in: Diagnostics' `login_as_current_user` signs this browser into the V3 development app as the current user. While signed in it stays on `https://dev.webagent.live`; navigate takes development routes. The sign-in lasts about ten minutes. To browse other sites again, `close` the browser; the next call opens a signed-out one.
+- Signed in: navigating to the WebAgent app (`https://dev.webagent.live/...`) signs this browser in as the person chatting, with only their own permissions, unless the agent's Sign in to WebAgent setting is off or `navigate` passes `signed_in: false`. Nothing else is needed: no sign-in step or credentials. While signed in the browser stays on the app; navigating anywhere else switches to a separate signed-out browser. The sign-in renews itself while the browser is in use.
 
 ## Site policy
 
@@ -20,7 +20,7 @@ The agent's Browser Control settings hold an allow list and a block list of host
 
 ## Pages and input
 
-- `navigate` `url`: signed out, a full `http` or `https` URL on port 80 or 443; signed in, a development route such as `/app?tab=agents&agent=<current agent>&agentView=model`. Returns the `url` opened. A blocked or failed load is rejected with its reason. Starts the clock that `wait_for` reports as `since_last_action_ms`.
+- `navigate` `url` (`signed_in`): a full `http` or `https` URL on port 80 or 443. On the WebAgent app, routes are `/app` with the parameters the app writes (`tab` with a main page ID such as `app`, `agents`, `account`, `builds` or `session-metrics`; `agent`, `agentView`, `agentScope`, `appView`, `session_id`, `article`, `path`, `job_id`, `theme`, `window`) or a bounded current-session read API such as `/api/v3/auth/me`; the agent and conversation IDs must be the current ones, and a bare `/app` opens the current conversation. A signed-in app navigation returns when the app has finished booting, with `ready: true` and `ready_ms`; read straight away. If it stops on the sign-in page it fails with `app_signed_out`; if boot does not finish within 10 s, `app_boot_stalled` with `page_errors`. Returns the `url` opened. A blocked or failed load is rejected with its reason. Starts the clock that `wait_for` reports as `since_last_action_ms`.
 - `read` (`selector`, `offset`): rendered text only, skipping hidden panels, closed menus and collapsed rows. A selector reads every match, outermost first, and reports `matches`. At most 12,000 characters per call; a `truncated` result gives `next_offset` to pass as `offset`. Results begin with `page_errors`: uncaught exceptions, console errors and failed resource loads since the previous read.
 - `browser_input` `click` `selector`, `type` `selector` `text`, `press` `key` (`selector`): input, through its own tool. Each needs a read under 120 seconds old, on the same URL, whose region (its selector, or the whole body) contains the target. Each input uses up that read. Changes elsewhere on the page, such as live timestamps, do not matter. The result reports the `target` it used (tag and visible label). Credential and password fields are refused. `press` takes one of Tab, Shift+Tab, Enter, Escape, Space, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, sent to `selector` or to the focused element, and reports the element `focused` afterwards.
 - `scroll` (`selector`, `dx`, `dy`): brings `selector` into view, or scrolls by `dx`/`dy` px. It acts on the nearest scroll container of `selector` and returns that `container`, its scroll position and maximum, and the target's box afterwards. Without a selector it scrolls the page; apps that scroll inside panels, such as the V3 app, need a selector inside the panel. It does not use up your read.
@@ -52,3 +52,11 @@ Each successful screenshot is saved as an attachment of your final reply in this
 ## Sessions
 
 One browser per chat session, at most two at once on the server; a session closes after 180 seconds idle. After an uncertain input or timeout, read the page before another action; nothing replays clicks, typing or navigation.
+
+## The WebAgent app
+
+- Main pages: the header tab buttons are `#tab-button-<page>` inside `#main-tabs` (pages include `app`, `agents`, `builds`, `account`, `session-metrics`, `wiki`, `automation`); each page mounts in `#tab-<page>`, loaded the first time it opens. On a phone the tabs are in a menu: `#mobile-nav-toggle` opens `#mobile-nav-menu`, whose buttons are `#mobile-nav-<page>`.
+- Scrolling: the page itself does not scroll; main pages scroll inside `#main-panel` and the chat inside its own panel.
+- Chat: messages are `.chat-bubble` elements, `.chat-bubble.user` and `.chat-bubble.agent`.
+- A URL naming a session opens the chat first; on a phone the page behind it loads when you switch to it.
+- Widths: every UI change is checked at phone and desktop width; the `viewport` presets emulate both.

@@ -354,16 +354,61 @@ fn install_url() -> String {
     )
 }
 
-/// How long a signed-out Browser Control authority lasts; the worker accepts at most ten minutes.
+/// The longest lease one Browser Control call gets; the worker accepts at most ten minutes.
 const SERVER_LEASE_SECS: u64 = 600;
 
-/// The authority for this session's private browser: Diagnostics' sign-in while it is still
-/// valid for this caller, so the signed-in browser keeps its profile; otherwise a signed-out
-/// authority carrying the agent's allow and block lists.
+/// The record of this session's signed-in browser: its sign-in cookie and session end.
+fn signed_key(sid: &str) -> String {
+    format!("administrator_browser:{sid}")
+}
+
+/// A new signed-in browser session for the caller, signing out any earlier one.
+async fn sign_in(
+    host: &tools::native_host::Host<'_>,
+    app: &App,
+    sid: &str,
+    account: &Value,
+    agent: &str,
+) -> Result<Value> {
+    use tools::native::NativeHost;
+    let user = host.actor();
+    if let Some(token) = app
+        .store
+        .get(&signed_key(sid))
+        .await?
+        .and_then(|old| old["cookie"].as_str().map(str::to_owned))
+    {
+        app.store.accounts_repository().logout(&token).await?;
+    }
+    let generation = account["generation"]
+        .as_str()
+        .ok_or_else(|| anyhow!("Caller unavailable"))?;
+    let session = app
+        .store
+        .accounts_repository()
+        .issue_trusted_browser_session(
+            user,
+            generation,
+            now(),
+            "Browser Control signed-in browser",
+            rules::SIGN_IN_SECS,
+        )
+        .await?;
+    let authority = json!({"session_id":sid,"user_id":user,"cookie":session.token,
+        "expires_at":session.expires,"generation":generation,
+        "agent_id":agent,"allowed_session_ids":[sid]});
+    app.store.put(&signed_key(sid), &authority).await?;
+    Ok(authority)
+}
+
+/// The authority for this session's private browser. A navigation to this app signs in as the
+/// caller (unless turned off); other calls keep a valid signed-in session, renewed near its end.
+/// A navigation anywhere else signs out, so the next browser carries the agent's site lists.
 async fn server_authority(
     host: &tools::native_host::Host<'_>,
     app: &App,
     sid: &str,
+    args: &Value,
 ) -> Result<Value> {
     use tools::native::NativeHost;
     let user = host.actor().to_owned();
@@ -372,25 +417,46 @@ async fn server_authority(
         .account_by_id(&user)
         .await?
         .ok_or_else(|| anyhow!("Caller unavailable"))?;
-    if let Some(signed) = app
-        .store
-        .get(&format!("administrator_browser:{sid}"))
-        .await?
-    {
-        if signed["user_id"] == user.as_str()
-            && signed["generation"] == account["generation"]
-            && signed["expires_at"].as_u64().unwrap_or(0) > now() + 5
-        {
-            return Ok(signed);
-        }
-    }
     let (_, _, visibility, _) = host.ability_controls(sid).await?;
     let settings = &visibility["settings"][rules::SERVER_ABILITY];
+    let origin = webagent_webapp::pages::public_origin();
+    let navigating = args["action"] == "navigate";
+    let agent = host.session_agent_id(sid).await?;
+    // One sign-in at a time, so parallel calls share a session instead of revoking each other's.
+    let _guard = app.gate.lock().await;
+    let saved = app.store.get(&signed_key(sid)).await?.filter(|signed| {
+        signed["user_id"] == user.as_str()
+            && signed["generation"] == account["generation"]
+            && signed["expires_at"].as_u64().unwrap_or(0) > now() + 5
+    });
+    if rules::signs_in(args, &origin, &settings[rules::SIGN_IN_SETTING])
+        || (!navigating && saved.is_some())
+    {
+        let mut authority = match saved {
+            Some(signed)
+                if signed["expires_at"].as_u64().unwrap_or(0) > now() + rules::RENEW_SECS =>
+            {
+                signed
+            }
+            _ => sign_in(host, app, sid, &account, &agent).await?,
+        };
+        let end = authority["expires_at"].as_u64().unwrap_or(0);
+        authority["expires_at"] = json!(end.min(now() + SERVER_LEASE_SECS));
+        return Ok(authority);
+    }
+    if navigating {
+        if let Some(old) = app.store.get(&signed_key(sid)).await? {
+            if let Some(token) = old["cookie"].as_str() {
+                app.store.accounts_repository().logout(token).await?;
+            }
+            app.store.delete(&signed_key(sid)).await?;
+        }
+    }
     let list = |key: &str| rules::server_sites(settings[key].as_str().unwrap_or(""));
     Ok(json!({
         "session_id": sid,
         "user_id": user,
-        "agent_id": host.session_agent_id(sid).await?,
+        "agent_id": agent,
         "generation": account["generation"],
         "expires_at": now() + SERVER_LEASE_SECS,
         "allowed_session_ids": [sid],
@@ -445,7 +511,7 @@ async fn execute_server(
     use tools::native::NativeHost;
     let host = tools::native_host::Host(app);
     host.authorize(call, name, args, &cancel).await?;
-    let authority = server_authority(&host, app, call.sid).await?;
+    let authority = server_authority(&host, app, call.sid, args).await?;
     let mut output = tools::execute_trusted(
         name,
         args,

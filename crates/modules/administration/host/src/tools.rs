@@ -5,7 +5,6 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
-use webagent_accounts_host::AccountsStore;
 use webagent_administration::arguments;
 use webagent_administration::tools::{authority_name, renews};
 use webagent_host_core::{digest, now};
@@ -34,7 +33,7 @@ pub async fn execute(
         sid,
         run_id,
         run,
-        agent,
+        agent: _,
         name,
         args,
         pending_id,
@@ -85,25 +84,6 @@ pub async fn execute(
             }
             None => diagnostics(host, None, sid),
         }),
-        "dev_browser_url" => {
-            let path = args["path"]
-                .as_str()
-                .filter(|value| !value.is_empty())
-                .map_or_else(|| format!("/app?session_id={sid}"), str::to_owned);
-            // A rejected path is an ordinary tool error the agent can correct, not a failure.
-            if let Err(cause) = arguments::valid_development_path(&path, sid, agent) {
-                return Ok(json!({"status":"rejected","error_kind":"invalid_path",
-                    "output":format!("dev_browser_url rejected the path: {cause}. No URL was created.")}));
-            }
-            let url = format!("{}{path}", arguments::public_origin());
-            Ok(json!({"status":"success","output":{"url":url,"authentication_required":true}}))
-        }
-        // Signs in this session's Browser Control browser; Browser Control's own tools then
-        // reuse this authority while it is valid.
-        "login_as_current_user" | "login_as_current_user_v3" => {
-            let authority = browser_authority(host, sid).await?;
-            host.worker(name, args, sid, Some(authority), cancel).await
-        }
         "v3_workspace_receipt" => {
             let id = arguments::request_id(args)?;
             let receipt = host
@@ -321,44 +301,6 @@ pub async fn cancel_task(
         return Ok(reply);
     }
     Ok(json!({"status":"success","output":{"state":"abandoned","task_id":task_id}}))
-}
-
-/// A short-lived browser session for the caller, reused while it stays valid.
-async fn browser_authority(host: &dyn AdministrationHost, sid: &str) -> Result<Value> {
-    let store = host.store();
-    let uid = host.actor();
-    let account = store
-        .account_by_id(uid)
-        .await?
-        .ok_or_else(|| anyhow!("Caller unavailable"))?;
-    let key = format!("administrator_browser:{sid}");
-    if let Some(old) = store.get(&key).await? {
-        if old["user_id"] == uid
-            && old["generation"] == account["generation"]
-            && old["expires_at"].as_u64().unwrap_or(0) > now() + 30
-        {
-            return Ok(old);
-        }
-    }
-    let generation = account["generation"]
-        .as_str()
-        .ok_or_else(|| anyhow!("Caller unavailable"))?;
-    let session = store
-        .accounts_repository()
-        .issue_trusted_browser_session(
-            uid,
-            generation,
-            now(),
-            "V3 current-caller Administrator browser",
-            600,
-        )
-        .await?;
-    let agent = host.session_agent(sid).await?;
-    let authority = json!({"session_id":sid,"user_id":uid,"cookie":session.token,
-        "expires_at":session.expires,"generation":account["generation"],"agent_id":agent,
-        "allowed_session_ids":[sid]});
-    store.put(&key, &authority).await?;
-    Ok(authority)
 }
 
 async fn git(

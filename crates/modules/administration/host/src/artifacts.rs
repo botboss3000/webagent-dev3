@@ -62,6 +62,10 @@ async fn authority(host: &dyn AdministrationHost, sid: &str) -> Result<(String, 
         browser,
         host.abilities_version()
     ]));
+    // The signed-in session can outlast the worker's ten-minute lease; hand over at most that.
+    let mut browser = browser;
+    let end = browser["expires_at"].as_u64().unwrap_or(0);
+    browser["expires_at"] = json!(end.min(now() + 600));
     Ok((fingerprint, browser))
 }
 

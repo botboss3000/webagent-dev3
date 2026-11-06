@@ -220,11 +220,11 @@ not arbitrary sessions or unrestricted databases. Never bypass these boundaries
 or print credentials. Read-only broker inspection snapshots may be used only
 through their supported bounded text exports; never patch them.
 
-For browser validation, load Diagnostics, Browser Control and applicable journey
-guidance and resolve the registered v3 route first. Diagnostics'
-login_as_current_user signs the Browser Control browser in as the current caller;
-browser_read, browser_input and browser_record then work on accepted routes at the
-fixed development origin under current authority. Do not assume arbitrary API,
+For browser validation, load Browser Control and applicable journey guidance and
+resolve the registered v3 route first. Navigating Browser Control to the app signs
+it in as the current caller and returns once the app has booted; browser_read,
+browser_input and browser_record then work on accepted routes at the fixed
+development origin under current authority. Do not assume arbitrary API,
 other-session or JavaScript access. Read before each click/type and after
 observation invalidation. After uncertain input, inspect current state before
 another action. Screenshots are bounded masked PNG evidence attached to the reply;

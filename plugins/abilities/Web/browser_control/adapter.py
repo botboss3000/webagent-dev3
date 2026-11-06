@@ -1,8 +1,8 @@
 """Browser Control engine: one private Chromium per chat session; Rust owns authority and approval.
 
 Two modes. Signed out (no cookie in the trusted authority): public http(s) sites through the
-egress guard, filtered by the agent's allow/block lists. Signed in (Diagnostics'
-login_as_current_user supplies a cookie): the fixed development origin only.
+egress guard, filtered by the agent's allow/block lists. Signed in (Rust supplies a cookie when
+the agent navigates to the WebAgent app): the fixed app origin only.
 
 Trusted cookie metadata is a separate dispatcher field, never a model argument.
 There is no caller-supplied JavaScript, origin, profile or filesystem path.
@@ -45,7 +45,8 @@ IDLE_SECONDS=180
 READ_FRESH_SECONDS=120
 PAGE_TIMEOUT=10
 CALL_TIMEOUT=20
-SETTLE_MS=5000
+# How long a signed-in navigation waits for the app to finish booting.
+READY_MS=10000
 # URL parameters the app itself writes. Invite and embed authentication parameters stay excluded.
 APP_PARAMS={"tab","agent","agentView","agentScope","appView","session_id","article","path","job_id","theme","window"}
 # Presets with a touch screen also emulate mobile media queries.
@@ -158,6 +159,14 @@ if (condition==='network_idle') {
 }
 return false;
 """
+READY_SCRIPT=r"""
+/* V3_BOOT */
+// The app's own boot signals (ui/boot/boot.js): revealed once the app is ready, curtain removed after.
+const shown=n=>n&&n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});
+if (shown(document.querySelector('input[name=password]'))) return 'signed_out';
+if (window.__boot&&window.__boot.revealed&&!document.getElementById('boot-curtain')) return 'ready';
+return 'booting';
+"""
 SCROLL_SCRIPT=r"""
 /* V3_SCROLL */
 // The app scrolls inside panels, so act on the target's nearest scroll container and say which it was.
@@ -261,6 +270,9 @@ def host_matches(host,patterns):
     return any(host==p or host.endswith("."+p) for p in patterns)
 class AuthenticationFailure(Rejected):pass
 class CapacityFailure(Rejected):pass
+class NotReady(Rejected):
+    """The app did not reach a signed-in, booted page; kind names where it stopped."""
+    def __init__(self,kind,message,errors):super().__init__(message);self.kind=kind;self.errors=errors
 def canonical_id(value):
     """Require canonical UUID spelling for private session and artifact ownership."""
     try:return isinstance(value,str) and str(uuid.UUID(value))==value
@@ -342,10 +354,8 @@ def validate_path(path,trusted):
 def validate_args(name,args):
     """Reject unknown or action-inapplicable fields before browser effects."""
     if not isinstance(args,dict):raise Rejected("Browser arguments must be an object")
-    if name in {"login_as_current_user","login_as_current_user_v3"}:
-        allowed={"path"};action="login"
-    elif name=="browser_read":
-        allowed={"action","url","selector","offset","condition","text","timeout_ms","quiet_ms","dx","dy","preset",
+    if name=="browser_read":
+        allowed={"action","url","signed_in","selector","offset","condition","text","timeout_ms","quiet_ms","dx","dy","preset",
             "color_scheme","reduced_motion","styles","points","expected_sequence"};action=args.get("action")
         if action not in READ_ACTIONS:raise Rejected("browser_read actions: "+", ".join(sorted(READ_ACTIONS))+"; click, type and press use browser_input")
     elif name=="browser_input":
@@ -356,7 +366,7 @@ def validate_args(name,args):
         if action not in {"start","stop","status"}:raise Rejected("Unsupported recorder action")
     else:raise Rejected("Unknown browser tool")
     if set(args)-allowed:raise Rejected("Unknown browser argument")
-    permitted={"login":{"path"},"navigate":{"url"},"read":{"selector","offset"},"click":{"selector"},
+    permitted={"navigate":{"url","signed_in"},"read":{"selector","offset"},"click":{"selector"},
         "type":{"selector","text"},"screenshot":set(),"viewport":{"preset"},"close":set(),"start":set(),"stop":set(),"status":set(),
         "measure":{"selector","offset","styles"},"pixels":{"points","selector"},"performance":set(),"wait_for":{"condition","selector","text","timeout_ms","quiet_ms"},"animations":{"selector"},
         "scroll":{"selector","dx","dy"},"press":{"key","selector"},"emulate":{"color_scheme","reduced_motion"}}
@@ -367,7 +377,8 @@ def validate_args(name,args):
             if args[key] not in ("",None):raise Rejected("Arguments do not apply to this action")
             del args[key]
     if action in {"read","animations","scroll","press","wait_for","pixels"} and args.get("selector") in ("",None):args.pop("selector",None)
-    if action=="login" and args.get("path") in ("",None):args.pop("path",None)
+    # signed_in is Rust's to apply when it chooses the authority; the browser only checks its type.
+    if "signed_in" in args and type(args.pop("signed_in")) is not bool:raise Rejected("signed_in must be true or false")
     if action=="navigate" and not args.get("url"):raise Rejected("Navigate needs a url")
     if "selector" in args and (not isinstance(args["selector"],str) or not 1<=len(args["selector"])<=256 or "\0" in args["selector"]):
         raise Rejected("Invalid bounded CSS selector")
@@ -587,7 +598,7 @@ class BrowserService:
         """Close idle or expired profiles before admitting new browser work."""
         for sid,state in list(self.states.items()):
             if state.expires<=time.time() or time.monotonic()-state.touched>IDLE_SECONDS:self.drop(sid)
-    def open(self,trusted):
+    def open(self,trusted,land=True):
         """Authenticate a new private profile as the current caller and reuse only matching authority."""
         sid=trusted["session_id"];self.purge()
         state=self.states.get(sid)
@@ -595,7 +606,9 @@ class BrowserService:
         if state and (state.signed_in!=(trusted["cookie"] is not None) or (state.signed_in and state.cookie!=trusted["cookie"])
             or state.sites!=trusted.get("sites") or state.generation!=trusted["generation"] or state.agent!=trusted["agent_id"]):
             self.drop(sid);state=None
-        if state:return state
+        if state:
+            # Rust renews the lease of the same signed-in session on each call.
+            state.expires=trusted["expires_at"];return state
         if len(self.states)>=MAX_SESSIONS:raise CapacityFailure("Private browser capacity reached")
         directory=self.directory(sid,trusted["user_id"])
         cleanup_prior(directory)
@@ -629,8 +642,8 @@ class BrowserService:
             csrf=identity.get("csrf_token","")
             if not isinstance(csrf,str) or len(csrf)>128:raise Rejected("Invalid browser identity metadata")
             state.csrf=csrf
-            driver.get(self.origin+validate_path("/app",trusted))
-            self.safe_url(state)
+            # A navigation that opened the browser loads its own route next.
+            if land:driver.get(self.origin+validate_path("/app",trusted));self.safe_url(state)
             self.states[sid]=state
             return state
         except Exception:
@@ -708,6 +721,17 @@ class BrowserService:
         now=time.monotonic()
         return {"condition":args["condition"],"met":met,"elapsed_ms":round((now-started)*1000),"last_action":state.last_action or None,
             "since_last_action_ms":round((now-state.last_action_at)*1000) if state.last_action_at else None}
+    def app_ready(self,state):
+        """Wait for the app's boot to finish signed in, or say where it stopped."""
+        started=time.monotonic();deadline=started+READY_MS/1000
+        while True:
+            stage=state.driver.execute_script(READY_SCRIPT)
+            if stage=="ready":return {"ready":True,"ready_ms":round((time.monotonic()-started)*1000)}
+            if stage=="signed_out":
+                raise NotReady("app_signed_out","The app opened its sign-in page instead of signing in; navigate to the app again",self.page_errors(state))
+            if time.monotonic()>=deadline or state.cancelled.is_set():
+                raise NotReady("app_boot_stalled","The app did not finish booting within "+str(READY_MS//1000)+" s; page_errors shows what failed",self.page_errors(state))
+            time.sleep(0.1)
     def pixels(self,state,args):
         """Rendered colours at viewport points, each from a 1x1 capture with the screenshot masks applied."""
         points=args.get("points") or []
@@ -758,9 +782,6 @@ class BrowserService:
         """Execute one validated action with serialized profile access and no automatic input replay."""
         trusted=validate_trusted(base,trusted);action=validate_args(name,args)
         # Reject a route before starting Chromium or causing navigation.
-        if action=="login":
-            if trusted["cookie"] is None:raise Rejected("Signing in needs Diagnostics' login_as_current_user")
-            validate_path(args.get("path","/app"),trusted)
         if action=="navigate":validate_url(args["url"],trusted)
         with self.guard:
             self.purge()
@@ -768,19 +789,17 @@ class BrowserService:
                 record=self.recordings.get(trusted["session_id"])
                 if record:record["stop"].set()
                 self.drop(trusted["session_id"]);return {"status":"success","closed":True}
-            state=self.open(trusted)
+            state=self.open(trusted,land=action!="navigate")
         with state.lock:
             if state.cancelled.is_set() or state.expires<=time.time():raise Rejected("Browser authorization expired")
             # Navigation may leave a page whose URL is outside the routes; other actions may not act on one.
             state.touched=time.monotonic()
-            if action not in {"login","navigate"}:self.safe_url(state)
-            if action=="login" or (action=="navigate" and state.signed_in):
-                route=validate_url(args["url"],trusted) if action=="navigate" else validate_path(args.get("path","/app"),trusted)
+            if action!="navigate":self.safe_url(state)
+            if action=="navigate" and state.signed_in:
+                route=validate_url(args["url"],trusted)
                 state.observed=None;state.driver.get(self.origin+route);self.acted(state,"navigate");self.apply_viewport(state);self.safe_url(state)
-                # The app keeps rendering after the load event; reads before it settles can come back empty.
-                settled=self.wait_for(state,{"condition":"quiet","quiet_ms":500,"timeout_ms":SETTLE_MS})
                 result={"url":self.origin+route,"signed_in":True,"identity_verified":True,"user_id":state.user,
-                    "settled":settled["met"],"settle_ms":settled["elapsed_ms"]}
+                    **({} if route.startswith("/api/") else self.app_ready(state))}
             elif action=="navigate":
                 url=validate_url(args["url"],trusted)
                 state.observed=None;state.driver.get(url);self.acted(state,"navigate");self.apply_viewport(state)
@@ -878,6 +897,8 @@ class BrowserService:
         except (StartupFailure,AuthenticationFailure,CapacityFailure) as error:
             kind={StartupFailure:"browser_startup_failed",AuthenticationFailure:"browser_authentication_failed",CapacityFailure:"browser_capacity"}[type(error)]
             return {"status":"error","error_kind":kind,"output":"Private browser operation failed; credentials were not returned"}
+        except NotReady as error:
+            return {"status":"error","error_kind":error.kind,"output":str(error),"page_errors":error.errors}
         except Rejected as error:
             # Rejection messages are fixed strings in this file, never page or credential text.
             return {"status":"error","error_kind":"browser_invalid_request","output":"Private browser request rejected: "+str(error)}

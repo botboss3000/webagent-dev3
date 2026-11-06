@@ -4,7 +4,7 @@ from pathlib import Path
 PROTOCOL=1
 IMPLEMENTATION_VERSION="2.0.0"
 MAX_FRAME=2*1024*1024
-TOOLS={"login_as_current_user","login_as_current_user_v3","browser_read","browser_input","browser_record","administrator_artifact_get","close"}
+TOOLS={"browser_read","browser_input","browser_record","administrator_artifact_get","close"}
 def adapter():
     """Load only the helper inside this pinned package."""
     spec=importlib.util.spec_from_file_location("browser_control_package_adapter",Path(__file__).with_name("adapter.py"))
