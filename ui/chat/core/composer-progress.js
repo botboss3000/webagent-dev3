@@ -12,7 +12,7 @@ export function mountComposerProgress({root,getProfile,isAdmin}) {
   const text=document.createElement('span');text.className='chat-activity-text';text.setAttribute('aria-live','polite');text.setAttribute('aria-atomic','true');
   const chevron=document.createElement('span');chevron.className='chat-activity-chevron';chevron.textContent='›';chevron.setAttribute('aria-hidden','true');bar.append(text,chevron);wrap.append(panel,bar);host.prepend(wrap);
   const css=document.createElement('link');css.rel='stylesheet';css.href=new URL('./composer-progress.css',import.meta.url).href;document.head.append(css);
-  let session='',run=null,label='',started=0,stop=null,events=[],disposed=false,optimistic='',generation=0,held=null;
+  let session='',run=null,label='',started=0,stop=null,events=[],disposed=false,optimistic='',generation=0,held=null,watched=null;
   // Close the details panel and remove expanded styling.
   function close(){panel.hidden=true;bar.setAttribute('aria-expanded','false');host.classList.remove('expanded');}
   // Toggle only when there are tool rows to display.
@@ -52,13 +52,17 @@ export function mountComposerProgress({root,getProfile,isAdmin}) {
     setLabel(held?.label||optimistic||(run?(run.status!=='running'?phase[run.status]:pending?'Calling '+pending.events[0].payload.tool+'…':'Working…'):''));
   }
   // Invalidate stale callbacks, stop the prior watch, and clear session-specific progress state.
-  function reset(id=''){++generation;stop?.();stop=null;session=id;run=null;events=[];optimistic='';held=null;panel.replaceChildren();close();setLabel('');}
-  // Start a fresh session watch; private activity is requested only for administrators.
-  function open(id){
-    reset(id);const epoch=generation;setLabel('Assessing…');
-    if(id&&isAdmin())stop=watchActivity({sessionId:id,
-      // Read activity pages with cancellation tied to this watch.
-      request:(cursor,signal)=>fetch('/api/v3/sessions/'+encodeURIComponent(id)+'/activity?after='+cursor,{credentials:'same-origin',cache:'no-store',signal}),
+  function reset(id=''){++generation;stop?.();stop=null;watched=null;session=id;run=null;events=[];optimistic='';held=null;panel.replaceChildren();close();setLabel('');}
+  // Start a fresh session; private activity is watched only for an active run.
+  function open(id){reset(id);setLabel('Assessing…');}
+  // Watches only the active run's log (administrators only), so no earlier history is downloaded; stops when no run is active.
+  function watchRun(rid){
+    if(rid===watched)return;
+    stop?.();stop=null;watched=rid;events=[];
+    const id=session,epoch=generation;
+    if(rid&&id&&isAdmin())stop=watchActivity({sessionId:id,
+      // Read this run's activity pages with cancellation tied to this watch.
+      request:(cursor,signal)=>fetch('/api/v3/sessions/'+encodeURIComponent(id)+'/runs/'+encodeURIComponent(rid)+'/logs?after='+cursor,{credentials:'same-origin',cache:'no-store',signal}),
       // Discard late pages after switching sessions; accepted pages refresh the detail rows.
       onChange:value=>{if(session!==id||epoch!==generation)return;events=value.events;details();},
       // Authorization or session loss clears private details; transient errors are retried by the watcher.
@@ -69,7 +73,7 @@ export function mountComposerProgress({root,getProfile,isAdmin}) {
   function update(runs){const next=runs.filter(r=>!r.session_id||r.session_id===session).find(r=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(r.status));
     // A stopped note stays until a different run starts; the stopped run's late snapshots are ignored.
     if(held&&(!next||next.id===held.run)){run=null;optimistic='';close();details();return;}
-    held=null;if(next?.id!==run?.id)close();run=next||null;optimistic='';details();}
+    held=null;if(next?.id!==run?.id)close();run=next||null;optimistic='';watchRun(run?.id||null);details();}
   const timer=setInterval(render,1000);
   const observer=new MutationObserver(render);observer.observe(root.querySelector('#chat-input-area'),{attributes:true,attributeFilter:['class']});
   return {open,update,

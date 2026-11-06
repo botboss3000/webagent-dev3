@@ -505,6 +505,10 @@ async fn state_inspect(
 #[serde(deny_unknown_fields)]
 struct ActivityArgs {
     after: Option<i64>,
+    /// `summary` returns group counts without events.
+    view: Option<String>,
+    /// Comma-separated boundary message ids (summary view only).
+    boundaries: Option<String>,
 }
 async fn activity(
     Extension(app): Extension<App>,
@@ -520,7 +524,26 @@ async fn activity(
         if after < 0 {
             return Err(crate::bad("Invalid activity cursor"));
         }
-        let data = app.store.private_activity(&id, after).await?;
+        let data = match args.view.as_deref() {
+            None => app.store.private_activity(&id, after).await?,
+            Some("summary") => {
+                let boundaries = args.boundaries.as_deref().map(|list| {
+                    list.split(',')
+                        .filter(|item| !item.is_empty())
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                });
+                if boundaries.as_ref().is_some_and(|list| {
+                    list.len() > 200 || list.iter().any(|item| item.len() > 256)
+                }) {
+                    return Err(crate::bad("Too many activity boundaries"));
+                }
+                app.store
+                    .private_activity_summary(&id, after, boundaries.as_deref())
+                    .await?
+            }
+            Some(_) => return Err(crate::bad("Unknown activity view")),
+        };
         crate::phase3_api::administrator(&app, &identity).await?;
         session_app(app, &id).await?;
         Ok(([("cache-control", "no-store")], Json(data)))

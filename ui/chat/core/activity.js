@@ -6,7 +6,9 @@
  * Called by watchActivity.poll for each fetched continuation page.
  */
 export function mergeActivity(previous, page, sessionId) {
-  if (!Array.isArray(page.events) || !Array.isArray(page.segments)
+  // Run-log pages carry no segments; session pages do.
+  const segments = page.segments ?? previous.segments;
+  if (!Array.isArray(page.events) || !Array.isArray(segments)
       || !Number.isSafeInteger(page.cursor) || page.cursor < previous.cursor)
     throw new Error('Invalid activity page');
   const events = new Map(previous.events.map(row => [row.seq, row]));
@@ -21,7 +23,7 @@ export function mergeActivity(previous, page, sessionId) {
   }
   if (page.events.some(row => row.seq > page.cursor)) throw new Error('Invalid activity cursor');
   return {events: [...events.values()].sort((a,b) => a.seq-b.seq),
-    segments: page.segments, cursor: page.cursor};
+    segments, cursor: page.cursor};
 }
 
 // Tool result statuses that mean the call failed.

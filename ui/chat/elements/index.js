@@ -1,12 +1,15 @@
 // @code-index {"version":1,"feature":"chat-tool-activity","aliases":["session activity groups","activity journal view"],"purpose":"Coordinates chat elements and authorized private activity. Config: ui/chat/chat.json -> chat_common.chat_elements and show_activity_groups, merged with desktop/mobile/widget profiles.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_common/show_activity_groups","/chat_common/chat_elements"],"profile_overrides":true}],"opportunities":[]}}
-import {activityGroups, watchActivity} from '../core/activity.js';
+import {activityRows} from '../core/activity.js';
 import {createMiniTranscript} from './mini-transcript/index.js';
 import {createActivityGroup} from './activity-group/index.js';
 import {createTypingEllipsis} from './typing-ellipsis/index.js';
 
-// Own session-scoped chat elements and a separately authorized private journal watch.
+// Own session-scoped chat elements and a separately authorized private activity view.
+// Group summaries (counts, flags) load only for drawn messages; a group's events load only
+// when it is expanded, so the private journal is never downloaded wholesale.
 export function createChatElements({app,isAdmin,chatUiFlag}) {
-let session=null, stop=null, journal=null, publicState=null, container=null, error='';
+let session=null, publicState=null, container=null, error='', enabled=false;
+let summaries=new Map(), requested=new Set(), cursor=null, timer=0, busy=false, generation=0;
 const nodes=new Map();
 let ellipsis=null;
 // Load each element-owned stylesheet once across session changes.
@@ -18,37 +21,123 @@ function styles() {
     link.href=new URL('./'+name+'/style.css',import.meta.url).href;document.head.append(link);
   }
 }
-// Place groups after matching public-message anchors and refresh labels from private journal state.
+const base=id=>'/api/v3/sessions/'+encodeURIComponent(id);
+const get=(url,signal)=>fetch(url,{credentials:'same-origin',cache:'no-store',signal}).then(response=>{
+  if(response.ok)return response.json();
+  const failure=new Error('Activity unavailable ('+response.status+')');failure.status=response.status;throw failure;});
+// Derives display state from the server's segment flags and the matching run snapshot.
+function displayed(summary,runs) {
+  const run=runs.find(r=>r.id===summary.run_id);
+  const finalOutcome=summary.last_of_run && ['completed','failed','cancelled'].includes(run?.state);
+  // A stop is superseded once the conversation resumes in any later segment.
+  const resumed=run?.state==='cancelled' && !summary.latest;
+  return {...summary,kind:run?.kind,rows:summary.rows||[],events:summary.events||[],
+    state:resumed || (summary.closed && !finalOutcome)?'finished':run?.state || 'queued'};
+}
+// Folds summary segments in; a newer latest segment closes the others, and a later segment of the same run ends `last_of_run`.
+function merge(segments) {
+  for(const segment of segments) {
+    for(const other of summaries.values()) {
+      if(other.id===segment.id)continue;
+      if(segment.latest){other.latest=false;other.closed=true;}
+      if(segment.last_of_run && other.run_id===segment.run_id)other.last_of_run=false;
+    }
+    const old=summaries.get(segment.id);
+    summaries.set(segment.id,{...segment,events:old?.events,rows:old?.rows});
+    if(old && nodes.get(segment.id)?.element.open && old.last_seq!==segment.last_seq)void loadEvents(segment.id);
+  }
+}
+// Loads one group's events from its run log, bounded to the group's sequence range.
+async function loadEvents(id) {
+  const summary=summaries.get(id), epoch=generation;
+  if(!summary)return;
+  try {
+    const events=[];let after=summary.first_seq-1;
+    for(;;) {
+      const page=await get(base(session)+'/runs/'+encodeURIComponent(summary.run_id)+'/logs?after='+after);
+      if(epoch!==generation)return;
+      events.push(...page.events.filter(event=>event.seq<=summary.last_seq));
+      if(!page.has_more || page.cursor>=summary.last_seq || page.cursor===after)break;
+      after=page.cursor;
+    }
+    const current=summaries.get(id);
+    if(current){current.events=events;current.rows=activityRows(events);}
+  } catch(failure) {if(epoch!==generation)return;error='Activity details unavailable';}
+  paint();
+}
+// Fetches summaries for newly drawn messages, then groups that changed since the cursor.
+async function refresh() {
+  if(busy || !session)return;
+  busy=true;const epoch=generation,id=session;
+  try {
+    const drawn=[...container?.children||[]].map(node=>node.dataset.publicId).filter(value=>value && !requested.has(value));
+    // An empty window still needs a cursor for live changes.
+    if(cursor===null && !drawn.length){const page=await get(base(id)+'/activity?view=summary&boundaries=');if(epoch!==generation)return;cursor=page.cursor;}
+    for(let index=0;index<drawn.length;index+=100) {
+      const batch=drawn.slice(index,index+100);
+      const page=await get(base(id)+'/activity?view=summary&boundaries='+encodeURIComponent(batch.join(',')));
+      if(epoch!==generation)return;
+      batch.forEach(value=>requested.add(value));merge(page.segments);
+      // Groups drawn now are current as of this page; later polls only need newer changes.
+      if(cursor===null)cursor=page.cursor;
+    }
+    if(cursor!==null) {
+      const page=await get(base(id)+'/activity?view=summary&after='+cursor);
+      if(epoch!==generation)return;
+      merge(page.segments);cursor=page.cursor;
+    }
+    error='';
+  } catch(failure) {
+    if(epoch!==generation)return;
+    if([401,403,404].includes(failure.status)){disconnectActivity();return;}
+    error='Activity connection lost; retrying…';
+  } finally {if(epoch===generation)busy=false;}
+  paint();
+}
+function schedule(){clearTimeout(timer);if(enabled)timer=setTimeout(()=>{void refresh().finally(schedule);},2000);}
+// Place groups after matching public-message anchors and refresh labels from summary state.
 function paint() {
-  if(!journal || !publicState || !container || session!==app.currentSessionId) return;
-  const groups=activityGroups(journal,publicState.runs), keep=new Set(), tails=new Map();
+  if(!enabled || !publicState || !container || session!==app.currentSessionId) return;
   const progressActive=document.querySelector('#chat-above-pill.visible')!==null;
   document.querySelector('#session-dropdown-icon')?.classList.toggle('activity-running',progressActive);
-  const lastGroup=groups[groups.length-1];
   const rows=new Map([...container.children].map(n=>[n.dataset.publicId,n]));
-  for(const group of groups) {
-    const boundary=rows.get(group.boundary_item_id);
-    if(!boundary) continue; // The corresponding public page has not loaded.
-    keep.add(group.id);
-    let entry=nodes.get(group.id);
-    if(!entry){entry=createActivityGroup({transcript:createMiniTranscript()});nodes.set(group.id,entry);}
+  const ordered=[...summaries.values()].sort((a,b)=>a.first_seq-b.first_seq);
+  const lastGroup=ordered.at(-1), keep=new Set(), tails=new Map();
+  for(const summary of ordered) {
+    const boundary=rows.get(summary.boundary_item_id);
+    if(!boundary) continue; // Its message is outside the drawn window.
+    keep.add(summary.id);
+    let entry=nodes.get(summary.id);
+    if(!entry) {
+      const transcript=createMiniTranscript(),id=summary.id;
+      // Expanding is the only path that downloads a group's events.
+      entry=createActivityGroup({transcript:{...transcript,open(){transcript.open();if(!summaries.get(id)?.events)void loadEvents(id);}}});
+      nodes.set(id,entry);
+    }
     const node=entry.element;
-    entry.update(group,{error,active:progressActive && group===lastGroup});
-    const anchor=tails.get(group.boundary_item_id) || boundary;
+    entry.update(displayed(summary,publicState.runs||[]),{error,active:progressActive && summary===lastGroup});
+    const anchor=tails.get(summary.boundary_item_id) || boundary;
     if(anchor.nextSibling!==node) container.insertBefore(node,anchor.nextSibling);
-    tails.set(group.boundary_item_id,node);
+    tails.set(summary.boundary_item_id,node);
   }
   for(const [id,entry] of nodes) if(!keep.has(id)) {entry.dispose();nodes.delete(id);}
   if(ellipsis && container.lastElementChild!==ellipsis.element)container.append(ellipsis.element);
   app._reLandAnchor?.();
+  // Newly drawn messages (window scroll, live replies) fetch their summaries right away.
+  if([...rows.keys()].some(value=>value && !requested.has(value)))void refresh();
+}
+// Stop polling and drop every private summary and group, for a policy change or a new session.
+function stopActivity() {
+  ++generation;enabled=false;busy=false;clearTimeout(timer);
+  summaries=new Map();requested=new Set();cursor=null;
+  for(const entry of nodes.values())entry.dispose();nodes.clear();
+  document.querySelector('#session-dropdown-icon')?.classList.remove('activity-running');
 }
 // Stop the current watch and dispose rendered groups before changing session or policy.
 function disconnectActivity() {
-  stop?.();stop=null;
-  document.querySelector('#session-dropdown-icon')?.classList.remove('activity-running');
-  for(const entry of nodes.values())entry.dispose();
+  stopActivity();
   ellipsis?.dispose();ellipsis=null;
-  nodes.clear();session=null;journal=null;publicState=null;container=null;error='';
+  session=null;publicState=null;container=null;error='';
 }
 // Enforce revocation, feature-flag, and administrator gates before watching this session.
 function renderActivity(state,target) {
@@ -65,29 +154,9 @@ function renderActivity(state,target) {
   // Preserve the tail position as public messages and activity groups arrive.
   if(container.lastElementChild!==ellipsis.element)container.append(ellipsis.element);
   if(!chatUiFlag('show_activity_groups',false) || config?.activity_group?.enabled===false || !isAdmin()) {
-    stop?.();stop=null;journal=null;
-    for(const entry of nodes.values())entry.dispose();nodes.clear();
-    document.querySelector('#session-dropdown-icon')?.classList.remove('activity-running');return;
+    stopActivity();return;
   }
-  if(!stop) {
-    const id=session;
-    // Fence callbacks to this session; transient watch failures remain visible while polling retries.
-    stop=watchActivity({sessionId:id,
-      // Request private pages with same-origin credentials and abort support.
-      request:(cursor,signal)=>fetch(('/api/v3/sessions/'+encodeURIComponent(id)+'/activity?after='+cursor),
-        {credentials: "same-origin",signal,cache:'no-store'}),
-      // Publish only while this view still owns the session and reflect remaining pagination.
-      onChange:(value,more)=>{
-        if(session!==id) return;
-        journal=value;error=more?'Loading activity…':'';paint();
-      },
-      // Authorization or missing-session failures disconnect; other errors leave a retry status.
-      onError:failure=>{
-        if(session!==id) return;
-        if([401,403,404].includes(failure.status)) {disconnectActivity();return;}
-        error='Activity connection lost; retrying…';paint();
-      }});
-  }
+  if(!enabled){enabled=true;void refresh().finally(schedule);}
   paint();
 }
 // The panel owns render/disconnect and calls disconnect on session change or teardown.

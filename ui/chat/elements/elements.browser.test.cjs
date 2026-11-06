@@ -22,7 +22,9 @@ async function fixture(t,{mobile=false,dark=false,reduced=false}={}) {
  const browser=await chromium.launch({headless:true,...(process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{}),args:['--no-sandbox']});
  const context=await browser.newContext({viewport:mobile?{width:390,height:844}:{width:1100,height:800},isMobile:mobile,hasTouch:mobile,reducedMotion:reduced?'reduce':'no-preference'});
  const page=await context.newPage();const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.error('pageerror: '+e.message);});
- await page.route('**/api/v3/sessions/*/activity?*',route=>route.fulfill({json:{events:[{session_id:'s',run_id:'r',event_id:'e',seq:1,kind:'agent_step_end',payload:{asst_id:'a',content:'A private update'}}],segments:[{id:'g',run_id:'r',boundary_item_id:'q',first_seq:1,last_seq:1,closed:false}],cursor:1,has_more:false}}));
+ // Summaries carry counts only; a group's events come from its run log when it is expanded.
+ await page.route('**/api/v3/sessions/*/activity?*',route=>route.fulfill({json:{segments:[{id:'g',run_id:'r',boundary_item_id:'q',first_seq:1,last_seq:1,closed:false,latest:true,last_of_run:true,counts:{tools:0,updates:1,responses:0,modes:0,compactions:0}}],cursor:1}}));
+ await page.route('**/api/v3/sessions/*/runs/*/logs?*',route=>route.fulfill({json:{events:[{session_id:'s',run_id:'r',event_id:'e',seq:1,kind:'agent_step_end',payload:{asst_id:'a',content:'A private update'}}],cursor:1,has_more:false}}));
  t.after(async()=>{await browser.close();await new Promise(r=>server.close(r));assert.deepEqual(hashes(),before);assert.deepEqual(errors,[]);});
  await page.goto('http://127.0.0.1:'+server.address().port+'/');
  await page.evaluate(async()=>{
