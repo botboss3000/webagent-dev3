@@ -1,13 +1,45 @@
 //! Access owns live policy publication, locking, revisions and validation.
 use crate::configuration::{validate_configuration, validate_pages};
 use crate::storage::{RecordCodec, Repository};
+use crate::{Permission, Tier};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use sqlx::Row;
 use uuid::Uuid;
 /// The live access policy (`live-files.json`), relative to the checkout.
 pub const LIVE_POLICY: &str = "crates/modules/access/access-policy.json";
 const POLICY_LIMIT: u64 = 4 * 1024 * 1024;
+/// Fresh-install tiers are explicit; only Operator receives codebase_admin.
+fn fresh_install_tiers() -> [Tier; 2] {
+    let operator = Tier {
+        id: "operator".into(),
+        revision: 1,
+        model_policy: None,
+        ability_permissions: [
+            ("codebase_admin".into(), Permission::Auto),
+            ("web_access".into(), Permission::Auto),
+        ]
+        .into(),
+        allowed_models: vec!["*".into()],
+        tools: [("*".into(), Permission::Auto)].into(),
+        entitlements: Default::default(),
+        max_sessions: 10_000,
+        max_active_runs: 200,
+        chain: Vec::new(),
+    };
+    let basic = Tier {
+        id: "basic".into(),
+        revision: 1,
+        model_policy: None,
+        ability_permissions: [("web_access".into(), Permission::Auto)].into(),
+        allowed_models: Vec::new(),
+        tools: Default::default(),
+        entitlements: Default::default(),
+        max_sessions: 10,
+        max_active_runs: 2,
+        chain: Vec::new(),
+    };
+    [operator, basic]
+}
 impl<C: RecordCodec> Repository<'_, C> {
     /// The live policy file in processes that save live files; a state-root file in fixtures.
     pub fn access_policy_path(&self) -> std::path::PathBuf {
@@ -54,23 +86,16 @@ impl<C: RecordCodec> Repository<'_, C> {
         self.write_access_policy(&policy)?;
         Ok(json!({"pages":policy["pages"],"revision":policy["revision"]}))
     }
+    /// Seed the fresh-install tiers when the policy has none. Installed checkouts ship them in
+    /// the live file, so this only fills state-root policies (fixtures).
     pub async fn init_policy_tiers(&self) -> Result<()> {
         if self.read_access_policy()?.get("tiers").is_some() {
             return Ok(());
         }
-        let rows = sqlx::query("SELECT value FROM entitlement_tiers ORDER BY tier_id")
-            .fetch_all(self.app_pool)
-            .await?;
         let mut tiers = serde_json::Map::new();
-        for row in rows {
-            let value = self.unseal(&row.get::<Vec<u8>, _>("value"))?;
-            tiers.insert(
-                value["id"]
-                    .as_str()
-                    .ok_or_else(|| anyhow!("Invalid legacy tier"))?
-                    .to_owned(),
-                value,
-            );
+        for tier in fresh_install_tiers() {
+            tier.validate()?;
+            tiers.insert(tier.id.clone(), serde_json::to_value(&tier)?);
         }
         let _lock = self.policy_lock()?;
         let mut policy = self.read_access_policy()?;

@@ -1856,9 +1856,6 @@
       "admin_database_encryption": {
         "_instructions": "false saves new or rewritten records in user_data/admin/admin.db as readable JSON with an authentication tag, not encrypted ciphertext. true encrypts new writes with AES-256-GCM. Existing records remain readable in either mode and are not bulk-converted. App and agent databases, credentials in those planes, other users, and search cursors remain encrypted. Plaintext admin records may contain private conversation data and tool outputs: protect the database, WAL files, and backups. This is the fixed admin account ID, not every user with an administrator role. Restart BOTH API and loop processes together after changing this value. Missing configuration preserves encryption; invalid configuration prevents startup.",
         "enabled": false
-      },
-      "development": {
-        "live_ui_editing": false
       }
     },
     "loop-runtime.json": {

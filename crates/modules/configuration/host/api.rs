@@ -62,7 +62,10 @@ pub(crate) fn validate(id: &str, value: &Value) -> Result<()> {
     match id {
         "app_settings" => {
             crate::store::admin_encryption_enabled(value)?;
-            webagent_webapp::configuration::validate_app_settings(value)?;
+            // UI and development settings live in the `app_ui` live file, not the state root.
+            if value.get("ui").is_some() || value.get("development").is_some() {
+                anyhow::bail!("UI settings belong to app_ui");
+            }
         }
         "app_ui" => webagent_webapp::configuration::validate_app_settings(value)?,
         "chat" => webagent_chat::configuration::validate_chat_config(value)

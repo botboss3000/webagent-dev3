@@ -153,7 +153,7 @@ Encrypted content and sensitive metadata follow the sensitivity noted above.
 | Table or key family | Plane and authority type | Sensitivity | Lifecycle |
 | --- | --- | --- | --- |
 | `user_accounts`, `user_profiles` | App; canonical identity/profile | Private | Revisioned account lifecycle |
-| `entitlement_tiers`, `agent_memberships` | App; canonical grants and caller relationships | Private security configuration | Revisioned; changes rotate account generation and recheck running work |
+| `agent_memberships` | App; canonical caller relationships (tiers live in `crates/modules/access/access-policy.json`) | Private security configuration | Revisioned; changes rotate account generation and recheck running work |
 | `agent_directory` | App; canonical agent ID and owner index | Private identity metadata | Add after validated agent storage; check each referenced agent file |
 | `agents`, `agent_connections`, `agent_prompts` | Agent; canonical configuration | Private | Revisioned agent lifecycle; nondefault agents use separate validated files |
 | `prompt_slots` | Agent; legacy compatibility source | Private | Retain for rollback; active reads use `agent_prompts` |

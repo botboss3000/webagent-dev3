@@ -196,7 +196,6 @@ mod integration_tests {
                 CREATE TABLE agent_directory(id TEXT PRIMARY KEY,owner_id TEXT);
                 CREATE TABLE agent_memberships(user_id TEXT,agent_id TEXT,value BLOB,PRIMARY KEY(user_id,agent_id));
                 CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT,kind TEXT,payload BLOB);
-                CREATE TABLE entitlement_tiers(tier_id TEXT PRIMARY KEY,revision INTEGER,value BLOB);
                 CREATE TABLE docs(key TEXT PRIMARY KEY,value BLOB);").execute(&app).await.unwrap();
             sqlx::raw_sql("CREATE TABLE agents(id TEXT PRIMARY KEY,status TEXT,metadata BLOB,revision INTEGER,updated_at INTEGER);
                 CREATE TABLE agent_memberships(user_id TEXT,agent_id TEXT,value BLOB,PRIMARY KEY(user_id,agent_id));
@@ -543,11 +542,6 @@ mod integration_tests {
             .unwrap();
         sqlx::raw_sql("CREATE TRIGGER reject_migration_marker BEFORE INSERT ON docs BEGIN SELECT RAISE(ABORT,'test late marker failure'); END;").execute(&f.app).await.unwrap();
         assert!(repo.migrate_access_v1().await.is_err());
-        let tiers: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entitlement_tiers")
-            .fetch_one(&f.app)
-            .await
-            .unwrap();
-        assert_eq!(tiers, 0);
         let unchanged: Vec<u8> =
             sqlx::query_scalar("SELECT value FROM user_accounts WHERE user_id='admin'")
                 .fetch_one(&f.app)
@@ -589,28 +583,30 @@ mod integration_tests {
                 .await
                 .unwrap();
         assert_eq!(stable, after);
-        let tiers: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entitlement_tiers")
-            .fetch_one(&f.app)
-            .await
-            .unwrap();
-        assert_eq!(tiers, 2);
-        // Fresh-install seeds are explicit: only Operator receives codebase_admin.
-        for (id, codebase) in [("basic", Permission::Deny), ("operator", Permission::Auto)] {
-            let blob: Vec<u8> =
-                sqlx::query_scalar("SELECT value FROM entitlement_tiers WHERE tier_id=?")
-                    .bind(id)
-                    .fetch_one(&f.app)
-                    .await
-                    .unwrap();
-            let tier: crate::Tier = serde_json::from_value(f.codec.unseal(&blob).unwrap()).unwrap();
-            assert_eq!(tier.ability_permission("codebase_admin"), codebase);
-            assert_eq!(tier.ability_permission("web_access"), Permission::Auto);
-        }
         let markers: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM docs WHERE key='storage:access_v1'")
                 .fetch_one(&f.app)
                 .await
                 .unwrap();
         assert_eq!(markers, 1);
+    }
+    #[tokio::test]
+    async fn fresh_policy_seeds_explicit_tiers_into_the_policy_file() {
+        let f = Fixture::new().await;
+        let repo = f.repo();
+        repo.write_access_policy(&json!({"schema_version":1,"registration":"open","revision":1}))
+            .unwrap();
+        repo.init_policy_tiers().await.unwrap();
+        let policy = repo.read_access_policy().unwrap();
+        assert_eq!(policy["revision"], 2);
+        // Fresh-install seeds are explicit: only Operator receives codebase_admin.
+        for (id, codebase) in [("basic", Permission::Deny), ("operator", Permission::Auto)] {
+            let tier: crate::Tier = serde_json::from_value(policy["tiers"][id].clone()).unwrap();
+            assert_eq!(tier.ability_permission("codebase_admin"), codebase);
+            assert_eq!(tier.ability_permission("web_access"), Permission::Auto);
+        }
+        // An existing tier set is never replaced.
+        repo.init_policy_tiers().await.unwrap();
+        assert_eq!(repo.read_access_policy().unwrap(), policy);
     }
 }

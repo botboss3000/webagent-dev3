@@ -542,46 +542,6 @@ impl<C: RecordCodec> Repository<'_, C> {
                 bail!("Unsupported access migration marker");
             }
         }
-        // Fresh-install seeds are explicit; only Operator receives codebase_admin.
-        let operator = Tier {
-            id: "operator".into(),
-            revision: 1,
-            model_policy: None,
-            ability_permissions: [
-                ("codebase_admin".into(), access::Permission::Auto),
-                ("web_access".into(), access::Permission::Auto),
-            ]
-            .into(),
-            allowed_models: vec!["*".into()],
-            tools: [("*".into(), access::Permission::Auto)].into(),
-            entitlements: Default::default(),
-            max_sessions: 10_000,
-            max_active_runs: 200,
-            chain: Vec::new(),
-        };
-        let basic = Tier {
-            id: "basic".into(),
-            revision: 1,
-            model_policy: None,
-            ability_permissions: [("web_access".into(), access::Permission::Auto)].into(),
-            allowed_models: Vec::new(),
-            tools: Default::default(),
-            entitlements: Default::default(),
-            max_sessions: 10,
-            max_active_runs: 2,
-            chain: Vec::new(),
-        };
-        for tier in [&operator, &basic] {
-            tier.validate()?;
-            sqlx::query(
-                "INSERT OR IGNORE INTO entitlement_tiers(tier_id,revision,value) VALUES(?,?,?)",
-            )
-            .bind(&tier.id)
-            .bind(tier.revision as i64)
-            .bind(self.seal(&serde_json::to_value(tier)?)?)
-            .execute(&mut *tx)
-            .await?;
-        }
         if self
             .accounts()
             .initialize_admin_assignment_in(
@@ -616,7 +576,8 @@ impl<C: RecordCodec> Repository<'_, C> {
 
 impl<C: RecordCodec> Repository<'_, C> {
     pub async fn initialize_authorization_tables(&self) -> Result<()> {
-        sqlx::raw_sql("CREATE TABLE IF NOT EXISTS entitlement_tiers(tier_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,value BLOB NOT NULL);
+        // Tiers live in the access policy file; the former seed table is gone.
+        sqlx::raw_sql("DROP TABLE IF EXISTS entitlement_tiers;
    CREATE TABLE IF NOT EXISTS agent_memberships(user_id TEXT NOT NULL REFERENCES user_accounts(user_id),agent_id TEXT NOT NULL,value BLOB NOT NULL,PRIMARY KEY(user_id,agent_id));")
    .execute(self.app_pool).await?;
         Ok(())
