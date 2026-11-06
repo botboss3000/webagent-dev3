@@ -37,10 +37,9 @@ function niceCeiling(value) {
   return nice * unit;
 }
 
+// Escapes quotes too: callers use it inside attribute values.
 function esc(value) {
-  const node = document.createElement('span');
-  node.textContent = String(value ?? '');
-  return node.innerHTML;
+  return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 let analyticsInstanceCount = 0;

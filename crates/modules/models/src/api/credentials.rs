@@ -158,8 +158,11 @@ pub async fn save<C: RuntimeStorage>(
             "Invalid API key: use 8–512 printable non-space characters",
         ));
     }
-    if body.base_url.len() > 500 || body.base_url.chars().any(char::is_control) {
-        return Err(bad("Invalid base URL"));
+    if body.base_url.len() > 500
+        || body.base_url.chars().any(char::is_control)
+        || !(body.base_url.is_empty() || public_https(&body.base_url))
+    {
+        return Err(bad("Invalid base URL: use a public HTTPS address"));
     }
     let record = json!({"owner_id":caller.user_id,"label":label,"provider":body.provider,"base_url":body.base_url,"api_key":body.api_key});
     let _guard = app.gate.lock().await;
@@ -343,5 +346,72 @@ mod tests {
             list(&app, admin, agent()).await.unwrap().0["credentials"],
             json!([])
         );
+    }
+}
+
+/// A provider base URL must be HTTPS to a public host: never loopback, private,
+/// link-local, Tailscale (100.64/10) or a metadata address.
+// shortcut: checks IP literals and local names only, not what a hostname resolves to; add a
+// resolve-and-pin check if the server ever dials this URL.
+fn public_https(raw: &str) -> bool {
+    use std::net::IpAddr;
+    let Ok(url) = reqwest::Url::parse(raw) else {
+        return false;
+    };
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    match host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
+    {
+        Ok(IpAddr::V4(ip)) => {
+            let [a, b, ..] = ip.octets();
+            !(ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || ip.is_unspecified()
+                || ip.is_broadcast()
+                || ip.is_multicast()
+                || a == 0
+                || (a == 100 && (64..128).contains(&b)))
+        }
+        // Global unicast only (2000::/3); this also excludes v4-mapped, loopback and ULA.
+        Ok(IpAddr::V6(ip)) => (0x2000..0x4000).contains(&ip.segments()[0]),
+        Err(_) => {
+            let name = host.trim_end_matches('.').to_ascii_lowercase();
+            name.contains('.')
+                && ![".localhost", ".local", ".internal"]
+                    .iter()
+                    .any(|suffix| name.ends_with(suffix))
+        }
+    }
+}
+
+#[cfg(test)]
+mod base_url_tests {
+    #[test]
+    fn base_url_must_be_public_https() {
+        for ok in ["https://api.example.com/v1", "https://8.8.8.8/"] {
+            assert!(super::public_https(ok), "{ok}");
+        }
+        for bad in [
+            "http://api.example.com",
+            "https://localhost/v1",
+            "https://127.0.0.1/",
+            "https://169.254.169.254/latest",
+            "https://10.0.0.1/",
+            "https://100.87.9.65:8081/",
+            "https://[::1]/",
+            concat!("https://", "user", ":", "pass", "@api.example.com/"),
+            "https://printer.local/",
+            "not a url",
+        ] {
+            assert!(!super::public_https(bad), "{bad}");
+        }
     }
 }

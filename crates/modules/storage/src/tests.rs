@@ -670,3 +670,24 @@ async fn chat_rebuild_admits_notices_and_keeps_rows_and_seq_counter() {
     .unwrap();
     assert_eq!(index, 1);
 }
+
+#[tokio::test]
+async fn prefix_scan_treats_underscore_and_percent_literally() {
+    let root = tempfile::tempdir().unwrap();
+    let pool = pool::open_pool(&root.path().join("scan.db"), false, false)
+        .await
+        .unwrap();
+    for key in ["memory:a_b:1", "memory:aXb:1", "memory:a%b:1", "memory:a_b"] {
+        sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
+            .bind(key)
+            .bind(key.as_bytes())
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let mut connection = pool.acquire().await.unwrap();
+    let found = docs::scan(&mut connection, "memory:a_b:").await.unwrap();
+    assert_eq!(found, vec![b"memory:a_b:1".to_vec()]);
+    let found = docs::scan(&mut connection, "memory:a%").await.unwrap();
+    assert_eq!(found, vec![b"memory:a%b:1".to_vec()]);
+}

@@ -1248,7 +1248,8 @@ async function loadDirInto(path, container, depth) {
     }
     _refreshLucideIcons(container);
   } catch (e) {
-    container.innerHTML = '<div class="files-tree-loading">Error: ' + (e.message || 'failed') + '</div>';
+    container.innerHTML = '<div class="files-tree-loading"></div>';
+    container.firstChild.textContent = 'Error: ' + (e.message || 'failed');
   }
 }
 
@@ -1314,7 +1315,8 @@ async function loadRoot() {
     loadLineStats();
     kvWrite(KC_CURRENT_ROOT, LS_CURRENT_ROOT, currentRoot);
   } catch (e) {
-    tree.innerHTML = '<div class="files-tree-empty">Error: ' + (e.message || 'failed') + '</div>';
+    tree.innerHTML = '<div class="files-tree-empty"></div>';
+    tree.firstChild.textContent = 'Error: ' + (e.message || 'failed');
     // If the saved root no longer exists, fall back to the project root
     // so the user isn't stranded with a dead breadcrumb.
     if (currentRoot && currentRoot !== projectRoot) {
@@ -2499,8 +2501,9 @@ function wireFoldAutoUnfold(ta, pane) {
 
 function renderMarkdown(src) {
   try {
-    if (window.marked && typeof window.marked.parse === 'function') {
-      return window.marked.parse(src || '');
+    // Previewed files can come from agents, uploads or git, so their HTML is untrusted.
+    if (window.marked && typeof window.marked.parse === 'function' && window.DOMPurify) {
+      return window.DOMPurify.sanitize(window.marked.parse(src || ''), { FORBID_ATTR: ['style'] });
     }
   } catch (_) {}
   // Fallback if marked hasn't loaded: escape and show as preformatted text.

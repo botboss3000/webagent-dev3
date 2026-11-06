@@ -1,9 +1,11 @@
 """Per-call agent-scoped HTTPS transport; credentials never become tool output."""
 import contextvars
 import importlib.util
+import ipaddress
 import os
 from pathlib import Path
 import re
+import socket
 from urllib.parse import urlsplit
 
 _DIRECTORY = Path(__file__).resolve().parent
@@ -30,6 +32,23 @@ def normalized(raw):
     if any(p in (".", "..") for p in value.path.split("/")):
         raise adapter.Rejected("Normalized repository path required")
     return "https://" + authority + value.path.rstrip("/")
+
+
+def public_host(url):
+    """Refuse repositories on loopback, private, link-local, Tailscale or metadata addresses."""
+    # shortcut: git resolves the name again when it dials, so DNS rebinding between the two
+    # lookups is not covered; pin the address through a proxy if that becomes a concern.
+    host = urlsplit(url).hostname
+    try:
+        addresses = {info[4][0] for info in socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)}
+    except OSError:
+        raise adapter.Rejected("Repository host does not resolve")
+    for address in addresses:
+        ip = ipaddress.ip_address(address.split("%")[0])
+        if getattr(ip, "ipv4_mapped", None):
+            ip = ip.ipv4_mapped
+        if not ip.is_global or ip.is_multicast:
+            raise adapter.Rejected("Repository host must be a public address")
 
 
 def connections(trusted):
@@ -63,6 +82,7 @@ async def authorize(repo, remote, operation):
     row = next((row for row in _CONNECTIONS.get() if row["url"] == exact), None)
     if row is None:
         raise adapter.Rejected("Remote is not granted by this agent's repository connections")
+    public_host(exact)
     # Git executes GIT_ASKPASS directly as one filename, without shell parsing.
     # Its fixed shebang supplies isolated Python; the sandbox allows only this
     # trusted helper, never an executable selected by repository configuration.

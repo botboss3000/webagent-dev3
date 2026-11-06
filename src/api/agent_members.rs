@@ -403,10 +403,17 @@ async fn turns_since(view: &Store, agent: &str, since: i64) -> anyhow::Result<i6
 pub(crate) async fn record_turn(app: &App, agent: &str, message_id: &str) -> anyhow::Result<()> {
     let view = app.store.for_user(crate::shared_chat::actor(app)).await?;
     let prefix = turn_prefix(agent);
-    let seen: Option<i64> = sqlx::query_scalar("SELECT 1 FROM docs WHERE key LIKE ? LIMIT 1")
-        .bind(format!("{prefix}%:{message_id}"))
-        .fetch_optional(&view.pool)
-        .await?;
+    // Escape ids so `_` (as in `shared_default`) only matches itself.
+    let literal = |text: &str| {
+        text.replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    };
+    let seen: Option<i64> =
+        sqlx::query_scalar("SELECT 1 FROM docs WHERE key LIKE ? ESCAPE '\\' LIMIT 1")
+            .bind(format!("{}%:{}", literal(&prefix), literal(message_id)))
+            .fetch_optional(&view.pool)
+            .await?;
     if seen.is_some() {
         return Ok(());
     }

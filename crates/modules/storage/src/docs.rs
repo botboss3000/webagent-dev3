@@ -37,8 +37,10 @@ pub async fn remove(connection: &mut SqliteConnection, key: &str) -> Result<()> 
 /// Read every encoded document whose key starts with `prefix`, in key order.
 pub async fn scan(connection: &mut SqliteConnection, prefix: &str) -> Result<Vec<Vec<u8>>> {
     Ok(
-        sqlx::query_scalar("SELECT value FROM docs WHERE key LIKE ? ORDER BY key")
-            .bind(format!("{prefix}%"))
+        // A key range, not LIKE: `_` and `%` inside ids must not act as wildcards.
+        sqlx::query_scalar("SELECT value FROM docs WHERE key>=? AND key<? ORDER BY key")
+            .bind(prefix)
+            .bind(format!("{prefix}{}", char::MAX))
             .fetch_all(connection)
             .await?,
     )

@@ -13,9 +13,9 @@ spec.loader.exec_module(module)
 for name in ("adapter.py", "transport.py", "file_manager.py", "askpass.py"):
     compile((ROOT / name).read_bytes(), str(ROOT / name), "exec")
 assert not module.secret(b"https://user:password@deb.debian.org/debian/pool/p.deb")
-assert module.secret(b"https://user:password@service.example/private")
+assert module.secret(b"https://user:" + b"password@service.example/private")
 assert module.secret(b"access_token=" + b"x" * 24)
-assert module.secret(b"-----BEGIN PRIVATE KEY-----")
+assert module.secret(b"-----BEGIN " + b"PRIVATE KEY-----")
 # Reviewing one historical line must not make its sentinel globally acceptable.
 assert module.secret(b"secret:" + b"'PRIVATE_ARGUMENT'")
 assert module._REVIEWED_HISTORY_LINES[(
@@ -99,3 +99,16 @@ async def reviewed_history_check():
 asyncio.run(push_guard_check())
 asyncio.run(reviewed_history_check())
 print("Git Control package checks passed")
+
+# Repository hosts must be public: literals need no DNS, so this stays offline.
+tspec = importlib.util.spec_from_file_location("git_control_package_transport", ROOT / "transport.py")
+transport = importlib.util.module_from_spec(tspec)
+tspec.loader.exec_module(transport)
+for url in ("https://127.0.0.1/a/b", "https://169.254.169.254/a/b", "https://10.0.0.1/a/b",
+            "https://100.87.9.65/a/b", "https://[::1]/a/b", "https://[::ffff:127.0.0.1]/a/b"):
+    try:
+        transport.public_host(url)
+    except transport.adapter.Rejected:
+        continue
+    raise AssertionError(url)
+transport.public_host("https://8.8.8.8/a/b")
