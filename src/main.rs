@@ -189,6 +189,10 @@ use agent_loop::*;
 fn main() -> Result<()> {
     // The tool worker's per-command supervisor starts without the async runtime's threads.
     let mode = std::env::args().nth(1);
+    // The container launcher sets up and starts every process of the web container.
+    if mode.as_deref() == Some("--launch") {
+        std::process::exit(webagent_worker::launch::run());
+    }
     if matches!(mode.as_deref(), Some("--tool-runner" | "--plugin-runner")) {
         let spec = std::env::args().nth(2).unwrap_or_default();
         std::process::exit(if mode.as_deref() == Some("--tool-runner") {

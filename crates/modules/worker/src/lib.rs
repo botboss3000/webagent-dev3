@@ -5,6 +5,7 @@
 //! conversion item A2).
 pub mod commands;
 pub mod files;
+pub mod launch;
 pub mod plugins;
 pub mod runner;
 pub mod sandbox;
