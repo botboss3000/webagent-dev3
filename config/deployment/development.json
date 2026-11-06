@@ -2243,7 +2243,7 @@
     "app_gid": 1100,
     "app_uid": 1100,
     "bind_address": "100.112.23.15",
-    "checkout_root": "/home/ar/webagent-dev3",
+    "checkout_root": "/home/ar/webagent-dev3/code",
     "code_index_ledger_max_bytes": 805306368,
     "gate_container": "webagent-dev-v3-gate",
     "install_root": "/var/lib/webagent/development/build-service",

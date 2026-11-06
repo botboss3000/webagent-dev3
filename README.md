@@ -22,7 +22,8 @@ approval and a fresh revision.
 
 
 Independent Rust agent runtime, subscription provider adapter, and isolated Python tool worker.
-Source lives independently at `/home/ar/webagent-dev3`; v2 remains at `/home/ar/webagent-dev2`.
+Source lives independently at `/home/ar/webagent-dev3/code`; app data is beside it in
+`state/` (mounted at `/state`), with `workspaces/`, `runtime/` and the broker's `build-jobs/`; v2 remains at `/home/ar/webagent-dev2`.
 Build archives retain virtual `v3/` paths for existing release receipts. See [the root migration](docs/root-migration.md).
 
 New to this codebase? Start with the
@@ -34,12 +35,12 @@ for deployment and API details.
 On the development server:
 
 ```sh
-sh /home/ar/webagent-dev3/deploy.sh build
-sh /home/ar/webagent-dev3/deploy.sh build-loop
-sh /home/ar/webagent-dev3/gate-deploy.sh build
-sh /home/ar/webagent-dev3/deploy.sh start
-sh /home/ar/webagent-dev3/gate-deploy.sh start
-sh /home/ar/webagent-dev3/deploy.sh start-loop
+sh /home/ar/webagent-dev3/code/deploy.sh build
+sh /home/ar/webagent-dev3/code/deploy.sh build-loop
+sh /home/ar/webagent-dev3/code/gate-deploy.sh build
+sh /home/ar/webagent-dev3/code/deploy.sh start
+sh /home/ar/webagent-dev3/code/gate-deploy.sh start
+sh /home/ar/webagent-dev3/code/deploy.sh start-loop
 curl -fsS http://100.112.23.15:8081/health/ready
 ```
 
@@ -677,9 +678,9 @@ reply; there is no separate downstream delivery consumer in this phase.
 Build the images independently on the development server:
 
 ```sh
-sh /home/ar/webagent-dev3/deploy.sh build
-sh /home/ar/webagent-dev3/deploy.sh build-loop
-sh /home/ar/webagent-dev3/gate-deploy.sh build
+sh /home/ar/webagent-dev3/code/deploy.sh build
+sh /home/ar/webagent-dev3/code/deploy.sh build-loop
+sh /home/ar/webagent-dev3/code/gate-deploy.sh build
 ```
 
 For a new installation, start the API first so its control and worker sockets

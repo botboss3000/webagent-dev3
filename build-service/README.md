@@ -966,7 +966,7 @@ owned task ID, its fresh input digest, and a unique stable request ID:
 
 ~~~sh
 WEBAGENT_BUILD_CONFIG=/etc/webagent/development/build-service.json \
-python3 -B /home/ar/webagent-dev3/build-service/buildctl.py check TASK_ID \
+python3 -B /home/ar/webagent-dev3/code/build-service/buildctl.py check TASK_ID \
   --expected INPUT_SHA256 --request-id LIVE_CHECK_ID \
   --feature-profile live --timeout 600
 ~~~

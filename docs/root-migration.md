@@ -1,6 +1,7 @@
 # Independent V3 development root
 
-V3 source and runtime storage live at `/home/ar/webagent-dev3`. V2 stays at
+V3 source lives at `/home/ar/webagent-dev3/code` (mounted at `/code`); runtime storage
+sits beside it: `state/` (`/state`), `workspaces/`, `runtime/` (`/runtime`) and `build-jobs/`. V2 stays at
 `/home/ar/webagent-dev2`. The V3 API, loop and metadata gate remain separate
 containers with their existing names, users, limits, capabilities and networks.
 The API exposes port 8081; the named development tunnel keeps its destination.
@@ -15,7 +16,7 @@ hashes and receipts remain valid. The protected snapshot helper maps `v3/` to
 the independent root and `ui/` to the selected V2 assets. Checkout promotion
 removes the virtual `v3/` prefix only at the filesystem boundary.
 
-Use `python3 -B /home/ar/webagent-dev3/build-service/buildctl.py`
+Use `python3 -B /home/ar/webagent-dev3/code/build-service/buildctl.py`
 for tasks. Edit isolated snapshots with checked unified diffs; finish queues
 one tested development release. Run the installed protected bootstrap for
 fixed-allowlist manual build snapshots. Keep runtime and workspace paths out

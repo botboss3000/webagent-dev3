@@ -1,7 +1,7 @@
 {
   "_instructions": "Live UI settings (live-files.json): edit in place; the API rereads this file per request and signed-in pages adopt changes within five seconds, without a release or restart. Instance-only settings (admin database encryption, trusted authentication proxies) stay in the state root's config/app-settings.json.",
   "development": {
-    "_instructions": "Development only. true serves v3 UI directly from /code/ui (/home/ar/webagent-dev3/ui on the host). Save and refresh; no restart. false restores broker-selected frozen UI. Disable before broker releases, then re-enable after promotion. Backend code and shared V2 assets remain frozen.",
+    "_instructions": "Development only. true serves v3 UI directly from /code/ui (/home/ar/webagent-dev3/code/ui on the host). Save and refresh; no restart. false restores broker-selected frozen UI. Disable before broker releases, then re-enable after promotion. Backend code and shared V2 assets remain frozen.",
     "live_ui_editing": false
   },
   "ui": {

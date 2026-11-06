@@ -74,15 +74,15 @@ to its most recent 20 jobs; the single-job route can retrieve an older known ID.
 
 ## Development setup
 
-1. Apply the reviewed source patch in `/home/ar/webagent-dev3` and run the
+1. Apply the reviewed source patch in `/home/ar/webagent-dev3/code` and run the
    locked Rust tests plus `python3 -B -m unittest discover -s tests -p
    test_admin_build.py`.
 2. Build and release the v3 API and loop images with the project's
    `v3_build` workflow. Replacing the v3 containers interrupts the public app.
 3. Install the reviewed build broker code with
-   `sudo -n python3 -B /home/ar/webagent-dev3/build-service/install.py --install`.
+   `sudo -n python3 -B /home/ar/webagent-dev3/code/build-service/install.py --install`.
    Stop its existing supervisor cleanly, then run
-   `sudo -n python3 -B /home/ar/webagent-dev3/host-build-service/bootstrap.py --start`.
+   `sudo -n python3 -B /home/ar/webagent-dev3/code/host-build-service/bootstrap.py --start`.
 4. Verify both v3 containers are healthy, `/health/ready` responds, and an
    authenticated administrator can read a scoped run log and a known build
    result. Existing account login and permissions supply access; no new
@@ -95,7 +95,7 @@ the v3 container. That optional step creates administrator machine access to
 the three messaging routes only. It does not enable the orchestration routes
 above. Do not put the token in a URL, source file, frontend asset, or log.
 
-The v3 source lives in `/home/ar/webagent-dev3` on the development server.
+The v3 source lives in `/home/ar/webagent-dev3/code` on the development server.
 A source change is not active until an authorized, tested release updates the
 API and protected broker. This document does not enable the optional bearer
 API.

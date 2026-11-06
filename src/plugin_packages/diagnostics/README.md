@@ -1,6 +1,6 @@
 # Live diagnostics application plugin
 
-Installed package: `/home/ar/webagent-dev3/plugins/diagnostics/`. Contains
+Installed package: `/home/ar/webagent-dev3/code/plugins/diagnostics/`. Contains
 `plugin.json`, `webagent-diagnostics` executable and optional Rust source.
 The API supervisor scans this administrator-controlled package every two seconds.
 Add it to start, remove it to stop, atomically replace the executable to update.
