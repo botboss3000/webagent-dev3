@@ -1,10 +1,12 @@
-//! The per-command supervisor (`webagent-v3 --tool-runner ARGV_JSON`), ported from
-//! `worker.py --runner`. It stays outside the sandbox so it can always reap: it becomes a
-//! child subreaper, so double-forked descendants reparent to it, runs the command
-//! confined by [`crate::sandbox`], and on exit or SIGTERM ends every descendant.
+//! The per-call supervisors, ported from `worker.py --runner` and
+//! `ability_plugin_worker.py --supervise`: `webagent-v3 --tool-runner ARGV_JSON` for a
+//! workspace command and `webagent-v3 --plugin-runner SPEC_JSON` for an ability plugin. A
+//! supervisor stays outside the sandbox so it can always reap: it becomes a child
+//! subreaper, so double-forked descendants reparent to it, runs the child confined by
+//! [`crate::sandbox`], and on exit or SIGTERM ends every descendant.
 use std::io;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -15,25 +17,69 @@ extern "C" fn terminated(_signal: libc::c_int) {
     TERMINATED.store(true, Ordering::SeqCst);
 }
 
+/// What one supervisor runs and how it is confined.
+struct Spec {
+    argv: Vec<String>,
+    read_paths: Vec<PathBuf>,
+    /// Commands: Unix socket fence, no stdin, descendants get SIGTERM before SIGKILL.
+    /// Plugins: no fence, the protocol frame on stdin, descendants get SIGKILL at once.
+    command: bool,
+}
+
+fn invalid(error: impl std::fmt::Display) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, error.to_string())
+}
+
 /// Runs the command `argv_json` names in the current directory and returns the exit code:
 /// the command's own, 128 + signal when a signal ended it, 143 when the supervisor was told
 /// to stop, and 1 when the command could not start confined.
 #[must_use]
 pub fn supervise(argv_json: &str) -> i32 {
-    match run(argv_json) {
+    let spec = serde_json::from_str(argv_json).map(|argv| Spec {
+        argv,
+        // Commands read the whole container, including state, and write only this
+        // workspace. Checkout writes go through checkout_edit or broker tasks.
+        read_paths: vec![PathBuf::from("/")],
+        command: true,
+    });
+    finish(spec.map_err(invalid).and_then(run), true)
+}
+
+/// Runs an ability plugin: `spec_json` is `{"argv": [...], "read": [package root,
+/// executable]}`, both already verified by the worker. The plugin reads its protocol frame
+/// from this process's stdin. Exit codes as [`supervise`].
+#[must_use]
+pub fn supervise_plugin(spec_json: &str) -> i32 {
+    let spec = serde_json::from_str::<serde_json::Value>(spec_json)
+        .map_err(invalid)
+        .and_then(|spec| {
+            let strings = |key: &str| -> io::Result<Vec<String>> {
+                serde_json::from_value(spec[key].clone()).map_err(invalid)
+            };
+            Ok(Spec {
+                argv: strings("argv")?,
+                read_paths: strings("read")?.into_iter().map(PathBuf::from).collect(),
+                command: false,
+            })
+        });
+    finish(spec.and_then(run), false)
+}
+
+fn finish(result: io::Result<i32>, graceful: bool) -> i32 {
+    match result {
         Ok(code) => code,
         Err(error) => {
-            eprintln!("Command supervisor: {error}");
-            clean_descendants();
+            eprintln!("Supervisor: {error}");
+            clean_descendants(graceful);
             1
         }
     }
 }
 
-fn run(argv_json: &str) -> io::Result<i32> {
-    let argv: Vec<String> = serde_json::from_str(argv_json)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    let (program, args) = argv
+fn run(spec: Spec) -> io::Result<i32> {
+    let graceful = spec.command;
+    let (program, args) = spec
+        .argv
         .split_first()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty command"))?;
     // SAFETY: prctl and sigaction calls with valid arguments; the handler only stores to an
@@ -60,7 +106,7 @@ fn run(argv_json: &str) -> io::Result<i32> {
             return Err(io::Error::last_os_error());
         }
         if libc::getppid() != expected_parent {
-            clean_descendants();
+            clean_descendants(graceful);
             return Ok(143);
         }
     }
@@ -77,11 +123,14 @@ fn run(argv_json: &str) -> io::Result<i32> {
             })
         })
         .collect::<io::Result<_>>()?;
-    // Commands read the whole container, including state, and write only this workspace.
-    // Checkout writes go through checkout_edit or broker tasks, never commands.
-    let sandbox = crate::sandbox::prepare(&std::env::current_dir()?, &[Path::new("/")], &ports)?;
+    let read_paths: Vec<&Path> = spec.read_paths.iter().map(PathBuf::as_path).collect();
+    let sandbox =
+        crate::sandbox::prepare(&std::env::current_dir()?, &read_paths, &ports, spec.command)?;
     let mut command = Command::new(program);
-    command.args(args).stdin(Stdio::null());
+    command.args(args);
+    if spec.command {
+        command.stdin(Stdio::null());
+    }
     // SAFETY: `apply` only makes raw system calls on memory prepared before the fork.
     unsafe {
         command.pre_exec(move || sandbox.apply());
@@ -90,7 +139,7 @@ fn run(argv_json: &str) -> io::Result<i32> {
     let mut pause = Duration::from_millis(1);
     let status = loop {
         if TERMINATED.load(Ordering::SeqCst) {
-            clean_descendants();
+            clean_descendants(graceful);
             return Ok(143);
         }
         if let Some(status) = child.try_wait()? {
@@ -99,7 +148,7 @@ fn run(argv_json: &str) -> io::Result<i32> {
         std::thread::sleep(pause);
         pause = (pause * 2).min(Duration::from_millis(50));
     };
-    clean_descendants();
+    clean_descendants(graceful);
     Ok(status
         .code()
         .unwrap_or_else(|| 128 + status.signal().unwrap_or(0)))
@@ -146,9 +195,10 @@ fn descendants() -> Vec<i32> {
     found
 }
 
-/// Ends every descendant: SIGTERM for three seconds, then SIGKILL, reaping as they exit.
-fn clean_descendants() {
-    let deadline = Instant::now() + Duration::from_secs(3);
+/// Ends every descendant, reaping as they exit: with `graceful`, SIGTERM for three seconds
+/// and then SIGKILL; otherwise SIGKILL at once.
+fn clean_descendants(graceful: bool) {
+    let deadline = Instant::now() + Duration::from_secs(if graceful { 3 } else { 0 });
     loop {
         let children = descendants();
         if children.is_empty() {

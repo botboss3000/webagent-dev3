@@ -189,10 +189,16 @@ struct Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        let Some(mut child) = self.child.take() else {
-            return;
-        };
-        let group = self.group;
+        if let Some(child) = self.child.take() {
+            stop_in_background(child, self.group);
+        }
+    }
+}
+
+/// Stops a supervisor's session in the background: SIGTERM now, then SIGKILL once the
+/// supervisor exits or after five seconds.
+pub(crate) fn stop_in_background(mut child: tokio::process::Child, group: i32) {
+    {
         // SAFETY: killpg takes plain integers; the unreaped child keeps the group's id.
         unsafe {
             libc::killpg(group, libc::SIGTERM);

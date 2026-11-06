@@ -62,10 +62,10 @@ struct Program {
     filter: *const Filter,
 }
 
-/// A ruleset and filter ready to apply in a command child.
+/// A ruleset, and for commands the Unix socket filter, ready to apply in a child.
 pub struct Prepared {
     ruleset: OwnedFd,
-    filter: [Filter; 11],
+    filter: Option<[Filter; 11]>,
 }
 
 fn checked(value: libc::c_long) -> io::Result<libc::c_long> {
@@ -96,13 +96,19 @@ pub fn abi() -> io::Result<i64> {
     })
 }
 
-/// Builds the boundary for a command in `base` that may also read `read_paths` and bind
-/// `ports` (at most four, 20000–29999).
+/// Builds the boundary for a child in `base` that may also read `read_paths` and bind
+/// `ports` (at most four, 20000–29999). `deny_unix` adds the Unix socket fence commands
+/// get; ability plugins run without it, as before.
 ///
 /// # Errors
 /// When Landlock ABI 6 is unavailable, a rule cannot be added, the ports are invalid or the
 /// ephemeral port range overlaps the preview range. A command never starts unconfined.
-pub fn prepare(base: &Path, read_paths: &[&Path], ports: &[u16]) -> io::Result<Prepared> {
+pub fn prepare(
+    base: &Path,
+    read_paths: &[&Path],
+    ports: &[u16],
+    deny_unix: bool,
+) -> io::Result<Prepared> {
     let base = std::fs::canonicalize(base)?;
     if abi()? < 6 {
         return Err(unavailable(
@@ -214,7 +220,11 @@ pub fn prepare(base: &Path, read_paths: &[&Path], ports: &[u16]) -> io::Result<P
     }
     Ok(Prepared {
         ruleset,
-        filter: unix_socket_filter()?,
+        filter: if deny_unix {
+            Some(unix_socket_filter()?)
+        } else {
+            None
+        },
     })
 }
 
@@ -266,12 +276,14 @@ impl Prepared {
                 self.ruleset.as_raw_fd(),
                 0_u32,
             ))?;
-            let program = Program {
-                len: 11,
-                filter: self.filter.as_ptr(),
-            };
-            if libc::prctl(libc::PR_SET_SECCOMP, 2, &program as *const Program, 0, 0) != 0 {
-                return Err(io::Error::last_os_error());
+            if let Some(filter) = &self.filter {
+                let program = Program {
+                    len: 11,
+                    filter: filter.as_ptr(),
+                };
+                if libc::prctl(libc::PR_SET_SECCOMP, 2, &program as *const Program, 0, 0) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
             }
         }
         Ok(())

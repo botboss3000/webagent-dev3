@@ -5,6 +5,7 @@
 //! conversion item A2).
 pub mod commands;
 pub mod files;
+pub mod plugins;
 pub mod runner;
 pub mod sandbox;
 
@@ -37,6 +38,10 @@ pub struct Config {
     pub files: files::Roots,
     /// The per-command supervisor: its executable and leading arguments.
     pub runner: Vec<String>,
+    /// The per-plugin supervisor: its executable and leading arguments.
+    pub plugin_runner: Vec<String>,
+    /// Where published ability packages live.
+    pub packages: plugins::Packages,
 }
 
 impl Config {
@@ -60,6 +65,11 @@ impl Config {
             files: files::Roots::container(),
             // The app executable's supervisor mode, dispatched before its async runtime.
             runner: vec!["/usr/local/bin/webagent-v3".into(), "--tool-runner".into()],
+            plugin_runner: vec![
+                "/usr/local/bin/webagent-v3".into(),
+                "--plugin-runner".into(),
+            ],
+            packages: plugins::Packages::container(),
         })
     }
 }
@@ -212,6 +222,17 @@ async fn handle(client: UnixStream, config: &Config, active: &Active) -> io::Res
         };
         return write_reply(&mut client_write, &parsed["id"], result).await;
     }
+    if let Some(parsed) = parsed.as_ref().filter(|_| name == plugins::TOOL) {
+        let workspace = parsed["workspace"].as_str().unwrap_or_default();
+        let (id, stop) = active.start(workspace);
+        let _registered = Registered { active, id };
+        let result = tokio::select! {
+            result = plugin_call(config, parsed) => result,
+            () = hang_up(&mut client_read) => return Ok(()),
+            () = stop.notified() => json!({"status":"failed","output":"Session not found"}),
+        };
+        return write_reply(&mut client_write, &parsed["id"], result).await;
+    }
     if name == "administrator_quiesce" {
         // Commands run here now; stop them before the Python worker quiesces the rest.
         if let Some(workspace) = parsed.as_ref().and_then(|p| p["workspace"].as_str()) {
@@ -236,6 +257,42 @@ async fn handle(client: UnixStream, config: &Config, active: &Active) -> io::Res
         }
         () = hang_up(&mut client_read) => Ok(()),
     }
+}
+
+/// Admits and runs one `ability_plugin_invoke` request.
+async fn plugin_call(config: &Config, request: &Value) -> Value {
+    let binding = &request["trusted"]["ability_plugin"];
+    if !binding.is_object() {
+        return json!({"status":"failed","output":"Trusted plugin binding required"});
+    }
+    let admitted = {
+        let roots = config.files.clone();
+        let request = request.clone();
+        tokio::task::spawn_blocking(move || {
+            files::admit(&roots, &request)
+                .map(|(base, _, _)| base)
+                .map_err(|failure| files::failed(&failure))
+        })
+        .await
+    };
+    let base = match admitted {
+        Ok(Ok(base)) => base,
+        Ok(Err(failed)) => return failed,
+        Err(_) => return json!({"status":"failed","output":"Plugin admission failed"}),
+    };
+    let args = request
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    plugins::invoke(
+        &config.packages,
+        &config.plugin_runner,
+        binding,
+        &args,
+        &base,
+    )
+    .await
+    .unwrap_or_else(|refused| json!({"status":"failed","output":refused.to_string()}))
 }
 
 /// Completes when the caller closes its side or sends anything after its request.
@@ -287,6 +344,8 @@ mod tests {
                 port_claims: dir.path().join("port-claims"),
             },
             runner: vec!["/nonexistent-runner".into()],
+            plugin_runner: vec!["/nonexistent-runner".into()],
+            packages: plugins::Packages::container(),
             socket: socket.clone(),
             legacy_socket: legacy.clone(),
             // The test process owns the directory it just created.

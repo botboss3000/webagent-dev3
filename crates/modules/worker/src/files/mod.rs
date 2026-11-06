@@ -232,7 +232,7 @@ fn workspace_path(roots: &Roots, session: &Value) -> Outcome<PathBuf> {
 }
 
 /// The canonical hyphenated lowercase form of a UUID, as Python's `str(uuid.UUID(text))`.
-fn uuid_text(text: &str) -> Option<String> {
+pub(crate) fn uuid_text(text: &str) -> Option<String> {
     let mut hex: String = text
         .trim_start_matches("urn:")
         .trim_start_matches("uuid:")

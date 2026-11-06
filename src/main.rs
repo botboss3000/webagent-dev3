@@ -188,9 +188,14 @@ use agent_loop::*;
 // recovery and execution; health only checks a recent loop heartbeat.
 fn main() -> Result<()> {
     // The tool worker's per-command supervisor starts without the async runtime's threads.
-    if std::env::args().nth(1).as_deref() == Some("--tool-runner") {
-        let argv = std::env::args().nth(2).unwrap_or_default();
-        std::process::exit(webagent_worker::runner::supervise(&argv));
+    let mode = std::env::args().nth(1);
+    if matches!(mode.as_deref(), Some("--tool-runner" | "--plugin-runner")) {
+        let spec = std::env::args().nth(2).unwrap_or_default();
+        std::process::exit(if mode.as_deref() == Some("--tool-runner") {
+            webagent_worker::runner::supervise(&spec)
+        } else {
+            webagent_worker::runner::supervise_plugin(&spec)
+        });
     }
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()

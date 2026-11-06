@@ -45,6 +45,11 @@ async fn worker() -> Worker {
             port_claims: dir.path().join("port-claims"),
         },
         runner: vec![env!("CARGO_BIN_EXE_webagent-tool-runner").into()],
+        plugin_runner: vec![
+            env!("CARGO_BIN_EXE_webagent-tool-runner").into(),
+            "--plugin".into(),
+        ],
+        packages: webagent_worker::plugins::Packages::container(),
     };
     tokio::spawn(serve(config));
     for _ in 0..100 {
