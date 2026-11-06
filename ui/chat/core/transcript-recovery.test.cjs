@@ -19,18 +19,23 @@ test('terminal poll restores dropped final event exactly once',async()=>{
  assert.deepEqual(f.published.map(x=>x.item.seq),[3]);assert.equal(f.published[0].options.recovered,true);
  f.client.updateRuns([{id:'run',session_id:'a',status:'completed'}]);f.streams[0].emit(msg(3));await tick();assert.equal(f.published.length,1);assert.equal(f.calls.length,2);f.client.disconnect();
 });
+// The first open follows the snapshot directly; only a later open is a reconnect that recovers.
+const reconnect=stream=>{stream.onopen();stream.onopen();};
+test('first stream open does not refetch the snapshot it follows',async()=>{
+ const f=await fixture();await f.open('a');const calls=f.calls.length;f.streams[0].onopen();await tick();assert.equal(f.calls.length,calls);f.client.disconnect();
+});
 test('reconnect fills older gap below newer delivered event',async()=>{
- const f=await fixture();await f.open('a');f.streams[0].emit(msg(9));f.saved.set('a',snapshot([msg(5),msg(9)]));f.streams[0].onopen();await tick();assert.deepEqual(f.published.map(x=>x.item.seq),[9,5]);f.client.disconnect();
+ const f=await fixture();await f.open('a');f.streams[0].emit(msg(9));f.saved.set('a',snapshot([msg(5),msg(9)]));reconnect(f.streams[0]);await tick();assert.deepEqual(f.published.map(x=>x.item.seq),[9,5]);f.client.disconnect();
 });
 test('render failure recovers despite browser Last-Event-ID advancement',async()=>{
  const f=await fixture();await f.open('a');f.saved.set('a',snapshot([msg(2)]));f.failRender(1);f.streams[0].emit(msg(2));await tick();assert.deepEqual(f.published.map(x=>x.item.seq),[2]);assert.equal(f.published[0].options.recovered,true);f.client.disconnect();
 });
 test('overlapping triggers coalesce and completion mid-fetch gets fresh snapshot',async()=>{
  const f=await fixture();await f.open('a');let resolve,count=0;f.override(()=>++count===1?new Promise(r=>resolve=r):snapshot([msg(4)]));
- f.streams[0].onopen();f.client.updateRuns([{id:'run',session_id:'a',status:'completed'}]);assert.equal(count,1);resolve(snapshot());await tick();assert.equal(count,2);assert.equal(f.published.length,1);f.client.disconnect();
+ reconnect(f.streams[0]);f.client.updateRuns([{id:'run',session_id:'a',status:'completed'}]);assert.equal(count,1);resolve(snapshot());await tick();assert.equal(count,2);assert.equal(f.published.length,1);f.client.disconnect();
 });
 test('delayed old session response cannot publish into new session',async()=>{
- const f=await fixture();await f.open('a');let resolve;f.override(id=>id==='a'?new Promise(r=>resolve=r):snapshot());f.streams[0].onopen();await f.open('b');resolve(snapshot([msg(6)]));await tick();assert.equal(f.published.length,0);assert.equal(f.streams[0].closed,true);f.client.disconnect();
+ const f=await fixture();await f.open('a');let resolve;f.override(id=>id==='a'?new Promise(r=>resolve=r):snapshot());reconnect(f.streams[0]);await f.open('b');resolve(snapshot([msg(6)]));await tick();assert.equal(f.published.length,0);assert.equal(f.streams[0].closed,true);f.client.disconnect();
 });
 test('retries stop after three timers and disconnect cancels scheduled retry',async()=>{
  const f=await fixture();await f.open('a');f.override(()=>{throw Error('offline');});f.streams[0].onerror();await tick();
@@ -42,7 +47,7 @@ test('other session completion does not fetch current snapshot',async()=>{
  const f=await fixture();await f.open('a');f.client.updateRuns([{id:'other',session_id:'b',status:'completed'}]);await tick();assert.equal(f.calls.length,1);f.client.disconnect();
 });
 test('transcript inserts recovered gaps in order without replacing existing rows',()=>{
- const source=fs.readFileSync(path.join(__dirname,'panel.js'),'utf8'),code=source.slice(source.indexOf('function message(item)'),source.indexOf('// Base presentation'));
+ const source=fs.readFileSync(path.join(__dirname,'panel.js'),'utf8'),code=source.slice(source.indexOf('function message(item,'),source.indexOf('// Base presentation'));
  const children=[],target={children,insertBefore(row,before){const index=children.indexOf(before);children.splice(index<0?children.length:index,0,row);}};
  const context=vm.createContext({$:()=>target,createMessage:item=>({dataset:{publicId:item.id,seq:String(item.seq)}}),resolveAsset:undefined,gutterRuns:new Map(),client:{},issues:null,session:'a',historyLastSeq:0,historyAction(){},note(){},stats:{},readObserver:{observe(){}},paintActivity(){},updateAdmission(){}});
  vm.runInContext(code,context);for(const seq of [9,5,9,2])context.message(msg(seq));assert.deepEqual(children.map(x=>Number(x.dataset.seq)),[2,5,9]);assert.equal(context.historyLastSeq,9);
@@ -60,7 +65,7 @@ test('queue recovery detects history rewind before publication and waits for reo
  f.streams[0].listeners.queue_updated();await tick();assert.equal(f.metadata[0].history_revision,1);assert.equal(f.published.length,0);assert.equal(f.queues.length,0);
  f.streams[0].emit(msg(9));assert.equal(f.published.length,0);
  // A response captured before Undo cannot reintroduce removed messages while reopening is deferred.
- f.saved.set('a',snapshot([msg(10)]));f.streams[0].onopen();await tick();assert.equal(f.published.length,0);
+ f.saved.set('a',snapshot([msg(10)]));reconnect(f.streams[0]);await tick();assert.equal(f.published.length,0);
  f.saved.set('a',{...snapshot([msg(2)]),session:{id:'a',history_revision:1}});await f.open('a');f.saved.set('a',{...snapshot([msg(2),msg(11)]),session:{id:'a',history_revision:1},queue:[]});f.streams.at(-1).listeners.queue_updated();await tick();assert.deepEqual(f.published.map(x=>x.item.seq),[11]);assert.equal(f.queues.length,1);f.client.disconnect();
 });
 test('queue rewind callback opening another session invalidates the old recovery',async()=>{
@@ -69,7 +74,7 @@ test('queue rewind callback opening another session invalidates the old recovery
 test('panel snapshot merge refuses different history revisions and other sessions',()=>{
  const source=fs.readFileSync(path.join(__dirname,'panel.js'),'utf8'),start=source.indexOf('function syncSnapshot(data)'),code=source.slice(start,source.indexOf('/** Confirms rewind',start));
  const published=[],updates=[],changes=[],disclosures=[];
- const context=vm.createContext({session:'a',historyRevision:2,historyLastSeq:4,privacyNotice:mode=>disclosures.push(mode),sharedAccess:null,canManageQueue:true,historyChanged:s=>changes.push(s),message:item=>published.push(item),followups:{update:data=>updates.push(data)},runs(){}});vm.runInContext(code,context);
+ const context=vm.createContext({session:'a',historyRevision:2,historyLastSeq:4,privacyNotice:mode=>disclosures.push(mode),sharedAccess:null,canManageQueue:true,historyChanged:s=>changes.push(s),message:item=>published.push(item),transcriptWindow:{accept:()=>true},paintActivity(){},followups:{update:data=>updates.push(data)},runs(){}});vm.runInContext(code,context);
  assert.equal(context.syncSnapshot({session:{id:'a',history_revision:1},messages:[msg(8)]}),false);assert.equal(context.syncSnapshot({session:{id:'b',history_revision:2},messages:[msg(9)]}),false);assert.equal(published.length,0);assert.equal(updates.length,0);
  assert.equal(context.syncSnapshot({session:{id:'a',history_revision:2},conversation_privacy:'operator_reviewable',access:{observer:true,can_manage_queue:false},last_seq:7,messages:[msg(7)],queue:[]}),true);assert.equal(context.historyLastSeq,7);assert.equal(published.length,1);assert.equal(updates.length,1);assert.equal(disclosures.length,2);assert.equal(disclosures.at(-1),'operator_reviewable');assert.equal(context.canManageQueue,false);
 });
@@ -77,7 +82,7 @@ test('panel snapshot merge refuses different history revisions and other session
 test('actual activity render failure stays open through message and resolves on successful render',()=>{
  const source=fs.readFileSync(path.join(__dirname,'panel.js'),'utf8');
  const paint=source.slice(source.indexOf('const paintActivity='),source.indexOf('  const client = createChatClient'));
- const message=source.slice(source.indexOf('function message(item)'),source.indexOf('// Base presentation'));
+ const message=source.slice(source.indexOf('function message(item,'),source.indexOf('// Base presentation'));
  const children=[],target={children,insertBefore(row){children.push(row);}};let broken=true;const active=new Set(),events=[];
  const context=vm.createContext({$:()=>target,activity:{render(){if(broken)throw Error('render failed');}},activityRuns:[],createMessage:item=>({dataset:{publicId:item.id,seq:String(item.seq)}}),resolveAsset:undefined,gutterRuns:new Map(),client:{},issues:{fail(operation){active.add(operation);events.push('opened');},resolve(operation){if(active.delete(operation))events.push('resolved');}},session:'a',historyLastSeq:0,historyAction(){},note(){},stats:{},readObserver:{observe(){}},updateAdmission(){}});
  vm.runInContext(paint+message+';this.paint=paintActivity;',context);context.message(msg(1));assert.deepEqual([...active],['activity_display']);assert.deepEqual(events,['opened']);broken=false;context.paint();assert.deepEqual([...active],[]);assert.deepEqual(events,['opened','resolved']);

@@ -809,6 +809,16 @@
       "description": "Vertical transcript pull distance in pixels. The maximum stretch and both top/bottom action triggers always use this same value. Surface profiles may override max_stretch_px.",
       "max_stretch_px": 10
     },
+    "transcript_window": {
+      "_instructions": "enabled: Draw only a window of the transcript; false draws every message at once. messages_above: Messages drawn above the saved position, or the newest messages drawn when none is saved. messages_below: Messages drawn below the saved position. load_more_step: Messages added when the reader scrolls near either edge of the window. load_threshold_px: Distance from the window's edge, in pixels, that loads more messages. remember_position: Reopen each session at the reader's last position (saved in this browser); false always opens at the latest message.",
+      "description": "Keeps long conversations fast by drawing a bounded slice of messages. Rows beyond messages_above + messages_below + 2 x load_more_step are dropped from the far side as the reader scrolls.",
+      "enabled": true,
+      "load_more_step": 20,
+      "load_threshold_px": 600,
+      "messages_above": 30,
+      "messages_below": 20,
+      "remember_position": true
+    },
     "transcript_padding": {
       "_instructions": "top_px: Additional top transcript padding in pixels. bottom_px: Additional bottom transcript padding in pixels.",
       "bottom_px": 50,
@@ -1136,6 +1146,12 @@
     "transcript_overscroll": {
       "_instructions": "max_stretch_px: Maximum transcript overscroll stretch and action-trigger distance, in pixels, where supported.",
       "max_stretch_px": 10
+    },
+    "transcript_window": {
+      "_instructions": "Phone override of chat_common.transcript_window; omitted keys inherit it.",
+      "load_more_step": 15,
+      "messages_above": 20,
+      "messages_below": 15
     },
     "user_turn_anchor": {
       "_instructions": "Edit up/down snap_distance_px (capture margin) and snap_rearm_distance_px (outer zone) independently. The shared landing zone uses the up outer distance below the landing and the down outer distance above it. Snap and layout movement do not rearm it. Pixel distances and millisecond durations. Refresh after editing. snap_distance_px: Capture margin from the user-bubble landing position, in pixels. Directional values override the flat fallback. snap_rearm_distance_px: Outer rearm distance in pixels. A landing blocks all nearby snaps until reader scrolling leaves this distance; the applicable side also rearms its individual cooldown.",

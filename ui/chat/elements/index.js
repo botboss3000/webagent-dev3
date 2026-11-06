@@ -25,8 +25,9 @@ function paint() {
   const progressActive=document.querySelector('#chat-above-pill.visible')!==null;
   document.querySelector('#session-dropdown-icon')?.classList.toggle('activity-running',progressActive);
   const lastGroup=groups[groups.length-1];
+  const rows=new Map([...container.children].map(n=>[n.dataset.publicId,n]));
   for(const group of groups) {
-    const boundary=[...container.children].find(n=>n.dataset.publicId===group.boundary_item_id);
+    const boundary=rows.get(group.boundary_item_id);
     if(!boundary) continue; // The corresponding public page has not loaded.
     keep.add(group.id);
     let entry=nodes.get(group.id);

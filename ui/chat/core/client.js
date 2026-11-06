@@ -114,8 +114,10 @@ export function createChatClient({request, note, issues, clearNoticeFrom = () =>
     };
     // Marks transport loss and starts bounded snapshot recovery for the current epoch.
     source.onerror = () => { if (valid(state)) {setConnecting(true); void recover(state);} };
-    // Clears the connection indicator and checks for messages missed before reconnect.
-    source.onopen = () => { if (valid(state)) {setConnecting(false); void recover(state);} };
+    // Clears the connection indicator and, on a reconnect, checks for messages missed while
+    // disconnected. The first open needs no check: the stream resumes after the snapshot's last_seq.
+    let opened = false;
+    source.onopen = () => { if (valid(state)) {setConnecting(false); if (opened) void recover(state); opened = true;} };
   }
   return {
     open, disconnect, updateRuns,

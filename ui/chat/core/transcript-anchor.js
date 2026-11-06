@@ -99,7 +99,7 @@ export function mountTranscriptAnchor({scroller,inner,header,getProfile}) {
   const observer=new ResizeObserver(entries=>{if(focusedId||entries.some(entry=>entry.target!==scroller))changed();});observer.observe(inner);observer.observe(header);observer.observe(scroller);
   // Polling rechecks focused landings; land honors an active run or the original focus deadline.
   const tick=setInterval(()=>{if(focusedId)land();},300);
-  return {reset,focus,changed,intent,
+  return {reset,focus,changed,intent,release,
     /** Treats a published user row as a new focus target; assistant rows only refresh layout. */
     published(item){if(item.role==='user')focus();else changed();},
     /** Tracks active run statuses and extends the current focus deadline while work is underway. */
