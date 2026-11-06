@@ -444,9 +444,7 @@ impl<
         for task in app.store.background_scan(Some(&sid)).await? {
             if task["status"] != "completed"
                 || delivered.contains(&task["id"])
-                || task["delivery_run_id"]
-                    .as_str()
-                    .is_some_and(|run_id| run["id"] != run_id)
+                || task["delivery_run_id"].is_string()
             {
                 continue;
             }
