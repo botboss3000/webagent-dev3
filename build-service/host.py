@@ -1448,7 +1448,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 raise ValueError("snapshot helper must be protected root-owned code")
             argv = ["sudo", "-n", str(helper)]
         else:
-            argv = ["sudo", "-n", "tar", "--exclude=__pycache__", "--exclude=*.pyc", "--exclude=*.pyo", "-cf", "-", *CONTEXT]
+            argv = ["sudo", "-n", "tar", "--exclude=__pycache__", "--exclude=*.pyc", "--exclude=*.pyo", *("--exclude=" + p for p in release.INSTALLED_PACKAGES), "-cf", "-", *CONTEXT]
         class BoundedContext(io.BytesIO):
             def write(self, data):
                 if self.tell() + len(data) > MAX_CONTEXT:

@@ -406,6 +406,10 @@ def backup_database(parent, name):
             raise ValueError("consistent database backup unavailable") from error
 
 
+# Root-installed executable plugin folders inside the source tree; never source inputs.
+INSTALLED_PACKAGES = ("v3/plugins/abilities/Core/mcp/package",)
+
+
 def snapshot_context(context):
     root_only()
     origin = directory(V3)
@@ -445,7 +449,8 @@ def snapshot_context(context):
                         top = os.open(leaf, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent)
                         try:
                             for relative, dirs, files, fd in os.fwalk(".", topdown=True, follow_symlinks=False, dir_fd=top):
-                                dirs[:] = [child for child in dirs if child != "__pycache__"]
+                                dirs[:] = [child for child in dirs if child != "__pycache__"
+                                           and str(Path(name) / relative / child) not in INSTALLED_PACKAGES]
                                 for child in dirs:
                                     if not stat.S_ISDIR(os.stat(child, dir_fd=fd, follow_symlinks=False).st_mode):
                                         raise ValueError("source symlink directory rejected")

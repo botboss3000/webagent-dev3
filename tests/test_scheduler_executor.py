@@ -44,7 +44,8 @@ class CacheTests(unittest.TestCase):
     def test_changed_or_new_rust_input_requires_compilation(self):
         """Added code is as significant as changed existing code for reuse decisions."""
         for changed in [{"v3/src/main.rs":"fn main(){panic!()}"},
-            {"v3/src/new.rs":"fn new(){}"},{"v3/Cargo.lock":"different lock"}]:
+            {"v3/src/new.rs":"fn new(){}"},{"v3/Cargo.lock":"different lock"},
+            {"v3/plugins/abilities/Core/mcp/service/main.rs":"fn main(){}"}]:
             self.assertIsNone(self.worker.cached_engine(self.candidate(changed),self.output()))
     def test_embedded_json_is_a_compile_dependency(self):
         """File extensions cannot conceal a compiler-declared JSON dependency."""

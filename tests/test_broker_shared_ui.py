@@ -64,6 +64,16 @@ class SnapshotTests(unittest.TestCase):
             (root / CSS).write_bytes(b"old")
             self.assertEqual(read(release.snapshot(root, (CSS,), NOOP))[CSS], b"old")
 
+    def test_installed_ability_package_is_never_a_source_input(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            ability = root / "v3/plugins/abilities/Core/mcp"
+            (ability / "package").mkdir(parents=True)
+            (ability / "package/webagent-mcp").write_bytes(b"installed")
+            (ability / "mcp.json").write_bytes(b"{}")
+            entries = read(release.snapshot(root, ("v3/plugins/abilities",), NOOP))
+        self.assertEqual(list(entries), ["v3/plugins/abilities/Core/mcp/mcp.json"])
+
 
 class CandidateTests(unittest.TestCase):
     def test_a_shared_ui_edit_ships_in_the_same_candidate(self):

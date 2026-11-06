@@ -240,6 +240,14 @@ def ui_baseline_mismatch(blob):
                 wrong.append(name)
     return wrong
 
+# Root-installed executable plugin folders inside the source tree; never source inputs.
+INSTALLED_PACKAGES = ("plugins/abilities/Core/mcp/package",)
+
+
+def installed_package(name):
+    return any(("/" + package + "/") in ("/" + name) for package in INSTALLED_PACKAGES)
+
+
 def snapshot(root, allowlist, validate):
     files = {}
     shared = root / SHARED_UI_SOURCE
@@ -259,7 +267,7 @@ def snapshot(root, allowlist, validate):
             if not entry.is_file():
                 raise ValueError("source workspace special file forbidden")
             name = entry.relative_to(base).as_posix()
-            if "__pycache__" in entry.parts or name.endswith((".pyc", ".pyo")):
+            if "__pycache__" in entry.parts or name.endswith((".pyc", ".pyo")) or installed_package(name):
                 continue
             info = entry.stat()
             if info.st_size > (MAX_INSPECTION_FILE if inspection_path(name) else 16 * 1024 * 1024) or len(files) > 20000:

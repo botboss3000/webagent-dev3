@@ -191,6 +191,16 @@ class InstallTests(unittest.TestCase):
         (src / "secret.db").write_bytes(b"SQLite format 3")
         with self.assertRaisesRegex(ValueError, "database"): installer.snapshot_context(("v3/src",))
 
+    def test_snapshot_skips_installed_ability_packages(self):
+        ability = self.v3 / "plugins/abilities/Core/mcp"
+        (ability / "package").mkdir(parents=True)
+        (ability / "package/webagent-mcp").write_bytes(b"installed")
+        (ability / "mcp.json").write_text("{}")
+        context = installer.snapshot_context(("v3/plugins/abilities",))
+        with installer.tarfile.open(fileobj=installer.io.BytesIO(context)) as archive:
+            names = [member.name for member in archive if "/Core/mcp/" in member.name]
+        self.assertEqual(names, ["v3/plugins/abilities/Core/mcp/mcp.json"])
+
     def test_snapshot_skips_optional_root_files_until_first_promoted(self):
         src = self.v3 / "src"
         src.mkdir()
