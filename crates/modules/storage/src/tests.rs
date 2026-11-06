@@ -634,3 +634,39 @@ async fn legacy_runtime_database_splits_into_planes_once() {
         json!({"changed":true})
     );
 }
+
+#[tokio::test]
+async fn chat_rebuild_admits_notices_and_keeps_rows_and_seq_counter() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("user_data/admin/admin.db");
+    let old = pool::open_pool(&path, true, true).await.unwrap();
+    // Recreate the pre-notice table shape; seq 3 was used and then removed (undo).
+    sqlx::raw_sql("DROP TABLE chat;
+        CREATE TABLE chat(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,session_id TEXT NOT NULL,run_id TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('user','assistant')),content BLOB NOT NULL,created_at INTEGER NOT NULL,terminal_run_id TEXT UNIQUE);
+        INSERT INTO chat(seq,id,session_id,run_id,role,content,created_at) VALUES(1,'user:r','s','r','user',x'00',1),(2,'assistant:r','s','r','assistant',x'00',1),(3,'user:r2','s','r2','user',x'00',1);
+        DELETE FROM chat WHERE seq=3;")
+        .execute(&old)
+        .await
+        .unwrap();
+    assert!(sqlx::query("INSERT INTO chat(id,session_id,run_id,role,content,created_at) VALUES('notice:r','s','r','notice',x'00',1)").execute(&old).await.is_err());
+    old.close().await;
+    let pool = pool::open_pool(&path, true, true).await.unwrap();
+    let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM chat ORDER BY seq")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(ids, ["user:r", "assistant:r"]);
+    sqlx::query("INSERT INTO chat(id,session_id,run_id,role,content,created_at) VALUES('notice:r','s','r','notice',x'00',1)").execute(&pool).await.unwrap();
+    let seq: i64 = sqlx::query_scalar("SELECT seq FROM chat WHERE id='notice:r'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(seq, 4, "a removed seq is never reused");
+    let index: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='chat_session'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(index, 1);
+}

@@ -2567,6 +2567,11 @@ async fn shutoff_cancels_midstream_model_without_waiting_for_eof() {
         .unwrap();
     assert_eq!(app.run(&id).await.unwrap()["status"], "stopped");
     let (chat, _) = app.store.chat_snapshot(&sid).await.unwrap();
+    // The stop leaves a run-status notice, but no published reply.
+    let chat: Vec<_> = chat
+        .into_iter()
+        .filter(|row| row["role"] != "notice")
+        .collect();
     assert_eq!(chat.len(), 1);
     assert_eq!(chat[0]["role"], "user");
     server.abort();
@@ -2652,7 +2657,15 @@ async fn runtime_restart_resumes_model_once_but_preserves_intentional_stops() {
         app.active.lock().await.remove(&id);
         let interrupted = app.run(&id).await.unwrap();
         assert_eq!(interrupted["input"], original, "{action}");
-        assert_eq!(app.store.chat_snapshot(&sid).await.unwrap().0.len(), 1);
+        let published = app.store.chat_snapshot(&sid).await.unwrap().0;
+        assert_eq!(
+            published
+                .iter()
+                .filter(|row| row["role"] != "notice")
+                .count(),
+            1,
+            "{action}"
+        );
         if matches!(action, "restart" | "disabled") {
             assert_eq!(interrupted["status"], "running");
             assert_eq!(

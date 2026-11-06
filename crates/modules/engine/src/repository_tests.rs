@@ -49,7 +49,8 @@ impl Fixture {
    CREATE TABLE loop_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,run_id TEXT,schema_version INTEGER,kind TEXT,payload BLOB,created_at INTEGER);
    CREATE TABLE publication_outbox(run_id TEXT PRIMARY KEY,schema_version INTEGER,payload BLOB,created_at INTEGER);
    CREATE TABLE notifications(event_key TEXT PRIMARY KEY,payload BLOB);
-   CREATE TABLE fixture_effects(key TEXT PRIMARY KEY,value BLOB);").execute(&pool).await.unwrap();
+   CREATE TABLE fixture_effects(key TEXT PRIMARY KEY,value BLOB);
+   CREATE TABLE chat(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,session_id TEXT NOT NULL,run_id TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('user','assistant','notice')),content BLOB NOT NULL,created_at INTEGER NOT NULL,terminal_run_id TEXT UNIQUE);").execute(&pool).await.unwrap();
         Self {
             root,
             pool,
@@ -553,4 +554,37 @@ async fn command_acknowledgement_waits_for_a_concurrent_writer_instead_of_failin
     let (acknowledged, ()) = tokio::join!(r.acknowledge_loop_commands(), commit);
     assert_eq!(acknowledged.unwrap(), 2);
     assert_eq!(f.repo().acknowledge_loop_commands().await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn failed_or_error_stopped_runs_keep_one_notice_row_until_they_move_on() {
+    let f = Fixture::new().await;
+    let r = f.repo();
+    for (status, error, uncertain, expected) in [
+        ("failed", "Bridge reply timed out", false, 1),
+        ("failed", "Bridge client offline", false, 1),
+        ("failed", "boom", true, 0),
+        ("stopped", "", false, 0),
+        ("paused", "Provider unavailable", false, 1),
+        ("running", "Retrying in 5s", false, 0),
+    ] {
+        let run = json!({"id":"r","session_id":"s","status":status,"error":error,"uncertain":uncertain,"updated_at":1});
+        let mut tx = f.pool.begin().await.unwrap();
+        r.index_run(&mut tx, &run).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(f.count("chat").await, expected, "{status} {error}");
+    }
+    let mut tx = f.pool.begin().await.unwrap();
+    r.index_run(
+        &mut tx,
+        &json!({"id":"r","session_id":"s","status":"failed","error":"late","updated_at":2}),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let role: String = sqlx::query_scalar("SELECT role FROM chat WHERE id='notice:r'")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(role, "notice");
 }

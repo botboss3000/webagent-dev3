@@ -8,6 +8,7 @@ import {copyText} from '../../shared/models/clipboard.js';
 import {openChatElementFullView} from './full-view.js';
 import {openChatImagePreview} from './image-preview.js';
 import {createBubbleGutter} from './bubble-gutters.js';
+import {createChatAction} from './chat-action-panel.js';
 /** Creates an accessible gutter button and forwards its click to the supplied action. */
 function button(title,icon,action){const node=document.createElement('button');node.type='button';node.className='turn-gutter-btn';node.title=title;node.setAttribute('aria-label',title);node.innerHTML='<i data-lucide="'+icon+'" style="width:14px;height:14px"></i>';node.addEventListener('click',action);return node;}
 /** Writes plain text as text nodes and recognized HTTP(S) URLs as safe new-tab links. */
@@ -34,7 +35,13 @@ export function updateAdmission(bubble, admission) {
 }
 /** Builds one published bubble; rejects malformed identity data and wires attachments, actions and user-text expansion. */
 export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSession=()=>null,note=()=>{},showContext=()=>{},historyAction=null}={}){
-  if(!['user','assistant','system'].includes(item.role)||!Number.isSafeInteger(item.seq)||item.seq<=0||typeof item.id!=='string')return null;
+  if(!['user','assistant','system','notice'].includes(item.role)||!Number.isSafeInteger(item.seq)||item.seq<=0||typeof item.id!=='string')return null;
+  // A stored run-status notice keeps its transcript position; the agent never sees these rows.
+  if(item.role==='notice'){
+    const notice=item.content&&typeof item.content==='object'?item.content:{};
+    const row=document.createElement('article');row.className='v3-message system';row.dataset.publicId=item.id;row.dataset.seq=String(item.seq);row.dataset.noticeRunId=item.run_id;
+    row.append(createChatAction({title:(notice.status==='failed'?'Run failed':'Stopped')+(notice.error?' — '+notice.error:''),message:'To continue, write a new message in the chat.'}));return row;
+  }
   if(item.role==='system'){
     const row=document.createElement('article');row.className='v3-message system';row.dataset.publicId=item.id;row.dataset.seq=String(item.seq);
     const text=document.createElement('p');text.textContent=typeof item.content==='string'?item.content:JSON.stringify(item.content);row.append(text);return row;
@@ -96,7 +103,7 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
 /** Composes the shared transcript row; bubble identity owns actions while row metadata owns ordering/read tracking. */
 export function createMessageRow(item,options){
   const bubble=createMessage(item,options);
-  if(!bubble||item.role==='system')return bubble;
+  if(!bubble||item.role==='system'||item.role==='notice')return bubble;
   const row=document.createElement('article');row.className='v3-message message-row '+(item.role==='user'?'user':'agent');
   for(const key of ['publicId','msgId','seq','turnId'])row.dataset[key]=bubble.dataset[key];
   // Move the configured gutter outside the painted surface for both roles without replacing its handlers.

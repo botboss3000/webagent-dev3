@@ -81,6 +81,7 @@ impl<
             crate::send_future(sqlx::query("INSERT INTO run_index(id,session_id,status,updated_at,enqueue_seq) VALUES(?,?,?,?,(SELECT COALESCE(MAX(enqueue_seq),0)+1 FROM run_index)) ON CONFLICT(id) DO UPDATE SET status=excluded.status,updated_at=excluded.updated_at,enqueue_seq=COALESCE(run_index.enqueue_seq,excluded.enqueue_seq)")
             .bind(run["id"].as_str().ok_or_else(||anyhow!("Invalid run"))?).bind(run["session_id"].as_str().unwrap_or(""))
             .bind(run["status"].as_str().unwrap_or("failed")).bind(run["updated_at"].as_i64().unwrap_or(0)).execute(&mut **tx)).await?;
+            crate::send_future(self.sync_run_notice(tx, run)).await?;
             // Session totals advance in the same transaction as the run. Re-saving
             // a run contributes only its delta, so retries and recovery cannot double-count.
             let new_usage = crate::send_future(self.usage.stage_run_usage_in(tx, run)).await?;
@@ -90,6 +91,43 @@ impl<
             "pending":run["pending"],"uncertain":run["uncertain"],"turns":run["turns"],"phase":run["phase"],"updated_at":run["updated_at"]});
             crate::send_future(sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
             .bind(format!("run_view:{}",run["id"].as_str().unwrap())).bind(self.records.encode_user_record(&view)?).execute(&mut **tx)).await?;
+            Ok(())
+        }
+    }
+
+    /// Keeps a failed or error-stopped run's notice as a chat row, so it holds its place in the
+    /// transcript and survives reload. It is written to `chat` only: model context is built from
+    /// `interactions`, and model chat pages exclude `notice` rows. A run that leaves that state
+    /// (retry, resume) loses its notice.
+    fn sync_run_notice<'s, 'tx>(
+        &'s self,
+        tx: &'s mut sqlx::Transaction<'tx, sqlx::Sqlite>,
+        run: &'s Value,
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 's + use<'s, 'tx, R, H, Q, N, U>
+    where
+        'tx: 's,
+    {
+        async move {
+            let rid = run["id"].as_str().ok_or_else(|| anyhow!("Invalid run"))?;
+            let status = run["status"].as_str().unwrap_or("");
+            let error = run["error"].as_str().filter(|error| !error.is_empty());
+            let id = format!("notice:{rid}");
+            let shown = run["uncertain"] != true
+                && (status == "failed"
+                    || (matches!(status, "paused" | "stopped") && error.is_some()));
+            if shown {
+                let content = serde_json::json!({"status": status, "error": error});
+                crate::send_future(sqlx::query("INSERT INTO chat(id,session_id,run_id,role,content,created_at) VALUES(?,?,?,'notice',?,strftime('%s','now')) ON CONFLICT(id) DO UPDATE SET content=excluded.content")
+                    .bind(id.clone()).bind(run["session_id"].as_str().unwrap_or("").to_owned()).bind(rid.to_owned())
+                    .bind(self.records.encode_user_record(&content)?).execute(&mut **tx)).await?;
+            } else {
+                crate::send_future(
+                    sqlx::query("DELETE FROM chat WHERE id=? AND role='notice'")
+                        .bind(id)
+                        .execute(&mut **tx),
+                )
+                .await?;
+            }
             Ok(())
         }
     }

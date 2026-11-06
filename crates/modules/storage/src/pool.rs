@@ -79,7 +79,7 @@ pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePo
             CREATE TABLE IF NOT EXISTS activity_boundaries(interaction_seq INTEGER PRIMARY KEY,boundary_item_id TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS chat_context_boundaries(message_id TEXT PRIMARY KEY,through_seq INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS activity_boundary_item ON activity_boundaries(boundary_item_id);
-            CREATE TABLE IF NOT EXISTS chat(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,session_id TEXT NOT NULL,run_id TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('user','assistant')),content BLOB NOT NULL,created_at INTEGER NOT NULL,terminal_run_id TEXT UNIQUE);
+            CREATE TABLE IF NOT EXISTS chat(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,session_id TEXT NOT NULL,run_id TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('user','assistant','notice')),content BLOB NOT NULL,created_at INTEGER NOT NULL,terminal_run_id TEXT UNIQUE);
             CREATE INDEX IF NOT EXISTS chat_session ON chat(session_id,seq);
             CREATE TABLE IF NOT EXISTS loop_commands(seq INTEGER PRIMARY KEY AUTOINCREMENT,command_id TEXT NOT NULL UNIQUE,run_id TEXT NOT NULL,schema_version INTEGER NOT NULL CHECK(schema_version=1),kind TEXT NOT NULL,payload BLOB NOT NULL,created_at INTEGER NOT NULL,acknowledged_at INTEGER);
             CREATE INDEX IF NOT EXISTS loop_commands_run ON loop_commands(run_id,seq);
@@ -118,6 +118,7 @@ pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePo
         sqlx::query("UPDATE run_index SET enqueue_seq=rowid WHERE enqueue_seq IS NULL")
             .execute(&pool)
             .await?;
+        widen_chat_roles(&pool).await?;
         for (name, declaration) in [
             ("lease_epoch", "INTEGER NOT NULL DEFAULT 0"),
             ("lease_owner", "TEXT"),
@@ -133,6 +134,35 @@ pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePo
         }
     }
     Ok(pool)
+}
+
+/// Rebuilds a chat table created before run-status `notice` rows existed.
+/// SQLite cannot change a CHECK constraint in place, so the rows move to a
+/// copy with the same columns, ids and seq values, and the AUTOINCREMENT
+/// counter keeps its high-water mark so seq values are never reused.
+async fn widen_chat_roles(pool: &SqlitePool) -> Result<()> {
+    let sql: Option<String> =
+        sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE type='table' AND name='chat'")
+            .fetch_optional(pool)
+            .await?;
+    if sql.is_none_or(|sql| sql.contains("'notice'")) {
+        return Ok(());
+    }
+    // One script on one connection; the temp table carries the counter across the drop.
+    sqlx::raw_sql("BEGIN IMMEDIATE;
+        CREATE TEMP TABLE chat_counter AS SELECT seq FROM sqlite_sequence WHERE name='chat';
+        CREATE TABLE chat_rebuild(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,session_id TEXT NOT NULL,run_id TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('user','assistant','notice')),content BLOB NOT NULL,created_at INTEGER NOT NULL,terminal_run_id TEXT UNIQUE);
+        INSERT INTO chat_rebuild(seq,id,session_id,run_id,role,content,created_at,terminal_run_id) SELECT seq,id,session_id,run_id,role,content,created_at,terminal_run_id FROM chat;
+        DROP TABLE chat;
+        ALTER TABLE chat_rebuild RENAME TO chat;
+        CREATE INDEX IF NOT EXISTS chat_session ON chat(session_id,seq);
+        INSERT INTO sqlite_sequence(name,seq) SELECT 'chat',0 WHERE EXISTS(SELECT 1 FROM temp.chat_counter) AND NOT EXISTS(SELECT 1 FROM sqlite_sequence WHERE name='chat');
+        UPDATE sqlite_sequence SET seq=MAX(seq,(SELECT seq FROM temp.chat_counter)) WHERE name='chat' AND EXISTS(SELECT 1 FROM temp.chat_counter);
+        DROP TABLE temp.chat_counter;
+        COMMIT;")
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 /// One account database with its disposable caches and context invalidation

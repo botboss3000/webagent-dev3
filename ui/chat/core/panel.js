@@ -330,12 +330,14 @@ function paintBackgroundStop(){const button=$('chat-stop-btn');if(button.dataset
 async function cancel(id){if(sharedAccess?.can_control===false)throw Error('This conversation is read only');stoppedRun=id;progress.hold(STOPPED,id);try{await client.cancel(id,{client_request_id:keyId('cancel:'+id)});const count=await checkBackground();if(count)progress.hold('Stopped, '+count+' background process'+(count===1?'':'es')+' still active. Click Stop again for total stop',id);}finally{await refresh();}}
 /** Second Stop: ends all background work; the agent asks before restarting any of it. */
 async function stopAll(){const id=session;progress.hold(STOPPED,stoppedRun);const requestKey='session-stop:'+id+':'+Date.now();try{await client.stopSession(id,{client_request_id:keyId(requestKey)});forgetKey(requestKey);if(id===session){backgroundCount=0;$('chat-stop-btn').dataset.background='false';}}finally{await refresh();}}
-// Adds/removes a transcript notice only for certain failed runs; uncertain outcomes remain in recovery UI.
+// Shows a transient card while a run retries. Failed and error-stopped runs arrive as stored
+// notice rows in transcript order; a notice whose run has moved on (retry, resume) is removed.
 function failedRunMessages(items){
   const target=$('chat-messages-inner');
-  // Error stops share the failed notice; uncertain outcomes keep their recovery controls.
   const retrying=run=>['queued','running'].includes(run.status)&&run.error?.startsWith('Retrying');
-  const failed=items.filter(run=>!run.uncertain&&(run.status==='failed'||retrying(run)||(['paused','stopped'].includes(run.status)&&run.error)));
+  const moved=new Set(items.filter(run=>!['failed','paused','stopped'].includes(run.status)).map(run=>run.id));
+  for(const row of target.querySelectorAll('[data-notice-run-id]'))if(moved.has(row.dataset.noticeRunId))row.remove();
+  const failed=items.filter(run=>!run.uncertain&&retrying(run));
   const ids=new Set(failed.map(run=>run.id));
   for(const row of target.querySelectorAll('[data-failed-run-id]'))if(!ids.has(row.dataset.failedRunId))row.remove();
   for(const run of failed){
@@ -347,13 +349,8 @@ function failedRunMessages(items){
       const after=turns.at(-1);
       target.insertBefore(row,after?.nextSibling||null);
     }
-    if(retrying(run)){
-      row.firstChild.querySelector('strong').textContent=run.error;
-      row.firstChild.querySelector('.chat-action-message').textContent='The run restarts automatically.';
-      continue;
-    }
-    row.firstChild.querySelector('strong').textContent=(run.status==='failed'?'Run failed':'Stopped')+(run.error?' — '+run.error:'');
-    row.firstChild.querySelector('.chat-action-message').textContent='To continue, write a new message in the chat.';
+    row.firstChild.querySelector('strong').textContent=run.error;
+    row.firstChild.querySelector('.chat-action-message').textContent='The run restarts automatically.';
   }
 }
 /** Fans run snapshots to transport, display lease, controls, progress and activity, then paints composer and run actions. Approval, recovery, and cancel handlers call their matching client endpoints. */

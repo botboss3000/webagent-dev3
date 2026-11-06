@@ -1,6 +1,7 @@
 //! Persistent participation and follow-up admission share the conversation writer.
-#[cfg(test)] use crate::State;
 use super::*;
+#[cfg(test)]
+use crate::State;
 use webagent_chat::shared::participation_state as state;
 impl Store {
     pub(crate) async fn shared_model_context(&self, sid: &str) -> Result<Vec<Value>> {
@@ -9,12 +10,20 @@ impl Store {
                 .bind(sid)
                 .fetch_all(&self.pool)
                 .await?;
-        let legacy=self.followup_queue(sid).await?;
-        let excluded:std::collections::HashSet<String>=legacy["entries"].as_array().into_iter().flatten().filter(|entry|entry["status"]!="delivered").filter_map(|entry|entry["id"].as_str().map(str::to_owned)).collect();
+        let legacy = self.followup_queue(sid).await?;
+        let excluded: std::collections::HashSet<String> = legacy["entries"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|entry| entry["status"] != "delivered")
+            .filter_map(|entry| entry["id"].as_str().map(str::to_owned))
+            .collect();
         let mut input = Vec::new();
         for row in rows {
             let rid: String = row.get("run_id");
-            if excluded.contains(&rid){continue;}
+            if excluded.contains(&rid) {
+                continue;
+            }
             if self
                 .get(&format!("message_meta:{rid}"))
                 .await?
@@ -28,7 +37,11 @@ impl Store {
             }
             let mut content = self.unseal(&row.get::<Vec<u8>, _>("content"))?;
             if role == "user" {
-                if let Some(meta)=self.get(&format!("message_meta:{rid}")).await? {if meta["context_eligible"]==true && meta["context_content"].is_string(){content=meta["context_content"].clone();}}
+                if let Some(meta) = self.get(&format!("message_meta:{rid}")).await? {
+                    if meta["context_eligible"] == true && meta["context_content"].is_string() {
+                        content = meta["context_content"].clone();
+                    }
+                }
                 if let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>(
                     "SELECT item FROM interactions WHERE session_id=? AND run_id=? AND step='user'",
                 )
@@ -53,9 +66,19 @@ impl Store {
     }
 
     pub(crate) async fn model_message_allowed(&self, sid: &str, rid: &str) -> Result<bool> {
-        if self.get(&format!("message_meta:{rid}")).await?.is_some_and(|meta|meta["context_eligible"]==false || meta["queued"]==true) {return Ok(false);}
-        let queue=self.followup_queue(sid).await?;
-        Ok(!queue["entries"].as_array().into_iter().flatten().any(|entry|entry["id"]==rid && entry["status"]!="delivered"))
+        if self
+            .get(&format!("message_meta:{rid}"))
+            .await?
+            .is_some_and(|meta| meta["context_eligible"] == false || meta["queued"] == true)
+        {
+            return Ok(false);
+        }
+        let queue = self.followup_queue(sid).await?;
+        Ok(!queue["entries"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|entry| entry["id"] == rid && entry["status"] != "delivered"))
     }
 
     pub(crate) async fn model_chat_page(&self, sid: &str, after: i64, limit: i64) -> Result<Value> {
@@ -63,8 +86,8 @@ impl Store {
         if let Some(rows) = page["messages"].as_array_mut() {
             for row in rows.iter_mut() {
                 let rid = row["run_id"].as_str().unwrap_or("");
-                if !self.model_message_allowed(sid,rid).await?
-                {
+                // Run-status notices are for people reading the transcript, never the agent.
+                if row["role"] == "notice" || !self.model_message_allowed(sid, rid).await? {
                     // Preserve cursor progression without disclosing excluded text.
                     row["content"] = Value::Null;
                     row["role"] = json!("excluded");
@@ -80,14 +103,19 @@ impl Store {
         let sid = hit["session_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Search session missing"))?;
-        let rid: Option<String> =
-            sqlx::query_scalar("SELECT run_id FROM chat WHERE seq=? AND session_id=?")
+        let row: Option<(String, String)> =
+            sqlx::query_as("SELECT run_id,role FROM chat WHERE seq=? AND session_id=?")
                 .bind(seq)
                 .bind(sid)
                 .fetch_optional(&self.pool)
                 .await?;
-        let Some(rid) = rid else { return Ok(false) };
-        self.model_message_allowed(sid,&rid).await
+        let Some((rid, role)) = row else {
+            return Ok(false);
+        };
+        if role == "notice" {
+            return Ok(false);
+        }
+        self.model_message_allowed(sid, &rid).await
     }
     pub(crate) async fn participation_state(&self, sid: &str) -> Result<Value> {
         Ok(state(
@@ -162,14 +190,20 @@ impl Store {
             current["actor_id"] = json!(actor);
             session["participation"] = current.clone();
             if !active {
-            self.cancel_session_followups(&mut tx,sid).await?;
-                if matches!(session["auto_naming"]["stage"].as_str(),Some("waiting_turn"|"queued"|"generating"|"failed")) {
-                    session["auto_naming"]["stage"]=json!("cancelled");
-                    session["auto_naming"]["claim"]=Value::Null;
-                    session["auto_naming"]["lease_until"]=json!(0);
-                    session["auto_naming"]["source"]=Value::Null;
-                    session["auto_naming"]["system_plan"]=Value::Null;
-                    sqlx::query("DELETE FROM docs WHERE key=?").bind(format!("session_naming:{sid}")).execute(&mut *tx).await?;
+                self.cancel_session_followups(&mut tx, sid).await?;
+                if matches!(
+                    session["auto_naming"]["stage"].as_str(),
+                    Some("waiting_turn" | "queued" | "generating" | "failed")
+                ) {
+                    session["auto_naming"]["stage"] = json!("cancelled");
+                    session["auto_naming"]["claim"] = Value::Null;
+                    session["auto_naming"]["lease_until"] = json!(0);
+                    session["auto_naming"]["source"] = Value::Null;
+                    session["auto_naming"]["system_plan"] = Value::Null;
+                    sqlx::query("DELETE FROM docs WHERE key=?")
+                        .bind(format!("session_naming:{sid}"))
+                        .execute(&mut *tx)
+                        .await?;
                 }
                 if let Some(queue) = session["message_queue"].as_array() {
                     for item in queue {
@@ -313,7 +347,7 @@ impl Store {
             .ok_or_else(|| anyhow!("Message id missing"))?;
         let receipts: Vec<_> = docs
             .iter()
-            .filter(|(k, _)| k.starts_with("receipt:message:")||k.starts_with("receipt:module:"))
+            .filter(|(k, _)| k.starts_with("receipt:message:") || k.starts_with("receipt:module:"))
             .collect();
         for (key, input) in &receipts {
             if let Some(raw) =
@@ -329,10 +363,13 @@ impl Store {
                 return Ok(saved["result"].clone());
             }
         }
-        if message["participation_generation"].as_u64().is_some_and(|generation|generation!=current["generation"].as_u64().unwrap_or(0)) {
+        if message["participation_generation"]
+            .as_u64()
+            .is_some_and(|generation| generation != current["generation"].as_u64().unwrap_or(0))
+        {
             return Err(anyhow!("Participation revision changed"));
         }
-        let eligible=kind!="human_message" && current["active"]==true;
+        let eligible = kind != "human_message" && current["active"] == true;
         let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed')").bind(sid).fetch_one(&mut *tx).await?;
         let review: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM docs WHERE key=?")
             .bind(format!("manager_pending:{sid}"))
@@ -356,7 +393,7 @@ impl Store {
         }
         let mut retained = Vec::new();
         for (key, mut value) in docs {
-            if key.starts_with("receipt:message:")||key.starts_with("receipt:module:") {
+            if key.starts_with("receipt:message:") || key.starts_with("receipt:module:") {
                 value["result"] = result.clone();
                 self.write_document(&mut tx, &key, &value).await?;
             } else if key.starts_with("run:") || key.starts_with("manager_") {
@@ -406,8 +443,14 @@ impl Store {
         docs: Vec<(String, Value)>,
         current: &Value,
     ) -> Result<()> {
-        if let Some((_,run))=docs.iter().find(|(key,_)|key.starts_with("run:")) {self.reserve_requester_run(run).await?;}
-        else if let Some((_,review))=docs.iter().find(|(key,_)|key.starts_with("manager_review:")) {self.reserve_requester_run(&review["run"]).await?;}
+        if let Some((_, run)) = docs.iter().find(|(key, _)| key.starts_with("run:")) {
+            self.reserve_requester_run(run).await?;
+        } else if let Some((_, review)) = docs
+            .iter()
+            .find(|(key, _)| key.starts_with("manager_review:"))
+        {
+            self.reserve_requester_run(&review["run"]).await?;
+        }
         let rid = message["run_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Message id missing"))?;
@@ -467,8 +510,18 @@ impl Store {
                 .bind(format!("manager_pending:{sid}"))
                 .fetch_one(&mut *tx)
                 .await?;
-            let legacy=self.queue_read_tx(&mut tx,sid).await?;
-            let legacy_pending=legacy["held"]==true || legacy["entries"].as_array().into_iter().flatten().any(|entry|matches!(entry["status"].as_str(),Some("pending"|"reviewing"|"held")));
+            let legacy = self.queue_read_tx(&mut tx, sid).await?;
+            let legacy_pending = legacy["held"] == true
+                || legacy["entries"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|entry| {
+                        matches!(
+                            entry["status"].as_str(),
+                            Some("pending" | "reviewing" | "held")
+                        )
+                    });
             if count > 0 || pending > 0 || legacy_pending {
                 continue;
             }
@@ -483,15 +536,22 @@ impl Store {
                 == current["generation"].as_u64().unwrap_or(0)
             {
                 let docs: Vec<(String, Value)> = serde_json::from_value(item["docs"].clone())?;
-                let activation=self.activate_message(
-                    &mut tx,
-                    sid,
-                    item["kind"].as_str().unwrap_or("message"),
-                    &item["message"],
-                    docs,
-                    &current,
-                ).await;
-                if activation.as_ref().is_err_and(|error|error.to_string()=="Account run limit reached"){continue;}
+                let activation = self
+                    .activate_message(
+                        &mut tx,
+                        sid,
+                        item["kind"].as_str().unwrap_or("message"),
+                        &item["message"],
+                        docs,
+                        &current,
+                    )
+                    .await;
+                if activation
+                    .as_ref()
+                    .is_err_and(|error| error.to_string() == "Account run limit reached")
+                {
+                    continue;
+                }
                 activation?;
             }
             latest["queue_revision"] = json!(latest["queue_revision"].as_u64().unwrap_or(0) + 1);
@@ -511,18 +571,28 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{
-        extract::{Path},
-        Json,
-    };
+    use axum::{extract::Path, Json};
     async fn fixture() -> (tempfile::TempDir, Store) {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
-        store.create_admin_account("root","long-hash-placeholder","generation").await.unwrap();
-        for name in ["alice","bob"] {
-            let mut account=store.create_user_account(name,"long-hash-placeholder").await.unwrap();
-            account["user_id"]=json!(name);account["status"]=json!("active");
-            sqlx::query("INSERT INTO user_accounts(user_id,username,value) VALUES(?,?,?)").bind(name).bind(format!("alias_{name}")).bind(store.seal(&account).unwrap()).execute(&store.app_pool).await.unwrap();
+        store
+            .create_admin_account("root", "long-hash-placeholder", "generation")
+            .await
+            .unwrap();
+        for name in ["alice", "bob"] {
+            let mut account = store
+                .create_user_account(name, "long-hash-placeholder")
+                .await
+                .unwrap();
+            account["user_id"] = json!(name);
+            account["status"] = json!("active");
+            sqlx::query("INSERT INTO user_accounts(user_id,username,value) VALUES(?,?,?)")
+                .bind(name)
+                .bind(format!("alias_{name}"))
+                .bind(store.seal(&account).unwrap())
+                .execute(&store.app_pool)
+                .await
+                .unwrap();
             store.for_user(name).await.unwrap();
         }
         store
@@ -700,22 +770,67 @@ mod tests {
     }
     #[tokio::test]
     async fn preparation_generation_fences_mode_flips_before_admission() {
-        let (_root,store)=fixture().await;
-        store.set_participation("s","alice",false,0,"off").await.unwrap();
-        let (docs,mut human)=envelope("prepared-inactive","alice");human["participation_generation"]=json!(1);
-        store.set_participation("s","bob",true,1,"on").await.unwrap();
-        assert_eq!(store.admit_shared_message(docs,"s","human_message",&human).await.unwrap_err().to_string(),"Participation revision changed");
-        let (docs,mut active)=envelope("prepared-active","bob");active["participation_generation"]=json!(2);
-        store.set_participation("s","alice",false,2,"off-again").await.unwrap();store.set_participation("s","bob",true,3,"on-again").await.unwrap();
-        assert_eq!(store.admit_shared_message(docs,"s","message",&active).await.unwrap_err().to_string(),"Participation revision changed");
-        assert!(store.chat_page("s",0,50).await.unwrap()["messages"].as_array().unwrap().is_empty());
+        let (_root, store) = fixture().await;
+        store
+            .set_participation("s", "alice", false, 0, "off")
+            .await
+            .unwrap();
+        let (docs, mut human) = envelope("prepared-inactive", "alice");
+        human["participation_generation"] = json!(1);
+        store
+            .set_participation("s", "bob", true, 1, "on")
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .admit_shared_message(docs, "s", "human_message", &human)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "Participation revision changed"
+        );
+        let (docs, mut active) = envelope("prepared-active", "bob");
+        active["participation_generation"] = json!(2);
+        store
+            .set_participation("s", "alice", false, 2, "off-again")
+            .await
+            .unwrap();
+        store
+            .set_participation("s", "bob", true, 3, "on-again")
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .admit_shared_message(docs, "s", "message", &active)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "Participation revision changed"
+        );
+        assert!(store.chat_page("s", 0, 50).await.unwrap()["messages"]
+            .as_array()
+            .unwrap()
+            .is_empty());
         assert!(store.context("s").await.unwrap().is_empty());
-        assert!(store.get("receipt:message:s:alice:prepared-inactive").await.unwrap().is_none());
-        assert!(store.get("receipt:message:s:bob:prepared-active").await.unwrap().is_none());
+        assert!(store
+            .get("receipt:message:s:alice:prepared-inactive")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get("receipt:message:s:bob:prepared-active")
+            .await
+            .unwrap()
+            .is_none());
         // Legacy human-only envelopes cannot acquire eligibility merely because active.
-        let (docs,human)=envelope("legacy-human","alice");
-        assert!(store.admit_shared_message(docs,"s","human_message",&human).await.unwrap()["run_id"].is_null());
-        assert!(store.context("s").await.unwrap().is_empty());assert!(store.shared_model_context("s").await.unwrap().is_empty());
+        let (docs, human) = envelope("legacy-human", "alice");
+        assert!(store
+            .admit_shared_message(docs, "s", "human_message", &human)
+            .await
+            .unwrap()["run_id"]
+            .is_null());
+        assert!(store.context("s").await.unwrap().is_empty());
+        assert!(store.shared_model_context("s").await.unwrap().is_empty());
     }
     #[tokio::test]
     async fn admitted_unprocessed_message_is_excluded_after_restart_and_reactivation() {
