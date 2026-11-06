@@ -1,5 +1,6 @@
 //! `ability_plugin_invoke` through a running worker: binding verification against a
 //! published package tree, and one protocol frame through the plugin supervisor.
+mod harness;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::os::unix::fs::MetadataExt;
@@ -68,7 +69,6 @@ impl Fixture {
     }
 }
 
-#[test]
 fn a_current_binding_verifies_and_runs_its_python_entrypoint() {
     let fixture = fixture();
     let verified = package(&fixture.packages, &fixture.binding()).expect("verified");
@@ -84,7 +84,6 @@ fn a_current_binding_verifies_and_runs_its_python_entrypoint() {
     );
 }
 
-#[test]
 fn changed_moved_or_foreign_packages_are_refused() {
     let fixture = fixture();
     let binding = fixture.binding();
@@ -113,7 +112,6 @@ fn changed_moved_or_foreign_packages_are_refused() {
 
 /// Ported from the retired Python bridge's generation test: scheme 2 also pins declared
 /// helper files, and scheme 1 bindings stay readable.
-#[test]
 fn declared_helpers_are_pinned_and_legacy_bindings_remain_readable() {
     let fixture = fixture();
     let manifest = json!({"id":"echo","protocol":1,"dispatch":"isolated","effect":"write",
@@ -141,7 +139,6 @@ fn declared_helpers_are_pinned_and_legacy_bindings_remain_readable() {
     assert_eq!(refusal.to_string(), "Stale package binding");
 }
 
-#[tokio::test]
 async fn one_frame_reaches_the_plugin_and_its_reply_comes_back() {
     if !webagent_worker::sandbox::abi().is_ok_and(|abi| abi >= 6) {
         eprintln!("skipped: Landlock ABI 6 unavailable");
@@ -154,7 +151,6 @@ async fn one_frame_reaches_the_plugin_and_its_reply_comes_back() {
     std::fs::write(control.join("shutoff"), "0").expect("shutoff");
     std::fs::create_dir_all(fixture.dir.path().join("workspaces")).expect("workspaces");
     let socket = fixture.dir.path().join("tools.sock");
-    let runner = env!("CARGO_BIN_EXE_webagent-tool-runner");
     tokio::spawn(serve(Config {
         socket: socket.clone(),
         legacy_socket: fixture.dir.path().join("legacy.sock"),
@@ -166,8 +162,8 @@ async fn one_frame_reaches_the_plugin_and_its_reply_comes_back() {
             context_config: fixture.dir.path().join("absent-context.json"),
             port_claims: fixture.dir.path().join("port-claims"),
         },
-        runner: vec![runner.into()],
-        plugin_runner: vec![runner.into(), "--plugin".into()],
+        runner: harness::runner(),
+        plugin_runner: harness::plugin_runner(),
         packages: fixture.packages.clone(),
     }));
     for _ in 0..100 {
@@ -197,4 +193,28 @@ async fn one_frame_reaches_the_plugin_and_its_reply_comes_back() {
     );
     assert_eq!(result["invocation_id"], "inv-1");
     assert_eq!(result["uncertain"], false);
+}
+
+fn main() {
+    harness::main(&[
+        (
+            "a_current_binding_verifies_and_runs_its_python_entrypoint",
+            || Box::pin(async { a_current_binding_verifies_and_runs_its_python_entrypoint() }),
+        ),
+        ("changed_moved_or_foreign_packages_are_refused", || {
+            Box::pin(async { changed_moved_or_foreign_packages_are_refused() })
+        }),
+        (
+            "declared_helpers_are_pinned_and_legacy_bindings_remain_readable",
+            || {
+                Box::pin(async {
+                    declared_helpers_are_pinned_and_legacy_bindings_remain_readable()
+                })
+            },
+        ),
+        (
+            "one_frame_reaches_the_plugin_and_its_reply_comes_back",
+            || Box::pin(one_frame_reaches_the_plugin_and_its_reply_comes_back()),
+        ),
+    ]);
 }

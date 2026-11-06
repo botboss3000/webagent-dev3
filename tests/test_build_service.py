@@ -1514,7 +1514,7 @@ class RecoveryDockerBoundaryTests(unittest.TestCase):
    self.assertEqual(loop["/live-checkout"],(str(checkout),True));self.assertEqual(loop["/live-checkout/plugins"],(str(checkout/"plugins"),True))
    api={m[0]:m[1:]for m in shape(job,configs["api"])[0]}
    self.assertEqual(api["/live-checkout"],(str(checkout),False))
-   self.assertEqual(["CAP_DAC_READ_SEARCH"],configs["api"]["HostConfig"]["CapAdd"])
+   self.assertEqual(["CAP_DAC_READ_SEARCH","CAP_KILL"],configs["api"]["HostConfig"]["CapAdd"])
    self.assertNotIn("CapAdd",configs["loop"]["HostConfig"])
 
 class AutomaticBrokerIdentityTests(unittest.TestCase):

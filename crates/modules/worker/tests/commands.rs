@@ -1,5 +1,6 @@
-//! `shell` and `python` through a running worker, its supervisor binary and the sandbox.
-//! Skipped where the kernel lacks Landlock ABI 6 (some build sandboxes).
+//! `shell` and `python` through a running worker, its supervisor (this test executable) and
+//! the sandbox. Skipped where the kernel lacks Landlock ABI 6 (some build sandboxes).
+mod harness;
 use serde_json::{json, Value};
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
@@ -44,11 +45,8 @@ async fn worker() -> Worker {
             context_config: dir.path().join("absent-context.json"),
             port_claims: dir.path().join("port-claims"),
         },
-        runner: vec![env!("CARGO_BIN_EXE_webagent-tool-runner").into()],
-        plugin_runner: vec![
-            env!("CARGO_BIN_EXE_webagent-tool-runner").into(),
-            "--plugin".into(),
-        ],
+        runner: harness::runner(),
+        plugin_runner: harness::plugin_runner(),
         packages: webagent_worker::plugins::Packages::container(),
     };
     tokio::spawn(serve(config));
@@ -91,7 +89,6 @@ impl Worker {
     }
 }
 
-#[tokio::test]
 async fn a_shell_command_runs_in_its_workspace_with_merged_output() {
     if !sandbox_available() {
         return;
@@ -116,7 +113,6 @@ async fn a_shell_command_runs_in_its_workspace_with_merged_output() {
     assert_eq!(output.lines().nth(3).expect("ports").split(',').count(), 4);
 }
 
-#[tokio::test]
 async fn python_runs_isolated() {
     if !sandbox_available() {
         return;
@@ -133,7 +129,6 @@ async fn python_runs_isolated() {
     assert_eq!(result["output"], "1\n");
 }
 
-#[tokio::test]
 async fn commands_write_only_their_workspace_and_cannot_open_unix_sockets() {
     if !sandbox_available() {
         return;
@@ -161,7 +156,6 @@ async fn commands_write_only_their_workspace_and_cannot_open_unix_sockets() {
     assert_eq!(result["output"], "fenced\n", "{result}");
 }
 
-#[tokio::test]
 async fn a_timeout_stops_the_command_and_its_descendants() {
     if !sandbox_available() {
         return;
@@ -182,7 +176,6 @@ async fn a_timeout_stops_the_command_and_its_descendants() {
     assert!(!marker.exists(), "a descendant outlived the timeout");
 }
 
-#[tokio::test]
 async fn a_caller_that_hangs_up_stops_the_command() {
     if !sandbox_available() {
         return;
@@ -202,7 +195,6 @@ async fn a_caller_that_hangs_up_stops_the_command() {
     assert!(!marker.exists(), "the command outlived its caller");
 }
 
-#[tokio::test]
 async fn output_is_capped_at_one_mebibyte() {
     if !sandbox_available() {
         return;
@@ -215,7 +207,6 @@ async fn output_is_capped_at_one_mebibyte() {
     assert_eq!(result["output"].as_str().expect("text").len(), 1024 * 1024);
 }
 
-#[tokio::test]
 async fn task_scoped_commands_are_refused() {
     let worker = worker().await;
     let result = worker
@@ -224,7 +215,6 @@ async fn task_scoped_commands_are_refused() {
     assert_eq!(result["output"], "Task scope unsupported");
 }
 
-#[tokio::test]
 async fn a_quiesce_stops_the_workspace_commands() {
     if !sandbox_available() {
         return;
@@ -256,7 +246,6 @@ const DOUBLE_FORK: &str = "import os,time\n\
 if os.fork()==0:\n os.setsid()\n if os.fork()!=0: os._exit(0)\n \
 time.sleep(2); open('detached-survived','w').write('bad'); os._exit(0)\n";
 
-#[tokio::test]
 async fn a_cancelled_command_takes_its_double_forked_new_session_child_with_it() {
     if !sandbox_available() {
         return;
@@ -275,7 +264,6 @@ async fn a_cancelled_command_takes_its_double_forked_new_session_child_with_it()
     assert!(!worker.workspace().join("detached-survived").exists());
 }
 
-#[tokio::test]
 async fn a_finished_command_leaves_no_detached_child_behind() {
     if !sandbox_available() {
         return;
@@ -287,7 +275,6 @@ async fn a_finished_command_leaves_no_detached_child_behind() {
     assert!(!worker.workspace().join("detached-survived").exists());
 }
 
-#[tokio::test]
 async fn commands_read_outside_their_workspace_but_cannot_change_it() {
     if !sandbox_available() {
         return;
@@ -317,7 +304,6 @@ async fn commands_read_outside_their_workspace_but_cannot_change_it() {
     );
 }
 
-#[tokio::test]
 async fn shutoff_stops_commands_before_they_start() {
     let worker = worker().await;
     std::fs::write(worker.dir.path().join("control/shutoff"), "1").expect("shutoff");
@@ -326,4 +312,47 @@ async fn shutoff_stops_commands_before_they_start() {
         .await;
     assert_eq!(result["output"], "execution disabled");
     assert!(!worker.workspace().join("forbidden").exists());
+}
+
+fn main() {
+    harness::main(&[
+        (
+            "a_shell_command_runs_in_its_workspace_with_merged_output",
+            || Box::pin(a_shell_command_runs_in_its_workspace_with_merged_output()),
+        ),
+        ("python_runs_isolated", || Box::pin(python_runs_isolated())),
+        (
+            "commands_write_only_their_workspace_and_cannot_open_unix_sockets",
+            || Box::pin(commands_write_only_their_workspace_and_cannot_open_unix_sockets()),
+        ),
+        ("a_timeout_stops_the_command_and_its_descendants", || {
+            Box::pin(a_timeout_stops_the_command_and_its_descendants())
+        }),
+        ("a_caller_that_hangs_up_stops_the_command", || {
+            Box::pin(a_caller_that_hangs_up_stops_the_command())
+        }),
+        ("output_is_capped_at_one_mebibyte", || {
+            Box::pin(output_is_capped_at_one_mebibyte())
+        }),
+        ("task_scoped_commands_are_refused", || {
+            Box::pin(task_scoped_commands_are_refused())
+        }),
+        ("a_quiesce_stops_the_workspace_commands", || {
+            Box::pin(a_quiesce_stops_the_workspace_commands())
+        }),
+        (
+            "a_cancelled_command_takes_its_double_forked_new_session_child_with_it",
+            || Box::pin(a_cancelled_command_takes_its_double_forked_new_session_child_with_it()),
+        ),
+        ("a_finished_command_leaves_no_detached_child_behind", || {
+            Box::pin(a_finished_command_leaves_no_detached_child_behind())
+        }),
+        (
+            "commands_read_outside_their_workspace_but_cannot_change_it",
+            || Box::pin(commands_read_outside_their_workspace_but_cannot_change_it()),
+        ),
+        ("shutoff_stops_commands_before_they_start", || {
+            Box::pin(shutoff_stops_commands_before_they_start())
+        }),
+    ]);
 }

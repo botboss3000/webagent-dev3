@@ -2557,7 +2557,10 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 host["PidsLimit"]=CONFIG["api_pids_limit"]
             if name == TARGETS[0]:
                 # The Codebase Admin worker reads every file through this ambient capability.
-                host["CapAdd"]=sorted(set(host.get("CapAdd")or[])|{"CAP_DAC_READ_SEARCH"})
+                # tini (root, PID 1) needs CAP_KILL to forward SIGTERM to the launcher,
+                # which runs as the application identity; without it a stop kills the
+                # container with no drain. Every other process drops it with its identity.
+                host["CapAdd"]=sorted(set(host.get("CapAdd")or[])|{"CAP_DAC_READ_SEARCH","CAP_KILL"})
             host = release.release_mounts(host, self.published_runtime_source(release_root), ASSET_ROOT)
             if name in TARGETS:
                 env = [value for value in config.get("Env", [])
