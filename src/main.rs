@@ -91,6 +91,8 @@ mod main_chat;
 mod modules;
 #[path = "api/accounts/registration.rs"]
 mod registration;
+#[path = "api/accounts/request_limits.rs"]
+mod request_limits;
 #[path = "../crates/modules/chat/host/session_naming/mod.rs"]
 mod session_naming;
 mod wake;

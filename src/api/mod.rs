@@ -119,10 +119,16 @@ pub(super) fn router(app: App) -> Router {
         .route("/admin/events/stream", get(notifications::stream))
         .route_layer(middleware::from_fn_with_state(app.clone(), admin_auth))
         .route_layer(middleware::from_fn_with_state(app.clone(), auth));
-    let messaging = user_api::messaging_router().route_layer(middleware::from_fn_with_state(
-        app.clone(),
-        message_api_auth,
-    ));
+    // The token is verified first (outer layer), then counted.
+    let messaging = user_api::messaging_router()
+        .route_layer(middleware::from_fn_with_state(
+            app.clone(),
+            crate::request_limits::messaging,
+        ))
+        .route_layer(middleware::from_fn_with_state(
+            app.clone(),
+            message_api_auth,
+        ));
     let admin_api = Router::new()
         .merge(diagnostics::router())
         .nest("/admin/system", system::router())
@@ -464,6 +470,7 @@ pub(super) fn router(app: App) -> Router {
         .nest_service("/ui",ServeDir::new(shared))
         .layer(middleware::from_fn_with_state(app.clone(), ui_pages::live_ui))
         .layer(DefaultBodyLimit::max(2*1024*1024))
+        .layer(middleware::from_fn_with_state(app.clone(), crate::request_limits::per_address))
         .layer(middleware::from_fn(diagnostics::http_errors))
         .layer(middleware::from_fn(|request:Request,next:Next|async move{
             let public_widget_module=request.uri().path()=="/v3-ui/chat/widget/window.js";

@@ -393,9 +393,20 @@ pub async fn pair(
             "Pairing code is invalid, used or expired".into(),
         )
     };
+    // Wrong codes from all clients share one cap, so guessing needs no address at all.
+    let wait = crate::request_limits::pairing_wait(&app).await;
+    if wait > 0 {
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            format!("Too many wrong pairing codes. Try again in {wait} seconds."),
+        ));
+    }
     let key = format!("{PAIRINGS}{}", digest(&code));
     let _guard = app.gate.lock().await;
-    let pairing = app.store.get(&key).await?.ok_or_else(invalid)?;
+    let Some(pairing) = app.store.get(&key).await? else {
+        crate::request_limits::pairing_failed(&app).await;
+        return Err(invalid());
+    };
     // A code works once, even when it has expired.
     app.store.delete(&key).await?;
     if now() > pairing["expires"].as_u64().unwrap_or(0) {

@@ -135,8 +135,8 @@ pub use sessions::SessionCandidate;
 
 mod throttling;
 pub use throttling::{
-    client_ip, AccountSlowdown, AddressBackoff, Admission, AdmissionContext, LoginAttempts,
-    LoginGate, LoginProtection,
+    client_ip, AccountSlowdown, AddressBackoff, AddressLimits, Admission, AdmissionContext,
+    LoginAttempts, LoginGate, LoginProtection, RequestLimits, UserLimits,
 };
 
 /// Apply one minimum to every password-creation path; the byte cap bounds hashing input.

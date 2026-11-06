@@ -42,8 +42,9 @@ pub async fn login<C: RecordCodec, H: Host>(
     origin(headers, secure)?;
     let username = required(body, "username", 128)?;
     required(body, "password", 1024)?;
+    let limits = crate::RequestLimits::from_policy(&host.registration_policy()?)?;
     if !attempts
-        .admit(crate::Admission::Login, client, username, now)
+        .admit_with(&limits, crate::Admission::Login, client, username, now)
         .await
     {
         return Err(Error::Public(

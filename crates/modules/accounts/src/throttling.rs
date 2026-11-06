@@ -1,6 +1,11 @@
 //! Bounded, independent admission windows; proxy identity is trusted only by socket peer.
 //!
 //! All counters, blocks and slowdowns live in process memory: a restart clears them.
+//!
+//! The client address is `0.0.0.0` when it is unknown: no socket peer, or a trusted proxy
+//! (one peer address shared by many visitors) whose request lacks the edge's proof. Per-address
+//! caps then count all unknown clients together, and the per-address sign-in block, which would
+//! lock an account for everyone, does not apply; the account-wide slowdown still does.
 use anyhow::{bail, Result};
 use axum::http::HeaderMap;
 use serde::Deserialize;
@@ -115,6 +120,105 @@ fn check_seconds(name: &str, value: u64) -> Result<()> {
     Ok(())
 }
 
+/// Per-minute caps for one client address, or for all unknown clients together.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct AddressLimits {
+    pub login: u32,
+    pub registration: u32,
+    pub guest: u32,
+    pub password_change: u32,
+    pub pairing: u32,
+    /// Every `/api/` request; only for addresses a trusted front names.
+    pub api: u32,
+}
+impl Default for AddressLimits {
+    fn default() -> Self {
+        Self {
+            login: 120,
+            registration: 10,
+            guest: 30,
+            password_change: 5,
+            pairing: 10,
+            api: 600,
+        }
+    }
+}
+/// Per-minute caps for one signed-in user, or one messaging token.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct UserLimits {
+    pub chat_send: u32,
+    pub upload: u32,
+    pub messaging_api: u32,
+}
+impl Default for UserLimits {
+    fn default() -> Self {
+        Self {
+            chat_send: 20,
+            upload: 30,
+            messaging_api: 60,
+        }
+    }
+}
+/// The `request_limits` section of the shared access-policy document.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct RequestLimits {
+    pub per_address_per_minute: AddressLimits,
+    pub per_user_per_minute: UserLimits,
+    /// Wrong pairing codes from all clients together.
+    pub pairing_failures_per_minute: u32,
+    /// Registered and guest accounts created, from all clients together.
+    pub new_accounts_per_day: u32,
+}
+impl Default for RequestLimits {
+    fn default() -> Self {
+        Self {
+            per_address_per_minute: AddressLimits::default(),
+            per_user_per_minute: UserLimits::default(),
+            pairing_failures_per_minute: 20,
+            new_accounts_per_day: 50,
+        }
+    }
+}
+impl RequestLimits {
+    /// Interpret the shared access-policy document; missing values take the defaults.
+    pub fn from_policy(policy: &Value) -> Result<Self> {
+        let Some(section) = policy.get("request_limits") else {
+            return Ok(Self::default());
+        };
+        if !section.is_object() {
+            bail!("Invalid request_limits policy: expected an object");
+        }
+        let limits: Self = serde_json::from_value(section.clone())
+            .map_err(|error| anyhow::anyhow!("Invalid request_limits policy: {error}"))?;
+        let a = limits.per_address_per_minute;
+        let u = limits.per_user_per_minute;
+        for (name, value) in [
+            ("per_address_per_minute.login", a.login),
+            ("per_address_per_minute.registration", a.registration),
+            ("per_address_per_minute.guest", a.guest),
+            ("per_address_per_minute.password_change", a.password_change),
+            ("per_address_per_minute.pairing", a.pairing),
+            ("per_address_per_minute.api", a.api),
+            ("per_user_per_minute.chat_send", u.chat_send),
+            ("per_user_per_minute.upload", u.upload),
+            ("per_user_per_minute.messaging_api", u.messaging_api),
+            (
+                "pairing_failures_per_minute",
+                limits.pairing_failures_per_minute,
+            ),
+            ("new_accounts_per_day", limits.new_accounts_per_day),
+        ] {
+            if !(1..=100_000).contains(&value) {
+                bail!("request_limits.{name} must be 1..=100000");
+            }
+        }
+        Ok(limits)
+    }
+}
+
 /// Outcome of the failed-login protections for one attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LoginGate {
@@ -161,6 +265,8 @@ struct State {
     windows: Windows,
     pairs: HashMap<(IpAddr, String), PairState>,
     accounts: HashMap<String, AccountState>,
+    /// Named counters (`hit`): per user, per token, per address or global, each with its window.
+    counters: HashMap<String, (u64, Vec<u64>)>,
 }
 impl State {
     fn prune(&mut self, protection: &LoginProtection, now: u64) {
@@ -185,8 +291,22 @@ impl State {
 #[derive(Clone, Default)]
 pub struct LoginAttempts(Arc<Mutex<State>>);
 impl LoginAttempts {
-    /// Debit a client lane and, for login, a narrower client/account window atomically.
+    /// `admit_with` under the default limits.
     pub async fn admit(&self, kind: Admission, client: IpAddr, username: &str, now: u64) -> bool {
+        self.admit_with(&RequestLimits::default(), kind, client, username, now)
+            .await
+    }
+    /// Debit a client lane and, for login, a narrower client/account window atomically.
+    /// An unknown client (`0.0.0.0`) shares one lane and has no account window, so other
+    /// visitors cannot use it to shut an account out.
+    pub async fn admit_with(
+        &self,
+        limits: &RequestLimits,
+        kind: Admission,
+        client: IpAddr,
+        username: &str,
+        now: u64,
+    ) -> bool {
         let mut state = self.0.lock().await;
         let windows = &mut state.windows;
 
@@ -204,30 +324,63 @@ impl LoginAttempts {
             },
         );
         let account = (kind, client, username.to_owned());
+        let caps = limits.per_address_per_minute;
         let cap = match kind {
-            Admission::Login => 120,
-            Admission::Registration => 10,
-            Admission::Guest => 30,
-            Admission::PasswordChange => 5,
-        };
+            Admission::Login => caps.login,
+            Admission::Registration => caps.registration,
+            Admission::Guest => caps.guest,
+            Admission::PasswordChange => caps.password_change,
+        } as usize;
+        let per_account = kind == Admission::Login && !client.is_unspecified();
         if windows.get(&lane).is_some_and(|v| v.len() >= cap)
-            || (kind == Admission::Login && windows.get(&account).is_some_and(|v| v.len() >= 5))
+            || (per_account && windows.get(&account).is_some_and(|v| v.len() >= 5))
         {
             return false;
         }
         let new_keys = usize::from(!windows.contains_key(&lane))
-            + usize::from(
-                kind == Admission::Login && account != lane && !windows.contains_key(&account),
-            );
+            + usize::from(per_account && account != lane && !windows.contains_key(&account));
         // Never evict active counters: random account names must not reset a throttled window.
         if windows.len() + new_keys > KEY_LIMIT {
             return false;
         }
         windows.entry(lane).or_default().push(now);
-        if kind == Admission::Login && !username.is_empty() {
+        if per_account && !username.is_empty() {
             windows.entry(account).or_default().push(now);
         }
         true
+    }
+    /// Count one event under `key`; false, counting nothing, when `cap` events already fall
+    /// inside the last `window` seconds. New keys are refused once the table is full, so a
+    /// flood of names cannot reset an active counter.
+    pub async fn hit(&self, key: String, cap: u32, window: u64, now: u64) -> bool {
+        let mut state = self.0.lock().await;
+        state.counters.retain(|_, (span, times)| {
+            times.retain(|t| now.saturating_sub(*t) < *span);
+            !times.is_empty()
+        });
+        if !state.counters.contains_key(&key) && state.counters.len() >= KEY_LIMIT {
+            return false;
+        }
+        let (span, times) = state.counters.entry(key).or_insert((window, Vec::new()));
+        *span = window;
+        if times.len() >= cap as usize {
+            return false;
+        }
+        times.push(now);
+        true
+    }
+    /// Seconds until a `hit` on `key` could pass again; zero when it would pass now.
+    pub async fn retry_after(&self, key: &str, cap: u32, now: u64) -> u64 {
+        let state = self.0.lock().await;
+        state.counters.get(key).map_or(0, |(span, times)| {
+            if times.len() < cap as usize {
+                return 0;
+            }
+            times
+                .iter()
+                .min()
+                .map_or(0, |first| (first + span).saturating_sub(now).max(1))
+        })
     }
     /// Apply the failed-login block and slowdown before any password check.
     /// Unknown usernames are tracked exactly like real ones.
@@ -241,14 +394,15 @@ impl LoginAttempts {
         let mut state = self.0.lock().await;
         state.prune(protection, now);
         let pair_key = (client, username.to_owned());
-        if let Some(pair) = state.pairs.get(&pair_key) {
+        let known = !client.is_unspecified();
+        if let Some(pair) = state.pairs.get(&pair_key).filter(|_| known) {
             if now < pair.blocked_until {
                 return LoginGate::Blocked {
                     retry_after: pair.blocked_until - now,
                 };
             }
         }
-        let new_keys = usize::from(!state.pairs.contains_key(&pair_key))
+        let new_keys = usize::from(known && !state.pairs.contains_key(&pair_key))
             + usize::from(!state.accounts.contains_key(username));
         // Never evict active state: a flood of names must not reset a block or slowdown.
         if state.pairs.len() + state.accounts.len() + new_keys > KEY_LIMIT {
@@ -268,18 +422,20 @@ impl LoginAttempts {
     ) {
         let mut state = self.0.lock().await;
         let address = protection.address;
-        let pair = state
-            .pairs
-            .entry((client, username.to_owned()))
-            .or_default();
-        pair.failures.prune(now, address.window_seconds);
-        pair.failures.push(now, address.failures);
-        if pair.block > 0 {
-            pair.block = pair.block.saturating_mul(2).min(address.max_block_seconds);
-            pair.blocked_until = now.saturating_add(pair.block);
-        } else if pair.failures.reached(address.failures) {
-            pair.block = address.block_seconds;
-            pair.blocked_until = now.saturating_add(pair.block);
+        if !client.is_unspecified() {
+            let pair = state
+                .pairs
+                .entry((client, username.to_owned()))
+                .or_default();
+            pair.failures.prune(now, address.window_seconds);
+            pair.failures.push(now, address.failures);
+            if pair.block > 0 {
+                pair.block = pair.block.saturating_mul(2).min(address.max_block_seconds);
+                pair.blocked_until = now.saturating_add(pair.block);
+            } else if pair.failures.reached(address.failures) {
+                pair.block = address.block_seconds;
+                pair.blocked_until = now.saturating_add(pair.block);
+            }
         }
         let account = protection.account;
         let entry = state.accounts.entry(username.to_owned()).or_default();
@@ -304,7 +460,10 @@ impl LoginAttempts {
     }
     pub async fn is_empty(&self) -> bool {
         let state = self.0.lock().await;
-        state.windows.is_empty() && state.pairs.is_empty() && state.accounts.is_empty()
+        state.windows.is_empty()
+            && state.pairs.is_empty()
+            && state.accounts.is_empty()
+            && state.counters.is_empty()
     }
     pub fn shares_state_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
@@ -342,20 +501,26 @@ pub fn client_ip(
     if trusted.into_iter().map(normalize).any(|ip| ip == peer) {
         // Docker/Tailscale can merge unrelated connections onto one gateway peer.
         // A Cloudflare-set proof is required in addition to that peer's address.
-        let expected = settings["authentication"]["proxy_header_sha256"]
+        // The peer stands for many visitors. Without the edge's proof the client is unknown,
+        // never the shared peer: counting everyone as one address would let any visitor
+        // trip a per-address block for all of them.
+        let unknown = Ipv4Addr::UNSPECIFIED.into();
+        let Some(expected) = settings["authentication"]["proxy_header_sha256"]
             .as_str()
             .filter(|v| v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit()))
-            .ok_or_else(|| anyhow::anyhow!("Trusted proxy proof is not configured"))?
-            .to_ascii_lowercase();
+            .map(str::to_ascii_lowercase)
+        else {
+            return Ok(unknown);
+        };
         let mut proofs = headers.get_all("x-webagent-client-proof").iter();
         let Some(proof) = proofs
             .next()
             .filter(|v| (32..=256).contains(&v.as_bytes().len()))
         else {
-            return Ok(peer);
+            return Ok(unknown);
         };
         if proofs.next().is_some() {
-            return Ok(peer);
+            return Ok(unknown);
         }
         let actual = format!("{:x}", Sha256::digest(proof.as_bytes()));
         if actual
@@ -364,7 +529,7 @@ pub fn client_ip(
             .fold(0u8, |diff, (a, b)| diff | (a ^ b))
             != 0
         {
-            return Ok(peer);
+            return Ok(unknown);
         }
 
         let mut values = headers.get_all("cf-connecting-ip").iter();
@@ -618,6 +783,77 @@ mod tests {
             );
         }
     }
+    #[tokio::test]
+    async fn an_unknown_client_slows_the_account_but_never_blocks_it() {
+        let attempts = LoginAttempts::default();
+        let protection = LoginProtection::default();
+        let unknown = IpAddr::from([0, 0, 0, 0]);
+        for t in 0..20 {
+            attempts
+                .failed_login(&protection, unknown, "admin", t)
+                .await;
+        }
+        // Everyone behind a shared proxy is unknown: a block here would lock admin for all.
+        match attempts.login_gate(&protection, unknown, "admin", 21).await {
+            LoginGate::Proceed { delay } => assert!(delay > 0),
+            LoginGate::Blocked { .. } => panic!("an unknown client must not block the account"),
+        }
+        // Nor does the per-address, per-account minute window apply.
+        let limits = RequestLimits::default();
+        for _ in 0..30 {
+            assert!(
+                attempts
+                    .admit_with(&limits, Admission::Login, unknown, "admin", 100)
+                    .await
+            );
+        }
+        // A known address is still blocked after its failures.
+        let known = IpAddr::from([198, 51, 100, 7]);
+        for t in 0..5 {
+            attempts
+                .failed_login(&protection, known, "admin", 200 + t)
+                .await;
+        }
+        assert!(matches!(
+            attempts.login_gate(&protection, known, "admin", 205).await,
+            LoginGate::Blocked { .. }
+        ));
+    }
+    #[tokio::test]
+    async fn named_counters_refuse_past_their_cap_and_report_the_wait() {
+        let attempts = LoginAttempts::default();
+        for _ in 0..3 {
+            assert!(attempts.hit("user:chat_send:u1".into(), 3, 60, 100).await);
+        }
+        assert!(!attempts.hit("user:chat_send:u1".into(), 3, 60, 110).await);
+        assert_eq!(attempts.retry_after("user:chat_send:u1", 3, 110).await, 50);
+        assert!(attempts.hit("user:chat_send:u2".into(), 3, 60, 110).await);
+        assert!(attempts.hit("user:chat_send:u1".into(), 3, 60, 160).await);
+    }
+    #[test]
+    fn request_limits_default_and_reject_out_of_range_values() {
+        let defaults = RequestLimits::from_policy(&serde_json::json!({})).unwrap();
+        assert_eq!(defaults.per_user_per_minute.chat_send, 20);
+        assert_eq!(defaults.new_accounts_per_day, 50);
+        let set = RequestLimits::from_policy(
+            &serde_json::json!({"request_limits":{"per_user_per_minute":{"upload":7}}}),
+        )
+        .unwrap();
+        assert_eq!(set.per_user_per_minute.upload, 7);
+        assert_eq!(set.per_user_per_minute.chat_send, 20);
+        for section in [
+            serde_json::json!([]),
+            serde_json::json!({"per_user_per_minute":{"chat_send":0}}),
+            serde_json::json!({"new_accounts_per_day":100001}),
+            serde_json::json!({"per_address_per_minute":{"unknown":1}}),
+        ] {
+            assert!(
+                RequestLimits::from_policy(&serde_json::json!({"request_limits": section}))
+                    .is_err(),
+                "{section}"
+            );
+        }
+    }
     #[test]
     fn forwarded_identity_requires_explicit_socket_peer_trust() {
         let mut h = HeaderMap::new();
@@ -629,15 +865,19 @@ mod tests {
         );
         let proof = concat!("test-edge-", "identity-proof-with-sufficient-entropy");
         let settings = serde_json::json!({"authentication":{"trusted_proxy_ips":["192.0.2.8"],"proxy_header_sha256":format!("{:x}", Sha256::digest(proof.as_bytes()))}});
-        // Untrusted direct traffic behind the same Docker peer cannot forge its client identity.
-        assert_eq!(client_ip(Some(peer), &h, &settings).unwrap(), peer.ip());
+        // Untrusted direct traffic behind the same Docker peer cannot forge its client identity,
+        // and is never counted as the shared peer itself.
+        let unknown = IpAddr::from([0, 0, 0, 0]);
+        assert_eq!(client_ip(Some(peer), &h, &settings).unwrap(), unknown);
+        let unproven = serde_json::json!({"authentication":{"trusted_proxy_ips":["192.0.2.8"]}});
+        assert_eq!(client_ip(Some(peer), &h, &unproven).unwrap(), unknown);
         h.insert(
             "x-webagent-client-proof",
             "wrong-proof-with-at-least-thirty-two-bytes"
                 .parse()
                 .unwrap(),
         );
-        assert_eq!(client_ip(Some(peer), &h, &settings).unwrap(), peer.ip());
+        assert_eq!(client_ip(Some(peer), &h, &settings).unwrap(), unknown);
         h.insert("x-webagent-client-proof", proof.parse().unwrap());
         assert_eq!(
             client_ip(Some(peer), &h, &settings).unwrap(),

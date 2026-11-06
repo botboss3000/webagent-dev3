@@ -154,6 +154,7 @@
   "excluded": {
     "/login_protection/account/*": "Other login-protection timings; not offered in v1.",
     "/login_protection/address/*": "Other login-protection timings; not offered in v1.",
+    "/request_limits/**": "Request rate limits; tuned in access-policy.json, not offered in v1.",
     "/revision": "Internal revision counter.",
     "/tier_order": "Account level order; changed with the account levels themselves.",
     "/tiers/*/ability_permissions/**": "Ability, tool and model grants act as ceilings (Q8); handled in a later step.",

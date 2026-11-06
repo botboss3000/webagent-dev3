@@ -84,13 +84,28 @@ pub async fn register<C: RecordCodec, H: Host>(
             "Invalid registration input; password must be at least 8 characters",
         ));
     }
+    let limits = crate::RequestLimits::from_policy(&host.registration_policy()?)?;
     if !attempts
-        .admit(crate::Admission::Registration, client, "", now)
+        .admit_with(&limits, crate::Admission::Registration, client, "", now)
         .await
     {
         return Err(Error::Public(
             StatusCode::TOO_MANY_REQUESTS,
             "Try again in one minute".into(),
+        ));
+    }
+    if !attempts
+        .hit(
+            "new_accounts".into(),
+            limits.new_accounts_per_day,
+            86_400,
+            now,
+        )
+        .await
+    {
+        return Err(Error::Public(
+            StatusCode::TOO_MANY_REQUESTS,
+            "New accounts are paused for today; try again tomorrow".into(),
         ));
     }
     let hash = crate::hash_password(password.clone())
@@ -182,13 +197,28 @@ pub async fn guest_login<C: RecordCodec, H: Host>(
     let account = if let Some(account) = recovered {
         account
     } else {
+        let limits = crate::RequestLimits::from_policy(&host.registration_policy()?)?;
         if !attempts
-            .admit(crate::Admission::Guest, client, "", now)
+            .admit_with(&limits, crate::Admission::Guest, client, "", now)
             .await
         {
             return Err(Error::Public(
                 StatusCode::TOO_MANY_REQUESTS,
                 "Try again in one minute".into(),
+            ));
+        }
+        if !attempts
+            .hit(
+                "new_accounts".into(),
+                limits.new_accounts_per_day,
+                86_400,
+                now,
+            )
+            .await
+        {
+            return Err(Error::Public(
+                StatusCode::TOO_MANY_REQUESTS,
+                "New accounts are paused for today; try again tomorrow".into(),
             ));
         }
         repo.create_guest_account(host.initial_guest_access())

@@ -110,8 +110,10 @@ pub async fn change_password<C: RecordCodec, H: Host>(
         return Err(bad("New password must be at least 8 characters"));
     }
     let id = doc["_user_id"].as_str().unwrap_or("admin");
+    let limits = crate::RequestLimits::from_policy(&host.registration_policy()?)?;
     if !attempts
-        .admit(
+        .admit_with(
+            &limits,
             crate::Admission::PasswordChange,
             std::net::Ipv4Addr::UNSPECIFIED.into(),
             id,

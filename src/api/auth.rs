@@ -1,5 +1,4 @@
 //! Authentication middleware composes Accounts identity with live Access authorization.
-use webagent_accounts_host::AccountsStore;
 use super::{
     access, json, now, phase3_api, registration, Api, ApiError, App, HashMap, HeaderMap,
     HeaderValue, Json, Next, Query, Request, Response, State, StatusCode, Value,
@@ -10,6 +9,7 @@ pub(crate) use crate::account_authentication::{
 };
 use axum::response::IntoResponse;
 pub(crate) use webagent_accounts::message_api_token_hash;
+use webagent_accounts_host::AccountsStore;
 pub(crate) fn message_api_authorized(expected: Option<&[u8; 32]>, headers: &HeaderMap) -> bool {
     webagent_accounts::message_api_authorized(
         expected,
@@ -77,10 +77,20 @@ pub(crate) async fn auth(State(app): State<App>, mut request: Request, next: Nex
         return next.run(request).await;
     }
     if request.headers().contains_key("authorization") {
-        return match super::embed::bearer(&app, &mut request).await {
-            Ok(()) => next.run(request).await,
-            Err(error) => error.into_response(),
-        };
+        if let Err(error) = super::embed::bearer(&app, &mut request).await {
+            return error.into_response();
+        }
+        // Embedded chat visitors send messages too: they share the per-user caps.
+        let user = request
+            .extensions()
+            .get::<Value>()
+            .and_then(|doc| doc["_user_id"].as_str())
+            .unwrap_or("")
+            .to_owned();
+        if let Some(refused) = crate::request_limits::signed_in(&app, &user, &method, &path).await {
+            return refused;
+        }
+        return next.run(request).await;
     }
 
     let token = webagent_accounts::session_token(&headers);
@@ -151,6 +161,9 @@ pub(crate) async fn auth(State(app): State<App>, mut request: Request, next: Nex
             return ApiError(StatusCode::UNAUTHORIZED, "Sign in required".into()).into_response()
         }
     };
+    if let Some(refused) = crate::request_limits::signed_in(&app, &user_id, &method, &path).await {
+        return refused;
+    }
     request.extensions_mut().insert(caller);
     request.extensions_mut().insert(doc);
     let mutation = !matches!(

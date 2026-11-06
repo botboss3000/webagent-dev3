@@ -49,6 +49,7 @@ pub fn validate_configuration(value: &Value) -> Result<()> {
         return Err(anyhow!("Invalid access-policy.json registration policy"));
     }
     webagent_accounts::LoginProtection::from_policy(value)?;
+    webagent_accounts::RequestLimits::from_policy(value)?;
     if value
         .get("revision")
         .is_some_and(|v| v.as_u64().is_none_or(|n| n == 0))

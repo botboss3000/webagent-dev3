@@ -14,6 +14,23 @@
     }
   },
   "registration": "open",
+  "request_limits": {
+    "new_accounts_per_day": 50,
+    "pairing_failures_per_minute": 20,
+    "per_address_per_minute": {
+      "api": 600,
+      "guest": 30,
+      "login": 120,
+      "pairing": 10,
+      "password_change": 5,
+      "registration": 10
+    },
+    "per_user_per_minute": {
+      "chat_send": 20,
+      "messaging_api": 60,
+      "upload": 30
+    }
+  },
   "revision": 52,
   "tier_names": {
     "anonymous": "Anonymous",
