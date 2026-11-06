@@ -72,7 +72,7 @@ async fn sharing(Extension(app): Extension<App>, Path(sid): Path<String>) -> Api
         json!({"policy":policy,"participants":participants,"participation":store.participation_state(&sid).await?,
  "help":store.get(&format!("shared_help:{sid}")).await?.unwrap_or(json!({"status":"none"})),
  "invitations":if write{store.shared_invites(&sid).await?}else{vec![]},
- "access":{"can_send":write,"can_control":write,"can_invite":write&&policy.shareable,"observer":!write}}),
+ "access":{"can_send":write,"can_control":write,"can_invite":rights.is_owner()&&policy.shareable,"observer":!write}}),
     ))
 }
 async fn issue(
@@ -88,6 +88,13 @@ async fn issue(
             .shareable
     {
         return Err(no_access());
+    }
+    // Only the owner widens who can read the chat; participants may still revoke.
+    if !rights.is_owner() {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Only the chat owner can invite".into(),
+        ));
     }
     let ttl = body.expires_in.unwrap_or(86400);
     if body.client_request_id.is_empty()
@@ -116,8 +123,13 @@ async fn require_active_directory(app: &App, directory: &Value) -> Result<(), Ap
     let owner = directory["owner_id"].as_str().ok_or_else(no_access)?;
     let sid = directory["session_id"].as_str().ok_or_else(no_access)?;
     let storage = app.store.for_user(owner).await?;
-    let session = storage.get(&format!("session:{sid}")).await?.ok_or_else(no_access)?;
-    if session["status"] != "active" { return Err(no_access()); }
+    let session = storage
+        .get(&format!("session:{sid}"))
+        .await?
+        .ok_or_else(no_access)?;
+    if session["status"] != "active" {
+        return Err(no_access());
+    }
     Ok(())
 }
 async fn redeem(Extension(app): Extension<App>, Json(body): Json<Redeem>) -> Api {
@@ -165,31 +177,71 @@ async fn redeem(Extension(app): Extension<App>, Json(body): Json<Redeem>) -> Api
     announce(&app, &sid, user).await?;
     Ok(Json(json!({"session_id":sid})))
 }
-async fn join(Extension(app):Extension<App>,Path(sid):Path<String>)->Api {
-    let _guard=app.gate.lock().await;let user=shared_chat::actor(&app);
-    let rights=shared_chat::resolve(&app,&sid,user).await.map_err(|_|no_access())?;
-    if !shared_chat::staff(&app.store,user,&rights.agent_id).await? {return Err(no_access());}
-    let store=app.store.for_user(&rights.owner_id).await?;
-    store.operator_join(&sid,user).await?;
-    let profile=app.store.user_profile(user).await?.unwrap_or(json!({}));
-    store.publish_shared_join(&sid,user,profile["display_name"].as_str().unwrap_or("Agent Operator")).await?;
+async fn join(Extension(app): Extension<App>, Path(sid): Path<String>) -> Api {
+    let _guard = app.gate.lock().await;
+    let user = shared_chat::actor(&app);
+    let rights = shared_chat::resolve(&app, &sid, user)
+        .await
+        .map_err(|_| no_access())?;
+    if !shared_chat::staff(&app.store, user, &rights.agent_id).await? {
+        return Err(no_access());
+    }
+    let store = app.store.for_user(&rights.owner_id).await?;
+    store.operator_join(&sid, user).await?;
+    let profile = app.store.user_profile(user).await?.unwrap_or(json!({}));
+    store
+        .publish_shared_join(
+            &sid,
+            user,
+            profile["display_name"].as_str().unwrap_or("Agent Operator"),
+        )
+        .await?;
     Ok(Json(json!({"session_id":sid,"joined":true})))
 }
-async fn operator_reply(Extension(app):Extension<App>,Path(sid):Path<String>,Json(body):Json<Value>)->Api {
-    let _guard=app.gate.lock().await;let actor=shared_chat::actor(&app);
-    let rights=shared_chat::resolve(&app,&sid,actor).await.map_err(|_|no_access())?;
-    if !shared_chat::staff(&app.store,actor,&rights.agent_id).await? {return Err(no_access());}
-    if body.as_object().is_none_or(|o|o.keys().any(|k|!matches!(k.as_str(),"text"|"client_message_id"|"attachment_ids")))
-        || body["attachment_ids"].as_array().is_some_and(|a|!a.is_empty()) {return Err(bad("Operator replies support text only"));}
-    let text=body["text"].as_str().filter(|v|!v.trim().is_empty()&&v.len()<=65536).ok_or_else(||bad("Message text required"))?;
-    let request=super::required(&body,"client_message_id",128)?;
-    let store=app.store.for_user(&rights.owner_id).await?;
-    let session=store.get(&format!("session:{sid}")).await?.ok_or_else(no_access)?;
-    if session["conversation_privacy"]!="operator_reviewable" || session["operator_joined"][actor]!=true {return Err(no_access());}
-    let rid=format!("operator:{}",crate::digest(&json!([sid,actor,request])));
-    let receipt=format!("receipt:message:{sid}:{actor}:{request}");
-    let result=json!({"run_id":null,"operator_reply":true});
-    let docs=vec![(receipt,json!({"digest":crate::digest(&body),"result":result}))];
+async fn operator_reply(
+    Extension(app): Extension<App>,
+    Path(sid): Path<String>,
+    Json(body): Json<Value>,
+) -> Api {
+    let _guard = app.gate.lock().await;
+    let actor = shared_chat::actor(&app);
+    let rights = shared_chat::resolve(&app, &sid, actor)
+        .await
+        .map_err(|_| no_access())?;
+    if !shared_chat::staff(&app.store, actor, &rights.agent_id).await? {
+        return Err(no_access());
+    }
+    if body.as_object().is_none_or(|o| {
+        o.keys()
+            .any(|k| !matches!(k.as_str(), "text" | "client_message_id" | "attachment_ids"))
+    }) || body["attachment_ids"]
+        .as_array()
+        .is_some_and(|a| !a.is_empty())
+    {
+        return Err(bad("Operator replies support text only"));
+    }
+    let text = body["text"]
+        .as_str()
+        .filter(|v| !v.trim().is_empty() && v.len() <= 65536)
+        .ok_or_else(|| bad("Message text required"))?;
+    let request = super::required(&body, "client_message_id", 128)?;
+    let store = app.store.for_user(&rights.owner_id).await?;
+    let session = store
+        .get(&format!("session:{sid}"))
+        .await?
+        .ok_or_else(no_access)?;
+    if session["conversation_privacy"] != "operator_reviewable"
+        || session["operator_joined"][actor] != true
+    {
+        return Err(no_access());
+    }
+    let rid = format!("operator:{}", crate::digest(&json!([sid, actor, request])));
+    let receipt = format!("receipt:message:{sid}:{actor}:{request}");
+    let result = json!({"run_id":null,"operator_reply":true});
+    let docs = vec![(
+        receipt,
+        json!({"digest":crate::digest(&body),"result":result}),
+    )];
     let value=store.admit_shared_message(docs,&sid,"human_message",&json!({"role":"user","content":text,"run_id":rid,"author_id":actor,"message_kind":"operator"})).await?;
     Ok(Json(value))
 }
@@ -210,14 +262,26 @@ async fn discover(Extension(app): Extension<App>, Path(agent): Path<String>) -> 
         let sid = directory["session_id"].as_str().unwrap();
         let store = app.store.for_user(owner).await?;
         if let Some(session) = store.get(&format!("session:{sid}")).await? {
-            if session["status"] != "active" || session["conversation_privacy"]!="operator_reviewable" {continue;}
+            if session["status"] != "active"
+                || session["conversation_privacy"] != "operator_reviewable"
+            {
+                continue;
+            }
             // Pending help requests surface first so staff can use this list as a handoff inbox.
-            let help=store.get(&format!("shared_help:{sid}")).await?.filter(|h|h["status"]=="pending");
+            let help = store
+                .get(&format!("shared_help:{sid}"))
+                .await?
+                .filter(|h| h["status"] == "pending");
             sessions.push(json!({"id":sid,"title":session["title"],"agent_id":agent,"can_observe":true,"can_join":true,
                 "help_pending":help.is_some(),"help_requested_at":help.map(|h|h["requested_at"].clone())}));
         }
     }
-    sessions.sort_by_key(|s|(s["help_pending"]!=true,std::cmp::Reverse(s["help_requested_at"].as_u64().unwrap_or(0))));
+    sessions.sort_by_key(|s| {
+        (
+            s["help_pending"] != true,
+            std::cmp::Reverse(s["help_requested_at"].as_u64().unwrap_or(0)),
+        )
+    });
     Ok(Json(json!({"sessions":sessions})))
 }
 async fn help(
@@ -331,7 +395,7 @@ pub fn router() -> Router<App> {
         )
         .route("/chat-invitations/redeem", post(redeem))
         .route("/sessions/{sid}/join", post(join))
-        .route("/sessions/{sid}/operator-replies",post(operator_reply))
+        .route("/sessions/{sid}/operator-replies", post(operator_reply))
         .route("/agents/{id}/shared-sessions", get(discover))
         .route("/sessions/{sid}/help", post(help).delete(cancel_help))
 }
@@ -408,29 +472,84 @@ mod tests {
     #[tokio::test]
     async fn archived_sessions_deny_new_admissions_without_consuming_invites() {
         let (_root, app) = crate::runtime_tests::fixture().await;
-        let owner = active_user(&app,"archived-owner").await;
-        let guest = active_user(&app,"archived-guest").await;
+        let owner = active_user(&app, "archived-owner").await;
+        let guest = active_user(&app, "archived-guest").await;
         let owner_store = app.store.for_user(&owner).await.unwrap();
-        set_policy(&app,shared_chat::SharedChatPolicy {shareable:true,admin_join:true,admin_view:true,..Default::default()}).await;
-        let guest_cookie = cookie(&app,&guest).await;
-        let admin_cookie = cookie(&app,"admin").await;
+        set_policy(
+            &app,
+            shared_chat::SharedChatPolicy {
+                shareable: true,
+                admin_join: true,
+                admin_view: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        let guest_cookie = cookie(&app, &guest).await;
+        let admin_cookie = cookie(&app, "admin").await;
         let router = crate::router(app.clone());
-        for status in ["archived","deleted"] {
+        for status in ["archived", "deleted"] {
             let sid = format!("archive-{status}");
             owner_store.put(&format!("session:{sid}"),&json!({"id":sid,"agent_id":"shared_default","title":"Archived","status":status})).await.unwrap();
-            app.store.register_shared_session(&owner,&sid,"shared_default").await.unwrap();
-            let invitation = app.store.shared_invite_issue(&sid,&owner,"archived-invite",3600).await.unwrap();
-            let response = router.clone().oneshot(request("POST","/api/v3/chat-invitations/redeem",&guest_cookie,json!({"token":invitation["token"],"client_request_id":"redeem-archived"}))).await.unwrap();
-            assert_eq!(response.status(),StatusCode::NOT_FOUND);
-            assert!(!app.store.shared_is_participant(&sid,&guest).await.unwrap());
-            assert_eq!(app.store.shared_invite_session_for(invitation["token"].as_str().unwrap(),&guest).await.unwrap(),Some(sid.clone()));
-            let response = router.clone().oneshot(request("POST",&format!("/api/v3/sessions/{sid}/join"),&admin_cookie,json!({}))).await.unwrap();
-            assert_eq!(response.status(),StatusCode::NOT_FOUND);
-            assert!(!app.store.shared_is_participant(&sid,"admin").await.unwrap());
+            app.store
+                .register_shared_session(&owner, &sid, "shared_default")
+                .await
+                .unwrap();
+            let invitation = app
+                .store
+                .shared_invite_issue(&sid, &owner, "archived-invite", 3600)
+                .await
+                .unwrap();
+            let response = router
+                .clone()
+                .oneshot(request(
+                    "POST",
+                    "/api/v3/chat-invitations/redeem",
+                    &guest_cookie,
+                    json!({"token":invitation["token"],"client_request_id":"redeem-archived"}),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert!(!app.store.shared_is_participant(&sid, &guest).await.unwrap());
+            assert_eq!(
+                app.store
+                    .shared_invite_session_for(invitation["token"].as_str().unwrap(), &guest)
+                    .await
+                    .unwrap(),
+                Some(sid.clone())
+            );
+            let response = router
+                .clone()
+                .oneshot(request(
+                    "POST",
+                    &format!("/api/v3/sessions/{sid}/join"),
+                    &admin_cookie,
+                    json!({}),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert!(!app
+                .store
+                .shared_is_participant(&sid, "admin")
+                .await
+                .unwrap());
         }
-        let response = router.oneshot(request("GET","/api/v3/agents/shared_default/shared-sessions",&admin_cookie,json!({}))).await.unwrap();
-        assert_eq!(response.status(),StatusCode::OK);
-        assert!(body(response).await["sessions"].as_array().unwrap().is_empty());
+        let response = router
+            .oneshot(request(
+                "GET",
+                "/api/v3/agents/shared_default/shared-sessions",
+                &admin_cookie,
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(body(response).await["sessions"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
     #[tokio::test]
     async fn authenticated_invitee_retains_actor_and_one_canonical_history() {
@@ -505,7 +624,9 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let sharing = body(response).await;
         assert_eq!(sharing["access"]["can_send"], true);
+        assert_eq!(sharing["access"]["can_invite"], false);
         let response = router
+            .clone()
             .oneshot(request(
                 "POST",
                 "/api/v3/sessions/shared-http/invitations",
@@ -514,9 +635,23 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
         let invitations = app.store.shared_invites("shared-http").await.unwrap();
-        assert!(invitations.iter().any(|v| v["issuer_id"] == alice));
+        assert!(!invitations.iter().any(|v| v["issuer_id"] == alice));
+        // Participants still revoke invitations, including the owner's.
+        let response = router
+            .oneshot(request(
+                "DELETE",
+                &format!(
+                    "/api/v3/sessions/shared-http/invitations/{}",
+                    invitation["id"].as_str().unwrap()
+                ),
+                &alice_cookie,
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
         let (messages, _) = app.store.chat_snapshot("shared-http").await.unwrap();
         assert_eq!(messages.len(), 1);
         let scoped = shared_chat::scope(
@@ -551,20 +686,58 @@ mod tests {
         assert!(shared_chat::resolve(&app, "staff-chat", "admin")
             .await
             .is_err());
-        set_policy(&app,shared_chat::SharedChatPolicy{admin_view:true,admin_join:true,..Default::default()}).await;
+        set_policy(
+            &app,
+            shared_chat::SharedChatPolicy {
+                admin_view: true,
+                admin_join: true,
+                ..Default::default()
+            },
+        )
+        .await;
         // Old global switches cannot change the pinned privacy of an existing conversation.
-        assert!(shared_chat::resolve(&app,"staff-chat","admin").await.is_err());
+        assert!(shared_chat::resolve(&app, "staff-chat", "admin")
+            .await
+            .is_err());
         owner.put("session:staff-chat",&json!({"id":"staff-chat","agent_id":"shared_default","status":"active","conversation_privacy":"operator_reviewable"})).await.unwrap();
-        assert_eq!(shared_chat::resolve(&app,"staff-chat","admin").await.unwrap().kind,shared_chat::AccessKind::Observer);
-        let scoped=app.clone();
-        assert!(join(Extension(scoped.clone()),Path("staff-chat".into())).await.is_ok());
+        assert_eq!(
+            shared_chat::resolve(&app, "staff-chat", "admin")
+                .await
+                .unwrap()
+                .kind,
+            shared_chat::AccessKind::Observer
+        );
+        let scoped = app.clone();
+        assert!(join(Extension(scoped.clone()), Path("staff-chat".into()))
+            .await
+            .is_ok());
         // Joining permits only the dedicated human-reply route, never participant controls.
-        assert_eq!(shared_chat::resolve(&app,"staff-chat","admin").await.unwrap().kind,shared_chat::AccessKind::Observer);
-        let reply=json!({"text":"Operator response","client_message_id":"operator-once"});
-        operator_reply(Extension(scoped.clone()),Path("staff-chat".into()),Json(reply.clone())).await.unwrap();
-        operator_reply(Extension(scoped),Path("staff-chat".into()),Json(reply)).await.unwrap();
-        let (messages,_)=owner.chat_snapshot("staff-chat").await.unwrap();
-        assert_eq!(messages.iter().filter(|m|m["content"]=="Operator response").count(),1);
+        assert_eq!(
+            shared_chat::resolve(&app, "staff-chat", "admin")
+                .await
+                .unwrap()
+                .kind,
+            shared_chat::AccessKind::Observer
+        );
+        let reply = json!({"text":"Operator response","client_message_id":"operator-once"});
+        operator_reply(
+            Extension(scoped.clone()),
+            Path("staff-chat".into()),
+            Json(reply.clone()),
+        )
+        .await
+        .unwrap();
+        operator_reply(Extension(scoped), Path("staff-chat".into()), Json(reply))
+            .await
+            .unwrap();
+        let (messages, _) = owner.chat_snapshot("staff-chat").await.unwrap();
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|m| m["content"] == "Operator response")
+                .count(),
+            1
+        );
         let bob = active_user(&app, "shared-revoked").await;
         app.store.shared_join("staff-chat", &bob).await.unwrap();
         assert!(shared_chat::resolve(&app, "staff-chat", &bob).await.is_ok());
