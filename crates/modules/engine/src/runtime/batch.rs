@@ -415,7 +415,11 @@ impl<
                 item["pending"]["mode_revision"] = json!(mode_revision);
                 item["pending"]["decision"] = Value::Null;
             }
-            run["pending"] = Value::Null;
+            // A repeat or additional-action confirmation stays waiting under Auto, so its
+            // pending decision is kept for the matching below; dropping it re-asked forever.
+            if run["pending"]["new_intent_confirmation"] != true {
+                run["pending"] = Value::Null;
+            }
         }
         if !run["pending"].is_null() {
             let approval_id = run["pending"]["id"].clone();
@@ -698,6 +702,9 @@ impl<
         {
             run["pending"] = item["pending"].clone();
             run["pending"]["state"] = json!("waiting");
+            if run["pending"]["waiting_since"].is_null() {
+                run["pending"]["waiting_since"] = json!(crate::now());
+            }
             run["status"] = json!("waiting_approval");
             let mut payload = run["pending"].clone();
             payload["run_id"] = json!(id);

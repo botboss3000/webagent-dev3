@@ -9545,6 +9545,76 @@ async fn wake_reads_require_fresh_approval_in_auto_serial_and_batch() {
 }
 
 #[tokio::test]
+async fn auto_batch_keeps_an_approved_repeat_confirmation() {
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    app.store
+        .put(
+            &key("session_mode", &sid),
+            &json!({"mode":"write","execution_mode":"auto","revision":1}),
+        )
+        .await
+        .unwrap();
+    activate_codebase(&app, &sid).await;
+    let id = queued(&app, &sid).await;
+    running(&app, &id, "repeat-approve").await;
+    let mut run = app.run(&id).await.unwrap();
+    run["phase"] = json!("tools");
+    run["loaded_abilities"] = json!(["codebase_admin"]);
+    let (policy, mode_revision, visibility, state) = ability_controls(&app, &sid).await.unwrap();
+    let access = app
+        .store
+        .live_access(app.store.current_user_id(), "shared_default")
+        .await
+        .unwrap();
+    let args = json!({"path":"fixture"});
+    let calls = (0..2)
+        .map(|index| {
+            json!({
+                "type":"function_call","call_id":format!("repeat-read-{index}"),
+                "name":"file_read","arguments":args.to_string()
+            })
+        })
+        .collect::<Vec<_>>();
+    for call in &calls {
+        run["input"].as_array_mut().unwrap().push(call.clone());
+    }
+    run["calls"] = json!(calls);
+    // The user approved a repeat confirmation; Auto mode never converts one.
+    let pending = json!({
+        "id":"repeat-pending","name":"file_read","call_id":"repeat-read-0","arguments":args,
+        "digest":digest(&args),"policy_version":policy["version"],"mode_revision":mode_revision,
+        "visibility_revision":visibility["revision"],"ability_state_revision":state["revision"],
+        "access_revision":access.revision,"state":"waiting","decision":null,
+        "new_intent_confirmation":true,"repeat_of":"earlier-call"
+    });
+    run["batch"] = json!([
+        {"state":"waiting","pending":pending,"result":null,"pre_tool_receipt":null},
+        {"state":"done","pending":{"call_id":"repeat-read-1","name":"file_read"},
+         "result":{"status":"success","output":"earlier"},"pre_tool_receipt":null}
+    ]);
+    run["pending"] = pending;
+    run["pending"]["decision"] = json!("approve");
+    app.save(&mut run).await.unwrap();
+    let _ = tokio::time::timeout(
+        Duration::from_secs(5),
+        execute_run(
+            app.clone(),
+            id.clone(),
+            "repeat-approve".into(),
+            CancellationToken::new(),
+        ),
+    )
+    .await;
+    let after = app.run(&id).await.unwrap();
+    assert_ne!(after["pending"]["id"], "repeat-pending");
+    assert_ne!(after["status"], "waiting_approval");
+    assert!(after["input"].as_array().unwrap().iter().any(|item| {
+        item["type"] == "function_call_output" && item["call_id"] == "repeat-read-0"
+    }));
+}
+
+#[tokio::test]
 async fn background_approved_reads_pin_authority_and_claim_identity() {
     for batched in [false, true] {
         let (_root, app) = fixture().await;
