@@ -1,6 +1,6 @@
 {
   "name": "browser_input",
-  "description": "Click, type or press a key in the private server browser. Each input needs a browser_read read under 120 seconds old whose region contains the target; password and credential fields are refused",
+  "description": "Click, type or press a key in the private server browser, or save the site's sign-in. Each click, type or press needs a browser_read read under 120 seconds old whose region contains the target. Sign-in fields take a vault entry (vault), never literal passwords; save_login keeps the signed-in site for later visits",
   "effect": "write",
   "retry_risk": "none",
   "retry_hint": "read the page again to see whether the earlier click or typing already took effect; every input needs its own fresh read, so input cannot repeat blindly",
@@ -17,7 +17,8 @@
         "enum": [
           "click",
           "type",
-          "press"
+          "press",
+          "save_login"
         ]
       },
       "selector": {
@@ -26,7 +27,15 @@
       },
       "text": {
         "type": "string",
-        "description": "type only: literal text to type"
+        "description": "type only: literal text to type; for passwords and codes use vault instead"
+      },
+      "vault": {
+        "type": "string",
+        "description": "type only: the name of the user's vault entry to type, instead of text. Only into a sign-in field (user name, email, password or one-time code) on the entry's own https site; you never see the value"
+      },
+      "totp": {
+        "type": "boolean",
+        "description": "type with vault only: the entry is an authenticator secret; type its current 6-digit code"
       },
       "key": {
         "type": "string",
@@ -46,6 +55,10 @@
           "PageDown"
         ],
         "description": "press only: sent to selector, or to the focused element"
+      },
+      "origin": {
+        "type": "string",
+        "description": "save_login only: the https origin of the site the browser is signed in to, for example https://example.com"
       }
     },
     "required": [

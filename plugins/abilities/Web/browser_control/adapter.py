@@ -4,6 +4,11 @@ Two modes. Signed out (no cookie in the trusted authority): public http(s) sites
 egress guard, filtered by the agent's allow/block lists. Signed in (Rust supplies a cookie when
 the agent navigates to the WebAgent app): the fixed app origin only.
 
+Signed out, a site the user saved a sign-in for opens with its saved cookies, and signs in
+again by replaying its recorded steps when the site asks. Vault values (Rust resolves them from
+the user's vault) are typed only into sign-in fields on their own origin and scrubbed from
+every result; the model only ever names them.
+
 Trusted cookie metadata is a separate dispatcher field, never a model argument.
 There is no caller-supplied JavaScript, origin, profile or filesystem path.
 """
@@ -12,6 +17,7 @@ import asyncio
 import base64
 import contextlib
 import hashlib
+import hmac
 import importlib.util
 import ipaddress
 import json
@@ -28,7 +34,7 @@ import time
 import uuid
 import zlib
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, quote_plus, urlencode, urlsplit, urlunsplit
 
 ORIGIN=os.environ.get("V3_PUBLIC_ORIGIN","https://dev.webagent.live")
 PRIVATE_ROOT=Path("/run/v3/worker/browser")
@@ -40,6 +46,12 @@ MAX_ARTIFACTS=40
 MAX_SESSIONS=2
 MAX_PRIVATE_SESSIONS=32
 MAX_ARTIFACT_BYTES=64*1024*1024
+# Saved site sign-ins: one site's cookies at a time, and the steps that sign in to it again.
+MAX_SITE_COOKIES=150
+MAX_STEPS=20
+STEP_WAIT=5
+SITE_CALL_TIMEOUT=60
+VAULT_NAME=r"[A-Za-z0-9_-]{1,64}"
 IDLE_SECONDS=180
 # Agent turns between a read and the input often take over 30 s; the target is re-checked at dispatch anyway.
 READ_FRESH_SECONDS=120
@@ -57,7 +69,7 @@ IGNORED_PAGE_ERRORS=("static.cloudflareinsights.com",)
 MAX_PAGE_ERRORS=20
 MAX_ELEMENTS=50
 READ_ACTIONS={"navigate","read","measure","pixels","performance","wait_for","animations","scroll","viewport","emulate","screenshot","close"}
-INPUT_ACTIONS={"click","type","press"}
+INPUT_ACTIONS={"click","type","press","save_login"}
 MEASURE_PAGE=20
 MAX_PIXELS=20
 MAX_SCROLL=20000
@@ -216,8 +228,12 @@ if (!n) return null;
 const b=n.getBoundingClientRect();
 return {x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2)};
 """
+# A sign-in field a vault value may go into: user name, email, password or one-time code.
+CREDENTIAL_JS=r"""const credential=n=>n.matches('input')&&['password','email','text','tel','number',''].includes(n.getAttribute('type')||'')&&
+ (n.type==='password'||n.type==='email'||/user|e-?mail|login|otp|one.?time|code|pass/i.test([n.id,n.name,n.autocomplete].join(' ')));"""
 TARGET_SCRIPT="""
 /* V3_TARGET */
+"""+CREDENTIAL_JS+"""
 const target=document.querySelector(arguments[0]);
 // The target must lie inside a region the agent read; other parts of the page may change freely.
 const observed=[...document.querySelectorAll(arguments[1]||'body')];
@@ -226,7 +242,17 @@ const secret=target.matches('input[type=password],input[type=file]') || target.c
  /password|secret|token|credential|api.?key/i.test([target.id,target.name,target.autocomplete].join(' '));
 // The visible label (never an input value) lets the result say what was actually used.
 const label=(target.getAttribute('aria-label')||target.innerText||'').trim().slice(0,80);
-return {allowed:true,secret:secret,href:target.closest('a[href]')?.href||'',tag:target.tagName.toLowerCase(),label:label};
+return {allowed:true,secret:secret,credential:credential(target),href:target.closest('a[href]')?.href||'',tag:target.tagName.toLowerCase(),label:label};
+"""
+CREDENTIAL_SCRIPT="""
+/* V3_CREDENTIAL */
+"""+CREDENTIAL_JS+"""
+return credential(arguments[0]);
+"""
+SIGNIN_SCRIPT=r"""
+/* V3_SIGNIN */
+// A visible password field means the site is asking to sign in.
+return [...document.querySelectorAll('input[type=password]')].some(n=>n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}));
 """
 MASK_SCRIPT="""
 /* V3_MASK */
@@ -273,6 +299,25 @@ class CapacityFailure(Rejected):pass
 class NotReady(Rejected):
     """The app did not reach a signed-in, booted page; kind names where it stopped."""
     def __init__(self,kind,message,errors):super().__init__(message);self.kind=kind;self.errors=errors
+def origin_of(url):
+    """scheme://host[:port] of an http(s) URL (default port left out), or '' for anything else."""
+    try:
+        parsed=urlsplit(url);port=parsed.port
+    except (ValueError,TypeError,AttributeError):return ""
+    if parsed.scheme not in ("http","https") or not parsed.hostname:return ""
+    default=443 if parsed.scheme=="https" else 80
+    return parsed.scheme+"://"+parsed.hostname.lower()+("" if port in (None,default) else ":"+str(port))
+def valid_origin(value):
+    """A plain https site origin, as Rust's vault stores it."""
+    return isinstance(value,str) and value.startswith("https://") and origin_of(value)==value
+def totp_code(secret,at=None):
+    """RFC 6238 code (SHA-1, 30 s, 6 digits) from a base32 authenticator secret."""
+    try:
+        text=re.sub(r"[\s-]","",secret).upper();key=base64.b32decode(text+"="*(-len(text)%8))
+    except (ValueError,TypeError):raise Rejected("That vault entry is not an authenticator secret") from None
+    digest=hmac.new(key,struct.pack(">Q",int((time.time() if at is None else at)//30)),"sha1").digest()
+    offset=digest[-1]&15
+    return "%06d"%((struct.unpack(">I",digest[offset:offset+4])[0]&0x7fffffff)%1000000)
 def canonical_id(value):
     """Require canonical UUID spelling for private session and artifact ownership."""
     try:return isinstance(value,str) and str(uuid.UUID(value))==value
@@ -298,7 +343,18 @@ def validate_trusted(base,trusted):
     if type(expires) not in (int,float) or not time.time()<expires<=time.time()+601:
         raise Rejected("Browser authorization expired or exceeds lease")
     if trusted.get("allowed_session_ids")!=[sid]:raise Rejected("Browser routes require the current session")
-    return {**trusted,"cookie":trusted.get("cookie")}
+    # Vault values Rust resolved for this call: by entry name, each bound to its own https origin.
+    secrets=trusted.get("secrets",{})
+    if not isinstance(secrets,dict) or len(secrets)>MAX_STEPS or any(not re.fullmatch(VAULT_NAME,name) or not isinstance(entry,dict)
+        or set(entry)!={"value","origin"} or not isinstance(entry["value"],str) or not 1<=len(entry["value"])<=8192 or not valid_origin(entry["origin"])
+        for name,entry in secrets.items()):raise Rejected("Invalid trusted vault values")
+    site=trusted.get("site")
+    if site is not None and (trusted.get("cookie") is not None or not isinstance(site,dict) or not valid_origin(site.get("origin"))
+        or not isinstance(site.get("cookies"),list) or len(site["cookies"])>MAX_SITE_COOKIES or any(not isinstance(c,dict) for c in site["cookies"])
+        or not isinstance(site.get("steps"),list) or len(site["steps"])>MAX_STEPS or any(not isinstance(step,dict) for step in site["steps"])
+        or not isinstance(site.get("login_url"),str) or origin_of(site["login_url"])!=site["origin"]):
+        raise Rejected("Invalid trusted site sign-in")
+    return {**trusted,"cookie":trusted.get("cookie"),"secrets":secrets}
 def validate_url(url,trusted):
     """Signed out: a public http(s) URL the agent's site policy allows. Signed in: a development route."""
     if trusted.get("cookie") is not None:
@@ -359,15 +415,15 @@ def validate_args(name,args):
             "color_scheme","reduced_motion","styles","points","expected_sequence"};action=args.get("action")
         if action not in READ_ACTIONS:raise Rejected("browser_read actions: "+", ".join(sorted(READ_ACTIONS))+"; click, type and press use browser_input")
     elif name=="browser_input":
-        allowed={"action","selector","text","key","expected_sequence"};action=args.get("action")
-        if action not in INPUT_ACTIONS:raise Rejected("browser_input actions: click, type, press; everything else uses browser_read")
+        allowed={"action","selector","text","key","vault","totp","origin","expected_sequence"};action=args.get("action")
+        if action not in INPUT_ACTIONS:raise Rejected("browser_input actions: click, type, press, save_login; everything else uses browser_read")
     elif name=="browser_record":
         allowed={"action"};action=args.get("action")
         if action not in {"start","stop","status"}:raise Rejected("Unsupported recorder action")
     else:raise Rejected("Unknown browser tool")
     if set(args)-allowed:raise Rejected("Unknown browser argument")
     permitted={"navigate":{"url","signed_in"},"read":{"selector","offset"},"click":{"selector"},
-        "type":{"selector","text"},"screenshot":set(),"viewport":{"preset"},"close":set(),"start":set(),"stop":set(),"status":set(),
+        "type":{"selector","text","vault","totp"},"save_login":{"origin"},"screenshot":set(),"viewport":{"preset"},"close":set(),"start":set(),"stop":set(),"status":set(),
         "measure":{"selector","offset","styles"},"pixels":{"points","selector"},"performance":set(),"wait_for":{"condition","selector","text","timeout_ms","quiet_ms"},"animations":{"selector"},
         "scroll":{"selector","dx","dy"},"press":{"key","selector"},"emulate":{"color_scheme","reduced_motion"}}
     for key in list(args):
@@ -385,7 +441,10 @@ def validate_args(name,args):
     if "text" in args and (not isinstance(args["text"],str) or len(args["text"].encode())>4096 or "\0" in args["text"]):
         raise Rejected("Literal text exceeds limit")
     if action in {"click","type"} and not args.get("selector"):raise Rejected("Action requires a selector")
-    if action=="type" and "text" not in args:raise Rejected("Type requires literal text")
+    if action=="type" and ("text" in args)==("vault" in args):raise Rejected("Type needs either literal text or a vault entry name")
+    if "vault" in args and (not isinstance(args["vault"],str) or not re.fullmatch(VAULT_NAME,args["vault"])):raise Rejected("Invalid vault entry name")
+    if "totp" in args and (type(args["totp"]) is not bool or "vault" not in args):raise Rejected("totp is true or false and goes with a vault entry")
+    if action=="save_login" and not valid_origin(args.get("origin")):raise Rejected("save_login needs the site's https origin, for example https://example.com")
     if action=="viewport" and args.get("preset") not in VIEWPORTS:raise Rejected("Viewport preset must be one of "+", ".join(VIEWPORTS))
     if "offset" in args and (type(args["offset"]) is not int or not 0<=args["offset"]<=MAX_READ_OFFSET):raise Rejected("Read offset must be a whole number of characters")
     if action=="measure":
@@ -520,6 +579,9 @@ class BrowserState:
         self.observed_selector="";self.observed_at=0;self.viewport=None
         self.media={};self.last_action="";self.last_action_at=None
         self.signed_in=cookie is not None;self.sites=None
+        # Signed out: the saved site whose cookies are loaded, the steps since the last navigation
+        # (what save_login keeps) and every vault value typed, scrubbed from results.
+        self.site=None;self.steps=[];self.login_url="";self.secrets=set()
         # Signed out there is no credential to scrub; a random value keeps the scrub scripts harmless.
         if cookie is None:self.cookie=str(uuid.uuid4())
 
@@ -665,12 +727,15 @@ class BrowserService:
     def artifact(self,state,data):
         """Store bounded PNG bytes with ownership, digest and quota metadata."""
         meta=png_metadata(data);folder=state.directory/"artifacts"
-        existing=list(folder.iterdir())
-        if len(existing)>=MAX_ARTIFACTS*2:raise Rejected("Private screenshot quota reached")
+        if any(item.is_symlink() for item in folder.iterdir()):raise Rejected("Invalid private artifact")
+        # The newest screenshots stay; the oldest make room. Replies keep their own copies.
+        oldest=sorted(folder.glob("*.json"),key=lambda item:item.stat().st_mtime)
+        while len(oldest)>=MAX_ARTIFACTS:self.evict(oldest.pop(0))
         total=0
         for image in self.root.glob("*/artifacts/*.png"):
             if image.is_symlink():raise Rejected("Invalid private artifact")
             total+=image.stat().st_size
+        while total+len(data)>MAX_ARTIFACT_BYTES and oldest:total-=self.evict(oldest.pop(0))
         if total+len(data)>MAX_ARTIFACT_BYTES:raise Rejected("Private screenshot byte quota reached")
         artifact=str(uuid.uuid4());image=folder/(artifact+".png");manifest=folder/(artifact+".json")
         fd=os.open(image,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
@@ -682,6 +747,12 @@ class BrowserService:
         os.chmod(manifest,0o600)
         return {**meta,"artifact_id":artifact,
             "path":"/api/v3/sessions/"+state.sid+"/administrator/artifacts/"+artifact}
+    def evict(self,manifest):
+        """Delete one stored screenshot and its record; returns the image bytes freed."""
+        image=manifest.with_suffix(".png");freed=0
+        with contextlib.suppress(OSError):freed=image.stat().st_size;image.unlink()
+        with contextlib.suppress(OSError):manifest.unlink()
+        return freed
     def page_errors(self,state):
         """Uncaught errors and console errors since the last read, credentials redacted before truncation."""
         try:entries=state.driver.get_log("browser")
@@ -690,9 +761,7 @@ class BrowserService:
         for entry in entries:
             if not isinstance(entry,dict) or entry.get("level")!="SEVERE":continue
             if any(noise in str(entry.get("message","")) for noise in IGNORED_PAGE_ERRORS):continue
-            text=str(entry.get("message","")).replace(state.cookie,"[redacted]")
-            if state.csrf:text=text.replace(state.csrf,"[redacted]")
-            errors.append(text[:300])
+            errors.append(self.redact(state,entry.get("message",""))[:300])
         return errors[-MAX_PAGE_ERRORS:]
     def apply_viewport(self,state):
         """Re-apply the chosen preset and media features; device emulation does not reliably survive navigation."""
@@ -707,7 +776,77 @@ class BrowserService:
     def redact(self,state,text):
         """Remove the browser's own credentials from page-derived text."""
         text=str(text).replace(state.cookie,"[redacted]")
+        for secret in state.secrets:text=text.replace(secret,"[redacted]")
         return text.replace(state.csrf,"[redacted]") if state.csrf else text
+    def scrub(self,state,result):
+        """Remove every vault value typed in this browser from a result, in any encoding a page might echo."""
+        if not state.secrets:return result
+        text=json.dumps(result)
+        for secret in state.secrets:
+            for form in {secret,quote(secret,safe=""),quote_plus(secret),json.dumps(secret)[1:-1]}:text=text.replace(form,"[redacted]")
+        try:return json.loads(text)
+        except ValueError:return {"status":"success","output":"Result withheld: it contained a vault value"}
+    def secret_value(self,state,secrets,name,totp):
+        """A vault value for the current page: only on its own origin, as a code when it is an authenticator secret."""
+        entry=secrets.get(name)
+        if entry is None:raise Rejected("That vault entry is unavailable; ask the user to save it with request_credential first")
+        if origin_of(state.driver.current_url)!=entry["origin"]:raise Rejected("That vault entry is only for "+entry["origin"])
+        value=totp_code(entry["value"]) if totp else entry["value"]
+        state.secrets.update({entry["value"],value});return value
+    def step(self,state,step):
+        """Note one input on an external site; save_login keeps them to sign in again later."""
+        if not state.signed_in and len(state.steps)<MAX_STEPS:state.steps.append(step)
+    def site_cookies(self,state,origin):
+        """The browser's cookies for one site's host and its parent domains, in the fields setCookies takes."""
+        host=urlsplit(origin).hostname;kept=[]
+        for cookie in state.driver.execute_cdp_cmd("Network.getAllCookies",{}).get("cookies",[]):
+            domain=str(cookie.get("domain","")).lstrip(".").lower()
+            if not domain or not (host==domain or host.endswith("."+domain)):continue
+            item={key:cookie[key] for key in ("name","value","domain","path","httpOnly","secure") if key in cookie}
+            if cookie.get("sameSite") in ("Strict","Lax","None"):item["sameSite"]=cookie["sameSite"]
+            if not cookie.get("session") and type(cookie.get("expires")) in (int,float) and cookie["expires"]>0:item["expires"]=cookie["expires"]
+            kept.append(item)
+        return kept[:MAX_SITE_COOKIES]
+    def restore_site(self,state,site):
+        """Keep at most one saved site's cookies in the browser: the one being opened. Staying on it keeps its live cookies."""
+        origin=site["origin"] if site else None
+        if state.site==origin:return
+        state.driver.execute_cdp_cmd("Network.clearBrowserCookies",{})
+        state.site=origin
+        if site and site["cookies"]:state.driver.execute_cdp_cmd("Network.setCookies",{"cookies":site["cookies"]})
+    def replay(self,state,step,secrets):
+        """Repeat one saved sign-in step, waiting a few seconds for its field to appear."""
+        deadline=time.monotonic()+STEP_WAIT
+        while True:
+            if step.get("selector"):
+                found=[e for e in state.driver.find_elements("css selector",str(step["selector"])) if e.is_displayed() and e.is_enabled()]
+            else:found=[state.driver.switch_to.active_element]
+            if found or time.monotonic()>=deadline or state.cancelled.is_set():break
+            time.sleep(0.1)
+        if not found:raise NotReady("signin_failed","A saved sign-in step's field did not appear; the site may have changed. Sign in step by step and save_login again",self.page_errors(state))
+        element=found[0]
+        if step.get("action")=="click":element.click()
+        elif step.get("action")=="press" and step.get("key") in KEYS:element.send_keys(KEYS[step["key"]])
+        elif step.get("action")=="type" and "vault" in step:
+            if state.driver.execute_script(CREDENTIAL_SCRIPT,element) is not True:raise NotReady("signin_failed","A saved step would type a vault value outside a sign-in field; sign in step by step and save_login again",None)
+            element.send_keys(self.secret_value(state,secrets,str(step["vault"]),step.get("totp") is True))
+        elif step.get("action")=="type" and isinstance(step.get("text"),str):element.send_keys(step["text"])
+        else:raise NotReady("signin_failed","A saved sign-in step is invalid; sign in step by step and save_login again",None)
+    def site_signed_in(self,state,site,url,secrets):
+        """After opening a saved site: signed in, or sign in again with its steps once and report how it went."""
+        origin=site["origin"]
+        if not state.driver.execute_script(SIGNIN_SCRIPT):return {"signed_in":True,"site":origin,"site_login":"restored"}
+        if not site["steps"]:
+            return {"signed_in":False,"site":origin,"site_login":"expired",
+                "next_step":"The saved sign-in expired and has no steps to sign in again: sign in step by step, then save_login"}
+        state.driver.get(site["login_url"])
+        for step in site["steps"]:self.replay(state,step,secrets)
+        deadline=time.monotonic()+STEP_WAIT
+        while state.driver.execute_script(SIGNIN_SCRIPT) and time.monotonic()<deadline:time.sleep(0.2)
+        state.driver.get(url)
+        if origin_of(state.driver.current_url)!=origin or state.driver.execute_script(SIGNIN_SCRIPT):
+            raise NotReady("signin_failed","Signing in again with the saved steps did not work; the site may have changed or want a new code. Sign in step by step and save_login again",self.page_errors(state))
+        return {"signed_in":True,"site":origin,"site_login":"signed_in_again","site_cookies":self.site_cookies(state,origin)}
     def acted(self,state,action):
         """Start the clock wait_for reports as since_last_action_ms."""
         state.last_action=action;state.last_action_at=time.monotonic()
@@ -760,13 +899,15 @@ class BrowserService:
         finally:
             with contextlib.suppress(Exception):state.driver.execute_script(UNMASK_SCRIPT)
             state.observed=None
-    def fresh_target(self,state,selector):
+    def fresh_target(self,state,selector,vault=False,keys=False):
         """Require a recent read of this URL whose region holds the target, then re-check the target itself at dispatch."""
         if state.observed is None or time.monotonic()-state.observed_at>READ_FRESH_SECONDS or state.driver.current_url!=state.observed_url:
             raise Rejected("Read the current page (a region containing the target) before each input action")
         target=state.driver.execute_script(TARGET_SCRIPT,selector,state.observed_selector)
         if not target.get("allowed"):raise Rejected("Target is not in the region last read; read a selector that contains it")
-        if target.get("secret"):raise Rejected("Target contains private credentials")
+        if vault and not target.get("credential"):raise Rejected("Vault values go only into a sign-in field: user name, email, password or one-time code")
+        # Navigation keys type nothing, so Enter may submit a password field.
+        if target.get("secret") and not (vault or keys):raise Rejected("Target contains private credentials; type a vault entry into it instead")
         if target.get("href") and not state.signed_in:
             if target["href"].startswith(("http://","https://")):validate_url(target["href"],{"cookie":None,"sites":state.sites})
         elif target.get("href"):
@@ -775,9 +916,7 @@ class BrowserService:
             validate_path(urlunsplit(("","",parsed.path,parsed.query,"")),{"session_id":state.sid,"agent_id":state.agent})
         element=state.driver.find_element("css selector",selector)
         if not element.is_displayed() or not element.is_enabled():raise Rejected("Input target is not visible and enabled; it may be inside a closed menu or panel, or disabled")
-        label=str(target.get("label","")).replace(state.cookie,"[redacted]")
-        if state.csrf:label=label.replace(state.csrf,"[redacted]")
-        return element,{"tag":str(target.get("tag","")),"label":label}
+        return element,{"tag":str(target.get("tag","")),"label":self.redact(state,target.get("label",""))}
     def run(self,name,args,base,trusted):
         """Execute one validated action with serialized profile access and no automatic input replay."""
         trusted=validate_trusted(base,trusted);action=validate_args(name,args)
@@ -801,14 +940,17 @@ class BrowserService:
                 result={"url":self.origin+route,"signed_in":True,"identity_verified":True,"user_id":state.user,
                     **({} if route.startswith("/api/") else self.app_ready(state))}
             elif action=="navigate":
-                url=validate_url(args["url"],trusted)
-                state.observed=None;state.driver.get(url);self.acted(state,"navigate");self.apply_viewport(state)
+                url=validate_url(args["url"],trusted);site=trusted.get("site")
+                state.observed=None;self.restore_site(state,site)
+                state.driver.get(url);self.acted(state,"navigate");self.apply_viewport(state)
                 current=state.driver.current_url
                 if not current.startswith(("http://","https://")):
                     host=urlsplit(url).hostname
                     reason=egress_guard().reason(host)
                     raise Rejected(("Blocked: "+host+" — "+reason) if reason else "The page could not be loaded (blocked, unreachable or not found)")
                 result={"url":self.safe_url(state),"signed_in":False}
+                state.steps=[];state.login_url=result["url"]
+                if site:result.update(self.site_signed_in(state,site,url,trusted["secrets"]));result["url"]=self.safe_url(state)
             elif action=="read":
                 read=state.driver.execute_script(READ_SCRIPT,args.get("selector","body"),state.cookie,MAX_TEXT,args.get("offset",0))
                 if not isinstance(read,dict) or not isinstance(read.get("text"),str):raise Rejected("Invalid bounded DOM result")
@@ -822,13 +964,29 @@ class BrowserService:
                 # Errors first, so a long page never pushes them out of view.
                 result={"page_errors":self.page_errors(state),**read,"fresh_for_input":state.observed is not None}
             elif action in {"click","type"}:
-                target,used=self.fresh_target(state,args["selector"]);state.observed=None
+                vault=args.get("vault")
+                if vault and state.signed_in:raise Rejected("Vault values are for external sites; the WebAgent app signs in by itself")
+                target,used=self.fresh_target(state,args["selector"],vault=bool(vault));state.observed=None
+                text=self.secret_value(state,trusted["secrets"],vault,args.get("totp",False)) if vault else args.get("text")
                 try:
                     if action=="click":target.click()
-                    else:target.send_keys(args["text"])
+                    else:target.send_keys(text)
                     self.acted(state,action);self.safe_url(state)
                 except Exception:raise Uncertain("Input outcome is uncertain; inspect the page before another action") from None
-                result={"action":action,"applied":True,"target":used,"read_required":True}
+                self.step(state,{"action":action,"selector":args["selector"],**({"vault":vault,"totp":args.get("totp",False)} if vault
+                    else {"text":text} if action=="type" else {})})
+                result={"action":action,"applied":True,"target":used,"read_required":True,**({"vault":vault} if vault else {})}
+            elif action=="save_login":
+                if state.signed_in:raise Rejected("save_login is for external sites; the WebAgent app signs in by itself")
+                origin=args["origin"]
+                if origin_of(state.driver.current_url)!=origin:raise Rejected("The page is not on "+origin+"; finish signing in there first")
+                cookies=self.site_cookies(state,origin)
+                if not cookies:raise Rejected("The site has set no cookies to save yet; finish signing in first")
+                steps=list(state.steps) if origin_of(state.login_url)==origin else []
+                state.site=origin
+                # Rust keeps site_login in the user's store and returns only the counts to the agent.
+                result={"action":"save_login","origin":origin,"cookies":len(cookies),"steps":len(steps),
+                    "site_login":{"origin":origin,"cookies":cookies,"steps":steps,"login_url":state.login_url if steps else origin+"/"}}
             elif action=="screenshot":result=self.screenshot(state)
             elif action=="viewport":
                 # Device emulation changes width, touch and mobile media queries; navigate again so boot-time layout reruns.
@@ -856,18 +1014,19 @@ class BrowserService:
                 if result.get("missing"):raise Rejected("Scroll target does not exist")
                 self.acted(state,"scroll")
             elif action=="press":
-                # A key is input: it needs a fresh read like a click, and never reaches a credential field.
-                if args.get("selector"):target,used=self.fresh_target(state,args["selector"])
+                # A key is input: it needs a fresh read like a click. Keys type no text, so a sign-in field may receive one.
+                if args.get("selector"):target,used=self.fresh_target(state,args["selector"],keys=True)
                 else:
                     if state.observed is None or time.monotonic()-state.observed_at>READ_FRESH_SECONDS or state.driver.current_url!=state.observed_url:
                         raise Rejected("Read the current page before pressing a key")
                     focus=state.driver.execute_script(FOCUS_SCRIPT)
-                    if not isinstance(focus,dict) or focus.get("secret"):raise Rejected("The focused element contains private credentials")
-                    target=state.driver.switch_to.active_element;used={"tag":str(focus.get("tag","")),"label":self.redact(state,focus.get("label",""))}
+                    if not isinstance(focus,dict):raise Rejected("Invalid focus result")
+                    target=state.driver.switch_to.active_element;used={"tag":str(focus.get("tag","")),"label":"" if focus.get("secret") else self.redact(state,focus.get("label",""))}
                 state.observed=None
                 try:
                     target.send_keys(KEYS[args["key"]]);self.acted(state,"press");self.safe_url(state)
                 except Exception:raise Uncertain("Key outcome is uncertain; inspect the page before another action") from None
+                self.step(state,{"action":"press","key":args["key"],**({"selector":args["selector"]} if args.get("selector") else {})})
                 focus=state.driver.execute_script(FOCUS_SCRIPT)
                 focused={"tag":str(focus.get("tag","")),"id":focus.get("id"),"label":"" if focus.get("secret") else self.redact(state,focus.get("label",""))} if isinstance(focus,dict) else None
                 result={"action":"press","key":args["key"],"applied":True,"target":used,"focused":focused,"read_required":True}
@@ -878,13 +1037,14 @@ class BrowserService:
                 result={"color_scheme":state.media.get("color_scheme","default"),"reduced_motion":state.media.get("reduced_motion","default")}
             else:raise Rejected("Recorder actions use the recorder interface")
             if state.cancelled.is_set():raise Uncertain("Browser action cancelled; inspect the outcome before retrying")
-            return {"status":"success","backend":"private_chromium","signed_in":state.signed_in,"session_id":state.sid,
-                "source_kind":"untrusted_browser_observation",**result}
+            return self.scrub(state,{"status":"success","backend":"private_chromium","signed_in":state.signed_in,"session_id":state.sid,
+                "source_kind":"untrusted_browser_observation",**result})
     async def call(self,name,args,base,trusted):
         """Bound synchronous browser work and publish only sanitized known or uncertain outcomes."""
         sid=trusted.get("session_id") if isinstance(trusted,dict) else None
         operation=asyncio.create_task(asyncio.to_thread(self.run,name,args,base,trusted))
-        try:return await asyncio.wait_for(asyncio.shield(operation),CALL_TIMEOUT)
+        limit=SITE_CALL_TIMEOUT if isinstance(trusted,dict) and isinstance(trusted.get("site"),dict) else CALL_TIMEOUT
+        try:return await asyncio.wait_for(asyncio.shield(operation),limit)
         except asyncio.CancelledError:
             if isinstance(sid,str):await asyncio.to_thread(self.drop,sid)
             raise

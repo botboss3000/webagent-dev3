@@ -226,6 +226,12 @@ pub(super) fn router(app: App) -> Router {
             "/browser/devices/{id}",
             axum::routing::delete(crate::browser::revoke),
         )
+        // Browser Control: the caller's saved site sign-ins, listed and removed on the abilities page.
+        .route("/browser/sites", get(crate::browser::sites))
+        .route(
+            "/browser/sites/{id}",
+            axum::routing::delete(crate::browser::forget_site),
+        )
         // Every signed-in caller reads the Wiki; its handlers keep writes to administrators.
         .route("/wiki", get(wiki::list))
         .route("/wiki/search", get(wiki::search))

@@ -384,7 +384,9 @@ class BrowserPackages:
             async with item["lock"]:
                 # Rust renews a signed-in session's lease on each call; the process lives as long as it.
                 item["touched"]=time.monotonic();item["expires"]=trusted["expires_at"]
-                result=await asyncio.wait_for(self.exchange(item,name,args,base,trusted),25)
+                # Signing in again to a saved site replays its steps, which takes longer than one action.
+                limit=65 if isinstance(trusted.get("site"),dict) else 25
+                result=await asyncio.wait_for(self.exchange(item,name,args,base,trusted),limit)
                 if result["status"]=="uncertain"or result.get("closed")or result.get("error_kind")=="browser_authentication_failed":
                     if not artifact:await self.drop(sid,item)
                 return result

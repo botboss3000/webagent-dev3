@@ -1,7 +1,7 @@
 //! Root adapter for the browser abilities. Browser Extension: device linking, the extension's
 //! action queue and the `browser_extension_status`/`browser_extension_action` tools. Browser
-//! Control: authority for the worker's private browser and reply attachments for its
-//! screenshots. Rules live in `webagent_browser`.
+//! Control: authority for the worker's private browser, the user's vault values and saved site
+//! sign-ins for it, and reply attachments for its screenshots. Rules live in `webagent_browser`.
 //!
 //! The API (extension endpoints) and the loop (tools) are separate processes; both read the
 //! shared application store, the same way the harness bridge does. A device belongs to one
@@ -464,6 +464,97 @@ async fn server_authority(
     }))
 }
 
+/// A saved site sign-in's key in its user's store.
+fn site_key(origin: &str) -> String {
+    format!("{}{}", rules::SITE_PREFIX, digest(&json!(origin)))
+}
+
+/// The caller's vault entries `names`, as the worker types them: `{name: {value, origin}}`.
+/// With `origin`, only entries for that site; entries without a site are never typed.
+async fn vault_values(store: &Store, names: &[String], origin: Option<&str>) -> Result<Value> {
+    let mut values = serde_json::Map::new();
+    for name in names
+        .iter()
+        .filter(|name| webagent_native_tools::vault::valid_name(name))
+    {
+        let Some(entry) = store.get(&format!("core_vault:{name}")).await? else {
+            continue;
+        };
+        let (Some(value), Some(site)) = (entry["value"].as_str(), entry["origin"].as_str()) else {
+            continue;
+        };
+        if origin.is_none_or(|origin| origin == site) {
+            values.insert(name.clone(), json!({"value":value,"origin":site}));
+        }
+    }
+    Ok(Value::Object(values))
+}
+
+/// The caller's saved site sign-ins, without their cookies.
+pub(crate) async fn sites(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+) -> Result<Json<Value>, ApiError> {
+    let store = app.store.for_user(signed_in(&identity)?).await?;
+    let sites: Vec<Value> = store
+        .list(rules::SITE_PREFIX)
+        .await?
+        .iter()
+        .filter_map(|site| {
+            let origin = site["origin"].as_str()?;
+            Some(
+                json!({"id":digest(&json!(origin)),"origin":origin,"saved_at":site["saved_at"],
+                "last_used":site["last_used"],"status":site["status"],"vault":site["vault"],
+                "steps":site["steps"].as_array().map_or(0, Vec::len)}),
+            )
+        })
+        .collect();
+    Ok(Json(json!({"sites":sites})))
+}
+
+/// Delete one of the caller's saved site sign-ins; its vault entries stay.
+pub(crate) async fn forget_site(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    if id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "Site id required".into()));
+    }
+    let store = app.store.for_user(signed_in(&identity)?).await?;
+    let key = format!("{}{id}", rules::SITE_PREFIX);
+    if store.get(&key).await?.is_none() {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            "Saved sign-in not found".into(),
+        ));
+    }
+    store.delete(&key).await?;
+    Ok(Json(json!({"removed":true})))
+}
+
+/// Keep the sign-in the worker returned from an approved `save_login`, in the caller's store.
+async fn save_site(store: &Store, args: &Value, login: &Value) -> Result<Value> {
+    let origin = login["origin"].as_str().unwrap_or("");
+    if args["origin"] != origin || rules::site_origin(origin).as_deref() != Some(origin) {
+        return Ok(
+            json!({"status":"error","error_kind":"browser_invalid_request",
+            "output":"The saved sign-in does not match the site asked for"}),
+        );
+    }
+    let record = json!({"origin":origin,"cookies":login["cookies"],"steps":login["steps"],
+        "login_url":login["login_url"],"vault":rules::step_vaults(&login["steps"]),
+        "saved_at":now(),"last_used":now(),"status":"signed_in"});
+    if serde_json::to_vec(&record)?.len() > rules::SITE_MAX_BYTES {
+        return Ok(
+            json!({"status":"error","error_kind":"browser_invalid_request",
+            "output":"This site's sign-in is too large to save"}),
+        );
+    }
+    store.put(&site_key(origin), &record).await?;
+    Ok(Value::Null)
+}
+
 /// Save one browser screenshot as an attachment of this run's reply.
 async fn attach_screenshot(
     app: &App,
@@ -512,15 +603,60 @@ async fn execute_server(
     let host = tools::native_host::Host(app);
     host.authorize(call, name, args, &cancel).await?;
     let authority = server_authority(&host, app, call.sid, args).await?;
+    // Signed out, the caller's own vault values and saved sign-in go to the worker for this
+    // call only; the model never sees them.
+    let store = app.store.for_user(host.actor()).await?;
+    let mut trusted = authority.clone();
+    let mut site = None;
+    if authority["cookie"].is_null() {
+        if let Some(vault) = args["vault"].as_str().filter(|_| name == "browser_input") {
+            trusted["secrets"] = vault_values(&store, &[vault.to_owned()], None).await?;
+        } else if name == "browser_read" && args["action"] == "navigate" {
+            let origin = args["url"].as_str().and_then(rules::site_origin);
+            if let Some(origin) = origin {
+                if let Some(record) = store.get(&site_key(&origin)).await? {
+                    let names = rules::step_vaults(&record["steps"]);
+                    trusted["secrets"] = vault_values(&store, &names, Some(&origin)).await?;
+                    trusted["site"] = json!({"origin":origin,"cookies":record["cookies"],
+                        "steps":record["steps"],"login_url":record["login_url"]});
+                    site = Some((origin, record));
+                }
+            }
+        }
+    }
     let mut output = tools::execute_trusted(
         name,
         args,
         call.sid,
         &app.tool_socket,
-        Some(authority.clone()),
+        Some(trusted),
         cancel.clone(),
     )
     .await?;
+    if let Some(login) = output.as_object_mut().and_then(|o| o.remove("site_login")) {
+        let refused = save_site(&store, args, &login).await?;
+        if refused.is_null() {
+            output["saved"] = json!(true);
+        } else {
+            output = refused;
+        }
+    }
+    if let Some((origin, mut record)) = site {
+        if let Some(cookies) = output
+            .as_object_mut()
+            .and_then(|o| o.remove("site_cookies"))
+        {
+            record["cookies"] = cookies;
+        }
+        record["status"] = match (output["site_login"].as_str(), output["error_kind"].as_str()) {
+            (Some("expired"), _) => json!("expired"),
+            (Some(_), _) => json!("signed_in"),
+            (_, Some("signin_failed")) => json!("failed"),
+            _ => record["status"].clone(),
+        };
+        record["last_used"] = json!(now());
+        store.put(&site_key(&origin), &record).await?;
+    }
     let ids: Vec<String> = if output["status"] != "success" {
         Vec::new()
     } else if name == "browser_read" && args["action"] == "screenshot" {

@@ -2,6 +2,7 @@ import { buildSourceControlControls } from "./source-control.js";
 // V3 data adapter for the v2 Abilities composition, prompts group, and ability rows.
 import { buildAbilitiesOverview } from './overview.js';
 import { buildAdministratorControls } from './administrator.js';
+import { buildBrowserSites } from './browser-sites.js';
 import { buildMcpControls } from './mcp.js';
 import { buildPromptsGroup } from './prompts.js';
 import { buildGroup, setGroupStatus } from './table.js';
@@ -175,6 +176,8 @@ export async function renderAbilities(host, request, options) {
     if (administrator) {
       for (const setting of administrator.querySelectorAll(':scope > .ac-ability-row')) tools.append(setting);
     }
+    // Every user sees their own saved sign-ins, whoever manages the agent.
+    if (ability.id === 'browser_control') tools.append(buildBrowserSites({ request }));
     for (const tool of ability.tools || []) {
       const effectiveTool = (projection(ability).tools || []).find(item => item.name === tool.name) || tool;
       const saveToolPermission = async mode => {

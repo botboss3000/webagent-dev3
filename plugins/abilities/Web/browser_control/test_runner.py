@@ -27,14 +27,23 @@ class Element:
         self.driver.clicks+=1;self.driver.revision+=1
         if self.driver.escape_on_click:self.driver.current_url="https://outside.invalid/"
     def send_keys(self,text):self.driver.typed.append(text);self.driver.revision+=1
+CREDENTIAL_FIELDS=("#password","#user","#code")
 class Driver:
-    def __init__(self):self.current_url="";self.identity="admin";self.csrf=str(uuid.uuid4());self.cookies=[];self.revision=0
+    def __init__(self):self.current_url="";self.identity="admin";self.csrf=str(uuid.uuid4());self.cookies=[];self.revision=0;self.jar=[];self.cdp_log=[]
     clicks=0
     ready="ready"
     escape_on_click=False
     closed=False
     failure=None
+    signin=False
     def get(self,url):self.current_url=url;self.revision+=1
+    def find_elements(self,by,selector):return [Element(self,selector)]
+    def execute_cdp_cmd(self,command,params):
+        self.cdp_log.append(command)
+        if command=="Network.getAllCookies":return {"cookies":list(self.jar)}
+        if command=="Network.setCookies":self.jar.extend(params["cookies"])
+        if command=="Network.clearBrowserCookies":self.jar.clear()
+        return {}
     def add_cookie(self,cookie):self.cookies.append(cookie)
     def find_element(self,by,selector):
         if self.failure:raise RuntimeError(self.failure)
@@ -44,8 +53,10 @@ class Driver:
         if "V3_BOOT" in script:return self.ready
         if "V3_READ" in script:return {"text":"Visible bounded text "+args[1]+" "+self.csrf,"missing":False,"truncated":False}
         if "V3_TARGET" in script:
-            return {"allowed":True,"secret":args[0]=="#password","href":
+            return {"allowed":True,"secret":args[0]=="#password","credential":args[0] in CREDENTIAL_FIELDS,"href":
                 "https://outside.invalid/" if args[0]=="#external" else "","tag":"input"}
+        if "V3_SIGNIN" in script:return self.signin() if callable(self.signin) else self.signin
+        if "V3_CREDENTIAL" in script:return args[0].selector in CREDENTIAL_FIELDS
         if "V3_CHECK" in script:return True
         if "V3_MASK" in script:self.masked_secrets=args;self.revision+=1;return 1
         if "V3_UNMASK" in script:self.revision+=1;return None
@@ -68,7 +79,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.temp.cleanup()
     async def call(self,name=None,**args):
         # Input actions belong to browser_input; signed-in routes are passed as url.
-        if name is None:name="browser_input" if args.get("action") in {"click","type","press"} else "browser_read"
+        if name is None:name="browser_input" if args.get("action") in {"click","type","press","save_login"} else "browser_read"
         if "path" in args and name=="browser_read":args["url"]=args.pop("path")
         return await self.service.call(name,args,self.base,self.trusted)
     async def test_optional_action_schema_defaults_preserve_boundaries(self):
@@ -224,8 +235,10 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((pressed["applied"],pressed["focused"]["label"]),(True,"Next"))
         self.assertEqual(driver.typed[-1],"\ue004")
         self.assertIn("Read the current page",(await self.call(action="press",key="Tab"))["output"])
-        focus["secret"]=True;await self.call(action="read")
-        self.assertIn("private credentials",(await self.call(action="press",key="Enter"))["output"])
+        # A key types nothing, so Enter may submit a password field; its label stays private.
+        focus["secret"]=True;focus["label"]="secret label";await self.call(action="read")
+        pressed=await self.call(action="press",key="Enter")
+        self.assertEqual((pressed["applied"],pressed["target"]["label"]),(True,""))
         self.assertIn("color_scheme must be",(await self.call(action="emulate",color_scheme="sepia"))["output"])
         self.assertIn("needs color_scheme",(await self.call(action="emulate"))["output"])
         emulated=await self.call(action="emulate",color_scheme="dark",reduced_motion="reduce")
@@ -320,6 +333,91 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(browser,"MAX_PNG",24):
             result=await self.call(action="screenshot")
             self.assertEqual(result["status"],"error")
+    async def test_full_screenshot_folder_drops_the_oldest(self):
+        with mock.patch.object(browser,"MAX_ARTIFACTS",3):
+            shots=[]
+            for _ in range(5):
+                shot=await self.call(action="screenshot");self.assertEqual(shot["status"],"success",shot);shots.append(shot["artifact_id"])
+                time.sleep(0.01)
+        folder=self.service.states[self.sid].directory/"artifacts"
+        self.assertEqual(sorted(p.stem for p in folder.glob("*.json")),sorted(shots[2:]))
+        self.assertEqual(len(list(folder.glob("*.png"))),3)
+        with self.assertRaises(OSError):self.service.read_artifact(self.base,self.trusted,shots[0])
+        self.assertEqual(self.service.read_artifact(self.base,self.trusted,shots[-1]),PNG)
+    def signed_out(self,**extra):
+        public={k:v for k,v in self.trusted.items() if k!="cookie"}
+        return {**public,"sites":{"allow":[],"block":[]},**extra}
+    def test_totp_codes_match_the_rfc_vector(self):
+        self.assertEqual(browser.totp_code("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",at=59),"287082")
+        self.assertEqual(browser.totp_code("gezd gnbv-gy3t qojq gezd gnbv gy3t qojq",at=59),"287082")
+        with self.assertRaises(browser.Rejected):browser.totp_code("not base32!")
+        self.assertEqual(browser.origin_of("https://Example.com:443/a?b"),"https://example.com")
+        self.assertTrue(browser.valid_origin("https://example.com"));self.assertFalse(browser.valid_origin("http://example.com"))
+    async def test_vault_values_go_only_into_sign_in_fields_on_their_site_and_never_come_back(self):
+        value="Pa55-"+"PRIVATE";secrets={"site_password":{"value":value,"origin":"https://example.com"},
+            "site_totp":{"value":"GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ","origin":"https://example.com"}}
+        trusted=self.signed_out(secrets=secrets)
+        call=lambda name,**args:self.service.call(name,args,self.base,trusted)
+        self.assertEqual((await call("browser_read",action="navigate",url="https://example.com/login"))["status"],"success")
+        self.assertIn("literal text or a vault",(await call("browser_input",action="type",selector="#password",text="x",vault="site_password"))["output"])
+        self.assertIn("goes with a vault",(await call("browser_input",action="type",selector="#user",text="me",totp=True))["output"])
+        await call("browser_read",action="read")
+        self.assertIn("sign-in field",(await call("browser_input",action="type",selector="#search",vault="site_password"))["output"])
+        await call("browser_read",action="read")
+        self.assertIn("unavailable",(await call("browser_input",action="type",selector="#password",vault="missing"))["output"])
+        await call("browser_read",action="read")
+        typed=await call("browser_input",action="type",selector="#password",vault="site_password")
+        self.assertEqual((typed["status"],typed["vault"]),("success","site_password"),typed)
+        driver=self.drivers[-1];self.assertEqual(driver.typed[-1],value)
+        await call("browser_read",action="read")
+        code=await call("browser_input",action="type",selector="#code",vault="site_totp",totp=True)
+        self.assertEqual(code["status"],"success");self.assertRegex(driver.typed[-1],r"^\d{6}$")
+        # A page that echoes the value anywhere has it scrubbed, in plain and URL-encoded form.
+        driver.get_log=lambda kind:[{"level":"SEVERE","message":"bad login for "+value+" / Pa55-PRIVATE"}]
+        read=await call("browser_read",action="read")
+        self.assertNotIn(value,json.dumps(read));self.assertIn("[redacted]",read["page_errors"][0])
+        # Another site never receives it.
+        await call("browser_read",action="navigate",url="https://other.example.org/login");await call("browser_read",action="read")
+        self.assertIn("only for https://example.com",(await call("browser_input",action="type",selector="#password",vault="site_password"))["output"])
+        with self.assertRaises(browser.Rejected):
+            browser.validate_trusted(self.base,self.signed_out(secrets={"x":{"value":"v","origin":"http://example.com"}}))
+    async def test_saved_sign_in_is_kept_restored_and_signs_in_again(self):
+        value="Pa55-"+"PRIVATE";secrets={"site_password":{"value":value,"origin":"https://example.com"}}
+        trusted=self.signed_out(secrets=secrets)
+        call=lambda name,**args:self.service.call(name,args,self.base,trusted)
+        await call("browser_read",action="navigate",url="https://example.com/login");await call("browser_read",action="read")
+        await call("browser_input",action="type",selector="#user",text="me@example.com");await call("browser_read",action="read")
+        await call("browser_input",action="type",selector="#password",vault="site_password");await call("browser_read",action="read")
+        await call("browser_input",action="click",selector="#submit")
+        driver=self.drivers[-1]
+        driver.jar=[{"name":"sid","value":"abc","domain":".example.com","path":"/","secure":True,"session":True,"expires":-1,"sameSite":"Lax"},
+            {"name":"tracker","value":"t","domain":"ads.test","path":"/"}]
+        self.assertIn("not on https://example.org",(await call("browser_input",action="save_login",origin="https://example.org"))["output"])
+        saved=await call("browser_input",action="save_login",origin="https://example.com")
+        self.assertEqual((saved["status"],saved["cookies"],saved["steps"]),("success",1,3),saved)
+        login=saved["site_login"]
+        self.assertEqual(login["cookies"],[{"name":"sid","value":"abc","domain":".example.com","path":"/","secure":True,"sameSite":"Lax"}])
+        self.assertEqual(login["steps"][1],{"action":"type","selector":"#password","vault":"site_password","totp":False})
+        self.assertEqual(login["login_url"],"https://example.com/login");self.assertNotIn(value,json.dumps(saved))
+        # Opening another site clears the cookies; opening the saved site loads its own.
+        await call("browser_read",action="navigate",url="https://other.example.org/");self.assertEqual(driver.jar,[])
+        restored=await self.service.call("browser_read",{"action":"navigate","url":"https://example.com/account"},self.base,{**trusted,"site":login})
+        self.assertEqual((restored["signed_in"],restored["site_login"]),(True,"restored"),restored)
+        self.assertEqual(driver.jar,login["cookies"])
+        # Signed out by the site: the saved steps sign in again, and the new cookies come back for Rust to keep.
+        await call("browser_read",action="navigate",url="https://other.example.org/")
+        driver.typed.clear();driver.signin=lambda:value not in driver.typed
+        again=await self.service.call("browser_read",{"action":"navigate","url":"https://example.com/account"},self.base,{**trusted,"site":login})
+        self.assertEqual((again["status"],again["site_login"],again["url"]),("success","signed_in_again","https://example.com/account"),again)
+        self.assertEqual(driver.typed,["me@example.com",value]);self.assertIn("site_cookies",again);self.assertNotIn(value,json.dumps(again))
+        await call("browser_read",action="navigate",url="https://other.example.org/")
+        driver.signin=True
+        failed=await self.service.call("browser_read",{"action":"navigate","url":"https://example.com/account"},self.base,{**trusted,"site":login})
+        self.assertEqual(failed["error_kind"],"signin_failed",failed)
+        await call("browser_read",action="navigate",url="https://other.example.org/")
+        expired=await self.service.call("browser_read",{"action":"navigate","url":"https://example.com/"},self.base,{**trusted,"site":{**login,"steps":[]}})
+        self.assertEqual((expired["signed_in"],expired["site_login"]),(False,"expired"))
+        self.assertIn("for external sites",(await self.call(action="save_login",origin="https://example.com"))["output"])
     async def test_rotation_expiry_unknown_fields_and_errors_never_echo_cookie(self):
         await self.call(action="navigate",url="/app")
         original=self.drivers[0]

@@ -32,6 +32,10 @@ pub const SIGN_IN_SETTING: &str = "sign_in_app";
 pub const SIGN_IN_SECS: u64 = 1800;
 /// A signed-in session this close to its end is replaced by a new one on the next call.
 pub const RENEW_SECS: u64 = 120;
+/// Saved site sign-ins, in the user's own store, one per site under its origin's digest.
+pub const SITE_PREFIX: &str = "administrator_browser:site:";
+/// The most one saved sign-in keeps, serialized: its cookies, steps and dates.
+pub const SITE_MAX_BYTES: usize = 256 * 1024;
 
 /// A queued action nobody fetches within this window fails as not started.
 pub const OFFLINE_SECS: u64 = 30;
@@ -92,6 +96,33 @@ pub fn signs_in(args: &Value, origin: &str, setting: &Value) -> bool {
         && args["url"]
             .as_str()
             .is_some_and(|url| url == origin || url.starts_with(&format!("{origin}/")))
+}
+
+/// The https origin a saved site sign-in or a vault entry belongs to (`https://host` plus any
+/// non-default port, as the vault stores origins); `None` for any other address.
+pub fn site_origin(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    (parsed.scheme() == "https"
+        && parsed.host_str().is_some()
+        && parsed.username().is_empty()
+        && parsed.password().is_none())
+    .then(|| parsed.origin().ascii_serialization())
+}
+
+/// The vault entries a saved sign-in's steps type, in order, each once.
+pub fn step_vaults(steps: &Value) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for name in steps
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|step| step["vault"].as_str())
+    {
+        if !names.iter().any(|seen| seen == name) {
+            names.push(name.to_owned());
+        }
+    }
+    names
 }
 
 /// Whether `url` is an http(s) address on one of `sites` or their subdomains.
@@ -230,6 +261,28 @@ mod tests {
             origin,
             &Value::Null
         ));
+    }
+    #[test]
+    fn saved_sign_ins_belong_to_plain_https_origins() {
+        assert_eq!(
+            site_origin("https://Example.com:443/login?next=/").as_deref(),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            site_origin("https://example.com:8443/").as_deref(),
+            Some("https://example.com:8443")
+        );
+        for url in [
+            "http://example.com/",
+            concat!("https://", "user", ":", "pass", "@example.com/"),
+            "javascript:alert(1)",
+            "not a url",
+        ] {
+            assert_eq!(site_origin(url), None, "{url}");
+        }
+        let steps = json!([{"action":"type","vault":"pw"},{"action":"click"},{"vault":"code"},{"vault":"pw"}]);
+        assert_eq!(step_vaults(&steps), ["pw", "code"]);
+        assert!(step_vaults(&Value::Null).is_empty());
     }
     #[test]
     fn sites_accept_pasted_urls_and_wildcards() {
