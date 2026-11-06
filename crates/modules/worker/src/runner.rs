@@ -37,9 +37,7 @@ fn invalid(error: impl std::fmt::Display) -> io::Error {
 pub fn supervise(argv_json: &str) -> i32 {
     let spec = serde_json::from_str(argv_json).map(|argv| Spec {
         argv,
-        // Commands read the whole container, including state, and write only this
-        // workspace. Checkout writes go through checkout_edit or broker tasks.
-        read_paths: vec![PathBuf::from("/")],
+        read_paths: command_read_paths(),
         command: true,
     });
     finish(spec.map_err(invalid).and_then(run), true)
@@ -63,6 +61,26 @@ pub fn supervise_plugin(spec_json: &str) -> i32 {
             })
         });
     finish(spec.and_then(run), false)
+}
+
+/// Commands read the container's system folders and the checkout's source files, and
+/// write only this workspace. Runtime state, other sessions' workspaces, control sockets
+/// and the checkout's runtime folders stay out. Checkout writes go through checkout_edit
+/// or broker tasks.
+fn command_read_paths() -> Vec<PathBuf> {
+    const HIDDEN: [&str; 4] = ["state", "workspaces", "live-checkout", "run"];
+    let entries = |folder: &str, skip: &[&str]| -> Vec<PathBuf> {
+        std::fs::read_dir(folder)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| !skip.iter().any(|name| entry.file_name() == *name))
+            .map(|entry| entry.path())
+            .collect()
+    };
+    let mut paths = entries("/", &HIDDEN);
+    paths.extend(entries("/live-checkout", &crate::files::CHECKOUT_HIDDEN));
+    paths
 }
 
 fn finish(result: io::Result<i32>, graceful: bool) -> i32 {

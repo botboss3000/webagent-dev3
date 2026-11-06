@@ -684,11 +684,14 @@ def runner(argv):
         spec=json.loads(argv[4])
         if set(spec)!={"base","name","arguments"}or Path(spec["base"]).resolve()!=Path.cwd():raise ValueError("Invalid trusted index invocation")
         read_paths=(Path(__file__).resolve(),Path(__file__).with_name("sandbox.py").resolve(),Path(__file__).parent/"plugins/abilities/Administrator/code_index",Path(__file__).parent/"build-service")
-    # Codebase Admin commands read the whole container, including state, and write only this
-    # workspace. Checkout writes go through checkout_edit or broker tasks, never commands.
-    # Internal seed and index invocations keep their narrow grants.
+    # Commands read system folders and the checkout's source files and write only this
+    # workspace; state, other workspaces, control sockets and checkout runtime folders stay
+    # out, as in the Rust runner. Internal seed and index invocations keep their narrow grants.
     if not read_paths:
-        read_paths=(Path("/"),)
+        hidden={"state","workspaces","live-checkout","run"}
+        private={"data","workspaces","target","build-jobs","deployment-secrets","runtime","rollback","gate-runtime"}
+        checkout=Path("/live-checkout")
+        read_paths=tuple(p for p in Path("/").iterdir() if p.name not in hidden)+(tuple(p for p in checkout.iterdir() if p.name not in private) if checkout.is_dir() else ())
     child = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
                              preexec_fn=lambda: restrict(Path.cwd(), read_paths=read_paths,deny_unix=True))
     try:

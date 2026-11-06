@@ -379,3 +379,56 @@ fn search_and_listing_stop_at_their_budgets() {
     let listed = fixture.call("file_list", json!({"path":many.to_string_lossy()}));
     assert_eq!(listed["truncated"], true);
 }
+
+#[test]
+fn tools_reach_only_this_workspace_and_checkout_source() {
+    let mut fixture = fixture();
+    let checkout = fixture._dir.path().join("checkout");
+    for folder in ["src", "data", "build-jobs"] {
+        std::fs::create_dir_all(checkout.join(folder)).expect("checkout");
+    }
+    std::fs::write(checkout.join("src/a.rs"), "needle source").expect("source");
+    std::fs::write(checkout.join("data/key"), "needle secret").expect("state");
+    std::fs::write(checkout.join("build-jobs/job.json"), "needle job").expect("job");
+    fixture.roots.live_checkout = checkout.clone();
+    let other = fixture
+        .roots
+        .workspaces
+        .join("5f0a3a52-6b5e-4a8f-9d2f-7e1c2b3a4d5e");
+    std::fs::create_dir_all(&other).expect("other workspace");
+    std::fs::write(other.join("theirs.txt"), "theirs").expect("other file");
+    let outside = "Path outside this session's workspace and the source checkout";
+
+    let source = fixture.call("file_read", json!({"path":"src/a.rs"}));
+    assert_eq!(source["output"], "needle source");
+    for path in [
+        checkout.join("data/key"),
+        checkout.join("build-jobs/job.json"),
+        other.join("theirs.txt"),
+        PathBuf::from("/etc/hostname"),
+    ] {
+        let read = fixture.call("file_read", json!({"path":path.to_string_lossy()}));
+        assert_eq!(read["output"], outside, "{}", path.display());
+    }
+    let escape = fixture.call("file_read", json!({"path":"../checkout/data/key"}));
+    assert_eq!(escape["output"], outside);
+    let write = fixture.call(
+        "file_write",
+        json!({"path":other.join("new.txt").to_string_lossy(),"content":"x"}),
+    );
+    assert_eq!(write["output"], outside);
+    assert!(!other.join("new.txt").exists());
+
+    let found = fixture.call("file_search", json!({"path":".","query":"needle"}));
+    let output = found["output"].as_str().expect("search output");
+    assert!(output.contains("src/a.rs"), "{output}");
+    assert!(
+        !output.contains("secret") && !output.contains("job"),
+        "{output}"
+    );
+    let mine = fixture.call(
+        "file_write",
+        json!({"path":fixture.path("mine.txt"),"content":"ok"}),
+    );
+    assert_eq!(mine["status"], "success");
+}

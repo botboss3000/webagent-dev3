@@ -1,6 +1,6 @@
 # shell
 
-Run approved shell commands in the current session workspace. They may read every file in the container, including the live checkout, application state under /state and sibling workspaces, and write only this workspace. Source writes use broker task file tools, or checkout_edit for a direct live-checkout edit. Control sockets stay excluded. Live runtime policy determines approval and authorization.
+Run approved shell commands in the current session workspace. They may read system folders and the checkout's source files (Git history included) and write only this workspace. Application state, other sessions' workspaces, control sockets and the checkout's runtime folders (data/, workspaces/, build-jobs/, target/, runtime/) are unreadable; use the app's APIs for app data. Source writes use broker task file tools, or checkout_edit for a direct live-checkout edit. Control sockets stay excluded. Live runtime policy determines approval and authorization.
 
 For isolated task verification use build_work check with the current task digest. Workspace command results do not verify an isolated broker draft. Keep checks bounded and preserve cancellation/recovery.
 

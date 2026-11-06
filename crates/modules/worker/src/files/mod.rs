@@ -52,6 +52,18 @@ const CHECKOUT_PRIVATE: [&str; 9] = [
     "rollback",
     "gate-runtime",
 ];
+/// Checkout folders holding runtime state, build output or other writers' material; no
+/// tool reads them. Git history stays readable.
+pub(crate) const CHECKOUT_HIDDEN: [&str; 8] = [
+    "data",
+    "workspaces",
+    "target",
+    "build-jobs",
+    "deployment-secrets",
+    "runtime",
+    "rollback",
+    "gate-runtime",
+];
 const SOURCE_EXCLUDED: [&str; 6] = [
     "data",
     "workspaces",
@@ -484,6 +496,7 @@ fn operation(roots: &Roots, base: &Path, args: &Map<String, Value>, name: &str) 
             ));
         }
     }
+    let checkout_top = confine(roots, base, &target, checkout || !writes)?;
     let parts: Vec<&OsStr> = target
         .components()
         .filter_map(|part| match part {
@@ -526,7 +539,15 @@ fn operation(roots: &Roots, base: &Path, args: &Map<String, Value>, name: &str) 
         "file_write" => write(&directory, leaf, args, checkout)?,
         "file_read" => return read(&directory, leaf, args),
         "file_list" => return list(&directory, leaf, args),
-        "file_search" => search(roots, &directory, leaf, args, raw, &mut scan_limited)?,
+        "file_search" => search(
+            roots,
+            &directory,
+            leaf,
+            args,
+            raw,
+            checkout_top,
+            &mut scan_limited,
+        )?,
         _ => return Err(rejected("unknown tool")),
     };
     let output = match output {
@@ -542,6 +563,32 @@ fn operation(roots: &Roots, base: &Path, args: &Map<String, Value>, name: &str) 
         json!({"status":"success","output":String::from_utf8_lossy(cut),
         "truncated":encoded.len() > LIMIT || scan_limited}),
     )
+}
+
+/// File tools reach only this session's workspace and the checkout's source files;
+/// runtime state, other sessions' workspaces and the rest of the container stay out.
+/// `source` allows the checkout (reads and checkout_edit). Returns whether `target` is the
+/// checkout root, whose runtime folders a walk skips.
+pub(super) fn confine(roots: &Roots, base: &Path, target: &Path, source: bool) -> Outcome<bool> {
+    let checkout = if source && roots.live_checkout.is_dir() {
+        let root = std::fs::canonicalize(&roots.live_checkout)?;
+        target.strip_prefix(&root).ok().map(Path::to_path_buf)
+    } else {
+        None
+    };
+    let in_source = checkout.as_ref().is_some_and(|rest| {
+        rest.components().next().is_none_or(|first| {
+            !CHECKOUT_HIDDEN
+                .iter()
+                .any(|name| first.as_os_str() == *name)
+        })
+    });
+    if !in_source && !target.starts_with(base) {
+        return Err(rejected(
+            "Path outside this session's workspace and the source checkout",
+        ));
+    }
+    Ok(in_source && checkout.is_some_and(|rest| rest.as_os_str().is_empty()))
 }
 
 enum Written {
@@ -854,6 +901,8 @@ struct Search<'a> {
     bytes_left: i64,
     deadline: Instant,
     limited: bool,
+    /// The search starts at the checkout root, so runtime folders there are skipped.
+    checkout_top: bool,
 }
 
 fn comment_markers(label: &str) -> &'static [&'static str] {
@@ -1140,7 +1189,7 @@ impl Search<'_> {
         Ok(())
     }
 
-    fn scan_dir(&mut self, folder: &OwnedFd, prefix: &str, raw: &str, depth: usize) -> Outcome<()> {
+    fn scan_dir(&mut self, folder: &OwnedFd, prefix: &str, depth: usize) -> Outcome<()> {
         if depth > 32 {
             self.limited = true;
             return Ok(());
@@ -1149,10 +1198,13 @@ impl Search<'_> {
         let (mut names, limited) = entries(folder, cap)?;
         self.limited |= limited;
         names.sort();
-        let whole_checkout = matches!(raw, "/live-checkout" | "/live-checkout/v3");
         for name in names {
             let entry = String::from_utf8_lossy(&name).into_owned();
-            if depth == 0 && whole_checkout && SEARCH_SKIPPED.contains(&entry.as_str()) {
+            if depth == 0
+                && self.checkout_top
+                && (SEARCH_SKIPPED.contains(&entry.as_str())
+                    || CHECKOUT_HIDDEN.contains(&entry.as_str()))
+            {
                 continue;
             }
             if self.entries_left <= 0
@@ -1182,7 +1234,7 @@ impl Search<'_> {
             };
             let stat = fstat(&child)?;
             match FileType::from_raw_mode(stat.st_mode) {
-                FileType::Directory => self.scan_dir(&child, &label, raw, depth + 1)?,
+                FileType::Directory => self.scan_dir(&child, &label, depth + 1)?,
                 FileType::RegularFile => self.scan_file(&child, &label)?,
                 _ => {}
             }
@@ -1197,6 +1249,7 @@ fn search(
     leaf: &OsStr,
     args: &Map<String, Value>,
     raw: &str,
+    checkout_top: bool,
     scan_limited: &mut bool,
 ) -> Outcome<Written> {
     let text = |key: &str| match args.get(key) {
@@ -1240,6 +1293,7 @@ fn search(
         bytes_left: (32 * LIMIT) as i64,
         deadline: Instant::now() + Duration::from_secs(2),
         limited: false,
+        checkout_top,
     };
     match FileType::from_raw_mode(fstat(&target)?.st_mode) {
         FileType::RegularFile => search.scan_file(&target, raw)?,
@@ -1248,7 +1302,7 @@ fn search(
                 return Err(rejected("a query is required for directory search"));
             }
             let prefix = if raw == "." { "" } else { raw };
-            search.scan_dir(&target, prefix, raw, 0)?;
+            search.scan_dir(&target, prefix, 0)?;
         }
         _ => return Err(rejected("search path must be a regular file or directory")),
     }

@@ -21,15 +21,14 @@ const APP_GID: u32 = 1100;
 const OWNER_UID: u32 = 1000;
 const APP_BINARY: &str = "/usr/local/bin/webagent-v3";
 const PROMOTE_SOCKET: &str = "/run/v3/promote/promote.sock";
-/// The workers keep the checkout owner's identity plus one ambient capability,
-/// CAP_DAC_READ_SEARCH, so Codebase Admin reads every file including state. Landlock still
-/// confines command writes to the session workspace.
+/// The workers keep the checkout owner's identity and no capabilities, so files the
+/// application alone owns, such as the encryption key, stay unreadable to tools.
 const WORKER_IDENTITY: [&str; 8] = [
     "--reuid=1000",
     "--regid=1100",
     "--groups=1001",
-    "--inh-caps=-all,+dac_read_search",
-    "--ambient-caps=-all,+dac_read_search",
+    "--inh-caps=-all",
+    "--ambient-caps=-all",
     "--no-new-privs",
     "--",
     "",

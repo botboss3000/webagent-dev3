@@ -2,7 +2,9 @@
 //! tool, optionally filtered by a basename glob, walked recursively and given bounded
 //! excerpts. Ported from `worker.py` `file_operation`; symlinks are never followed while
 //! collecting candidates for an external model.
-use super::{glob_matches, open_at, rejected, resolve, Outcome, Roots, DIRECTORY};
+use super::{
+    confine, glob_matches, open_at, rejected, resolve, Outcome, Roots, CHECKOUT_HIDDEN, DIRECTORY,
+};
 use rustix::fs::{fstat, openat, statat, AtFlags, Dir, FileType, Mode, OFlags, CWD};
 use serde_json::{json, Map, Value};
 use std::ffi::OsStr;
@@ -22,6 +24,8 @@ struct Walk<'a> {
     names: Vec<(String, &'static str)>,
     examined: usize,
     limited: bool,
+    /// The walk starts at the checkout root, whose runtime folders it skips.
+    checkout_top: bool,
 }
 
 impl Walk<'_> {
@@ -41,6 +45,9 @@ impl Walk<'_> {
                 self.limited = true;
                 continue;
             };
+            if depth == 0 && self.checkout_top && CHECKOUT_HIDDEN.contains(&name) {
+                continue;
+            }
             let relative = format!("{prefix}{name}");
             if relative.len() > 512 {
                 self.limited = true;
@@ -111,6 +118,7 @@ pub(super) fn candidates(roots: &Roots, base: &Path, args: &Map<String, Value>) 
         base
     };
     let target = resolve(&default_root.join(raw));
+    let checkout_top = confine(roots, base, &target, true)?;
     let parts: Vec<&OsStr> = target
         .components()
         .filter_map(|part| match part {
@@ -164,6 +172,7 @@ pub(super) fn candidates(roots: &Roots, base: &Path, args: &Map<String, Value>) 
         names: Vec::new(),
         examined: 0,
         limited: false,
+        checkout_top,
     };
     walk.walk(&folder, "", 0)?;
     walk.names.sort();
