@@ -89,9 +89,24 @@ fn exited(child: &mut Child) -> bool {
 }
 
 /// Waits up to five seconds for `socket` to appear while `process` and the broker run.
+/// Checks `socket` with the worker owner's effective identity: the worker folders are
+/// private to that owner, and the launcher keeps no capability to read past file modes.
+fn exists_as_owner(socket: &str) -> io::Result<bool> {
+    // SAFETY: seteuid takes a plain integer; the launcher is root here and returns to it.
+    if unsafe { libc::seteuid(OWNER_UID) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let found = Path::new(socket).exists();
+    // SAFETY: as above; the saved set-user-ID is still root.
+    if unsafe { libc::seteuid(0) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(found)
+}
+
 fn wait_for(socket: &str, process: &mut Child, broker: &mut Child, name: &str) -> io::Result<()> {
     for _ in 0..100 {
-        if Path::new(socket).exists() {
+        if exists_as_owner(socket)? {
             return Ok(());
         }
         if exited(process) {
