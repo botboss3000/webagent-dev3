@@ -6,6 +6,7 @@
   "color": "#7dcfff",
   "order": 15,
   "placeholder": false,
+  "readiness": "ready",
   "config": {},
   "skill_summary": "Discover MCP servers, manage agent connections and call permitted remote tools.",
   "migration_note": "Native V3 adapter; the separately installed package in package/ (built from service/) carries MCP transport. Tools are unavailable until it is installed."

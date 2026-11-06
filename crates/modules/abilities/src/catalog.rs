@@ -614,10 +614,12 @@ impl<H: Host> Catalog<H> {
                 }
                 // An omitted optional service must not prevent ordinary app startup.
                 // Execution still requires its live healthy package and schemas.
-                let omitted_module = manifest
-                    .required_module
-                    .as_deref()
-                    .is_some_and(|module| !H::module_available(module));
+                // MCP's package is installed separately; `present` hides it until it runs.
+                let omitted_module = id == "mcp"
+                    || manifest
+                        .required_module
+                        .as_deref()
+                        .is_some_and(|module| !H::module_available(module));
                 if !omitted_module
                     && matches!(readiness, Readiness::Ready | Readiness::Partial)
                     && (!matches!(manifest.kind, EntryKind::Ability | EntryKind::VirtualCore)
