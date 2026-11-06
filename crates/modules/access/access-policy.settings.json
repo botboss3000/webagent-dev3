@@ -1,0 +1,167 @@
+{
+  "_instructions": "Setting descriptors for the configuration composer (see crates/modules/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
+  "settings": [
+    {
+      "id": "access.registration",
+      "description": "Whether anyone can sign up (open) or new accounts need an administrator (restricted).",
+      "type": "enum",
+      "pointer": "/registration",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "stop new signups",
+        "let anyone register",
+        "close registration"
+      ],
+      "areas": [
+        "accounts",
+        "signup",
+        "security"
+      ],
+      "enum": [
+        "open",
+        "restricted"
+      ],
+      "bounds": "validator"
+    },
+    {
+      "id": "access.login_protection.account.failures",
+      "description": "Failed sign-ins on one account, within the window, before sign-in is slowed down.",
+      "type": "integer",
+      "pointer": "/login_protection/account/failures",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "slow down logins after 3 wrong passwords",
+        "allow 10 failed attempts"
+      ],
+      "areas": [
+        "security",
+        "login",
+        "accounts"
+      ],
+      "min": 1,
+      "max": 100,
+      "bounds": "validator"
+    },
+    {
+      "id": "access.login_protection.address.block_seconds",
+      "description": "How long, in seconds, a network address is first blocked after too many failed sign-ins.",
+      "type": "integer",
+      "pointer": "/login_protection/address/block_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "block an IP for 5 minutes after failed logins",
+        "shorter lockout for addresses"
+      ],
+      "areas": [
+        "security",
+        "login",
+        "network"
+      ],
+      "unit": "s",
+      "min": 1,
+      "bounds": "validator",
+      "notes": "Must not exceed access.login_protection.address.max_block_seconds (3600)."
+    },
+    {
+      "id": "access.tier.max_sessions",
+      "description": "Most chat sessions one account at this account level may keep.",
+      "type": "integer",
+      "pointer": "/tiers/{tier}/max_sessions",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "let base users have 20 chats",
+        "anonymous visitors get only 2 sessions"
+      ],
+      "areas": [
+        "accounts",
+        "limits",
+        "sessions"
+      ],
+      "min": 1,
+      "max": 100000,
+      "parameters": {
+        "tier": [
+          "operator",
+          "basic",
+          "anonymous"
+        ]
+      },
+      "bounds": "proposed"
+    },
+    {
+      "id": "access.tier.max_active_runs",
+      "description": "How many agent runs one account at this account level may have going at the same time.",
+      "type": "integer",
+      "pointer": "/tiers/{tier}/max_active_runs",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "base users can run 3 tasks at once",
+        "one run at a time for anonymous"
+      ],
+      "areas": [
+        "accounts",
+        "limits",
+        "runs"
+      ],
+      "min": 1,
+      "max": 1000,
+      "parameters": {
+        "tier": [
+          "operator",
+          "basic",
+          "anonymous"
+        ]
+      },
+      "bounds": "proposed"
+    },
+    {
+      "id": "access.tier_names",
+      "description": "Display name of an account level.",
+      "type": "string",
+      "pointer": "/tier_names/{tier}",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "rename the Base level to Member",
+        "call anonymous users Guests"
+      ],
+      "areas": [
+        "accounts",
+        "naming"
+      ],
+      "max_length": 40,
+      "parameters": {
+        "tier": [
+          "operator",
+          "basic",
+          "anonymous"
+        ]
+      },
+      "bounds": "proposed"
+    }
+  ],
+  "excluded": {
+    "/login_protection/account/*": "Other login-protection timings; not offered in v1.",
+    "/login_protection/address/*": "Other login-protection timings; not offered in v1.",
+    "/revision": "Internal revision counter.",
+    "/tier_order": "Account level order; changed with the account levels themselves.",
+    "/tiers/*/ability_permissions/**": "Ability, tool and model grants act as ceilings (Q8); handled in a later step.",
+    "/tiers/*/allowed_models/**": "Ability, tool and model grants act as ceilings (Q8); handled in a later step.",
+    "/tiers/*/entitlements/**": "Ability, tool and model grants act as ceilings (Q8); handled in a later step.",
+    "/tiers/*/id": "Internal tier identity.",
+    "/tiers/*/model_policy/**": "Ability, tool and model grants act as ceilings (Q8); handled in a later step.",
+    "/tiers/*/revision": "Internal tier identity.",
+    "/tiers/*/tools/**": "Ability, tool and model grants act as ceilings (Q8); handled in a later step."
+  }
+}

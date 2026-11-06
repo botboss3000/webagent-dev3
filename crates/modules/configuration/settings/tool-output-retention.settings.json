@@ -1,0 +1,35 @@
+{
+  "_instructions": "Setting descriptors for the configuration composer (see crates/modules/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
+  "settings": [
+    {
+      "id": "context.tool_output_retention.enabled",
+      "description": "Keep large tool outputs out of the context after a number of calls, replacing them with a short placeholder.",
+      "type": "boolean",
+      "pointer": "/enabled",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "drop old tool results from the context",
+        "turn on tool output retention"
+      ],
+      "areas": [
+        "context",
+        "tools",
+        "memory"
+      ],
+      "agent_pointer": "/tool_output_policy",
+      "bounds": "validator"
+    }
+  ],
+  "excluded": {
+    "/lifetime_calls": "Retention detail; not offered in v1.",
+    "/ordinary_chars": "Retention detail; not offered in v1.",
+    "/promote_on_edit": "Retention detail; not offered in v1.",
+    "/promoted_chars": "Retention detail; not offered in v1.",
+    "/refresh_on_recall": "Retention detail; not offered in v1.",
+    "/scope": "Retention detail; not offered in v1.",
+    "/tools": "Retention detail; not offered in v1."
+  }
+}

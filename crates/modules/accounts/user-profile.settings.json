@@ -1,0 +1,43 @@
+{
+  "_instructions": "Setting descriptors for the configuration composer (see crates/modules/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
+  "settings": [
+    {
+      "id": "user.display_name",
+      "description": "The name shown for you in the app.",
+      "type": "string",
+      "pointer": "/display_name",
+      "layers": [
+        "user"
+      ],
+      "examples": [
+        "change my name to Alex",
+        "call me Sam"
+      ],
+      "areas": [
+        "profile",
+        "account"
+      ],
+      "max_length": 80,
+      "bounds": "validator"
+    },
+    {
+      "id": "user.default_agent_id",
+      "description": "The agent a new chat opens with for you.",
+      "type": "agent_id",
+      "pointer": "/default_agent_id",
+      "layers": [
+        "user"
+      ],
+      "examples": [
+        "open new chats with my research agent",
+        "make Shared Default my default agent"
+      ],
+      "areas": [
+        "profile",
+        "agent",
+        "chat"
+      ],
+      "bounds": "validator (must be an agent you can use)"
+    }
+  ]
+}

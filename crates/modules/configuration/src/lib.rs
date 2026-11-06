@@ -128,5 +128,6 @@ mod tests {
     }
 }
 
+pub mod catalog;
 pub mod live;
 pub mod prompts;

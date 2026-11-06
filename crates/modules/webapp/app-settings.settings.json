@@ -1,0 +1,80 @@
+{
+  "_instructions": "Setting descriptors for the configuration composer (see crates/modules/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
+  "settings": [
+    {
+      "id": "app_ui.chat_panel.width",
+      "description": "Initial width of the docked chat panel on desktop when the app opens.",
+      "type": "length",
+      "pointer": "/ui/chat_panel",
+      "layers": [
+        "app",
+        "user"
+      ],
+      "examples": [
+        "make the chat panel wider",
+        "chat width 600 pixels",
+        "chat takes half the screen",
+        "hide the chat when the app opens"
+      ],
+      "areas": [
+        "chat",
+        "layout",
+        "desktop"
+      ],
+      "min": 0,
+      "value_shape": {
+        "width": "number",
+        "unit": "px|%"
+      },
+      "bounds": "validator",
+      "notes": "At most 100 when the unit is %."
+    },
+    {
+      "id": "app_ui.mobile_mode.full_height",
+      "description": "On phones, draw the chat transcript edge to edge behind the status and navigation bars.",
+      "type": "boolean",
+      "pointer": "/ui/mobile_mode/full_height",
+      "layers": [
+        "app",
+        "user"
+      ],
+      "examples": [
+        "edge to edge chat on my phone",
+        "full screen chat on mobile",
+        "stop the chat going behind the status bar"
+      ],
+      "areas": [
+        "chat",
+        "mobile",
+        "layout"
+      ],
+      "bounds": "validator"
+    },
+    {
+      "id": "app_ui.pull_to_refresh.start_zone_px",
+      "description": "How far from the top of the screen, in pixels, a pull-down gesture must start to refresh the page.",
+      "type": "number",
+      "pointer": "/ui/pull_to_refresh/start_zone_px",
+      "layers": [
+        "app",
+        "user"
+      ],
+      "examples": [
+        "pull to refresh triggers too easily",
+        "make the refresh zone smaller",
+        "pull down area 80 pixels"
+      ],
+      "areas": [
+        "mobile",
+        "gesture"
+      ],
+      "unit": "px",
+      "min": 0,
+      "recommended_max": 300,
+      "bounds": "validator (min only)"
+    }
+  ],
+  "excluded": {
+    "/development/**": "Development-only live UI switch; not offered to the composer."
+  }
+}

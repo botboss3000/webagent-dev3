@@ -1,0 +1,61 @@
+{
+  "_instructions": "Setting descriptors for the configuration composer (see crates/modules/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
+  "settings": [
+    {
+      "id": "media.dictation.max_recording_seconds",
+      "description": "Longest voice dictation, in seconds, before recording stops.",
+      "type": "integer",
+      "pointer": "/dictation/max_recording_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "allow 10 minute voice messages",
+        "cap dictation at 2 minutes"
+      ],
+      "areas": [
+        "voice",
+        "dictation",
+        "microphone"
+      ],
+      "unit": "s",
+      "min": 10,
+      "max": 1800,
+      "bounds": "proposed"
+    },
+    {
+      "id": "media.speech.idle_unload_minutes",
+      "description": "Minutes of no use before the text-to-speech model is unloaded from memory.",
+      "type": "integer",
+      "pointer": "/speech/idle_unload_minutes",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "unload the voice model after 5 minutes",
+        "keep speech loaded longer"
+      ],
+      "areas": [
+        "voice",
+        "memory",
+        "performance"
+      ],
+      "unit": "min",
+      "min": 1,
+      "max": 1440,
+      "bounds": "proposed"
+    }
+  ],
+  "excluded": {
+    "/dictation/finish_timeout_seconds": "Voice service internals; not offered in v1.",
+    "/dictation/idle_capture_seconds": "Voice service internals; not offered in v1.",
+    "/dictation/idle_unload_minutes": "Voice service internals; not offered in v1.",
+    "/dictation/max_concurrent": "Voice service internals; not offered in v1.",
+    "/dictation/pause_detection/**": "Speech detection tuning; not offered in v1.",
+    "/dictation/threads": "Voice service internals; not offered in v1.",
+    "/schema_version": "File format version.",
+    "/speech/max_chars": "Voice service internals; not offered in v1.",
+    "/speech/queue_wait_seconds": "Voice service internals; not offered in v1.",
+    "/speech/threads": "Voice service internals; not offered in v1."
+  }
+}

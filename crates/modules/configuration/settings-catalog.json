@@ -1,0 +1,53 @@
+{
+  "_instructions": "Setting descriptor catalog for the configuration composer. Each owner keeps a *.settings.json beside its configuration; the composer merges them at runtime. Every leaf of an owner's config must be described or excluded with a reason, and every live file must be an owner or excluded here (webagent_configuration::catalog tests).",
+  "owners": [
+    {
+      "config": "ui/chat/chat.json",
+      "descriptors": "crates/modules/chat/chat.settings.json"
+    },
+    {
+      "config": "crates/modules/webapp/app-settings.json",
+      "descriptors": "crates/modules/webapp/app-settings.settings.json"
+    },
+    {
+      "config": "crates/modules/access/access-policy.json",
+      "descriptors": "crates/modules/access/access-policy.settings.json"
+    },
+    {
+      "config": "crates/modules/context/context-compaction.json",
+      "descriptors": "crates/modules/configuration/settings/context-compaction.settings.json"
+    },
+    {
+      "config": "crates/modules/context/tool-output-retention.json",
+      "descriptors": "crates/modules/configuration/settings/tool-output-retention.settings.json"
+    },
+    {
+      "config": "crates/modules/engine/loop-runtime.json",
+      "descriptors": "crates/modules/configuration/settings/loop-runtime.settings.json"
+    },
+    {
+      "config": "crates/modules/media/voice.json",
+      "descriptors": "crates/modules/media/voice.settings.json"
+    },
+    {
+      "store": "agent_metadata",
+      "descriptors": "crates/modules/agents/agent.settings.json"
+    },
+    {
+      "store": "user_profile",
+      "descriptors": "crates/modules/accounts/user-profile.settings.json"
+    }
+  ],
+  "excluded_files": {
+    "crates/modules/configuration/prompts/*.json": "Prompts are never offered by the composer (Q1).",
+    "crates/modules/configuration/prompts/*.md": "Prompts are never offered by the composer (Q1).",
+    "crates/modules/configuration/prompts/main_chat_skills/*.md": "Prompts are never offered by the composer (Q1).",
+    "crates/modules/configuration/prompts/session_naming/*.md": "Prompts are never offered by the composer (Q1).",
+    "crates/modules/configuration/prompts/tool_output_retention/*.md": "Prompts are never offered by the composer (Q1).",
+    "crates/modules/configuration/prompts/tool_result_deduplication/*.md": "Prompts are never offered by the composer (Q1).",
+    "crates/modules/engine/engine-components.json": "Engine component wiring; not offered in v1.",
+    "crates/modules/engine/gates/*.json": "Gate manifests; changed only with the gates themselves.",
+    "crates/modules/models/providers/*.json": "Provider definitions and connections; credentials are never offered (Q1).",
+    "src/plugin_packages/diagnostics/diagnostics.json": "Diagnostics package configuration; not offered in v1."
+  }
+}

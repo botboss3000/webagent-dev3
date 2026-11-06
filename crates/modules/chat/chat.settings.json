@@ -1,0 +1,341 @@
+{
+  "_instructions": "Setting descriptors for the configuration composer (see crates/modules/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
+  "settings": [
+    {
+      "id": "chat.message_bubbles.font_size_px",
+      "description": "Text size of chat message bubbles, in pixels.",
+      "type": "number",
+      "pointer": "/chat_common/message_bubbles/font_size_px",
+      "layers": [
+        "app",
+        "user"
+      ],
+      "examples": [
+        "bigger chat text",
+        "font size 18",
+        "messages are hard to read",
+        "smaller text in the chat"
+      ],
+      "areas": [
+        "chat",
+        "text",
+        "appearance"
+      ],
+      "unit": "px",
+      "min": 10,
+      "max": 32,
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.execution_mode.default_mode",
+      "description": "Mode a new chat starts in: ask (asks before acting), plan (read-only planning) or auto (acts without asking where policy allows).",
+      "type": "enum",
+      "pointer": "/chat_common/execution_mode/default_mode",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "new chats should start in ask mode",
+        "default to plan mode",
+        "start chats in auto"
+      ],
+      "areas": [
+        "chat",
+        "mode",
+        "approvals"
+      ],
+      "enum": [
+        "ask",
+        "plan",
+        "auto"
+      ],
+      "agent_pointer": "/default_execution_mode",
+      "bounds": "validator"
+    },
+    {
+      "id": "chat.execution_mode.confirm_auto_mode",
+      "description": "Ask for confirmation when someone switches a chat to Auto mode.",
+      "type": "boolean",
+      "pointer": "/chat_common/execution_mode/confirm_auto_mode",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "warn me before switching to auto",
+        "confirm auto mode",
+        "don't ask when I pick auto"
+      ],
+      "areas": [
+        "chat",
+        "mode",
+        "approvals"
+      ],
+      "bounds": "validator"
+    },
+    {
+      "id": "chat.limits.attachments.max_file_size_mb",
+      "description": "Largest file, in megabytes, that can be attached to a chat message.",
+      "type": "number",
+      "pointer": "/chat_limits/attachments/max_file_size_mb",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "allow bigger uploads",
+        "max attachment 50 MB",
+        "files up to 10 megabytes"
+      ],
+      "areas": [
+        "chat",
+        "attachments",
+        "limits"
+      ],
+      "unit": "MB",
+      "min": 1,
+      "max": 100,
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.limits.attachments.max_per_message",
+      "description": "How many files one chat message may attach.",
+      "type": "integer",
+      "pointer": "/chat_limits/attachments/max_per_message",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "let people attach 20 files",
+        "only one attachment per message",
+        "more files per message"
+      ],
+      "areas": [
+        "chat",
+        "attachments",
+        "limits"
+      ],
+      "min": 1,
+      "max": 50,
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.live_reload.interval_ms",
+      "description": "How often, in milliseconds, an open chat checks for new messages.",
+      "type": "integer",
+      "pointer": "/chat_common/live_reload/interval_ms",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "refresh the chat every 5 seconds",
+        "check for new messages more often",
+        "poll less often"
+      ],
+      "areas": [
+        "chat",
+        "refresh",
+        "performance"
+      ],
+      "unit": "ms",
+      "min": 500,
+      "max": 60000,
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.composer.placeholder",
+      "description": "Hint text shown in the empty message box.",
+      "type": "string",
+      "pointer": "/chat_common/composer/placeholder",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "change the message box hint to 'Ask me anything'",
+        "placeholder text should say Type here"
+      ],
+      "areas": [
+        "chat",
+        "composer",
+        "text"
+      ],
+      "max_length": 80,
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.mark_read_on_visit",
+      "description": "Mark a chat as read as soon as it is opened.",
+      "type": "boolean",
+      "pointer": "/chat_common/mark_read_on_visit",
+      "layers": [
+        "app",
+        "user"
+      ],
+      "examples": [
+        "mark chats read when I open them",
+        "keep the unread badge until I scroll"
+      ],
+      "areas": [
+        "chat",
+        "notifications",
+        "unread"
+      ],
+      "bounds": "validator"
+    },
+    {
+      "id": "chat.main_notes.enabled",
+      "description": "Show the Main Notes panel below the chat header in Main Chat.",
+      "type": "boolean",
+      "pointer": "/chat_common/chat_header/controls/main_notes/enabled",
+      "layers": [
+        "app",
+        "user"
+      ],
+      "examples": [
+        "hide the notes panel",
+        "turn off main notes",
+        "show notes under the header"
+      ],
+      "areas": [
+        "chat",
+        "header",
+        "notes"
+      ],
+      "bounds": "validator"
+    },
+    {
+      "id": "chat.mobile.transcript_window.messages_above",
+      "description": "On phones, how many earlier messages stay loaded above the visible part of a chat.",
+      "type": "integer",
+      "pointer": "/chat_mobile/transcript_window/messages_above",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "load more history on mobile",
+        "keep 50 earlier messages on the phone"
+      ],
+      "areas": [
+        "chat",
+        "mobile",
+        "performance",
+        "history"
+      ],
+      "min": 5,
+      "max": 200,
+      "bounds": "proposed"
+    },
+    {
+      "id": "chat.widget.window.width",
+      "description": "Width, in pixels, of the floating chat widget window.",
+      "type": "number",
+      "pointer": "/chat_widget/window/width",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "make the chat widget wider",
+        "widget 500 pixels wide"
+      ],
+      "areas": [
+        "widget",
+        "layout"
+      ],
+      "unit": "px",
+      "min": 300,
+      "max": 1200,
+      "bounds": "proposed (min_width 300 in file)"
+    },
+    {
+      "id": "chat.widget.launcher.position",
+      "description": "Which side of the screen the floating chat launcher button sits on.",
+      "type": "enum",
+      "pointer": "/chat_widget/launcher/position",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "move the chat button to the left",
+        "launcher on the right side"
+      ],
+      "areas": [
+        "widget",
+        "launcher",
+        "layout"
+      ],
+      "enum": [
+        "left",
+        "right"
+      ],
+      "bounds": "proposed"
+    }
+  ],
+  "excluded": {
+    "/agents_page_widget/**": "Page launcher labels and placement; not offered in v1.",
+    "/chat_common/active_footer/**": "Chat layout and styling; not offered in v1.",
+    "/chat_common/chat_header/**": "Chat layout and styling; not offered in v1.",
+    "/chat_common/classify_main_messages/**": "Chat behaviour not offered in v1.",
+    "/chat_common/component_panel/**": "Chat layout and styling; not offered in v1.",
+    "/chat_common/composer/**": "Chat layout and styling; not offered in v1.",
+    "/chat_common/content_max_width/**": "Chat layout and styling; not offered in v1.",
+    "/chat_common/context_composition/**": "Chat behaviour not offered in v1.",
+    "/chat_common/fade/**": "Chat layout and styling; not offered in v1.",
+    "/chat_common/fold_main_messages/**": "Chat behaviour not offered in v1.",
+    "/chat_common/glimmer/**": "Chat layout and styling; not offered in v1.",
+    "/chat_common/gutter_presentation/**": "Chat layout and styling; not offered in v1.",
+    "/chat_common/idle_footer/**": "Chat layout and styling; not offered in v1.",
+    "/chat_common/live_reload/**": "Chat behaviour not offered in v1.",
+    "/chat_common/message_bubbles/**": "Chat layout and styling; not offered in v1.",
+    "/chat_common/message_gutters/**": "Chat layout and styling; not offered in v1.",
+    "/chat_common/message_headings/**": "Chat layout and styling; not offered in v1.",
+    "/chat_common/message_spacing/**": "Chat layout and styling; not offered in v1.",
+    "/chat_common/message_visibility/**": "Chat behaviour not offered in v1.",
+    "/chat_common/messages/**": "Chat behaviour not offered in v1.",
+    "/chat_common/mirror_activity_in_transcript/**": "Chat behaviour not offered in v1.",
+    "/chat_common/pill_fade/**": "Chat layout and styling; not offered in v1.",
+    "/chat_common/screen_display/**": "Chat layout and styling; not offered in v1.",
+    "/chat_common/show_activity_groups/**": "Chat behaviour not offered in v1.",
+    "/chat_common/show_activity_preview/**": "Chat behaviour not offered in v1.",
+    "/chat_common/show_tool_calls/**": "Chat behaviour not offered in v1.",
+    "/chat_common/transcript_overscroll/**": "Chat layout and styling; not offered in v1.",
+    "/chat_common/transcript_padding/**": "Chat layout and styling; not offered in v1.",
+    "/chat_common/transcript_tail_clearance/**": "Chat layout and styling; not offered in v1.",
+    "/chat_common/transcript_window/**": "Chat behaviour not offered in v1.",
+    "/chat_common/user_message_truncation/**": "Chat behaviour not offered in v1.",
+    "/chat_common/user_turn_anchor/**": "Chat layout and styling; not offered in v1.",
+    "/chat_desktop/active_footer/**": "Chat layout and styling; not offered in v1.",
+    "/chat_desktop/chat_header/**": "Chat layout and styling; not offered in v1.",
+    "/chat_desktop/debug/**": "Chat layout and styling; not offered in v1.",
+    "/chat_desktop/fade/**": "Chat layout and styling; not offered in v1.",
+    "/chat_desktop/idle_footer/**": "Chat layout and styling; not offered in v1.",
+    "/chat_desktop/pill_fade/**": "Chat layout and styling; not offered in v1.",
+    "/chat_desktop/transcript_overscroll/**": "Chat layout and styling; not offered in v1.",
+    "/chat_desktop/transcript_tail_clearance/**": "Chat layout and styling; not offered in v1.",
+    "/chat_desktop/user_turn_anchor/**": "Chat layout and styling; not offered in v1.",
+    "/chat_display/default/**": "Chat behaviour not offered in v1.",
+    "/chat_mobile/active_footer/**": "Chat layout and styling; not offered in v1.",
+    "/chat_mobile/chat_header/**": "Chat layout and styling; not offered in v1.",
+    "/chat_mobile/composer/**": "Chat layout and styling; not offered in v1.",
+    "/chat_mobile/content_max_width/**": "Chat layout and styling; not offered in v1.",
+    "/chat_mobile/fade/**": "Chat layout and styling; not offered in v1.",
+    "/chat_mobile/idle_footer/**": "Chat layout and styling; not offered in v1.",
+    "/chat_mobile/pill_fade/**": "Chat layout and styling; not offered in v1.",
+    "/chat_mobile/transcript_overscroll/**": "Chat layout and styling; not offered in v1.",
+    "/chat_mobile/transcript_window/**": "Chat behaviour not offered in v1.",
+    "/chat_mobile/user_turn_anchor/**": "Chat layout and styling; not offered in v1.",
+    "/chat_widget/active_footer/**": "Chat layout and styling; not offered in v1.",
+    "/chat_widget/chat_header/**": "Chat layout and styling; not offered in v1.",
+    "/chat_widget/fade/**": "Chat layout and styling; not offered in v1.",
+    "/chat_widget/idle_footer/**": "Chat layout and styling; not offered in v1.",
+    "/chat_widget/launcher/**": "Chat layout and styling; not offered in v1.",
+    "/chat_widget/messages/**": "Chat behaviour not offered in v1.",
+    "/chat_widget/pill_fade/**": "Chat layout and styling; not offered in v1.",
+    "/chat_widget/transcript_overscroll/**": "Chat layout and styling; not offered in v1.",
+    "/chat_widget/user_turn_anchor/**": "Chat layout and styling; not offered in v1.",
+    "/chat_widget/window/**": "Chat layout and styling; not offered in v1.",
+    "/controls_library/**": "Control definitions the layouts reference; edited with the UI, not by the composer.",
+    "/settings_page_widget/**": "Page launcher labels and placement; not offered in v1.",
+    "/tier_gates/**": "Which account levels see each control; belongs with account levels, not offered in v1.",
+    "/version": "File format version."
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "_instructions": "Setting descriptors for the configuration composer (see crates/modules/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
+  "settings": [
+    {
+      "id": "loop.scheduler.max_active_runs",
+      "description": "How many agent runs the whole server executes at the same time, across all users.",
+      "type": "integer",
+      "pointer": "/scheduler/max_active_runs",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "run 8 agents at once on the server",
+        "lower server concurrency"
+      ],
+      "areas": [
+        "server",
+        "performance",
+        "runs"
+      ],
+      "min": 1,
+      "max": 64,
+      "bounds": "proposed"
+    },
+    {
+      "id": "loop.tools.max_parallel_calls",
+      "description": "How many read-only tool calls one run may execute in parallel.",
+      "type": "integer",
+      "pointer": "/tools/max_parallel_calls",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "let tools run 8 at a time",
+        "only one tool call at a time"
+      ],
+      "areas": [
+        "tools",
+        "performance"
+      ],
+      "min": 1,
+      "max": 16,
+      "bounds": "proposed"
+    }
+  ],
+  "excluded": {
+    "/cache/context_budget_bytes": "Scheduler internals; not offered in v1.",
+    "/cache/document_budget_bytes": "Scheduler internals; not offered in v1.",
+    "/context/max_context_bytes": "Scheduler internals; not offered in v1.",
+    "/scheduler/background_rescan_interval_ms": "Scheduler internals; not offered in v1.",
+    "/scheduler/drain_timeout_seconds": "Scheduler internals; not offered in v1.",
+    "/scheduler/max_unresolved_runs": "Scheduler internals; not offered in v1.",
+    "/scheduler/poll_interval_ms": "Scheduler internals; not offered in v1.",
+    "/scheduler/recovery_interval_ms": "Scheduler internals; not offered in v1.",
+    "/schema_version": "File format version.",
+    "/tools/parallel_modes/**": "Per-tool concurrency classes set by each tool's owner.",
+    "/workflow/max_attempts": "Scheduler internals; not offered in v1.",
+    "/workflow/max_publication_bytes": "Scheduler internals; not offered in v1.",
+    "/workflow/max_turns": "Scheduler internals; not offered in v1.",
+    "/workflow/modules/**": "Gate wiring; changed only with the gates themselves."
+  }
+}

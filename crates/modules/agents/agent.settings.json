@@ -1,0 +1,114 @@
+{
+  "_instructions": "Setting descriptors for the configuration composer (see crates/modules/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
+  "settings": [
+    {
+      "id": "agent.voice_output",
+      "description": "Whether this agent reads its replies aloud, and with which voice.",
+      "type": "object",
+      "pointer": "/voice_output",
+      "layers": [
+        "agent"
+      ],
+      "examples": [
+        "have this agent speak its answers",
+        "use a British male voice",
+        "turn off spoken replies"
+      ],
+      "areas": [
+        "voice",
+        "agent",
+        "replies"
+      ],
+      "value_shape": {
+        "enabled": "boolean",
+        "voice": "voice id from the voice catalog"
+      },
+      "bounds": "validator"
+    },
+    {
+      "id": "agent.shared_chat.shareable",
+      "description": "Whether people can share their chats with this agent with others.",
+      "type": "boolean",
+      "pointer": "/shared_chat/shareable",
+      "layers": [
+        "agent"
+      ],
+      "examples": [
+        "let people share chats with this agent",
+        "turn off chat sharing"
+      ],
+      "areas": [
+        "sharing",
+        "agent",
+        "privacy"
+      ],
+      "bounds": "validator"
+    },
+    {
+      "id": "agent.member_access.visitor_access",
+      "description": "Whether signed-out visitors may chat with this agent.",
+      "type": "boolean",
+      "pointer": "/member_access/visitor_access",
+      "layers": [
+        "agent"
+      ],
+      "examples": [
+        "let visitors use this agent without signing in",
+        "members only for this agent"
+      ],
+      "areas": [
+        "access",
+        "agent",
+        "visitors"
+      ],
+      "bounds": "validator"
+    },
+    {
+      "id": "agent.member_access.conversation_privacy",
+      "description": "Whether members' conversations with this agent are private or reviewable by its operators.",
+      "type": "enum",
+      "pointer": "/member_access/conversation_privacy",
+      "layers": [
+        "agent"
+      ],
+      "examples": [
+        "let me review conversations with my agent",
+        "keep members' chats private"
+      ],
+      "areas": [
+        "privacy",
+        "agent",
+        "review"
+      ],
+      "enum": [
+        "private",
+        "operator_reviewable"
+      ],
+      "bounds": "validator"
+    },
+    {
+      "id": "agent.message_visibility.mode",
+      "description": "Whether the agent's working updates appear as separate chat messages while it works: never (none), when it chooses (manual) or always (auto).",
+      "type": "enum",
+      "pointer": "/message_visibility/mode",
+      "layers": [
+        "agent"
+      ],
+      "examples": [
+        "show me progress messages while it works",
+        "only show the final answer"
+      ],
+      "areas": [
+        "chat",
+        "agent",
+        "progress"
+      ],
+      "enum": [
+        "none",
+        "manual",
+        "auto"
+      ],
+      "bounds": "validator"
+    }
+  ]
+}

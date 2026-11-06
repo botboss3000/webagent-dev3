@@ -1,0 +1,70 @@
+{
+  "_instructions": "Setting descriptors for the configuration composer (see crates/modules/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
+  "settings": [
+    {
+      "id": "context.compaction.trigger_tokens",
+      "description": "Conversation size, in tokens, at which older history is summarized to save context.",
+      "type": "integer",
+      "pointer": "/trigger_tokens",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "summarize the conversation sooner",
+        "compact at 100k tokens",
+        "let chats get longer before summarizing"
+      ],
+      "areas": [
+        "context",
+        "memory",
+        "agent"
+      ],
+      "unit": "tokens",
+      "min": 10000,
+      "max": 1000000,
+      "agent_pointer": "/compaction_thresholds/trigger_tokens",
+      "bounds": "validator (relation) + proposed",
+      "notes": "Must exceed tail_tokens + summary_tokens."
+    },
+    {
+      "id": "context.compaction.tail_tokens",
+      "description": "How many tokens of the most recent conversation are kept word for word when history is summarized.",
+      "type": "integer",
+      "pointer": "/tail_tokens",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "keep more recent messages when summarizing",
+        "keep the last 20k tokens verbatim"
+      ],
+      "areas": [
+        "context",
+        "memory",
+        "agent"
+      ],
+      "unit": "tokens",
+      "min": 1000,
+      "agent_pointer": "/compaction_thresholds/tail_tokens",
+      "bounds": "validator (relation) + proposed",
+      "notes": "Must stay below trigger_tokens - summary_tokens."
+    }
+  ],
+  "excluded": {
+    "/active_summary_prefix": "Prompt text; prompts are never offered (Q1).",
+    "/characters_per_token": "Internal size limit; not offered in v1.",
+    "/dedup_max_output_bytes": "Internal size limit; not offered in v1.",
+    "/max_source_bytes": "Internal size limit; not offered in v1.",
+    "/max_summary_bytes": "Internal size limit; not offered in v1.",
+    "/schema_version": "File format version.",
+    "/search_line_bytes": "Internal size limit; not offered in v1.",
+    "/search_output_bytes": "Internal size limit; not offered in v1.",
+    "/summary_prefix": "Prompt text; prompts are never offered (Q1).",
+    "/summary_prompt": "Prompt text; prompts are never offered (Q1).",
+    "/summary_reserve_bytes": "Internal size limit; not offered in v1.",
+    "/summary_tokens": "Internal size limit; not offered in v1.",
+    "/tool_result_preview_bytes": "Internal size limit; not offered in v1."
+  }
+}
