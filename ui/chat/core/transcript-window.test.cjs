@@ -44,3 +44,7 @@ test('saves the first visible message and clears it at the latest message',()=>{
   const f=fixture({load_threshold_px:10},new Map([['webagent.chat.position.s','10']]));f.api.open('s',history(20));f.scroll(150);f.flushSave();assert.equal(f.saved.get('webagent.chat.position.s'),'8');
   const g=fixture({load_threshold_px:10});g.api.open('s',history(10));g.scroll(g.scroller.scrollHeight-400);g.flushSave();assert.equal(g.saved.has('webagent.chat.position.s'),false);
 });
+test('rows that arrive before open wait for the window instead of drawing everything',()=>{
+  const f=fixture();for(const item of history(12))assert.equal(f.api.accept(item),false);assert.equal(f.rows.length,0);
+  f.api.open('s',history(10));assert.deepEqual(f.seqs(),[10,11,12]);
+});

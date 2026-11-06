@@ -4,6 +4,8 @@
 export function mountTranscriptWindow({scroller,inner,getProfile,render,paint,storage=globalThis.localStorage}) {
   const abort=new AbortController();
   let id=null,all=[],start=0,end=0,busy=false,saveTimer=0;
+  // Rows that arrive (for example from a queue refresh) before open() are merged into its window.
+  let early=new Map();
   /** Reads the live profile; a missing or disabled section renders every message as before. */
   const config=()=>{const value=getProfile()?.transcript_window||{};const n=(key,fallback)=>Number.isInteger(value[key])&&value[key]>0?value[key]:fallback;
     return {enabled:value.enabled!==false,above:n('messages_above',30),below:n('messages_below',20),step:n('load_more_step',20),threshold:n('load_threshold_px',600),remember:value.remember_position!==false};};
@@ -19,7 +21,8 @@ export function mountTranscriptWindow({scroller,inner,getProfile,render,paint,st
   function keepOffset(change){const before=scroller.scrollHeight;change();scroller.scrollTop+=scroller.scrollHeight-before;}
   /** Opens a session: draws the window around the saved position, or the newest messages. Returns the row to land on, if any. */
   function open(sessionId,messages){
-    id=sessionId;all=[...messages].sort((a,b)=>a.seq-b.seq);const c=config();
+    const merged=new Map([...early.values(),...messages].map(item=>[item.id,item]));early=new Map();
+    id=sessionId;all=[...merged.values()].sort((a,b)=>a.seq-b.seq);const c=config();
     if(!c.enabled){start=0;end=all.length;draw(start,end);return null;}
     const saved=c.remember?readSaved():0,index=saved?all.findIndex(item=>item.seq>=saved):-1;
     if(index>=0){start=Math.max(0,index-c.above);end=Math.min(all.length,index+c.below+1);}
@@ -29,7 +32,7 @@ export function mountTranscriptWindow({scroller,inner,getProfile,render,paint,st
   }
   /** Admits a live or recovered message; returns whether it belongs in the drawn window. */
   function accept(item){
-    if(!id)return true;
+    if(!id){early.set(item.id,item);return false;}
     const at=all.findIndex(row=>row.id===item.id);
     if(at>=0){all[at]=item;return at>=start&&at<end;}
     let index=all.length;while(index>0&&all[index-1].seq>item.seq)index--;
@@ -64,6 +67,6 @@ export function mountTranscriptWindow({scroller,inner,getProfile,render,paint,st
   scroller.addEventListener('scroll',()=>{update();clearTimeout(saveTimer);saveTimer=setTimeout(save,250);},{passive:true,signal:abort.signal});
   return {open,accept,update,
     /** Forgets the session; the next open starts a fresh window. */
-    reset(){id=null;all=[];start=end=0;clearTimeout(saveTimer);},
+    reset(){id=null;all=[];early=new Map();start=end=0;clearTimeout(saveTimer);},
     destroy(){clearTimeout(saveTimer);abort.abort();}};
 }
