@@ -118,7 +118,8 @@ def codebase_source_path(path):
     relative=path[len(CODEBASE_ROOT):]
     return relative in {"runner.py","test_runner.py","plugin.json","codebase_admin.json","codebase_admin.skill.md"} or (
         relative in {"tools/"+name+".skill.md" for name in CODEBASE_TOOLS}
-        or relative in {"skills/rust_quality.skill.md","skills/live_plugin_publication.skill.md","skills/ui_theming.skill.md","skills/ui_toggle_list.skill.md"})
+        or relative in {"skills/rust_quality.skill.md","skills/live_plugin_publication.skill.md","skills/ui_theming.skill.md","skills/ui_toggle_list.skill.md",
+                     "skills/security_practices.skill.md"})
 BROWSER_ROOT="v3/plugins/abilities/Web/browser_control/"
 BROWSER_TOOLS=["browser_read","browser_input","browser_record"]
 BROWSER_MANIFEST={'version': 1, 'id': 'browser_control', 'protocol': 1, 'interface': 1, 'runtime': 'python3', 'entrypoint': 'runner.py', 'tools': BROWSER_TOOLS, 'build': {'inputs': ['runner.py', 'adapter.py', 'egress.py'], 'dependencies': [], 'toolchain': 'image-python3', 'flags': ['-I', '-B'], 'assets': ['browser_control.json', 'browser_control.skill.md', 'tools']}}
@@ -266,6 +267,7 @@ LOOP_DRAIN_STOP_SECONDS = 240
 # The app names a planned restart's deploy job and session in cut-off tool results.
 RESTART_CAUSE = Path(CONFIG["checkout_root"]) / "runtime" / "control" / "restart-cause.json"
 # Replacement phases before any new consumer has passed its health check.
+ADOPTABLE_PHASES = ("promoting_checkout", "checking_api", "checking_loop")
 AUTO_RESTORE_PHASES = {"stopping_loop", "stopping_api", "switching_ui", "renaming_api", "activating_api", "starting_api",
                        "renaming_loop", "activating_loop", "starting_loop", "checking_api"}
 LOCAL_WORKSPACE = "71440aad-a6ba-4ba8-adc8-1fcf66250be6"
@@ -4368,6 +4370,9 @@ class Broker:
         candidate=(folder/"candidate.tar").read_bytes()
         admitted=(folder/"admitted_base.tar").read_bytes()
         job["lease_until"]=min(deadline,time.time()+180)
+        # A release stopped at its health check never verified served UI bytes; do that first.
+        if job.get("phase")!="promoting_checkout" and self.runner.ui_hot_swappable():
+            self.runner.verify_ui(job.get("changed_paths",()))
         try:
             self.runner.promote_checkout(admitted,candidate,job.get("changed_paths",()))
         except ValueError as error:
@@ -4393,8 +4398,9 @@ class Broker:
         # An operator may accept a healthy deployed image while checkout
         # promotion remains conflicted; never replay its external effects.
         try:
-            if (not job.get("isolated") or job["status"] != "uncertain" or
-                    job.get("phase") != "promoting_checkout" or not job.get("effects_started")):
+            # A health-check phase is recorded only after both replacements started.
+            if (not job.get("isolated") or job["status"] != "uncertain" or job.get("phase") not in ADOPTABLE_PHASES
+                    or job.get("phase") == "promoting_checkout" and not job.get("effects_started")):
                 return False
             candidate = (self.state / job["job_id"] / "candidate.tar").read_bytes()
             if context_digest(candidate)[0] != job["inputs_sha256"]:
@@ -5837,7 +5843,7 @@ class Broker:
                     return self._reconcile_plugin_publication(job,trusted,workspace)
                 if job.get("operation")=="build_deploy" and job.get("phase")=="checking_ui":
                     return self._reconcile_build_ui_check(job,trusted,workspace)
-                if (job.get("operation")=="build_deploy" and job.get("phase")=="promoting_checkout"
+                if (job.get("operation")=="build_deploy" and job.get("phase") in ADOPTABLE_PHASES
                         and (self.state/job["job_id"]/"admitted_base.tar").is_file()):
                     return self._reconcile_build_promotion(job,trusted)
                 if not self._runtime_release_matches(job):
@@ -7115,6 +7121,13 @@ class Broker:
                 self._phase(job, "stopping_api")
                 with host_phase(job,"stopping_api"):
                     self.runner.stop(TARGETS[0])
+                # A predecessor that came back during its drain would keep the loop lease
+                # from its replacement; stop it again or fail while restore still applies.
+                for role, name in zip(("api", "loop"), TARGETS):
+                    if self.runner.inspect(name)["State"]["Status"] == "running":
+                        self.runner.stop(name)
+                        if self.runner.inspect(name)["State"]["Status"] == "running":
+                            raise RuntimeError("previous V3 " + role + " restarted while stopping")
                 self._phase(job, "switching_ui")
                 with host_phase(job,"switching_ui"):
                     self.runner.activate_assets(job["job_id"])

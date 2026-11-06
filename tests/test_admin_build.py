@@ -2119,6 +2119,65 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(mutations, len([c for c in self.runner.calls if c[0] in ("stop", "rename", "create", "start")]))
         self.assertFalse(self.broker._has_unresolved_release())
 
+    def test_operator_adopts_release_stuck_at_loop_health_check(self):
+        """A loop that became healthy only after its check is adopted; nothing is replayed."""
+        self.call("v3_build_work", {"action": "begin", "task_id": "adopt-loop-health",
+            "summary": "Adopt loop health", "mode": "isolated"})
+        status = self.call("v3_build_work", {"action": "status", "task_id": "adopt-loop-health"})["own"][0]
+        source = Path(status["workspace_path"], "src", "adopt_loop.rs")
+        source.parent.mkdir(exist_ok=True)
+        source.write_text("loop")
+        digest = self.call("v3_build_work", {"action": "status",
+            "task_id": "adopt-loop-health"})["own"][0]["workspace_inputs_sha256"]
+        original = self.runner.healthy
+        self.runner.healthy = lambda name, expected: name != host.TARGETS[1] and original(name, expected)
+        receipt = self.call("v3_build_work", {"action": "finish",
+            "task_id": "adopt-loop-health", "expected_inputs_sha256": digest})
+        result = self.wait(receipt)
+        self.assertEqual(("uncertain", "checking_loop"), (result["status"], self.broker.jobs[receipt["job_id"]]["phase"]))
+        self.runner.healthy = original
+        mutations = len([c for c in self.runner.calls if c[0] in ("stop", "rename", "create", "start")])
+        local = {"user_id": "codex-local", "session_id": host.LOCAL_WORKSPACE,
+                 "local_caller": True, "lease_until": time.time() + 30,
+                 "access_fingerprint": "a" * 64}
+        # A running rollback copy (the old loop) still blocks adoption.
+        rollback = self.broker.jobs[receipt["job_id"]]["rollback"]["loop"]
+        self.runner.containers[rollback]["State"]["Status"] = "running"
+        with self.assertRaisesRegex(ValueError, "does not match healthy runtime"):
+            self.call("v3_build_adopt_release", {"job_id": receipt["job_id"]},
+                      trusted=local, workspace=host.LOCAL_WORKSPACE)
+        self.runner.containers[rollback]["State"]["Status"] = "exited"
+        accepted = self.call("v3_build_adopt_release", {"job_id": receipt["job_id"]},
+                             trusted=local, workspace=host.LOCAL_WORKSPACE)
+        self.assertEqual((accepted["status"], accepted["checkout_promotion"], accepted["effects_replayed"]),
+                         ("completed", "promoted", False))
+        self.assertEqual(mutations, len([c for c in self.runner.calls if c[0] in ("stop", "rename", "create", "start")]))
+        self.assertFalse(self.broker._has_unresolved_release())
+
+    def test_predecessor_restarted_during_drain_is_stopped_before_replacement(self):
+        """A previous loop that comes back while stopping is stopped again, never kept running as rollback."""
+        self.call("v3_build_work", {"action": "begin", "task_id": "drain-restart",
+            "summary": "Drain restart", "mode": "isolated"})
+        status = self.call("v3_build_work", {"action": "status", "task_id": "drain-restart"})["own"][0]
+        source = Path(status["workspace_path"], "src", "drain.rs")
+        source.parent.mkdir(exist_ok=True)
+        source.write_text("drain")
+        digest = self.call("v3_build_work", {"action": "status",
+            "task_id": "drain-restart"})["own"][0]["workspace_inputs_sha256"]
+        original, stops = self.runner.stop, []
+        def comes_back_once(name, seconds=30):
+            original(name, seconds)
+            stops.append(name)
+            if name == host.TARGETS[1] and stops.count(name) == 1:
+                self.runner.containers[name]["State"]["Status"] = "running"
+        self.runner.stop = comes_back_once
+        receipt = self.call("v3_build_work", {"action": "finish",
+            "task_id": "drain-restart", "expected_inputs_sha256": digest})
+        self.assertEqual("completed", self.wait(receipt)["status"])
+        self.assertEqual(2, stops.count(host.TARGETS[1]))
+        rollback = self.broker.jobs[receipt["job_id"]]["rollback"]["loop"]
+        self.assertEqual("exited", self.runner.containers[rollback]["State"]["Status"])
+
     def test_operator_adopts_healthy_hot_ui_checkout_conflict(self):
         self.runner.hot_assets = True
         task = self.call("v3_build_work", {"action": "begin", "task_id": "adopt-hot-ui",
