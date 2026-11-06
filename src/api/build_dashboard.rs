@@ -134,32 +134,19 @@ mod tests {
         );
     }
 
-    /// The Broker card page's task read needs a signed-in administrator and a valid task ID
-    /// before any broker call.
+    /// The Broker card page's task read is public: no sign-in is needed, and a malformed
+    /// task ID is refused before any broker call.
     #[tokio::test]
-    async fn task_route_requires_auth_and_admin_and_a_task_id() {
+    async fn task_route_is_public_and_checks_the_task_id() {
         let (_root, app) = crate::runtime_tests::fixture().await;
-        let token = uuid();
-        let auth_key = format!("auth:{}", digest(&json!(token)));
-        app.store
-            .put(
-                &auth_key,
-                &json!({"csrf":"expected","expires":now()+3600,"generation":"fixture-generation"}),
-            )
-            .await
-            .unwrap();
-        let read = |cookie: bool, job: &str| {
-            let mut builder = Request::builder()
-                .method("GET")
-                .uri(format!("/api/v3/admin/builds/tasks/{job}"));
-            if cookie {
-                builder = builder.header("cookie", format!("v3_session={token}"));
-            }
-            builder.body(Body::empty()).unwrap()
-        };
-        let status = |request: Request<Body>| {
+        let status = |path: String| {
             let app = app.clone();
             async move {
+                let request = Request::builder()
+                    .method("GET")
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap();
                 crate::api::router(app)
                     .oneshot(request)
                     .await
@@ -167,27 +154,13 @@ mod tests {
                     .status()
             }
         };
-        assert_eq!(status(read(false, &uuid())).await, StatusCode::UNAUTHORIZED);
-        assert_eq!(status(read(true, "bad")).await, StatusCode::BAD_REQUEST);
-        let user = app
-            .store
-            .create_user_account("progress_user", "fixture-only-password-hash")
-            .await
-            .unwrap();
-        let uid = user["user_id"].as_str().unwrap();
-        app.store
-            .update_account_access(
-                uid,
-                1,
-                access::AccountStatus::Active,
-                access::Role::User,
-                "basic",
-            )
-            .await
-            .unwrap();
-        let generation = app.store.account_by_id(uid).await.unwrap().unwrap()["generation"].clone();
-        app.store.put(&auth_key, &json!({"user_id":uid,"csrf":"expected","expires":now()+3600,"generation":generation})).await.unwrap();
-        assert_eq!(status(read(true, &uuid())).await, StatusCode::FORBIDDEN);
+        assert_eq!(
+            status("/api/v3/builds/tasks/bad".into()).await,
+            StatusCode::BAD_REQUEST
+        );
+        // The fixture has no broker: a valid ID reaches it instead of an auth refusal.
+        let reached = status("/api/v3/builds/tasks/broker-card-public".into()).await;
+        assert!(![StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN].contains(&reached));
     }
 
     /// Scheduler controls require authenticated administrators and CSRF before any broker effect.

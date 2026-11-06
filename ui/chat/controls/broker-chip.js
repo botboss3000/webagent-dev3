@@ -60,12 +60,33 @@ function pressable(node, tap, hold) {
   node.addEventListener('click', e => { e.stopPropagation(); if (held) { held = false; return; } tap(e); });
 }
 
-function stageRows(snapshot, age, slowNow) {
+/** The class that colors a job status: done in bold green, failures in red. */
+export function statusClass(status) {
+  return status === 'completed' ? 'broker-ok' : FAILED.includes(status) && status !== 'needs_decision' ? 'broker-blocker' : '';
+}
+
+/** The jobs ahead of a queued one, in red, each linking to its task's Broker card page. */
+function queueAhead(ahead) {
+  const box = el('div', 'broker-queue'); box.append(el('strong', '', 'Queue ahead'));
+  for (const other of ahead) {
+    const row = el('div', 'broker-blocker');
+    const name = other.name || other.task_id || other.job_id.slice(0, 8);
+    if (other.task_id) {
+      const link = el('a', '', name); link.href = '/v3-ui/broker-card.html?task_id=' + encodeURIComponent(other.task_id); row.append(link);
+    } else row.append(name);
+    row.append(' · ' + (LABELS[other.status] || other.status) + (other.phase ? ' (' + other.phase + ')' : '') + (other.session ? ' · session ' + other.session : ''));
+    box.append(row);
+  }
+  return box;
+}
+
+function stageRows(snapshot, age, slowNow, failed = false) {
   const table = el('div', 'broker-stages'); table.setAttribute('role', 'table');
   const head = el('div', 'broker-stage broker-stage-head'); head.setAttribute('role', 'row');
   for (const label of ['#', 'Stage', 'Time', 'Normal (min)', 'Status']) head.append(el('span', '', label));
   table.append(head);
-  const rows = [...(snapshot.finished_stages || []).map(s => [s, 'done']), ...(snapshot.running_stages || []).map(s => [s, 'running']), ...(snapshot.upcoming_stages || []).map(s => [s, 'upcoming'])];
+  // A failed job's unfinished stages show where it stopped, in red.
+  const rows = [...(snapshot.finished_stages || []).map(s => [s, 'done']), ...(snapshot.running_stages || []).map(s => [s, failed ? 'failed' : 'running']), ...(snapshot.upcoming_stages || []).map(s => [s, 'upcoming'])];
   for (const [stage, state] of rows) {
     const row = el('div', 'broker-stage broker-stage-' + state); row.setAttribute('role', 'row');
     const time = el('span', 'broker-time');
@@ -96,16 +117,16 @@ export function renderCard(task, detail, hold = () => {}, {pageLink = false} = {
   const snapshot = main.snapshot || {}, live = ACTIVE.includes(main.status);
   const age = live ? liveSeconds(0, main.snapshot_at, offset) : 0;
   const job = el('div', 'broker-job');
-  const title = el('div', 'broker-job-title', (main.kind === 'check' ? 'Check ' + (main.check || '') : 'Build') + ' ' + main.job_id.slice(0, 8) + ' · ' + (LABELS[main.status] || main.status));
+  const title = el('div', 'broker-job-title', (main.kind === 'check' ? 'Check ' + (main.check || '') : 'Build') + ' ' + main.job_id.slice(0, 8) + ' · ');
+  title.append(el('span', statusClass(main.status), LABELS[main.status] || main.status));
   pressable(title, () => {}, () => hold(main));
   const line = el('div', 'broker-summary');
   job.append(title, line);
-  if (detail.task.warning === 'broker_unresponsive') job.append(el('p', 'broker-warning', 'Broker not responding — the job’s state is unknown.'));
-  else if (detail.task.warning === 'stalled') job.append(el('p', 'broker-warning', 'Stalled — no progress for ' + minutes(snapshot.idle_seconds) + ' min.'));
-  const behind = (snapshot.queued_behind || []).map(o => o.task_id + (o.session ? ' (session ' + o.session + ')' : ''));
-  if (main.status === 'queued' && behind.length) job.append(el('p', 'broker-note', 'Queued behind ' + behind.join(', ')));
+  if (detail.task.warning === 'broker_unresponsive') job.append(el('p', 'broker-blocker', 'Broker not responding — the job’s state is unknown.'));
+  else if (detail.task.warning === 'stalled') job.append(el('p', 'broker-blocker', 'Stalled — no progress for ' + minutes(snapshot.idle_seconds) + ' min.'));
+  if (main.status === 'queued' && (snapshot.queued_behind || []).length) job.append(queueAhead(snapshot.queued_behind));
   const slow = [];
-  if (snapshot.finished_stages || snapshot.running_stages) job.append(stageRows(snapshot, age, slow));
+  if (snapshot.finished_stages || snapshot.running_stages) job.append(stageRows(snapshot, age, slow, FAILED.includes(main.status)));
   if ((snapshot.background || []).length) {
     const bg = el('div', 'broker-background'); bg.append(el('strong', '', 'Background'));
     for (const work of snapshot.background) bg.append(el('div', '', work.name + ' · ' + (work.status || 'running') + ' · ' + minutes(work.seconds) + ' min' + (work.result ? ' (' + work.result + ')' : '')));
@@ -118,8 +139,8 @@ export function renderCard(task, detail, hold = () => {}, {pageLink = false} = {
     for (const other of checks) {
       const row = el('div', 'broker-check');
       const seconds = other.snapshot?.job_seconds;
-      row.append(icon(taskIcon(other)), el('span', '', (other.kind === 'check' ? (other.check || 'check') : 'build') + ' ' + other.job_id.slice(0, 8)),
-        el('span', 'broker-normal', (LABELS[other.status] || other.status) + (seconds != null ? ' · ' + minutes(seconds) + ' min' : '')));
+      const state = el('span', 'broker-normal'); state.append(el('span', statusClass(other.status), LABELS[other.status] || other.status), seconds != null ? ' · ' + minutes(seconds) + ' min' : '');
+      row.append(icon(taskIcon(other)), el('span', '', (other.kind === 'check' ? (other.check || 'check') : 'build') + ' ' + other.job_id.slice(0, 8)), state);
       pressable(row, () => {}, () => hold(other));
       advanced.append(row);
     }

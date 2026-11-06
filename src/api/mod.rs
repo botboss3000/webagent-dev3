@@ -208,7 +208,6 @@ pub(super) fn router(app: App) -> Router {
             "/admin/builds/{job_id}/result",
             get(build_dashboard::result),
         )
-        .route("/admin/builds/tasks/{task_id}", get(build_dashboard::task))
         .route(
             "/admin/builds/{job_id}/cancel",
             post(build_dashboard::cancel),
@@ -426,6 +425,8 @@ pub(super) fn router(app: App) -> Router {
         .route("/api/v3/embed/{id}/guest",post(embed::guest))
         .route("/api/v3/embed/redeem",post(embed::redeem))
         .route("/api/v3/core/webhook-receive/{id}",post(tools::core_webhooks::receive).layer(DefaultBodyLimit::max(16384)))
+        // The Broker card page reads one task without sign-in (names, states and timings only).
+        .route("/api/v3/builds/tasks/{task_id}",get(build_dashboard::task))
         .route("/api/v3/auth/login",post(login))
         .route("/api/v3/harness-bridge/next",post(crate::harness_bridge::next))
         .route("/api/v3/harness-bridge/reply",post(crate::harness_bridge::reply))

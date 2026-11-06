@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {minutes, taskIcon, liveSeconds, stageVerdict, remaining} from './broker-chip.js';
+import {minutes, taskIcon, liveSeconds, stageVerdict, remaining, statusClass} from './broker-chip.js';
 
 test('times read as minutes with one decimal, counting a tenth every 6 s', () => {
   assert.equal(minutes(0), '0.0');
@@ -35,4 +35,11 @@ test('a running stage turns slow as soon as it passes p90, and time left counts 
   assert.equal(remaining([600, 1200], 60), '9.0–19.0 min left');
   assert.equal(remaining([600, 1200], 1300), 'past normal');
   assert.equal(remaining(null, 0), null);
+});
+
+test('done reads in bold green and failures in red', () => {
+  assert.equal(statusClass('completed'), 'broker-ok');
+  for (const status of ['failed', 'cancelled', 'uncertain', 'interrupted']) assert.equal(statusClass(status), 'broker-blocker');
+  assert.equal(statusClass('running'), '');
+  assert.equal(statusClass('needs_decision'), '');
 });

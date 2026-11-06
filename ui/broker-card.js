@@ -1,6 +1,6 @@
-// Broker card page: one broker task's progress for administrators, the same card the
+// Broker card page: one broker task's progress, public (no sign-in), the same card the
 // chat's Broker chip opens (chat/controls/broker-chip.js renderCard). It reads
-// GET /api/v3/admin/builds/tasks/{task_id}, counts in the browser and re-reads every 15 s
+// GET /api/v3/builds/tasks/{task_id} (names, states and timings only), counts in the browser and re-reads every 15 s
 // while the newest job is queued or running. Linked from the chip's card, each Builds page
 // job and Claude Code release updates: /v3-ui/broker-card.html?task_id=<Broker ID>.
 import {renderCard} from './chat/controls/broker-chip.js';
@@ -25,8 +25,7 @@ function message(text, link) {
 let tick = null, refresh = null;
 async function show() {
   try {
-    const response = await fetch('/api/v3/admin/builds/tasks/' + encodeURIComponent(id), {credentials: 'same-origin', cache: 'no-store'});
-    if (response.status === 401) { clearInterval(refresh); return message('Sign in to view this task.', {href: '/app', text: 'Sign in'}); }
+    const response = await fetch('/api/v3/builds/tasks/' + encodeURIComponent(id), {cache: 'no-store'});
     if (!response.ok) throw Error((await response.json().catch(() => ({}))).error || 'Task progress unavailable');
     const detail = await response.json();
     document.title = 'Broker · ' + (detail.task.name || id);

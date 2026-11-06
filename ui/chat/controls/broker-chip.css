@@ -43,6 +43,10 @@
 .broker-stage .broker-name { overflow-wrap: anywhere; }
 .broker-stage-upcoming { color: var(--fg-2); }
 .broker-stage-running .broker-state { color: var(--brand); }
+.broker-stage-done .broker-state, .broker-ok { color: var(--success, #2e9d5b); font-weight: 700; }
+.broker-stage-failed .broker-state, .broker-blocker { color: var(--danger, #d04545); font-weight: 700; }
+.broker-blocker a { color: inherit; }
+.broker-queue { display: grid; gap: 2px; margin: 6px 0; }
 .broker-stage-running.broker-slow .broker-state { color: var(--warning, #c98a1b); font-weight: 600; }
 .broker-normal { color: var(--fg-2); }
 .broker-background { display: grid; gap: 2px; margin-top: 6px; color: var(--fg-2); }
