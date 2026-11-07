@@ -177,6 +177,25 @@ async fn identity_get(
         "can_manage":rights["can_manage"]}),
     ))
 }
+/// Identity fields that hold one composer setting each (the configuration composer).
+pub(crate) const IDENTITY_SETTINGS: [&str; 7] = [
+    "default_execution_mode",
+    "compaction_thresholds",
+    "tool_output_policy",
+    "voice_output",
+    "shared_chat",
+    "member_access",
+    "message_visibility",
+];
+/// The identity view, as `GET /agents/{id}/identity` returns it.
+pub(crate) async fn identity(app: App, caller: Value, id: String) -> Api {
+    identity_get(State(app), Extension(caller), Path(id)).await
+}
+/// An identity update, as `PUT /agents/{id}/identity` takes it.
+pub(crate) async fn update_identity(app: App, caller: Value, id: String, body: Value) -> Api {
+    let body = serde_json::from_value(body).map_err(|_| crate::bad("Invalid agent setting"))?;
+    identity_put(State(app), Extension(caller), Path(id), Json(body)).await
+}
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct IdentityUpdate {

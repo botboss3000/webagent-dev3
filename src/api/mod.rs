@@ -28,6 +28,8 @@ pub(crate) mod build_tasks;
 pub(crate) mod chat;
 #[path = "../../crates/modules/chat/host/api/chat_controls.rs"]
 mod chat_controls;
+#[path = "../../crates/modules/composer/host/api.rs"]
+mod composer;
 #[cfg(test)]
 mod composer_tests;
 pub(crate) mod direct_messages;
@@ -227,6 +229,9 @@ pub(super) fn router(app: App) -> Router {
     let api = Router::new()
         // Browser Extension: the chat panel links the extension to whoever is signed in.
         .route("/browser/link-code", post(crate::browser::link_code))
+        // Configuration composer: the page's settings matched to a request, then one confirmed save.
+        .route("/config/propose", post(composer::propose))
+        .route("/config/apply", post(composer::apply))
         .route("/browser/devices", get(crate::browser::devices))
         .route(
             "/browser/devices/{id}",

@@ -54,6 +54,11 @@ fn live_path(app: &App, id: &str) -> Option<String> {
     }
     live(id).map(str::to_owned)
 }
+/// The configuration id whose live file is `relative`, for saves made on its behalf.
+pub(crate) fn id_for_live(app: &App, relative: &str) -> Option<&'static str> {
+    IDS.into_iter()
+        .find(|id| live_path(app, id).as_deref() == Some(relative))
+}
 /// Reuse each owner's domain validator before an administrator save.
 pub(crate) fn validate(id: &str, value: &Value) -> Result<()> {
     if !value.is_object() {

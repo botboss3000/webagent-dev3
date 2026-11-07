@@ -35,10 +35,12 @@ const FIELDS: [&str; 18] = [
     "notes",
 ];
 
-/// One validated descriptor and the descriptor file it came from.
+/// One validated descriptor, the descriptor file it came from and the live configuration file
+/// its app-layer value lives in (`None` for stores).
 #[derive(Debug, Clone)]
 pub struct Setting {
     pub owner: String,
+    pub config: Option<String>,
     pub descriptor: Value,
 }
 
@@ -57,6 +59,7 @@ pub fn load(root: &Path) -> Result<Vec<Setting>> {
             );
             settings.push(Setting {
                 owner: owner.file.clone(),
+                config: owner.config_path.clone(),
                 descriptor: descriptor.clone(),
             });
         }

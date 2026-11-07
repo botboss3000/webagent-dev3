@@ -19,7 +19,7 @@
         "tools",
         "memory"
       ],
-      "agent_pointer": "/tool_output_policy",
+      "agent_pointer": "/tool_output_policy/enabled",
       "bounds": "validator"
     }
   ],
