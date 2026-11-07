@@ -143,6 +143,7 @@ fn save_automation_activation(
     file.as_file().sync_all()?;
     file.persist(&path).map_err(anyhow::Error::from)?;
     File::open(parent)?.sync_all()?;
+    forget_available();
     Ok(())
 }
 /// Explicit installed=false wins over retained legacy metadata after uninstall.
@@ -346,7 +347,45 @@ fn health_path(root: &FsPath, id: &str) -> PathBuf {
     root.join("modules").join(format!("health-{id}.json"))
 }
 /// Resolve current code and activation together; health from an older implementation cannot authorize tools.
+/// How long an availability answer is reused. Each answer re-validates the package on
+/// disk (about 30 path checks for Automation), and catalog and policy reads ask once per
+/// tool, so a page load asked thousands of times. Running a tool still re-validates
+/// through `manifest`; this only bounds how stale a displayed or admitted answer can be.
+const AVAILABLE_REUSE: Duration = Duration::from_secs(1);
+static RECENT_AVAILABLE: std::sync::Mutex<Vec<(&'static str, std::time::Instant, bool)>> =
+    std::sync::Mutex::new(Vec::new());
+/// Drop reused answers after this host changes an activation or health record.
+fn forget_available() {
+    RECENT_AVAILABLE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
+}
 pub(crate) fn available(id: &str) -> bool {
+    // Only known package IDs are remembered, so the list stays bounded.
+    let Some(id) = IDS.iter().copied().find(|known| *known == id) else {
+        return available_now(id);
+    };
+    let recent = |id| {
+        RECENT_AVAILABLE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|(known, at, _)| *known == id && at.elapsed() < AVAILABLE_REUSE)
+            .map(|(_, _, answer)| *answer)
+    };
+    if cfg!(not(test)) {
+        if let Some(answer) = recent(id) {
+            return answer;
+        }
+    }
+    let answer = available_now(id);
+    let mut list = RECENT_AVAILABLE.lock().unwrap_or_else(|e| e.into_inner());
+    list.retain(|(known, _, _)| *known != id);
+    list.push((id, std::time::Instant::now(), answer));
+    answer
+}
+fn available_now(id: &str) -> bool {
     let Ok((path, descriptor)) = manifest(id) else {
         return false;
     };
@@ -396,6 +435,7 @@ fn write_health(
     )?)?;
     output.sync_all()?;
     std::fs::rename(temp, file)?;
+    forget_available();
     Ok(())
 }
 pub(crate) async fn binding_lease(app: &App, run: &Value) -> Result<Option<File>> {

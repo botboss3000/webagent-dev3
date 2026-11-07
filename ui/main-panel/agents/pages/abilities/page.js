@@ -29,19 +29,21 @@ export async function renderAbilities(host, request, options) {
   const scope = '/agents/' + encodeURIComponent(agentId);
   const generation = (host._abilityGeneration || 0) + 1;
   host._abilityGeneration = generation;
+  // Start every read at once; manager-only reads are refused for members and ignored below.
+  const managed = (path, fallback) => request(scope + path).catch(() => fallback);
+  const effectiveRead = levelId || previewUser
+    ? request(scope + '/abilities/effective?' + new URLSearchParams({
+        ...(levelId ? { level_id: levelId } : {}),
+        ...(previewUser ? { user_id: previewUser } : {}),
+      })) : null;
+  effectiveRead?.catch(() => {});
+  const reads = [managed('/slots', { slots: [] }), managed('/context-composition', { tokens: 0 }),
+    managed('/repository-connections', { load_failed: true }), managed('/source-control/sites', { load_failed: true })];
   const data = await request(scope + '/abilities');
   const canManage = data.authority?.can_manage === true;
-  const [slotsResult, compositionResult, effective, repository, sourceSites] = await Promise.all([
-    canManage ? request(scope + '/slots').catch(() => ({ slots: [] })) : { slots: [] },
-    canManage ? request(scope + '/context-composition').catch(() => ({ tokens: 0 })) : { tokens: 0 },
-    (levelId || previewUser) && canManage
-      ? request(scope + '/abilities/effective?' + new URLSearchParams({
-          ...(levelId ? { level_id: levelId } : {}),
-          ...(previewUser ? { user_id: previewUser } : {}),
-        })) : data,
-    canManage ? request(scope + '/repository-connections').catch(() => ({ load_failed: true })) : null,
-    canManage ? request(scope + '/source-control/sites').catch(() => ({ load_failed: true })) : null,
-  ]);
+  const [slotsResult, compositionResult, repository, sourceSites] = canManage
+    ? await Promise.all(reads) : [{ slots: [] }, { tokens: 0 }, null, null];
+  const effective = canManage && effectiveRead ? await effectiveRead : data;
   if (host._abilityGeneration !== generation) return;
   const effectiveAbilities = effective.abilities || [];
   const projection = ability => effectiveAbilities.find(item => item.id === ability.id) || ability;
@@ -82,8 +84,9 @@ export async function renderAbilities(host, request, options) {
   if (host._abilityGeneration !== generation) return;
   overview.querySelector('[data-tier-selector]').replaceChildren(controls.selector);
 
-  // The spinner covers the control until the re-read confirms the change; a failure
-  // leaves the control unchanged and shows the reason in red under its row.
+  // The spinner covers the control until the save returns, then a check; the page
+  // keeps the returned revision instead of re-reading everything. A failure leaves
+  // the control unchanged and shows the reason in red under its row.
   const save = async (ability, kind, mode, control, toolName = null) => {
     const input = control.querySelector('input') || control;
     const row = control.closest('.ac-ability-row');
@@ -97,18 +100,27 @@ export async function renderAbilities(host, request, options) {
         const id = kind === 'tool' ? toolName : kind === 'skill' && toolName && toolName !== 'core' ? ability.id + ':' + toolName : ability.id;
         level[key] ||= {};
         level[key][id] = mode;
-        await request(scope + '/capability-levels/' + encodeURIComponent(levelId), 'PUT',
+        const saved = await request(scope + '/capability-levels/' + encodeURIComponent(levelId), 'PUT',
           { expected_revision: data.capability_levels.revision, level });
+        data.capability_levels = saved.capability_levels;
       } else {
         const path = scope + '/abilities/' + encodeURIComponent(ability.id) +
           (kind === 'tool' ? '/tools/' + encodeURIComponent(toolName) + '/mode' :
             kind === 'skill' && toolName && toolName !== 'core'
               ? '/skills/' + encodeURIComponent(toolName) + '/visibility'
               : '/' + (kind === 'skill' ? 'skill-visibility' : 'visibility'));
-        await request(path, 'PUT', { visibility: mode, expected_revision: data.revision });
+        const saved = await request(path, 'PUT', { visibility: mode, expected_revision: data.revision });
+        data.revision = saved.revision;
       }
-      expandedAbility = ability.id;
-      await rerender({});
+      if (kind === 'ability') ability.visibility = mode;
+      if (input.type === 'checkbox') {
+        input.checked = mode !== 'off';
+        input.setAttribute('aria-label', input.getAttribute('aria-label').replace(/: \w+\./, ': ' + mode + '.'));
+      }
+      const card = kind === 'ability' && control.closest('.v3-ability');
+      if (card) { card.classList.toggle('enabled', mode !== 'off'); card.dataset.exposure = mode; }
+      input.disabled = false;
+      _flashSaveCheck(control, true);
     } catch (error) {
       const message = 'Could not change availability: ' + (error.status === 409
         ? 'settings changed elsewhere. Reload and try again.' : error.message || 'unknown error');
@@ -123,10 +135,12 @@ export async function renderAbilities(host, request, options) {
   const modeMenu = (ability, kind, current, toolName = null, anchorOnly = false) => {
     const trigger = _buildMoreButton(() => modes.map(mode => ({
       icon: mode === 'off' ? 'eye-off' : mode === 'visible' ? 'eye' : 'download',
-      label: mode[0].toUpperCase() + mode.slice(1), checked: current === mode,
+      label: mode[0].toUpperCase() + mode.slice(1), checked: trigger._mode === mode,
       disabled: !canManage || !!previewUser,
-      action: () => save(ability, kind, mode, trigger._floatingMenuOwner || trigger, toolName).catch(() => {}),
+      action: () => save(ability, kind, mode, trigger._floatingMenuOwner || trigger, toolName)
+        .then(() => { trigger._mode = mode; }, () => {}),
     })), { title: 'Choose ' + kind + ' availability' });
+    trigger._mode = current;
     if (anchorOnly) trigger.classList.add('ac-ability-more-anchor');
     return trigger;
   };
@@ -224,11 +238,11 @@ export async function renderAbilities(host, request, options) {
         onOpenToolSkill: name => openToolSkill(ability, name),
         onExecutionChange: async (_, settings) => {
           try {
-            await request(scope + '/abilities/' + encodeURIComponent(ability.id) +
+            const saved = await request(scope + '/abilities/' + encodeURIComponent(ability.id) +
               '/tools/' + encodeURIComponent(tool.name) + '/execution', 'PUT',
               { expected_revision: data.revision, settings });
-            expandedAbility = ability.id;
-            await rerender({ administratorNotice: 'Tool execution settings saved.' });
+            data.revision = saved.revision;
+            status.textContent = 'Tool execution settings saved.';
           } catch (error) {
             status.textContent = error.status === 409
               ? 'Settings changed. Reload before saving: ' + error.message : error.message;
@@ -237,11 +251,11 @@ export async function renderAbilities(host, request, options) {
         },
         onResultDeduplicationChange: async (_, included) => {
           try {
-            await request(scope + '/abilities/' + encodeURIComponent(ability.id) +
+            const saved = await request(scope + '/abilities/' + encodeURIComponent(ability.id) +
               '/tools/' + encodeURIComponent(tool.name) + '/result-deduplication', 'PUT',
               { expected_revision: data.revision, included });
-            expandedAbility = ability.id;
-            await rerender({ administratorNotice: 'Duplicate-result setting saved.' });
+            data.revision = saved.revision;
+            status.textContent = 'Duplicate-result setting saved.';
           } catch (error) {
             status.textContent = error.status === 409
               ? 'Settings changed. Reload before saving: ' + error.message : error.message;

@@ -1,5 +1,6 @@
 // Agent configuration is distinct from capability-level previews; Rust enforces every save.
 import { buildConfigRow } from '../../../../shared/ability-row-controls.js';
+import { _markSaving, _flashSaveCheck } from '../../../../shared/models/dom-utils.js';
 const node = (tag, cls = '', text = '') => {
   const el = document.createElement(tag); el.className = cls; el.textContent = text; return el;
 };
@@ -13,6 +14,23 @@ const field = (name, value = '', type = 'text', maxLength = 2048) => {
 const message = error => error?.status === 409
   ? 'Configuration changed. Reload abilities before saving again.'
   : 'Configuration could not be saved. Check the fields and your agent authority.';
+// Save one settings change in place: spinner and check over the changed control, and the
+// returned revision kept for the next save instead of re-reading the whole page.
+async function saveSettings({ ability, data, request, scope, status, settings, changed, notice }) {
+  const box = changed?.closest?.('.ac-config-control') || changed?.parentElement;
+  _markSaving(box);
+  try {
+    const saved = await request(scope + '/abilities/' + encodeURIComponent(ability.id) + '/settings', 'PUT',
+      { expected_revision: data.revision, settings });
+    data.revision = saved.revision;
+    data.settings = saved.settings || data.settings;
+    status.textContent = notice;
+    _flashSaveCheck(box, true);
+  } catch (error) {
+    _flashSaveCheck(box, false, message(error));
+    throw error;
+  }
+}
 const cautions = ['cautious', 'balanced', 'trusted'];
 // Agent settings are edited at the agent's own (Operator) level; other levels and user previews are read-only.
 const editable = (levelId, previewUser) => (!levelId || levelId === 'operator') && !previewUser;
@@ -55,7 +73,7 @@ function buildCodeIndexControls({ ability, data, request, scope, levelId, previe
   }
   const inputs = [sourceRoot, active, ...Object.values(controls)];
   // One revision covers the entire settings object; block overlapping writes.
-  const save = async () => {
+  const save = async event => {
     if (!enabled || inputs.some(input => input.disabled)) return;
     const settings = { enabled: active.checked, root: sourceRoot.value };
     for (const [key, input] of Object.entries(controls)) settings[key] = Number(input.value);
@@ -65,13 +83,12 @@ function buildCodeIndexControls({ ability, data, request, scope, levelId, previe
     for (const input of inputs) input.disabled = true;
     status.textContent = 'Saving Code Index retrieval settings…';
     try {
-      await request(scope + '/abilities/' + encodeURIComponent(ability.id) + '/settings', 'PUT',
-        { expected_revision: data.revision, settings });
-      await rerender({ administratorNotice: 'Code Index retrieval settings saved.' });
+      await saveSettings({ ability, data, request, scope, status, settings, changed: event?.target,
+        notice: 'Code Index retrieval settings saved.' });
     } catch (error) {
       status.textContent = message(error);
-      for (const input of inputs) input.disabled = false;
     }
+    for (const input of inputs) input.disabled = false;
   };
   for (const input of inputs) input.onchange = save;
   return panel;
@@ -135,7 +152,7 @@ function buildOptimizationControls({ ability, data, request, scope, levelId, pre
   controls.allow_dependencies = dependencies;
   panel.append(row('Dependency changes', dependencies, 'Permission and sandbox restrictions still apply.'));
   const inputs = Object.values(controls);
-  const save = async () => {
+  const save = async event => {
     if (!enabled || inputs.some(input => input.disabled)) return;
     if (inputs.some(input => input.type === 'number' && (input.value === '' || !input.checkValidity() || !Number.isInteger(Number(input.value))))) {
       status.textContent = 'Enter integers within the displayed limits before saving.'; return;
@@ -147,13 +164,12 @@ function buildOptimizationControls({ ability, data, request, scope, levelId, pre
     for (const input of inputs) input.disabled = true;
     status.textContent = 'Saving Optimization settings…';
     try {
-      await request(scope + '/abilities/' + encodeURIComponent(ability.id) + '/settings', 'PUT',
-        { expected_revision: data.revision, settings });
-      await rerender({ administratorNotice: 'Optimization settings saved.' });
+      await saveSettings({ ability, data, request, scope, status, settings, changed: event?.target,
+        notice: 'Optimization settings saved.' });
     } catch (error) {
       status.textContent = message(error);
-      for (const input of inputs) input.disabled = false;
     }
+    for (const input of inputs) input.disabled = false;
   };
   for (const input of inputs) input.onchange = save;
   return panel;
@@ -216,7 +232,7 @@ function buildManifestSettings({ ability, data, request, scope, levelId, preview
   const read = ([item, control]) => item.type === 'boolean' ? control.checked
     : item.type === 'select' || item.type === 'text' ? control.value : Number(control.value);
   // One revision covers the whole settings object; each change saves every value.
-  const save = async () => {
+  const save = async event => {
     if (!enabled || controls.some(([, control]) => control.disabled)) return;
     const settings = {};
     for (const entry of controls) settings[entry[0].key] = read(entry);
@@ -228,13 +244,12 @@ function buildManifestSettings({ ability, data, request, scope, levelId, preview
     for (const [, control] of controls) control.disabled = true;
     status.textContent = 'Saving agent settings…';
     try {
-      await request(scope + '/abilities/' + encodeURIComponent(ability.id) + '/settings', 'PUT',
-        { expected_revision: data.revision, settings });
-      await rerender({ administratorNotice: 'Agent settings saved.' });
+      await saveSettings({ ability, data, request, scope, status, settings, changed: event?.target,
+        notice: 'Agent settings saved.' });
     } catch (error) {
       status.textContent = message(error);
-      for (const [, control] of controls) control.disabled = false;
     }
+    for (const [, control] of controls) control.disabled = false;
   };
   for (const [, control] of controls) control.onchange = save;
   return panel;
@@ -271,22 +286,23 @@ export function buildAdministratorControls({ ability, data, repository, request,
     control.value = cautions.includes(current) ? current : 'cautious';
   }
   control.disabled = !enabled;
-  const savedValue = ability.id === 'git_control' ? control.checked : control.value;
+  let savedValue = ability.id === 'git_control' ? control.checked : control.value;
   // Persist each setting change while its current revision is still on screen.
   control.onchange = async () => {
     if (!enabled || control.disabled) return;
     control.disabled = true;
     status.textContent = 'Saving agent settings…';
     try {
-      await request(scope + '/abilities/' + encodeURIComponent(ability.id) + '/settings', 'PUT',
-        { expected_revision: data.revision, settings: { [key]: ability.id === 'git_control' ? control.checked : control.value } });
-      await rerender({ administratorNotice: 'Agent settings saved.' });
+      await saveSettings({ ability, data, request, scope, status, changed: control,
+        settings: { [key]: ability.id === 'git_control' ? control.checked : control.value },
+        notice: 'Agent settings saved.' });
+      savedValue = ability.id === 'git_control' ? control.checked : control.value;
     } catch (error) {
       if (ability.id === 'git_control') control.checked = savedValue;
       else control.value = savedValue;
       status.textContent = message(error);
-      control.disabled = false;
     }
+    control.disabled = false;
   };
   panel.append(row(title, control));
   if (ability.id !== 'git_control') return panel;

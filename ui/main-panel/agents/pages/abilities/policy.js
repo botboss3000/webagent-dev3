@@ -1,4 +1,5 @@
 // Rust owns effective access. These controls edit one layer and display its live result.
+import { _markSaving, _flashSaveCheck } from '../../../../shared/models/dom-utils.js';
 const node = (tag, cls = '', text = '') => {
   const el = document.createElement(tag); el.className = cls; el.textContent = text; return el;
 };
@@ -18,13 +19,21 @@ const row = (label, control, hint = '') => {
   caption.append(node('div', 'ac-ability-name', label), node('div', 'ac-ability-desc', hint));
   el.append(caption, control); return el;
 };
+// A small box around a control so its save spinner and check sit over it alone.
+const savable = control => {
+  const box = node('span', 'ac-save-wrap');
+  box.style.display = 'inline-block';
+  box.append(control); return box;
+};
 async function saving(control, status, fn) {
-  control.disabled = true; status.textContent = 'Saving…';
-  try { await fn(); status.textContent = 'Saved'; }
+  const box = control.closest('.ac-save-wrap') || control;
+  control.disabled = true; status.textContent = 'Saving…'; _markSaving(box);
+  try { await fn(); status.textContent = 'Saved'; _flashSaveCheck(box, true); }
   catch (error) {
     status.textContent = error.status === 409
       ? 'Settings changed. Reload before saving: ' + error.message : error.message;
     control.value = control.dataset.savedValue;
+    _flashSaveCheck(box, false, status.textContent);
   } finally { control.disabled = false; }
 }
 // Readiness describes the port, independently of the current caller's permission.
@@ -65,22 +74,27 @@ export function permissionControl({ data, request, scope, levelId, previewUser, 
   control.disabled = !data.authority?.can_manage || !!previewUser || (!!levelId && !level);
   control.onclick = event => event.stopPropagation();
   control.onchange = () => saving(control, status, async () => {
-    const next = clone(policy); next[key] ||= {};
+    // Other controls may have saved since this one was drawn: start from the page's
+    // current copy, then keep the response so the next save has the new revision.
+    const live = data.capability_levels?.levels?.[levelId];
+    const next = clone(live || data.permissions); next[key] ||= {};
     if (control.value) next[key][id] = control.value;
     else delete next[key][id];
-    if (level) {
-      await request(scope + '/capability-levels/' + encodeURIComponent(levelId), 'PUT',
+    if (live) {
+      const saved = await request(scope + '/capability-levels/' + encodeURIComponent(levelId), 'PUT',
         { expected_revision: data.capability_levels.revision, level: next });
+      data.capability_levels = saved.capability_levels;
     } else {
-      await request(scope + '/ability-permissions', 'PUT', {
+      const saved = await request(scope + '/ability-permissions', 'PUT', {
         expected_revision: data.permissions.revision,
         ability_permissions: next.ability_permissions || {},
         tool_permissions: next.tool_permissions || {},
       });
+      data.permissions = { ...data.permissions, ...saved };
     }
-    await rerender({});
+    control.dataset.savedValue = control.value;
   });
-  return control;
+  return savable(control);
 }
 export async function buildPolicyControls({data,request,scope,levelId,previewUser,rerender,status}) {
   const canManage=data.authority?.can_manage===true;
@@ -105,15 +119,14 @@ export async function buildPolicyControls({data,request,scope,levelId,previewUse
       toggle.onchange = () => saving(toggle, status, async () => {
         const enabled = toggle.checked;
         try {
-          await request('/admin/services/boot_orphan_resume', 'PUT',
-            { enabled, expected_revision: service.revision });
-          await rerender({});
+          Object.assign(service, await request('/admin/services/boot_orphan_resume', 'PUT',
+            { enabled, expected_revision: service.revision }));
         } catch (error) {
           toggle.checked = service.enabled === true;
           throw error;
         }
       });
-      servicePanel.append(row('Startup-only safe automatic resume', toggle,
+      servicePanel.append(row('Startup-only safe automatic resume', savable(toggle),
         'Installation service · ' + readinessLabel(service) +
         '. Resumes eligible interrupted runs when the loop starts. Uncertain writes always require review.'));
     } catch (error) {
