@@ -156,6 +156,10 @@ pub(crate) async fn reset(
 
 async fn save(app: &App, agent: &str, document: &str, change: Change<'_>, expected: i64) -> Api {
     let store = managed(app, agent, document).await?;
+    app.store
+        .check_agent_folder(agent)
+        .await?
+        .map_err(|message| ApiError(StatusCode::PAYLOAD_TOO_LARGE, message))?;
     // Agent storage limits may only lower the app ceiling for the same account tier.
     if let Change::Patch(patch) = &change {
         let limits = &patch["chat_limits"]["storage"]["user_storage_mb"];

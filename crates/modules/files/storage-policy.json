@@ -20,17 +20,17 @@
     "anonymous": {
       "agent_storage_mb": 0,
       "max_published_agents": 0,
-      "user_storage_mb": 100
+      "user_storage_mb": 10
     },
     "basic": {
       "agent_storage_mb": 256,
       "max_published_agents": 5,
-      "user_storage_mb": 1024
+      "user_storage_mb": 100
     },
     "operator": {
-      "agent_storage_mb": null,
+      "agent_storage_mb": 50,
       "max_published_agents": null,
-      "user_storage_mb": null
+      "user_storage_mb": 100
     }
   },
   "warning_percent": 80

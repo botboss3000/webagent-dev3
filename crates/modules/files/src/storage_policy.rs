@@ -63,6 +63,13 @@ impl StoragePolicy {
     pub fn read_in(roots: &[std::path::PathBuf]) -> Result<Self> {
         webagent_configuration::live::parsed_from(roots, LIVE_POLICY, MAX_POLICY_BYTES, Self::parse)
     }
+    /// Data folder byte limit of each agent owned by an account at `tier`; `None` is unlimited.
+    pub fn agent_limit(&self, tier: &str) -> Option<u64> {
+        self.tiers
+            .get(tier)
+            .and_then(|t| t.agent_storage_mb)
+            .map(|mb| mb * MIB)
+    }
     /// Agents an account at `tier` may own; `None` is unlimited.
     pub fn max_agents(&self, tier: &str) -> Option<u64> {
         self.tiers.get(tier).and_then(|t| t.max_published_agents)
@@ -156,6 +163,7 @@ mod tests {
         );
         assert!(check_user(None, u64::MAX, 1).is_ok());
         assert_eq!(policy.max_agents("basic"), Some(1));
+        assert_eq!(policy.agent_limit("basic"), None);
         let chat = serde_json::json!({"chat_limits":{"storage":{"user_storage_mb":{"basic":1}}}});
         assert_eq!(agent_user_limit(&chat, "basic"), Some(MIB));
         assert_eq!(agent_user_limit(&chat, "anonymous"), None);

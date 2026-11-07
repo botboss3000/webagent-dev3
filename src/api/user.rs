@@ -453,6 +453,12 @@ async fn voice_sample(Extension(app): Extension<App>, Path(voice): Path<String>)
         .into_response()
 }
 path_arg!(attachment => attachment_get, (String, String));
+/// Administrator-only rewrite of the caller's stored records (see `compact_storage`).
+async fn storage_compact(Extension(app): Extension<App>, Json(body): Json<Value>) -> Response {
+    crate::api::uploads::compact_storage(&app, &body)
+        .await
+        .into_response()
+}
 /// The signed-in user's storage use and tier limit.
 async fn storage(Extension(app): Extension<App>) -> Response {
     crate::api::uploads::storage_status(&app)
@@ -809,6 +815,7 @@ pub(crate) fn router() -> Router<App> {
         .route("/user/status", get(user_status))
         .route("/sessions", get(sessions).post(create_session))
         .route("/storage", get(storage))
+        .route("/storage/compact", post(storage_compact))
         .route("/sessions/search", get(session_search))
         .route("/sessions/stats", get(session_statistics))
         .route("/sessions/{sid}/runs/{rid}/diagnostics", get(diagnostics))

@@ -221,6 +221,10 @@ async fn identity_put(
     Path(id): Path<String>,
     Json(body): Json<IdentityUpdate>,
 ) -> Api {
+    app.store
+        .check_agent_folder(&id)
+        .await?
+        .map_err(|message| ApiError(StatusCode::PAYLOAD_TOO_LARGE, message))?;
     if body.tool_output_policy.is_some() && body.reset_tool_output_policy.is_some() {
         return Err(crate::bad("Set a tool output policy or reset it, not both"));
     }

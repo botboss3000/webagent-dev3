@@ -46,6 +46,30 @@ pub(crate) async fn storage_status(app: &App) -> Api {
     Ok(Json(json!({"used_bytes":used,"limit_bytes":limit,
         "warning_percent":policy.warning_percent,"near_limit":near_limit})))
 }
+/// Administrator-only: rewrite the caller's own records with current compression, optionally
+/// deleting all their attachments first. Body: `{"delete_attachments": bool}`.
+pub(crate) async fn compact_storage(app: &App, body: &Value) -> Api {
+    let Some(account) = app.store.account_by_id(app.store.current_user_id()).await? else {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Administrators only".into(),
+        ));
+    };
+    if crate::access::Principal::from_account(&account)?.role != crate::access::Role::Administrator
+    {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Administrators only".into(),
+        ));
+    }
+    let delete = match body.get("delete_attachments") {
+        None => false,
+        Some(Value::Bool(flag)) => *flag,
+        Some(_) => return Err(bad("delete_attachments must be true or false")),
+    };
+    let _guard = app.gate.lock().await;
+    Ok(Json(app.store.compact_storage(delete).await?))
+}
 /// Refuse a write that would take the storage owner past their account tier's limit, or past
 /// the lower limit the session's agent sets for that tier on files in its sessions.
 async fn check_storage(app: &App, agent: &str, added: u64) -> Result<(), ApiError> {

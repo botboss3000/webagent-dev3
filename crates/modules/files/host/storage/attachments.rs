@@ -164,3 +164,127 @@ fn tree_bytes(path: &std::path::Path) -> u64 {
         })
         .unwrap_or(0)
 }
+
+impl Store {
+    /// Size of this user's database and journal files.
+    fn database_bytes(&self) -> u64 {
+        let dir = self.root.join("user_data").join(&self.user_id);
+        ["db", "db-wal"]
+            .iter()
+            .filter_map(|suffix| {
+                std::fs::metadata(dir.join(format!("{}.{suffix}", self.user_id))).ok()
+            })
+            .map(|meta| meta.len())
+            .sum()
+    }
+    /// Rewrite this user's stored records with the current codec settings (compression),
+    /// optionally deleting every attachment first, then reclaim free pages. Values are
+    /// unchanged: only their stored encoding is. Returns sizes before and after.
+    pub(crate) async fn compact_storage(&self, delete_attachments: bool) -> Result<Value> {
+        let before = self.storage_used().await?;
+        let database_before = self.database_bytes();
+        let mut removed_attachments = 0u64;
+        if delete_attachments {
+            let keys: Vec<String> = sqlx::query_scalar(
+                "SELECT key FROM docs WHERE key GLOB 'attachment:*' OR key GLOB 'attachment_quota*' \
+                 OR key GLOB 'message_attachments:*' OR key GLOB 'reply_attachments:*'",
+            )
+            .fetch_all(&self.pool)
+            .await?;
+            removed_attachments =
+                keys.iter().filter(|k| k.starts_with("attachment:")).count() as u64;
+            let mut tx = self.pool.begin().await?;
+            for key in &keys {
+                sqlx::query("DELETE FROM docs WHERE key=?")
+                    .bind(key)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            tx.commit().await?;
+            self.cache.lock().unwrap().invalidate(&keys);
+            let _ = std::fs::remove_dir_all(self.blob_dir());
+        }
+        let mut rewritten = 0u64;
+        for (table, id, column) in [
+            ("docs", "rowid", "value"),
+            ("chat", "seq", "content"),
+            ("interactions", "seq", "item"),
+            ("events", "seq", "payload"),
+        ] {
+            let mut last = 0i64;
+            loop {
+                let rows = sqlx::query(&format!(
+                    "SELECT {id} AS id,{column} AS value FROM {table} WHERE {id}>? ORDER BY {id} LIMIT 200"
+                ))
+                .bind(last)
+                .fetch_all(&self.pool)
+                .await?;
+                let Some(end) = rows.last().map(|row| row.get::<i64, _>("id")) else {
+                    break;
+                };
+                let mut tx = self.pool.begin().await?;
+                for row in &rows {
+                    // Rows another codec owns (agent envelopes) are left as they are.
+                    let Ok(value) = self.unseal(&row.get::<Vec<u8>, _>("value")) else {
+                        continue;
+                    };
+                    sqlx::query(&format!("UPDATE {table} SET {column}=? WHERE {id}=?"))
+                        .bind(self.encode_user_record(&value)?)
+                        .bind(row.get::<i64, _>("id"))
+                        .execute(&mut *tx)
+                        .await?;
+                    rewritten += 1;
+                }
+                tx.commit().await?;
+                last = end;
+            }
+        }
+        // Free pages return to the filesystem only after a vacuum; a busy database keeps them.
+        let vacuum = sqlx::query("VACUUM")
+            .execute(&self.pool)
+            .await
+            .err()
+            .map(|e| e.to_string());
+        let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&self.pool)
+            .await;
+        Ok(
+            json!({"used_bytes_before":before,"used_bytes_after":self.storage_used().await?,
+            "database_bytes_before":database_before,"database_bytes_after":self.database_bytes(),
+            "records_rewritten":rewritten,"attachments_deleted":removed_attachments,"vacuum_error":vacuum}),
+        )
+    }
+    /// Refuse agent-plane writes once the agent's data folder reaches its owner's tier limit.
+    pub(crate) async fn check_agent_folder(
+        &self,
+        agent: &str,
+    ) -> Result<std::result::Result<(), String>> {
+        let Some(owner): Option<String> =
+            sqlx::query_scalar("SELECT owner_id FROM agent_directory WHERE id=?")
+                .bind(agent)
+                .fetch_optional(&self.app_pool)
+                .await?
+        else {
+            return Ok(Ok(()));
+        };
+        let Some(account) = self.account_by_id(&owner).await? else {
+            return Ok(Ok(()));
+        };
+        let tier = crate::access::Principal::from_account(&account)?.tier_id;
+        let Some(limit) = webagent_files::storage_policy::StoragePolicy::live()?.agent_limit(&tier)
+        else {
+            return Ok(Ok(()));
+        };
+        let dir = self.root.join("agent_data").join(agent);
+        let used = tokio::task::spawn_blocking(move || tree_bytes(&dir)).await?;
+        Ok(if used >= limit {
+            Err(format!(
+                "Agent storage limit reached: {} of {} MB used",
+                used.div_ceil(1 << 20),
+                limit >> 20
+            ))
+        } else {
+            Ok(())
+        })
+    }
+}

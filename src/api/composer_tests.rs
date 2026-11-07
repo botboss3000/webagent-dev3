@@ -521,11 +521,7 @@ async fn unrestricted_attachment_defaults_remove_size_count_and_storage_caps() {
         controls["composer"]["attachment_limits"]["max_per_message"],
         Value::Null
     );
-    // Existing storage accounting above the former quota cannot block another upload.
-    app.store
-        .put("attachment_quota", &json!({"bytes":300*1024*1024u64}))
-        .await
-        .unwrap();
+    // Chat limits add no size cap; per-tier storage limits are separate (storage-policy.json).
     let aid = uuid();
     let body = json!({"client_upload_id":aid,"name":"unrestricted.txt","media_type":"text/plain",
         "data":STANDARD.encode(vec![b'x';26*1024*1024])});
@@ -541,7 +537,7 @@ async fn unrestricted_attachment_defaults_remove_size_count_and_storage_caps() {
         app.store.get("attachment_quota").await.unwrap().unwrap()["bytes"]
             .as_u64()
             .unwrap()
-            > 300 * 1024 * 1024u64
+            == 26 * 1024 * 1024u64
     );
     let items = json!((0..12)
         .map(|n| json!({"name":format!("{n}.txt"),"media_type":"text/plain","text":"source"}))
