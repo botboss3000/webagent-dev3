@@ -82,7 +82,7 @@ Client secret and server: work/harness-bridge/client.json (mode 0600), written b
 Server override: $HARNESS_BRIDGE_URL.
 Per-chat files: work/harness-bridge/sessions/<webagent-session>/.
 """
-import base64, difflib, hashlib, json, os, re, shutil, signal, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request, uuid
+import base64, difflib, hashlib, json, os, re, secrets, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request, uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent / "work" / "harness-bridge"
@@ -134,6 +134,68 @@ def opencode_config(work, model):
                              "command": [sys.executable, "-B", str(Path(__file__).resolve()), "mcp", str(work)]}},
         "agent": {"webagent-bridge": {"mode": "primary", "prompt": OPENCODE_PROMPT,
                                       "permission": {"*": own, "execute": "allow", MCP_PREFIX + "*": "allow"}}}})
+
+
+# One `opencode serve` per chat folder and permission mode, kept warm between calls. A fresh
+# `opencode run --standalone` starts the model before its MCP stub connects, so every call's first
+# step failed with "Unknown tool" and was repeated (35-80 s each on a long context).
+SERVERS, SERVERS_LOCK = {}, threading.Lock()
+SERVER_PASSWORD = secrets.token_hex(24)
+SERVER_IDLE_SECS = 15 * 60
+
+
+def opencode_server(work, model):
+    """URL of a running server for this chat folder, started on first use. Its MCP stub lists tools.json
+    as it was at start, so a changed tool set restarts the server."""
+    own = "ask" if model.startswith("opencode/") else "deny"
+    key = (str(work), own)
+    tools = hashlib.sha256((work / "tools.json").read_bytes()).hexdigest()
+    with SERVERS_LOCK:
+        server = SERVERS.get(key)
+        if server and server["process"].poll() is None and server["tools"] == tools:
+            server["used"] = time.time()
+            return server["url"]
+        if server:
+            stop_server(server["process"])
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        process = subprocess.Popen([OPENCODE, "serve", "--hostname", "127.0.0.1", "--port", str(port)], cwd=work,
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   start_new_session=True,
+                                   env={**os.environ, "OPENCODE_CONFIG_CONTENT": opencode_config(work, model),
+                                        "OPENCODE_SERVER_PASSWORD": SERVER_PASSWORD})
+        deadline = time.time() + 30
+        while True:
+            try:
+                socket.create_connection(("127.0.0.1", port), 0.2).close()
+                break
+            except OSError:
+                if process.poll() is not None or time.time() > deadline:
+                    stop_server(process)
+                    raise RuntimeError("opencode server did not start")
+                time.sleep(0.1)
+        SERVERS[key] = {"process": process, "url": f"http://127.0.0.1:{port}", "used": time.time(), "tools": tools}
+        return SERVERS[key]["url"]
+
+
+def stop_server(process):
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def reap_servers():
+    """Stop servers idle past SERVER_IDLE_SECS; a call in progress keeps its server's `used` fresh."""
+    while True:
+        time.sleep(60)
+        with SERVERS_LOCK:
+            for key, server in list(SERVERS.items()):
+                if server["process"].poll() is not None or time.time() - server["used"] > SERVER_IDLE_SECS:
+                    stop_server(server["process"])
+                    del SERVERS[key]
 
 
 def secret():
@@ -501,7 +563,7 @@ def opencode_turn(command, prompt, work, model):
     so any further step is the model winding down (30-45 s each on a long context). The next call resumes
     the session with the tool's real result."""
     # The prompt goes on stdin: a fresh session's full history can exceed the 128 KiB argument cap.
-    process = start_harness(command, cwd=work, env={**os.environ, "OPENCODE_CONFIG_CONTENT": opencode_config(work, model)})
+    process = start_harness(command, cwd=work, env={**os.environ, "OPENCODE_SERVER_PASSWORD": SERVER_PASSWORD})
     stop = lambda: interrupt(process)
     timer = threading.Timer(HARNESS_SECS, stop)
     timer.start()
@@ -546,15 +608,16 @@ def answer_opencode(call, folder, state, delta):
     body = call["body"]
     fresh = not resumable(state, "opencode_session", delta)
     prompt = prompt_for(call, delta, fresh)
-    command = [OPENCODE, "run", "--standalone", "--agent", "webagent-bridge", "-m", body.get("model", ""), "--format", "json"]
+    work = OPENCODE_HOME / folder.name
+    work.mkdir(parents=True, exist_ok=True)
+    (work / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
+    command = [OPENCODE, "run", "--server", opencode_server(work, body.get("model", "")), "--agent", "webagent-bridge",
+               "-m", body.get("model", ""), "--format", "json"]
     if not fresh:
         command += ["-s", state["opencode_session"]]
     for image in re.findall(r"\[image: (/[^\]]+)\]", prompt):
         command += ["-f", image]
-    # Run outside this repository: OpenCode would otherwise load the enclosing git project as context.
-    work = OPENCODE_HOME / folder.name
-    work.mkdir(parents=True, exist_ok=True)
-    (work / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
+    # The work folder is outside this repository: OpenCode would otherwise load the enclosing git project.
     (work / "calls.jsonl").unlink(missing_ok=True)
     started = time.time()
     session, text, usage = opencode_turn(command, prompt, work, body.get("model", ""))
@@ -714,6 +777,7 @@ HARNESSES = {"claude_bridge": answer_claude, "opencode_bridge": answer_opencode,
 
 
 def cmd_auto(session):
+    threading.Thread(target=reap_servers, daemon=True).start()
     # One thread per call, no cap: each call already holds its own harness process.
     while True:
         threading.Thread(target=answer, args=(fetch(session),), daemon=True).start()
