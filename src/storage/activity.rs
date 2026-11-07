@@ -40,7 +40,7 @@ fn event(row: &SqliteRow, store: &Store, sid: &str) -> Result<Value> {
         }
         "compaction_call" => (
             "compaction_call",
-            json!({"model":item["model"],"input_bytes":item["input_bytes"]}),
+            json!({"model":item["model"],"input_bytes":item["input_bytes"],"reason":item["reason"]}),
         ),
         "compaction_result" => (
             "compaction_result",

@@ -38,16 +38,20 @@ test('a held duplicate is labelled held and a typed rejection failed',()=>{
 });
 
 test('a compaction is one row: the call labels it and the result fills it, counted once',()=>{
-  const call={kind:'compaction_call',event_id:'e1',run_id:'r1',seq:1,payload:{model:'sys-model',input_bytes:2048}};
-  const done={kind:'compaction_result',event_id:'e2',run_id:'r1',seq:2,payload:{summary:'Kept goals'}};
+  const call={kind:'compaction_call',event_id:'e1',run_id:'r1',seq:1,payload:{model:'sys-model',input_bytes:2048,reason:'automatic'}};
+  const done={kind:'compaction_result',event_id:'e2',run_id:'r1',seq:2,payload:{summary:'x'.repeat(512)}};
   assert.deepEqual(activityRows([call]).map(r=>[r.label,r.text,r.events.length]),
-    [['Compaction · System model sys-model · 2.0 KB input','',1]]);
+    [['Compaction · automatic, context limit · System model sys-model · 2.0 KB input','',1]]);
   const rows=activityRows([call,done]);
-  assert.deepEqual(rows.map(r=>[r.category,r.compaction,r.text,r.events.length]),[['compactions',true,'Kept goals',2]]);
+  assert.deepEqual(rows.map(r=>[r.category,r.compaction,r.label,r.events.length]),
+    [['compactions',true,'Compaction · automatic, context limit · System model sys-model · 2.0 KB → 0.5 KB summary',2]]);
+  const requested={...call,payload:{...call.payload,reason:'requested'}};
+  assert.match(activityRows([requested])[0].label,/^Compaction · requested by agent · /);
   const failed=activityRows([call,{...done,payload:{error:'timeout'}}]);
   assert.equal(failed[0].text,'Compaction failed: timeout');
+  assert.match(failed[0].label,/2\.0 KB input$/);
   // A result without its call (older journals) still shows as its own row.
-  assert.equal(activityRows([done])[0].text,'Kept goals');
+  assert.equal(activityRows([done])[0].text,'x'.repeat(512));
   const groups=activityGroups({events:[call,done],segments:[{...segment('a','r1'),first_seq:1,last_seq:2}]},[{id:'r1',state:'running'}]);
   assert.equal(groups[0].counts.compactions,1);
 });

@@ -50,6 +50,13 @@ export function toolFailure(payload) {
   return text.length>300 ? text.slice(0,300)+'…' : text;
 }
 
+// Formats a compaction's input size, and its summary size once known, in KB.
+function compactionSize(input,summary) {
+  if (!Number.isFinite(input)) return '';
+  const kb=value=>(value/1024).toFixed(1)+' KB';
+  return ' · '+kb(input)+(Number.isFinite(summary)?' → '+kb(summary)+' summary':' input');
+}
+
 /** Projects journal events into grouped tool, message, mode, and compaction rows for activityGroups. */
 export function activityRows(events) {
   const rows=[], tools=new Map(), messages=new Map();
@@ -81,14 +88,20 @@ export function activityRows(events) {
       rows.push({id:event.event_id,category:'modes',label:'Mode change',events:[event]});
     } else if (kind === 'compaction_call') {
       // One expandable row per compaction: the call opens it and its result fills it.
-      const size=Number.isFinite(p.input_bytes)?' · '+(p.input_bytes/1024).toFixed(1)+' KB input':'';
-      compaction={id:event.event_id,category:'compactions',compaction:true,
-        label:'Compaction · System model '+(p.model||'unknown')+size,text:'',events:[event]};
+      const reason={automatic:' · automatic, context limit',requested:' · requested by agent'}[p.reason]||'';
+      compaction={id:event.event_id,category:'compactions',compaction:true,inputBytes:p.input_bytes,
+        label:'Compaction'+reason+' · System model '+(p.model||'unknown')+compactionSize(p.input_bytes),text:'',events:[event]};
       rows.push(compaction);
     } else if (kind === 'compaction_completed' || kind === 'compaction_result'
         || (kind==='pipeline' && p.step==='compaction_end')) {
       const text=p.error?'Compaction failed: '+p.error:typeof p.summary==='string'?p.summary:'';
-      if (kind==='compaction_result' && compaction) {compaction.events.push(event);compaction.text=text;compaction=null;}
+      if (kind==='compaction_result' && compaction) {
+        compaction.events.push(event);compaction.text=text;
+        // A summary shows how far it shrank the input it replaced.
+        if (!p.error && typeof p.summary==='string') compaction.label=compaction.label.replace(
+          compactionSize(compaction.inputBytes),compactionSize(compaction.inputBytes,new TextEncoder().encode(p.summary).length));
+        compaction=null;
+      }
       else rows.push({id:event.event_id,category:'compactions',label:'Compaction',text,events:[event]});
     }
   }

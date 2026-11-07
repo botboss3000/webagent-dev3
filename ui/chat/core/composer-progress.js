@@ -48,8 +48,11 @@ export function mountComposerProgress({root,getProfile,isAdmin}) {
     bar.classList.toggle('has-tools',rows.length>0);if(!rows.length)close();
     // A call without its result is the current tool represented by the progress label.
     const pending=rows.find(r=>!r.events.some(e=>e.kind==='tool_result'));
+    // The call row and the compacting phase are saved together, so the run log (polled faster) can show it first.
+    const compaction=activityRows(events.filter(e=>e.run_id===run?.id)).filter(r=>r.compaction).at(-1);
+    const compacting=compaction?compaction.events.length===1:run?.phase==='compacting';
     const phase={queued:'Queued…',waiting_approval:'Waiting for approval…',waiting_gate:'Checking response…',waiting_external:'Waiting for build…',running:'Working…'};
-    setLabel(held?.label||optimistic||(run?(run.status!=='running'?phase[run.status]:run.phase==='compacting'?'Compacting…':pending?'Calling '+pending.events[0].payload.tool+'…':'Working…'):''));
+    setLabel(held?.label||optimistic||(run?(run.status!=='running'?phase[run.status]:compacting?'Compacting…':pending?'Calling '+pending.events[0].payload.tool+'…':'Working…'):''));
   }
   // Invalidate stale callbacks, stop the prior watch, and clear session-specific progress state.
   function reset(id=''){++generation;stop?.();stop=null;watched=null;session=id;run=null;events=[];optimistic='';held=null;panel.replaceChildren();close();setLabel('');}

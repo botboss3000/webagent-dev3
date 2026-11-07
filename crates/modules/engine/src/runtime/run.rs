@@ -2804,12 +2804,17 @@ impl<
                         .iter()
                         .map(|item| item["content"].as_str().map_or(0, str::len))
                         .sum();
+                    let reason = if run["manual_compaction_requested"] == true {
+                        "requested"
+                    } else {
+                        "automatic"
+                    };
                     run["phase"] = json!("compacting");
                     compaction_activity(
                         &mut run,
                         format!("{compaction_step}:call"),
                         json!({"type":"compaction_call","model":selection.model,
-                            "input_bytes":input_bytes}),
+                            "input_bytes":input_bytes,"reason":reason}),
                     );
                     app.save(&mut run).await?;
                     let prepared_system = match crate::provider::CallDraft::new(

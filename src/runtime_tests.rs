@@ -7349,6 +7349,7 @@ async fn rolling_compaction_uses_explicit_system_model_and_persists_checkpoint()
         .unwrap();
     assert_eq!(call["payload"]["model"], "system-summary-model");
     assert!(call["payload"]["input_bytes"].as_u64().unwrap() > 0);
+    assert_eq!(call["payload"]["reason"], "automatic");
     let result = events
         .iter()
         .find(|e| e["kind"] == "compaction_result")
