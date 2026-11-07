@@ -1888,9 +1888,6 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<u
         )
         .await?;
     }
-    if id == "automation" {
-        log_fast_poll(&initial, &envelope);
-    }
     Ok(if id == "automation" {
         webagent_extensions::health::delay(
             &initial,
@@ -1901,43 +1898,6 @@ pub(crate) async fn tick_package(app: &App, id: &str, startup: bool) -> Result<u
     } else {
         1000
     })
-}
-/// Diagnostic, at most once a minute: which rule keeps Automation re-ticking every second.
-/// Logs state key names and counts only, never values.
-fn log_fast_poll(before: &Value, after: &Value) {
-    static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
-    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
-    if last.is_some_and(|at| at.elapsed() < Duration::from_secs(60)) {
-        return;
-    }
-    let keys = |v: &Value| {
-        v.as_object()
-            .map(|m| m.keys().cloned().collect::<Vec<_>>())
-            .unwrap_or_default()
-    };
-    let mut changed: Vec<String> = keys(&before["state"])
-        .into_iter()
-        .chain(keys(&after["state"]))
-        .filter(|k| before["state"][k] != after["state"][k])
-        .collect();
-    changed.dedup();
-    let pending = after["pending"].as_array().map_or(0, Vec::len);
-    let busy = after["state"]["occurrences"]
-        .as_object()
-        .into_iter()
-        .flatten()
-        .filter(|(_, o)| matches!(o["status"].as_str(), Some("queued" | "admitted")))
-        .count();
-    if changed.is_empty() && pending == 0 && busy == 0 {
-        return;
-    }
-    *last = Some(std::time::Instant::now());
-    tracing::info!(
-        ?changed,
-        pending,
-        queued_or_admitted = busy,
-        "Automation fast poll"
-    );
 }
 fn copy_distribution(source: &FsPath, target: &FsPath) -> Result<()> {
     std::fs::create_dir(target)?;

@@ -146,6 +146,8 @@ pub fn idle(envelope: &Value, latest: i64, generation: &str) -> bool {
 
 /// Milliseconds until the next tick: one second after any change or queued work,
 /// otherwise up to fifteen seconds but never past a schedule or retry deadline.
+/// The reducer bumps `revision` on every tick, so that field alone is not a change;
+/// counting it kept an idle user re-ticking every second.
 #[must_use]
 pub fn delay(before: &Value, after: &Value, next: Option<u64>, now_ms: u64) -> u64 {
     let occurrences = || {
@@ -154,7 +156,14 @@ pub fn delay(before: &Value, after: &Value, next: Option<u64>, now_ms: u64) -> u
             .into_iter()
             .flatten()
     };
-    if before["state"] != after["state"]
+    let content = |envelope: &Value| {
+        let mut state = envelope["state"].clone();
+        if let Some(fields) = state.as_object_mut() {
+            fields.remove("revision");
+        }
+        state
+    };
+    if content(before) != content(after)
         || after["pending"]
             .as_array()
             .is_some_and(|pending| !pending.is_empty())
@@ -214,6 +223,9 @@ mod tests {
         retry["state"]["occurrences"]["retry"] = json!({"status":"retry_wait","retry_ms":1200});
         assert_eq!(delay(&retry, &retry, None, 1000), 200);
         assert_eq!(delay(&before, &retry, None, 1000), 1000);
+        let mut bumped = before.clone();
+        bumped["state"]["revision"] = json!(before["state"]["revision"].as_u64().unwrap_or(0) + 1);
+        assert_eq!(delay(&before, &bumped, None, 1000), 15_000);
     }
 
     #[test]
