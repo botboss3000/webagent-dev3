@@ -60,3 +60,5 @@ body.light-mode { --orange: #c2410c; --orange-rgb: 194, 65, 12; }
   border: var(--border-width) solid var(--border); background: var(--bg-elev);
 }
 .v2-activity-body .v2-mini-nav .is-following { color: var(--accent); background: var(--accent-soft); }
+/* The nav floats over the rows; while it shows, row headers wrap before its buttons. */
+.v2-activity-body:has(> .v2-mini-nav:not([hidden])) .v2-mini-row > details > summary { padding-right: 64px; }

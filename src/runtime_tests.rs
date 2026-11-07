@@ -192,6 +192,10 @@ fn checkpoint_pre_tool(name: &str) -> workflow::Input {
     })
 }
 
+/// Bound for test work that must finish. It only catches hangs: a full suite runs hundreds of
+/// tests on a few threads beside other builds, where short limits failed at random.
+const TEST_TIMEOUT: Duration = Duration::from_secs(60);
+
 #[tokio::test]
 async fn chat_ui_config_reads_data_config_on_each_request_and_requires_auth() {
     let (root, mut app) = fixture().await;
@@ -1008,7 +1012,7 @@ async fn promotion_requires_auth_and_csrf_and_reuses_durable_receipt() {
     broker.await.unwrap();
 
     let retry = tokio::time::timeout(
-        Duration::from_secs(2),
+        TEST_TIMEOUT,
         router(app.clone()).oneshot(request(Some(&cookie), Some("fixture"))),
     )
     .await
@@ -1827,7 +1831,7 @@ async fn agent_loop_creates_reviewable_proposal_without_dispatching_broker() {
     .await
     .unwrap();
     assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
-    tokio::time::timeout(Duration::from_secs(10), worker)
+    tokio::time::timeout(TEST_TIMEOUT, worker)
         .await
         .expect("legacy source review must dispatch within the fixture timeout")
         .unwrap();
@@ -2547,7 +2551,7 @@ async fn shutoff_cancels_midstream_model_without_waiting_for_eof() {
         cancel,
     ));
     // Catalog assembly is setup; the cancellation deadline below remains two seconds.
-    tokio::time::timeout(Duration::from_secs(10), started.notified())
+    tokio::time::timeout(TEST_TIMEOUT, started.notified())
         .await
         .unwrap();
     assert_eq!(
@@ -2560,7 +2564,7 @@ async fn shutoff_cancels_midstream_model_without_waiting_for_eof() {
         .0["shutoff"],
         true
     );
-    tokio::time::timeout(Duration::from_secs(2), executing)
+    tokio::time::timeout(TEST_TIMEOUT, executing)
         .await
         .unwrap()
         .unwrap()
@@ -2621,7 +2625,7 @@ async fn runtime_restart_resumes_model_once_but_preserves_intentional_stops() {
             "before-restart".into(),
             cancel.clone(),
         ));
-        tokio::time::timeout(Duration::from_secs(20), started.notified())
+        tokio::time::timeout(TEST_TIMEOUT, started.notified())
             .await
             .unwrap();
         match action {
@@ -2649,7 +2653,7 @@ async fn runtime_restart_resumes_model_once_but_preserves_intentional_stops() {
             }
             _ => cancel.cancel(),
         }
-        tokio::time::timeout(Duration::from_secs(5), executing)
+        tokio::time::timeout(TEST_TIMEOUT, executing)
             .await
             .unwrap()
             .unwrap()
@@ -2775,11 +2779,11 @@ async fn runtime_restart_retains_pending_read_for_startup_retry() {
         "before-read-restart".into(),
         app.stop.child_token(),
     ));
-    tokio::time::timeout(Duration::from_secs(20), started.notified())
+    tokio::time::timeout(TEST_TIMEOUT, started.notified())
         .await
         .unwrap();
     app.stop.cancel();
-    tokio::time::timeout(Duration::from_secs(5), executing)
+    tokio::time::timeout(TEST_TIMEOUT, executing)
         .await
         .unwrap()
         .unwrap()
@@ -3113,7 +3117,7 @@ async fn sse_last_event_id_replays_only_chat_after_reconnect_cursor() {
     let response = router(app.clone()).oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let mut stream = response.into_body().into_data_stream();
-    let chunk = tokio::time::timeout(Duration::from_secs(2), stream.next())
+    let chunk = tokio::time::timeout(TEST_TIMEOUT, stream.next())
         .await
         .unwrap()
         .unwrap()
@@ -7439,7 +7443,7 @@ async fn parallel_batch_overlaps_reads_denies_write_by_policy_and_preserves_resu
     // Hang guard only: the assertions check dispatch order, so a generous bound
     // absorbs build-server load without hiding a stalled batch.
     tokio::time::timeout(
-        Duration::from_secs(30),
+        TEST_TIMEOUT,
         parallel_batch::execute_parallel_batch(
             &app,
             &id,
@@ -7640,7 +7644,7 @@ async fn parallel_writes_need_independent_approvals_and_return_uncertain_call_to
     running(&app, &id, "third").await;
     let guard = app.gate.lock().await;
     tokio::time::timeout(
-        Duration::from_secs(5),
+        TEST_TIMEOUT,
         parallel_batch::execute_parallel_batch(
             &app,
             &id,
@@ -7655,7 +7659,7 @@ async fn parallel_writes_need_independent_approvals_and_return_uncertain_call_to
     .await
     .unwrap()
     .unwrap();
-    tokio::time::timeout(Duration::from_secs(5), worker)
+    tokio::time::timeout(TEST_TIMEOUT, worker)
         .await
         .expect("Fake worker did not receive both approved workspace writes")
         .unwrap();
@@ -7839,7 +7843,7 @@ async fn switching_waiting_parallel_writes_to_auto_runs_without_approval() {
     });
     let guard = app.gate.lock().await;
     tokio::time::timeout(
-        Duration::from_secs(5),
+        TEST_TIMEOUT,
         parallel_batch::execute_parallel_batch(
             &app,
             &id,
@@ -7862,7 +7866,7 @@ async fn switching_waiting_parallel_writes_to_auto_runs_without_approval() {
             item["result"]
         );
     }
-    tokio::time::timeout(Duration::from_secs(5), worker)
+    tokio::time::timeout(TEST_TIMEOUT, worker)
         .await
         .expect("Fake worker did not receive both parallel writes")
         .unwrap();
@@ -7944,7 +7948,7 @@ async fn parallel_batch_overflow_queues_reads_despite_legacy_reject() {
     // Hang guard only: the assertions check dispatch order, so a generous bound
     // absorbs build-server load without hiding a stalled batch.
     tokio::time::timeout(
-        Duration::from_secs(30),
+        TEST_TIMEOUT,
         parallel_batch::execute_parallel_batch(
             &app,
             &id,
@@ -8063,7 +8067,7 @@ async fn parallel_batch_read_completes_before_independent_write_approval() {
     // Hang guard only: the assertions check dispatch order, so a generous bound
     // absorbs build-server load without hiding a stalled batch.
     tokio::time::timeout(
-        Duration::from_secs(30),
+        TEST_TIMEOUT,
         parallel_batch::execute_parallel_batch(
             &app,
             &id,
@@ -8711,7 +8715,7 @@ async fn bundle_withdrawal_during_credentials_rebuilds_before_provider_dispatch(
             )
             .await
         });
-        tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::time::timeout(TEST_TIMEOUT, async {
             loop {
                 if !app.run(&id).await.unwrap()["context_assembly_report"].is_null() {
                     break;
@@ -8729,7 +8733,7 @@ async fn bundle_withdrawal_during_credentials_rebuilds_before_provider_dispatch(
         }
         std::fs::remove_file(manifest).unwrap();
         drop(credentials);
-        tokio::time::timeout(Duration::from_secs(10), task)
+        tokio::time::timeout(TEST_TIMEOUT, task)
             .await
             .unwrap()
             .unwrap()
@@ -9565,7 +9569,7 @@ async fn wake_reads_require_fresh_approval_in_auto_serial_and_batch() {
         app.save(&mut run).await.unwrap();
         running(&app, &id, "wake-ask").await;
         tokio::time::timeout(
-            Duration::from_secs(5),
+            TEST_TIMEOUT,
             execute_run(
                 app.clone(),
                 id.clone(),
@@ -9927,7 +9931,7 @@ async fn foreground_queue_revocation_denies_before_worker_dispatch() {
     let settings = tool_execution::resolve(&visibility, "file_list").unwrap();
     let cancel = CancellationToken::new();
     let blocker = tokio::time::timeout(
-        Duration::from_secs(5),
+        TEST_TIMEOUT,
         tool_execution::acquire(
             app.store.current_user_id(),
             "shared_default",
@@ -9962,7 +9966,7 @@ async fn foreground_queue_revocation_denies_before_worker_dispatch() {
     revoked["rules"]["file_list"] = json!("deny");
     app.store.put("policy", &revoked).await.unwrap();
     drop(blocker);
-    let result = tokio::time::timeout(Duration::from_secs(5), &mut operation)
+    let result = tokio::time::timeout(TEST_TIMEOUT, &mut operation)
         .await
         .unwrap()
         .unwrap();
@@ -10887,7 +10891,7 @@ async fn live_context_default_stack_journey() {
         )
         .await
     });
-    tokio::time::timeout(Duration::from_secs(30), execution)
+    tokio::time::timeout(TEST_TIMEOUT, execution)
         .await
         .unwrap()
         .unwrap()
@@ -12402,7 +12406,7 @@ async fn late_single_tool_case(name: &str, action: &str, mutation: &str, success
         )
         .await
     });
-    let request = tokio::time::timeout(Duration::from_secs(10), received)
+    let request = tokio::time::timeout(TEST_TIMEOUT, received)
         .await
         .unwrap()
         .unwrap();
@@ -12429,7 +12433,7 @@ async fn late_single_tool_case(name: &str, action: &str, mutation: &str, success
         app.store.put(&key("run", &id), &before).await.unwrap();
     }
     release.send(()).unwrap();
-    tokio::time::timeout(Duration::from_secs(10), task)
+    tokio::time::timeout(TEST_TIMEOUT, task)
         .await
         .unwrap()
         .unwrap()

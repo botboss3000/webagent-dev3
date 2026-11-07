@@ -20,7 +20,8 @@
       "unit": "retries",
       "min": 0,
       "max": 5,
-      "bounds": "validator"
+      "bounds": "validator",
+      "notes": "The engine also stops a call after workflow.max_attempts dispatches (loop-runtime.json, 3), which counts the first try; more retries need that raised too."
     },
     {
       "id": "models.retry.delays_seconds",

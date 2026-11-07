@@ -311,12 +311,13 @@ def opencode_server(work, model):
 
 
 def warm_up(url, work, model):
-    """One-word prompt on a new server; its result does not matter."""
+    """One-word prompt on a new server; its result does not matter. It runs through opencode_turn, so
+    a failing provider ends it at opencode's first retry instead of after PROBE_SECS of silent retries;
+    the real call then reports that failure."""
+    command = [OPENCODE, "run", "--server", url, "--agent", "webagent-bridge", "-m", model, "--format", "json"]
     try:
-        subprocess.run([OPENCODE, "run", "--server", url, "--agent", "webagent-bridge", "-m", model, "--format", "json"],
-                       input="Reply with the single word OK. Do not use tools.", cwd=work, capture_output=True,
-                       text=True, timeout=PROBE_SECS, env={**os.environ, "OPENCODE_SERVER_PASSWORD": server_password()})
-    except subprocess.TimeoutExpired:
+        opencode_turn(command, "Reply with the single word OK. Do not use tools.", work, model)
+    except (HarnessFailure, RuntimeError, Stopped):
         pass
 
 
