@@ -149,6 +149,7 @@ export async function renderAbilities(host, request, options) {
       if (dialog.isConnected) pre.textContent = error.message || 'Could not load tool skill.';
     }
   };
+  const toolPolicy = data.capability_levels?.levels?.[levelId] || data.permissions;
   const buildAbilityBody = (detail, ability) => {
     if (detail.childElementCount) return;
     if (ability.id === 'mcp') detail.append(buildMcpControls({ ability, request, scope,
@@ -207,10 +208,11 @@ export async function renderAbilities(host, request, options) {
         ...tool,
         description: tool.description || '',
         callCount: tool.call_count,
-        // The control edits the agent's configured layer. Effective access can
-        // still be Deny because of the account tier, visibility or port status.
-        permMode: data.permissions?.tool_permissions?.[tool.name] ||
-          data.permissions?.tool_permissions?.['*'] || 'auto',
+        // The control edits the agent's configured layer (the selected level when
+        // one exists, as saveToolPermission writes). Effective access can still be
+        // Deny because of the account tier, visibility or port status.
+        permMode: toolPolicy?.tool_permissions?.[tool.name] ||
+          toolPolicy?.tool_permissions?.['*'] || 'auto',
       }, {
         canEdit: canManage && !previewUser && levelId==='operator',
         showPerm: true,
