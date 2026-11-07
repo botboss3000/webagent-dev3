@@ -246,18 +246,24 @@ class HarnessFailure(RuntimeError):
         self.source, self.category, self.retry_after = source, category, retry_after
 
 
-UPSTREAM = re.compile(r"Upstream request failed: (?:\[(?P<code>[\w.-]+)\] )?(?P<text>.*)", re.S)
+UPSTREAM = re.compile(r"Upstream request failed: (?:\[(?P<code>[\w.-]+)\] )?(?P<text>.*)|\[(?P<bare>[\w.-]+)\] ", re.S)
 
 
-def classify(message):
-    """(category, retry_after) when an error came from the harness's provider, else None."""
+def classify(error):
+    """(category, retry_after) when an error came from the harness's provider, else None. Takes
+    opencode's error object ({"type": "provider.…", "status": 503, "message": …}) or its message."""
+    structured = isinstance(error, dict)
+    message = str(error.get("message", "")) if structured else str(error)
     match = UPSTREAM.search(message)
     lowered = message.lower()
-    if not match and not any(k in lowered for k in ("usage limit", "insufficient account funds")):
+    provider = structured and (str(error.get("type", "")).startswith("provider") or "status" in error)
+    if not (match or provider) and not any(k in lowered for k in ("usage limit", "insufficient account funds")):
         return None
-    words = ((match["code"] or "") + " " + match["text"]).lower() if match else lowered
+    words = " ".join(filter(None, [str(error.get("type", "")) if structured else "", lowered]))
     wait = re.search(r"after (\d+) ?s", words)
-    if any(k in words for k in ("overload", "capacity", "cap_refused", "rate limit", "rate_limit", "retry shortly")):
+    status = error.get("status") if structured else None
+    if status in (429, 503, 529) or any(
+            k in words for k in ("overload", "capacity", "cap_refused", "rate limit", "rate_limit", "retry shortly")):
         category = "overloaded"
     elif any(k in words for k in ("fund", "usage limit", "quota", "billing")):
         category = "quota"
@@ -269,8 +275,9 @@ def classify(message):
 
 
 def harness_failure(errors, returncode, stderr):
-    detail = f"opencode failed ({returncode}): {errors or stderr[-300:]}"
-    upstream = classify(" ".join(map(str, errors)))
+    messages = [str(e.get("message", e)) if isinstance(e, dict) else str(e) for e in errors]
+    detail = f"opencode failed ({returncode}): {messages or stderr[-300:]}"
+    upstream = next(filter(None, map(classify, errors)), None)
     return HarnessFailure(detail, "upstream", *upstream) if upstream else HarnessFailure(detail)
 
 
@@ -599,7 +606,8 @@ PROBE_SECS = 30
 
 
 class StallWatch:
-    """Tell a slow model from a dead provider. Any session event on the chat's server is progress;
+    """Stop at opencode's first provider error (`session.retry.scheduled`), and tell a slow model from
+    a dead provider. Any session event on the chat's server is progress;
     after STALL_SECS of silence a one-word probe goes to the same model on the same server. A probe
     that answers means the provider is up and the call is just slow, so waiting continues; one that
     fails or times out ends the call now as an upstream failure instead of after minutes."""
@@ -619,10 +627,22 @@ class StallWatch:
             for line in self.response:
                 if self.closed:
                     break
-                if line.startswith(b"data:") and b'"type":"session.' in line:
-                    self.last = time.time()
+                if not (line.startswith(b"data:") and b'"type":"session.' in line):
+                    continue
+                if b'"type":"session.retry.scheduled"' in line:
+                    self.provider_failed(json.loads(line[5:]).get("data") or {})
+                    return
+                self.last = time.time()
         except Exception:  # closed on purpose, or no stream: the call then runs unwatched
             pass
+
+    def provider_failed(self, data):
+        """opencode got an error from its provider and would retry silently with growing gaps (2 s,
+        4 s, 8 s, … for minutes). Stop at the first one so WebAgent's own retry policy decides."""
+        error = data.get("error") or {}
+        upstream = classify(error) or ("upstream", None)
+        self.failure = HarnessFailure(f"provider error: {error.get('message', 'unknown')}"[:300], "upstream", *upstream)
+        interrupt(self.process)
 
     def check(self):
         while not self.closed and self.process.poll() is None:
@@ -703,7 +723,7 @@ def opencode_turn(command, prompt, work, model):
                     stop()
                     break
             elif event.get("type") == "error":
-                errors.append(str((event.get("error") or {}).get("message", event))[:300])
+                errors.append(event.get("error") or {"message": str(event)[:300]})
         process.wait()
     finally:
         timer.cancel()
@@ -934,6 +954,9 @@ def selftest():
     failure = harness_failure(["Upstream request failed: [overloaded] the server is overloaded; retry shortly"], 1, "")
     assert (failure.source, failure.category, failure.retry_after) == ("upstream", "overloaded", None)
     assert harness_failure([], 1, "crash").source == "harness"
+    assert classify({"type": "provider.internal", "status": 503,
+                     "message": "[overloaded] the server is overloaded; retry shortly (after 20 s)"}) == ("overloaded", 20)
+    assert classify({"type": "provider.internal", "status": 500, "message": "boom"}) == ("upstream", None)
     CURRENT.call = "stop-me"
     process = start_harness(["sleep", "30"])
     stop_calls(["stop-me"])
