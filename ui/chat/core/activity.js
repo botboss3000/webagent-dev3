@@ -57,7 +57,7 @@ function compactionSize(input,summary) {
   return ' · '+kb(input)+(Number.isFinite(summary)?' → '+kb(summary)+' summary':' input');
 }
 
-/** Projects journal events into grouped tool, message, mode, and compaction rows for activityGroups. */
+/** Projects journal events into grouped tool, message, mode, compaction and retry rows for activityGroups. */
 export function activityRows(events) {
   const rows=[], tools=new Map(), messages=new Map();
   let compaction=null;
@@ -86,6 +86,14 @@ export function activityRows(events) {
       if (kind==='response') {row.category='responses';row.label='Response';}
     } else if (kind === 'mode_change' || kind === 'execution_mode') {
       rows.push({id:event.event_id,category:'modes',label:'Mode change',events:[event]});
+    } else if (kind === 'retry_scheduled') {
+      // A provider failure the run will retry, fail over, or resume later; not an agent tool call.
+      const wait=p.wait_seconds>=120?Math.round(p.wait_seconds/60)+' min':(p.wait_seconds??0)+' s';
+      const label=p.auto_resume?'Retries used up · resuming automatically in '+wait
+        :p.backup?'Switching to the backup model in '+wait
+        :'Retrying connection in '+wait+' · attempt '+p.attempt+' of '+p.of;
+      rows.push({id:event.event_id,category:'retries',retry:true,autoResume:!!p.auto_resume,label,
+        text:p.error||'',events:[event]});
     } else if (kind === 'compaction_call') {
       // One expandable row per compaction: the call opens it and its result fills it.
       const reason={automatic:' · automatic, context limit',requested:' · requested by agent'}[p.reason]||'';
@@ -125,7 +133,7 @@ export function activityGroups(activity, runs) {
     const events=activity.events.filter(e=>owns(segment,e) ||
       (!covered.has(e.seq) && e.run_id===segment.run_id && lastByRun.get(e.run_id)===segment.id));
     const rows=activityRows(events);
-    const counts={tools:0,updates:0,responses:0,modes:0,compactions:0};
+    const counts={tools:0,updates:0,responses:0,modes:0,compactions:0,retries:0};
     for (const row of rows) if (row.category in counts) counts[row.category]++;
     const run=runs.find(r=>r.id===segment.run_id);
     const finalOutcome=lastByRun.get(segment.run_id)===segment.id && terminal.has(run?.state);

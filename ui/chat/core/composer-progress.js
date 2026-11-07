@@ -49,10 +49,14 @@ export function mountComposerProgress({root,getProfile,isAdmin}) {
     // A call without its result is the current tool represented by the progress label.
     const pending=rows.find(r=>!r.events.some(e=>e.kind==='tool_result'));
     // The call row and the compacting phase are saved together, so the run log (polled faster) can show it first.
-    const compaction=activityRows(events.filter(e=>e.run_id===run?.id)).filter(r=>r.compaction).at(-1);
+    const runRows=activityRows(events.filter(e=>e.run_id===run?.id));
+    const compaction=runRows.filter(r=>r.compaction).at(-1);
+    // A queued run whose latest row is a scheduled retry is reconnecting, not waiting its turn.
+    const last=runRows.at(-1);
+    const retrying=run?.status==='queued'&&last?.retry?(last.autoResume?'Recovering…':'Retrying connection…'):'';
     const compacting=compaction?compaction.events.length===1:run?.phase==='compacting';
     const phase={queued:'Queued…',waiting_approval:'Waiting for approval…',waiting_gate:'Checking response…',waiting_external:'Waiting for build…',running:'Working…'};
-    setLabel(held?.label||optimistic||(run?(run.status!=='running'?phase[run.status]:compacting?'Compacting…':pending?'Calling '+pending.events[0].payload.tool+'…':'Working…'):''));
+    setLabel(held?.label||optimistic||(run?(retrying||run.status!=='running'?retrying||phase[run.status]:compacting?'Compacting…':pending?'Calling '+pending.events[0].payload.tool+'…':'Working…'):''));
   }
   // Invalidate stale callbacks, stop the prior watch, and clear session-specific progress state.
   function reset(id=''){++generation;stop?.();stop=null;watched=null;session=id;run=null;events=[];optimistic='';held=null;panel.replaceChildren();close();setLabel('');}

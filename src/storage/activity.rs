@@ -46,6 +46,11 @@ fn event(row: &SqliteRow, store: &Store, sid: &str) -> Result<Value> {
             "compaction_result",
             json!({"summary":item["summary"],"error":item["error"]}),
         ),
+        "retry_scheduled" => (
+            "retry_scheduled",
+            json!({"attempt":item["attempt"],"of":item["of"],"wait_seconds":item["wait_seconds"],
+                "error":item["error"],"backup":item["backup"],"auto_resume":item["auto_resume"]}),
+        ),
         _ => ("diagnostic", item),
     };
     let execution_metadata = row

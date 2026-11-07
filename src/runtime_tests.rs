@@ -11428,9 +11428,30 @@ async fn provider_recovery_exhaustion_persists_and_explicit_resume_is_idempotent
     model_failure(&mut run, &error).unwrap();
     assert_eq!(run["status"], "queued");
     assert_eq!(run["failover_state"]["retries"], 2);
+    // Retries spent: one automatic resume after the configured wait, with a fresh budget.
+    model_failure(&mut run, &error).unwrap();
+    assert_eq!(run["status"], "queued");
+    assert_eq!(run["auto_resumes"], 1);
+    assert_eq!(run["failover_state"]["retries"], 0);
+    assert!(run["provider_recovery"].is_null());
+    let row = &run["_activity_items"].as_array().unwrap().last().unwrap()["item"];
+    assert_eq!(
+        (row["type"].as_str(), row["auto_resume"].as_bool()),
+        (Some("retry_scheduled"), Some(true))
+    );
+    let settings = webagent_models::settings::Settings::default().retry;
+    assert!(
+        run["provider_retry_at"].as_u64().unwrap() + 1
+            >= crate::now() + settings.auto_resume_after_seconds
+    );
+    for _ in 0..settings.same_model_retries {
+        model_failure(&mut run, &error).unwrap();
+        assert_eq!(run["status"], "queued");
+    }
     model_failure(&mut run, &error).unwrap();
     assert_eq!(run["status"], "stopped");
     assert_eq!(run["provider_recovery"]["safe_to_resume"], true);
+    assert_eq!(run["retry_rows"], 2 * settings.same_model_retries + 1);
     app.save(&mut run).await.unwrap();
     let mut reopened = app.clone();
     reopened.store = Store::open(root.path()).await.unwrap();
@@ -11520,9 +11541,12 @@ async fn provider_recovery_never_marks_partial_or_uncertain_or_contract_failures
         false,
         "summary connection failure",
     );
-    for _ in 0..=webagent_models::settings::Settings::default()
-        .retry
-        .same_model_retries
+    // Two rounds of retries with one automatic resume between them, then the stop.
+    for _ in 0..2
+        * (webagent_models::settings::Settings::default()
+            .retry
+            .same_model_retries
+            + 1)
     {
         system_model_failure(&mut run, &error).unwrap();
     }

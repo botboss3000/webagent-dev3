@@ -40,6 +40,9 @@
 :root { --orange: #fb923c; --orange-rgb: 251, 146, 60; }
 body.light-mode { --orange: #c2410c; --orange-rgb: 194, 65, 12; }
 .v2-activity-body .v2-mini-compaction { border-left: 3px solid var(--orange); }
+/* A provider retry is the app reconnecting, not an agent action; same orange as compaction. */
+.v2-activity-body .v2-mini-retry { border-left: 3px solid var(--orange); }
+.v2-activity-body .v2-mini-retry > details > summary { color: var(--orange); }
 .v2-activity-body .v2-mini-compaction[data-status="done"] > details > summary,
 .v2-activity-body .v2-mini-compaction[data-status="running"] > details > summary { color: var(--orange); }
 .v2-activity-body .v2-mini-section-head { display: flex; align-items: center; justify-content: space-between; color: var(--fg-3); }

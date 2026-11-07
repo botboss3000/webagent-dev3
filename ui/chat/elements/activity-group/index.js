@@ -13,11 +13,13 @@ export function createActivityGroup({transcript}) {
     node.dataset.activityGroupId=group.id;
     // Summarize nonzero category counts without changing the underlying journal rows.
     const parts=Object.entries(group.counts).filter(([,count])=>count)
-      .map(([kind,count])=>count+' '+(count===1?kind.replace(/s$/,''):kind));
+      .map(([kind,count])=>count+' '+(count===1?({retries:'retry'}[kind]||kind.replace(/s$/,'')):kind));
     const phase={running:'Working…',queued:'Queued…',waiting_external:'Waiting for build…',finalizing:'Checking response…',
       stopping:'Stopping…',completed:'Completed',failed:'Failed',cancelled:'Stopped',
       finished:'Finished'}[group.state] || group.state;
-    const progress=group.kind==='compaction' && ['queued','running','finalizing'].includes(group.state)
+    const last=group.rows?.at(-1);
+    const progress=group.state==='queued' && last?.retry ? (last.autoResume ? 'Recovering…' : 'Retrying connection…')
+      : group.kind==='compaction' && ['queued','running','finalizing'].includes(group.state)
       ? (group.state==='queued' ? 'Compaction queued…' : 'Compacting…') : phase;
     // Normal completion needs no status suffix; retain active and exceptional states.
     const status=error || (['completed','finished'].includes(group.state)?'':progress);

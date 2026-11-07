@@ -55,3 +55,16 @@ test('a compaction is one row: the call labels it and the result fills it, count
   const groups=activityGroups({events:[call,done],segments:[{...segment('a','r1'),first_seq:1,last_seq:2}]},[{id:'r1',state:'running'}]);
   assert.equal(groups[0].counts.compactions,1);
 });
+
+test('a scheduled retry is its own counted row, labelled by attempt, backup or automatic resume',()=>{
+  const event=(id,payload)=>({kind:'retry_scheduled',event_id:id,run_id:'r1',seq:Number(id.slice(1)),payload});
+  const rows=activityRows([
+    event('e1',{attempt:1,of:2,wait_seconds:2,error:'Bridge provider overloaded: busy',backup:false,auto_resume:false}),
+    event('e2',{attempt:0,of:2,wait_seconds:180,error:'still busy',backup:false,auto_resume:true}),
+    event('e3',{attempt:0,of:2,wait_seconds:2,error:'x',backup:true,auto_resume:false})]);
+  assert.deepEqual(rows.map(r=>[r.category,r.retry,r.autoResume,r.label]),[
+    ['retries',true,false,'Retrying connection in 2 s · attempt 1 of 2'],
+    ['retries',true,true,'Retries used up · resuming automatically in 3 min'],
+    ['retries',true,false,'Switching to the backup model in 2 s']]);
+  assert.equal(rows[0].text,'Bridge provider overloaded: busy');
+});
