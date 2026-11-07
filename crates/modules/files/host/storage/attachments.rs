@@ -254,6 +254,7 @@ impl Store {
                 last = end;
             }
         }
+        let manifests = self.refresh_recovery_manifests().await?;
         // Free pages return to the filesystem only after a vacuum; a busy database keeps them.
         // Its temporary copy goes beside the database: the container's /tmp is too small.
         let vacuum = async {
@@ -278,8 +279,80 @@ impl Store {
         Ok(
             json!({"used_bytes_before":before,"used_bytes_after":self.storage_used().await?,
             "database_bytes_before":database_before,"database_bytes_after":self.database_bytes(),
-            "records_rewritten":rewritten,"attachments_deleted":removed_attachments,"vacuum_error":vacuum}),
+            "records_rewritten":rewritten,"recovery_manifests_refreshed":manifests,"attachments_deleted":removed_attachments,"vacuum_error":vacuum}),
         )
+    }
+    /// Recovery metadata commits to each `recovery_input` row's stored bytes. After those rows are
+    /// re-encoded, refresh the stored-bytes hashes, first proving each row still holds exactly the
+    /// committed content. A content mismatch is left untouched and reported by the recovery reader.
+    async fn refresh_recovery_manifests(&self) -> Result<u64> {
+        use webagent_storage::recovery::{
+            recovery_digest, recovery_item_digest, recovery_manifest,
+        };
+        let keys: Vec<String> = sqlx::query_scalar("SELECT key FROM docs WHERE key GLOB 'run:*'")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut refreshed = 0u64;
+        for key in keys {
+            let mut tx = self.pool.begin().await?;
+            let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+                .bind(&key)
+                .fetch_optional(&mut *tx)
+                .await?
+            else {
+                continue;
+            };
+            let Ok(mut run) = self.unseal(&raw) else {
+                continue;
+            };
+            let Some(reference) = run.get("_recovery_input").cloned() else {
+                continue;
+            };
+            let Some(rid) = run["id"].as_str().map(str::to_owned) else {
+                continue;
+            };
+            let rows = sqlx::query(
+                "SELECT ordinal,item FROM recovery_input WHERE run_id=? ORDER BY ordinal",
+            )
+            .bind(&rid)
+            .fetch_all(&mut *tx)
+            .await?;
+            let Ok(Some(mut pairs)) = recovery_manifest(&reference, rows.len()) else {
+                continue;
+            };
+            let mut changed = false;
+            let mut intact = true;
+            for (ordinal, row) in rows.iter().enumerate() {
+                let sealed = row.get::<Vec<u8>, _>("item");
+                let sealed_hash = recovery_digest(&sealed);
+                if pairs[ordinal].1 == sealed_hash {
+                    continue;
+                }
+                match self.unseal(&sealed).map(|item| recovery_item_digest(&item)) {
+                    Ok(Ok(plain)) if plain == pairs[ordinal].0 => {
+                        pairs[ordinal].1 = sealed_hash;
+                        changed = true;
+                    }
+                    _ => {
+                        intact = false;
+                        break;
+                    }
+                }
+            }
+            if changed && intact {
+                run["_recovery_input"]["manifest"] = json!(pairs);
+                // Same encoding as `write_document`, without its live-run admission checks.
+                sqlx::query("UPDATE docs SET value=? WHERE key=?")
+                    .bind(self.encode_user_record(&run)?)
+                    .bind(&key)
+                    .execute(&mut *tx)
+                    .await?;
+                tx.commit().await?;
+                self.cache.lock().unwrap().invalidate(&[key]);
+                refreshed += 1;
+            }
+        }
+        Ok(refreshed)
     }
     /// Refuse agent-plane writes once the agent's data folder reaches its owner's tier limit.
     pub(crate) async fn check_agent_folder(
