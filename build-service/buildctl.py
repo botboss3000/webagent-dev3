@@ -498,11 +498,11 @@ def workcopy(task_id, folder, request=call):
 
 
 def credential_findings(paths, root):
-    """Run the checkout's Git Control credential guard over changed files; returns the flagged paths only."""
-    adapter = (Path(CONFIG["checkout_root"]) / "plugins/abilities/Administrator/git_control/adapter.py").read_text()
-    namespace = {"re": __import__("re")}
-    exec(adapter[adapter.index("_DUMMY_CREDENTIALS={"):adapter.index("async def command(")], namespace)
-    return [p for p in paths if (root / p).is_file() and namespace["secret"]((root / p).read_bytes())]
+    """Run the broker's credential guard over changed files; returns the flagged paths only."""
+    spec = importlib.util.spec_from_file_location("build_client_release", Path(__file__).with_name("release.py"))
+    release = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(release)
+    return [p for p in paths if (root / p).is_file() and release.possible_credentials((root / p).read_bytes())]
 
 
 def make_patch(task_id, folder, request=call, run=subprocess.run):

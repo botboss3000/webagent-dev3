@@ -36,8 +36,8 @@ LIVE_MANIFEST = "v3/live-files.json"
 LIVE_DENIED = ("build-service/", "tests/", "data/", "build-jobs/", "workspaces/", "runtime/", "target/", ".")
 
 
-# Broker copy of plugins/abilities/Administrator/git_control/adapter.py secret(): the broker
-# never executes task-editable app code; tests keep the two copies in agreement.
+# Broker copy of the app's Git credential guard (crates/modules/worker/src/git/guard.rs): the
+# broker never executes task-editable app code; both test the same shared samples.
 _DUMMY_CREDENTIALS = {
     b"SECRET_CANARY",
     b"abcdefghijklmnop12345", b"another-secret", b"discovery-key", b"first-secret",

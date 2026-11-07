@@ -18,17 +18,17 @@ pub struct Connection {
 }
 
 /// The parts of an `https://` URL that `urllib.parse.urlsplit` would report.
-struct Split<'a> {
-    scheme: String,
-    userinfo: Option<&'a str>,
-    host: &'a str,
-    port: Option<&'a str>,
-    path: &'a str,
-    query: bool,
-    fragment: bool,
+pub(super) struct Split<'a> {
+    pub(super) scheme: String,
+    pub(super) userinfo: Option<&'a str>,
+    pub(super) host: &'a str,
+    pub(super) port: Option<&'a str>,
+    pub(super) path: &'a str,
+    pub(super) query: bool,
+    pub(super) fragment: bool,
 }
 
-fn split(raw: &str) -> Option<Split<'_>> {
+pub(super) fn split(raw: &str) -> Option<Split<'_>> {
     let colon = raw.find(':')?;
     let scheme = &raw[..colon];
     if scheme.is_empty()
@@ -74,7 +74,7 @@ fn split(raw: &str) -> Option<Split<'_>> {
 }
 
 /// The canonical form of a configured HTTPS repository URL without credentials.
-fn normalized(raw: &Value) -> Outcome<String> {
+pub(super) fn normalized(raw: &Value) -> Outcome<String> {
     let invalid = || rejected("Invalid configured HTTPS repository");
     let raw = raw.as_str().ok_or_else(invalid)?;
     if raw.chars().count() > 2048 || raw.trim() != raw || raw.chars().any(|c| (c as u32) < 33) {
@@ -297,26 +297,9 @@ enum Target {
     Network(Vec<(String, String)>),
 }
 
-/// The published Git Control package's credential prompt helper.
+/// The credential prompt helper: the app executable, in its `V3_GIT_ASKPASS` mode.
 fn askpass() -> Outcome<PathBuf> {
-    let current = Path::new("/opt/v3/assets/current");
-    let folder = if current.parent().is_some_and(Path::is_dir) {
-        // The selected immutable release, as the worker resolved the package.
-        let selected = std::fs::canonicalize(current).map_err(|_| generic())?;
-        let release = selected
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default();
-        if selected.parent() != Some(Path::new("/opt/v3/assets/releases"))
-            || crate::files::uuid_text(release).as_deref() != Some(release)
-        {
-            return Err(generic());
-        }
-        selected.join("v3/plugins/abilities/Administrator/git_control")
-    } else {
-        PathBuf::from("/opt/v3/plugins/abilities/Administrator/git_control")
-    };
-    let helper = folder.join("askpass.py");
+    let helper = PathBuf::from(super::askpass::HELPER);
     let meta = std::fs::symlink_metadata(&helper).map_err(|_| generic())?;
     // Git executes GIT_ASKPASS directly as one file; the sandbox allows only this helper.
     if !meta.is_file() || std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o111 == 0
@@ -400,6 +383,7 @@ async fn transport(
     let helper = askpass()?;
     Ok(Target::Network(vec![
         ("GIT_ASKPASS".into(), helper.to_string_lossy().into_owned()),
+        ("V3_GIT_ASKPASS".into(), "1".into()),
         ("V3_GIT_URL".into(), exact),
         ("V3_GIT_USERNAME".into(), row.username.clone()),
         ("V3_GIT_TOKEN".into(), row.token.clone().unwrap_or_default()),

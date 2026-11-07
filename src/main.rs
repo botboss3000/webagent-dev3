@@ -189,6 +189,10 @@ use agent_loop::*;
 // Choose one role for this process. The API serves requests; the loop owns
 // recovery and execution; health only checks a recent loop heartbeat.
 fn main() -> Result<()> {
+    // Git runs this executable as its credential prompt (GIT_ASKPASS) with this marker.
+    if std::env::var_os("V3_GIT_ASKPASS").is_some_and(|marker| marker == "1") {
+        std::process::exit(webagent_worker::git::askpass::main());
+    }
     // The tool worker's per-command supervisor starts without the async runtime's threads.
     let mode = std::env::args().nth(1);
     // The container launcher sets up and starts every process of the web container.

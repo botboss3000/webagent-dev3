@@ -3,8 +3,10 @@
 //! runs with fixed safety options, a scrubbed environment and the workspace Landlock
 //! boundary; output is capped and passed through the credential guard. The host owns
 //! permission and network credentials.
+pub mod askpass;
 mod conflict;
 pub mod guard;
+pub mod manager;
 mod remote;
 
 use conflict::resolve_conflict;

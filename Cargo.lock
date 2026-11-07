@@ -3028,6 +3028,7 @@ dependencies = [
 name = "webagent-worker"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "hex",
  "libc",
  "rustix",

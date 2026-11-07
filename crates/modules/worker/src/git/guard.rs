@@ -246,6 +246,39 @@ mod tests {
         }
     }
 
+    /// The samples the broker's own credential guard (build-service/release.py) is tested
+    /// against, with the same expected verdicts.
+    #[test]
+    fn shared_samples_match_the_broker_guard() {
+        let assembled = |parts: &[&str]| parts.concat().into_bytes();
+        for (text, expected) in [
+            (b"plain text".to_vec(), false),
+            (assembled(&["-----BEGIN ", "PRIVATE KEY-----"]), true),
+            (assembled(&["token = ghp_", &"A".repeat(24)]), true),
+            (
+                assembled(&["https://user:", "hunter2abc@host.example"]),
+                true,
+            ),
+            (assembled(&["https://u:p", "@example.test"]), false),
+            (
+                assembled(&["password = \"", "fixture-password", "\""]),
+                false,
+            ),
+            (assembled(&["api_key = \"", "AbCdEfGh123456", "\""]), true),
+            (b"let secret_name = value();".to_vec(), false),
+            (assembled(&["sk-", "1234567890abcdef"]), false),
+            (assembled(&["AKIA", &"B".repeat(16)]), true),
+            (assembled(&["sk-", &"x".repeat(20)]), true),
+        ] {
+            assert_eq!(
+                secret(&text),
+                expected,
+                "{}",
+                String::from_utf8_lossy(&text)
+            );
+        }
+    }
+
     #[test]
     fn fixtures_and_ordinary_text_pass() {
         let assembled = |parts: &[&str]| parts.concat().into_bytes();

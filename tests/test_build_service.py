@@ -2333,15 +2333,14 @@ class LiveFileRoutingTests(unittest.TestCase):
   self.assertIn("Possible credentials in changed files: crates/modules/context/prompts/summary.md",plan["refusal"])
   self.assertNotIn(token,json.dumps(plan))
   self.assertIsNone(self.plan({"crates/modules/context/prompts/summary.md":"new"})["refusal"])
- def test_broker_credential_scanner_agrees_with_git_control(self):
-  import re
-  source=(Path(fixtures.host.__file__).parents[1]/"plugins/abilities/Administrator/git_control/adapter.py").read_text()
-  app={"re":re};exec(source[source.index("_DUMMY_CREDENTIALS={"):source.index("async def command(")],app)
-  samples=[b"plain text",b"-----BEGIN "+b"PRIVATE KEY-----",b"token = ghp_"+b"A"*24,b"https://user:"+b"hunter2abc@host.example",
-           b"https://u:p@example.test",b'password = "fixture-password"',b'api_key = "'+b"AbCdEfGh123456"+b'"',
-           b"let secret_name = value();",b"sk-1234567890abcdef",b"AKIA"+b"B"*16,b"sk-"+b"x"*20]
-  for sample in samples:
-   with self.subTest(sample=sample[:12]):self.assertEqual(fixtures.host.release.possible_credentials(sample),app["secret"](sample))
+ def test_broker_credential_scanner_matches_the_shared_samples(self):
+  # The app's Rust guard (crates/modules/worker/src/git/guard.rs) checks the same samples.
+  samples=[(b"plain text",False),(b"-----BEGIN "+b"PRIVATE KEY-----",True),(b"token = ghp_"+b"A"*24,True),
+           (b"https://user:"+b"hunter2abc@host.example",True),(b"https://u:p@example.test",False),
+           (b'password = "fixture-password"',False),(b'api_key = "'+b"AbCdEfGh123456"+b'"',True),
+           (b"let secret_name = value();",False),(b"sk-1234567890abcdef",False),(b"AKIA"+b"B"*16,True),(b"sk-"+b"x"*20,True)]
+  for sample,expected in samples:
+   with self.subTest(sample=sample[:12]):self.assertEqual(fixtures.host.release.possible_credentials(sample),expected)
  def test_unparseable_live_json_is_refused(self):
   self.assertIn("Live JSON file does not parse: crates/modules/context/policy.json",self.plan({"crates/modules/context/policy.json":"{"})["refusal"])
 
@@ -2538,30 +2537,15 @@ class CommandReturnBoundaryTests(unittest.TestCase):
   self.assertNotIn('namespace::fixture',json.dumps(job))
 
 class SourceControlContractTests(unittest.TestCase):
- def test_coordinated_native_tools_keep_an_exact_closed_contract(self):
-  import copy,shutil
-  host=fixtures.host
+ def test_source_control_is_a_native_ability_with_its_closed_tool_list(self):
   native=["source_remote_read","source_remote_commit","source_site_create","source_site_status",
           "source_preview_start","source_preview_stop","source_publish","source_rollback"]
   tools=["repository_access","git_tool","resolve_conflict","commit_and_push",*native]
-  self.assertEqual(host.GIT_CONTROL_TOOLS,tools)
-  source=Path(__file__).resolve().parents[1]/"plugins/abilities/Administrator/git_control"
-  with tempfile.TemporaryDirectory() as temporary:
-   folder=Path(temporary)/"git_control";shutil.copytree(source,folder)
-   manifest=json.loads((folder/"plugin.json").read_bytes());manifest["tools"]=tools
-   catalog=json.loads((folder/"git_control.json").read_bytes());catalog["tools"]=tools
-   (folder/"plugin.json").write_text(json.dumps(manifest));(folder/"git_control.json").write_text(json.dumps(catalog))
-   host.validate_git_control_package(folder)
-   for filename,value in (("plugin.json",manifest),("git_control.json",catalog)):
-    changed=copy.deepcopy(value);changed["tools"].append("unregistered_source_tool")
-    (folder/filename).write_text(json.dumps(changed))
-    with self.assertRaisesRegex(ValueError,"Incompatible Git Control"):
-     host.validate_git_control_package(folder)
-    (folder/filename).write_text(json.dumps(value))
-   changed=copy.deepcopy(manifest);changed["build"]["inputs"].append("unregistered.py")
-   (folder/"plugin.json").write_text(json.dumps(changed))
-   with self.assertRaisesRegex(ValueError,"Incompatible Git Control contract"):
-    host.validate_git_control_package(folder)
+  folder=Path(__file__).resolve().parents[1]/"plugins/abilities/Administrator/git_control"
+  self.assertEqual(json.loads((folder/"git_control.json").read_bytes())["tools"],tools)
+  # Git Control runs in the Rust tool worker; no executable package ships with it.
+  self.assertFalse((folder/"plugin.json").exists())
+  self.assertEqual(sorted(p.name for p in folder.glob("*.py")),[])
 
 
 class TerminalScratchRetentionTests(unittest.TestCase):
