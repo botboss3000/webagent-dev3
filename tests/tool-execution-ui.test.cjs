@@ -264,6 +264,6 @@ test('ability, tool and skill rows show their declared default read-only', () =>
   const row = { querySelector: sel => (sel === '.ac-ability-desc' ? anchor : null) };
   mark(row, 'deny'); mark(row, 'auto'); mark(row, 'discoverable'); mark(row, undefined);
   assert.deepEqual(appended.map(el => el.text), ['Default: Off', 'Default: Auto', 'Default: Discoverable']);
-  for (const call of ['markDefault(label, ability.default)', 'markDefault(toolRow, tool.default)',
+  for (const call of ['markDefault(label, projected.default ?? ability.default)', 'markDefault(toolRow, effectiveTool.default)',
     'markDefault(skill.row, entry.default_mode)']) assert(page.includes(call), call);
 });

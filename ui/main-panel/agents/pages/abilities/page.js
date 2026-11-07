@@ -238,7 +238,7 @@ export async function renderAbilities(host, request, options) {
         // one exists, as saveToolPermission writes). Effective access can still be
         // Deny because of the account tier, visibility or port status.
         permMode: toolPolicy()?.tool_permissions?.[tool.name] ||
-          toolPolicy()?.tool_permissions?.['*'] || tool.default || 'auto',
+          toolPolicy()?.tool_permissions?.['*'] || effectiveTool.default || 'auto',
       }, {
         canEdit: canManage && !previewUser && levelId==='operator',
         showPerm: true,
@@ -275,7 +275,7 @@ export async function renderAbilities(host, request, options) {
         onVisibilityChange: (_, mode) => save(ability, 'tool', mode, toolRow.querySelector('.ac-tri'), tool.name),
       });
       if (tool.supported === false) toolRow.querySelector('.ac-tool-name').style.color = 'var(--danger)';
-      markDefault(toolRow, tool.default);
+      markDefault(toolRow, effectiveTool.default);
       toolRow.title = [tool.supported ? '' : 'Unavailable in v3', effectiveLabel(effectiveTool)].filter(Boolean).join(' · ');
       tools.append(toolRow);
     }
@@ -317,8 +317,9 @@ export async function renderAbilities(host, request, options) {
         ability.installed === false || (ability.tools || []).some(tool => tool.supported === false);
       if (incomplete) name.style.color = 'var(--danger)';
       label.append(name, node('div', 'ac-ability-desc', ability.description));
-      markDefault(label, ability.default);
       const projected = projection(ability);
+      // Defaults depend on the viewed level, so read them from its projection.
+      markDefault(label, projected.default ?? ability.default);
       const availability = node('span', 'ac-ability-status',
         [readinessLabel(ability), effectiveLabel(projected)].filter(Boolean).join(' · '));
       availability.title = ['Declared: ' + !!ability.declared, 'Installed: ' + !!ability.installed,
