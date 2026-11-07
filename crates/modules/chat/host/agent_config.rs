@@ -156,6 +156,16 @@ pub(crate) async fn reset(
 
 async fn save(app: &App, agent: &str, document: &str, change: Change<'_>, expected: i64) -> Api {
     let store = managed(app, agent, document).await?;
+    // Agent storage limits may only lower the app ceiling for the same account tier.
+    if let Change::Patch(patch) = &change {
+        let limits = &patch["chat_limits"]["storage"]["user_storage_mb"];
+        if !limits.is_null() {
+            webagent_files::storage_policy::StoragePolicy::live()
+                .map_err(|error| ApiError(StatusCode::SERVICE_UNAVAILABLE, error.to_string()))?
+                .check_agent_limits(limits)
+                .map_err(|message| bad(&message))?;
+        }
+    }
     let base = base(app, document).await?;
     let record = overlays::save(
         &store.agent_pool,

@@ -757,6 +757,17 @@ impl Store {
                 self.write_document(&mut tx, "attachment_quota", &quota)
                     .await?;
             }
+            if let Some(agent) = session["agent_id"].as_str() {
+                let agent_quota = webagent_files::agent_quota_key(agent);
+                webagent_files::repository::subtract_quota(
+                    self,
+                    &mut tx,
+                    &agent_quota,
+                    upload_bytes,
+                )
+                .await?;
+                removed.push(agent_quota);
+            }
         }
         // Background tables are lazily initialized; deletion must also work without any tasks.
         let has_background:i64=sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='background_task_index'").fetch_one(&mut *tx).await?;

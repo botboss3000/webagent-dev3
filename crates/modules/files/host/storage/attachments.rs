@@ -24,7 +24,16 @@ impl Store {
             use std::io::Write;
             std::fs::create_dir_all(&dir)?;
             let temporary = dir.join(format!(".{aid}.tmp"));
-            let mut file = std::fs::File::create(&temporary)?;
+            // Owner-only: other local accounts never need these files.
+            let mut file = {
+                use std::os::unix::fs::OpenOptionsExt;
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .open(&temporary)?
+            };
             file.write_all(&sealed)?;
             file.sync_all()?;
             std::fs::rename(&temporary, dir.join(&aid))?;
@@ -91,14 +100,20 @@ impl Store {
     /// Remove only an unclaimed upload owned by this session and decrement its quota atomically.
     pub(crate) async fn delete_pending_upload(&self, sid: &str, aid: &str) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-        if !webagent_files::repository::delete_pending_upload(self, &mut tx, sid, aid).await? {
+        let Some(record) =
+            webagent_files::repository::delete_pending_upload(self, &mut tx, sid, aid).await?
+        else {
             return Ok(());
-        }
+        };
         tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[
+        let mut keys = vec![
             webagent_files::attachment_key(aid),
             webagent_files::QUOTA_KEY.into(),
-        ]);
+        ];
+        if let Some(agent) = record["agent_id"].as_str() {
+            keys.push(webagent_files::agent_quota_key(agent));
+        }
+        self.cache.lock().unwrap().invalidate(&keys);
         self.remove_blobs([aid]);
         Ok(())
     }

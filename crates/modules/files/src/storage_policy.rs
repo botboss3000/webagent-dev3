@@ -60,6 +60,39 @@ impl StoragePolicy {
     pub fn read_in(roots: &[std::path::PathBuf]) -> Result<Self> {
         webagent_configuration::live::parsed_from(roots, LIVE_POLICY, MAX_POLICY_BYTES, Self::parse)
     }
+    /// Agents an account at `tier` may own; `None` is unlimited.
+    pub fn max_agents(&self, tier: &str) -> Option<u64> {
+        self.tiers.get(tier).and_then(|t| t.max_published_agents)
+    }
+    /// Refuse agent-level user limits above the app ceiling for the same tier.
+    pub fn check_agent_limits(
+        &self,
+        limits: &serde_json::Value,
+    ) -> std::result::Result<(), String> {
+        let Some(limits) = limits.as_object() else {
+            return Err("user_storage_mb must map account tiers to megabytes".into());
+        };
+        for (tier, value) in limits {
+            if value.is_null() {
+                continue;
+            }
+            let mb = value
+                .as_u64()
+                .ok_or_else(|| format!("Storage limit for {tier} must be a whole number of MB"))?;
+            if !self.tiers.contains_key(tier) {
+                return Err(format!("Unknown account tier {tier}"));
+            }
+            if let Some(ceiling) = self.user_limit(tier) {
+                if mb * MIB > ceiling {
+                    return Err(format!(
+                        "Storage limit for {tier} exceeds the app ceiling of {} MB",
+                        ceiling / MIB
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
     /// Byte limit for a user at `tier`; `None` is unlimited.
     pub fn user_limit(&self, tier: &str) -> Option<u64> {
         self.tiers
@@ -67,6 +100,13 @@ impl StoragePolicy {
             .and_then(|t| t.user_storage_mb)
             .map(|mb| mb * MIB)
     }
+}
+
+/// An agent's lower limit for users at `tier`, from its effective chat configuration.
+pub fn agent_user_limit(chat: &serde_json::Value, tier: &str) -> Option<u64> {
+    chat["chat_limits"]["storage"]["user_storage_mb"][tier]
+        .as_u64()
+        .and_then(|mb| mb.checked_mul(MIB))
 }
 
 /// Refuse a write of `added` bytes that would take usage past `limit`.
@@ -112,6 +152,25 @@ mod tests {
             "Storage limit reached: 1 of 2 MB used"
         );
         assert!(check_user(None, u64::MAX, 1).is_ok());
+        assert_eq!(policy.max_agents("basic"), Some(1));
+        let chat = serde_json::json!({"chat_limits":{"storage":{"user_storage_mb":{"basic":1}}}});
+        assert_eq!(agent_user_limit(&chat, "basic"), Some(MIB));
+        assert_eq!(agent_user_limit(&chat, "anonymous"), None);
+        assert!(policy
+            .check_agent_limits(&serde_json::json!({"basic":2,"other_unset":null}))
+            .is_ok());
+        assert_eq!(
+            policy
+                .check_agent_limits(&serde_json::json!({"basic":3}))
+                .unwrap_err(),
+            "Storage limit for basic exceeds the app ceiling of 2 MB"
+        );
+        assert!(policy
+            .check_agent_limits(&serde_json::json!({"missing":1}))
+            .is_err());
+        assert!(policy
+            .check_agent_limits(&serde_json::json!({"basic":"1"}))
+            .is_err());
         for bad in [
             r#"{"warning_percent":0,"compress_idle_days":30,"tiers":{}}"#,
             r#"{"warning_percent":80,"compress_idle_days":0,"tiers":{}}"#,

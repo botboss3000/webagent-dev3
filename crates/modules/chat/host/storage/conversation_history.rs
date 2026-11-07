@@ -179,6 +179,7 @@ impl Store {
                 .collect();
             let mut copied_followups = Vec::new();
             let mut copied_bytes = 0u64;
+            let mut copied_agent = None;
             let mut attachment_map = HashMap::new();
             let mut run_map = HashMap::new();
             let mut message_map = HashMap::new();
@@ -264,6 +265,7 @@ impl Store {
                                 copied_bytes = copied_bytes.checked_add(record["bytes"].as_u64().unwrap_or(0)).ok_or_else(|| anyhow!("Attachment byte count exceeds machine accounting range"))?;
                                 let old_aid = aid.to_owned();
                                 let aid = crate::uuid();
+                                copied_agent = record["agent_id"].as_str().map(str::to_owned);
                                 // The copy gets its own file name, sharing the bytes on disk.
                                 self.link_blob(&old_aid, &aid)?;
                                 attachment_map.insert(old_aid, aid.clone());
@@ -295,6 +297,25 @@ impl Store {
                 self.write_document(&mut tx, "attachment_quota", &json!({"bytes":total}))
                     .await?;
                 touched.push("attachment_quota".into());
+                if let Some(agent) = copied_agent {
+                    let key = webagent_files::agent_quota_key(&agent);
+                    let used =
+                        sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+                            .bind(&key)
+                            .fetch_optional(&mut *tx)
+                            .await?
+                            .map(|raw| self.unseal(&raw))
+                            .transpose()?
+                            .and_then(|value| value["bytes"].as_u64())
+                            .unwrap_or(0);
+                    self.write_document(
+                        &mut tx,
+                        &key,
+                        &json!({"bytes":used.saturating_add(copied_bytes)}),
+                    )
+                    .await?;
+                    touched.push(key);
+                }
             }
             let selected: Vec<_> = items
                 .iter()

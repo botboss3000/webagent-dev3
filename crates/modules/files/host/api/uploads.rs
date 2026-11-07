@@ -4,7 +4,9 @@
 use super::*;
 use webagent_files::uploads::{self as files, Rejected, UploadInput};
 pub(crate) use webagent_files::uploads::{allowed_media, metadata, AttachmentLimits};
-use webagent_files::{attachment_key, message_files_key, reply_files_key, QUOTA_KEY};
+use webagent_files::{
+    agent_quota_key, attachment_key, message_files_key, reply_files_key, QUOTA_KEY,
+};
 /// Limits come from the session agent's effective chat.json on every admission; browsers cannot raise them.
 pub(crate) async fn limits(app: &App, sid: &str) -> Result<AttachmentLimits, ApiError> {
     let agent = session_agent_id(app, sid)
@@ -18,17 +20,41 @@ pub(crate) async fn limits_for(app: &App, agent: &str) -> Result<AttachmentLimit
         .and_then(|config| webagent_chat::configuration::parse_attachment_limits(&config))
         .map_err(|error| ApiError(StatusCode::SERVICE_UNAVAILABLE, error.to_string()))
 }
-/// Refuse a write that would take the storage owner past their account tier's limit.
-async fn check_storage(app: &App, added: u64) -> Result<(), ApiError> {
+/// Refuse a write that would take the storage owner past their account tier's limit, or past
+/// the lower limit the session's agent sets for that tier on files in its sessions.
+async fn check_storage(app: &App, agent: &str, added: u64) -> Result<(), ApiError> {
+    use webagent_files::storage_policy::{agent_user_limit, check_user, StoragePolicy};
     let Some(account) = app.store.account_by_id(app.store.current_user_id()).await? else {
         return Ok(());
     };
     let tier = crate::access::Principal::from_account(&account)?.tier_id;
-    let policy = webagent_files::storage_policy::StoragePolicy::live()
+    let policy = StoragePolicy::live()
         .map_err(|error| ApiError(StatusCode::SERVICE_UNAVAILABLE, error.to_string()))?;
-    let used = app.store.storage_used().await?;
-    webagent_files::storage_policy::check_user(policy.user_limit(&tier), used, added)
-        .map_err(|message| ApiError(StatusCode::PAYLOAD_TOO_LARGE, message))
+    let too_large = |message| ApiError(StatusCode::PAYLOAD_TOO_LARGE, message);
+    check_user(
+        policy.user_limit(&tier),
+        app.store.storage_used().await?,
+        added,
+    )
+    .map_err(too_large)?;
+    let chat = crate::chat_config::effective_chat(&app.store, &app.chat_ui_config_path, agent)
+        .await
+        .map_err(|error| ApiError(StatusCode::SERVICE_UNAVAILABLE, error.to_string()))?;
+    let Some(limit) = agent_user_limit(&chat, &tier) else {
+        return Ok(());
+    };
+    let used = quota_bytes(app.store.get(&agent_quota_key(agent)).await?.as_ref());
+    check_user(Some(limit), used, added)
+        .map_err(|message| too_large(format!("{message} for this agent")))
+}
+fn quota_bytes(quota: Option<&Value>) -> u64 {
+    quota.and_then(|q| q["bytes"].as_u64()).unwrap_or(0)
+}
+/// Session agent, or not found.
+async fn agent_of(app: &App, sid: &str) -> Result<String, ApiError> {
+    session_agent_id(app, sid)
+        .await
+        .map_err(|_| ApiError(StatusCode::NOT_FOUND, "Session not found".into()))
 }
 pub(crate) async fn request_body(
     app: &App,
@@ -69,7 +95,8 @@ pub(crate) async fn upload(
     Path(sid): Path<String>,
     Json(body): Json<Value>,
 ) -> Api {
-    let limits = limits(&app, &sid).await?;
+    let agent = agent_of(&app, &sid).await?;
+    let limits = limits_for(&app, &agent).await?;
     let uploader = crate::shared_chat::actor(&app).to_owned();
     let aid = required(&body, "client_upload_id", 64)?;
     if !files::upload_id_ok(aid) {
@@ -119,14 +146,23 @@ pub(crate) async fn upload(
         }
         return Ok(Json(metadata(&saved)));
     }
-    check_storage(&app, new.bytes).await?;
+    check_storage(&app, &agent, new.bytes).await?;
     let quota = files::quota_with(app.store.get(QUOTA_KEY).await?.as_ref(), new.bytes)
         .ok_or_else(|| conflict("Attachment byte count exceeds machine accounting range"))?;
+    let agent_quota = agent_quota_key(&agent);
+    let agent_used = files::quota_with(app.store.get(&agent_quota).await?.as_ref(), new.bytes)
+        .ok_or_else(|| conflict("Attachment byte count exceeds machine accounting range"))?;
+    let mut new = new;
+    new.record["agent_id"] = json!(agent);
     let info = metadata(&new.record);
     app.store.write_blob(aid, &new.content).await?;
     app.store
         .atomic_docs_event(
-            vec![(attachment_key(aid), new.record), (QUOTA_KEY.into(), quota)],
+            vec![
+                (attachment_key(aid), new.record),
+                (QUOTA_KEY.into(), quota),
+                (agent_quota, agent_used),
+            ],
             &sid,
             "attachment_uploaded",
             &info,
@@ -146,7 +182,8 @@ pub(crate) async fn publish_reply_file(
     media: &str,
     data: &str,
 ) -> Result<Value, ApiError> {
-    let limits = limits(app, sid).await?;
+    let agent = agent_of(app, sid).await?;
+    let limits = limits_for(app, &agent).await?;
     let uploader = crate::shared_chat::actor(app).to_owned();
     if !files::upload_id_ok(aid) || !files::name_ok(name) || !files::allowed_media(media) {
         return Err(bad("Unsupported reply file"));
@@ -169,6 +206,7 @@ pub(crate) async fn publish_reply_file(
     })?;
     // Sent, not a draft: the composer never offers it and it is immutable.
     new.record["run_id"] = json!(run_id);
+    new.record["agent_id"] = json!(agent);
     let info = metadata(&new.record);
     let _guard = app.gate.lock().await;
     let link_key = reply_files_key(run_id);
@@ -189,8 +227,11 @@ pub(crate) async fn publish_reply_file(
     if app.store.get(&attachment_key(aid)).await?.is_some() {
         return Err(conflict("Upload identifier reused"));
     }
-    check_storage(app, new.bytes).await?;
+    check_storage(app, &agent, new.bytes).await?;
     let quota = files::quota_with(app.store.get(QUOTA_KEY).await?.as_ref(), new.bytes)
+        .ok_or_else(|| conflict("Attachment byte count exceeds machine accounting range"))?;
+    let agent_quota = agent_quota_key(&agent);
+    let agent_used = files::quota_with(app.store.get(&agent_quota).await?.as_ref(), new.bytes)
         .ok_or_else(|| conflict("Attachment byte count exceeds machine accounting range"))?;
     app.store.write_blob(aid, &new.content).await?;
     link["files"]
@@ -202,6 +243,7 @@ pub(crate) async fn publish_reply_file(
             vec![
                 (attachment_key(aid), new.record),
                 (QUOTA_KEY.into(), quota),
+                (agent_quota, agent_used),
                 (link_key, link),
             ],
             sid,

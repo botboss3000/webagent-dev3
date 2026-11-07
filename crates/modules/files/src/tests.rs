@@ -293,6 +293,7 @@ async fn pending_upload_deletion_is_session_scoped_and_keeps_user_plane_quota() 
         repository::delete_pending_upload(&TaggedCodec, &mut tx, "s", "a")
             .await
             .unwrap()
+            .is_some()
     );
     tx.commit().await.unwrap();
     assert!(raw(&pool, "attachment:a").await.is_none());
@@ -304,9 +305,10 @@ async fn pending_upload_deletion_is_session_scoped_and_keeps_user_plane_quota() 
     assert_eq!(TaggedCodec.unseal(&quota).unwrap()["bytes"], 5);
     let mut tx = pool.begin().await.unwrap();
     assert!(
-        !repository::delete_pending_upload(&TaggedCodec, &mut tx, "s", "a")
+        repository::delete_pending_upload(&TaggedCodec, &mut tx, "s", "a")
             .await
             .unwrap()
+            .is_none()
     );
     assert!(raw(&pool, "attachment:sent").await.is_some());
 }

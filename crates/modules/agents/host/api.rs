@@ -441,8 +441,24 @@ pub(crate) async fn create_agent(
     Extension(identity): Extension<Value>,
     Json(body): Json<NewAgent>,
 ) -> Api {
-    if principal(&app, &identity).await?.role == crate::access::Role::Guest {
+    let caller = principal(&app, &identity).await?;
+    if caller.role == crate::access::Role::Guest {
         return Err(denied());
+    }
+    let policy = webagent_files::storage_policy::StoragePolicy::live()
+        .map_err(|error| ApiError(StatusCode::SERVICE_UNAVAILABLE, error.to_string()))?;
+    if let Some(maximum) = policy.max_agents(&caller.tier_id) {
+        let owned: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM agent_directory WHERE owner_id=?")
+                .bind(&caller.user_id)
+                .fetch_one(&app.store.app_pool)
+                .await
+                .map_err(anyhow::Error::from)?;
+        if owned as u64 >= maximum {
+            return Err(crate::conflict(&format!(
+                "Agent limit reached: your account may own {maximum} agents"
+            )));
+        }
     }
     body.validate()
         .map_err(|_| crate::bad("Invalid agent fields"))?;

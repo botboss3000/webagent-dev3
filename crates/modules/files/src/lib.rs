@@ -29,5 +29,10 @@ pub fn reply_files_key(run_id: &str) -> String {
 /// Running byte total of stored uploads in this user plane.
 pub const QUOTA_KEY: &str = "attachment_quota";
 
+/// Running byte total of this user's uploads in sessions of one agent.
+pub fn agent_quota_key(agent_id: &str) -> String {
+    format!("{QUOTA_KEY}:{agent_id}")
+}
+
 #[cfg(test)]
 mod tests;
