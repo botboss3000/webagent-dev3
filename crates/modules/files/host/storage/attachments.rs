@@ -210,7 +210,22 @@ impl Store {
             ("chat", "seq", "content"),
             ("interactions", "seq", "item"),
             ("events", "seq", "payload"),
+            ("recovery_input", "rowid", "item"),
+            ("loop_events", "seq", "payload"),
+            ("loop_commands", "seq", "payload"),
+            ("publication_outbox", "rowid", "payload"),
+            ("reasoning_cleanup", "rowid", "payload"),
         ] {
+            // Lazily created tables may not exist yet for this user.
+            let exists: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+            )
+            .bind(table)
+            .fetch_one(&self.pool)
+            .await?;
+            if exists == 0 {
+                continue;
+            }
             let mut last = 0i64;
             loop {
                 let rows = sqlx::query(&format!(
