@@ -20,16 +20,40 @@ pub(crate) async fn limits_for(app: &App, agent: &str) -> Result<AttachmentLimit
         .and_then(|config| webagent_chat::configuration::parse_attachment_limits(&config))
         .map_err(|error| ApiError(StatusCode::SERVICE_UNAVAILABLE, error.to_string()))
 }
+/// The storage owner's account tier; `None` for stores without an account (fixtures).
+async fn owner_tier(app: &App) -> Result<Option<String>, ApiError> {
+    let Some(account) = app.store.account_by_id(app.store.current_user_id()).await? else {
+        return Ok(None);
+    };
+    Ok(Some(
+        crate::access::Principal::from_account(&account)?.tier_id,
+    ))
+}
+fn live_policy() -> Result<webagent_files::storage_policy::StoragePolicy, ApiError> {
+    webagent_files::storage_policy::StoragePolicy::live()
+        .map_err(|error| ApiError(StatusCode::SERVICE_UNAVAILABLE, error.to_string()))
+}
+/// The signed-in user's storage use against their tier limit, for the near-full notice.
+pub(crate) async fn storage_status(app: &App) -> Api {
+    let policy = live_policy()?;
+    let limit = owner_tier(app)
+        .await?
+        .and_then(|tier| policy.user_limit(&tier));
+    let used = app.store.storage_used().await?;
+    let near_limit = limit.is_some_and(|limit| {
+        u128::from(used) * 100 >= u128::from(limit) * u128::from(policy.warning_percent)
+    });
+    Ok(Json(json!({"used_bytes":used,"limit_bytes":limit,
+        "warning_percent":policy.warning_percent,"near_limit":near_limit})))
+}
 /// Refuse a write that would take the storage owner past their account tier's limit, or past
 /// the lower limit the session's agent sets for that tier on files in its sessions.
 async fn check_storage(app: &App, agent: &str, added: u64) -> Result<(), ApiError> {
-    use webagent_files::storage_policy::{agent_user_limit, check_user, StoragePolicy};
-    let Some(account) = app.store.account_by_id(app.store.current_user_id()).await? else {
+    use webagent_files::storage_policy::{agent_user_limit, check_user};
+    let Some(tier) = owner_tier(app).await? else {
         return Ok(());
     };
-    let tier = crate::access::Principal::from_account(&account)?.tier_id;
-    let policy = StoragePolicy::live()
-        .map_err(|error| ApiError(StatusCode::SERVICE_UNAVAILABLE, error.to_string()))?;
+    let policy = live_policy()?;
     let too_large = |message| ApiError(StatusCode::PAYLOAD_TOO_LARGE, message);
     check_user(
         policy.user_limit(&tier),

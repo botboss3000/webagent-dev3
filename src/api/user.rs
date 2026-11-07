@@ -453,6 +453,12 @@ async fn voice_sample(Extension(app): Extension<App>, Path(voice): Path<String>)
         .into_response()
 }
 path_arg!(attachment => attachment_get, (String, String));
+/// The signed-in user's storage use and tier limit.
+async fn storage(Extension(app): Extension<App>) -> Response {
+    crate::api::uploads::storage_status(&app)
+        .await
+        .into_response()
+}
 async fn upload(
     Extension(app): Extension<App>,
     Path(sid): Path<String>,
@@ -802,6 +808,7 @@ pub(crate) fn router() -> Router<App> {
         )
         .route("/user/status", get(user_status))
         .route("/sessions", get(sessions).post(create_session))
+        .route("/storage", get(storage))
         .route("/sessions/search", get(session_search))
         .route("/sessions/stats", get(session_statistics))
         .route("/sessions/{sid}/runs/{rid}/diagnostics", get(diagnostics))

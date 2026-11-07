@@ -79,7 +79,25 @@ impl Store {
             }
         }
     }
-    /// Bytes this user stores: the database and its journal plus attachment files.
+    /// Bytes in the workspaces of this user's sessions (`/workspaces/<session id>`).
+    async fn workspace_used(&self) -> Result<u64> {
+        let ids: Vec<String> =
+            sqlx::query_scalar("SELECT key FROM docs WHERE key LIKE 'session:%'")
+                .fetch_all(&self.pool)
+                .await?;
+        let root = std::path::PathBuf::from(
+            std::env::var("V3_WORKSPACE_ROOT").unwrap_or_else(|_| "/workspaces".into()),
+        );
+        Ok(tokio::task::spawn_blocking(move || {
+            ids.iter()
+                .filter_map(|key| key.strip_prefix("session:"))
+                .filter(|sid| webagent_files::uploads::upload_id_ok(sid))
+                .map(|sid| tree_bytes(&root.join(sid)))
+                .fold(0u64, u64::saturating_add)
+        })
+        .await?)
+    }
+    /// Bytes this user stores: the database and its journal, attachment files and workspaces.
     pub(crate) async fn storage_used(&self) -> Result<u64> {
         let files = self
             .get(webagent_files::QUOTA_KEY)
@@ -95,7 +113,9 @@ impl Store {
                 database = database.saturating_add(meta.len());
             }
         }
-        Ok(files.saturating_add(database))
+        Ok(files
+            .saturating_add(database)
+            .saturating_add(self.workspace_used().await?))
     }
     /// Remove only an unclaimed upload owned by this session and decrement its quota atomically.
     pub(crate) async fn delete_pending_upload(&self, sid: &str, aid: &str) -> Result<()> {
@@ -117,4 +137,22 @@ impl Store {
         self.remove_blobs([aid]);
         Ok(())
     }
+}
+
+/// Apparent size of a directory tree without following links; unreadable entries count as zero.
+fn tree_bytes(path: &std::path::Path) -> u64 {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if !meta.is_dir() {
+        return meta.len();
+    }
+    std::fs::read_dir(path)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| tree_bytes(&entry.path()))
+                .fold(0u64, u64::saturating_add)
+        })
+        .unwrap_or(0)
 }
