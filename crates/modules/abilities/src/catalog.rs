@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -880,6 +880,32 @@ impl<H: Host> Catalog<H> {
         }
         // Presence alone cannot retain an old executable declaration after an
         // operator disables or edits its manifest. Unreadable/changed bytes fail closed.
+        // Catalog checks ask once per tool for every ability, so one disk answer per
+        // ability folder and manifest digest is reused for a second.
+        type Recent = HashMap<(PathBuf, String), (std::time::Instant, bool)>;
+        static RECENT: std::sync::Mutex<Option<Recent>> = std::sync::Mutex::new(None);
+        let key = (ability.path.clone(), ability.manifest_bytes_digest.clone());
+        // Tests edit fixtures and expect the change at once, so they never reuse.
+        if cfg!(not(any(test, feature = "test-support"))) {
+            let recent = RECENT.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((at, answer)) = recent.as_ref().and_then(|map| map.get(&key)) {
+                if at.elapsed() < std::time::Duration::from_secs(1) {
+                    return *answer;
+                }
+            }
+        }
+        let answer = Self::present_on_disk(ability);
+        let mut recent = RECENT.lock().unwrap_or_else(|e| e.into_inner());
+        let map = recent.get_or_insert_with(HashMap::new);
+        // Bounded: one entry per catalog ability folder; old releases' paths are dropped.
+        if map.len() > 1024 {
+            map.clear();
+        }
+        map.insert(key, (std::time::Instant::now(), answer));
+        answer
+    }
+
+    fn present_on_disk(ability: &Ability) -> bool {
         [
             ability.path.as_path(),
             ability.path.parent().unwrap_or(ability.path.as_path()),
