@@ -7333,6 +7333,36 @@ async fn rolling_compaction_uses_explicit_system_model_and_persists_checkpoint()
     assert!(app.store.context(&sid).await.unwrap()[0]
         .to_string()
         .contains("Remember original goal"));
+    // The summary call and its result are activity rows, never model context.
+    let activity = app.store.private_run_activity(&sid, &id, 0).await.unwrap();
+    let events = activity["events"].as_array().unwrap();
+    let call = events
+        .iter()
+        .find(|e| e["kind"] == "compaction_call")
+        .unwrap();
+    assert_eq!(call["payload"]["model"], "system-summary-model");
+    assert!(call["payload"]["input_bytes"].as_u64().unwrap() > 0);
+    let result = events
+        .iter()
+        .find(|e| e["kind"] == "compaction_result")
+        .unwrap();
+    assert_eq!(result["payload"]["summary"], "Remember original goal");
+    assert!(call["seq"].as_i64() < result["seq"].as_i64());
+    assert_ne!(done["phase"], "compacting");
+    // Rebuild from interactions alone: the compaction rows must not enter it.
+    let mut session = app.store.get(&key("session", &sid)).await.unwrap().unwrap();
+    session["checkpoint_through"] = json!(0);
+    session["checkpoint_input"] = json!([]);
+    app.store
+        .put(&key("session", &sid), &session)
+        .await
+        .unwrap();
+    let rebuilt = app.store.context(&sid).await.unwrap();
+    assert!(!rebuilt.is_empty());
+    assert!(rebuilt.iter().all(|item| !item["type"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("compaction_")));
     server.abort();
 }
 #[tokio::test]

@@ -3,8 +3,14 @@
 use serde_json::{json, Value};
 
 const CHECKPOINTS: [&str; 8] = [
-    "admission", "attachment_preparation", "context_assembly", "model_dispatch",
-    "model_output", "pre_tool", "tool_result", "publication",
+    "admission",
+    "attachment_preparation",
+    "context_assembly",
+    "model_dispatch",
+    "model_output",
+    "pre_tool",
+    "tool_result",
+    "publication",
 ];
 
 fn known_status(value: &Value) -> Option<&str> {
@@ -22,10 +28,11 @@ fn known_status(value: &Value) -> Option<&str> {
     }
 }
 
-fn known_phase(value: &Value) -> Option<&str> {
+pub(crate) fn known_phase(value: &Value) -> Option<&str> {
     match value.as_str()? {
         "model" => Some("model"),
         "tools" => Some("tools"),
+        "compacting" => Some("compacting"),
         _ => None,
     }
 }
@@ -44,15 +51,20 @@ fn pending_state(run: &Value) -> Option<&str> {
 fn checkpoint_decisions(run: &Value) -> Vec<Value> {
     // Receipts are one slot per checkpoint, not an append-only timeline.
     // Fixed presentation order cannot be read as execution chronology.
-    CHECKPOINTS.iter().filter_map(|name| {
-        let receipt = run.pointer(&format!("/workflow/receipts/{name}"))?;
-        let turn = receipt["turn"].as_u64()?;
-        let call_index = receipt["call_index"].as_u64()?;
-        let decision = receipt.pointer("/result/decision")?.as_str()?;
-        if !matches!(decision, "pass" | "reject") { return None; }
-        Some(json!({"checkpoint": name, "decision": decision,
+    CHECKPOINTS
+        .iter()
+        .filter_map(|name| {
+            let receipt = run.pointer(&format!("/workflow/receipts/{name}"))?;
+            let turn = receipt["turn"].as_u64()?;
+            let call_index = receipt["call_index"].as_u64()?;
+            let decision = receipt.pointer("/result/decision")?.as_str()?;
+            if !matches!(decision, "pass" | "reject") {
+                return None;
+            }
+            Some(json!({"checkpoint": name, "decision": decision,
             "turn": turn, "call_index": call_index}))
-    }).collect()
+        })
+        .collect()
 }
 
 fn compaction_count(run: &Value) -> Option<u64> {
@@ -126,11 +138,16 @@ mod tests {
         assert_eq!(value["compaction_count"], 1);
         let receipts = value["checkpoint_decisions"].as_array().unwrap();
         assert_eq!(receipts.len(), 3);
-        let pre_tool = receipts.iter().find(|r| r["checkpoint"] == "pre_tool").unwrap();
+        let pre_tool = receipts
+            .iter()
+            .find(|r| r["checkpoint"] == "pre_tool")
+            .unwrap();
         assert_eq!(pre_tool["decision"], "reject");
         assert_eq!(pre_tool["turn"], 2);
         assert!(!value.to_string().contains("private sentinel"));
         assert!(!value.to_string().contains("file_write"));
+        let compacting = project(&json!({"status":"running","phase":"compacting"}));
+        assert_eq!(compacting["phase"], "compacting");
     }
 
     #[test]

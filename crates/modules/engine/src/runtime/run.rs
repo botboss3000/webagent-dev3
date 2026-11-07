@@ -1693,6 +1693,10 @@ impl<
             if run["generation"] != generation || status(&run) != "running" {
                 return Ok(());
             }
+            // A summary call cut off by a restart or retry resumes as an ordinary model step.
+            if run["phase"] == "compacting" {
+                run["phase"] = json!("model");
+            }
             if !app
                 .chat
                 .participation_allows_run(app.store.records(), &run)
@@ -2790,6 +2794,23 @@ impl<
                         return Ok(());
                     }
                     run["engine_component_prepared"] = json!({"version":1,"component":crate::components::CONTEXT,"kind":"compaction","call":call_number});
+                    // The progress note reads the phase; the call row stays until its result row.
+                    let compaction_step = format!(
+                        "compaction:{}:{}",
+                        run["compactions"].as_u64().unwrap_or(0) + 1,
+                        uuid::Uuid::new_v4()
+                    );
+                    let input_bytes: usize = summary_input
+                        .iter()
+                        .map(|item| item["content"].as_str().map_or(0, str::len))
+                        .sum();
+                    run["phase"] = json!("compacting");
+                    compaction_activity(
+                        &mut run,
+                        format!("{compaction_step}:call"),
+                        json!({"type":"compaction_call","model":selection.model,
+                            "input_bytes":input_bytes}),
+                    );
                     app.save(&mut run).await?;
                     let prepared_system = match crate::provider::CallDraft::new(
                         &selection,
@@ -2806,6 +2827,11 @@ impl<
                     {
                         Ok(value) => value,
                         Err(error) => {
+                            compaction_result(
+                                &mut run,
+                                &compaction_step,
+                                json!({"error": error.to_string()}),
+                            );
                             Self::pause_context_preparation(
                                 &app,
                                 &mut run,
@@ -2824,6 +2850,11 @@ impl<
                             let _guard = app.handles.gate.lock().await;
                             let mut run = app.run(&id).await?;
                             if run["generation"] == generation && status(&run) == "running" {
+                                compaction_result(
+                                    &mut run,
+                                    &compaction_step,
+                                    json!({"error": error.to_string()}),
+                                );
                                 app.trusted_model_failure(&mut run, &error, true)?;
                                 app.save(&mut run).await?;
                             }
@@ -2859,6 +2890,11 @@ impl<
                         .run_model_authorized(&system_dispatch_run(&current)?)
                         .await
                     {
+                        compaction_result(
+                            &mut current,
+                            &compaction_step,
+                            json!({"error": "Access changed before model dispatch"}),
+                        );
                         current["status"] = json!("stopped");
                         current["error"] = json!("Access changed before model dispatch");
                         app.save(&mut current).await?;
@@ -2957,6 +2993,11 @@ impl<
                         return Ok(());
                     }
                     if !app.run_model_authorized(&system_dispatch_run(&run)?).await {
+                        compaction_result(
+                            &mut run,
+                            &compaction_step,
+                            json!({"error": "Access changed during context summary"}),
+                        );
                         run["status"] = json!("stopped");
                         run["error"] = json!("Access changed during context summary");
                         app.save(&mut run).await?;
@@ -2966,12 +3007,22 @@ impl<
                         if Self::preserve_restart_interruption(&app, &mut run).await? {
                             return Ok(());
                         }
+                        compaction_result(
+                            &mut run,
+                            &compaction_step,
+                            json!({"error": "Context summary interrupted"}),
+                        );
                         run["status"] = json!("stopped");
                         run["error"] = json!("Context summary interrupted");
                         app.save(&mut run).await?;
                         return Ok(());
                     }
                     if let Err(error) = &response {
+                        compaction_result(
+                            &mut run,
+                            &compaction_step,
+                            json!({"error": error.to_string()}),
+                        );
                         app.trusted_model_failure(&mut run, error, true)?;
                         app.save(&mut run).await?;
                         return Ok(());
@@ -3014,6 +3065,8 @@ impl<
                             run["error"] = json!(format!(
                                 "Context summary paused: {stage}/{code}; review this run"
                             ));
+                            let error = run["error"].as_str().unwrap_or_default().to_owned();
+                            compaction_result(&mut run, &compaction_step, json!({"error": error}));
                             if let Some(report) =
                                 app.native
                                     .validation(app.store.records(), &run, code, stage)
@@ -3027,6 +3080,7 @@ impl<
                     // COMPACTION PERSISTENCE: Store::save_run below atomically saves run,
                     // event and session checkpoint under its existing ownership fences.
                     // Original interactions stay intact; continue reassembles before dispatch.
+                    compaction_result(&mut run, &compaction_step, json!({"summary": summary}));
                     run["input"] = json!(compacted);
                     run["tool_result_projection"]["rebase"] = json!(true);
                     context_accounting.reset();
@@ -3711,4 +3765,21 @@ impl<
             }
         }
     }
+}
+
+/// Queue one activity row for the next run save. Rows are stored in `interactions`
+/// under a `compaction:` step, which session context assembly skips.
+fn compaction_activity(run: &mut Value, step: String, item: Value) {
+    let entry = json!({"step":step,"item":item});
+    match run["_activity_items"].as_array_mut() {
+        Some(items) => items.push(entry),
+        None => run["_activity_items"] = json!([entry]),
+    }
+}
+
+/// Leave the compacting phase with a result row; `outcome` holds `summary` or `error`.
+fn compaction_result(run: &mut Value, step: &str, mut outcome: Value) {
+    run["phase"] = json!("model");
+    outcome["type"] = json!("compaction_result");
+    compaction_activity(run, format!("{step}:result"), outcome);
 }

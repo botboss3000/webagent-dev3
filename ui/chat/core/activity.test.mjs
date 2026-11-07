@@ -36,3 +36,16 @@ test('a held duplicate is labelled held and a typed rejection failed',()=>{
   assert.equal(activityRows([call,result(JSON.stringify({status:'held',output:'x'}))])[0].label,'push · held: possible duplicate');
   assert.equal(activityRows([call,result(JSON.stringify({status:'rejected',output:'bad path'}))])[0].label,'push · failed: bad path');
 });
+
+test('a compaction shows a call row and a result row, counted once',()=>{
+  const call={kind:'compaction_call',event_id:'e1',run_id:'r1',seq:1,payload:{model:'sys-model',input_bytes:2048}};
+  const done={kind:'compaction_result',event_id:'e2',run_id:'r1',seq:2,payload:{summary:'Kept goals'}};
+  const rows=activityRows([call,done]);
+  assert.deepEqual(rows.map(r=>[r.category,r.text]),
+    [['compaction_calls','Compaction call · System model sys-model · 2.0 KB input'],['compactions','Kept goals']]);
+  const failed=activityRows([{...done,payload:{error:'timeout'}}]);
+  assert.equal(failed[0].text,'Compaction failed: timeout');
+  const groups=activityGroups({events:[call,done],segments:[{...segment('a','r1'),first_seq:1,last_seq:2}]},[{id:'r1',state:'running'}]);
+  assert.equal(groups[0].counts.compactions,1);
+  assert.equal(groups[0].counts.compaction_calls,undefined);
+});

@@ -246,6 +246,7 @@ fn public_run(run: &Value) -> Value {
         "component_pause":if run["status"]=="paused"&&run["component_pause"]["version"]==1&&run["component_pause"]["component"].as_str().is_some_and(crate::engine_components::working_component) {json!({"version":1,"component":run["component_pause"]["component"],"reason":"component_unavailable"})}else{Value::Null},
         "code_index_retrieval":public_code_index_retrieval(run),
         "pending":run["pending"],"uncertain":run["uncertain"],"turns":run["turns"],
+        "phase":crate::task_progress::known_phase(&run["phase"]),
         "uncertain_calls":uncertain_calls(run),
         "tool_failure":tools::failure::project(&run["latest_tool_failure"]),
         "attachments":run["attachments"].as_array().cloned().unwrap_or_default(),

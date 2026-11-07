@@ -35,6 +35,14 @@
 .v2-activity-body .v2-mini-tool-disclosure > summary { font-family: var(--font-mono); }
 .v2-activity-body .v2-mini-tool[data-status="error"] > details > summary { color: var(--danger); }
 .v2-activity-body .v2-mini-tool[data-status="held"] > details > summary { color: var(--warning); }
+/* A compaction call is a system summary call, not an agent tool call.
+   Orange tokens follow the design-system theme pair (dark default, light override). */
+:root { --orange: #fb923c; --orange-rgb: 251, 146, 60; }
+body.light-mode { --orange: #c2410c; --orange-rgb: 194, 65, 12; }
+.v2-activity-body .v2-mini-row[data-category="compaction_calls"] {
+  border-left: 3px solid var(--orange);
+}
+.v2-activity-body .v2-mini-row[data-category="compaction_calls"] .v2-mini-content { color: var(--orange); }
 .v2-activity-body .v2-mini-section-head { display: flex; align-items: center; justify-content: space-between; color: var(--fg-3); }
 .v2-activity-body pre {
   white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono);

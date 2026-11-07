@@ -38,6 +38,14 @@ fn event(row: &SqliteRow, store: &Store, sid: &str) -> Result<Value> {
                 json!({"asst_id":format!("interaction:{seq}"),"content":text}),
             )
         }
+        "compaction_call" => (
+            "compaction_call",
+            json!({"model":item["model"],"input_bytes":item["input_bytes"]}),
+        ),
+        "compaction_result" => (
+            "compaction_result",
+            json!({"summary":item["summary"],"error":item["error"]}),
+        ),
         _ => ("diagnostic", item),
     };
     let execution_metadata = row
@@ -215,7 +223,7 @@ impl Store {
             let items=sqlx::query_scalar::<_,Vec<u8>>("SELECT i.item FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? AND i.run_id=? AND i.seq BETWEEN ? AND ? AND b.boundary_item_id IS ?")
                 .bind(sid).bind(&run).bind(first).bind(last).bind(&recorded).fetch_all(&self.pool).await?;
             // Same categories as the page's activityRows: one tool per call id, one update per message.
-            let (mut tools, mut updates) = (HashSet::new(), 0);
+            let (mut tools, mut updates, mut compactions) = (HashSet::new(), 0, 0);
             for raw in &items {
                 let item = self.unseal(raw)?;
                 match item["type"].as_str().unwrap_or("") {
@@ -223,13 +231,14 @@ impl Store {
                         tools.insert(item["call_id"].as_str().unwrap_or("").to_owned());
                     }
                     "message" => updates += 1,
+                    "compaction_result" => compactions += 1,
                     _ => {}
                 }
             }
             segments.push(json!({"id":format!("activity:{run}:{anchor}"),"run_id":run,"boundary_item_id":anchor,"first_seq":first,"last_seq":last,
                 "closed":latest.as_deref()!=Some(anchor.as_str()),"latest":index+1==groups.len(),"last_of_run":last_of_run.get(&run)==Some(&index),
                 "boundary_quality":if recorded.is_some(){"recorded"}else{"legacy_unverified"},
-                "counts":{"tools":tools.len(),"updates":updates,"responses":0,"modes":0,"compactions":0}}));
+                "counts":{"tools":tools.len(),"updates":updates,"responses":0,"modes":0,"compactions":compactions}}));
         }
         Ok(json!({"segments":segments,"cursor":cursor}))
     }
@@ -264,6 +273,59 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn compaction_rows_show_in_activity_but_not_in_context() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store
+            .put(
+                "session:s",
+                &json!({"id":"s","agent_id":"shared_default","status":"active"}),
+            )
+            .await
+            .unwrap();
+        let reply = json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]});
+        let mut tx = store.pool.begin().await.unwrap();
+        store
+            .insert_interaction(&mut tx, "s", "r", "model:1:0", &reply)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let before = store.context("s").await.unwrap();
+        let mut tx = store.pool.begin().await.unwrap();
+        let call = json!({"type":"compaction_call","model":"system-model","input_bytes":12});
+        let result = json!({"type":"compaction_result","summary":"Summary text"});
+        store
+            .insert_interaction(&mut tx, "s", "r", "compaction:1:x:call", &call)
+            .await
+            .unwrap();
+        store
+            .insert_interaction(&mut tx, "s", "r", "compaction:1:x:result", &result)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        // Both the cached cursor path and a cold rebuild skip the rows.
+        assert_eq!(store.context("s").await.unwrap(), before);
+        let cold = Store::open(root.path()).await.unwrap();
+        assert_eq!(cold.context("s").await.unwrap(), before);
+        let events = store.private_run_activity("s", "r", 0).await.unwrap()["events"].clone();
+        let kinds: Vec<_> = events
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["kind"].clone())
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                json!("agent_step_end"),
+                json!("compaction_call"),
+                json!("compaction_result")
+            ]
+        );
+        assert_eq!(events[1]["payload"]["model"], "system-model");
+        assert_eq!(events[2]["payload"]["summary"], "Summary text");
+    }
     #[tokio::test]
     async fn counts_recorded_calls_for_only_the_selected_agent() {
         let root = tempfile::tempdir().unwrap();

@@ -322,6 +322,7 @@ impl<
                 .as_object_mut()
                 .unwrap()
                 .remove("_context_assets_operation");
+            persisted.as_object_mut().unwrap().remove("_activity_items");
             if let Some(id) = run["input"]
                 .as_array()
                 .and_then(|items| items.last())
@@ -450,6 +451,21 @@ impl<
                             .await?;
                     }
                 }
+            }
+            // Activity-only rows (compaction call/result); context assembly skips their steps.
+            for entry in run["_activity_items"].as_array().into_iter().flatten() {
+                let step = entry["step"]
+                    .as_str()
+                    .filter(|step| step.starts_with("compaction:"))
+                    .ok_or_else(|| anyhow!("Activity row has an invalid step"))?;
+                crate::send_future(self.chat.insert_interaction(
+                    &mut tx,
+                    sid,
+                    rid,
+                    step,
+                    &entry["item"],
+                ))
+                .await?;
             }
             crate::send_future(self.background_claim_delivery(&mut tx, run)).await?;
             if kind == "context_compacted" {
@@ -618,6 +634,7 @@ impl<
             run.as_object_mut()
                 .unwrap()
                 .remove("_context_assets_operation");
+            run.as_object_mut().unwrap().remove("_activity_items");
             if let Some(map) = persisted.get("_tool_execution_metadata") {
                 run["_tool_execution_metadata"] = map.clone();
             }
