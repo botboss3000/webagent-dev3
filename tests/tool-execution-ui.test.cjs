@@ -252,3 +252,18 @@ test('duplicate protection is independently configurable and retains the complet
   await failed.items().find(item => item.label === 'Off for new actions').action();
   assert(failed.items().find(item => item.label === 'On').checked);
 });
+
+test('ability, tool and skill rows show their declared default read-only', () => {
+  const page = fs.readFileSync(path.join(__dirname, '../ui/main-panel/agents/pages/abilities/page.js'), 'utf8');
+  const start = page.indexOf('  const markDefault =');
+  const end = page.indexOf('};', start) + 2;
+  const appended = [];
+  const anchor = { after: el => appended.push(el) };
+  const context = { node: (tag, cls, text) => ({ tag, cls, text }) };
+  const mark = vm.runInNewContext('(() => {' + page.slice(start, end) + '; return markDefault; })()', context);
+  const row = { querySelector: sel => (sel === '.ac-ability-desc' ? anchor : null) };
+  mark(row, 'deny'); mark(row, 'auto'); mark(row, 'discoverable'); mark(row, undefined);
+  assert.deepEqual(appended.map(el => el.text), ['Default: Off', 'Default: Auto', 'Default: Discoverable']);
+  for (const call of ['markDefault(label, ability.default)', 'markDefault(toolRow, tool.default)',
+    'markDefault(skill.row, entry.default_mode)']) assert(page.includes(call), call);
+});

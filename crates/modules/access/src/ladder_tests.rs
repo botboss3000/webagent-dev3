@@ -259,18 +259,7 @@ fn defined_tools_fall_back_to_role_defaults_then_deny() {
 }
 
 #[test]
-fn saved_ladders_use_declared_ability_defaults_and_unset_ladders_stay_closed() {
-    crate::capabilities::install_ability_defaults(|id, rungs| {
-        (id == "web_search")
-            .then(|| {
-                rungs.iter().find_map(|rung| match rung.as_str() {
-                    "operator" => Some(Permission::Auto),
-                    "member" => Some(Permission::Ask),
-                    _ => None,
-                })
-            })
-            .flatten()
-    });
+fn abilities_a_level_does_not_name_stay_off() {
     let unset = CapabilityLevels::default();
     assert_eq!(
         unset
@@ -279,8 +268,29 @@ fn saved_ladders_use_declared_ability_defaults_and_unset_ladders_stay_closed() {
             .ability_permission("web_search"),
         Permission::Deny
     );
+    // A saved ladder no longer falls back to manifest defaults: a new ability is off
+    // until an Operator switches it on.
     let mut levels = CapabilityLevels::default();
     levels.revision = 1;
+    assert_eq!(
+        levels
+            .effective("operator")
+            .unwrap()
+            .ability_permission("web_search"),
+        Permission::Deny
+    );
+    levels
+        .levels
+        .get_mut("operator")
+        .unwrap()
+        .ability_permissions
+        .insert("web_search".into(), Permission::Auto);
+    levels
+        .levels
+        .get_mut("member")
+        .unwrap()
+        .ability_permissions
+        .insert("web_search".into(), Permission::Ask);
     assert_eq!(
         levels
             .effective("operator")
@@ -300,18 +310,9 @@ fn saved_ladders_use_declared_ability_defaults_and_unset_ladders_stay_closed() {
             .effective("visitor")
             .unwrap()
             .ability_permission("web_search"),
-        Permission::Deny,
-        "no default for visitors"
+        Permission::Deny
     );
-    assert_eq!(
-        levels
-            .effective("operator")
-            .unwrap()
-            .ability_permission("codebase_admin"),
-        Permission::Deny,
-        "undeclared stays closed"
-    );
-    // A saved grant wins, and an upper level's grant still caps the levels below it.
+    // An upper level's grant still caps the levels below it.
     levels
         .levels
         .get_mut("operator")

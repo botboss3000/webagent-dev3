@@ -23,11 +23,11 @@ Abilities not yet moved keep the manifest `tools` list and flat `tools/<tool>.sk
 
 ## Ability access defaults and plan entitlements
 
-An ability's manifest may declare `default_access` per role, like `tool.json`. In a saved
-capability ladder, a level with no saved permission for the ability (and no `*`) uses
-that default for its role, then the next role down, then deny; an ability that declares
-none stays closed until a level grants it, and an unconfigured ladder keeps every
-ability closed. Account plans (tiers) grant by entitlement group: the
+An ability's manifest may declare `default_access` per role, like `tool.json`. It is
+shown on the Abilities page ("Default: …") but grants nothing: a level with no saved
+permission for the ability (and no `*`) keeps it off, so a new ability stays off for
+existing agents until an Operator switches it on. Once on, its tools without a saved
+permission use their `tool.json` defaults and its skills their `default_mode`. Account plans (tiers) grant by entitlement group: the
 `entitlement_group` in the group's `_group.json` names it, and a tier's `entitlements`
 map grants it. An ability or tool the tier does not name, and that `*` does not cover,
 inherits its group's grant, so a new ability in a granted group works in that plan at

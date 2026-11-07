@@ -1426,7 +1426,7 @@ impl<H: Host> Catalog<H> {
         if Self::core_skill(ability).is_some() {
             general_skills.push(
                 json!({"skill_id":"core","title":"Skill","when_to_use":ability.skill_summary,
-                "mode":Self::skill_mode(visibility,&ability.id)}),
+                "mode":Self::skill_mode(visibility,&ability.id),"default_mode":"visible"}),
             );
         }
         for (name, cached) in &ability.selectable_skills {
@@ -1436,9 +1436,10 @@ impl<H: Host> Catalog<H> {
             if !Self::skill_live(ability, "selectable", name, &text) {
                 continue;
             }
-            if let Some((title, when, _)) = Self::selectable_metadata(name, &text) {
+            if let Some((title, when, default_mode)) = Self::selectable_metadata(name, &text) {
                 general_skills.push(json!({"skill_id":name,"title":title,"when_to_use":when,
-                    "mode":Self::selectable_mode(visibility,&ability.id,name,&text)}));
+                    "mode":Self::selectable_mode(visibility,&ability.id,name,&text),
+                    "default_mode":default_mode}));
             }
         }
         let mut described = json!({"id":ability.id,"group":ability.group,"group_name":ability.group_name,

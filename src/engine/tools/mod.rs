@@ -202,7 +202,7 @@ pub(crate) fn definition_problems() -> Vec<String> {
 
 /// Default access for a tool built into Base or defined in a tool folder; `None` keeps
 /// the earlier Auto for tools still defined only in code.
-fn tool_defaults(name: &str, rungs: &[String]) -> Option<webagent_access::Permission> {
+pub(crate) fn tool_defaults(name: &str, rungs: &[String]) -> Option<webagent_access::Permission> {
     if webagent_abilities::base::owns(name) {
         let read = is_read(name) || webagent_abilities::is_discovery(name);
         return Some(webagent_abilities::base::default_access(rungs, read));
@@ -214,13 +214,10 @@ fn tool_defaults(name: &str, rungs: &[String]) -> Option<webagent_access::Permis
     webagent_abilities::tool_definitions::get(name).map(|definition| definition.default_for(rungs))
 }
 
-/// Let capability levels fall back to tool and ability defaults, and account plans grant by
+/// Let capability levels fall back to tool defaults, and account plans grant by
 /// entitlement group; once per process.
 pub(crate) fn install_tool_defaults() {
     webagent_access::capabilities::install_tool_defaults(tool_defaults);
-    webagent_access::capabilities::install_ability_defaults(
-        webagent_abilities::ability_access::default_for,
-    );
     webagent_access::install_entitlements(
         webagent_abilities::ability_access::ability_entitlement,
         webagent_abilities::ability_access::tool_entitlement,

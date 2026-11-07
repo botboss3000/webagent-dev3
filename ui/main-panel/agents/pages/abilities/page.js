@@ -164,6 +164,14 @@ export async function renderAbilities(host, request, options) {
     }
   };
   const toolPolicy = () => data.capability_levels?.levels?.[levelId] || data.permissions;
+  // Read-only mark: the access a manifest declares for this level, applied only once the
+  // ability is switched on (a new ability stays off for existing agents).
+  const markDefault = (row, value) => {
+    if (!value) return;
+    const label = { deny: 'Off', ask: 'Ask', auto: 'Auto', visible: 'Visible', discoverable: 'Discoverable', off: 'Off' }[value] || value;
+    const anchor = row.querySelector('.ac-ability-desc') || row.querySelector('.ac-ability-name');
+    anchor?.after(node('div', 'ac-hint v3-default-mark', 'Default: ' + label));
+  };
   const buildAbilityBody = (detail, ability) => {
     if (detail.childElementCount) return;
     if (ability.id === 'mcp') detail.append(buildMcpControls({ ability, request, scope,
@@ -181,6 +189,7 @@ export async function renderAbilities(host, request, options) {
           (entry.skill_id === 'core' ? '/skill-content' :
             '/skills/' + encodeURIComponent(entry.skill_id) + '/content')),
       });
+      markDefault(skill.row, entry.default_mode);
       tools.append(skill.row, skill.body);
     }
     if (ability.id === "git_control" && canManage) tools.append(buildSourceControlControls({ data: sourceSites, request, scope, enabled: levelId === "operator" && !previewUser, status, rerender }));
@@ -229,7 +238,7 @@ export async function renderAbilities(host, request, options) {
         // one exists, as saveToolPermission writes). Effective access can still be
         // Deny because of the account tier, visibility or port status.
         permMode: toolPolicy()?.tool_permissions?.[tool.name] ||
-          toolPolicy()?.tool_permissions?.['*'] || 'auto',
+          toolPolicy()?.tool_permissions?.['*'] || tool.default || 'auto',
       }, {
         canEdit: canManage && !previewUser && levelId==='operator',
         showPerm: true,
@@ -266,6 +275,7 @@ export async function renderAbilities(host, request, options) {
         onVisibilityChange: (_, mode) => save(ability, 'tool', mode, toolRow.querySelector('.ac-tri'), tool.name),
       });
       if (tool.supported === false) toolRow.querySelector('.ac-tool-name').style.color = 'var(--danger)';
+      markDefault(toolRow, tool.default);
       toolRow.title = [tool.supported ? '' : 'Unavailable in v3', effectiveLabel(effectiveTool)].filter(Boolean).join(' · ');
       tools.append(toolRow);
     }
@@ -307,6 +317,7 @@ export async function renderAbilities(host, request, options) {
         ability.installed === false || (ability.tools || []).some(tool => tool.supported === false);
       if (incomplete) name.style.color = 'var(--danger)';
       label.append(name, node('div', 'ac-ability-desc', ability.description));
+      markDefault(label, ability.default);
       const projected = projection(ability);
       const availability = node('span', 'ac-ability-status',
         [readinessLabel(ability), effectiveLabel(projected)].filter(Boolean).join(' · '));

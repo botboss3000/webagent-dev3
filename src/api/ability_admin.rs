@@ -204,9 +204,21 @@ async fn catalog(app: &App, identity: &Value, id: &str, params: &HashMap<String,
         .await?
         .tool_call_counts(id)
         .await?;
+    // Declared defaults are shown for the viewed level's rungs: it, then the levels below.
+    let rungs = access
+        .capability_level
+        .chain
+        .first()
+        .map(|(rungs, _)| rungs.clone())
+        .unwrap_or_else(|| vec![access.capability_level.id.clone()]);
     // The counts describe this caller's recorded model calls, including older sessions.
     for ability in &mut abilities {
         let ability_id = ability["id"].as_str().unwrap_or("").to_owned();
+        ability["default"] = json!(webagent_abilities::ability_access::default_for(
+            &ability_id,
+            &rungs
+        )
+        .unwrap_or(Permission::Deny));
         let ready = ability["available"] == true;
         let permission = access.ability_permission(&ability_id);
         let reason = if !ready {
@@ -248,6 +260,8 @@ async fn catalog(app: &App, identity: &Value, id: &str, params: &HashMap<String,
             for tool in tools {
                 let name = tool["name"].as_str().unwrap_or("").to_owned();
                 tool["call_count"] = json!(call_counts.get(&name).copied().unwrap_or(0));
+                tool["default"] =
+                    json!(crate::tools::tool_defaults(&name, &rungs).unwrap_or(Permission::Auto));
                 tool["execution_override"] = if rights["can_manage"] == true {
                     visibility["tool_execution"][&name].clone()
                 } else {

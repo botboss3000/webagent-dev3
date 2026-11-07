@@ -1,8 +1,8 @@
 //! What each ability declares about access: its manifest's `default_access` by capability
 //! level, as tools declare theirs in `tool.json`, and its group's `entitlement_group` from
 //! `_group.json`, which account plans grant. Read once per process from the same abilities
-//! folder as the tool definitions. An ability that declares no default stays closed until
-//! a level grants it; an ungrouped ability needs a named plan grant.
+//! folder as the tool definitions. The default is shown, not applied: an ability stays
+//! closed until a level grants it; an ungrouped ability needs a named plan grant.
 use crate::tool_definitions::{self, ROLES};
 use serde_json::Value;
 use std::{collections::BTreeMap, fs, path::Path, sync::OnceLock};
@@ -149,7 +149,7 @@ pub fn registry() -> &'static Registry {
     })
 }
 
-/// An ability's declared default for a level's rungs (installed into the access layer).
+/// An ability's declared default for a level's rungs, shown on the Abilities page.
 pub fn default_for(id: &str, rungs: &[String]) -> Option<Permission> {
     registry().abilities.get(id)?.default_for(rungs)
 }

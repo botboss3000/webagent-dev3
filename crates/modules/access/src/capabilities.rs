@@ -35,39 +35,14 @@ pub struct CapabilityLevel {
     /// The same rungs with each level's saved ability permissions.
     #[serde(skip)]
     pub ability_chain: Vec<(Vec<String>, BTreeMap<String, Permission>)>,
-    /// Set by `effective` for a saved ladder: an ability it does not name uses its
-    /// declared default. An unset ladder keeps every ability closed.
-    #[serde(skip)]
-    pub ability_defaults: bool,
 }
-/// Default access for an ability given a level's rungs, from its manifest's
-/// `default_access`; `None` when it declares none, which keeps it closed. The app installs
-/// it from the ability catalog.
-pub type AbilityDefaults = fn(&str, &[String]) -> Option<Permission>;
-static ABILITY_DEFAULTS: std::sync::OnceLock<AbilityDefaults> = std::sync::OnceLock::new();
-pub fn install_ability_defaults(defaults: AbilityDefaults) {
-    let _ = ABILITY_DEFAULTS.set(defaults);
-}
-/// A level's saved ability permission, else the ability's declared default for its rungs.
-fn level_ability_permission(
-    saved: &BTreeMap<String, Permission>,
-    rungs: &[String],
-    id: &str,
-    defaults: bool,
-) -> Permission {
+/// A level's saved ability permission; an ability it does not name stays off, whatever
+/// its manifest declares, until an Operator switches it on.
+fn level_ability_permission(saved: &BTreeMap<String, Permission>, id: &str) -> Permission {
     saved
         .get(id)
         .or_else(|| saved.get("*"))
         .copied()
-        .or_else(|| {
-            defaults
-                .then(|| {
-                    ABILITY_DEFAULTS
-                        .get()
-                        .and_then(|declared| declared(id, rungs))
-                })
-                .flatten()
-        })
         .unwrap_or(Permission::Deny)
 }
 /// Default access for a tool with a definition, given a level's rungs; `None` for a
@@ -135,22 +110,12 @@ impl CapabilityLevel {
     }
     pub fn ability_permission(&self, id: &str) -> Permission {
         if self.ability_chain.is_empty() {
-            return level_ability_permission(
-                &self.ability_permissions,
-                std::slice::from_ref(&self.id),
-                id,
-                self.ability_defaults,
-            );
+            return level_ability_permission(&self.ability_permissions, id);
         }
         self.ability_chain
             .iter()
-            .fold(Permission::Auto, |permission, (rungs, saved)| {
-                permission.meet(level_ability_permission(
-                    saved,
-                    rungs,
-                    id,
-                    self.ability_defaults,
-                ))
+            .fold(Permission::Auto, |permission, (_, saved)| {
+                permission.meet(level_ability_permission(saved, id))
             })
     }
     pub fn tool_permission(&self, id: &str) -> Permission {
@@ -266,7 +231,6 @@ impl Default for CapabilityLevels {
                         monthly_turns: None,
                         chain: Vec::new(),
                         ability_chain: Vec::new(),
-                        ability_defaults: false,
                     },
                 )
             })
@@ -412,7 +376,6 @@ impl CapabilityLevels {
                 )
             })
             .collect();
-        result.ability_defaults = self.revision > 0;
         for upper_id in &self.order[..position] {
             let upper = &self.levels[upper_id];
             meet_permissions(

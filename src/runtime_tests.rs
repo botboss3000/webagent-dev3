@@ -4276,6 +4276,13 @@ async fn ability_management_routes_enforce_auth_revisions_and_session_boundaries
     assert_eq!(status, StatusCode::OK);
     assert_eq!(agent["revision"], 0);
     assert_eq!(agent["abilities"][0]["visibility"], "discoverable");
+    // Each row carries its declared default for the viewed level, shown read-only.
+    for ability in agent["abilities"].as_array().unwrap() {
+        assert!(ability["default"].is_string(), "{}", ability["id"]);
+        for tool in ability["tools"].as_array().into_iter().flatten() {
+            assert!(tool["runtime_control"] == true || tool["default"].is_string());
+        }
+    }
     let (status, first_state) =
         ability_request(&app, Method::GET, &first_uri, None, Some(&cookie), None).await;
     assert_eq!(status, StatusCode::OK);
