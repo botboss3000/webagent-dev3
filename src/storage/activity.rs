@@ -225,10 +225,13 @@ impl Store {
                 continue;
             }
             let recorded = r.get::<Option<String>, _>("boundary_item_id");
-            let items=sqlx::query_scalar::<_,Vec<u8>>("SELECT i.item FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? AND i.run_id=? AND i.seq BETWEEN ? AND ? AND b.boundary_item_id IS ?")
+            let items=sqlx::query_scalar::<_,Vec<u8>>("SELECT i.item FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? AND i.run_id=? AND i.seq BETWEEN ? AND ? AND b.boundary_item_id IS ? ORDER BY i.seq")
                 .bind(sid).bind(&run).bind(first).bind(last).bind(&recorded).fetch_all(&self.pool).await?;
             // Same categories as the page's activityRows: one tool per call id, one update per message.
-            let (mut tools, mut updates, mut compactions) = (HashSet::new(), 0, 0);
+            let (mut tools, mut updates, mut compactions, mut retries) = (HashSet::new(), 0, 0, 0);
+            // Whether the group's latest row is a scheduled retry, so its label can say so before
+            // its events are loaded: "retry" while reconnecting, "recovering" for an automatic resume.
+            let mut retrying = Value::Null;
             for raw in &items {
                 let item = self.unseal(raw)?;
                 match item["type"].as_str().unwrap_or("") {
@@ -237,13 +240,20 @@ impl Store {
                     }
                     "message" => updates += 1,
                     "compaction_result" => compactions += 1,
+                    "retry_scheduled" => retries += 1,
                     _ => {}
                 }
+                retrying = match item["type"].as_str() {
+                    Some("retry_scheduled") if item["auto_resume"] == true => json!("recovering"),
+                    Some("retry_scheduled") => json!("retry"),
+                    _ => Value::Null,
+                };
             }
             segments.push(json!({"id":format!("activity:{run}:{anchor}"),"run_id":run,"boundary_item_id":anchor,"first_seq":first,"last_seq":last,
                 "closed":latest.as_deref()!=Some(anchor.as_str()),"latest":index+1==groups.len(),"last_of_run":last_of_run.get(&run)==Some(&index),
                 "boundary_quality":if recorded.is_some(){"recorded"}else{"legacy_unverified"},
-                "counts":{"tools":tools.len(),"updates":updates,"responses":0,"modes":0,"compactions":compactions}}));
+                "retrying":retrying,
+                "counts":{"tools":tools.len(),"updates":updates,"responses":0,"modes":0,"compactions":compactions,"retries":retries}}));
         }
         Ok(json!({"segments":segments,"cursor":cursor}))
     }
@@ -330,6 +340,29 @@ mod tests {
         );
         assert_eq!(events[1]["payload"]["model"], "system-model");
         assert_eq!(events[2]["payload"]["summary"], "Summary text");
+        // A scheduled retry is an activity-only row too: counted, flagged as the group's latest
+        // state, and kept out of the model's context.
+        let retry = json!({"type":"retry_scheduled","attempt":1,"of":2,"wait_seconds":8,
+            "error":"Bridge provider overloaded","backup":false,"auto_resume":false});
+        let mut tx = store.pool.begin().await.unwrap();
+        store
+            .insert_interaction(&mut tx, "s", "r", "retry:1", &retry)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(store.context("s").await.unwrap(), before);
+        let summary = store.private_activity_summary("s", 0, None).await.unwrap();
+        let group = &summary["segments"][0];
+        assert_eq!(
+            (
+                group["counts"]["retries"].as_u64(),
+                group["retrying"].as_str()
+            ),
+            (Some(1), Some("retry"))
+        );
+        let events = store.private_run_activity("s", "r", 0).await.unwrap()["events"].clone();
+        assert_eq!(events[3]["kind"], "retry_scheduled");
+        assert_eq!(events[3]["payload"]["wait_seconds"], 8);
     }
     #[tokio::test]
     async fn counts_recorded_calls_for_only_the_selected_agent() {

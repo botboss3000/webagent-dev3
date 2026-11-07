@@ -17,8 +17,10 @@ export function createActivityGroup({transcript}) {
     const phase={running:'Working…',queued:'Queued…',waiting_external:'Waiting for build…',finalizing:'Checking response…',
       stopping:'Stopping…',completed:'Completed',failed:'Failed',cancelled:'Stopped',
       finished:'Finished'}[group.state] || group.state;
+    // Loaded rows decide; before the group is expanded its server summary says whether it is retrying.
     const last=group.rows?.at(-1);
-    const progress=group.state==='queued' && last?.retry ? (last.autoResume ? 'Recovering…' : 'Retrying connection…')
+    const retrying=last?(last.retry?(last.autoResume?'recovering':'retry'):null):group.retrying;
+    const progress=group.state==='queued' && retrying ? (retrying==='recovering' ? 'Recovering…' : 'Retrying connection…')
       : group.kind==='compaction' && ['queued','running','finalizing'].includes(group.state)
       ? (group.state==='queued' ? 'Compaction queued…' : 'Compacting…') : phase;
     // Normal completion needs no status suffix; retain active and exceptional states.
