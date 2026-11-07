@@ -340,6 +340,26 @@ print("SEEDED" if result["baseline_commit"] else "FAILED")
             await self.run_tool("workspace_seed", {})
         self.assertFalse((worker.ROOT / self.session / "webagent-v3").exists())
 
+    async def test_workspace_seed_skips_engine_artifacts_only(self):
+        # Releases carry compiled engine services over the per-file limit; they are
+        # build outputs, so the seed leaves them out. Large source still fails.
+        artifact = worker.TEMPLATE / "plugins/engine/x/artifact/service"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_bytes(b"x" * (worker.LIMIT + 100_000))
+        result = await self.run_tool("workspace_seed", {})
+        self.assertEqual(result["status"], "success")
+        path = worker.ROOT / self.session / "webagent-v3"
+        self.assertTrue((path / "src/main.rs").exists())
+        self.assertFalse((path / "plugins/engine/x/artifact").exists())
+
+    async def test_workspace_seed_refuses_large_source_file(self):
+        large = worker.TEMPLATE / "plugins/engine/x/src/big.rs"
+        large.parent.mkdir(parents=True)
+        large.write_bytes(b"x" * (worker.LIMIT + 100_000))
+        with self.assertRaisesRegex(ValueError, "exceeds limit"):
+            await self.run_tool("workspace_seed", {})
+        self.assertFalse((worker.ROOT / self.session / "webagent-v3").exists())
+
 
 
 if __name__ == "__main__":

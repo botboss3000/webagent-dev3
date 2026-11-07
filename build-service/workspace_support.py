@@ -174,13 +174,30 @@ def source_patch(base, args):
             temporary.unlink(missing_ok=True)
 
 
+def _seed_skipped(prefix, name):
+    """Build outputs the broker places in every release, not editable source:
+    the compiled engine services under plugins/engine/<component>/artifact/."""
+    parts = prefix.split("/")
+    return (not prefix and name == ".code-index") or (
+        len(parts) == 4 and parts[:2] == ["plugins", "engine"] and parts[2] and name == "artifact")
+
+
+def _seed_ignore(root):
+    """copytree ignore callable matching _seed_skipped for a copy of root."""
+    def ignore(directory, names):
+        relative = os.path.relpath(directory, root)
+        prefix = "" if relative == "." else relative.replace(os.sep, "/") + "/"
+        return {name for name in names if _seed_skipped(prefix, name)}
+    return ignore
+
+
 def _seed_capture(path, include_git=False):
     digest = hashlib.sha256()
     count = size = 0
     def walk(fd, prefix):
         nonlocal count, size
         for name in sorted(os.listdir(fd)):
-            if not prefix and (name == ".code-index" or name == ".git" and not include_git):
+            if _seed_skipped(prefix, name) or not prefix and name == ".git" and not include_git:
                 continue
             info = os.stat(name, dir_fd=fd, follow_symlinks=False)
             if stat.S_ISDIR(info.st_mode):
@@ -231,7 +248,7 @@ def _seed_inner(spec):
     if before["files"] == 0 or (template / ".git").exists():
         raise ValueError("invalid source template")
     stage.mkdir(mode=0o700)
-    shutil.copytree(template, stage, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".code-index"))
+    shutil.copytree(template, stage, dirs_exist_ok=True, ignore=_seed_ignore(template))
     if _seed_capture(template, True) != before or _seed_capture(stage, True) != before:
         raise ValueError("seed copy changed")
     env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(stage),

@@ -272,6 +272,19 @@ class MountBoundaryTests(unittest.TestCase):
    with self.assertRaises(OSError):
     with fixtures.host.pinned_directory(root,"session"):pass
 
+class ExecutorControlMountTests(unittest.TestCase):
+ def test_executor_control_folder_is_on_a_writable_mount(self):
+  # The executor container is --read-only; the control folder its entrypoint creates must
+  # sit under one of workspace_task's tmpfs mounts (da6a488 moved it off and broke startup).
+  import re
+  service=Path(__file__).resolve().parents[1]/"build-service"
+  control=re.search(r'control=Path\("([^"]+)"\)',(service/"workspace_executor.py").read_text()).group(1)
+  host=(service/"host.py").read_text()
+  task=host[host.index("def workspace_task"):]
+  argv=task[:task.index("workspace_executor.py")]
+  mounts=re.findall(r'"--tmpfs","([^:"]+):rw',argv)
+  self.assertIn("--read-only",argv)
+  self.assertTrue(any(control==m or control.startswith(m.rstrip("/")+"/") for m in mounts),(control,mounts))
 class InitialPublicationTests(unittest.TestCase):
  def test_first_workspace_request_stages_snapshot_before_release_id(self):
   from unittest.mock import Mock
