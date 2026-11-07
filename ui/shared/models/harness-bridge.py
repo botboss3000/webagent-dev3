@@ -82,7 +82,7 @@ Client secret and server: work/harness-bridge/client.json (mode 0600), written b
 Server override: $HARNESS_BRIDGE_URL.
 Per-chat files: work/harness-bridge/sessions/<webagent-session>/.
 """
-import base64, difflib, hashlib, json, os, re, shutil, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request, uuid
+import base64, difflib, hashlib, json, os, re, shutil, signal, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request, uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent / "work" / "harness-bridge"
@@ -453,29 +453,50 @@ def mcp_stub(work):
 
 
 def opencode_turn(command, prompt, work, model):
-    """Run one `opencode run`; return its session id, the final text and token usage."""
+    """Run one `opencode run`; return its session id, the final text and token usage.
+
+    The run stops at the end of the first step that called a WebAgent tool: the stub only records the call,
+    so any further step is the model winding down (30-45 s each on a long context). The next call resumes
+    the session with the tool's real result."""
     # The prompt goes on stdin: a fresh session's full history can exceed the 128 KiB argument cap.
-    result = subprocess.run(command, input=prompt, cwd=work, capture_output=True, text=True, timeout=HARNESS_SECS,
-                            env={**os.environ, "OPENCODE_CONFIG_CONTENT": opencode_config(work, model)})
-    session, texts, usage, errors = None, {}, {"input": 0, "output": 0}, []
-    for line in result.stdout.splitlines():
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        session = event.get("sessionID") or session
-        part = event.get("part") or {}
-        if event.get("type") == "text":
-            texts.setdefault(part.get("messageID"), []).append(part.get("text", ""))
-        elif event.get("type") == "step_finish":
-            tokens = part.get("tokens") or {}
-            cache = tokens.get("cache") or {}
-            usage["input"] += tokens.get("input", 0) + cache.get("read", 0) + cache.get("write", 0)
-            usage["output"] += tokens.get("output", 0)
-        elif event.get("type") == "error":
-            errors.append(str((event.get("error") or {}).get("message", event))[:300])
-    if errors or not session:
-        raise RuntimeError(f"opencode failed ({result.returncode}): {errors or result.stderr[-300:]}")
+    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               cwd=work, text=True, start_new_session=True,
+                               env={**os.environ, "OPENCODE_CONFIG_CONTENT": opencode_config(work, model)})
+    stop = lambda: os.killpg(process.pid, signal.SIGTERM) if process.poll() is None else None
+    timer = threading.Timer(HARNESS_SECS, stop)
+    timer.start()
+    stderr = []
+    threading.Thread(target=lambda: stderr.append(process.stderr.read()), daemon=True).start()
+    process.stdin.write(prompt)
+    process.stdin.close()
+    session, texts, usage, errors, stopped = None, {}, {"input": 0, "output": 0}, [], False
+    try:
+        for line in process.stdout:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            session = event.get("sessionID") or session
+            part = event.get("part") or {}
+            if event.get("type") == "text":
+                texts.setdefault(part.get("messageID"), []).append(part.get("text", ""))
+            elif event.get("type") == "step_finish":
+                tokens = part.get("tokens") or {}
+                cache = tokens.get("cache") or {}
+                usage["input"] += tokens.get("input", 0) + cache.get("read", 0) + cache.get("write", 0)
+                usage["output"] += tokens.get("output", 0)
+                if (work / "calls.jsonl").exists() and (work / "calls.jsonl").stat().st_size:
+                    stopped = True
+                    stop()
+                    break
+            elif event.get("type") == "error":
+                errors.append(str((event.get("error") or {}).get("message", event))[:300])
+        process.wait()
+    finally:
+        timer.cancel()
+        stop()
+    if errors or not session or (process.returncode and not stopped):
+        raise RuntimeError(f"opencode failed ({process.returncode}): {errors or ''.join(stderr)[-300:]}")
     # The last assistant message is the turn's answer; earlier ones led up to its tool calls.
     return session, "".join(list(texts.values())[-1]) if texts else "", usage
 
