@@ -79,7 +79,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-cert
     && curl -fsSLo espeak.whl https://files.pythonhosted.org/packages/de/1e/25ec5ab07528c0fbb215a61800a38eca05c8a99445515a02d7fa5debcb32/espeakng_loader-0.2.4-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl \
     && curl -fsSLo /opt/voice/models/silero_vad.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx \
     && printf '%s  %s\n' 532c45bbd41036d83cd70606797529aa8086c2053395a58967736c727625b120 sherpa.tar.bz2 \
-        5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf parakeet.tar.bz2 \
+        1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9 parakeet.tar.bz2 \
         60703707bc05ccd48d60e1eb723f38b07d6e474795a0b6a588d7220400e0f7a4 kokoro.tar.bz2 \
         08721baf27d13d461f6be6eed9a65277e70d68234ff484fd8b9897b222cdcb6d espeak.whl \
         9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6 /opt/voice/models/silero_vad.onnx | sha256sum -c - \

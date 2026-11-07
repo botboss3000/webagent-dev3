@@ -171,12 +171,54 @@ def post(path, body, timeout=60, url=None):
         raise Transient(str(error))
 
 
+# Harness processes by call id, so a Stop from WebAgent can interrupt the one running that call.
+RUNNING, STOPPED, CURRENT = {}, set(), threading.local()
+
+
+class Stopped(Exception):
+    """WebAgent stopped the call; it wants no reply."""
+
+
+def interrupt(process, grace=5):
+    """Ctrl-C the harness, as its own stop key would; kill it if it is still running after the grace period."""
+    def signal_group(sig):
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            pass
+    if process.poll() is None:
+        signal_group(signal.SIGINT)
+        threading.Timer(grace, lambda: process.poll() is None and signal_group(signal.SIGKILL)).start()
+
+
+def start_harness(command, **options):
+    """Start a harness process in its own process group, registered under the call this thread answers."""
+    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, start_new_session=True, **options)
+    call = getattr(CURRENT, "call", None)
+    if call:
+        RUNNING[call] = process
+        if call in STOPPED:
+            interrupt(process)
+    return process
+
+
+def stop_calls(ids):
+    for call in ids:
+        STOPPED.add(call)
+        if call in RUNNING:
+            print(f"{call}: stopped by WebAgent; interrupting its harness", file=sys.stderr)
+            interrupt(RUNNING[call])
+
+
 def fetch(session=None):
     """Long-poll until a call arrives and this process takes it; ride out gateway restarts and network blips.
     An unacknowledged call returns to WebAgent's queue after a minute, so a lost response or ack only delays it."""
     while True:
         try:
-            call = post("/api/v3/harness-bridge/next", {"session": session} if session else {}, timeout=POLL_TIMEOUT)["call"]
+            response = post("/api/v3/harness-bridge/next", {"session": session} if session else {}, timeout=POLL_TIMEOUT)
+            stop_calls(response.get("cancelled") or [])
+            call = response["call"]
             if call:
                 post("/api/v3/harness-bridge/ack", {"id": call["id"]})
         except (Transient, Gone) as error:
@@ -459,10 +501,8 @@ def opencode_turn(command, prompt, work, model):
     so any further step is the model winding down (30-45 s each on a long context). The next call resumes
     the session with the tool's real result."""
     # The prompt goes on stdin: a fresh session's full history can exceed the 128 KiB argument cap.
-    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               cwd=work, text=True, start_new_session=True,
-                               env={**os.environ, "OPENCODE_CONFIG_CONTENT": opencode_config(work, model)})
-    stop = lambda: os.killpg(process.pid, signal.SIGTERM) if process.poll() is None else None
+    process = start_harness(command, cwd=work, env={**os.environ, "OPENCODE_CONFIG_CONTENT": opencode_config(work, model)})
+    stop = lambda: interrupt(process)
     timer = threading.Timer(HARNESS_SECS, stop)
     timer.start()
     stderr = []
@@ -495,6 +535,7 @@ def opencode_turn(command, prompt, work, model):
     finally:
         timer.cancel()
         stop()
+    check_stopped()
     if errors or not session or (process.returncode and not stopped):
         raise RuntimeError(f"opencode failed ({process.returncode}): {errors or ''.join(stderr)[-300:]}")
     # The last assistant message is the turn's answer; earlier ones led up to its tool calls.
@@ -533,14 +574,22 @@ def answer_opencode(call, folder, state, delta):
           f"({'fresh' if fresh else 'resumed'} session {session}, {len(calls)} tool call(s))")
 
 
+def check_stopped():
+    if getattr(CURRENT, "call", None) in STOPPED:
+        raise Stopped()
+
+
 def answer(call):
     """Run the call's harness; on any failure tell WebAgent at once, so the run retries instead of waiting."""
+    CURRENT.call = call["id"]
     try:
         harness = HARNESSES.get(call.get("provider"))
         if not harness:
             raise RuntimeError(f"no harness for {call.get('provider')} on this client")
         folder, state, delta = remember(call)
         harness(call, folder, state, delta)
+    except Stopped:
+        print(f"{call['id']}: stopped; no reply sent", file=sys.stderr)
     except (Exception, SystemExit) as error:
         detail = str(error)[:300] or type(error).__name__
         print(f"{call['id']}: {detail}", file=sys.stderr)
@@ -548,6 +597,9 @@ def answer(call):
             post("/api/v3/harness-bridge/reply", {"id": call["id"], "error": detail})
         except (Transient, Gone) as failure:
             print(f"{call['id']}: could not report the failure ({failure})", file=sys.stderr)
+    finally:
+        RUNNING.pop(call["id"], None)
+        STOPPED.discard(call["id"])
 
 
 def answer_claude(call, folder, state, delta):
@@ -569,7 +621,14 @@ def answer_claude(call, folder, state, delta):
     # Prompt on stdin: a fresh chat's full history exceeds Linux's 128 KiB single-argument limit.
     prompt = prompt_for(call, delta, fresh)
     started = time.time()
-    result = subprocess.run(command, input=prompt, cwd=folder, capture_output=True, text=True, timeout=HARNESS_SECS)
+    process = start_harness(command, cwd=folder)
+    try:
+        stdout, stderr = process.communicate(prompt, timeout=HARNESS_SECS)
+    except subprocess.TimeoutExpired:
+        interrupt(process)
+        stdout, stderr = process.communicate()
+    check_stopped()
+    result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
     ended = time.time()
     try:
         output = json.loads(result.stdout)
@@ -686,6 +745,17 @@ def selftest():
     assert delta["rewritten"] and len(delta["new"]) == 1
     message = parse_reply('{"content":"","tool_calls":[{"name":"file_list","arguments":{}}]}', body)
     assert message["tool_calls"][0]["function"] == {"name": "file_list", "arguments": "{}"}
+    CURRENT.call = "stop-me"
+    process = start_harness(["sleep", "30"])
+    stop_calls(["stop-me"])
+    assert process.wait(timeout=5) != 0
+    try:
+        check_stopped()
+        raise AssertionError("a stopped call must not reply")
+    except Stopped:
+        pass
+    RUNNING.clear(), STOPPED.clear()
+    CURRENT.call = None
     global TIMING
     TIMING = folder / "timing.jsonl"
     fetched = time.time()

@@ -6,6 +6,8 @@
 //! lost poll response returns the call to the queue instead of stranding it.
 //! The API (client endpoints) and the loop (calls) are separate processes; both
 //! poll the same sealed documents, so a restart simply drops waiting calls.
+//! Stop on a call a client already took marks it cancelled; that process's next poll returns its
+//! id, and the client interrupts the harness running it.
 use crate::*;
 use axum::{http::HeaderMap, Extension};
 use webagent_configuration::digest;
@@ -67,6 +69,7 @@ fn stale(call: &Value, at: u64) -> bool {
         Some("pending") => at > since("created") + OFFLINE_SECS,
         Some("offered") => at > since("offered") + LEASE_SECS + OFFLINE_SECS,
         Some("claimed") => at > since("claimed") + ANSWER_SECS,
+        Some("cancelled") => at > since("cancelled") + OFFLINE_SECS,
         _ => at > since("created") + 2 * ANSWER_SECS,
     }
 }
@@ -118,12 +121,22 @@ impl BridgeQueue for Queue {
             let id = Uuid::new_v4().to_string();
             let key = format!("{CALLS}{link}:{id}");
             self.0.put(&key, &json!({"id":id,"session":call.session,"provider":call.provider,"body":call.body,"state":"pending","created":now()})).await?;
+            // A cancelled call a client is running stays, marked, until that client's next poll.
+            let mut keep = false;
             // No bridge failure reaches WebAgent with a partial response or a tool effect (the
             // harness only records tool calls), so each one is reported as not started.
             let result = async {
                 loop {
                     tokio::select! {
-                        _ = call.cancel.cancelled() => return Err(typed_failure(FailureKind::Cancelled, false, "Provider request cancelled")),
+                        _ = call.cancel.cancelled() => {
+                            if let Some(mut doc) = self.0.get(&key).await?.filter(|d| d["state"] == "claimed") {
+                                doc["state"] = json!("cancelled");
+                                doc["cancelled"] = json!(now());
+                                self.0.put(&key, &doc).await?;
+                                keep = true;
+                            }
+                            return Err(typed_failure(FailureKind::Cancelled, false, "Provider request cancelled"));
+                        }
                         _ = tokio::time::sleep(TICK) => {}
                     }
                     let Some(doc) = self.0.get(&key).await? else { return Err(offline()) };
@@ -153,7 +166,9 @@ impl BridgeQueue for Queue {
                     }
                 }
             }.await;
-            let _ = self.0.delete(&key).await;
+            if !keep {
+                let _ = self.0.delete(&key).await;
+            }
             result
         })
     }
@@ -217,7 +232,8 @@ async fn mark_seen(app: &App, caller: &Caller) -> Result<(), ApiError> {
 }
 
 /// Long-poll for the next open call on this link, optionally for one WebAgent chat. The call is
-/// only offered: the process must acknowledge it before running it.
+/// only offered: the process must acknowledge it before running it. `cancelled` lists calls this
+/// process took that WebAgent has since stopped; the client interrupts their harnesses.
 pub async fn next(
     State(app): State<App>,
     headers: HeaderMap,
@@ -231,6 +247,7 @@ pub async fn next(
     loop {
         {
             let _guard = app.gate.lock().await;
+            let mut cancelled = Vec::new();
             for mut call in app.store.list(&format!("{CALLS}{}:", caller.link)).await? {
                 let key = format!(
                     "{CALLS}{}:{}",
@@ -239,6 +256,11 @@ pub async fn next(
                 );
                 if stale(&call, now()) {
                     app.store.delete(&key).await?;
+                    continue;
+                }
+                if call["state"] == "cancelled" && call["instance"] == caller.instance.as_str() {
+                    app.store.delete(&key).await?;
+                    cancelled.push(call["id"].clone());
                     continue;
                 }
                 if !open(&call, now()) || session.is_some_and(|s| call["session"] != s) {
@@ -250,8 +272,11 @@ pub async fn next(
                 call["instance"] = json!(caller.instance);
                 app.store.put(&key, &call).await?;
                 return Ok(Json(
-                    json!({"call":{"id":call["id"],"session":call["session"],"provider":call["provider"],"body":call["body"]}}),
+                    json!({"call":{"id":call["id"],"session":call["session"],"provider":call["provider"],"body":call["body"]},"cancelled":cancelled}),
                 ));
+            }
+            if !cancelled.is_empty() {
+                return Ok(Json(json!({"call":null,"cancelled":cancelled})));
             }
         }
         if now() >= deadline {
@@ -530,6 +555,15 @@ mod tests {
             &offered,
             1001 + super::LEASE_SECS + super::OFFLINE_SECS
         ));
+    }
+
+    /// A stopped call is never offered again and is dropped soon if its client never polls.
+    #[test]
+    fn cancelled_calls_are_closed_and_expire() {
+        let cancelled = json!({"state":"cancelled","cancelled":1000,"created":900});
+        assert!(!super::open(&cancelled, 99_999));
+        assert!(!super::stale(&cancelled, 1000 + super::OFFLINE_SECS));
+        assert!(super::stale(&cancelled, 1001 + super::OFFLINE_SECS));
     }
 
     #[test]
