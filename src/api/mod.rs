@@ -474,9 +474,17 @@ pub(super) fn router(app: App) -> Router {
         .layer(middleware::from_fn(diagnostics::http_errors))
         .layer(middleware::from_fn(|request:Request,next:Next|async move{
             let public_widget_module=request.uri().path()=="/v3-ui/chat/widget/window.js";
+            // Static UI code is the same for every account: let the browser keep it and
+            // revalidate each use (a body-less 304 when unchanged), so a page load stops
+            // re-downloading every module while a live UI publish still applies at once.
+            // Everything else, including generated JSON and API data, is never stored.
+            let path=request.uri().path();
+            let static_code=(path.starts_with("/v3-ui/")||path.starts_with("/ui/"))
+                &&[".js",".css",".svg",".png",".woff2"].iter().any(|ext|path.ends_with(ext));
             let mut response=next.run(request).await;
             if public_widget_module {response.headers_mut().insert("access-control-allow-origin",HeaderValue::from_static("*"));}
-            response.headers_mut().insert("cache-control",HeaderValue::from_static("no-store"));
+            let revalidate=static_code&&matches!(response.status(),StatusCode::OK|StatusCode::NOT_MODIFIED);
+            response.headers_mut().insert("cache-control",HeaderValue::from_static(if revalidate {"private, no-cache"} else {"no-store"}));
             response.headers_mut().insert("x-content-type-options",HeaderValue::from_static("nosniff"));
             response.headers_mut().insert("referrer-policy",HeaderValue::from_static("same-origin"));
             if !response.headers().contains_key("content-security-policy") {response.headers_mut().insert("content-security-policy",HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"));}
