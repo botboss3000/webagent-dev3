@@ -113,9 +113,24 @@ fn fresh(root: &Path, digest: &str) -> bool {
             })
 }
 
+/// Readiness may already be 6 seconds old, and the catalog asks once per tool while
+/// this hashes the package folder each time, so one answer is reused for a second.
 pub fn available() -> bool {
-    ROOT.get()
-        .is_some_and(|root| package(&folder()).is_some_and(|digest| fresh(root, &digest)))
+    static RECENT: std::sync::Mutex<Option<(std::time::Instant, bool)>> =
+        std::sync::Mutex::new(None);
+    let mut recent = RECENT.lock().unwrap_or_else(|e| e.into_inner());
+    if cfg!(not(test)) {
+        if let Some((at, answer)) = *recent {
+            if at.elapsed() < std::time::Duration::from_secs(1) {
+                return answer;
+            }
+        }
+    }
+    let answer = ROOT
+        .get()
+        .is_some_and(|root| package(&folder()).is_some_and(|digest| fresh(root, &digest)));
+    *recent = Some((std::time::Instant::now(), answer));
+    answer
 }
 
 fn response(bytes: &[u8]) -> anyhow::Result<Value> {

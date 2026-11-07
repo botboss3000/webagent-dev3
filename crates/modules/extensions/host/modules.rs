@@ -354,12 +354,17 @@ fn health_path(root: &FsPath, id: &str) -> PathBuf {
 const AVAILABLE_REUSE: Duration = Duration::from_secs(1);
 static RECENT_AVAILABLE: std::sync::Mutex<Vec<(&'static str, std::time::Instant, bool)>> =
     std::sync::Mutex::new(Vec::new());
+/// The live package schema list, reused for the same window: catalog checks rebuild the
+/// whole tool list once per tool, and Automation's comes from its tool folders on disk.
+static RECENT_SCHEMAS: std::sync::Mutex<Option<(std::time::Instant, Vec<Value>)>> =
+    std::sync::Mutex::new(None);
 /// Drop reused answers after this host changes an activation or health record.
 fn forget_available() {
     RECENT_AVAILABLE
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clear();
+    *RECENT_SCHEMAS.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 pub(crate) fn available(id: &str) -> bool {
     // Only known package IDs are remembered, so the list stays bounded.
@@ -499,10 +504,22 @@ fn package_schemas(id: &str) -> Vec<Value> {
         .collect()
 }
 pub(crate) fn schemas() -> Vec<Value> {
-    IDS.into_iter()
+    if cfg!(not(test)) {
+        let recent = RECENT_SCHEMAS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((at, list)) = recent.as_ref() {
+            if at.elapsed() < AVAILABLE_REUSE {
+                return list.clone();
+            }
+        }
+    }
+    let list: Vec<Value> = IDS
+        .into_iter()
         .filter(|id| available(id))
         .flat_map(package_schemas)
-        .collect()
+        .collect();
+    *RECENT_SCHEMAS.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some((std::time::Instant::now(), list.clone()));
+    list
 }
 pub(crate) fn owns_tool(name: &str) -> bool {
     schemas().iter().any(|schema| schema["name"] == name)
