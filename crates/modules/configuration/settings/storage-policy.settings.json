@@ -3,6 +3,7 @@
   "settings": [],
   "excluded": {
     "/compress_idle_days": "Storage policy is edited in its JSON file; not offered by the composer in v1.",
+    "/compression/**": "Compression is edited in its JSON file; not offered by the composer in v1.",
     "/tiers/**": "Per-tier storage limits are edited in their JSON file; not offered by the composer in v1.",
     "/warning_percent": "Storage policy is edited in its JSON file; not offered by the composer in v1."
   }

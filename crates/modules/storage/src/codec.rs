@@ -104,7 +104,9 @@ impl Codec {
             self.cipher
                 .encrypt(
                     Nonce::from_slice(&nonce),
-                    serde_json::to_vec(value)?.as_ref(),
+                    crate::compression::Compression::current()
+                        .pack(serde_json::to_vec(value)?)?
+                        .as_ref(),
                 )
                 .map_err(|_| anyhow!("Encryption failed"))?,
         );
@@ -169,7 +171,7 @@ impl Codec {
             .cipher
             .decrypt(Nonce::from_slice(&data[..12]), &data[12..])
             .map_err(|_| anyhow!("Storage authentication failed"))?;
-        Ok(serde_json::from_slice(&plain)?)
+        Ok(serde_json::from_slice(&crate::compression::unpack(plain)?)?)
     }
     /// User-plane write policy. Only the fixed administrator account may store
     /// authenticated plaintext, and only while app-settings disables encryption.

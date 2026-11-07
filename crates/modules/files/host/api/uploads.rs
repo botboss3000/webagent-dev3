@@ -179,7 +179,7 @@ pub(crate) async fn upload(
     let mut new = new;
     new.record["agent_id"] = json!(agent);
     let info = metadata(&new.record);
-    app.store.write_blob(aid, &new.content).await?;
+    app.store.write_blob(aid, &media, &new.content).await?;
     app.store
         .atomic_docs_event(
             vec![
@@ -257,7 +257,7 @@ pub(crate) async fn publish_reply_file(
     let agent_quota = agent_quota_key(&agent);
     let agent_used = files::quota_with(app.store.get(&agent_quota).await?.as_ref(), new.bytes)
         .ok_or_else(|| conflict("Attachment byte count exceeds machine accounting range"))?;
-    app.store.write_blob(aid, &new.content).await?;
+    app.store.write_blob(aid, media, &new.content).await?;
     link["files"]
         .as_array_mut()
         .ok_or_else(|| conflict("Invalid reply attachments"))?

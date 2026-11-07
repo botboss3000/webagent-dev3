@@ -16,8 +16,14 @@ impl Store {
         format!("v3-attachment-file-v1:{}", self.user_id).into_bytes()
     }
     /// Encrypt and durably write one attachment file (temporary name, fsync, rename).
-    pub(crate) async fn write_blob(&self, aid: &str, bytes: &[u8]) -> Result<()> {
-        let sealed = self.codec.seal_bytes(&self.blob_aad(), bytes)?;
+    pub(crate) async fn write_blob(&self, aid: &str, media: &str, bytes: &[u8]) -> Result<()> {
+        let compression = webagent_storage::compression::Compression::current();
+        let plain = if compression.applies_to_media(media) {
+            compression.pack(bytes.to_vec())?
+        } else {
+            bytes.to_vec()
+        };
+        let sealed = self.codec.seal_bytes(&self.blob_aad(), &plain)?;
         let dir = self.blob_dir();
         let aid = aid.to_owned();
         tokio::task::spawn_blocking(move || -> Result<()> {
@@ -53,7 +59,9 @@ impl Store {
             let sealed = tokio::fs::read(self.blob_dir().join(aid))
                 .await
                 .map_err(|_| anyhow!("Attachment bytes unavailable"))?;
-            let bytes = self.codec.unseal_bytes(&self.blob_aad(), &sealed)?;
+            let bytes = webagent_storage::compression::unpack(
+                self.codec.unseal_bytes(&self.blob_aad(), &sealed)?,
+            )?;
             record["data"] = json!(STANDARD.encode(bytes));
         }
         Ok(record)

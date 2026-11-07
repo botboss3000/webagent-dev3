@@ -19,6 +19,9 @@ pub struct StoragePolicy {
     /// Sessions idle this many days have their files compressed.
     pub compress_idle_days: u32,
     pub tiers: BTreeMap<String, TierStorage>,
+    /// Compression before encryption; read and validated by `webagent_storage::compression`.
+    #[serde(default)]
+    pub compression: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
