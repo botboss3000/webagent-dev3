@@ -13,6 +13,10 @@ pub(crate) async fn prepare<'a>(app:&App,run:&Value,request:context_input::Reque
   let (_root,app)=crate::runtime_tests::fixture().await;let sid=crate::runtime_tests::conversation(&app).await;
   let id=crate::runtime_tests::queued(&app,&sid).await;let mut run=app.run(&id).await.unwrap();
   let input=run["input"].clone();pause(&app,&mut run).await.unwrap();assert_eq!(run["status"],"paused");
+  // An earlier test's component failure leaves a process-wide cooldown (seconds) during which
+  // restore rightly keeps runs paused; wait it out so this checks the restore decision itself.
+  let deadline=std::time::Instant::now()+std::time::Duration::from_secs(15);
+  while !available(&app.store.root)&&std::time::Instant::now()<deadline{tokio::time::sleep(std::time::Duration::from_millis(100)).await;}
   restore(&app,&id).await.unwrap();let restored=app.run(&id).await.unwrap();assert_eq!(restored["status"],"queued");assert_eq!(restored["input"],input);
   let mut manual=restored;manual["status"]=json!("paused");manual["component_pause"]=Value::Null;app.save(&mut manual).await.unwrap();
   restore(&app,&id).await.unwrap();assert_eq!(app.run(&id).await.unwrap()["status"],"paused");

@@ -1,8 +1,10 @@
 //! Configuration Controller ability (`plugins/abilities/Core/config_controller`): the
 //! configuration composer from an agent conversation. `find_setting` asks the composer which
-//! setting a request means and what it would change; `change_setting` saves one value through
-//! the same apply path as the API. Both act as the chat's signed-in user, so the composer's own
-//! page checks decide what they may see and change.
+//! setting a request means and what it would change. Saving is split by layer so each has its
+//! own permission: `change_my_setting` (the user's own), `change_agent_setting` (an agent the
+//! user manages) and `change_app_setting` (everyone; administrators). All go through the same
+//! apply path as the API and act as the chat's signed-in user, so the composer's own page checks
+//! decide what they may see and change.
 use anyhow::{anyhow, Result};
 use axum::{Extension, Json};
 use serde_json::{json, Value};
@@ -12,7 +14,12 @@ use webagent_accounts_host::AccountsStore;
 use crate::{api, shared_chat, App, State};
 
 /// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
-pub const TOOLS: &[&str] = &["find_setting", "change_setting"];
+pub const TOOLS: &[&str] = &[
+    "find_setting",
+    "change_my_setting",
+    "change_agent_setting",
+    "change_app_setting",
+];
 
 /// True when this adapter executes tool `name`.
 pub fn owns(name: &str) -> bool {
@@ -47,10 +54,20 @@ pub async fn execute(
     let identity = json!({"_user_id": actor, "_role": principal.role});
     let mut caller = app.clone();
     caller.store = app.store.for_user(&actor).await?;
-    // "agent" means this conversation's agent; the model never names another one.
-    let page = match args["layer"].as_str() {
-        Some("agent") => format!("agent:{}", crate::session_agent_id(app, sid).await?),
-        Some(layer @ ("app" | "user")) => layer.to_owned(),
+    let layer = match name {
+        "change_my_setting" => "user",
+        "change_agent_setting" => "agent",
+        "change_app_setting" => "app",
+        _ => args["layer"].as_str().unwrap_or_default(),
+    };
+    // The agent layer is this conversation's agent unless the call names another; the page
+    // check still requires the user to manage it.
+    let page = match layer {
+        "agent" => match args["agent"].as_str() {
+            Some(agent) => format!("agent:{agent}"),
+            None => format!("agent:{}", crate::session_agent_id(app, sid).await?),
+        },
+        "app" | "user" => layer.to_owned(),
         _ => return Ok(json!({"status": "error", "output": "layer must be app, agent or user"})),
     };
     let mut body = args.clone();

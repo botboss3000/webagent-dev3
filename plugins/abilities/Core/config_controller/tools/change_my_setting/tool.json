@@ -1,0 +1,40 @@
+{
+  "name": "change_my_setting",
+  "description": "Save one of the signed-in user's own settings (their personal preferences and profile), using the revision find_setting returned for the user layer. Affects only this user.",
+  "effect": "write",
+  "retry_risk": "none",
+  "retry_hint": "call find_setting again: its current value shows whether the earlier change was saved, and a repeat with the old revision is refused",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "setting": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "description": "A setting id from find_setting."
+      },
+      "value": {
+        "description": "The complete new value: a number, true/false, one of the setting's choices, text, or {\"width\": N, \"unit\": \"px\"|\"%\"} for widths."
+      },
+      "params": {
+        "type": "object",
+        "description": "Setting parameters, for example {\"tier\": \"basic\"}."
+      },
+      "revision": {
+        "type": "object",
+        "description": "review.revision from find_setting, unchanged."
+      }
+    },
+    "required": [
+      "setting",
+      "value",
+      "revision"
+    ],
+    "additionalProperties": false
+  }
+}

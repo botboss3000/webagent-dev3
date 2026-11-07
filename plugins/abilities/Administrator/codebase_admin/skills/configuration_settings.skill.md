@@ -8,7 +8,7 @@ minimum_access: registered
 
 # Configuration files and setting descriptors
 
-The Configuration Controller ability (`find_setting`, `change_setting`) and the composer API
+The Configuration Controller ability (`find_setting` and the `change_my_setting`, `change_agent_setting` and `change_app_setting` tools) and the composer API
 (`POST /api/v3/config/propose`, `/apply`) only know settings that have a **descriptor**. Every
 configuration change therefore ships its descriptor change in the same patch. The catalog tests
 in `crates/modules/configuration/src/catalog.rs` fail when a live file or one of its values is
@@ -26,7 +26,7 @@ neither described nor excluded with a reason.
   generated data) go in its `excluded_files` with a reason.
 - A save path: the composer writes app-layer values through the administrator configuration save
   (`crates/modules/configuration/host/api.rs`: `IDS`, `live()`, `validate()`). A new live file
-  needs an id there and its owner's validator, or `change_setting` answers that it can't change
+  needs an id there and its owner's validator, or the change tools answer that it can't change
   the setting yet. Agent settings save through the agent identity update
   (`IDENTITY_SETTINGS` in `crates/modules/agents/host/api.rs`).
 

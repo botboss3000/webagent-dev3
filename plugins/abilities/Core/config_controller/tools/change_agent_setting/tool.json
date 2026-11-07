@@ -1,19 +1,22 @@
 {
-  "name": "change_setting",
-  "description": "Save one setting's new value on a layer, using the revision find_setting returned. The owner's validation, permission and revision checks apply; a changed setting is refused rather than overwritten.",
+  "name": "change_agent_setting",
+  "description": "Save one setting of an agent the signed-in user manages (this conversation's agent unless `agent` names another one they manage), using the revision find_setting returned for the agent layer. The agent's owner checks apply.",
   "effect": "write",
   "retry_risk": "none",
   "retry_hint": "call find_setting again: its current value shows whether the earlier change was saved, and a repeat with the old revision is refused",
   "default_access": {
-    "operator": "ask",
-    "member": "ask",
+    "operator": "auto",
+    "member": "auto",
     "visitor": "deny"
   },
   "parameters": {
     "type": "object",
     "properties": {
-      "layer": {
-        "enum": ["user", "agent", "app"]
+      "agent": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "description": "Agent id; omit for this conversation's agent."
       },
       "setting": {
         "type": "string",
@@ -33,7 +36,11 @@
         "description": "review.revision from find_setting, unchanged."
       }
     },
-    "required": ["layer", "setting", "value", "revision"],
+    "required": [
+      "setting",
+      "value",
+      "revision"
+    ],
     "additionalProperties": false
   }
 }

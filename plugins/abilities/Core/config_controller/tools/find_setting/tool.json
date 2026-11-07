@@ -1,6 +1,6 @@
 {
   "name": "find_setting",
-  "description": "Find which setting a plain-language request means on a layer (user, this agent, or the whole app) and what it would change: a card with current and proposed values, or a short described pick list. Changes nothing.",
+  "description": "Find which setting a plain-language request means on a layer (the user's own, an agent the user manages, or the whole app) and what it would change: a card with current and proposed values, or a short described pick list. Changes nothing.",
   "effect": "read",
   "default_access": {
     "operator": "auto",
@@ -17,11 +17,24 @@
         "description": "The user's request in their own words."
       },
       "layer": {
-        "enum": ["user", "agent", "app"],
-        "description": "user: the caller's own preferences; agent: this conversation's agent; app: the whole app (administrators)."
+        "enum": [
+          "user",
+          "agent",
+          "app"
+        ],
+        "description": "user: the caller's own settings; agent: this conversation's agent or `agent`; app: the whole app (administrators)."
+      },
+      "agent": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "description": "Agent id for the agent layer; omit for this conversation's agent."
       }
     },
-    "required": ["request", "layer"],
+    "required": [
+      "request",
+      "layer"
+    ],
     "additionalProperties": false
   }
 }
