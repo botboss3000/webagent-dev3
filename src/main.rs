@@ -195,6 +195,10 @@ fn main() -> Result<()> {
     if mode.as_deref() == Some("--launch") {
         std::process::exit(webagent_worker::launch::run());
     }
+    if mode.as_deref() == Some("--terminal-supervisor") {
+        let spec = std::env::args().nth(2).unwrap_or_default();
+        std::process::exit(webagent_worker::terminal::supervise(&spec));
+    }
     if matches!(mode.as_deref(), Some("--tool-runner" | "--plugin-runner")) {
         let spec = std::env::args().nth(2).unwrap_or_default();
         std::process::exit(if mode.as_deref() == Some("--tool-runner") {

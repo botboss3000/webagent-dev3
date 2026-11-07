@@ -505,12 +505,7 @@ impl<H: Host> Catalog<H> {
                 if group_id == "Administrator"
                     && matches!(
                         id.as_str(),
-                        "v3_build"
-                            | "v3_workspace"
-                            | "terminal_control"
-                            | "computer_control"
-                            | "remote_tunnel"
-                            | "program_screenshot"
+                        "v3_build" | "v3_workspace" | "computer_control" | "program_screenshot"
                     )
                     && !ability_path.join(format!("{id}.json")).exists()
                 {
@@ -3720,14 +3715,12 @@ pub mod registered_tests {
                 .abilities
                 .iter()
                 .any(|ability| ability.id == "diagnostics"));
-            assert!([
-                "terminal_control",
-                "computer_control",
-                "remote_tunnel",
-                "program_screenshot"
-            ]
-            .iter()
-            .all(|id| !catalog.known(id)));
+            assert!(["computer_control", "program_screenshot"]
+                .iter()
+                .all(|id| !catalog.known(id)));
+            assert!(["terminal_control", "remote_tunnel"]
+                .iter()
+                .all(|id| catalog.known(id)));
         }
 
         pub fn web_access_loading_policy_and_visibility_gates<H: crate::TestHost>() {

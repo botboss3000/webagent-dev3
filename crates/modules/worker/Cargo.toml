@@ -32,3 +32,7 @@ harness = false
 [[test]]
 name = "git"
 harness = false
+
+[[test]]
+name = "terminals"
+harness = false

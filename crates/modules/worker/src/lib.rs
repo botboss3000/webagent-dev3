@@ -10,6 +10,8 @@ pub mod launch;
 pub mod plugins;
 pub mod runner;
 pub mod sandbox;
+pub mod terminal;
+pub mod tunnel;
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -88,6 +90,7 @@ pub async fn serve(config: Config) -> io::Result<()> {
     let listener = UnixListener::bind(&config.socket)?;
     std::fs::set_permissions(&config.socket, std::fs::Permissions::from_mode(0o660))?;
     let active = Arc::new(Active::default());
+    let persistent = Arc::new(Persistent::new(&config));
     loop {
         let stream = match listener.accept().await {
             Ok((stream, _)) => stream,
@@ -105,11 +108,62 @@ pub async fn serve(config: Config) -> io::Result<()> {
         }
         let config = config.clone();
         let active = Arc::clone(&active);
+        let persistent = Arc::clone(&persistent);
         tokio::spawn(async move {
             // A failed write means the caller left; there is nobody to tell.
-            let _ = handle(stream, &config, &active).await;
+            let _ = handle(stream, &config, &active, &persistent).await;
         });
     }
+}
+
+/// Terminals and preview tunnels outlive their calls: one registry of each per worker.
+struct Persistent {
+    terminals: Arc<terminal::Terminals>,
+    tunnels: tunnel::Tunnels,
+}
+
+impl Persistent {
+    fn new(config: &Config) -> Self {
+        let terminals = Arc::new(terminal::Terminals::default());
+        let registry = Arc::clone(&terminals);
+        let claims = config.files.port_claims.clone();
+        // A preview serves only one of the workspace's own ports that one of its running
+        // terminals listens on.
+        let validator: tunnel::Validator = Arc::new(move |base: PathBuf, port: u16| {
+            let registry = Arc::clone(&registry);
+            let claims = claims.clone();
+            Box::pin(async move {
+                let owned = {
+                    let base = base.clone();
+                    tokio::task::spawn_blocking(move || commands::network_ports(&claims, &base))
+                        .await
+                };
+                if !matches!(owned, Ok(Ok(ports)) if ports.contains(&port)) {
+                    return false;
+                }
+                let roots = registry.roots(&base).await;
+                tokio::task::spawn_blocking(move || tunnel::terminal_listens(&roots, port))
+                    .await
+                    .unwrap_or(false)
+            })
+        });
+        Self {
+            terminals,
+            tunnels: tunnel::Tunnels::new("/usr/local/bin/cloudflared".into(), validator),
+        }
+    }
+}
+
+/// The workspace folder a control request names, when it exists. Quiesce and resource
+/// counts work while execution is disabled and never create a workspace.
+fn existing_workspace(roots: &files::Roots, request: &Value) -> Option<PathBuf> {
+    let session = request["workspace"].as_str()?;
+    let parsed = uuid::Uuid::parse_str(session).ok()?;
+    if parsed.hyphenated().to_string() != session {
+        return None;
+    }
+    let path = std::fs::canonicalize(&roots.workspaces).ok()?.join(session);
+    path.is_dir().then_some(path)
 }
 
 /// The commands running in each workspace, so a quiesce can stop them.
@@ -179,7 +233,12 @@ async fn write_reply(
 /// forwarded connection, which cancels the call exactly as a direct disconnect would; a
 /// command is stopped the same way. A native file call always completes, so a write is
 /// never left half done.
-async fn handle(client: UnixStream, config: &Config, active: &Active) -> io::Result<()> {
+async fn handle(
+    client: UnixStream,
+    config: &Config,
+    active: &Active,
+    persistent: &Persistent,
+) -> io::Result<()> {
     let (client_read, mut client_write) = client.into_split();
     let mut client_read = BufReader::new(client_read);
     let mut request = Vec::new();
@@ -247,10 +306,40 @@ async fn handle(client: UnixStream, config: &Config, active: &Active) -> io::Res
         };
         return write_reply(&mut client_write, &parsed["id"], result).await;
     }
+    if let Some(parsed) = parsed
+        .as_ref()
+        .filter(|_| terminal::handles(name) || tunnel::handles(name))
+    {
+        // Bounded calls (a wait lasts at most 30 s); an open is never abandoned halfway.
+        let result = persistent_call(config, persistent, parsed).await;
+        return write_reply(&mut client_write, &parsed["id"], result).await;
+    }
+    if let Some(parsed) = parsed
+        .as_ref()
+        .filter(|_| name == "administrator_resources")
+    {
+        // Counts the resources that survive a conversation stop.
+        let (terminals, tunnels) = match existing_workspace(&config.files, parsed) {
+            Some(base) => (
+                persistent.terminals.count(&base),
+                persistent.tunnels.count(&base),
+            ),
+            None => (0, 0),
+        };
+        let result = json!({"status":"success","output":{"terminals":terminals,"tunnels":tunnels}});
+        return write_reply(&mut client_write, &parsed["id"], result).await;
+    }
     if name == "administrator_quiesce" {
-        // Commands run here now; stop them before the Python worker quiesces the rest.
-        if let Some(workspace) = parsed.as_ref().and_then(|p| p["workspace"].as_str()) {
-            active.stop(workspace);
+        // Commands, terminals and tunnels run here; stop them before the Python worker
+        // quiesces the rest.
+        if let Some(parsed) = parsed.as_ref() {
+            if let Some(workspace) = parsed["workspace"].as_str() {
+                active.stop(workspace);
+            }
+            if let Some(base) = existing_workspace(&config.files, parsed) {
+                persistent.terminals.close_all(&base).await;
+                persistent.tunnels.close_workspace(&base).await;
+            }
         }
     }
     let upstream = match UnixStream::connect(&config.legacy_socket).await {
@@ -303,6 +392,56 @@ async fn git_call(roots: &files::Roots, request: &Value) -> Value {
         request.get("trusted").unwrap_or(&Value::Null),
     )
     .await
+}
+
+/// Admits and runs one terminal or preview tunnel request.
+async fn persistent_call(config: &Config, persistent: &Persistent, request: &Value) -> Value {
+    let admitted = {
+        let roots = config.files.clone();
+        let request = request.clone();
+        tokio::task::spawn_blocking(move || {
+            files::admit(&roots, &request)
+                .map(|(base, _, _)| base)
+                .map_err(|failure| files::failed(&failure))
+        })
+        .await
+    };
+    let base = match admitted {
+        Ok(Ok(base)) => base,
+        Ok(Err(failed)) => return failed,
+        Err(_) => return json!({"status":"failed","output":"Terminal admission failed"}),
+    };
+    let name = request["name"].as_str().unwrap_or_default();
+    let empty = json!({});
+    let args = request.get("arguments").unwrap_or(&empty);
+    if tunnel::handles(name) {
+        return persistent.tunnels.execute(name, args, &base).await;
+    }
+    let ports = {
+        let claims = config.files.port_claims.clone();
+        let base = base.clone();
+        tokio::task::spawn_blocking(move || commands::network_ports(&claims, &base)).await
+    };
+    let supervisor = config
+        .runner
+        .first()
+        .cloned()
+        .into_iter()
+        .chain(["--terminal-supervisor".to_owned()])
+        .collect();
+    let launch = move || match ports {
+        Ok(Ok(ports)) => Ok(terminal::Launch { supervisor, ports }),
+        Ok(Err(error)) => Err(error.to_string()),
+        Err(_) => Err("Port claim failed".to_owned()),
+    };
+    match persistent
+        .terminals
+        .execute(name, args, &base, launch)
+        .await
+    {
+        Ok(output) => json!({"status":"success","output":output}),
+        Err(output) => json!({"status":"failed","output":output}),
+    }
 }
 
 /// Admits and runs one `ability_plugin_invoke` request.
@@ -445,12 +584,12 @@ mod tests {
         });
         let mut client = connect(&fixture.socket).await;
         client
-            .write_all(b"{\"version\":2,\"id\":\"a\",\"name\":\"terminal_read\"}\n")
+            .write_all(b"{\"version\":2,\"id\":\"a\",\"name\":\"code_index_lookup\"}\n")
             .await
             .expect("request");
         let reply = read_line(&mut client).await;
         assert_eq!(reply["id"], "a");
-        assert_eq!(reply["result"]["output"], "terminal_read");
+        assert_eq!(reply["result"]["output"], "code_index_lookup");
     }
 
     #[tokio::test]
@@ -474,7 +613,7 @@ mod tests {
         let fixture = fixture();
         let mut client = connect(&fixture.socket).await;
         client
-            .write_all(b"{\"version\":2,\"id\":\"b\",\"name\":\"terminal_send\"}\n")
+            .write_all(b"{\"version\":2,\"id\":\"b\",\"name\":\"code_index_lookup\"}\n")
             .await
             .expect("request");
         let reply = read_line(&mut client).await;
@@ -499,7 +638,7 @@ mod tests {
         });
         let mut client = connect(&fixture.socket).await;
         client
-            .write_all(b"{\"version\":2,\"id\":\"c\",\"name\":\"terminal_send\"}\n")
+            .write_all(b"{\"version\":2,\"id\":\"c\",\"name\":\"code_index_lookup\"}\n")
             .await
             .expect("request");
         drop(client);

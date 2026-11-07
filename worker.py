@@ -113,7 +113,7 @@ def git_file_manager():
 
 def administrator_plugin(name):
     # Static ownership, not manifest-driven imports or a model supplied path.
-    if name not in ("code_index", "git_control", "terminal_control", "v3_workspace", "remote_tunnel"):
+    if name not in ("code_index", "git_control", "v3_workspace"):
         raise ValueError("unknown installed Administrator adapter")
     if name=="git_control":
         folder=git_control_package()
@@ -133,10 +133,6 @@ def administrator_plugin(name):
         spec.loader.exec_module(module)
         if name == "v3_workspace":
             module.configure(sys.modules[__name__])
-        if name == "terminal_control":
-            module.configure(network_ports)
-        if name == "remote_tunnel":
-            module.configure(terminal_listener_owned)
         PLUGINS[name] = module
     return PLUGINS[name]
 
@@ -175,40 +171,6 @@ def network_ports(base):
             json.dump(ports,file);file.flush();os.fsync(file.fileno())
         PORTS[key] = ports
         return ports
-
-def terminal_listener_owned(base,port):
-    if port not in network_ports(base): return False
-    module=PLUGINS.get("terminal_control")
-    if module is None: return False
-    roots={t.process.pid for t in list(module._TERMINALS.values())
-           if t.base==Path(base).resolve() and t.process.returncode is None}
-    parents={}
-    for entry in Path("/proc").iterdir():
-        if entry.name.isdigit():
-            try:
-                raw=(entry/"stat").read_text();parents[int(entry.name)]=int(raw[raw.rfind(")")+2:].split()[1])
-            except (OSError,ValueError,IndexError): pass
-    owned=set(roots)
-    while True:
-        expanded=owned|{pid for pid,parent in parents.items() if parent in owned}
-        if expanded==owned: break
-        owned=expanded
-    inodes=set()
-    for line in Path("/proc/net/tcp").read_text().splitlines()[1:]:
-        fields=line.split()
-        if len(fields)>9 and fields[3]=="0A" and int(fields[1].split(":")[1],16)==port:
-            if fields[1].split(":")[0] in ("0100007F","00000000"): inodes.add(fields[9])
-    if not inodes:return False
-    for pid in owned:
-        try:
-            for fd in Path(f"/proc/{pid}/fd").iterdir():
-                try:
-                    target=os.readlink(fd)
-                    if target.startswith("socket:[") and target[8:-1] in inodes:return True
-                except OSError: pass
-        except OSError:pass
-    return False
-
 
 def workspace_path(session):
     if str(uuid.UUID(session)) != session:
@@ -431,8 +393,8 @@ async def execute_locked(request, lock):
     if request["name"]=="codebase_admin_protocol":
         fcntl.flock(lock,fcntl.LOCK_UN)
         return {"status":"success","output":{"protocol":1,"interface":1}}
-    if request["name"] in ("administrator_quiesce", "administrator_resources") and not (ROOT / str(uuid.UUID(request["workspace"]))).exists():
-        return {"status": "success", "output": {"terminals": 0, "tunnels": 0}}
+    if request["name"] == "administrator_quiesce" and not (ROOT / str(uuid.UUID(request["workspace"]))).exists():
+        return {"status": "success"}
     base = workspace_path(request["workspace"])
     args = request.get("arguments", {})
     name = request["name"]
@@ -461,8 +423,6 @@ async def execute_locked(request, lock):
         return await synchronous(git_file_manager().execute, args)
     if name == "administrator_file_git":
         return await git_file_manager().git_action(args, request.get("trusted"), administrator_plugin("git_control"))
-    if name in ("terminal_open", "terminal_read", "terminal_send", "terminal_wait", "terminal_list", "terminal_close"):
-        return await administrator_plugin("terminal_control").execute(name, args, base)
     if name in ("workspace_seed","source_review","source_patch","v3_workspace_status","v3_workspace_action","v3_cargo_task") and os.environ.get("V3_BUILD_EXECUTOR")!="1":
         raise PermissionError("Source workspace operations require the host build service")
     if name in ("v3_workspace_status", "v3_workspace_action"):
@@ -471,21 +431,10 @@ async def execute_locked(request, lock):
         return await administrator_plugin("v3_workspace").cargo(base, args)
     if name in BROWSER_FRAMES or name == "administrator_artifact_get":
         return await BROWSER_PACKAGES.call(name,args,base,request.get("trusted"))
-    if name == "administrator_resources":
-        # Counts persistent resources that survive a conversation stop.
-        terminals = PLUGINS["terminal_control"].count(base) if "terminal_control" in PLUGINS else 0
-        tunnels = PLUGINS["remote_tunnel"].count(base) if "remote_tunnel" in PLUGINS else 0
-        return {"status": "success", "output": {"terminals": terminals, "tunnels": tunnels}}
     if name == "administrator_quiesce":
         await stop_workspace_operations(request["workspace"])
-        if "terminal_control" in PLUGINS:
-            await PLUGINS["terminal_control"].close_all(base)
         await BROWSER_PACKAGES.drop(Path(base).name)
-        if "remote_tunnel" in PLUGINS:
-            await PLUGINS["remote_tunnel"].close_workspace(base)
         return {"status": "success"}
-    if name in ("start_tunnel", "get_tunnel_url"):
-        return await administrator_plugin("remote_tunnel").execute(name, args, base)
     if name == "workspace_seed":
         return await seed_workspace_async(base)
     if name == "source_review":

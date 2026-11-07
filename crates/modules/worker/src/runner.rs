@@ -67,7 +67,7 @@ pub fn supervise_plugin(spec_json: &str) -> i32 {
 /// write only this workspace. Runtime state, other sessions' workspaces, control sockets
 /// and the checkout's runtime folders stay out. Checkout writes go through checkout_edit
 /// or broker tasks.
-fn command_read_paths() -> Vec<PathBuf> {
+pub(crate) fn command_read_paths() -> Vec<PathBuf> {
     // `live-checkout` is the image's compatibility link to `/code`: granting it would grant all
     // of `/code`, hidden folders included.
     const HIDDEN: [&str; 6] = [
@@ -182,7 +182,7 @@ fn run(spec: Spec) -> io::Result<i32> {
 }
 
 /// This process's descendants, from the public parent links in `/proc`.
-fn descendants() -> Vec<i32> {
+pub(crate) fn descendants() -> Vec<i32> {
     let mut parents = Vec::new();
     if let Ok(entries) = std::fs::read_dir("/proc") {
         for entry in entries.flatten() {

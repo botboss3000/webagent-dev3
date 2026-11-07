@@ -40,9 +40,8 @@ must stay administrator-only checks that in its own code.
 
 Administrator native tools (`webagent_administration::tools::TOOLS`) use the same
 folders under `plugins/abilities/Administrator/`. Tools with no catalog ability (the
-in-app broker, terminal and tunnel tools) live in the retired `v3_build`,
-`v3_workspace`, `terminal_control` and `remote_tunnel` folders, which the catalog does
-not list. Each catalog snapshot reads these schemas from its own folders, so a published
+in-app broker tools) live in the retired `v3_build` and `v3_workspace` folders, which the
+catalog does not list. Each catalog snapshot reads these schemas from its own folders, so a published
 description edit needs no Rust build; release validation refuses a missing or invalid
 Administrator folder.
 
