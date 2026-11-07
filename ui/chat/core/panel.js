@@ -28,6 +28,7 @@ import {createChatElements} from '../elements/index.js';
 import {closeChatElementFullView} from './full-view.js';
 import {currentChatProfile} from '../controls/chat-config.js';
 import { applyChatConfig, setChatConfigAgent } from '../controls/chat-config.js';
+import { enterSubmits, resolveEnterBehavior } from './composer-enter.js';
 import { readDraft, saveDraft, adoptNewDraft } from './composer-draft.js';
 import { shouldCreateSession } from './session-start.js';
 import { mountSessionDropdown } from '../controls/session-dropdown/controller.js';
@@ -468,11 +469,19 @@ async function submit(text,clearInput=false){
 $('composer').onsubmit=guard(()=>{const text=$('chat-input').value.trim();if(onLogin&&text.toLowerCase()==='/login'){$('chat-input').value='';saveDraft(session,'');return onLogin();}return submit(text,true);});
 // Continue is a new user turn, not an automatic retry of an exhausted run.
 $('chat-continue-btn').onclick=guard(()=>submit('Continue'));
-// Enter submits unless Shift is held or IME composition is active.
+// Enter behavior follows chat_common.composer.enter_behavior; touch devices are detected once per adoption.
+const touchComposer=matchMedia('(pointer: coarse)');
+let enterBehavior=resolveEnterBehavior(currentChatProfile());
+/** Re-reads the configured Enter policy and mirrors it on the mobile action key. */
+function syncEnterBehavior(){enterBehavior=resolveEnterBehavior(currentChatProfile());$('chat-input').setAttribute('enterkeyhint',enterBehavior==='send'?'send':'enter');}
+syncEnterBehavior();
+const onChatConfigApplied=()=>syncEnterBehavior();
+document.addEventListener('v3:chat-config-applied',onChatConfigApplied);
+// Enter inserts a newline by default; Shift+Enter always newlines and Ctrl/Cmd+Enter always sends.
 // Every edit, including programmatic input events, saves the selected session's draft.
 $('chat-input').oninput=()=>saveDraft(session,$('chat-input').value);
 $('chat-input').value=readDraft('');
-$('chat-input').onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();if(!$('chat-send').disabled)$('composer').requestSubmit();}};
+$('chat-input').onkeydown=event=>{if(!enterSubmits(event,enterBehavior,touchComposer.matches))return;event.preventDefault();if(!$('chat-send').disabled)$('composer').requestSubmit();};
 // Stops the run currently identified on the stop control.
 $('chat-stop-btn').onclick=guard(()=>$('chat-stop-btn').dataset.run?cancel($('chat-stop-btn').dataset.run):stopAll());
 
@@ -483,7 +492,7 @@ $('chat-stop-btn').onclick=guard(()=>$('chat-stop-btn').dataset.run?cancel($('ch
     mainNotes?.destroy();disposeFeedback();screenAwake.destroy();++sessionGeneration;closeUndoDialog?.();
     disconnect();followups.destroy();chatActions.destroy();anchor.destroy();transcriptWindow.destroy();uiTrace.then(dispose=>dispose());disposeFooterGestures();disposeHeaderGestures();disposeZoom();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();voiceReply.destroy();controls.destroy();sharing.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
     $('sessions').onchange=null;$('new').onclick=null;$('composer').onsubmit=null;
-    $('chat-input').onkeydown=null;$('chat-input').oninput=null;$('chat-stop-btn').onclick=null;$('chat-continue-btn').onclick=null;
+    document.removeEventListener('v3:chat-config-applied',onChatConfigApplied);$('chat-input').onkeydown=null;$('chat-input').oninput=null;$('chat-stop-btn').onclick=null;$('chat-continue-btn').onclick=null;
   }
   /** Creates and opens a new conversation, rejecting while a message or upload is pending. */
   async function newSession(){
