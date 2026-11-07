@@ -84,13 +84,6 @@ mod catalog_tests {
     }
 }
 #[cfg(test)]
-mod browser_native_contract_tests {
-    #[test]
-    fn browser_control_retains_native_authority_and_rejects_incompatible_packages() {
-        webagent_abilities::plugins_testing::browser_native_contract_tests::browser_control_retains_native_authority_and_rejects_incompatible_packages::<crate::abilities::NativeHost>();
-    }
-}
-#[cfg(test)]
 mod native_automation_contract_tests {
     #[test]
     fn native_registration_rejects_host_and_tool_escalation() {

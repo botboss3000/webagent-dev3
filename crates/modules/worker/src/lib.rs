@@ -1,8 +1,9 @@
 //! The v3 tool worker. It owns the tool socket the API and loop call and accepts only the
 //! application identity. File tools ([`files`]) and workspace commands ([`commands`]) run
-//! here; every other request is forwarded unchanged to the Python worker on a private
-//! socket. Tool groups move from the Python worker into this crate one at a time (Rust
+//! here, as do the private browsers ([`browser`]); every other request is forwarded
+//! unchanged to the Python worker on a private socket. Tool groups move from the Python worker into this crate one at a time (Rust
 //! conversion item A2).
+pub mod browser;
 pub mod commands;
 pub mod files;
 pub mod git;
@@ -47,6 +48,8 @@ pub struct Config {
     pub plugin_runner: Vec<String>,
     /// Where published ability packages live.
     pub packages: plugins::Packages,
+    /// Where private browsers keep their state and which app origin they may sign in to.
+    pub browser: browser::Settings,
 }
 
 impl Config {
@@ -75,6 +78,7 @@ impl Config {
                 "--plugin-runner".into(),
             ],
             packages: plugins::Packages::container(),
+            browser: browser::Settings::container(),
         })
     }
 }
@@ -117,10 +121,12 @@ pub async fn serve(config: Config) -> io::Result<()> {
     }
 }
 
-/// Terminals and preview tunnels outlive their calls: one registry of each per worker.
+/// Terminals, preview tunnels and private browsers outlive their calls: one registry of
+/// each per worker.
 struct Persistent {
     terminals: Arc<terminal::Terminals>,
     tunnels: tunnel::Tunnels,
+    browsers: Arc<browser::Browsers>,
 }
 
 impl Persistent {
@@ -151,6 +157,7 @@ impl Persistent {
         Self {
             terminals,
             tunnels: tunnel::Tunnels::new("/usr/local/bin/cloudflared".into(), validator),
+            browsers: Arc::new(browser::Browsers::new(config.browser.clone())),
         }
     }
 }
@@ -331,6 +338,34 @@ async fn handle(
         let result = persistent_call(config, persistent, parsed).await;
         return write_reply(&mut client_write, &parsed["id"], result).await;
     }
+    if let Some(parsed) = parsed.as_ref().filter(|_| browser::handles(name)) {
+        if name == "browser_protocol" {
+            let result = protocol(&config.files).await;
+            return write_reply(&mut client_write, &parsed["id"], result).await;
+        }
+        let workspace = parsed["workspace"].as_str().unwrap_or_default();
+        let (id, stop) = active.start(workspace);
+        let _registered = Registered { active, id };
+        // A call that ends early closes the session's browser, as the Python worker's
+        // cancellation did; a screenshot read holds no browser.
+        let cancel = || async {
+            if name != "administrator_artifact_get" {
+                persistent.browsers.close(workspace).await;
+            }
+        };
+        let result = tokio::select! {
+            result = browser_call(config, persistent, parsed) => result,
+            () = hang_up(&mut client_read) => {
+                cancel().await;
+                return Ok(());
+            }
+            () = stop.notified() => {
+                cancel().await;
+                json!({"status":"failed","output":"Session not found"})
+            }
+        };
+        return write_reply(&mut client_write, &parsed["id"], result).await;
+    }
     if let Some(parsed) = parsed
         .as_ref()
         .filter(|_| name == "administrator_resources")
@@ -347,8 +382,8 @@ async fn handle(
         return write_reply(&mut client_write, &parsed["id"], result).await;
     }
     if name == "administrator_quiesce" {
-        // Commands, terminals and tunnels run here; stop them before the Python worker
-        // quiesces the rest.
+        // Commands, terminals, tunnels and browsers run here; stop them before the Python
+        // worker quiesces the rest.
         if let Some(parsed) = parsed.as_ref() {
             if let Some(workspace) = parsed["workspace"].as_str() {
                 active.stop(workspace);
@@ -356,6 +391,9 @@ async fn handle(
             if let Some(base) = existing_workspace(&config.files, parsed) {
                 persistent.terminals.close_all(&base).await;
                 persistent.tunnels.close_workspace(&base).await;
+                if let Some(sid) = base.file_name().and_then(|name| name.to_str()) {
+                    persistent.browsers.close(sid).await;
+                }
             }
         }
     }
@@ -440,6 +478,61 @@ async fn file_manager_call(roots: &files::Roots, request: &Value) -> Value {
     tokio::task::spawn_blocking(move || manager::execute(&root, &args))
         .await
         .unwrap_or_else(|_| json!({"status":"error","output":"File Manager operation failed"}))
+}
+
+/// The browser contract the broker checks before a hot swap, behind the same shutoff
+/// switch as every call.
+async fn protocol(roots: &files::Roots) -> Value {
+    let control = roots.control.clone();
+    let admitted = tokio::task::spawn_blocking(move || -> io::Result<bool> {
+        let lock = std::fs::File::open(control.join("dispatch.lock"))?;
+        rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive)?;
+        Ok(std::fs::read_to_string(control.join("shutoff"))?.trim() == "0")
+    })
+    .await;
+    match admitted {
+        Ok(Ok(true)) => {
+            json!({"status":"success","output":{"protocol":1,"interface":1,"stateful":true}})
+        }
+        Ok(Ok(false)) => json!({"status":"failed","output":"execution disabled"}),
+        Ok(Err(error)) => json!({"status":"failed","output":error.to_string()}),
+        Err(_) => json!({"status":"failed","output":"Browser admission failed"}),
+    }
+}
+
+/// Admits and runs one browser request in the session's private browser.
+async fn browser_call(config: &Config, persistent: &Persistent, request: &Value) -> Value {
+    let admitted = {
+        let roots = config.files.clone();
+        let request = request.clone();
+        tokio::task::spawn_blocking(move || {
+            files::admit(&roots, &request)
+                .map(|(base, _, _)| base)
+                .map_err(|failure| files::failed(&failure))
+        })
+        .await
+    };
+    let base = match admitted {
+        Ok(Ok(base)) => base,
+        Ok(Err(failed)) => return failed,
+        Err(_) => return json!({"status":"failed","output":"Browser admission failed"}),
+    };
+    let name = request["name"].as_str().unwrap_or_default();
+    let empty = json!({});
+    let args = request.get("arguments").unwrap_or(&empty);
+    let Some(supervisor) = config.runner.first() else {
+        return json!({"status":"failed","output":"Browser supervisor not configured"});
+    };
+    persistent
+        .browsers
+        .call(
+            supervisor,
+            name,
+            args,
+            &base,
+            request.get("trusted").unwrap_or(&Value::Null),
+        )
+        .await
 }
 
 /// Admits and runs one terminal or preview tunnel request.
@@ -579,6 +672,10 @@ mod tests {
             runner: vec!["/nonexistent-runner".into()],
             plugin_runner: vec!["/nonexistent-runner".into()],
             packages: plugins::Packages::container(),
+            browser: browser::Settings {
+                root: dir.path().join("browser"),
+                origin: "http://127.0.0.1:9".into(),
+            },
             socket: socket.clone(),
             legacy_socket: legacy.clone(),
             // The test process owns the directory it just created.

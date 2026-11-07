@@ -48,6 +48,7 @@ async fn worker() -> Worker {
         runner: harness::runner(),
         plugin_runner: harness::plugin_runner(),
         packages: webagent_worker::plugins::Packages::container(),
+        browser: webagent_worker::browser::Settings::container(),
     };
     tokio::spawn(serve(config));
     for _ in 0..100 {

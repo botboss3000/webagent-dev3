@@ -198,126 +198,6 @@ async def command(argv, base, timeout, lock):
             "exit_code": process.returncode, "truncated": truncated}
 
 
-
-BROWSER_TOOLS=["browser_read","browser_input","browser_record"]
-BROWSER_MANIFEST={"version":1,"id":"browser_control","protocol":1,"interface":1,"runtime":"python3","entrypoint":"runner.py",
-    "tools":BROWSER_TOOLS,"build":{"inputs":["runner.py","adapter.py","egress.py"],"dependencies":[],"toolchain":"image-python3",
-    "flags":["-I","-B"],"assets":["browser_control.json","browser_control.skill.md","tools"]}}
-BROWSER_FRAMES=tuple(BROWSER_TOOLS)
-def browser_package():
-    """Resolve one immutable native package, checking its full declared executable inputs."""
-    releases=Path("/opt/v3/assets/releases")
-    selected=(releases.parent/"current").resolve(strict=True)
-    if selected.parent!=releases:raise ValueError("Invalid Browser Control release pointer")
-    uuid.UUID(selected.name)
-    folder=selected/"v3/plugins/abilities/Web/browser_control"
-    if any(p.is_symlink() for p in [folder,folder.parent,folder.parent.parent]):raise ValueError("Unsafe Browser Control package")
-    hashes={}
-    for name,bound in (("plugin.json",4096),("runner.py",2*LIMIT),("adapter.py",2*LIMIT),("egress.py",2*LIMIT),("browser_control.json",64*1024)):
-        path=folder/name
-        if path.is_symlink()or not path.is_file()or path.stat().st_size>bound:raise ValueError("Browser Control package unavailable")
-        hashes[name]=hashlib.sha256(path.read_bytes()).hexdigest()
-    metadata=json.loads((folder/"plugin.json").read_bytes())
-    if json.dumps(metadata,sort_keys=True)!=json.dumps(BROWSER_MANIFEST,sort_keys=True):raise ValueError("Browser Control package incompatible")
-    if json.loads((folder/"browser_control.json").read_bytes()).get("tools")!=BROWSER_TOOLS:raise ValueError("Browser Control catalog incompatible")
-    implementation=hashlib.sha256(json.dumps({k:hashes[k]for k in metadata["build"]["inputs"]},sort_keys=True,separators=(",",":")).encode()).hexdigest()
-    return folder,selected.name,implementation
-
-class BrowserPackages:
-    """Trusted worker owns global capacity and pinned session-process lifecycle."""
-    def __init__(self):
-        self.sessions={};self.guard=asyncio.Lock();self.reaper=None
-    async def reap(self):
-        """Enforce leases even when no later tool call arrives."""
-        try:
-            while self.sessions:
-                await asyncio.sleep(1)
-                for sid,item in list(self.sessions.items()):
-                    if item["process"].returncode is not None or time.time()>=item["expires"] or time.monotonic()-item["touched"]>180:
-                        await self.drop(sid,item)
-        finally:self.reaper=None
-    async def drop(self,sid,item=None):
-        """Remove only the expected generation and reap its entire process group."""
-        current=self.sessions.get(sid)
-        if current is None or(item is not None and current is not item):return
-        self.sessions.pop(sid,None)
-        await terminate(current["process"])
-        with contextlib.suppress(ProcessLookupError):os.killpg(current["process"].pid,signal.SIGKILL)
-    async def start(self,folder,revision,implementation,base,trusted):
-        """Create a package process without passing credentials through argv or environment."""
-        process=await asyncio.create_subprocess_exec("/usr/bin/python3","-I","-B",str(folder/"runner.py"),
-            stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,
-            limit=2*LIMIT+1,start_new_session=True,env={"PATH":"/usr/bin:/bin","LANG":"C.UTF-8"})
-        return {"process":process,"revision":revision,"implementation":implementation,"lock":asyncio.Lock(),
-            "authority":tuple(trusted.get(k)for k in ("session_id","user_id","agent_id","generation","cookie")),
-            "expires":trusted["expires_at"],"touched":time.monotonic()}
-    async def exchange(self,item,name,args,base,trusted):
-        """Match bounded response IDs; a broken transport never authorizes replay."""
-        invocation=str(uuid.uuid4())
-        payload={"protocol":1,"invocation_id":invocation,"tool":name,"arguments":args,"base":str(base),"trusted":trusted}
-        frame=json.dumps(payload,separators=(",",":")).encode()+b"\n"
-        if len(frame)>2*LIMIT:raise ValueError("Browser request oversized")
-        process=item["process"]
-        process.stdin.write(frame);await process.stdin.drain()
-        raw=await process.stdout.readline()
-        if not raw.endswith(b"\n")or len(raw)>2*LIMIT:raise ValueError("Browser response oversized")
-        reply=json.loads(raw)
-        if type(reply.get("protocol"))is not int or reply["protocol"]!=1 or reply.get("invocation_id")!=invocation or not isinstance(reply.get("result"),dict):
-            raise ValueError("Browser response incompatible")
-        result=reply["result"]
-        if result.get("status")not in ("success","error","failed","uncertain"):raise ValueError("Browser status incompatible")
-        result.update(plugin_revision=item["revision"],implementation_sha256=item["implementation"],implementation_version=reply.get("implementation_version"))
-        return result
-    async def call(self,name,args,base,trusted):
-        """Keep active profiles pinned; artifact reads never take a browser slot."""
-        sid=Path(base).name
-        if not isinstance(trusted,dict)or trusted.get("session_id")!=sid or trusted.get("allowed_session_ids")!=[sid]:
-            return {"status":"error","error_kind":"browser_invalid_request","output":"Trusted browser session required"}
-        if type(trusted.get("expires_at"))not in (int,float)or not time.time()<trusted["expires_at"]<=time.time()+601:
-            await self.drop(sid)
-            return {"status":"error","error_kind":"browser_invalid_request","output":"Browser authorization expired"}
-        artifact=name=="administrator_artifact_get"
-        item=None
-        try:
-            async with self.guard:
-                identity=tuple(trusted.get(k)for k in ("session_id","user_id","agent_id","generation","cookie"))
-                old=self.sessions.get(sid)
-                if old is not None and(old["authority"]!=identity or old["process"].returncode is not None):
-                    await self.drop(sid,old)
-                item=None if artifact else self.sessions.get(sid)
-                if item is None:
-                    if not artifact and name=="browser_read"and args.get("action")=="close":
-                        return {"status":"success","closed":True}
-                    if not artifact and len(self.sessions)>=2:
-                        return {"status":"error","error_kind":"browser_capacity","output":"Two private browsers are already active; close one before opening another"}
-                    folder,revision,implementation=browser_package()
-                    item=await self.start(folder,revision,implementation,base,trusted)
-                    if not artifact:
-                        self.sessions[sid]=item
-                        if self.reaper is None:self.reaper=asyncio.create_task(self.reap())
-            async with item["lock"]:
-                # Rust renews a signed-in session's lease on each call; the process lives as long as it.
-                item["touched"]=time.monotonic();item["expires"]=trusted["expires_at"]
-                # Signing in again to a saved site replays its steps, which takes longer than one action.
-                limit=65 if isinstance(trusted.get("site"),dict) else 25
-                result=await asyncio.wait_for(self.exchange(item,name,args,base,trusted),limit)
-                if result["status"]=="uncertain"or result.get("closed")or result.get("error_kind")=="browser_authentication_failed":
-                    if not artifact:await self.drop(sid,item)
-                return result
-        except asyncio.CancelledError:
-            if not artifact:await self.drop(sid,item)
-            raise
-        except Exception:
-            if not artifact:await self.drop(sid,item)
-            mutating=name=="browser_input" or (name=="browser_read" and args.get("action")=="navigate")
-            return {"status":"uncertain"if mutating else "error","uncertain":mutating,
-                "error_kind":"browser_transport_failed","output":"Browser process interrupted; inspect before retrying an input action"}
-        finally:
-            if artifact and item is not None:
-                await terminate(item["process"])
-                with contextlib.suppress(ProcessLookupError):os.killpg(item["process"].pid,signal.SIGKILL)
-BROWSER_PACKAGES=BrowserPackages()
-
 async def execute_locked(request, lock):
     """Route approved requests to fixed native adapters or validated isolated packages; release the dispatch lock before effects."""
     if request["name"] == "core_visual_capture":
@@ -336,9 +216,6 @@ async def execute_locked(request, lock):
             await terminate(process)
             # The browser group may outlive its completed capture-process leader.
             with contextlib.suppress(ProcessLookupError):os.killpg(process.pid,signal.SIGKILL)
-    if request["name"]=="browser_protocol":
-        fcntl.flock(lock,fcntl.LOCK_UN)
-        return {"status":"success","output":{"protocol":1,"interface":1,"stateful":True}}
     if request["name"]=="ability_plugins_protocol":
         fcntl.flock(lock,fcntl.LOCK_UN)
         return {"status":"success","output":{"protocol":1,"catalog":1,"dispatch":1}}
@@ -377,11 +254,8 @@ async def execute_locked(request, lock):
         return await administrator_plugin("v3_workspace").execute(name, args, base)
     if name == "v3_cargo_task":
         return await administrator_plugin("v3_workspace").cargo(base, args)
-    if name in BROWSER_FRAMES or name == "administrator_artifact_get":
-        return await BROWSER_PACKAGES.call(name,args,base,request.get("trusted"))
     if name == "administrator_quiesce":
         await stop_workspace_operations(request["workspace"])
-        await BROWSER_PACKAGES.drop(Path(base).name)
         return {"status": "success"}
     if name == "workspace_seed":
         return await seed_workspace_async(base)

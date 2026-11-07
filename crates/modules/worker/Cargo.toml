@@ -10,7 +10,7 @@ libc = "0.2"
 rustix = { version = "1", features = ["fs"] }
 serde_json = "1"
 sha2 = "0.10"
-tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt", "sync", "time"] }
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
@@ -36,4 +36,8 @@ harness = false
 
 [[test]]
 name = "terminals"
+harness = false
+
+[[test]]
+name = "browser"
 harness = false

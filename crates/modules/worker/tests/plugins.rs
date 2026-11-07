@@ -165,6 +165,7 @@ async fn one_frame_reaches_the_plugin_and_its_reply_comes_back() {
         runner: harness::runner(),
         plugin_runner: harness::plugin_runner(),
         packages: fixture.packages.clone(),
+        browser: webagent_worker::browser::Settings::container(),
     }));
     for _ in 0..100 {
         if Path::new(&socket).exists() {

@@ -120,32 +120,11 @@ def codebase_source_path(path):
         relative in {"tools/"+name+".skill.md" for name in CODEBASE_TOOLS}
         or relative in {"skills/rust_quality.skill.md","skills/live_plugin_publication.skill.md","skills/ui_theming.skill.md","skills/ui_toggle_list.skill.md",
                      "skills/security_practices.skill.md"})
-BROWSER_ROOT="v3/plugins/abilities/Web/browser_control/"
-BROWSER_TOOLS=["browser_read","browser_input","browser_record"]
-BROWSER_MANIFEST={'version': 1, 'id': 'browser_control', 'protocol': 1, 'interface': 1, 'runtime': 'python3', 'entrypoint': 'runner.py', 'tools': BROWSER_TOOLS, 'build': {'inputs': ['runner.py', 'adapter.py', 'egress.py'], 'dependencies': [], 'toolchain': 'image-python3', 'flags': ['-I', '-B'], 'assets': ['browser_control.json', 'browser_control.skill.md', 'tools']}}
-def browser_source_path(path):
-    """Only the installed native Browser Control package may use this executable hot lane."""
-    if not path.startswith(BROWSER_ROOT):return False
-    relative=path[len(BROWSER_ROOT):]
-    return relative in {"runner.py","adapter.py","egress.py","test_runner.py","plugin.json","browser_control.json","browser_control.skill.md"} or relative.startswith("tools/")and relative.endswith(".skill.md")
-def validate_browser_package(folder):
-    """Validate a complete native contract before activating either consumer."""
-    folder=Path(folder)
-    for name in ("plugin.json","runner.py","adapter.py","egress.py","test_runner.py","browser_control.json","browser_control.skill.md"):
-        path=folder/name
-        if path.is_symlink()or not path.is_file()or path.stat().st_size>2*1024*1024:raise ValueError("Incomplete Browser Control package")
-    if canonical(json.loads((folder/"plugin.json").read_bytes()))!=canonical(BROWSER_MANIFEST):raise ValueError("Incompatible Browser Control contract")
-    declaration=json.loads((folder/"browser_control.json").read_bytes())
-    if declaration.get("tools")!=BROWSER_TOOLS or declaration.get("kind")!="ability"or declaration.get("readiness")!="ready":raise ValueError("Incompatible Browser Control catalog")
-    for path in folder.rglob("*"):
-        if path.is_symlink():raise ValueError("Browser Control package symlink")
-        if path.is_file()and path.suffix==".py":compile(path.read_bytes(),str(path),"exec")
-
 ABILITY_ROOT="v3/plugins/abilities/"
 def ability_asset_path(path):
     if not path.startswith(ABILITY_ROOT):return False
     # Rust adapters and legacy Python helpers still have core/image consumers.
-    return path.endswith((".json",".md")) or codebase_source_path(path) or browser_source_path(path)
+    return path.endswith((".json",".md")) or codebase_source_path(path)
 def engine_component_source_path(path):
     """Recognize every registered implementation/contract family at each publication fence."""
     return path.startswith(("v3/plugins/engine/",
@@ -1973,15 +1952,6 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 "--tmpfs","/tmp:rw,size=64m,mode=1777",
                 "--mount","type=bind,src="+str(root / CODEBASE_ROOT)+",dst=/package,readonly",
                 "-w","/tmp","--entrypoint","python3",image,"-I","-B","/package/test_runner.py"],timeout=30)
-        if any(browser_source_path(name) for name in changed):
-            validate_browser_package(root / BROWSER_ROOT)
-            if (active is None or active.get("operation")!="build_deploy") and not self.browser_hot_swappable():
-                raise ValueError("Installed worker lacks native Browser Control package support")
-            image=(active["images"]["api"] if active is not None and active.get("operation")=="build_deploy" else self.inspect(TARGETS[0])["Image"])
-            self.command(["docker","run","--rm","--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges",
-                "--user",str(CONFIG["worker_uid"])+":"+str(CONFIG["worker_gid"]),"--pids-limit","64","--memory","256m",
-                "--tmpfs","/tmp:rw,size=64m,mode=1777","--mount","type=bind,src="+str(root / BROWSER_ROOT)+",dst=/package,readonly",
-                "--entrypoint","python3",image,"-I","-B","/package/test_runner.py"],timeout=60)
         manifest=root/release.LIVE_MANIFEST
         live=release.live_patterns({release.LIVE_MANIFEST:(0o644,manifest.read_bytes())})if manifest.is_file()else()
         # Live files take the app's own configuration validators, as a full release does.
@@ -2062,20 +2032,6 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             if normalized.startswith(("src/","crates/","plugins/","config/","docs/")):paths.add("v3/"+normalized)
         if "v3/src/main.rs"not in paths:raise ValueError("Installed compiler dependency manifest unavailable")
         return paths
-    def browser_hot_swappable(self):
-        """Parse fixed private capability metadata before environment-value redaction.
-
-        Raw output stays local to this exact comparison; no frame is published.
-        """
-        program=("import socket,json; s=socket.socket(socket.AF_UNIX); s.settimeout(10); "
-            "s.connect('/runtime/worker/tools.sock'); "
-            "s.sendall(json.dumps({'version':2,'id':'browser-protocol','name':'browser_protocol',"
-            "'workspace':'"+LOCAL_WORKSPACE+"','arguments':{}}).encode()+bytes([10])); "
-            "print(s.makefile('rb').readline(4096).decode())")
-        try:
-            reply=json.loads(self.command(["docker","exec","--user",str(CONFIG["app_uid"]),TARGETS[0],"python3","-I","-B","-c",program],timeout=15,private_raw=True))
-            return reply.get("version")==2 and reply.get("id")=="browser-protocol" and reply.get("result")=={"status":"success","output":{"protocol":1,"interface":1,"stateful":True}}
-        except Exception:return False
     def plugin_hot_swappable(self):
         for name in TARGETS:
             value=self.inspect(name)

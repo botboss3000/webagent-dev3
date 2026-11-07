@@ -1,6 +1,6 @@
 //! A small runner for this crate's integration tests (`harness = false`). The test
 //! executable is also the per-call supervisor (`--runner ARGV` / `--plugin SPEC` /
-//! `--terminal-supervisor SPEC`), because
+//! `--terminal-supervisor SPEC` / `--browser-session`), because
 //! the broker replays retained test executables without Cargo's other build targets.
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
@@ -39,6 +39,7 @@ pub fn main(tests: &[Test]) {
         Some("--terminal-supervisor") => {
             std::process::exit(webagent_worker::terminal::supervise(&spec))
         }
+        Some("--browser-session") => std::process::exit(webagent_worker::browser::session::run()),
         _ => {}
     }
     let filters: Vec<&String> = args.iter().filter(|arg| !arg.starts_with('-')).collect();

@@ -203,6 +203,11 @@ fn main() -> Result<()> {
         let spec = std::env::args().nth(2).unwrap_or_default();
         std::process::exit(webagent_worker::terminal::supervise(&spec));
     }
+    // One chat session's private browser, started by the tool worker; it builds its own
+    // single-threaded runtime.
+    if mode.as_deref() == Some("--browser-session") {
+        std::process::exit(webagent_worker::browser::session::run());
+    }
     if matches!(mode.as_deref(), Some("--tool-runner" | "--plugin-runner")) {
         let spec = std::env::args().nth(2).unwrap_or_default();
         std::process::exit(if mode.as_deref() == Some("--tool-runner") {

@@ -429,19 +429,7 @@ impl Package {
             return Ok(None);
         }
         // Existing native package adapters retain their own contract.
-        if matches!(id, "codebase_admin" | "browser_control") && manifest.get("dispatch").is_none()
-        {
-            if id == "browser_control" {
-                let expected = json!({"version":1,"id":"browser_control","protocol":1,"interface":1,"runtime":"python3","entrypoint":"runner.py",
-                    "tools":tools,"build":{"inputs":["runner.py","adapter.py","egress.py"],"dependencies":[],"toolchain":"image-python3","flags":["-I","-B"],
-                    "assets":["browser_control.json","browser_control.skill.md","tools"]}});
-                if manifest != expected {
-                    anyhow::bail!("Unsupported native Browser Control contract");
-                }
-                for name in ["runner.py", "adapter.py", "egress.py"] {
-                    read(&root.join(name), 2 * 1024 * 1024)?;
-                }
-            }
+        if id == "codebase_admin" && manifest.get("dispatch").is_none() {
             return Ok(None);
         }
         if manifest["dispatch"] != "isolated"
@@ -857,51 +845,6 @@ pub mod registered_tests {
             value["tools"] = json!(["file_read"]);
             std::fs::write(&p, serde_json::to_vec(&value).unwrap()).unwrap();
             assert!(Package::load::<H>(&path, "fixture_ability", &["file_read".into()]).is_err());
-        }
-    }
-
-    pub mod browser_native_contract_tests {
-        use super::*;
-
-        /// Browser credentials remain behind native dispatch; malformed or incomplete contracts cannot install.
-        pub fn browser_control_retains_native_authority_and_rejects_incompatible_packages<
-            H: crate::TestHost,
-        >() {
-            let root = tempfile::tempdir().unwrap();
-            let tools = vec![
-                "browser_read".to_owned(),
-                "browser_input".to_owned(),
-                "browser_record".to_owned(),
-            ];
-            let manifest = json!({"version":1,"id":"browser_control","protocol":1,"interface":1,"runtime":"python3","entrypoint":"runner.py",
-            "tools":tools,"build":{"inputs":["runner.py","adapter.py","egress.py"],"dependencies":[],"toolchain":"image-python3","flags":["-I","-B"],
-            "assets":["browser_control.json","browser_control.skill.md","tools"]}});
-            for name in ["runner.py", "adapter.py", "egress.py"] {
-                std::fs::write(root.path().join(name), "# native fixture\n").unwrap();
-            }
-            std::fs::write(
-                root.path().join("plugin.json"),
-                serde_json::to_vec(&manifest).unwrap(),
-            )
-            .unwrap();
-            assert!(Package::load::<H>(root.path(), "browser_control", &tools)
-                .unwrap()
-                .is_none());
-            let mut invalid = manifest.clone();
-            invalid["protocol"] = json!(true);
-            std::fs::write(
-                root.path().join("plugin.json"),
-                serde_json::to_vec(&invalid).unwrap(),
-            )
-            .unwrap();
-            assert!(Package::load::<H>(root.path(), "browser_control", &tools).is_err());
-            std::fs::write(
-                root.path().join("plugin.json"),
-                serde_json::to_vec(&manifest).unwrap(),
-            )
-            .unwrap();
-            std::fs::remove_file(root.path().join("egress.py")).unwrap();
-            assert!(Package::load::<H>(root.path(), "browser_control", &tools).is_err());
         }
     }
 
