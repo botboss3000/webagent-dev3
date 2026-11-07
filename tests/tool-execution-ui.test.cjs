@@ -259,7 +259,7 @@ test('ability, tool and skill rows show their declared default read-only', () =>
   const end = page.indexOf('};', start) + 2;
   const appended = [];
   const anchor = { after: el => appended.push(el) };
-  const context = { node: (tag, cls, text) => ({ tag, cls, text }) };
+  const context = { node: (tag, cls, text) => ({ tag, cls, text, style: {} }) };
   const mark = vm.runInNewContext('(() => {' + page.slice(start, end) + '; return markDefault; })()', context);
   const row = { querySelector: sel => (sel === '.ac-ability-desc' ? anchor : null) };
   mark(row, 'deny'); mark(row, 'auto'); mark(row, 'discoverable'); mark(row, undefined);

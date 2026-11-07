@@ -170,7 +170,9 @@ export async function renderAbilities(host, request, options) {
     if (!value) return;
     const label = { deny: 'Off', ask: 'Ask', auto: 'Auto', visible: 'Visible', discoverable: 'Discoverable', off: 'Off' }[value] || value;
     const anchor = row.querySelector('.ac-ability-desc') || row.querySelector('.ac-ability-name');
-    anchor?.after(node('div', 'ac-hint v3-default-mark', 'Default: ' + label));
+    const mark = node('div', 'ac-hint v3-default-mark', 'Default: ' + label);
+    mark.style.whiteSpace = 'nowrap'; // Keep "Default: Auto" on one line on phones.
+    anchor?.after(mark);
   };
   const buildAbilityBody = (detail, ability) => {
     if (detail.childElementCount) return;
