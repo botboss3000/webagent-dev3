@@ -1,0 +1,12 @@
+{
+  "display_name": "Configuration Controller",
+  "kind": "ability",
+  "description": "Find and change app, agent and personal settings from the conversation. Each change is shown with its current and new value and saved only after the user approves it.",
+  "icon": "sliders-horizontal",
+  "color": "#e0af68",
+  "order": 4,
+  "placeholder": false,
+  "readiness": "ready",
+  "config": {},
+  "migration_note": "Native V3 implementation over the configuration composer (POST /api/v3/config/propose and /apply)."
+}

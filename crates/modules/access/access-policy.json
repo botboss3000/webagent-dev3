@@ -75,6 +75,7 @@
     },
     "basic": {
       "ability_permissions": {
+        "config_controller": "auto",
         "human_escalation": "auto",
         "managed_knowledge_files": "auto",
         "reply_buttons": "auto",
@@ -111,6 +112,7 @@
         "base": "auto",
         "code_index": "auto",
         "codebase_admin": "auto",
+        "config_controller": "auto",
         "decision": "auto",
         "diagnostics": "auto",
         "git_control": "auto",

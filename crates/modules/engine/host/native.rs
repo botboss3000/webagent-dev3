@@ -199,6 +199,18 @@ impl
                     cancel,
                 )
                 .await
+            } else if tools::core_config_controller::owns(&name) {
+                tools::core_config_controller::execute(
+                    &app,
+                    &sid,
+                    &run_id,
+                    &generation,
+                    &pending_id,
+                    &name,
+                    &args,
+                    cancel,
+                )
+                .await
             } else if tools::core_image_generation::owns(&name) {
                 tools::core_image_generation::execute(
                     &app,

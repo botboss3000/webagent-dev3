@@ -29,7 +29,7 @@ pub(crate) mod chat;
 #[path = "../../crates/modules/chat/host/api/chat_controls.rs"]
 mod chat_controls;
 #[path = "../../crates/modules/composer/host/api.rs"]
-mod composer;
+pub(crate) mod composer;
 #[cfg(test)]
 mod composer_tests;
 pub(crate) mod direct_messages;
