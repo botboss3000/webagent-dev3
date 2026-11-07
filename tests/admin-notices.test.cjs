@@ -73,30 +73,3 @@ test('chat client clears timer and stale EventSource epoch while preserving note
  assert.equal(timer.size(),1);client.disconnect();assert(!classes.has('connection-connecting'));assert.equal(timer.size(),0);
 });
 
-const buildNotice=()=>({id:'b'.repeat(64),task_id:'retained-task',status:'stale_open',notification:'Investigate retained work.',retained_bytes:1024});
-test('build reminders survive absent repository notice, deduplicate and review exact owning session',async()=>{
- const timer=timers(),renders=[],calls=[];let response={notice:null,build_notices:[buildNotice()]};
- const helper=load().createAdministratorNotices({...timer,render:()=>{},renderBuilds:(rows,review)=>renders.push({rows,review}),
- request:async(url,method)=>{calls.push({url,method});if(method==='POST')response={notice:null,build_notices:[]};return response;}});
- helper.start('owner');await flush();assert.equal(renders.at(-1).rows.length,1);
- const count=renders.length;timer.tick();await flush();assert.equal(renders.length,count);
- await renders.at(-1).review('b'.repeat(64));await flush();
- assert.equal(calls.filter(c=>c.method==='POST')[0].url,'/sessions/owner/administrator/notices/'+'b'.repeat(64)+'/review');
- assert.equal(renders.at(-1).rows.length,0);helper.stop();
-});
-test('switched sessions and unavailable broker withdraw stale build notices and review callbacks',async()=>{
- const timer=timers(),renders=[],calls=[];let response={notice:null,build_notices:[buildNotice()]};
- const helper=load().createAdministratorNotices({...timer,render:()=>{},renderBuilds:(rows,review)=>renders.push({rows,review}),
- request:async(url,method)=>{calls.push({url,method});return response;}});
- helper.start('first');await flush();const staleReview=renders.at(-1).review;
- helper.start('second');await flush();await staleReview('b'.repeat(64));
- assert.equal(calls.filter(c=>c.method==='POST').length,0);
- response={notice:null,build_notices:[buildNotice()],build_notices_unavailable:true};
- timer.tick();await flush();assert.equal(renders.at(-1).rows.length,0);helper.stop();
-});
-test('build reminder shared card renders literal text and reviews only its revision',async()=>{
- const parent=new Element(),doc={getElementById:()=>parent,createElement:tag=>new Element(tag)},reviewed=[];
- const render=load().buildNoticeRenderer(doc);render([{...buildNotice(),notification:'<script>literal</script>'}],async id=>reviewed.push(id));
- const region=parent.children[0],row=region.children[0];assert.match(flatten(row),/<script>literal<\/script>/);assert.equal(row.className,'chat-notification');
- await row.querySelector('button').onclick();assert.deepEqual(reviewed,['b'.repeat(64)]);render([],null);assert.equal(region.hidden,true);
-});

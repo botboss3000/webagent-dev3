@@ -10,7 +10,7 @@ for(const mobile of [false,true])for(const light of [false,true])test(`shared no
  const context=await browser.newContext({viewport:mobile?{width:390,height:844}:{width:1200,height:1000},isMobile:mobile,hasTouch:mobile});const p=await context.newPage();await p.goto('http://127.0.0.1:'+server.address().port);
  await p.evaluate(async light=>{
  document.body.classList.toggle('light-mode',light);window.calls=[];window.errors=[];
- const {mountChatActionPanel}=await import('/chat/core/chat-action-panel.js');const {createRecoveryDetails}=await import('/chat/core/recovery-details.js');const {repositoryNoticeRenderer,buildNoticeRenderer}=await import('/chat/core/administrator-notices.js');
+ const {mountChatActionPanel}=await import('/chat/core/chat-action-panel.js');const {createRecoveryDetails}=await import('/chat/core/recovery-details.js');const {repositoryNoticeRenderer}=await import('/chat/core/administrator-notices.js');
  const guard=fn=>async(...args)=>{try{return await fn(...args);}catch(e){errors.push(e.message);}};
  window.notifications=mountChatActionPanel({root:document,guard,request:async()=>({routes:[]}),note:e=>errors.push(e)});
  notifications.messagingRoutes.open('session',true);await notifications.messagingRoutes.refresh();
@@ -23,13 +23,12 @@ for(const mobile of [false,true])for(const light of [false,true])test(`shared no
  notifications.showTool({approval:{id:'approve',name:'file_write',arguments:{path:'example'}},run:{id:'approval-run'},expanded:new Set(),decide:decision=>calls.push(['approval',decision])});
  window.mode=notifications.confirmMode('Auto');
  window.repository=repositoryNoticeRenderer(document);repository('Repository changed.');
- window.builds=buildNoticeRenderer(document);builds([{id:'notice',notification:'Investigate retained work. <img src=invalid>',retained_bytes:1024}],async id=>calls.push(['review',id]));
  },light);
  assert.equal(await p.evaluate(()=>innerWidth),mobile?390:1200);
  assert.equal(await p.locator('#runs,.run-card').count(),0);assert.equal(await p.locator('#chat-action-panel img').count(),0);
  assert.equal(await p.locator('body').innerText().then(x=>x.includes('PRIVATE_ARGUMENT')),false);
  assert.equal(await p.getByRole('button',{name:'Resume run',exact:true}).count(),0);
- const styles=await p.locator('.chat-action:not([hidden])').evaluateAll(nodes=>nodes.map(n=>{const s=getComputedStyle(n);return [s.border,s.borderRadius,s.backgroundColor,s.padding,s.fontSize];}));assert.ok(styles.length>=6);for(const style of styles)assert.deepEqual(style,styles[0]);
+ const styles=await p.locator('.chat-action:not([hidden])').evaluateAll(nodes=>nodes.map(n=>{const s=getComputedStyle(n);return [s.border,s.borderRadius,s.backgroundColor,s.padding,s.fontSize];}));assert.ok(styles.length>=5);for(const style of styles)assert.deepEqual(style,styles[0]);
  assert.equal(await p.locator('#chat-action-panel button:not(.chat-action-action):not(.chat-action-detail-toggle):not(.chat-action-copy)').count(),0);
  // The expanded recovery arguments carry a Copy control pinned inside the top-right of their code block.
  await p.locator('.recovery-call-details > summary').first().click();const code=p.locator('.recovery-details .chat-action-code').first();assert.equal(await code.locator('.chat-action-copy').count(),1);
@@ -39,9 +38,8 @@ for(const mobile of [false,true])for(const light of [false,true])test(`shared no
  if(process.env.EVIDENCE_DIR)await p.screenshot({path:path.join(process.env.EVIDENCE_DIR,`shared-${mobile?'mobile':'desktop'}-${light?'light':'dark'}.png`),fullPage:true});
  assert.equal(await p.getByRole('button',{name:'Use my result'}).isDisabled(),true);
  await p.getByRole('textbox',{name:'Known action result'}).fill('Confirmed result');await p.getByRole('button',{name:'Use my result'}).click();assert.deepEqual(await p.evaluate(()=>calls.find(x=>x[0]==='recover')),['recover','accept','Confirmed result',undefined]);
- await p.getByRole('button',{name:'Mark reviewed'}).click();assert.deepEqual(await p.evaluate(()=>calls.find(x=>x[0]==='review')),['review','notice']);
  const approve=p.getByRole('button',{name:'Approve',exact:true});await approve.click();assert.deepEqual(await p.evaluate(()=>calls.find(x=>x[0]==='approval')),['approval','approve']);
  await p.getByRole('group',{name:'This will allow all write permitted tools',exact:true}).getByRole('button',{name:'Deny',exact:true}).click();assert.equal(await p.evaluate(()=>mode),false);
- await p.evaluate(()=>{notifications.clearRuns();repository('');builds([],null);});assert.equal(await p.locator('.chat-action:not([hidden])').count(),0);
+ await p.evaluate(()=>{notifications.clearRuns();repository('');});assert.equal(await p.locator('.chat-action:not([hidden])').count(),0);
  await p.evaluate(()=>{notifications.destroy();});assert.equal(await p.locator('#chat-action-panel > *').count(),0);assert.deepEqual(await p.evaluate(()=>errors),[]);
 });
