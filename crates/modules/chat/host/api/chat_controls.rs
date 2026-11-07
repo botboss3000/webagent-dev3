@@ -175,8 +175,8 @@ pub(crate) async fn chat_model_set(
         .await?;
     Ok(Json(saved))
 }
-// Composer revisions are consumed only at the next model-call boundary.
-// The current call and System plan stay pinned; live grants are checked anew.
+// Composer revisions and Models-page role changes are consumed only at the next model-call
+// boundary. The current call is never replayed; dispatch checks live grants anew.
 pub(crate) async fn apply_chat_model_preference(app: &App, run: &mut Value) -> Result<bool> {
     let sid = run["session_id"]
         .as_str()
@@ -189,18 +189,34 @@ pub(crate) async fn apply_chat_model_preference(app: &App, run: &mut Value) -> R
     let revision = saved["revision"]
         .as_u64()
         .ok_or_else(|| anyhow!("Invalid model revision"))?;
-    if revision == run["chat_model_revision"].as_u64().unwrap_or(0) {
+    let catalog = app.store.model_catalog().await?;
+    let composer_changed = revision != run["chat_model_revision"].as_u64().unwrap_or(0);
+    let roles_changed = catalog.revision != run["model_catalog_revision"].as_u64().unwrap_or(0);
+    if !composer_changed && !roles_changed {
         return Ok(false);
     }
     let agent = run["agent_id"]
         .as_str()
-        .ok_or_else(|| anyhow!("Agent missing"))?;
-    let catalog = app.store.model_catalog().await?;
+        .ok_or_else(|| anyhow!("Agent missing"))?
+        .to_owned();
+    run["model_catalog_revision"] = json!(catalog.revision);
+    let mut changed = false;
+    if roles_changed {
+        changed |= refresh_system_plan(app, &catalog, &agent, run).await?;
+    }
+    // A chat's own model choice outranks its agent's Standard role.
+    let follows_role = saved["entry_id"].is_null();
+    if !composer_changed && !(roles_changed && follows_role) {
+        return Ok(changed);
+    }
     let mut plan = match saved["entry_id"].as_str() {
-        Some(entry) => catalog.resolve_custom(agent, entry)?,
-        None => catalog.resolve_role(agent, model_selection::ModelRole::Standard)?,
+        Some(entry) => catalog.resolve_custom(&agent, entry)?,
+        None => catalog.resolve_role(&agent, model_selection::ModelRole::Standard)?,
     };
     app.pin_model_plan(&mut plan).await?;
+    if !composer_changed && json!(plan) == run["selection_plan"] {
+        return Ok(changed);
+    }
     let candidate = &plan.candidates[0];
     if candidate.platform.is_none() && app.store.get(&candidate.credential_ref).await?.is_none() {
         return Err(anyhow!("Selected model connection is unavailable"));
@@ -212,10 +228,44 @@ pub(crate) async fn apply_chat_model_preference(app: &App, run: &mut Value) -> R
     .value();
     run["selection_plan"] = json!(plan);
     run["failover_state"] = json!(model_selection::FailoverState::default());
-    // Applies to the chosen entry only; backups use their own defaults.
-    run["chat_effort"] = saved["effort"].clone();
-    run["chat_model_revision"] = json!(revision);
+    if composer_changed {
+        // Applies to the chosen entry only; backups use their own defaults.
+        run["chat_effort"] = saved["effort"].clone();
+        run["chat_model_revision"] = json!(revision);
+    }
     run["attempt"] = json!(0);
+    Ok(true)
+}
+
+/// Re-resolve the agent's System role (compaction and other system calls) after a Models-page
+/// change. A removed assignment clears it; a resolution that fails keeps the pinned plan.
+async fn refresh_system_plan(
+    app: &App,
+    catalog: &model_selection::Catalog,
+    agent: &str,
+    run: &mut Value,
+) -> Result<bool> {
+    let assigned = catalog.agent_models.get(agent).is_some_and(|models| {
+        models
+            .roles
+            .contains_key(&model_selection::ModelRole::System)
+    });
+    let plan = if assigned {
+        let Ok(mut plan) = catalog.resolve_role(agent, model_selection::ModelRole::System) else {
+            return Ok(false);
+        };
+        if app.pin_model_plan(&mut plan).await.is_err() {
+            return Ok(false);
+        }
+        json!(plan)
+    } else {
+        Value::Null
+    };
+    if plan == run["system_selection_plan"] {
+        return Ok(false);
+    }
+    run["system_selection_plan"] = plan;
+    run["system_failover_state"] = json!(model_selection::FailoverState::default());
     Ok(true)
 }
 
@@ -402,6 +452,56 @@ mod tests {
             app.store.model_catalog().await.unwrap().agent_models["shared_default"].roles,
             catalog.agent_models["shared_default"].roles
         );
+    }
+
+    #[tokio::test]
+    async fn models_page_role_changes_apply_at_next_loop_boundary() {
+        let (_root, app) = fixture().await;
+        let mut catalog = selection_fixture(&app).await;
+        let Json(session) = create_session(
+            State(app.clone()),
+            Json(json!({"client_request_id":uuid()})),
+        )
+        .await
+        .unwrap();
+        let sid = session["id"].as_str().unwrap().to_owned();
+        let (_, Json(sent)) = send(
+            State(app.clone()),
+            Path(sid.clone()),
+            Json(json!({"text":"hi","client_message_id":uuid()})),
+        )
+        .await
+        .unwrap();
+        let mut run = app.run(sent["run_id"].as_str().unwrap()).await.unwrap();
+        assert!(!apply_chat_model_preference(&app, &mut run).await.unwrap());
+        let roles = &mut catalog
+            .agent_models
+            .get_mut("shared_default")
+            .unwrap()
+            .roles;
+        roles
+            .get_mut(&model_selection::ModelRole::Standard)
+            .unwrap()
+            .entry_id = "two".into();
+        roles
+            .get_mut(&model_selection::ModelRole::System)
+            .unwrap()
+            .entry_id = "two".into();
+        roles
+            .get_mut(&model_selection::ModelRole::System)
+            .unwrap()
+            .backup_entry_ids = vec!["one".into()];
+        app.store
+            .save_model_catalog(&catalog, catalog.revision)
+            .await
+            .unwrap();
+        assert!(apply_chat_model_preference(&app, &mut run).await.unwrap());
+        assert_eq!(run["provider_selection"]["model"], "model-two");
+        assert_eq!(
+            run["system_selection_plan"]["candidates"][0]["upstream_model"],
+            "model-two"
+        );
+        assert!(!apply_chat_model_preference(&app, &mut run).await.unwrap());
     }
 
     #[tokio::test]

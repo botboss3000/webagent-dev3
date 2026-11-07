@@ -548,6 +548,8 @@ async fn prepare_message_inner(
     run["participation_generation"] = participation["generation"].clone();
     // Both role cursors survive recovery without changing one another on failover.
     run["system_selection_plan"] = json!(system_plan);
+    // Role changes on the Models page after this revision apply at the next model call.
+    run["model_catalog_revision"] = json!(catalog.revision);
     run["system_failover_state"] = json!(model_selection::FailoverState::default());
     run["attachments"] = json!(prepared.metadata.clone());
     run["chat_model_revision"] = json!(saved_model
