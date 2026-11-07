@@ -149,7 +149,7 @@ export async function renderAbilities(host, request, options) {
       if (dialog.isConnected) pre.textContent = error.message || 'Could not load tool skill.';
     }
   };
-  const toolPolicy = data.capability_levels?.levels?.[levelId] || data.permissions;
+  const toolPolicy = () => data.capability_levels?.levels?.[levelId] || data.permissions;
   const buildAbilityBody = (detail, ability) => {
     if (detail.childElementCount) return;
     if (ability.id === 'mcp') detail.append(buildMcpControls({ ability, request, scope,
@@ -187,18 +187,21 @@ export async function renderAbilities(host, request, options) {
         policy.tool_permissions ||= {};
         policy.tool_permissions[tool.name] = mode;
         try {
+          // Update this page's copy from the response instead of re-reading the whole
+          // page: the toggle already shows the choice, and the next save needs the new revision.
           if (level) {
-            await request(scope + '/capability-levels/' + encodeURIComponent(levelId), 'PUT',
+            const saved = await request(scope + '/capability-levels/' + encodeURIComponent(levelId), 'PUT',
               { expected_revision: data.capability_levels.revision, level: policy });
+            data.capability_levels = saved.capability_levels;
           } else {
-            await request(scope + '/ability-permissions', 'PUT', {
+            const saved = await request(scope + '/ability-permissions', 'PUT', {
               expected_revision: data.permissions.revision,
               ability_permissions: policy.ability_permissions || {},
               tool_permissions: policy.tool_permissions,
             });
+            data.permissions = { ...data.permissions, ...saved };
           }
-          expandedAbility = ability.id;
-          await rerender({ administratorNotice: 'Tool permission saved.' });
+          status.textContent = 'Tool permission saved.';
         } catch (error) {
           status.textContent = error.status === 409 ? 'Settings changed. Reload before saving: ' + error.message : error.message;
           throw error;
@@ -211,8 +214,8 @@ export async function renderAbilities(host, request, options) {
         // The control edits the agent's configured layer (the selected level when
         // one exists, as saveToolPermission writes). Effective access can still be
         // Deny because of the account tier, visibility or port status.
-        permMode: toolPolicy?.tool_permissions?.[tool.name] ||
-          toolPolicy?.tool_permissions?.['*'] || 'auto',
+        permMode: toolPolicy()?.tool_permissions?.[tool.name] ||
+          toolPolicy()?.tool_permissions?.['*'] || 'auto',
       }, {
         canEdit: canManage && !previewUser && levelId==='operator',
         showPerm: true,
