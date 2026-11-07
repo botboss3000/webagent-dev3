@@ -82,7 +82,7 @@ Client secret and server: work/harness-bridge/client.json (mode 0600), written b
 Server override: $HARNESS_BRIDGE_URL.
 Per-chat files: work/harness-bridge/sessions/<webagent-session>/.
 """
-import base64, hashlib, json, os, re, shutil, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request, uuid
+import base64, difflib, hashlib, json, os, re, shutil, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request, uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent / "work" / "harness-bridge"
@@ -259,6 +259,7 @@ def remember(call):
     instructions, conversation = split(body)
     tools = tools_of(body)
     seen = state.get("conversation", [])
+    old_schemas = state.get("tool_schemas", {})
     append = len(seen) <= len(conversation) and all(digest(m) == d for m, d in zip(conversation, seen))
     delta = {
         "folder": folder, "count": count,
@@ -266,10 +267,16 @@ def remember(call):
         "tools_added": sorted(set(tools) - set(state.get("tools", []))),
         "tools_removed": sorted(set(state.get("tools", [])) - set(tools)),
         "tools_changed": digest(body.get("tools")) != state.get("tools_digest"),
+        # Schemas new or different since the last call, and the previous instructions: a resumed session
+        # gets only these as an update instead of restarting (a restart resends everything uncached).
+        "tool_updates": [t["function"] for n, t in tools.items() if old_schemas.get(n) != digest(t)],
+        "previous_instructions": state.get("instructions_text"),
         "rewritten": bool(seen) and not append,
         "new": conversation[len(seen):] if append else conversation,
     }
     state.update(instructions=digest(instructions), tools=sorted(tools), tools_digest=digest(body.get("tools")),
+                 instructions_text=[text_of(m.get("content"), folder) for m in instructions],
+                 tool_schemas={n: digest(t) for n, t in tools.items()},
                  conversation=[digest(m) for m in conversation])
     return folder, state, delta
 
@@ -379,10 +386,36 @@ def prompt_for(call, delta, fresh):
         lines.append("## Tools you may call\n" + json.dumps([t["function"] for t in tools_of(body).values()], indent=1))
         messages = conversation
     else:
+        lines += updates(delta, folder)
         messages = delta["new"]
     lines.append("## Conversation" if fresh else "## New since your last turn")
     lines += [render(m, folder, full=True) for m in messages]
     return "\n\n".join(lines)
+
+
+def updates(delta, folder):
+    """On a resumed session: what changed in the instructions and tools, appended rather than restarting."""
+    lines = []
+    if delta["instructions"] is not None:
+        new = "\n\n".join(text_of(m.get("content"), folder) for m in delta["instructions"]).splitlines()
+        old = delta["previous_instructions"]
+        if old is None:
+            lines.append("## Agent instructions (replace the earlier ones)\n" + "\n".join(new))
+        else:
+            diff = [l for l in difflib.unified_diff("\n\n".join(old).splitlines(), new, lineterm="", n=1)
+                    if not l.startswith(("---", "+++"))]
+            lines.append("## Agent instructions updated (diff against the earlier ones; + added, - removed)\n"
+                         + "\n".join(diff))
+    if delta["tools_removed"]:
+        lines.append("## Tools no longer available\n" + ", ".join(delta["tools_removed"]))
+    if delta["tool_updates"]:
+        lines.append("## Tools added or changed\n" + json.dumps(delta["tool_updates"], indent=1))
+    return lines
+
+
+def resumable(state, key, delta):
+    """Restart only when the transcript was rewritten (compaction or edits); other changes are appended."""
+    return bool(state.get(key)) and not delta["rewritten"]
 
 
 def mcp_stub(work):
@@ -449,7 +482,7 @@ def opencode_turn(command, prompt, work, model):
 
 def answer_opencode(call, folder, state, delta):
     body = call["body"]
-    fresh = not state.get("opencode_session") or delta["rewritten"] or delta["instructions"] is not None or delta["tools_changed"]
+    fresh = not resumable(state, "opencode_session", delta)
     prompt = prompt_for(call, delta, fresh)
     command = [OPENCODE, "run", "--standalone", "--agent", "webagent-bridge", "-m", body.get("model", ""), "--format", "json"]
     if not fresh:
@@ -498,7 +531,7 @@ def answer(call):
 
 def answer_claude(call, folder, state, delta):
     body = call["body"]
-    fresh = not state.get("claude_session") or delta["rewritten"] or delta["instructions"] is not None or delta["tools_changed"]
+    fresh = not resumable(state, "claude_session", delta)
     session = str(uuid.uuid4()) if fresh else state["claude_session"]
     # WebAgent's tools come from the MCP stub, which records each call for the reply (as for OpenCode).
     (folder / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
@@ -620,6 +653,13 @@ def selftest():
     _, state, delta = remember({"id": "b", "session": "s", "body": body})
     save_state(SESSIONS / "s", state)
     assert len(delta["new"]) == 2 and delta["instructions"] is None and not delta["rewritten"]
+    body["messages"][0]["content"] = "be brief\nuse tools"
+    body["tools"].append({"type": "function", "function": {"name": "file_read", "parameters": {}}})
+    _, state, delta = remember({"id": "b2", "session": "s", "body": body})
+    save_state(SESSIONS / "s", state)
+    assert resumable({"opencode_session": "x"}, "opencode_session", delta)
+    update = "\n".join(updates(delta, SESSIONS / "s"))
+    assert "+use tools" in update and '"file_read"' in update and '"file_list"' not in update
     body["messages"] = body["messages"][:1] + [{"role": "user", "content": "summary"}]
     _, _, delta = remember({"id": "c", "session": "s", "body": body})
     assert delta["rewritten"] and len(delta["new"]) == 1
