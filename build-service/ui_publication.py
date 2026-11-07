@@ -505,9 +505,16 @@ class UIPublication:
         with self.broker.deploy_lock,self.broker.boot_effect_lease(),self.broker.lock:
             self.broker._incoming_lease(trusted)
             if not self.broker._maintenance_allowed(trusted,args):raise PermissionError("Build service drained for another task")
-            item=self.broker.scheduler.item(args,trusted,workspace)
+            # The local operator may discard a revoked chat's never-activated release on its behalf:
+            # its owner cannot (recovery needs a local caller) and an unresolved uncertain release
+            # stops every later deployment. _reconcile still proves the predecessor is active and
+            # the runtime and checkout are unchanged before anything is recorded.
+            operator=(args["action"]=="discard_prepared_release"and trusted.get("user_id")=="codex-local"
+                      and workspace==self.broker.local_workspace)
+            item=self.broker.scheduler.item(args,trusted,workspace,administrator=operator)
             job=self.broker.jobs.get(args["job_id"])
-            if not job or item.get("job_id")!=job["job_id"]or not self.broker._owned(job,trusted,workspace):raise PermissionError("Owned latest release required")
+            if not job or item.get("job_id")!=job["job_id"]:raise PermissionError("Owned latest release required")
+            if not(self.broker._owned(job,trusted,workspace)or(operator and job.get("revoked"))):raise PermissionError("Owned latest release required")
             previous=job.get("publication_recovery")
             # An unfinished captured restore whose predecessor never became healthy may be
             # settled by accept_unhealthy_predecessor; every other request stays exact.
@@ -522,8 +529,9 @@ class UIPublication:
                     or (job.get("revoked") and not discard)
                     or job["job_id"] in self.broker.active_jobs):
                 raise ValueError("Inactive uncertain publication intent required")
-            state=self.broker.scheduler.ensure(item,trusted,workspace)
-            self.broker.scheduler.store.assert_owned(item["key"],state["owner"],job["ownership_epoch"],[])
+            if not operator:
+                state=self.broker.scheduler.ensure(item,trusted,workspace)
+                self.broker.scheduler.store.assert_owned(item["key"],state["owner"],job["ownership_epoch"],[])
             result=self._reconcile(job,args,digest)
             self.broker._start_next()
             return result

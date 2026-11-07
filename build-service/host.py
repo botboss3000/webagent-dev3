@@ -3020,6 +3020,7 @@ class Broker:
         self.index_coordinator=index_coordinator_module.IndexCoordinator(self,index_queue_module,release,context_digest,TASK_CONTEXT,ASSET_ROOT,scheduler_module.ownership.source_path)
         self.runner.index_seed_provider=self.index_coordinator.publication_seeds
         self.publication_targets=TARGETS
+        self.local_workspace=LOCAL_WORKSPACE
         self.ui_publication=ui_publication_module.UIPublication(self,release,context_digest,CONTEXT,ASSET_ROOT,ui_policy_module,scrub=lambda text:scrub(text,self.runner.secrets))
         self.work_activity = {key: self._work_content(item) for key, item in self.work.items()}
         for path in sorted(self.state.glob("*.json")):
