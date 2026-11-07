@@ -53,6 +53,7 @@ export function toolFailure(payload) {
 /** Projects journal events into grouped tool, message, mode, and compaction rows for activityGroups. */
 export function activityRows(events) {
   const rows=[], tools=new Map(), messages=new Map();
+  let compaction=null;
   for (const event of events) {
     const p=event.payload || {}, kind=event.kind;
     if (kind === 'tool_call' || kind === 'tool_result') {
@@ -79,14 +80,16 @@ export function activityRows(events) {
     } else if (kind === 'mode_change' || kind === 'execution_mode') {
       rows.push({id:event.event_id,category:'modes',label:'Mode change',events:[event]});
     } else if (kind === 'compaction_call') {
-      // Not an agent tool call, so it is not counted; the result row counts the compaction.
+      // One expandable row per compaction: the call opens it and its result fills it.
       const size=Number.isFinite(p.input_bytes)?' · '+(p.input_bytes/1024).toFixed(1)+' KB input':'';
-      rows.push({id:event.event_id,category:'compaction_calls',label:'Compaction call',
-        text:'Compaction call · System model '+(p.model||'unknown')+size,events:[event]});
+      compaction={id:event.event_id,category:'compactions',compaction:true,
+        label:'Compaction · System model '+(p.model||'unknown')+size,text:'',events:[event]};
+      rows.push(compaction);
     } else if (kind === 'compaction_completed' || kind === 'compaction_result'
         || (kind==='pipeline' && p.step==='compaction_end')) {
       const text=p.error?'Compaction failed: '+p.error:typeof p.summary==='string'?p.summary:'';
-      rows.push({id:event.event_id,category:'compactions',label:'Compaction',text,events:[event]});
+      if (kind==='compaction_result' && compaction) {compaction.events.push(event);compaction.text=text;compaction=null;}
+      else rows.push({id:event.event_id,category:'compactions',label:'Compaction',text,events:[event]});
     }
   }
   return rows;

@@ -39,10 +39,9 @@
    Orange tokens follow the design-system theme pair (dark default, light override). */
 :root { --orange: #fb923c; --orange-rgb: 251, 146, 60; }
 body.light-mode { --orange: #c2410c; --orange-rgb: 194, 65, 12; }
-.v2-activity-body .v2-mini-row[data-category="compaction_calls"] {
-  border-left: 3px solid var(--orange);
-}
-.v2-activity-body .v2-mini-row[data-category="compaction_calls"] .v2-mini-content { color: var(--orange); }
+.v2-activity-body .v2-mini-compaction { border-left: 3px solid var(--orange); }
+.v2-activity-body .v2-mini-compaction[data-status="done"] > details > summary,
+.v2-activity-body .v2-mini-compaction[data-status="running"] > details > summary { color: var(--orange); }
 .v2-activity-body .v2-mini-section-head { display: flex; align-items: center; justify-content: space-between; color: var(--fg-3); }
 .v2-activity-body pre {
   white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono);

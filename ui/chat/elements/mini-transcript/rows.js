@@ -81,13 +81,18 @@ function diagnostic() {
 }
 // Construct a tool or message row with stable control nodes; patchTranscriptRow supplies current data.
 export function createTranscriptRow(row) {
-  const tool=row.category==='tools';
-  const node=el('div','','v2-mini-row '+(tool?'v2-mini-tool':'v2-mini-message'));
+  const tool=row.category==='tools',compaction=row.compaction===true;
+  const node=el('div','','v2-mini-row '+(tool?'v2-mini-tool':compaction?'v2-mini-tool v2-mini-compaction':'v2-mini-message'));
   const content=el('div','','v2-mini-content');
   const footer=el('div','','turn-gutter ca-activity-entry-footer notice-gutter');
   const raw=diagnostic();
-  node._parts={content,footer,raw,tool};
-  if(tool) {
+  node._parts={content,footer,raw,tool,compaction};
+  if(compaction) {
+    // Collapsed like a tool row; expanding shows the summary (or the failure) once the result arrives.
+    const disclosure=el('details','','v2-mini-tool-disclosure');
+    const head=el('summary');disclosure.append(head,content);node.append(disclosure,footer,raw);
+    node._parts.head=head;footer.append(copy('Copy summary',()=>node._text));
+  } else if(tool) {
     const disclosure=el('details','','v2-mini-tool-disclosure');
     const head=el('summary');disclosure.append(head,content);node.append(disclosure,footer,raw);
     node._parts.head=head;
@@ -126,7 +131,12 @@ export function patchTranscriptRow(node,row) {
   const signature=JSON.stringify(row.events);if(node.dataset.signature===signature)return;
   node.dataset.signature=signature;node.dataset.category=row.category;
   const value=normalizeRow(row),p=node._parts;node._text=value.text;
-  if(p.tool) {
+  if(p.compaction) {
+    const result=row.events.find(e=>e.kind==='compaction_result');
+    const status=!result?'running':result.payload?.error?'error':'done';
+    p.head.textContent=({done:'✓ ',error:'✗ '}[status]||'◷ ')+row.label;node.dataset.status=status;
+    markdown(p.content,value.text || 'Waiting for the summary…');
+  } else if(p.tool) {
     p.head.textContent=({done:'✓ ',error:'✗ ',held:'⏸ '}[value.status]||'◷ ')+row.label;
     node.dataset.status=value.status;
     const details=brokerDetails(value.result);p.broker.hidden=!details;
