@@ -1,0 +1,66 @@
+{
+ "_about": "Value words for the configuration composer's matcher (src/values.rs): wording a setting's type alone does not give. phrases: [phrase, value] pairs tried in order, the first found in the lowercased request wins; a value {\"needs\": DETAIL} means the request must name that detail first. increase/decrease: words that mean a bigger or smaller value. inverse: words that flip doubling and halving (more often = a shorter interval). Keys are catalog setting ids (checked by a test).",
+ "settings": {
+  "access.registration": {
+   "phrases": [
+    ["close", "restricted"],
+    ["nobody new", "restricted"],
+    ["invite only", "restricted"],
+    ["anyone sign up", "open"],
+    ["let anyone", "open"],
+    ["reopen", "open"]
+   ]
+  },
+  "chat.widget.launcher.position": {
+   "phrases": [
+    ["other side", "left"]
+   ]
+  },
+  "agent.message_visibility.mode": {
+   "phrases": [
+    ["only show the final answer", "none"],
+    ["no progress", "none"],
+    ["show progress", "auto"]
+   ]
+  },
+  "agent.member_access.conversation_privacy": {
+   "phrases": [
+    ["private", "private"],
+    ["review", "operator_reviewable"]
+   ]
+  },
+  "chat.execution_mode.default_mode": {
+   "phrases": [
+    ["plan mode", "plan"],
+    ["ask mode", "ask"],
+    ["auto mode", "auto"]
+   ]
+  },
+  "chat.mark_read_on_visit": {
+   "phrases": [
+    ["unread", false]
+   ]
+  },
+  "agent.voice_output": {
+   "phrases": [
+    ["different voice", {"needs": "voice"}],
+    ["another voice", {"needs": "voice"}]
+   ]
+  },
+  "chat.live_reload.interval_ms": {
+   "inverse": ["often", "frequent"]
+  },
+  "app_ui.chat_panel.width": {
+   "phrases": [
+    ["don't show the chat", {"width": 0, "unit": "%"}],
+    ["hide the chat", {"width": 0, "unit": "%"}]
+   ]
+  },
+  "app_ui.pull_to_refresh.start_zone_px": {
+   "decrease": ["by accident", "accidentally"]
+  },
+  "context.compaction.trigger_tokens": {
+   "increase": ["forgets", "too early"]
+  }
+ }
+}

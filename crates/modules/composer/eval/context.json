@@ -1,0 +1,11 @@
+{
+ "_about": "What the request sets in this folder were written against: the development install's agents and the limits that related live values imposed (address block at most max_block_seconds 3600; compaction tail below the 150000-token trigger).",
+ "agents": [
+  "research",
+  "shared_default"
+ ],
+ "limits": {
+  "access.login_protection.address.block_seconds": 3600,
+  "context.compaction.tail_tokens": 149999
+ }
+}

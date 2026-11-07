@@ -836,6 +836,14 @@ async fn run_process() -> Result<()> {
         let arg = |n| std::env::args().nth(n).unwrap_or_default();
         return webagent_media::voice_service(&arg(2), &arg(3)).map_err(anyhow::Error::msg);
     }
+    if std::env::args().nth(1).as_deref() == Some("--composer-service") {
+        // The configuration composer's matcher, started by the API as a child process.
+        return webagent_composer::serve();
+    }
+    if std::env::args().nth(1).as_deref() == Some("--composer-eval") {
+        // Score the matcher against request sets (crates/modules/composer/eval/*.jsonl).
+        return webagent_composer::evaluate(&std::env::args().skip(2).collect::<Vec<_>>());
+    }
     if std::env::args().nth(1).as_deref() == Some("--tool-worker") {
         // The tool worker, started by the container launcher under the worker identity.
         return Ok(webagent_worker::serve(webagent_worker::Config::from_env()?).await?);

@@ -99,6 +99,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-cert
         'silero_vad.onnx: Silero VAD (https://github.com/snakers4/silero-vad), MIT.' \
         '../espeak-ng-data, ../lib/libespeak-ng.so.1: espeak-ng 1.52 (https://github.com/espeak-ng/espeak-ng), GPL-3.0.' > /opt/voice/models/NOTICE \
     && chmod -R a+rX /opt/voice
+# The configuration composer's matcher (crates/modules/composer) runs BAAI bge-small-en-v1.5 (MIT)
+# in its ONNX export on the ONNX Runtime above; files pinned to one revision and checked.
+RUN cd /opt/voice && mkdir -p composer/bge-small-en-v1.5 && cd composer/bge-small-en-v1.5 \
+    && curl -fsSLo model.onnx https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/5c38ec7c405ec4b44b94cc5a9bb96e735b38267a/onnx/model.onnx \
+    && curl -fsSLo vocab.txt https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/5c38ec7c405ec4b44b94cc5a9bb96e735b38267a/vocab.txt \
+    && printf '%s  %s\n' 828e1496d7fabb79cfa4dcd84fa38625c0d3d21da474a00f08db0f559940cf35 model.onnx \
+        07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3 vocab.txt | sha256sum -c - \
+    && printf '%s\n' 'composer/bge-small-en-v1.5/: BAAI bge-small-en-v1.5 (https://huggingface.co/BAAI/bge-small-en-v1.5), MIT.' >> /opt/voice/models/NOTICE \
+    && chmod -R a+rX /opt/voice/composer
 
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS api
 RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates curl tini git ripgrep build-essential pkg-config chromium chromium-driver python3-selenium valgrind heaptrack linux-perf \
