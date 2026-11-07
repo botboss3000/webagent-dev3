@@ -2104,7 +2104,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         Raw output stays local to this exact comparison; no frame is published.
         """
         program=("import socket,json; s=socket.socket(socket.AF_UNIX); s.settimeout(10); "
-            "s.connect('/run/v3/worker/tools.sock'); "
+            "s.connect('/runtime/worker/tools.sock'); "
             "s.sendall(json.dumps({'version':2,'id':'browser-protocol','name':'browser_protocol',"
             "'workspace':'"+LOCAL_WORKSPACE+"','arguments':{}}).encode()+bytes([10])); "
             "print(s.makefile('rb').readline(4096).decode())")
@@ -2122,7 +2122,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 return False
         # Ask the installed worker contract, not a filename or source-byte guess.
         program=("import socket,json; s=socket.socket(socket.AF_UNIX); s.settimeout(10); "
-            "s.connect('/run/v3/worker/tools.sock'); "
+            "s.connect('/runtime/worker/tools.sock'); "
             "s.sendall(json.dumps({'version':2,'id':'plugin-protocol','name':'ability_plugins_protocol',"
             "'workspace':'"+LOCAL_WORKSPACE+"','arguments':{}}).encode()+bytes([10])); "
             "print(s.makefile('rb').readline(4096).decode())")
