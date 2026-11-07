@@ -11374,6 +11374,29 @@ async fn persisted_code_index_status_survives_snapshot_and_legacy_view_hydration
 }
 
 #[tokio::test]
+async fn transient_retries_back_off_and_honor_retry_after() {
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    let id = queued(&app, &sid).await;
+    let mut run = app.run(&id).await.unwrap();
+    let wait = |run: &Value| run["provider_retry_at"].as_u64().unwrap() - crate::now();
+    let error = provider::typed_failure(model_selection::FailureKind::Transient, false, "busy");
+    model_failure(&mut run, &error).unwrap();
+    assert!((1..=3).contains(&wait(&run)));
+    model_failure(&mut run, &error).unwrap();
+    assert!((7..=10).contains(&wait(&run)));
+    let mut run = app.run(&id).await.unwrap();
+    let asked = provider::typed_failure_after(
+        model_selection::FailureKind::Transient,
+        false,
+        "busy",
+        Some(30),
+    );
+    model_failure(&mut run, &asked).unwrap();
+    assert!((29..=30).contains(&wait(&run)));
+}
+
+#[tokio::test]
 async fn provider_recovery_exhaustion_persists_and_explicit_resume_is_idempotent() {
     let (root, app) = fixture().await;
     let sid = conversation(&app).await;
@@ -11393,6 +11416,10 @@ async fn provider_recovery_exhaustion_persists_and_explicit_resume_is_idempotent
         .claim_run(&mut run, "other-loop", "too-early")
         .await
         .unwrap());
+    // A second same-model retry follows the first, after a longer backoff.
+    model_failure(&mut run, &error).unwrap();
+    assert_eq!(run["status"], "queued");
+    assert_eq!(run["failover_state"]["retries"], 2);
     model_failure(&mut run, &error).unwrap();
     assert_eq!(run["status"], "stopped");
     assert_eq!(run["provider_recovery"]["safe_to_resume"], true);
@@ -11485,8 +11512,9 @@ async fn provider_recovery_never_marks_partial_or_uncertain_or_contract_failures
         false,
         "summary connection failure",
     );
-    system_model_failure(&mut run, &error).unwrap();
-    system_model_failure(&mut run, &error).unwrap();
+    for _ in 0..=model_selection::MAX_TRANSIENT_RETRIES {
+        system_model_failure(&mut run, &error).unwrap();
+    }
     assert_eq!(run["status"], "stopped");
     assert_eq!(run["provider_recovery"]["system"], true);
     app.save(&mut run).await.unwrap();

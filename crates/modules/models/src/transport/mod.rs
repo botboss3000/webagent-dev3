@@ -60,6 +60,8 @@ pub struct ProviderFailure {
     detail: String,
     pub transport: Option<TransportDiagnostic>,
     pub http_status: Option<u16>,
+    /// Seconds the provider asked to wait before retrying (HTTP Retry-After or its error text).
+    pub retry_after: Option<u64>,
 }
 impl std::fmt::Display for ProviderFailure {
     /// Expose only the sanitized failure label through the standard error display.
@@ -80,6 +82,24 @@ pub fn typed_failure(
         detail: detail.into(),
         transport: None,
         http_status: None,
+        retry_after: None,
+    }
+    .into()
+}
+/// A classified failure carrying the provider's requested wait before a retry.
+pub fn typed_failure_after(
+    kind: crate::model_selection::FailureKind,
+    started: bool,
+    detail: impl Into<String>,
+    retry_after: Option<u64>,
+) -> anyhow::Error {
+    ProviderFailure {
+        kind,
+        response_started: started,
+        detail: detail.into(),
+        transport: None,
+        http_status: None,
+        retry_after,
     }
     .into()
 }
@@ -120,6 +140,7 @@ fn transport_failure(error: reqwest::Error, started: bool, detail: &str) -> anyh
             status: error.status().map(|s| s.as_u16()),
             io_kind,
         }),
+        retry_after: None,
     }
     .into()
 }
@@ -277,6 +298,12 @@ async fn response_failure(
     cancel: &CancellationToken,
 ) -> anyhow::Error {
     let status = response.status().as_u16();
+    // Only the delay-seconds form; an HTTP-date is rare from model APIs and is ignored.
+    let retry_after = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok());
     // Bound time and bytes even when an error endpoint sends an endless body.
     let mut stream = response.bytes_stream();
     let read = async {
@@ -323,6 +350,7 @@ async fn response_failure(
         detail: format!("Provider HTTP {status}: {detail}"),
         transport: None,
         http_status: Some(status),
+        retry_after,
     }
     .into()
 }
@@ -841,6 +869,7 @@ impl Provider {
                             ),
                             transport: None,
                             http_status: Some(http_status),
+                            retry_after: None,
                         }
                         .into())
                     }

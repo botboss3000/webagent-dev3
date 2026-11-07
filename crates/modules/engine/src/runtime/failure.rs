@@ -57,7 +57,7 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
     } else if kind == FailureKind::Transient
         && !state.response_started
         && !state.uncertain_tool_effect
-        && state.retries < 1
+        && state.retries < model_selection::MAX_TRANSIENT_RETRIES
     {
         state.retries += 1;
         NextAction::Retry
@@ -74,7 +74,7 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
         Value::Null
     };
     run["provider_retry_at"] = if action != NextAction::Terminal {
-        json!(now() + 2)
+        json!(now() + retry_delay(&state, failure.and_then(|f| f.retry_after)))
     } else {
         Value::Null
     };
@@ -96,6 +96,19 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
     });
     Ok(())
 }
+/// Seconds before the next attempt: 2 s, then 8 s for a second same-model retry, each with
+/// up to 25% jitter so parallel runs do not retry in step; a backup starts after 2 s. A
+/// provider's own Retry-After wins when longer, capped at a minute.
+fn retry_delay(state: &model_selection::FailoverState, retry_after: Option<u64>) -> u64 {
+    let base: u64 = if state.retries >= 2 { 8 } else { 2 };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let jittered = base + u64::from(nanos) % (base / 4 + 1);
+    jittered.max(retry_after.unwrap_or(0)).min(60)
+}
+
 pub fn system_model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
     let mut system = system_dispatch_run(run)?;
     model_failure(&mut system, error)?;

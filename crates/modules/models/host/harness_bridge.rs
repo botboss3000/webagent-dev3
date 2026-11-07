@@ -13,7 +13,7 @@ use axum::{http::HeaderMap, Extension};
 use webagent_configuration::digest;
 use webagent_models::{
     model_selection::FailureKind,
-    transport::{typed_failure, BridgeCall, BridgeQueue},
+    transport::{typed_failure, typed_failure_after, BridgeCall, BridgeQueue},
 };
 
 const CALLS: &str = "harness_bridge_call:";
@@ -143,14 +143,7 @@ impl BridgeQueue for Queue {
                     let Some(doc) = self.0.get(&key).await? else { return Err(offline()) };
                     match doc["state"].as_str() {
                         Some("replied") => return Ok(doc["reply"].clone()),
-                        Some("failed") => {
-                            let error = doc["error"].as_str().unwrap_or("no detail");
-                            return Err(typed_failure(
-                                FailureKind::Transient,
-                                false,
-                                format!("Bridge client failed: {error}"),
-                            ));
-                        }
+                        Some("failed") => return Err(failure_of(&doc)),
                         Some("pending") if now() > doc["created"].as_u64().unwrap_or(0) + OFFLINE_SECS => {
                             let seen = self.0.get(&format!("{SEEN}{link}")).await?.and_then(|v| v["at"].as_u64());
                             return Err(if recently_seen(seen, now()) {
@@ -176,6 +169,35 @@ impl BridgeQueue for Queue {
             result
         })
     }
+}
+
+/// A client-reported failure, kept apart by where it happened: between the harness and its own
+/// provider ("Bridge provider …", typed so overload and quota are handled like any provider's),
+/// or in the client and harness themselves ("Bridge client failed").
+fn failure_of(doc: &Value) -> anyhow::Error {
+    let error = doc["error"].as_str().unwrap_or("no detail");
+    let retry_after = doc["retry_after"].as_u64();
+    if doc["source"] != "upstream" {
+        return typed_failure_after(
+            FailureKind::Transient,
+            false,
+            format!("Bridge client failed: {error}"),
+            retry_after,
+        );
+    }
+    let (kind, label) = match doc["category"].as_str() {
+        Some("overloaded") => (FailureKind::Transient, "overloaded"),
+        Some("stalled") => (FailureKind::Transient, "not responding"),
+        Some("quota") => (FailureKind::QuotaExhausted, "usage limit reached"),
+        Some("auth") => (FailureKind::InvalidCredentials, "authorization failed"),
+        _ => (FailureKind::Transient, "error"),
+    };
+    typed_failure_after(
+        kind,
+        false,
+        format!("Bridge provider {label}: {error}"),
+        retry_after,
+    )
 }
 
 /// Settles a stopped call: one a client is running is marked cancelled, so that client's next
@@ -393,7 +415,17 @@ pub async fn reply(
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Call not waiting for a reply".into()))?;
     let outcome = match error {
         Some(error) => {
-            json!({"state":"failed","error":error.chars().take(300).collect::<String>()})
+            // The client says whether its harness failed or the harness's own provider did.
+            let source = match input["source"].as_str() {
+                Some("upstream") => "upstream",
+                _ => "harness",
+            };
+            let category = input["category"]
+                .as_str()
+                .filter(|c| matches!(*c, "overloaded" | "quota" | "auth" | "stalled" | "upstream"));
+            let retry_after = input["retry_after"].as_u64().filter(|s| *s <= 600);
+            json!({"state":"failed","error":error.chars().take(300).collect::<String>(),
+                "source":source,"category":category,"retry_after":retry_after})
         }
         None => {
             json!({"state":"replied","reply":{"message":input["message"],"usage":input["usage"]}})
@@ -605,6 +637,33 @@ mod tests {
         assert!(!super::open(&cancelled, 99_999));
         assert!(!super::stale(&cancelled, 1000 + super::OFFLINE_SECS));
         assert!(super::stale(&cancelled, 1001 + super::OFFLINE_SECS));
+    }
+
+    /// Upstream overload, quota and auth stay distinct from a failing client, with the wait kept.
+    #[test]
+    fn client_failures_keep_their_source() {
+        use webagent_models::transport::ProviderFailure;
+        let kind = |doc: serde_json::Value| {
+            let error = super::failure_of(&doc);
+            let failure = error.downcast_ref::<ProviderFailure>().unwrap();
+            (failure.kind, failure.retry_after, error.to_string())
+        };
+        let (k, wait, text) = kind(
+            json!({"error":"[overloaded] busy","source":"upstream","category":"overloaded","retry_after":30}),
+        );
+        assert_eq!((k, wait), (super::FailureKind::Transient, Some(30)));
+        assert!(text.starts_with("Bridge provider overloaded"));
+        assert_eq!(
+            kind(json!({"error":"funds","source":"upstream","category":"quota"})).0,
+            super::FailureKind::QuotaExhausted
+        );
+        assert_eq!(
+            kind(json!({"error":"key","source":"upstream","category":"auth"})).0,
+            super::FailureKind::InvalidCredentials
+        );
+        assert!(kind(json!({"error":"crash"}))
+            .2
+            .starts_with("Bridge client failed"));
     }
 
     #[test]

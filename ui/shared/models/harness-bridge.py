@@ -82,7 +82,7 @@ Client secret and server: work/harness-bridge/client.json (mode 0600), written b
 Server override: $HARNESS_BRIDGE_URL.
 Per-chat files: work/harness-bridge/sessions/<webagent-session>/.
 """
-import base64, difflib, hashlib, json, os, re, secrets, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request, uuid
+import base64, difflib, hashlib, json, os, re, secrets, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request, uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent / "work" / "harness-bridge"
@@ -235,6 +235,43 @@ def post(path, body, timeout=60, url=None):
 
 # Harness processes by call id, so a Stop from WebAgent can interrupt the one running that call.
 RUNNING, STOPPED, CURRENT = {}, set(), threading.local()
+
+
+class HarnessFailure(RuntimeError):
+    """A failure WebAgent should file by where it happened: "upstream" is the harness's own provider
+    (overloaded, quota, auth, not responding); "harness" is this client or the harness process."""
+
+    def __init__(self, detail, source="harness", category=None, retry_after=None):
+        super().__init__(detail)
+        self.source, self.category, self.retry_after = source, category, retry_after
+
+
+UPSTREAM = re.compile(r"Upstream request failed: (?:\[(?P<code>[\w.-]+)\] )?(?P<text>.*)", re.S)
+
+
+def classify(message):
+    """(category, retry_after) when an error came from the harness's provider, else None."""
+    match = UPSTREAM.search(message)
+    lowered = message.lower()
+    if not match and not any(k in lowered for k in ("usage limit", "insufficient account funds")):
+        return None
+    words = ((match["code"] or "") + " " + match["text"]).lower() if match else lowered
+    wait = re.search(r"after (\d+) ?s", words)
+    if any(k in words for k in ("overload", "capacity", "cap_refused", "rate limit", "rate_limit", "retry shortly")):
+        category = "overloaded"
+    elif any(k in words for k in ("fund", "usage limit", "quota", "billing")):
+        category = "quota"
+    elif any(k in words for k in ("auth", "api key", "unauthorized", "forbidden")):
+        category = "auth"
+    else:
+        category = "upstream"
+    return category, int(wait[1]) if wait else None
+
+
+def harness_failure(errors, returncode, stderr):
+    detail = f"opencode failed ({returncode}): {errors or stderr[-300:]}"
+    upstream = classify(" ".join(map(str, errors)))
+    return HarnessFailure(detail, "upstream", *upstream) if upstream else HarnessFailure(detail)
 
 
 class Stopped(Exception):
@@ -556,6 +593,78 @@ def mcp_stub(work):
         print(json.dumps({"jsonrpc": "2.0", "id": rid, "result": result}), flush=True)
 
 
+# A step that streams nothing (no reasoning, text or tool events) for this long is checked with a probe.
+STALL_SECS = 120
+PROBE_SECS = 30
+
+
+class StallWatch:
+    """Tell a slow model from a dead provider. Any session event on the chat's server is progress;
+    after STALL_SECS of silence a one-word probe goes to the same model on the same server. A probe
+    that answers means the provider is up and the call is just slow, so waiting continues; one that
+    fails or times out ends the call now as an upstream failure instead of after minutes."""
+
+    def __init__(self, server, work, model, process):
+        self.server, self.work, self.model, self.process = server, work, model, process
+        self.last, self.failure, self.closed, self.response = time.time(), None, False, None
+        threading.Thread(target=self.listen, daemon=True).start()
+        threading.Thread(target=self.check, daemon=True).start()
+
+    def listen(self):
+        url = self.server + "/api/event?directory=" + urllib.parse.quote(str(self.work))
+        auth = base64.b64encode(f"opencode:{SERVER_PASSWORD}".encode()).decode()
+        try:
+            self.response = urllib.request.urlopen(urllib.request.Request(url, headers={"Authorization": "Basic " + auth}),
+                                                   timeout=HARNESS_SECS)
+            for line in self.response:
+                if self.closed:
+                    break
+                if line.startswith(b"data:") and b'"type":"session.' in line:
+                    self.last = time.time()
+        except Exception:  # closed on purpose, or no stream: the call then runs unwatched
+            pass
+
+    def check(self):
+        while not self.closed and self.process.poll() is None:
+            time.sleep(5)
+            if time.time() - self.last < STALL_SECS or self.closed:
+                continue
+            silent = round(time.time() - self.last)
+            error = self.probe()
+            if error is None:
+                self.last = time.time()
+                continue
+            upstream = classify(error) or ("stalled", None)
+            self.failure = HarnessFailure(f"no response for {silent} s and a probe failed: {error}"[:300],
+                                          "upstream", *upstream)
+            interrupt(self.process)
+            return
+
+    def probe(self):
+        """None when the model answers a one-word prompt in time, else the error."""
+        command = [OPENCODE, "run", "--server", self.server, "--agent", "webagent-bridge", "-m", self.model,
+                   "--format", "json"]
+        try:
+            result = subprocess.run(command, input="Reply with the single word OK. Do not use tools.", cwd=self.work,
+                                    capture_output=True, text=True, timeout=PROBE_SECS,
+                                    env={**os.environ, "OPENCODE_SERVER_PASSWORD": SERVER_PASSWORD})
+        except subprocess.TimeoutExpired:
+            return f"probe got no answer within {PROBE_SECS} s"
+        events = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
+        errors = [str((e.get("error") or {}).get("message", e))[:200] for e in events if e.get("type") == "error"]
+        if errors or not any(e.get("type") == "text" for e in events):
+            return " ".join(errors) or f"probe failed ({result.returncode})"
+        return None
+
+    def close(self):
+        self.closed = True
+        if self.response:
+            try:
+                self.response.close()
+            except OSError:
+                pass
+
+
 def opencode_turn(command, prompt, work, model):
     """Run one `opencode run`; return its session id, the final text and token usage.
 
@@ -571,6 +680,8 @@ def opencode_turn(command, prompt, work, model):
     threading.Thread(target=lambda: stderr.append(process.stderr.read()), daemon=True).start()
     process.stdin.write(prompt)
     process.stdin.close()
+    server = command[command.index("--server") + 1] if "--server" in command else None
+    watch = StallWatch(server, work, model, process) if server else None
     session, texts, usage, errors, stopped = None, {}, {"input": 0, "output": 0}, [], False
     try:
         for line in process.stdout:
@@ -597,9 +708,13 @@ def opencode_turn(command, prompt, work, model):
     finally:
         timer.cancel()
         stop()
+        if watch:
+            watch.close()
     check_stopped()
+    if watch and watch.failure:
+        raise watch.failure
     if errors or not session or (process.returncode and not stopped):
-        raise RuntimeError(f"opencode failed ({process.returncode}): {errors or ''.join(stderr)[-300:]}")
+        raise harness_failure(errors, process.returncode, "".join(stderr))
     # The last assistant message is the turn's answer; earlier ones led up to its tool calls.
     return session, "".join(list(texts.values())[-1]) if texts else "", usage
 
@@ -656,8 +771,10 @@ def answer(call):
     except (Exception, SystemExit) as error:
         detail = str(error)[:300] or type(error).__name__
         print(f"{call['id']}: {detail}", file=sys.stderr)
+        source = {"source": error.source, "category": error.category, "retry_after": error.retry_after} \
+            if isinstance(error, HarnessFailure) else {"source": "harness"}
         try:
-            post("/api/v3/harness-bridge/reply", {"id": call["id"], "error": detail})
+            post("/api/v3/harness-bridge/reply", {"id": call["id"], "error": detail, **source})
         except (Transient, Gone) as failure:
             print(f"{call['id']}: could not report the failure ({failure})", file=sys.stderr)
     finally:
@@ -809,6 +926,14 @@ def selftest():
     assert delta["rewritten"] and len(delta["new"]) == 1
     message = parse_reply('{"content":"","tool_calls":[{"name":"file_list","arguments":{}}]}', body)
     assert message["tool_calls"][0]["function"] == {"name": "file_list", "arguments": "{}"}
+    assert classify("Upstream request failed: [prefill_cap_refused] the cell is at capacity; retry shortly (after 30 s)") \
+        == ("overloaded", 30)
+    assert classify("['Upstream request failed: Insufficient account funds']")[0] == "quota"
+    assert classify("Free usage limit reached. Free models work in OpenCode")[0] == "quota"
+    assert classify("ENOENT: no such file") is None
+    failure = harness_failure(["Upstream request failed: [overloaded] the server is overloaded; retry shortly"], 1, "")
+    assert (failure.source, failure.category, failure.retry_after) == ("upstream", "overloaded", None)
+    assert harness_failure([], 1, "crash").source == "harness"
     CURRENT.call = "stop-me"
     process = start_harness(["sleep", "30"])
     stop_calls(["stop-me"])
@@ -851,7 +976,7 @@ def selftest():
         post = real_post
     assert posted and posted[0][0] == "/api/v3/harness-bridge/reply"
     assert posted[0][1]["message"]["tool_calls"][0]["function"]["name"] == "file_list"
-    assert posted[1][1] == {"id": "x", "error": "no harness for unknown_bridge on this client"}
+    assert posted[1][1] == {"id": "x", "error": "no harness for unknown_bridge on this client", "source": "harness"}
     print("selftest ok")
 
 

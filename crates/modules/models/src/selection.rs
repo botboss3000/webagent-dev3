@@ -817,6 +817,9 @@ impl SelectionPlan {
     }
 }
 
+/// Same-model retries for a transient failure before failing over: after about 2 s, then about 8 s.
+pub const MAX_TRANSIENT_RETRIES: u8 = 2;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureKind {
@@ -880,7 +883,7 @@ impl FailoverState {
         {
             return NextAction::Terminal;
         }
-        if kind == FailureKind::Transient && self.retries < 1 {
+        if kind == FailureKind::Transient && self.retries < MAX_TRANSIENT_RETRIES {
             self.retries += 1;
             return NextAction::Retry;
         }
@@ -1317,6 +1320,7 @@ mod tests {
         let (a, e, c, g) = fixture();
         let p = SelectionPlan::resolve(&a, &e, &c, &g).unwrap();
         let mut s = FailoverState::default();
+        assert_eq!(s.failed(&p, FailureKind::Transient), NextAction::Retry);
         assert_eq!(s.failed(&p, FailureKind::Transient), NextAction::Retry);
         assert_eq!(s.failed(&p, FailureKind::Transient), NextAction::Backup);
         assert_eq!(s.history[0].to_entry_id, "c");
