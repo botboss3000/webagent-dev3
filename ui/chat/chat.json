@@ -1030,7 +1030,7 @@
   "chat_limits": {
     "attachments": {
       "_instructions": "max_file_size_mb: Maximum size of one attachment in MiB; a positive integer limits uploads, null or an omitted key removes this application limit. max_per_message: Maximum attachments per message; a positive integer limits the count, null or an omitted key removes this application limit.",
-      "max_file_size_mb": 26,
+      "max_file_size_mb": 25,
       "max_per_message": 10
     }
   },
