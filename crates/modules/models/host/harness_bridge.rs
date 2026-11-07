@@ -121,20 +121,21 @@ impl BridgeQueue for Queue {
             let id = Uuid::new_v4().to_string();
             let key = format!("{CALLS}{link}:{id}");
             self.0.put(&key, &json!({"id":id,"session":call.session,"provider":call.provider,"body":call.body,"state":"pending","created":now()})).await?;
-            // A cancelled call a client is running stays, marked, until that client's next poll.
-            let mut keep = false;
+            // Stop usually drops this future rather than firing `call.cancel`; the guard settles
+            // the call either way.
+            let mut guard = Abandoned {
+                store: self.0.clone(),
+                key: key.clone(),
+                armed: true,
+            };
+            let mut cancelled = false;
             // No bridge failure reaches WebAgent with a partial response or a tool effect (the
             // harness only records tool calls), so each one is reported as not started.
             let result = async {
                 loop {
                     tokio::select! {
                         _ = call.cancel.cancelled() => {
-                            if let Some(mut doc) = self.0.get(&key).await?.filter(|d| d["state"] == "claimed") {
-                                doc["state"] = json!("cancelled");
-                                doc["cancelled"] = json!(now());
-                                self.0.put(&key, &doc).await?;
-                                keep = true;
-                            }
+                            cancelled = true;
                             return Err(typed_failure(FailureKind::Cancelled, false, "Provider request cancelled"));
                         }
                         _ = tokio::time::sleep(TICK) => {}
@@ -166,11 +167,51 @@ impl BridgeQueue for Queue {
                     }
                 }
             }.await;
-            if !keep {
+            guard.armed = false;
+            if cancelled {
+                let _ = settle_cancelled(&self.0, &key).await;
+            } else {
                 let _ = self.0.delete(&key).await;
             }
             result
         })
+    }
+}
+
+/// Settles a stopped call: one a client is running is marked cancelled, so that client's next
+/// poll interrupts its harness; any other is removed.
+async fn settle_cancelled(store: &Store, key: &str) -> Result<()> {
+    match store.get(key).await? {
+        Some(mut doc) if doc["state"] == "claimed" => {
+            doc["state"] = json!("cancelled");
+            doc["cancelled"] = json!(now());
+            store.put(key, &doc).await?;
+        }
+        _ => {
+            let _ = store.delete(key).await;
+        }
+    }
+    Ok(())
+}
+
+/// Settles a call whose waiter was dropped before an outcome, as WebAgent's Stop does.
+struct Abandoned {
+    store: Store,
+    key: String,
+    armed: bool,
+}
+
+impl Drop for Abandoned {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let (store, key) = (self.store.clone(), std::mem::take(&mut self.key));
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let _ = settle_cancelled(&store, &key).await;
+            });
+        }
     }
 }
 
