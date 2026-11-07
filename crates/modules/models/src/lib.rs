@@ -20,6 +20,7 @@ pub mod transport;
 
 pub mod api;
 pub mod runtime;
+pub mod settings;
 
 #[cfg(test)]
 mod model_io_tests;

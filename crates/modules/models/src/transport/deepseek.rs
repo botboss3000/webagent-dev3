@@ -296,10 +296,12 @@ impl Provider {
             .bearer_auth(api_key)
             .header("Accept", "text/event-stream")
             .json(&body);
+        // Live limits (`models-runtime.json`), fixed for this call.
+        let streaming = crate::settings::Settings::live().streaming;
         let response = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Err(typed_failure(FailureKind::Cancelled,false,"Provider request cancelled")),
-            result = tokio::time::timeout(Duration::from_secs(60),request.send()) => result
+            result = tokio::time::timeout(Duration::from_secs(streaming.response_start_seconds), request.send()) => result
                 .map_err(|_|typed_failure(FailureKind::Transient,false,"Provider connection timed out"))?
                 .map_err(|e|transport_failure(e,false,"Provider connection failed"))?
         };
@@ -314,7 +316,7 @@ impl Provider {
             let chunk = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err(typed_failure(FailureKind::Cancelled,started,"Provider request cancelled")),
-                result = tokio::time::timeout(Duration::from_secs(120),stream.next()) => result.map_err(|_|typed_failure(FailureKind::Transient,started,"Provider stream stalled"))?
+                result = tokio::time::timeout(Duration::from_secs(streaming.stall_seconds), stream.next()) => result.map_err(|_|typed_failure(FailureKind::Transient,started,"Provider stream stalled"))?
             };
             // Usage is often a final empty-choice frame after finish_reason.
             // Preserve providers which close a finished stream without [DONE].

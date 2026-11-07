@@ -443,6 +443,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/api/v3/harness-bridge/next",post(crate::harness_bridge::next))
         .route("/api/v3/harness-bridge/reply",post(crate::harness_bridge::reply))
         .route("/api/v3/harness-bridge/ack",post(crate::harness_bridge::ack))
+        .route("/api/v3/harness-bridge/progress",post(crate::harness_bridge::progress))
         .route("/api/v3/harness-bridge/pair",post(crate::harness_bridge::pair))
         .route("/api/v3/browser/link",post(crate::browser::link))
         .route("/api/v3/browser/unlink",post(crate::browser::unlink))

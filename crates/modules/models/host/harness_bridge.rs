@@ -11,6 +11,7 @@
 use crate::*;
 use axum::{http::HeaderMap, Extension};
 use webagent_configuration::digest;
+use webagent_models::settings::{Bridge, Settings};
 use webagent_models::{
     model_selection::FailureKind,
     transport::{typed_failure, typed_failure_after, BridgeCall, BridgeQueue},
@@ -24,22 +25,10 @@ const PAIRINGS: &str = "harness_bridge_pairing:";
 const CLIENTS: &str = "harness_bridge_client:";
 /// `{link, client}` keyed by a client secret's digest: the client endpoints' admission.
 const SECRETS: &str = "harness_bridge_secret:";
-/// A queued call no client fetches within this window fails.
-const OFFLINE_SECS: u64 = 60;
-/// A link that polled within this window is online; a process counts as running for this long.
-const RECENT_SECS: u64 = 120;
-/// A fetched call is offered this long; unacknowledged, it returns to the queue.
-const LEASE_SECS: u64 = 60;
-/// An acknowledged call waits this long for its reply.
-const ANSWER_SECS: u64 = 30 * 60;
-/// Client long-poll window.
-const POLL_SECS: u64 = 25;
-/// A pairing code is valid for this long, once.
-const PAIRING_SECS: u64 = 10 * 60;
-/// How often a waiting side re-reads the call document. The API and the loop are separate
-/// processes, so polling is the only signal; a short tick makes a queued call and its reply
-/// visible within a fraction of a second instead of a whole one.
-const TICK: Duration = Duration::from_millis(250);
+/// Timers come from the live `models-runtime.json` (`harness_bridge`), read on use.
+fn bridge() -> Bridge {
+    Settings::live().harness_bridge
+}
 
 fn now() -> u64 {
     std::time::SystemTime::now()
@@ -49,28 +38,28 @@ fn now() -> u64 {
 }
 use webagent_models::transport::bridge_link_id as link_id;
 
-fn recently_seen(seen: Option<u64>, at: u64) -> bool {
-    seen.is_some_and(|seen| at <= seen + RECENT_SECS)
+fn recently_seen(seen: Option<u64>, at: u64, b: &Bridge) -> bool {
+    seen.is_some_and(|seen| at <= seen + b.client_online_seconds)
 }
 
 /// A call no process holds: never fetched, or offered and left unacknowledged past its lease.
-fn open(call: &Value, at: u64) -> bool {
+fn open(call: &Value, at: u64, b: &Bridge) -> bool {
     match call["state"].as_str() {
         Some("pending") => true,
-        Some("offered") => at > call["offered"].as_u64().unwrap_or(0) + LEASE_SECS,
+        Some("offered") => at > call["offered"].as_u64().unwrap_or(0) + b.offer_lease_seconds,
         _ => false,
     }
 }
 
 /// A call the loop has already failed or finished with; the API drops these leftovers.
-fn stale(call: &Value, at: u64) -> bool {
+fn stale(call: &Value, at: u64, b: &Bridge) -> bool {
     let since = |field: &str| call[field].as_u64().unwrap_or(0);
     match call["state"].as_str() {
-        Some("pending") => at > since("created") + OFFLINE_SECS,
-        Some("offered") => at > since("offered") + LEASE_SECS + OFFLINE_SECS,
-        Some("claimed") => at > since("claimed") + ANSWER_SECS,
-        Some("cancelled") => at > since("cancelled") + OFFLINE_SECS,
-        _ => at > since("created") + 2 * ANSWER_SECS,
+        Some("pending") => at > since("created") + b.unclaimed_call_seconds,
+        Some("offered") => at > since("offered") + b.offer_lease_seconds + b.unclaimed_call_seconds,
+        Some("claimed") => at > since("claimed") + b.answer_seconds,
+        Some("cancelled") => at > since("cancelled") + b.unclaimed_call_seconds,
+        _ => at > since("created") + 2 * b.answer_seconds,
     }
 }
 
@@ -115,7 +104,7 @@ impl BridgeQueue for Queue {
                 .get(&format!("{SEEN}{link}"))
                 .await?
                 .and_then(|v| v["at"].as_u64());
-            if !recently_seen(seen, now()) {
+            if !recently_seen(seen, now(), &bridge()) {
                 return Err(offline());
             }
             let id = Uuid::new_v4().to_string();
@@ -133,28 +122,34 @@ impl BridgeQueue for Queue {
             // harness only records tool calls), so each one is reported as not started.
             let result = async {
                 loop {
+                    let b = bridge();
                     tokio::select! {
                         _ = call.cancel.cancelled() => {
                             cancelled = true;
                             return Err(typed_failure(FailureKind::Cancelled, false, "Provider request cancelled"));
                         }
-                        _ = tokio::time::sleep(TICK) => {}
+                        _ = tokio::time::sleep(Duration::from_millis(b.store_poll_ms)) => {}
                     }
                     let Some(doc) = self.0.get(&key).await? else { return Err(offline()) };
                     match doc["state"].as_str() {
                         Some("replied") => return Ok(doc["reply"].clone()),
                         Some("failed") => return Err(failure_of(&doc)),
-                        Some("pending") if now() > doc["created"].as_u64().unwrap_or(0) + OFFLINE_SECS => {
+                        Some("pending") if now() > doc["created"].as_u64().unwrap_or(0) + b.unclaimed_call_seconds => {
                             let seen = self.0.get(&format!("{SEEN}{link}")).await?.and_then(|v| v["at"].as_u64());
-                            return Err(if recently_seen(seen, now()) {
+                            return Err(if recently_seen(seen, now(), &b) {
                                 typed_failure(FailureKind::Transient, false, "Bridge call not picked up; the client polled recently, retrying")
                             } else {
                                 offline()
                             });
                         }
-                        Some("offered") if stale(&doc, now()) =>
+                        Some("offered") if stale(&doc, now(), &b) =>
                             return Err(typed_failure(FailureKind::Transient, false, "Bridge call was never acknowledged by a client")),
-                        Some("claimed") if now() > doc["claimed"].as_u64().unwrap_or(0) + ANSWER_SECS =>
+                        // A heartbeating client must keep beating; one that never beats gets the
+                        // whole answer window.
+                        Some("claimed") if doc["progress"].as_u64().is_some_and(|beat| now() > beat + b.heartbeat_timeout_seconds) =>
+                            return Err(typed_failure(FailureKind::Transient, false, format!(
+                                "Bridge client stopped responding (no heartbeat for {} s)", b.heartbeat_timeout_seconds))),
+                        Some("claimed") if doc["progress"].is_null() && now() > doc["claimed"].as_u64().unwrap_or(0) + b.answer_seconds =>
                             return Err(typed_failure(FailureKind::Transient, false, "Bridge reply timed out")),
                         _ => {}
                     }
@@ -285,7 +280,8 @@ async fn mark_seen(app: &App, caller: &Caller) -> Result<(), ApiError> {
     let key = format!("{CLIENTS}{}:{}", caller.link, caller.client);
     if let Some(mut client) = app.store.get(&key).await? {
         let mut instances = client["instances"].as_object().cloned().unwrap_or_default();
-        instances.retain(|_, seen| recently_seen(seen.as_u64(), at));
+        let b = bridge();
+        instances.retain(|_, seen| recently_seen(seen.as_u64(), at, &b));
         instances.insert(caller.instance.clone(), json!(at));
         client["instances"] = Value::Object(instances);
         client["last_seen"] = json!(at);
@@ -304,8 +300,11 @@ pub async fn next(
 ) -> Result<Json<Value>, ApiError> {
     let caller = admit(&app.store, &headers, &input).await?;
     let session = input["session"].as_str();
-    let deadline = now() + POLL_SECS;
-    // Each poll lasts under OFFLINE_SECS, so one mark per poll keeps a running client online.
+    let b = bridge();
+    let deadline = now() + b.poll_hold_seconds;
+    // Each poll lasts under unclaimed_call_seconds, so one mark per poll keeps a running client online.
+    // Every response carries the client's live settings.
+    let settings = json!(b.client);
     mark_seen(&app, &caller).await?;
     loop {
         {
@@ -317,7 +316,7 @@ pub async fn next(
                     caller.link,
                     call["id"].as_str().unwrap_or("")
                 );
-                if stale(&call, now()) {
+                if stale(&call, now(), &b) {
                     app.store.delete(&key).await?;
                     continue;
                 }
@@ -326,7 +325,7 @@ pub async fn next(
                     cancelled.push(call["id"].clone());
                     continue;
                 }
-                if !open(&call, now()) || session.is_some_and(|s| call["session"] != s) {
+                if !open(&call, now(), &b) || session.is_some_and(|s| call["session"] != s) {
                     continue;
                 }
                 call["state"] = json!("offered");
@@ -335,17 +334,19 @@ pub async fn next(
                 call["instance"] = json!(caller.instance);
                 app.store.put(&key, &call).await?;
                 return Ok(Json(
-                    json!({"call":{"id":call["id"],"session":call["session"],"provider":call["provider"],"body":call["body"]},"cancelled":cancelled}),
+                    json!({"call":{"id":call["id"],"session":call["session"],"provider":call["provider"],"body":call["body"]},"cancelled":cancelled,"settings":settings}),
                 ));
             }
             if !cancelled.is_empty() {
-                return Ok(Json(json!({"call":null,"cancelled":cancelled})));
+                return Ok(Json(
+                    json!({"call":null,"cancelled":cancelled,"settings":settings}),
+                ));
             }
         }
         if now() >= deadline {
-            return Ok(Json(json!({"call":null})));
+            return Ok(Json(json!({"call":null,"settings":settings})));
         }
-        tokio::time::sleep(TICK).await;
+        tokio::time::sleep(Duration::from_millis(b.store_poll_ms)).await;
     }
 }
 
@@ -365,7 +366,7 @@ pub async fn ack(
         .await?
         .filter(|c| {
             c["state"] == "offered"
-                && !open(c, now())
+                && !open(c, now(), &bridge())
                 && c["client"] == caller.client.as_str()
                 && c["instance"] == caller.instance.as_str()
         })
@@ -379,6 +380,37 @@ pub async fn ack(
     call["claimed"] = json!(now());
     app.store.put(&key, &call).await?;
     Ok(Json(json!({"acknowledged":true})))
+}
+
+/// Heartbeat from the process running an acknowledged call. Once a client beats, silence longer
+/// than `heartbeat_timeout_seconds` fails the call, so a crashed client is noticed in about a
+/// minute instead of the whole answer window.
+pub async fn progress(
+    State(app): State<App>,
+    headers: HeaderMap,
+    Json(input): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    let caller = admit(&app.store, &headers, &input).await?;
+    let key = format!("{CALLS}{}:{}", caller.link, call_id(&input)?);
+    let _guard = app.gate.lock().await;
+    let mut call = app
+        .store
+        .get(&key)
+        .await?
+        .filter(|c| {
+            c["state"] == "claimed"
+                && c["client"] == caller.client.as_str()
+                && c["instance"] == caller.instance.as_str()
+        })
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "Call not running on this client".into(),
+            )
+        })?;
+    call["progress"] = json!(now());
+    app.store.put(&key, &call).await?;
+    Ok(Json(json!({"ok":true})))
 }
 
 /// Accept the outcome of an acknowledged call from the process that took it: a chat-completions
@@ -458,14 +490,15 @@ pub async fn pairing(
     Path(provider): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let link = owned_link(&app, &identity, &provider).await?;
+    let pairing_seconds = bridge().pairing_code_seconds;
     let code = pairing_code();
     app.store
         .put(
             &format!("{PAIRINGS}{}", digest(&normalize_code(&code))),
-            &json!({"link":link,"expires":now() + PAIRING_SECS}),
+            &json!({"link":link,"expires":now() + pairing_seconds}),
         )
         .await?;
-    Ok(Json(json!({"code":code,"expires_in":PAIRING_SECS})))
+    Ok(Json(json!({"code":code,"expires_in":pairing_seconds})))
 }
 
 /// Trade a pairing code for this client's own secret, returned once.
@@ -538,6 +571,7 @@ pub async fn clients(
 ) -> Result<Json<Value>, ApiError> {
     let link = owned_link(&app, &identity, &provider).await?;
     let at = now();
+    let b = bridge();
     let clients: Vec<Value> = app
         .store
         .list(&format!("{CLIENTS}{link}:"))
@@ -546,7 +580,7 @@ pub async fn clients(
         .map(|c| {
             let running = c["instances"]
                 .as_object()
-                .map_or(0, |i| i.values().filter(|seen| recently_seen(seen.as_u64(), at)).count());
+                .map_or(0, |i| i.values().filter(|seen| recently_seen(seen.as_u64(), at, &b)).count());
             json!({"id":c["id"],"name":c["name"],"created":c["created"],"last_seen":c["last_seen"],"processes":running})
         })
         .collect();
@@ -601,42 +635,65 @@ mod tests {
 
     #[test]
     fn unclaimed_call_is_retryable_only_on_a_recently_seen_link() {
-        assert!(super::recently_seen(Some(1000), 1000 + super::RECENT_SECS));
-        assert!(!super::recently_seen(Some(1000), 1001 + super::RECENT_SECS));
-        assert!(!super::recently_seen(None, 1000));
+        let b = webagent_models::settings::Settings::default().harness_bridge;
+        assert!(super::recently_seen(
+            Some(1000),
+            1000 + b.client_online_seconds,
+            &b
+        ));
+        assert!(!super::recently_seen(
+            Some(1000),
+            1001 + b.client_online_seconds,
+            &b
+        ));
+        assert!(!super::recently_seen(None, 1000, &b));
     }
 
     /// An offered call is held only for its lease; then any process may take it again.
     #[test]
     fn offered_calls_return_to_the_queue_after_their_lease() {
+        let b = webagent_models::settings::Settings::default().harness_bridge;
         let offered = json!({"state":"offered","offered":1000,"created":990});
-        assert!(!super::open(&offered, 1000 + super::LEASE_SECS));
-        assert!(super::open(&offered, 1001 + super::LEASE_SECS));
+        assert!(!super::open(&offered, 1000 + b.offer_lease_seconds, &b));
+        assert!(super::open(&offered, 1001 + b.offer_lease_seconds, &b));
         assert!(super::open(
             &json!({"state":"pending","created":1000}),
-            1000
+            1000,
+            &b
         ));
         assert!(!super::open(
             &json!({"state":"claimed","claimed":1000}),
-            99_999
+            99_999,
+            &b
         ));
         assert!(!super::stale(
             &offered,
-            1000 + super::LEASE_SECS + super::OFFLINE_SECS
+            1000 + b.offer_lease_seconds + b.unclaimed_call_seconds,
+            &b
         ));
         assert!(super::stale(
             &offered,
-            1001 + super::LEASE_SECS + super::OFFLINE_SECS
+            1001 + b.offer_lease_seconds + b.unclaimed_call_seconds,
+            &b
         ));
     }
 
     /// A stopped call is never offered again and is dropped soon if its client never polls.
     #[test]
     fn cancelled_calls_are_closed_and_expire() {
+        let b = webagent_models::settings::Settings::default().harness_bridge;
         let cancelled = json!({"state":"cancelled","cancelled":1000,"created":900});
-        assert!(!super::open(&cancelled, 99_999));
-        assert!(!super::stale(&cancelled, 1000 + super::OFFLINE_SECS));
-        assert!(super::stale(&cancelled, 1001 + super::OFFLINE_SECS));
+        assert!(!super::open(&cancelled, 99_999, &b));
+        assert!(!super::stale(
+            &cancelled,
+            1000 + b.unclaimed_call_seconds,
+            &b
+        ));
+        assert!(super::stale(
+            &cancelled,
+            1001 + b.unclaimed_call_seconds,
+            &b
+        ));
     }
 
     /// Upstream overload, quota and auth stay distinct from a failing client, with the wait kept.

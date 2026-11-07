@@ -1,0 +1,479 @@
+{
+  "_instructions": "Setting descriptors for the configuration composer (see crates/modules/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
+  "settings": [
+    {
+      "id": "models.retry.same_model_retries",
+      "description": "How many times a model call that failed with a temporary provider error is retried on the same model before switching to a backup or stopping.",
+      "type": "integer",
+      "pointer": "/retry/same_model_retries",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "retry overloaded providers more times",
+        "give up sooner when a provider is down"
+      ],
+      "areas": [
+        "models",
+        "reliability"
+      ],
+      "unit": "retries",
+      "min": 0,
+      "max": 5,
+      "bounds": "validator"
+    },
+    {
+      "id": "models.retry.delays_seconds",
+      "description": "Wait before each same-model retry; the last value repeats for further retries.",
+      "type": "integer",
+      "pointer": "/retry/delays_seconds/{step}",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "wait longer between retries",
+        "retry after 5 seconds first"
+      ],
+      "areas": [
+        "models",
+        "reliability"
+      ],
+      "parameters": {
+        "step": [
+          "0",
+          "1"
+        ]
+      },
+      "unit": "seconds",
+      "min": 0,
+      "max": 300,
+      "bounds": "validator"
+    },
+    {
+      "id": "models.retry.jitter_percent",
+      "description": "Random extra share added to each retry wait so many runs do not retry at the same moment.",
+      "type": "integer",
+      "pointer": "/retry/jitter_percent",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "spread out retries more",
+        "no random retry delay"
+      ],
+      "areas": [
+        "models",
+        "reliability"
+      ],
+      "unit": "percent",
+      "min": 0,
+      "max": 100,
+      "bounds": "validator"
+    },
+    {
+      "id": "models.retry.max_retry_after_seconds",
+      "description": "Longest wait honored when a provider asks to retry later.",
+      "type": "integer",
+      "pointer": "/retry/max_retry_after_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "honor provider retry hints up to two minutes"
+      ],
+      "areas": [
+        "models",
+        "reliability"
+      ],
+      "unit": "seconds",
+      "min": 0,
+      "max": 600,
+      "bounds": "validator"
+    },
+    {
+      "id": "models.retry.auto_resume_after_seconds",
+      "description": "After retries run out on a run that is safe to resume, how long to wait before resuming it automatically.",
+      "type": "integer",
+      "pointer": "/retry/auto_resume_after_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "auto resume stopped runs after 5 minutes",
+        "resume sooner after an outage"
+      ],
+      "areas": [
+        "models",
+        "reliability"
+      ],
+      "unit": "seconds",
+      "min": 10,
+      "max": 3600,
+      "bounds": "validator"
+    },
+    {
+      "id": "models.retry.auto_resume_attempts",
+      "description": "How many times a stopped run is resumed automatically before waiting for the user.",
+      "type": "integer",
+      "pointer": "/retry/auto_resume_attempts",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "never auto resume",
+        "auto resume twice"
+      ],
+      "areas": [
+        "models",
+        "reliability"
+      ],
+      "unit": "attempts",
+      "min": 0,
+      "max": 3,
+      "bounds": "validator"
+    },
+    {
+      "id": "models.streaming.response_start_seconds",
+      "description": "How long a direct API provider may take to start answering before the call counts as failed.",
+      "type": "integer",
+      "pointer": "/streaming/response_start_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "allow slower first responses",
+        "fail faster when a provider does not answer"
+      ],
+      "areas": [
+        "models",
+        "reliability"
+      ],
+      "unit": "seconds",
+      "min": 5,
+      "max": 600,
+      "bounds": "validator"
+    },
+    {
+      "id": "models.streaming.stall_seconds",
+      "description": "How long a direct API answer may stay silent mid-stream before it counts as stalled.",
+      "type": "integer",
+      "pointer": "/streaming/stall_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "treat 60 seconds of silence as stalled"
+      ],
+      "areas": [
+        "models",
+        "reliability"
+      ],
+      "unit": "seconds",
+      "min": 10,
+      "max": 1800,
+      "bounds": "validator"
+    },
+    {
+      "id": "models.bridge.unclaimed_call_seconds",
+      "description": "How long a bridge model call waits for a paired client to pick it up.",
+      "type": "integer",
+      "pointer": "/harness_bridge/unclaimed_call_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "give bridge clients longer to pick up calls"
+      ],
+      "areas": [
+        "models",
+        "bridge",
+        "reliability"
+      ],
+      "unit": "seconds",
+      "min": 6,
+      "max": 600,
+      "bounds": "validator",
+      "notes": "Must exceed poll_hold_seconds."
+    },
+    {
+      "id": "models.bridge.client_online_seconds",
+      "description": "How recently a bridge client must have polled to count as online.",
+      "type": "integer",
+      "pointer": "/harness_bridge/client_online_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "consider bridge clients offline sooner"
+      ],
+      "areas": [
+        "models",
+        "bridge",
+        "reliability"
+      ],
+      "unit": "seconds",
+      "min": 6,
+      "max": 3600,
+      "bounds": "validator",
+      "notes": "At least unclaimed_call_seconds."
+    },
+    {
+      "id": "models.bridge.offer_lease_seconds",
+      "description": "How long a fetched bridge call is reserved for one client before it returns to the queue.",
+      "type": "integer",
+      "pointer": "/harness_bridge/offer_lease_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "return unacknowledged bridge calls sooner"
+      ],
+      "areas": [
+        "models",
+        "bridge",
+        "reliability"
+      ],
+      "unit": "seconds",
+      "min": 10,
+      "max": 600,
+      "bounds": "validator"
+    },
+    {
+      "id": "models.bridge.answer_seconds",
+      "description": "Longest wait for a reply from a bridge client that sends no heartbeats.",
+      "type": "integer",
+      "pointer": "/harness_bridge/answer_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "allow bridge calls up to an hour"
+      ],
+      "areas": [
+        "models",
+        "bridge",
+        "reliability"
+      ],
+      "unit": "seconds",
+      "min": 60,
+      "max": 7200,
+      "bounds": "validator"
+    },
+    {
+      "id": "models.bridge.poll_hold_seconds",
+      "description": "How long the server holds a bridge client's poll open while waiting for work.",
+      "type": "integer",
+      "pointer": "/harness_bridge/poll_hold_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "shorter bridge polls"
+      ],
+      "areas": [
+        "models",
+        "bridge",
+        "reliability"
+      ],
+      "unit": "seconds",
+      "min": 5,
+      "max": 60,
+      "bounds": "validator"
+    },
+    {
+      "id": "models.bridge.pairing_code_seconds",
+      "description": "How long a bridge pairing code stays valid.",
+      "type": "integer",
+      "pointer": "/harness_bridge/pairing_code_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "pairing codes valid for 30 minutes"
+      ],
+      "areas": [
+        "models",
+        "bridge",
+        "reliability"
+      ],
+      "unit": "seconds",
+      "min": 60,
+      "max": 86400,
+      "bounds": "validator"
+    },
+    {
+      "id": "models.bridge.store_poll_ms",
+      "description": "How often the server re-checks a bridge call's state.",
+      "type": "integer",
+      "pointer": "/harness_bridge/store_poll_ms",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "check bridge calls less often"
+      ],
+      "areas": [
+        "models",
+        "bridge",
+        "reliability"
+      ],
+      "unit": "milliseconds",
+      "min": 50,
+      "max": 5000,
+      "bounds": "validator"
+    },
+    {
+      "id": "models.bridge.heartbeat_timeout_seconds",
+      "description": "How long a bridge client that sends heartbeats may stay silent before its call fails as not responding.",
+      "type": "integer",
+      "pointer": "/harness_bridge/heartbeat_timeout_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "notice a crashed bridge client within 30 seconds"
+      ],
+      "areas": [
+        "models",
+        "bridge",
+        "reliability"
+      ],
+      "unit": "seconds",
+      "min": 2,
+      "max": 1800,
+      "bounds": "validator",
+      "notes": "At least twice client.heartbeat_seconds."
+    },
+    {
+      "id": "models.bridge.client.heartbeat_seconds",
+      "description": "How often a bridge client reports that a call is still running.",
+      "type": "integer",
+      "pointer": "/harness_bridge/client/heartbeat_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "bridge heartbeat every 10 seconds"
+      ],
+      "areas": [
+        "models",
+        "bridge",
+        "reliability"
+      ],
+      "unit": "seconds",
+      "min": 1,
+      "max": 900,
+      "bounds": "validator"
+    },
+    {
+      "id": "models.bridge.client.stall_seconds",
+      "description": "How long a bridge harness may show no progress before the client probes its provider.",
+      "type": "integer",
+      "pointer": "/harness_bridge/client/stall_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "probe bridge providers after a minute of silence"
+      ],
+      "areas": [
+        "models",
+        "bridge",
+        "reliability"
+      ],
+      "unit": "seconds",
+      "min": 10,
+      "max": 3600,
+      "bounds": "validator"
+    },
+    {
+      "id": "models.bridge.client.probe_seconds",
+      "description": "How long a bridge client's provider probe may take before the provider counts as down.",
+      "type": "integer",
+      "pointer": "/harness_bridge/client/probe_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "give the provider probe 60 seconds"
+      ],
+      "areas": [
+        "models",
+        "bridge",
+        "reliability"
+      ],
+      "unit": "seconds",
+      "min": 5,
+      "max": 300,
+      "bounds": "validator"
+    },
+    {
+      "id": "models.bridge.client.server_idle_seconds",
+      "description": "How long a chat's warm bridge harness server is kept after its last use.",
+      "type": "integer",
+      "pointer": "/harness_bridge/client/server_idle_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "keep warm bridge servers for an hour"
+      ],
+      "areas": [
+        "models",
+        "bridge",
+        "reliability"
+      ],
+      "unit": "seconds",
+      "min": 60,
+      "max": 86400,
+      "bounds": "validator"
+    },
+    {
+      "id": "models.bridge.client.stop_grace_seconds",
+      "description": "After a bridge harness is told to stop, how long it may take before it is killed.",
+      "type": "integer",
+      "pointer": "/harness_bridge/client/stop_grace_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "kill stopped bridge harnesses faster"
+      ],
+      "areas": [
+        "models",
+        "bridge",
+        "reliability"
+      ],
+      "unit": "seconds",
+      "min": 1,
+      "max": 60,
+      "bounds": "validator"
+    },
+    {
+      "id": "models.bridge.client.harness_seconds",
+      "description": "Longest a single bridge harness run may take.",
+      "type": "integer",
+      "pointer": "/harness_bridge/client/harness_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "allow bridge runs up to 25 minutes"
+      ],
+      "areas": [
+        "models",
+        "bridge",
+        "reliability"
+      ],
+      "unit": "seconds",
+      "min": 60,
+      "max": 7199,
+      "bounds": "validator",
+      "notes": "Below answer_seconds."
+    }
+  ],
+  "excluded": {
+    "/schema_version": "File format version; not a setting.",
+    "/retry/delays_seconds": "A list; each wait is described on its own (models.retry.delays_seconds)."
+  }
+}

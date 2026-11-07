@@ -758,10 +758,12 @@ impl Provider {
                 request = request.header(header, value);
             }
         }
+        // Live limits (`models-runtime.json`), fixed for this call.
+        let streaming = crate::settings::Settings::live().streaming;
         let response = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Err(typed_failure(crate::model_selection::FailureKind::Cancelled, response_started, "Provider request cancelled")),
-            response = tokio::time::timeout(Duration::from_secs(60), request.send()) =>
+            response = tokio::time::timeout(Duration::from_secs(streaming.response_start_seconds), request.send()) =>
                 response.map_err(|_| typed_failure(crate::model_selection::FailureKind::Transient, false, "Provider connection timed out"))?
                     .map_err(|e| transport_failure(e, false, "Provider connection failed"))?
         };
@@ -780,7 +782,7 @@ impl Provider {
             let chunk = tokio::select! {
             biased;
                 _ = cancel.cancelled() => return Err(typed_failure(crate::model_selection::FailureKind::Cancelled, response_started, "Provider request cancelled")),
-                chunk = tokio::time::timeout(Duration::from_secs(120), stream.next()) =>
+                chunk = tokio::time::timeout(Duration::from_secs(streaming.stall_seconds), stream.next()) =>
                     chunk.map_err(|_| typed_failure(crate::model_selection::FailureKind::Transient, response_started, "Provider stream stalled"))?
             };
             let Some(chunk) = chunk else {

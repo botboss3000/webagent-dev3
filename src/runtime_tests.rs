@@ -11520,7 +11520,10 @@ async fn provider_recovery_never_marks_partial_or_uncertain_or_contract_failures
         false,
         "summary connection failure",
     );
-    for _ in 0..=model_selection::MAX_TRANSIENT_RETRIES {
+    for _ in 0..=webagent_models::settings::Settings::default()
+        .retry
+        .same_model_retries
+    {
         system_model_failure(&mut run, &error).unwrap();
     }
     assert_eq!(run["status"], "stopped");

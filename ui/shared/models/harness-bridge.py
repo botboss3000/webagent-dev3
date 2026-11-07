@@ -136,48 +136,188 @@ def opencode_config(work, model):
                                       "permission": {"*": own, "execute": "allow", MCP_PREFIX + "*": "allow"}}}})
 
 
+# Client tunables. The server sends the live values (`models-runtime.json`, harness_bridge.client)
+# with every poll; these defaults apply until then and with an older server.
+HEARTBEAT_SECS = 20
+SERVER_IDLE_SECS = 15 * 60
+STOP_GRACE_SECS = 5
+SETTINGS = {"heartbeat_seconds": "HEARTBEAT_SECS", "stall_seconds": "STALL_SECS", "probe_seconds": "PROBE_SECS",
+            "server_idle_seconds": "SERVER_IDLE_SECS", "stop_grace_seconds": "STOP_GRACE_SECS",
+            "harness_seconds": "HARNESS_SECS"}
+
+
+def apply_settings(settings):
+    for key, name in SETTINGS.items():
+        value = (settings or {}).get(key)
+        if isinstance(value, int) and value > 0:
+            globals()[name] = value
+
+
 # One `opencode serve` per chat folder and permission mode, kept warm between calls. A fresh
 # `opencode run --standalone` starts the model before its MCP stub connects, so every call's first
-# step failed with "Unknown tool" and was repeated (35-80 s each on a long context).
+# step failed with "Unknown tool" and was repeated (35-80 s each on a long context). Each server is
+# its own systemd user unit where available, so it outlives a restart of this client, which then
+# reattaches to it through REGISTRY; its password is kept beside it for the same reason.
 SERVERS, SERVERS_LOCK = {}, threading.Lock()
-SERVER_PASSWORD = secrets.token_hex(24)
-SERVER_IDLE_SECS = 15 * 60
+REGISTRY = ROOT / "servers.json"
+PASSWORD_FILE = ROOT / "server-password"
+
+
+def server_password():
+    """The warm servers' password, created on first use (never on import, so tests and source
+    checkouts get no file)."""
+    global SERVER_PASSWORD
+    if SERVER_PASSWORD:
+        return SERVER_PASSWORD
+    try:
+        SERVER_PASSWORD = PASSWORD_FILE.read_text().strip()
+        return SERVER_PASSWORD
+    except OSError:
+        password = secrets.token_hex(24)
+        try:
+            ROOT.mkdir(parents=True, exist_ok=True)
+            fd = os.open(PASSWORD_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as file:
+                file.write(password)
+        except OSError:
+            pass  # this process still works; servers simply cannot be reattached later
+        SERVER_PASSWORD = password
+        return password
+
+
+SERVER_PASSWORD = None
+
+
+class Unit:
+    """A server running as its own systemd user unit."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def alive(self):
+        return subprocess.run(["systemctl", "--user", "is-active", "--quiet", self.name]).returncode == 0
+
+    def stop(self):
+        subprocess.run(["systemctl", "--user", "stop", self.name], capture_output=True)
+
+
+class Child:
+    """A server running as a child process (no systemd user session)."""
+
+    def __init__(self, process):
+        self.process, self.name = process, None
+
+    def alive(self):
+        return self.process.poll() is None
+
+    def stop(self):
+        stop_server(self.process)
+
+
+def server_request(url, path, work, timeout=5):
+    query = urllib.parse.urlencode({"location[directory]": str(work)})
+    auth = base64.b64encode(f"opencode:{server_password()}".encode()).decode()
+    request = urllib.request.Request(f"{url}{path}?{query}", headers={"Authorization": "Basic " + auth})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.load(response)
+
+
+def stub_connected(url, work):
+    """True once the chat folder's WebAgent MCP stub is connected on this server."""
+    try:
+        servers = server_request(url, "/api/mcp", work)["data"]
+    except (OSError, ValueError, KeyError):
+        return False
+    return any(s.get("name") == "webagent" and (s.get("status") or {}).get("status") == "connected" for s in servers)
+
+
+def start_server(work, model, port):
+    command = [OPENCODE, "serve", "--hostname", "127.0.0.1", "--port", str(port)]
+    env = {"OPENCODE_CONFIG_CONTENT": opencode_config(work, model), "OPENCODE_SERVER_PASSWORD": server_password()}
+    if shutil.which("systemd-run"):
+        name = "webagent-opencode-" + hashlib.sha256(str(work).encode()).hexdigest()[:12] + f"-{port}"
+        started = subprocess.run(["systemd-run", "--user", "--quiet", "--collect", f"--unit={name}",
+                                  f"--working-directory={work}", "--property=KillMode=control-group",
+                                  *[f"--setenv={k}={v}" for k, v in env.items()], *command],
+                                 capture_output=True, text=True)
+        if started.returncode == 0:
+            return Unit(name)
+    return Child(subprocess.Popen(command, cwd=work, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, start_new_session=True, env={**os.environ, **env}))
+
+
+def save_registry():
+    """Record the unit servers so a restarted client can reattach to them. Caller holds SERVERS_LOCK."""
+    rows = {"\0".join(key): {"unit": s["handle"].name, "url": s["url"], "tools": s["tools"], "used": s["used"]}
+            for key, s in SERVERS.items() if s["handle"].name}
+    try:
+        temp = REGISTRY.with_suffix(".tmp")
+        temp.write_text(json.dumps(rows))
+        temp.replace(REGISTRY)
+    except OSError:
+        pass
+
+
+def reattach_servers():
+    """Adopt servers a previous run of this client left running; stop any that are not healthy."""
+    try:
+        rows = json.loads(REGISTRY.read_text())
+    except (OSError, ValueError):
+        return
+    with SERVERS_LOCK:
+        for key, row in rows.items():
+            work, own = key.split("\0")
+            unit = Unit(row["unit"])
+            if unit.alive() and stub_connected(row["url"], work):
+                SERVERS[(work, own)] = {"handle": unit, "url": row["url"], "tools": row["tools"], "used": time.time()}
+            else:
+                unit.stop()
+        save_registry()
 
 
 def opencode_server(work, model):
-    """URL of a running server for this chat folder, started on first use. Its MCP stub lists tools.json
-    as it was at start, so a changed tool set restarts the server."""
+    """URL of a ready server for this chat folder, started on first use and returned only once its
+    MCP stub is connected, so the first step already has WebAgent's tools. The stub lists tools.json as
+    it was at start, so a changed tool set restarts the server."""
     own = "ask" if model.startswith("opencode/") else "deny"
     key = (str(work), own)
     tools = hashlib.sha256((work / "tools.json").read_bytes()).hexdigest()
     with SERVERS_LOCK:
         server = SERVERS.get(key)
-        if server and server["process"].poll() is None and server["tools"] == tools:
+        if server and server["tools"] == tools and server["handle"].alive():
             server["used"] = time.time()
             return server["url"]
         if server:
-            stop_server(server["process"])
+            server["handle"].stop()
+            del SERVERS[key]
         probe = socket.socket()
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
         probe.close()
-        process = subprocess.Popen([OPENCODE, "serve", "--hostname", "127.0.0.1", "--port", str(port)], cwd=work,
-                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                   start_new_session=True,
-                                   env={**os.environ, "OPENCODE_CONFIG_CONTENT": opencode_config(work, model),
-                                        "OPENCODE_SERVER_PASSWORD": SERVER_PASSWORD})
+        handle = start_server(work, model, port)
+        url = f"http://127.0.0.1:{port}"
         deadline = time.time() + 30
-        while True:
-            try:
-                socket.create_connection(("127.0.0.1", port), 0.2).close()
-                break
-            except OSError:
-                if process.poll() is not None or time.time() > deadline:
-                    stop_server(process)
-                    raise RuntimeError("opencode server did not start")
-                time.sleep(0.1)
-        SERVERS[key] = {"process": process, "url": f"http://127.0.0.1:{port}", "used": time.time(), "tools": tools}
-        return SERVERS[key]["url"]
+        while not stub_connected(url, work):
+            if not handle.alive() or time.time() > deadline:
+                handle.stop()
+                raise RuntimeError("opencode server did not become ready")
+            time.sleep(0.2)
+        # opencode fetches the stub's tool list when its first session starts, too late for that
+        # session's first step; one tiny warm-up prompt makes it fetch them before the real call.
+        warm_up(url, work, model)
+        SERVERS[key] = {"handle": handle, "url": url, "used": time.time(), "tools": tools}
+        save_registry()
+        return url
+
+
+def warm_up(url, work, model):
+    """One-word prompt on a new server; its result does not matter."""
+    try:
+        subprocess.run([OPENCODE, "run", "--server", url, "--agent", "webagent-bridge", "-m", model, "--format", "json"],
+                       input="Reply with the single word OK. Do not use tools.", cwd=work, capture_output=True,
+                       text=True, timeout=PROBE_SECS, env={**os.environ, "OPENCODE_SERVER_PASSWORD": server_password()})
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def stop_server(process):
@@ -193,9 +333,10 @@ def reap_servers():
         time.sleep(60)
         with SERVERS_LOCK:
             for key, server in list(SERVERS.items()):
-                if server["process"].poll() is not None or time.time() - server["used"] > SERVER_IDLE_SECS:
-                    stop_server(server["process"])
+                if time.time() - server["used"] > SERVER_IDLE_SECS or not server["handle"].alive():
+                    server["handle"].stop()
                     del SERVERS[key]
+            save_registry()
 
 
 def secret():
@@ -285,7 +426,7 @@ class Stopped(Exception):
     """WebAgent stopped the call; it wants no reply."""
 
 
-def interrupt(process, grace=5):
+def interrupt(process, grace=None):
     """Ctrl-C the harness, as its own stop key would; kill it if it is still running after the grace period."""
     def signal_group(sig):
         try:
@@ -294,7 +435,7 @@ def interrupt(process, grace=5):
             pass
     if process.poll() is None:
         signal_group(signal.SIGINT)
-        threading.Timer(grace, lambda: process.poll() is None and signal_group(signal.SIGKILL)).start()
+        threading.Timer(grace or STOP_GRACE_SECS, lambda: process.poll() is None and signal_group(signal.SIGKILL)).start()
 
 
 def start_harness(command, **options):
@@ -324,6 +465,7 @@ def fetch(session=None):
         try:
             response = post("/api/v3/harness-bridge/next", {"session": session} if session else {}, timeout=POLL_TIMEOUT)
             stop_calls(response.get("cancelled") or [])
+            apply_settings(response.get("settings"))
             call = response["call"]
             if call:
                 post("/api/v3/harness-bridge/ack", {"id": call["id"]})
@@ -620,7 +762,7 @@ class StallWatch:
 
     def listen(self):
         url = self.server + "/api/event?directory=" + urllib.parse.quote(str(self.work))
-        auth = base64.b64encode(f"opencode:{SERVER_PASSWORD}".encode()).decode()
+        auth = base64.b64encode(f"opencode:{server_password()}".encode()).decode()
         try:
             self.response = urllib.request.urlopen(urllib.request.Request(url, headers={"Authorization": "Basic " + auth}),
                                                    timeout=HARNESS_SECS)
@@ -667,7 +809,7 @@ class StallWatch:
         try:
             result = subprocess.run(command, input="Reply with the single word OK. Do not use tools.", cwd=self.work,
                                     capture_output=True, text=True, timeout=PROBE_SECS,
-                                    env={**os.environ, "OPENCODE_SERVER_PASSWORD": SERVER_PASSWORD})
+                                    env={**os.environ, "OPENCODE_SERVER_PASSWORD": server_password()})
         except subprocess.TimeoutExpired:
             return f"probe got no answer within {PROBE_SECS} s"
         events = [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
@@ -692,7 +834,7 @@ def opencode_turn(command, prompt, work, model):
     so any further step is the model winding down (30-45 s each on a long context). The next call resumes
     the session with the tool's real result."""
     # The prompt goes on stdin: a fresh session's full history can exceed the 128 KiB argument cap.
-    process = start_harness(command, cwd=work, env={**os.environ, "OPENCODE_SERVER_PASSWORD": SERVER_PASSWORD})
+    process = start_harness(command, cwd=work, env={**os.environ, "OPENCODE_SERVER_PASSWORD": server_password()})
     stop = lambda: interrupt(process)
     timer = threading.Timer(HARNESS_SECS, stop)
     timer.start()
@@ -777,9 +919,24 @@ def check_stopped():
         raise Stopped()
 
 
+def heartbeat(call, done):
+    """Tell WebAgent this call is still running, now and every HEARTBEAT_SECS. A server without the
+    endpoint, or one that no longer holds the call, answers 404 and ends the beating."""
+    while not done.is_set():
+        try:
+            post("/api/v3/harness-bridge/progress", {"id": call})
+        except Gone:
+            return
+        except Transient:
+            pass
+        done.wait(HEARTBEAT_SECS)
+
+
 def answer(call):
     """Run the call's harness; on any failure tell WebAgent at once, so the run retries instead of waiting."""
     CURRENT.call = call["id"]
+    done = threading.Event()
+    threading.Thread(target=heartbeat, args=(call["id"], done), daemon=True).start()
     try:
         harness = HARNESSES.get(call.get("provider"))
         if not harness:
@@ -798,6 +955,7 @@ def answer(call):
         except (Transient, Gone) as failure:
             print(f"{call['id']}: could not report the failure ({failure})", file=sys.stderr)
     finally:
+        done.set()
         RUNNING.pop(call["id"], None)
         STOPPED.discard(call["id"])
 
@@ -914,6 +1072,7 @@ HARNESSES = {"claude_bridge": answer_claude, "opencode_bridge": answer_opencode,
 
 
 def cmd_auto(session):
+    reattach_servers()
     threading.Thread(target=reap_servers, daemon=True).start()
     # One thread per call, no cap: each call already holds its own harness process.
     while True:
@@ -997,9 +1156,14 @@ def selftest():
         answer({"id": "x", "session": "s", "provider": "unknown_bridge", "body": body})
     finally:
         post = real_post
+    # Each call heartbeats as it starts; the replies follow.
+    assert any(path.endswith("/progress") and body == {"id": "x"} for path, body in posted)
+    posted = [entry for entry in posted if not entry[0].endswith("/progress")]
     assert posted and posted[0][0] == "/api/v3/harness-bridge/reply"
     assert posted[0][1]["message"]["tool_calls"][0]["function"]["name"] == "file_list"
     assert posted[1][1] == {"id": "x", "error": "no harness for unknown_bridge on this client", "source": "harness"}
+    apply_settings({"heartbeat_seconds": 7, "stall_seconds": "x", "probe_seconds": 0})
+    assert (HEARTBEAT_SECS, STALL_SECS, PROBE_SECS) == (7, 120, 30)
     print("selftest ok")
 
 

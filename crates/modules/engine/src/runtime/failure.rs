@@ -30,6 +30,7 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
     use model_selection::{FailoverState, FailureKind, NextAction, SelectionPlan};
     let failure = error.downcast_ref::<provider::ProviderFailure>();
     let kind = failure.map(|e| e.kind).unwrap_or(FailureKind::Protocol);
+    let retry = webagent_models::settings::Settings::live().retry;
     let mut state: FailoverState = run
         .get("failover_state")
         .filter(|v| !v.is_null())
@@ -40,7 +41,7 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
     state.uncertain_tool_effect |= run["uncertain"] == true;
     let action = if let Some(value) = run.get("selection_plan").filter(|v| !v.is_null()) {
         let plan: SelectionPlan = serde_json::from_value(value.clone())?;
-        let action = state.failed(&plan, kind);
+        let action = state.failed_with(&plan, kind, retry.same_model_retries);
         if action == NextAction::Backup {
             run["provider_selection"] = provider::ProviderSelection {
                 provider: plan.candidates[state.candidate_index]
@@ -57,7 +58,7 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
     } else if kind == FailureKind::Transient
         && !state.response_started
         && !state.uncertain_tool_effect
-        && state.retries < model_selection::MAX_TRANSIENT_RETRIES
+        && state.retries < retry.same_model_retries
     {
         state.retries += 1;
         NextAction::Retry
@@ -74,7 +75,7 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
         Value::Null
     };
     run["provider_retry_at"] = if action != NextAction::Terminal {
-        json!(now() + retry_delay(&state, failure.and_then(|f| f.retry_after)))
+        json!(now() + retry_delay(&retry, &state, failure.and_then(|f| f.retry_after)))
     } else {
         Value::Null
     };
@@ -96,17 +97,18 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
     });
     Ok(())
 }
-/// Seconds before the next attempt: 2 s, then 8 s for a second same-model retry, each with
-/// up to 25% jitter so parallel runs do not retry in step; a backup starts after 2 s. A
-/// provider's own Retry-After wins when longer, capped at a minute.
-fn retry_delay(state: &model_selection::FailoverState, retry_after: Option<u64>) -> u64 {
-    let base: u64 = if state.retries >= 2 { 8 } else { 2 };
-    let nanos = std::time::SystemTime::now()
+/// Seconds before the next attempt, from the live retry settings (`models-runtime.json`).
+/// A backup starts after the first delay.
+fn retry_delay(
+    retry: &webagent_models::settings::Retry,
+    state: &model_selection::FailoverState,
+    retry_after: Option<u64>,
+) -> u64 {
+    let entropy = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
+        .map(|d| u64::from(d.subsec_nanos()))
         .unwrap_or(0);
-    let jittered = base + u64::from(nanos) % (base / 4 + 1);
-    jittered.max(retry_after.unwrap_or(0)).min(60)
+    retry.delay(state.retries, retry_after, entropy)
 }
 
 pub fn system_model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {

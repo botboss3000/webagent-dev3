@@ -30,6 +30,10 @@
       "descriptors": "crates/modules/media/voice.settings.json"
     },
     {
+      "config": "crates/modules/models/models-runtime.json",
+      "descriptors": "crates/modules/models/models-runtime.settings.json"
+    },
+    {
       "store": "agent_metadata",
       "descriptors": "crates/modules/agents/agent.settings.json"
     },

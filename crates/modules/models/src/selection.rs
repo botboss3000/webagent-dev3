@@ -817,9 +817,6 @@ impl SelectionPlan {
     }
 }
 
-/// Same-model retries for a transient failure before failing over: after about 2 s, then about 8 s.
-pub const MAX_TRANSIENT_RETRIES: u8 = 2;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureKind {
@@ -869,7 +866,17 @@ impl Default for FailoverState {
 impl FailoverState {
     /// At most one transient retry per candidate; never replay partial output or
     /// uncertain effects. Caller must durably save this state before redispatch.
+    /// Classify one failure with the live retry budget (`models-runtime.json`).
     pub fn failed(&mut self, plan: &SelectionPlan, kind: FailureKind) -> NextAction {
+        let retries = crate::settings::Settings::live().retry.same_model_retries;
+        self.failed_with(plan, kind, retries)
+    }
+    pub fn failed_with(
+        &mut self,
+        plan: &SelectionPlan,
+        kind: FailureKind,
+        same_model_retries: u8,
+    ) -> NextAction {
         if self.response_started
             || self.uncertain_tool_effect
             || self.candidate_index >= plan.candidates.len()
@@ -883,7 +890,7 @@ impl FailoverState {
         {
             return NextAction::Terminal;
         }
-        if kind == FailureKind::Transient && self.retries < MAX_TRANSIENT_RETRIES {
+        if kind == FailureKind::Transient && self.retries < same_model_retries {
             self.retries += 1;
             return NextAction::Retry;
         }

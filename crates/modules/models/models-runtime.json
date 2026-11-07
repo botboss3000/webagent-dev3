@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "retry": {
+    "same_model_retries": 2,
+    "delays_seconds": [2, 8],
+    "jitter_percent": 25,
+    "max_retry_after_seconds": 60,
+    "auto_resume_after_seconds": 180,
+    "auto_resume_attempts": 1
+  },
+  "streaming": {
+    "response_start_seconds": 60,
+    "stall_seconds": 120
+  },
+  "harness_bridge": {
+    "unclaimed_call_seconds": 60,
+    "client_online_seconds": 120,
+    "offer_lease_seconds": 60,
+    "answer_seconds": 1800,
+    "poll_hold_seconds": 25,
+    "pairing_code_seconds": 600,
+    "store_poll_ms": 250,
+    "heartbeat_timeout_seconds": 60,
+    "client": {
+      "heartbeat_seconds": 20,
+      "stall_seconds": 120,
+      "probe_seconds": 30,
+      "server_idle_seconds": 900,
+      "stop_grace_seconds": 5,
+      "harness_seconds": 1680
+    }
+  }
+}
