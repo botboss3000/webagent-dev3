@@ -255,11 +255,23 @@ impl Store {
             }
         }
         // Free pages return to the filesystem only after a vacuum; a busy database keeps them.
-        let vacuum = sqlx::query("VACUUM")
-            .execute(&self.pool)
-            .await
-            .err()
-            .map(|e| e.to_string());
+        // Its temporary copy goes beside the database: the container's /tmp is too small.
+        let vacuum = async {
+            let mut connection = self.pool.acquire().await?;
+            let dir = self.root.join("user_data").join(&self.user_id);
+            let dir = dir.display().to_string().replace('\'', "''");
+            sqlx::query(&format!("PRAGMA temp_store_directory='{dir}'"))
+                .execute(&mut *connection)
+                .await?;
+            let result = sqlx::query("VACUUM").execute(&mut *connection).await;
+            let _ = sqlx::query("PRAGMA temp_store_directory=''")
+                .execute(&mut *connection)
+                .await;
+            result.map(|_| ())
+        }
+        .await
+        .err()
+        .map(|error: sqlx::Error| error.to_string());
         let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
             .execute(&self.pool)
             .await;
