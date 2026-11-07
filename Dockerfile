@@ -178,6 +178,10 @@ COPY --from=tested_builder /out/webagent-v3 /usr/local/bin/webagent-v3
 RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade libpcre2-8-0 perl-base \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=tested_builder /out/core-inputs.txt /usr/local/lib/webagent/core-inputs.txt
+# Configuration Controller tools run here and start the composer's matcher
+# (crates/modules/composer/host/api.rs): ONNX Runtime and bge-small from the `voice` stage.
+COPY --from=voice /opt/voice/lib/libonnxruntime.so /opt/voice/lib/libonnxruntime.so
+COPY --from=voice /opt/voice/composer /opt/voice/composer
 COPY v3/plugins/abilities /opt/v3/plugins/abilities
 COPY v3/plugins/engine /opt/v3/plugins/engine
 COPY --from=tested_builder /out/webagent-context-service /usr/local/lib/webagent/engine/context-assembly/webagent-context-service
