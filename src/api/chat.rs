@@ -1104,6 +1104,8 @@ pub(crate) async fn command(
                 state.retries = 0;
                 run[field] = serde_json::to_value(state).map_err(anyhow::Error::from)?;
                 run["provider_recovery"] = Value::Null;
+                // The per-call attempt limit counts the spent retries too; resume starts it again.
+                run["attempt"] = json!(0);
             }
             run["provider_retry_at"] = Value::Null;
             run["component_pause"] = Value::Null;

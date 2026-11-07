@@ -11433,6 +11433,7 @@ async fn provider_recovery_exhaustion_persists_and_explicit_resume_is_idempotent
     assert_eq!(run["status"], "queued");
     assert_eq!(run["auto_resumes"], 1);
     assert_eq!(run["failover_state"]["retries"], 0);
+    assert_eq!(run["attempt"], 0);
     assert!(run["provider_recovery"].is_null());
     let row = &run["_activity_items"].as_array().unwrap().last().unwrap()["item"];
     assert_eq!(
@@ -11469,6 +11470,7 @@ async fn provider_recovery_exhaustion_persists_and_explicit_resume_is_idempotent
     .unwrap();
     let mut resumed = reopened.run(&id).await.unwrap();
     assert_eq!(resumed["failover_state"]["retries"], 0);
+    assert_eq!(resumed["attempt"], 0);
     assert_eq!(resumed["selection_plan"], run["selection_plan"]);
     model_failure(&mut resumed, &error).unwrap();
     reopened.save(&mut resumed).await.unwrap();

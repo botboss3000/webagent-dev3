@@ -77,6 +77,9 @@ pub fn model_failure(run: &mut Value, error: &anyhow::Error) -> Result<()> {
         && resumes < u64::from(retry.auto_resume_attempts);
     if auto_resume {
         state.retries = 0;
+        // A fresh budget includes the per-call attempt limit (`workflow.max_attempts`), as for a
+        // backup switch; otherwise the resumed dispatch pauses at once with "Run limit reached".
+        run["attempt"] = json!(0);
         run["auto_resumes"] = json!(resumes + 1);
         action = NextAction::Retry;
     }
