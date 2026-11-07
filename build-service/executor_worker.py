@@ -18,7 +18,8 @@ from pathlib import Path
 SERVICE = Path(__file__).resolve().parent
 # The app tree the executor runs in: /opt/v3 in the image, the checkout in tests.
 APP = SERVICE.parent
-CONTROL = Path("/runtime/control")
+# Set by workspace_executor.py to its private folder; tests point it at a fixture.
+CONTROL = Path("/run/v3/control")
 LIMIT = 1024 * 1024
 ROOT = Path(os.environ.get("V3_WORKSPACE_ROOT", "/workspaces"))
 TEMPLATE = Path(os.environ.get("V3_CODE_TEMPLATE", "/opt/v3/source-template"))
