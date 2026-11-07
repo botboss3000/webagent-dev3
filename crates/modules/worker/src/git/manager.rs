@@ -61,6 +61,10 @@ fn excludes() -> Vec<String> {
         .collect()
 }
 
+/// Whole-checkout listings (every tracked path, line counts) outgrow the 64 KiB cap of
+/// other Git reads; their results are bounded by entry count instead.
+const LISTING_LIMIT: usize = 2 * 1024 * 1024;
+
 /// `git ARGV` in the checkout repository; `pathspec` appends `-- . <excludes>`.
 async fn git(root: &Path, repo: &Path, argv: &[&str], pathspec: bool) -> Outcome<Vec<u8>> {
     let excludes = excludes();
@@ -69,7 +73,11 @@ async fn git(root: &Path, repo: &Path, argv: &[&str], pathspec: bool) -> Outcome
         full.extend(["--", "."]);
         full.extend(excludes.iter().map(String::as_str));
     }
-    command(root, repo, &full, Run::default()).await
+    let run = Run {
+        output_limit: pathspec.then_some(LISTING_LIMIT),
+        ..Run::default()
+    };
+    command(root, repo, &full, run).await
 }
 
 async fn mutate(root: &Path, repo: &Path, argv: &[&str]) -> Outcome<Vec<u8>> {

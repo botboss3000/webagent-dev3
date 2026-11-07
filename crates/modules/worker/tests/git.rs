@@ -250,6 +250,38 @@ async fn pushes_scan_outgoing_history_and_conflicts_resolve() {
     );
 }
 
+async fn the_file_manager_lists_checkouts_past_the_read_cap() {
+    if !available() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("checkout");
+    let root = std::fs::canonicalize(dir.path()).expect("root");
+    git(&root, &["init", "-q"]);
+    // 1500 tracked paths: about 90 KiB of `ls-files -z`, past the 64 KiB read cap.
+    for index in 0..1500 {
+        let folder = root.join(format!("folder-with-a-long-name-{:02}", index % 50));
+        std::fs::create_dir_all(&folder).expect("folder");
+        std::fs::write(
+            folder.join(format!("file-with-a-long-name-{index:04}.txt")),
+            "x\n",
+        )
+        .expect("file");
+    }
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-qm", "many files"]);
+    let listed = webagent_worker::git::manager::action(
+        &root,
+        &json!({"action":"git_tree_status"}),
+        &Value::Null,
+    )
+    .await;
+    assert_eq!(listed["status"], "success", "{listed}");
+    assert_eq!(
+        listed["output"]["tracked"].as_array().map(Vec::len),
+        Some(1500)
+    );
+}
+
 fn main() {
     harness::main(&[
         ("status_reports_changes_with_a_stable_review_digest", || {
@@ -261,6 +293,9 @@ fn main() {
         ),
         ("unsafe_input_and_repositories_are_refused", || {
             Box::pin(unsafe_input_and_repositories_are_refused())
+        }),
+        ("the_file_manager_lists_checkouts_past_the_read_cap", || {
+            Box::pin(the_file_manager_lists_checkouts_past_the_read_cap())
         }),
         ("the_watch_notices_uncommitted_work", || {
             Box::pin(the_watch_notices_uncommitted_work())

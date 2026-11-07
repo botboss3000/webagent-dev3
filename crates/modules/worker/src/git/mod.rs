@@ -189,6 +189,8 @@ struct Run<'a> {
     scan_only: bool,
     /// Hashes of reviewed fixture lines the scan accepts in this exact commit and path.
     reviewed: Option<&'static [&'static str]>,
+    /// A larger output cap than [`LIMIT`] for whole-checkout listings.
+    output_limit: Option<usize>,
 }
 
 const SCAN_LINE_LIMIT: usize = 1024 * 1024;
@@ -404,7 +406,7 @@ async fn command_os(root: &Path, repo: &Path, argv: &[&OsStr], run: Run<'_>) -> 
                 }
             } else {
                 output.extend_from_slice(&chunk[..count]);
-                if output.len() > LIMIT {
+                if output.len() > run.output_limit.unwrap_or(LIMIT) {
                     return Err(rejected("Git output exceeds limit"));
                 }
             }
