@@ -2,7 +2,8 @@
 import asyncio,importlib.util,json,sys,uuid
 from pathlib import Path
 root=Path(__file__).resolve().parent.parent
-spec=importlib.util.spec_from_file_location("build_executor_worker",root/"worker.py")
+# The broker's own helpers; the app's worker.py is never imported here.
+spec=importlib.util.spec_from_file_location("build_executor_worker",Path(__file__).with_name("executor_worker.py"))
 worker=importlib.util.module_from_spec(spec);sys.modules[spec.name]=worker;spec.loader.exec_module(worker)
 async def main():
  request=json.loads(sys.argv[1]);name=request["name"];args=request["arguments"]

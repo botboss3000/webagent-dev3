@@ -138,7 +138,7 @@ def cargo_rustflags():
   raise Rejected("Baked Cargo linker capability invalid")
  return "-C debuginfo=0 -C link-arg=-fuse-ld=mold"
 async def run_cargo(root,argv,timeout):
- worker=Path(__file__).resolve().parent.parent/"worker.py"
+ worker=Path(__file__).resolve().with_name("executor_worker.py")
  if not worker.is_file() or worker.is_symlink():raise Rejected("Trusted Cargo supervisor unavailable")
  env={"PATH":"/opt/rust/bin:/usr/bin:/bin","LANG":"C.UTF-8","HOME":str(root),"TMPDIR":str(root),
       "CARGO_HOME":str(root/".cache/.cargo"),"CARGO_TARGET_DIR":str(root/"target/.v3-target"),

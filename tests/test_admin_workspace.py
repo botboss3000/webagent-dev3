@@ -5,7 +5,7 @@ ROOT=Path(__file__).resolve().parents[1]
 def module(name,file):
  spec=importlib.util.spec_from_file_location(name,file);value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 workspace=module("workspace_adapter",ROOT/"build-service/workspace.py")
-worker=module("fixture_worker",ROOT/"worker.py")
+worker=module("fixture_worker",ROOT/"build-service/executor_worker.py")
 class Tests(unittest.IsolatedAsyncioTestCase):
  def setUp(self):
   self.temp=tempfile.TemporaryDirectory();self.base=Path(self.temp.name);self.source=self.base/"webagent-v3";self.source.mkdir()
@@ -31,10 +31,8 @@ class Tests(unittest.IsolatedAsyncioTestCase):
   (self.source/"src/main.rs").write_text('first\nsecond\nthird\n')
   live=self.base/"live-checkout";live.mkdir();(live/"webagent-v3/src").mkdir(parents=True)
   (live/"webagent-v3/src/main.rs").write_text("live checkout sentinel\n")
-  old_live=worker.LIVE_CHECKOUT;worker.LIVE_CHECKOUT=live
-  try:
-   result=await workspace.execute("v3_workspace_action",{"action":"read","path":"src/main.rs","offset":2,"limit":1},self.base)
-  finally:worker.LIVE_CHECKOUT=old_live
+  # The executor has no live checkout; a read must still come from the workspace.
+  result=await workspace.execute("v3_workspace_action",{"action":"read","path":"src/main.rs","offset":2,"limit":1},self.base)
   self.assertEqual(result["status"],"success",result)
   self.assertEqual(result["output"],'second\n')
   self.assertNotIn("live checkout sentinel",result["output"])

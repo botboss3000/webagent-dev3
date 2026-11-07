@@ -202,7 +202,7 @@ class PublishedTests(unittest.TestCase):
   self.assertEqual(before_index,(d/".code-index/index.sqlite").read_bytes())
 
  def test_seed_pins_one_release_and_copies_private_bootstrap(self):
-  worker=load("published_seed_worker",ROOT/"worker.py")
+  worker=load("published_seed_worker",ROOT/"build-service/executor_worker.py")
   j,d,m=self.stage(self.blob());rel.activate_assets(self.assets,j)
   base=self.root/"workspace";base.mkdir()
   with patch.object(worker,"TEMPLATE",self.assets/"current/v3"):

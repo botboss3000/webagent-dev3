@@ -12,7 +12,6 @@ import time
 import json
 import importlib.util
 import os
-import select
 import signal
 import shutil
 import tempfile
@@ -26,7 +25,6 @@ ROOT = Path(os.environ.get("V3_WORKSPACE_ROOT", "/workspaces"))
 SOCKET = os.environ.get("V3_TOOL_SOCKET", "/runtime/worker/tools.sock")
 # The Rust tool worker front is the only caller in the container; tests call directly.
 CLIENT_UID = int(os.environ.get("V3_TOOL_CLIENT_UID", "1100"))
-TEMPLATE = Path(os.environ.get("V3_CODE_TEMPLATE", "/opt/v3/source-template"))
 LIVE_CHECKOUT = Path("/code")
 
 
@@ -75,16 +73,14 @@ async def stop_workspace_operations(workspace):
 
 def administrator_plugin(name):
     # Static ownership, not manifest-driven imports or a model supplied path.
-    if name not in ("code_index", "v3_workspace"):
+    if name != "code_index":
         raise ValueError("unknown installed Administrator adapter")
     if name not in PLUGINS:
-        path = (Path(__file__).parent/"build-service/workspace.py" if name=="v3_workspace" else Path(__file__).parent/"plugins/abilities/Administrator"/name/"adapter.py")
+        path = Path(__file__).parent/"plugins/abilities/Administrator"/name/"adapter.py"
         spec = importlib.util.spec_from_file_location("v3_admin_" + name, path)
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
-        if name == "v3_workspace":
-            module.configure(sys.modules[__name__])
         PLUGINS[name] = module
     return PLUGINS[name]
 
@@ -248,71 +244,11 @@ async def execute_locked(request, lock):
         if result["status"] != "success":
             return result
         return json.loads(result["output"])
-    if name in ("workspace_seed","source_review","source_patch","v3_workspace_status","v3_workspace_action","v3_cargo_task") and os.environ.get("V3_BUILD_EXECUTOR")!="1":
-        raise PermissionError("Source workspace operations require the host build service")
-    if name in ("v3_workspace_status", "v3_workspace_action"):
-        return await administrator_plugin("v3_workspace").execute(name, args, base)
-    if name == "v3_cargo_task":
-        return await administrator_plugin("v3_workspace").cargo(base, args)
     if name == "administrator_quiesce":
         await stop_workspace_operations(request["workspace"])
         return {"status": "success"}
-    if name == "workspace_seed":
-        return await seed_workspace_async(base)
-    if name == "source_review":
-        return await synchronous(source_review, base)
-    if name == "source_patch":
-        return await synchronous(source_patch, base, args)
     raise ValueError("Unknown tool")
 
-
-def git_capture(source, arguments, limit=LIMIT, acceptable=(0,)):
-    """Run Git without hooks or external diff helpers and bound its output."""
-    env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8",
-           "HOME": str(source), "GIT_CONFIG_NOSYSTEM": "1",
-           "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_OPTIONAL_LOCKS": "0",
-           "GIT_NO_REPLACE_OBJECTS": "1"}
-    argv = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
-            "-c", "diff.external=", *arguments]
-    import runpy
-    restrict=runpy.run_path(str(Path(__file__).with_name("sandbox.py")))["restrict"]
-    process = subprocess.Popen(argv, cwd=source, env=env, stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT,preexec_fn=lambda:restrict(source.parent))
-    output = bytearray()
-    deadline = time.monotonic() + 30
-    try:
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0 or not select.select([process.stdout], [], [], remaining)[0]:
-                raise ValueError("source review timed out")
-            chunk = os.read(process.stdout.fileno(), min(65536, limit + 1 - len(output)))
-            if not chunk:
-                break
-            output.extend(chunk)
-            if len(output) > limit:
-                return bytes(output[:limit]), True
-        if process.wait(timeout=1) not in acceptable:
-            raise ValueError("source review Git command failed")
-        return bytes(output), False
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait()
-        process.stdout.close()
-
-
-def workspace_support():
-    path=Path(__file__).parent/"build-service/workspace_support.py"
-    if "build_workspace_support" not in PLUGINS:
-        spec=importlib.util.spec_from_file_location("build_workspace_support",path)
-        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);PLUGINS["build_workspace_support"]=module
-    module=PLUGINS["build_workspace_support"];module.configure(sys.modules.get(__name__) or __import__("types").SimpleNamespace(**globals()));return module
-def source_review(base):return workspace_support().source_review(base)
-def source_patch(base,args):return workspace_support().source_patch(base,args)
-def _seed_capture(*args):return workspace_support()._seed_capture(*args)
-def _seed_inner(spec):return workspace_support()._seed_inner(spec)
-def seed_workspace(base):return workspace_support().seed_workspace(base)
-async def seed_workspace_async(base):return await workspace_support().seed_workspace_async(base)
 
 async def execute(request):
     task = asyncio.current_task()
@@ -445,19 +381,13 @@ def runner(argv):
     import runpy
     restrict = runpy.run_path(str(Path(__file__).with_name("sandbox.py")))["restrict"]
     read_paths = ()
-    if len(argv) == 5 and argv[1:4] == ["-I", str(Path(__file__).resolve()), "--seed-inner"]:
-        spec = json.loads(argv[4])
-        if set(spec) not in ({"base", "template", "stage"}, {"base", "template", "stage", "published"}) or type(spec.get("published",False)) is not bool or Path(spec["base"]).resolve() != Path.cwd() or not spec["stage"].startswith(".v3-seed-") or "/" in spec["stage"]:
-            raise ValueError("invalid trusted seed invocation")
-        read_paths = (Path(spec["template"]).parent if (Path(spec["template"]).parent/".code-index").is_dir() else Path(spec["template"]), Path(__file__).resolve(), Path(__file__).with_name("sandbox.py").resolve(),
-                      Path(__file__).parent/"plugins/abilities/Administrator/code_index/adapter.py",Path(__file__).parent/"build-service")
     if len(argv)==5 and argv[1:4]==["-I",str(Path(__file__).resolve()),"--index-inner"]:
         spec=json.loads(argv[4])
         if set(spec)!={"base","name","arguments"}or Path(spec["base"]).resolve()!=Path.cwd():raise ValueError("Invalid trusted index invocation")
         read_paths=(Path(__file__).resolve(),Path(__file__).with_name("sandbox.py").resolve(),Path(__file__).parent/"plugins/abilities/Administrator/code_index",Path(__file__).parent/"build-service")
     # Commands read system folders and the checkout's source files and write only this
     # workspace; state, other workspaces, control sockets and checkout runtime folders stay
-    # out, as in the Rust runner. Internal seed and index invocations keep their narrow grants.
+    # out, as in the Rust runner. Internal index invocations keep their narrow grants.
     if not read_paths:
         # live-checkout is the image's compatibility link to /code; granting it grants all of /code.
         hidden={"state","workspaces","code","live-checkout","runtime","run"}
@@ -473,8 +403,6 @@ def runner(argv):
     raise SystemExit(result if result >= 0 else 128 - result)
 
 
-workspace_support()
-
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--runner":
         runner(json.loads(sys.argv[2]))
@@ -486,10 +414,5 @@ if __name__ == "__main__":
         except Exception as error:
             result = {"status":"failed", "output":str(error)[:4096]}
         print(json.dumps(result))
-    elif len(sys.argv) == 3 and sys.argv[1] == "--seed-inner":
-        try:
-            print(json.dumps(_seed_inner(json.loads(sys.argv[2]))))
-        except Exception as error:
-            print(json.dumps({"error": str(error) if isinstance(error, ValueError) else "isolated seed rejected"}))
     else:
         asyncio.run(main())
