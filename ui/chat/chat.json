@@ -544,9 +544,9 @@
       "margin_bottom": "24px"
     },
     "live_reload": {
+      "_instructions": "Enabled native open chats reread this file automatically. interval_ms is bounded to 1000–60000ms; provided guest/embed settings keep their existing owner. Disable requires reload to enable again.",
       "enabled": true,
-      "interval_ms": 2000,
-      "_instructions": "Enabled native open chats reread this file automatically. interval_ms is bounded to 1000–60000ms; provided guest/embed settings keep their existing owner. Disable requires reload to enable again."
+      "interval_ms": 2000
     },
     "mark_read_on_visit": false,
     "message_bubbles": {
@@ -809,16 +809,6 @@
       "description": "Vertical transcript pull distance in pixels. The maximum stretch and both top/bottom action triggers always use this same value. Surface profiles may override max_stretch_px.",
       "max_stretch_px": 10
     },
-    "transcript_window": {
-      "_instructions": "enabled: Draw only a window of the transcript; false draws every message at once. messages_above: Messages drawn above the saved position, or the newest messages drawn when none is saved. messages_below: Messages drawn below the saved position. load_more_step: Messages added when the reader scrolls near either edge of the window. load_threshold_px: Distance from the window's edge, in pixels, that loads more messages. remember_position: Reopen each session at the reader's last position (saved in this browser); false always opens at the latest message.",
-      "description": "Keeps long conversations fast by drawing a bounded slice of messages. Rows beyond messages_above + messages_below + 2 x load_more_step are dropped from the far side as the reader scrolls.",
-      "enabled": true,
-      "load_more_step": 20,
-      "load_threshold_px": 600,
-      "messages_above": 30,
-      "messages_below": 20,
-      "remember_position": true
-    },
     "transcript_padding": {
       "_instructions": "top_px: Additional top transcript padding in pixels. bottom_px: Additional bottom transcript padding in pixels.",
       "bottom_px": 50,
@@ -830,6 +820,16 @@
       "description": "Tail anchor clearance after the last transcript row: max(min_px, live composer clearance + gap_px), plus transcript_padding.bottom_px. Tracks composer resizing so the latest message clears the pill. Surface profiles can override either value.",
       "gap_px": 74,
       "min_px": 100
+    },
+    "transcript_window": {
+      "_instructions": "enabled: Draw only a window of the transcript; false draws every message at once. messages_above: Messages drawn above the saved position, or the newest messages drawn when none is saved. messages_below: Messages drawn below the saved position. load_more_step: Messages added when the reader scrolls near either edge of the window. load_threshold_px: Distance from the window's edge, in pixels, that loads more messages. remember_position: Reopen each session at the reader's last position (saved in this browser); false always opens at the latest message.",
+      "description": "Keeps long conversations fast by drawing a bounded slice of messages. Rows beyond messages_above + messages_below + 2 x load_more_step are dropped from the far side as the reader scrolls.",
+      "enabled": true,
+      "load_more_step": 20,
+      "load_threshold_px": 600,
+      "messages_above": 30,
+      "messages_below": 20,
+      "remember_position": true
     },
     "user_message_truncation": {
       "_instructions": "enabled: Enable this feature or control; false disables it where supported. max_lines: Maximum displayed text lines before truncation where supported. expand_label: Text on the expand-truncated-message control. collapse_label: Text on the collapse-expanded-message control.",
