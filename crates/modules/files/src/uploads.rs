@@ -75,6 +75,8 @@ pub struct NewUpload {
     /// Retry fingerprint: the same identifier may only repeat the same name, type and bytes.
     pub fingerprint: String,
     pub bytes: u64,
+    /// Decoded file bytes; the host stores them as an encrypted file beside the database.
+    pub content: Vec<u8>,
 }
 
 /// Decode and size-check an upload whose name and media type were already accepted.
@@ -108,8 +110,9 @@ pub fn new_upload(
     let media = input.media_type;
     let hash = hex::encode(Sha256::digest(&bytes));
     let fingerprint = webagent_chat::digest(&json!([input.name, media, hash]));
-    let mut record = json!({"schema_version":2,"id":input.id,"session_id":input.session_id,"run_id":null,"uploader_id":input.uploader_id,"name":input.name,"media_type":media,
-        "bytes":bytes.len(),"sha256":hash,"data":input.data,"upload_digest":fingerprint,"created_at":input.created_at,"text":"",
+    // Schema 3 keeps the bytes in a file named by the attachment id, not in the record.
+    let mut record = json!({"schema_version":3,"id":input.id,"session_id":input.session_id,"run_id":null,"uploader_id":input.uploader_id,"name":input.name,"media_type":media,
+        "bytes":bytes.len(),"sha256":hash,"upload_digest":fingerprint,"created_at":input.created_at,"text":"",
         "preview":matches!(media,"image/png"|"image/jpeg"|"image/gif"|"image/webp")});
     if media.starts_with("text/") || media.starts_with("application/") && media != "application/pdf"
     {
@@ -119,6 +122,7 @@ pub fn new_upload(
         record,
         fingerprint,
         bytes: bytes.len() as u64,
+        content: bytes,
     })
 }
 
@@ -188,6 +192,7 @@ pub fn check_record_size(
 }
 
 /// Stored content: schema 1 records kept text only; schema 2 keeps the uploaded base64 bytes.
+/// Schema 3 bytes live in a file; the host reads them and fills `data` in memory.
 pub fn content_bytes(record: &Value) -> Result<Vec<u8>> {
     if record["schema_version"] == 1 {
         return Ok(record["text"].as_str().unwrap_or("").as_bytes().to_vec());
@@ -211,7 +216,7 @@ pub const CONTENT_SECURITY_POLICY: &str = "sandbox; default-src 'none'";
 /// Sent-attachment view for the owning session; unsent drafts and unknown schemas are not found.
 pub fn sent_view(record: &Value, session_id: &str) -> Option<Value> {
     if record["session_id"] != session_id
-        || !matches!(record["schema_version"].as_u64(), Some(1 | 2))
+        || !matches!(record["schema_version"].as_u64(), Some(1..=3))
         || record["run_id"].is_null()
     {
         return None;

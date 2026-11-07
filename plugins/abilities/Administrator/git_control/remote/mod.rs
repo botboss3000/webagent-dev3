@@ -305,7 +305,7 @@ async fn resolve_attachments(app: &App, sid: &str, args: &Value) -> Result<Value
             .await?
             .filter(|record| webagent_files::uploads::sent_view(record, sid).is_some())
             .ok_or_else(|| anyhow!("Attachment {id} is not a file sent in this conversation"))?;
-        let bytes = webagent_files::uploads::content_bytes(&record)?;
+        let bytes = app.store.attachment_bytes(&record).await?;
         let object = change
             .as_object_mut()
             .ok_or_else(|| anyhow!("Invalid change"))?;

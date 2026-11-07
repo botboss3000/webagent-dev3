@@ -3176,8 +3176,16 @@ impl<
                         .into_iter()
                         .take(super::images::MAX_IMAGES * 4)
                     {
-                        if let Some(record) = app.store.get(&format!("attachment:{id}")).await? {
-                            records.insert(id, record);
+                        // Only sent images of this session are worth reading from disk.
+                        if let Some(record) = app
+                            .store
+                            .get(&format!("attachment:{id}"))
+                            .await?
+                            .filter(|r| r["session_id"] == sid && r["preview"] == true)
+                        {
+                            if let Ok(record) = app.store.attachment_with_data(record).await {
+                                records.insert(id, record);
+                            }
                         }
                     }
                     let chosen = super::images::select(&sid, &projected_input, &records);

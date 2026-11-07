@@ -18,6 +18,10 @@
       "descriptors": "crates/modules/configuration/settings/context-compaction.settings.json"
     },
     {
+      "config": "crates/modules/files/storage-policy.json",
+      "descriptors": "crates/modules/configuration/settings/storage-policy.settings.json"
+    },
+    {
       "config": "crates/modules/context/tool-output-retention.json",
       "descriptors": "crates/modules/configuration/settings/tool-output-retention.settings.json"
     },

@@ -1,10 +1,11 @@
 //! Files: upload/attachment validation, provenance, encrypted attachment and link records, quota
 //! accounting and content delivery policy. Chat owns the `chat.json` attachment limits consumed here;
-//! Storage keeps pools, keys and the record codec. No `files.json` exists.
+//! Storage keeps pools, keys and the record codec. Per-tier storage limits live in `storage-policy.json`.
 //! Root-bound adapters (App/Store, HTTP routes, the File Manager admission route) live in `host/`
 //! and are compiled by the root binary. The isolated worker keeps File Manager checkout confinement.
 pub mod attachments;
 pub mod repository;
+pub mod storage_policy;
 pub mod uploads;
 
 pub use webagent_chat::RecordCodec;

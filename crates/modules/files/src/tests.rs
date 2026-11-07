@@ -135,6 +135,7 @@ fn upload_record_keeps_provenance_text_and_size_limits() {
         (5, &json!("hello"), &json!("alice"), &Value::Null)
     );
     assert_eq!(text.record["upload_digest"], text.fingerprint);
+    assert!(text.record.get("data").is_none() && text.content == b"hello");
     assert_eq!(
         new_upload(limits, input("text/plain", &encoded))
             .unwrap()
@@ -196,6 +197,8 @@ fn draft_ownership_retry_and_sent_view() {
     assert_eq!(sent_view(&record, "s").unwrap()["text"], "t");
     assert!(sent_view(&record, "other").is_none());
     record["schema_version"] = json!(3);
+    assert!(sent_view(&record, "s").is_some());
+    record["schema_version"] = json!(4);
     assert!(sent_view(&record, "s").is_none());
     record.as_object_mut().unwrap().remove("uploader_id");
     assert_eq!(draft_owner(&record, "owner"), "owner");

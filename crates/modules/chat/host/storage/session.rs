@@ -806,6 +806,7 @@ impl Store {
         )
         .await?;
         tx.commit().await?;
+        self.remove_blobs(removed.iter().filter_map(|k| k.strip_prefix("attachment:")));
         removed.push(key);
         self.cache.lock().unwrap().invalidate(&removed);
         self.context_cache

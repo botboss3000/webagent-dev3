@@ -21,6 +21,11 @@ pub trait ScopedStorage:
         key: &'a str,
         value: &'a Value,
     ) -> impl Future<Output = Result<()>> + Send + 'a;
+    /// An attachment record with its file bytes filled into `data`, in memory only.
+    fn attachment_with_data(
+        &self,
+        record: Value,
+    ) -> impl Future<Output = Result<Value>> + Send + '_;
     /// Fails unless the run is still the session's live, leased dispatch of `pending`.
     fn native_fence<'a>(
         &'a self,

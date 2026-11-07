@@ -14,6 +14,7 @@
     "crates/modules/engine/engine-components.json",
     "crates/modules/engine/gates/*.json",
     "crates/modules/engine/loop-runtime.json",
+    "crates/modules/files/storage-policy.json",
     "crates/modules/media/voice.json",
     "crates/modules/models/models-runtime.json",
     "crates/modules/models/providers/*.json",

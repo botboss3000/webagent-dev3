@@ -18,6 +18,18 @@ pub(crate) async fn limits_for(app: &App, agent: &str) -> Result<AttachmentLimit
         .and_then(|config| webagent_chat::configuration::parse_attachment_limits(&config))
         .map_err(|error| ApiError(StatusCode::SERVICE_UNAVAILABLE, error.to_string()))
 }
+/// Refuse a write that would take the storage owner past their account tier's limit.
+async fn check_storage(app: &App, added: u64) -> Result<(), ApiError> {
+    let Some(account) = app.store.account_by_id(app.store.current_user_id()).await? else {
+        return Ok(());
+    };
+    let tier = crate::access::Principal::from_account(&account)?.tier_id;
+    let policy = webagent_files::storage_policy::StoragePolicy::live()
+        .map_err(|error| ApiError(StatusCode::SERVICE_UNAVAILABLE, error.to_string()))?;
+    let used = app.store.storage_used().await?;
+    webagent_files::storage_policy::check_user(policy.user_limit(&tier), used, added)
+        .map_err(|message| ApiError(StatusCode::PAYLOAD_TOO_LARGE, message))
+}
 pub(crate) async fn request_body(
     app: &App,
     sid: &str,
@@ -107,9 +119,11 @@ pub(crate) async fn upload(
         }
         return Ok(Json(metadata(&saved)));
     }
+    check_storage(&app, new.bytes).await?;
     let quota = files::quota_with(app.store.get(QUOTA_KEY).await?.as_ref(), new.bytes)
         .ok_or_else(|| conflict("Attachment byte count exceeds machine accounting range"))?;
     let info = metadata(&new.record);
+    app.store.write_blob(aid, &new.content).await?;
     app.store
         .atomic_docs_event(
             vec![(attachment_key(aid), new.record), (QUOTA_KEY.into(), quota)],
@@ -175,8 +189,10 @@ pub(crate) async fn publish_reply_file(
     if app.store.get(&attachment_key(aid)).await?.is_some() {
         return Err(conflict("Upload identifier reused"));
     }
+    check_storage(app, new.bytes).await?;
     let quota = files::quota_with(app.store.get(QUOTA_KEY).await?.as_ref(), new.bytes)
         .ok_or_else(|| conflict("Attachment byte count exceeds machine accounting range"))?;
+    app.store.write_blob(aid, &new.content).await?;
     link["files"]
         .as_array_mut()
         .ok_or_else(|| conflict("Invalid reply attachments"))?
@@ -270,7 +286,11 @@ pub(crate) async fn upload_content(
     if record["run_id"].is_null() {
         require_draft_owner(&app, &record)?;
     }
-    let bytes = files::content_bytes(&record).map_err(|_| bad("Attachment bytes unavailable"))?;
+    let bytes = app
+        .store
+        .attachment_bytes(&record)
+        .await
+        .map_err(|_| bad("Attachment bytes unavailable"))?;
     let media = record["media_type"]
         .as_str()
         .unwrap_or("application/octet-stream");
@@ -385,7 +405,7 @@ pub(crate) async fn upload_describe(
     let description = media_lane::lane_answer(
         &app,
         &run,
-        files::describe_input(&record),
+        files::describe_input(&app.store.attachment_with_data(record).await?),
         files::DESCRIBE_INSTRUCTIONS,
     )
     .await?;

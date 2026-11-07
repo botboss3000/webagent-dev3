@@ -1,0 +1,21 @@
+{
+  "compress_idle_days": 30,
+  "tiers": {
+    "anonymous": {
+      "agent_storage_mb": 0,
+      "max_published_agents": 0,
+      "user_storage_mb": 100
+    },
+    "basic": {
+      "agent_storage_mb": 256,
+      "max_published_agents": 5,
+      "user_storage_mb": 1024
+    },
+    "operator": {
+      "agent_storage_mb": null,
+      "max_published_agents": null,
+      "user_storage_mb": null
+    }
+  },
+  "warning_percent": 80
+}

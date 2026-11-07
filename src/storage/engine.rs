@@ -313,6 +313,12 @@ impl webagent_engine::runtime::ports::ScopedStorage for Store {
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         Store::put(self, key, value)
     }
+    fn attachment_with_data(
+        &self,
+        record: Value,
+    ) -> impl std::future::Future<Output = Result<Value>> + Send + '_ {
+        Store::attachment_with_data(self, record)
+    }
     fn native_fence<'a>(
         &'a self,
         sid: &'a str,

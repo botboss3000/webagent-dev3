@@ -134,9 +134,10 @@ impl NativeHost for Host<'_> {
     }
     fn attachment<'a>(&'a self, sid: &'a str, id: &'a str) -> Pending<'a, Result<Value>> {
         Box::pin(async move {
-            api::uploads::lookup(self.0, sid, id)
+            let record = api::uploads::lookup(self.0, sid, id)
                 .await
-                .map_err(|e| anyhow!(e.1))
+                .map_err(|e| anyhow!(e.1))?;
+            self.0.store.attachment_with_data(record).await
         })
     }
     fn media_lane<'a>(&'a self, sid: &'a str, role: ModelRole) -> Pending<'a, Result<Value>> {

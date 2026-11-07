@@ -2755,6 +2755,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "hex",
+ "serde",
  "serde_json",
  "sha2",
  "sqlx",
@@ -2762,6 +2763,7 @@ dependencies = [
  "tokio",
  "uuid",
  "webagent-chat",
+ "webagent-configuration",
 ]
 
 [[package]]

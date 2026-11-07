@@ -163,8 +163,9 @@ impl Store {
             child["forked_from"] =
                 json!({"session_id":sid,"message_id":body.message_id,"through_seq":target_seq});
             child["auto_naming"] = json!({"version":1,"stage":"locked"});
-            child["conversation_privacy"]=match session["conversation_privacy"].as_str() {
-                Some("operator_reviewable")=>json!("operator_reviewable"),_=>json!("private")
+            child["conversation_privacy"] = match session["conversation_privacy"].as_str() {
+                Some("operator_reviewable") => json!("operator_reviewable"),
+                _ => json!("private"),
             };
             child.as_object_mut().unwrap().remove("operator_joined");
             let admitted_batches: HashSet<String> = items
@@ -211,10 +212,17 @@ impl Store {
                 let old_mid: String = row.get("id");
                 for (old_key, new_key) in [
                     (format!("message_meta:{old}"), format!("message_meta:{rid}")),
-                    (format!("message_meta:{old_mid}"), format!("message_meta:{mid}")),
+                    (
+                        format!("message_meta:{old_mid}"),
+                        format!("message_meta:{mid}"),
+                    ),
                 ] {
-                    if let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
-                        .bind(&old_key).fetch_optional(&mut *tx).await? {
+                    if let Some(raw) =
+                        sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+                            .bind(&old_key)
+                            .fetch_optional(&mut *tx)
+                            .await?
+                    {
                         let mut metadata = self.unseal(&raw)?;
                         if metadata["context_eligible"] == false || metadata["queued"] == true {
                             excluded_runs.insert(old.clone());
@@ -256,6 +264,8 @@ impl Store {
                                 copied_bytes = copied_bytes.checked_add(record["bytes"].as_u64().unwrap_or(0)).ok_or_else(|| anyhow!("Attachment byte count exceeds machine accounting range"))?;
                                 let old_aid = aid.to_owned();
                                 let aid = crate::uuid();
+                                // The copy gets its own file name, sharing the bytes on disk.
+                                self.link_blob(&old_aid, &aid)?;
                                 attachment_map.insert(old_aid, aid.clone());
                                 record["id"] = json!(aid);
                                 record["session_id"] = json!(id);
@@ -531,7 +541,7 @@ impl Store {
                 .execute(&mut *tx)
                 .await?;
             // Undo changes history identity without unloading permanent selections.
-            self.reset_context_asset_layouts(&mut tx,sid).await?;
+            self.reset_context_asset_layouts(&mut tx, sid).await?;
             self.write_document(&mut tx, &session_key, &session).await?;
             let retained_messages: HashSet<String> = chats
                 .iter()
@@ -596,7 +606,10 @@ mod tests {
     async fn fixture() -> (tempfile::TempDir, Store) {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
-        store.create_admin_account("root","long-hash-placeholder","generation").await.unwrap();
+        store
+            .create_admin_account("root", "long-hash-placeholder", "generation")
+            .await
+            .unwrap();
         store.put("session:s",&json!({"id":"s","title":"Original","agent_id":"shared_default","checkpoint_input":[],"checkpoint_through":0})).await.unwrap();
         for rid in ["r1", "r2"] {
             store.put(&format!("run:{rid}"),&json!({"id":rid,"session_id":"s","status":"completed","run_revision":0,"input":[]})).await.unwrap();
@@ -659,31 +672,62 @@ mod tests {
     async fn fork_preserves_inactive_and_queued_exclusions_with_authorship() {
         for queued in [false, true] {
             let (_root, store) = fixture().await;
-            store.put("message_meta:r1",&json!({"author_id":"alice","context_eligible":queued,"queued":queued})).await.unwrap();
+            store
+                .put(
+                    "message_meta:r1",
+                    &json!({"author_id":"alice","context_eligible":queued,"queued":queued}),
+                )
+                .await
+                .unwrap();
             store.put("message_meta:user:r1",&json!({"author_id":"alice","author_name":"Alice","context_eligible":false,"queued":queued})).await.unwrap();
-            let selected = request(&store,"assistant:r2","fork-excluded").await;
+            let selected = request(&store, "assistant:r2", "fork-excluded").await;
             let child = json!({"id":"excluded-child","agent_id":"shared_default","title":"Fork","participation":{"active":true,"revision":0,"generation":0}});
-            saved(store.conversation_history("s",&selected,Some((child,json!({}),100))).await.unwrap());
+            saved(
+                store
+                    .conversation_history("s", &selected, Some((child, json!({}), 100)))
+                    .await
+                    .unwrap(),
+            );
             // Discard warmed source/child caches and rebuild durable model inputs.
-            store.context_cache.lock().unwrap().invalidate(&store.context_cache_key("excluded-child"));
+            store
+                .context_cache
+                .lock()
+                .unwrap()
+                .invalidate(&store.context_cache_key("excluded-child"));
             let public = store.chat_snapshot("excluded-child").await.unwrap().0;
-            assert_eq!(public.len(),4);
+            assert_eq!(public.len(), 4);
             let first = &public[0];
             let rid = first["run_id"].as_str().unwrap();
-            let meta = store.get(&format!("message_meta:{rid}")).await.unwrap().unwrap();
-            assert_eq!(meta["author_id"],"alice");
-            assert_eq!(meta["context_eligible"],false);
-            assert_eq!(meta["queued"],false);
-            let meta = store.get(&format!("message_meta:{}",first["id"].as_str().unwrap())).await.unwrap().unwrap();
-            assert_eq!(meta["author_name"],"Alice");
+            let meta = store
+                .get(&format!("message_meta:{rid}"))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(meta["author_id"], "alice");
+            assert_eq!(meta["context_eligible"], false);
+            assert_eq!(meta["queued"], false);
+            let meta = store
+                .get(&format!("message_meta:{}", first["id"].as_str().unwrap()))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(meta["author_name"], "Alice");
             let context = store.context("excluded-child").await.unwrap();
             assert!(!json!(context).to_string().contains("question r1"));
             assert!(!json!(context).to_string().contains("answer r1"));
             let shared = store.shared_model_context("excluded-child").await.unwrap();
             assert!(!json!(shared).to_string().contains("question r1"));
-            let page = store.model_chat_page("excluded-child",0,20).await.unwrap();
+            let page = store
+                .model_chat_page("excluded-child", 0, 20)
+                .await
+                .unwrap();
             assert!(!page.to_string().contains("question r1"));
-            assert!(!store.model_search_hit_allowed(&json!({"session_id":"excluded-child","seq":first["seq"]})).await.unwrap());
+            assert!(!store
+                .model_search_hit_allowed(
+                    &json!({"session_id":"excluded-child","seq":first["seq"]})
+                )
+                .await
+                .unwrap());
         }
     }
     /// Verify nested forks preserve legacy final boundaries and refuse ambiguous progress cutoffs.
@@ -752,29 +796,86 @@ mod tests {
     /// Undo retains selections but resets layouts; a fork starts with no dynamic selections.
     #[tokio::test]
     async fn context_assets_survive_undo_without_being_inherited_by_fork() {
-        for forking in [false,true] {
-            let (_root,store)=fixture().await;
-            let state=webagent_assets_contracts::State{revision:3,
-                selectors:vec![json!({"type":"tool","tool_name":"file_read"})],
-                placements:vec![webagent_assets_contracts::Placement{id:"main".into(),after_input:0,anchor:None}],
-                schema_order:vec!["file_read".into()],history_basis:"before".into(),..Default::default()};
-            let mut scopes=serde_json::Map::new();
-            scopes.insert(super::super::context_assets::scope_key("shared_default",store.current_user_id()),json!(state));
-            store.put("session_context_assets:s",&json!({"version":1,"session_id":"s","scopes":scopes})).await.unwrap();
+        for forking in [false, true] {
+            let (_root, store) = fixture().await;
+            let state = webagent_assets_contracts::State {
+                revision: 3,
+                selectors: vec![json!({"type":"tool","tool_name":"file_read"})],
+                placements: vec![webagent_assets_contracts::Placement {
+                    id: "main".into(),
+                    after_input: 0,
+                    anchor: None,
+                }],
+                schema_order: vec!["file_read".into()],
+                history_basis: "before".into(),
+                ..Default::default()
+            };
+            let mut scopes = serde_json::Map::new();
+            scopes.insert(
+                super::super::context_assets::scope_key("shared_default", store.current_user_id()),
+                json!(state),
+            );
+            store
+                .put(
+                    "session_context_assets:s",
+                    &json!({"version":1,"session_id":"s","scopes":scopes}),
+                )
+                .await
+                .unwrap();
             if forking {
-                let selected=request(&store,"assistant:r1","assets-fork").await;
-                saved(store.conversation_history("s",&selected,Some((
-                    json!({"id":"assets-child","agent_id":"shared_default"}),json!({}),100))).await.unwrap());
-                assert!(store.get("session_context_assets:assets-child").await.unwrap().is_none());
-                assert_eq!(store.context_assets("assets-child","shared_default",store.current_user_id()).await.unwrap(),
-                    webagent_assets_contracts::State::default());
-                assert_eq!(store.context_assets("s","shared_default",store.current_user_id()).await.unwrap(),state);
+                let selected = request(&store, "assistant:r1", "assets-fork").await;
+                saved(
+                    store
+                        .conversation_history(
+                            "s",
+                            &selected,
+                            Some((
+                                json!({"id":"assets-child","agent_id":"shared_default"}),
+                                json!({}),
+                                100,
+                            )),
+                        )
+                        .await
+                        .unwrap(),
+                );
+                assert!(store
+                    .get("session_context_assets:assets-child")
+                    .await
+                    .unwrap()
+                    .is_none());
+                assert_eq!(
+                    store
+                        .context_assets("assets-child", "shared_default", store.current_user_id())
+                        .await
+                        .unwrap(),
+                    webagent_assets_contracts::State::default()
+                );
+                assert_eq!(
+                    store
+                        .context_assets("s", "shared_default", store.current_user_id())
+                        .await
+                        .unwrap(),
+                    state
+                );
             } else {
-                let selected=request(&store,"user:r2","assets-undo").await;
-                saved(store.conversation_history("s",&selected,None).await.unwrap());
-                let current=store.context_assets("s","shared_default",store.current_user_id()).await.unwrap();
-                assert_eq!(current.revision,4);assert_eq!(current.selectors,state.selectors);
-                assert!(current.placements.is_empty()&&current.schema_order.is_empty()&&current.history_basis.is_empty());
+                let selected = request(&store, "user:r2", "assets-undo").await;
+                saved(
+                    store
+                        .conversation_history("s", &selected, None)
+                        .await
+                        .unwrap(),
+                );
+                let current = store
+                    .context_assets("s", "shared_default", store.current_user_id())
+                    .await
+                    .unwrap();
+                assert_eq!(current.revision, 4);
+                assert_eq!(current.selectors, state.selectors);
+                assert!(
+                    current.placements.is_empty()
+                        && current.schema_order.is_empty()
+                        && current.history_basis.is_empty()
+                );
             }
         }
     }
@@ -967,8 +1068,9 @@ mod tests {
             .put("attachment_quota", &json!({"bytes":19}))
             .await
             .unwrap();
-        let mut source=store.get("session:s").await.unwrap().unwrap();
-        source["conversation_privacy"]=json!("private");store.put("session:s",&source).await.unwrap();
+        let mut source = store.get("session:s").await.unwrap().unwrap();
+        source["conversation_privacy"] = json!("private");
+        store.put("session:s", &source).await.unwrap();
         let request = request(&store, "assistant:r1", "fork").await;
         let child = json!({"id":"child","title":"Fork","agent_id":"shared_default","checkpoint_input":[],"checkpoint_through":0,"conversation_privacy":"operator_reviewable","operator_joined":{"operator":true}});
         let result = saved(
@@ -982,8 +1084,9 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(result["title"], "Fork: Original");
-        let forked=store.get("session:child").await.unwrap().unwrap();
-        assert_eq!(forked["conversation_privacy"],"private");assert!(forked.get("operator_joined").is_none());
+        let forked = store.get("session:child").await.unwrap().unwrap();
+        assert_eq!(forked["conversation_privacy"], "private");
+        assert!(forked.get("operator_joined").is_none());
         assert_eq!(
             store.get("attachment_quota").await.unwrap().unwrap()["bytes"],
             38

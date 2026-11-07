@@ -110,6 +110,33 @@ impl Codec {
         );
         Ok(data)
     }
+    /// Seal raw file bytes with a fresh nonce; `aad` binds the owner so a file cannot move between accounts.
+    pub fn seal_bytes(&self, aad: &[u8], data: &[u8]) -> Result<Vec<u8>> {
+        let mut nonce = [0; 12];
+        rand::thread_rng().fill_bytes(&mut nonce);
+        let mut sealed = nonce.to_vec();
+        sealed.extend(
+            self.cipher
+                .encrypt(Nonce::from_slice(&nonce), Payload { msg: data, aad })
+                .map_err(|_| anyhow!("Encryption failed"))?,
+        );
+        Ok(sealed)
+    }
+    /// Open bytes sealed by `seal_bytes` with the same `aad`.
+    pub fn unseal_bytes(&self, aad: &[u8], sealed: &[u8]) -> Result<Vec<u8>> {
+        if sealed.len() < 28 {
+            return Err(anyhow!("Invalid encrypted file"));
+        }
+        self.cipher
+            .decrypt(
+                Nonce::from_slice(&sealed[..12]),
+                Payload {
+                    msg: &sealed[12..],
+                    aad,
+                },
+            )
+            .map_err(|_| anyhow!("Storage authentication failed"))
+    }
     /// Authenticate either an installation-key record or the explicitly versioned
     /// administrator plaintext envelope. Agent envelopes are decoded by `AgentCipher`.
     pub fn unseal(&self, data: &[u8]) -> Result<Value> {
