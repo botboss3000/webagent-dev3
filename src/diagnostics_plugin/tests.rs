@@ -1,5 +1,5 @@
-use webagent_accounts_host::AccountsStore;
 use super::*;
+use webagent_accounts_host::AccountsStore;
 fn enabled(sid: &str) -> Settings {
     let mut config = Config::disabled();
     config.enabled = true;
@@ -74,7 +74,7 @@ async fn snapshot_encryption_identity_expiry_and_retention() {
     let pool = open(root.path()).await.unwrap();
     std::fs::create_dir_all(root.path().join("config")).unwrap();
     std::fs::write(
-        root.path().join("config/app-settings.json"),
+        root.path().join("config/storage-settings.json"),
         br#"{"admin_database_encryption":{"enabled":false}}"#,
     )
     .unwrap();
@@ -718,9 +718,15 @@ async fn recorder_end_to_end_live_reload_and_private_capture() {
     .await
     .unwrap();
     assert_eq!(
-        read_snapshot(package::test_support::test_pool(r), &app.store, &sid, &rid, &attempt)
-            .await
-            .unwrap()["history"],
+        read_snapshot(
+            package::test_support::test_pool(r),
+            &app.store,
+            &sid,
+            &rid,
+            &attempt
+        )
+        .await
+        .unwrap()["history"],
         json!(history)
     );
     let writer = open(&packages).await.unwrap();
@@ -764,7 +770,9 @@ fn committed_transition_projection_excludes_private_text_and_honors_categories()
     assert_eq!(event["interruption_reason"], "timeout");
     assert!(!event.to_string().contains("PRIVATE"));
     interrupted["pending"]["interruption"]["reason"] = json!("PRIVATE_REASON");
-    assert!(transition(&s, &interrupted, "run_status", false).unwrap()["interruption_reason"].is_null());
+    assert!(
+        transition(&s, &interrupted, "run_status", false).unwrap()["interruption_reason"].is_null()
+    );
     assert_eq!(
         transition(&s, &run, "tool_result", false).unwrap()["category"],
         "tool"
@@ -807,18 +815,31 @@ async fn persist_fixture(pool: &SqlitePool, event: &Value) -> anyhow::Result<()>
 
 #[test]
 fn tool_failure_transition_is_content_free_and_obeys_capture_settings() {
-    let settings=enabled("session-1");
-    let mut run=json!({"id":"run-1","session_id":"session-1","status":"recovery","uncertain":true,"pending":{"name":"build_work","call_id":"call-1","id":"attempt-1","arguments":{"request_id":"github-fields-begin","secret":"SECRET_CANARY"}}});
-    let error: anyhow::Error=crate::tools::failure::Failure::new(crate::tools::failure::Stage::Authorization,crate::tools::failure::Code::LegacyAuthorizationRejected,crate::tools::failure::Delivery::NotSent).into();
-    crate::tools::failure::record(&mut run,&error,None);
-    let event=transition(&settings,&run,"run_status",false).unwrap();
-    assert_eq!(event["tool_failure"]["code"],"legacy_authorization_rejected");
-    assert_eq!(event["tool_failure"]["request_id"],"github-fields-begin");
+    let settings = enabled("session-1");
+    let mut run = json!({"id":"run-1","session_id":"session-1","status":"recovery","uncertain":true,"pending":{"name":"build_work","call_id":"call-1","id":"attempt-1","arguments":{"request_id":"github-fields-begin","secret":"SECRET_CANARY"}}});
+    let error: anyhow::Error = crate::tools::failure::Failure::new(
+        crate::tools::failure::Stage::Authorization,
+        crate::tools::failure::Code::LegacyAuthorizationRejected,
+        crate::tools::failure::Delivery::NotSent,
+    )
+    .into();
+    crate::tools::failure::record(&mut run, &error, None);
+    let event = transition(&settings, &run, "run_status", false).unwrap();
+    assert_eq!(
+        event["tool_failure"]["code"],
+        "legacy_authorization_rejected"
+    );
+    assert_eq!(event["tool_failure"]["request_id"], "github-fields-begin");
     assert!(!event.to_string().contains("SECRET_CANARY"));
-    let diagnostic=crate::run_diagnostics(&run);
-    assert_eq!(diagnostic["tool_failure"],event["tool_failure"]);
-    assert_eq!(crate::task_progress::project(&run)["tool_failure"],event["tool_failure"]);
-    let mut disabled=settings.clone();disabled.config.enabled=false;
-    assert!(transition(&disabled,&run,"run_status",false).is_none());
-    assert_eq!(run["status"],"recovery");assert_eq!(run["uncertain"],true);
+    let diagnostic = crate::run_diagnostics(&run);
+    assert_eq!(diagnostic["tool_failure"], event["tool_failure"]);
+    assert_eq!(
+        crate::task_progress::project(&run)["tool_failure"],
+        event["tool_failure"]
+    );
+    let mut disabled = settings.clone();
+    disabled.config.enabled = false;
+    assert!(transition(&disabled, &run, "run_status", false).is_none());
+    assert_eq!(run["status"], "recovery");
+    assert_eq!(run["uncertain"], true);
 }

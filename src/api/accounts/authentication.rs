@@ -156,7 +156,7 @@ pub(crate) fn throttle_client(
     peer: Option<Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     headers: &HeaderMap,
 ) -> std::result::Result<std::net::IpAddr, ApiError> {
-    let settings = crate::store::read_app_settings(&app.store.root).map_err(|_| {
+    let settings = webagent_accounts::trust_settings(&app.store.root).map_err(|_| {
         ApiError(
             StatusCode::SERVICE_UNAVAILABLE,
             "Authentication configuration unavailable".into(),

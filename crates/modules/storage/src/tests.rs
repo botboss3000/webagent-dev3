@@ -46,7 +46,7 @@ fn handle(root: &Path, user: &'static str) -> Handle {
 
 fn write_settings(root: &Path, bytes: &[u8]) {
     std::fs::create_dir_all(root.join("config")).unwrap();
-    std::fs::write(root.join("config/app-settings.json"), bytes).unwrap();
+    std::fs::write(root.join("config/storage-settings.json"), bytes).unwrap();
 }
 
 #[test]
@@ -151,7 +151,7 @@ fn administrator_plaintext_policy_follows_app_settings() {
     assert!(admin.encode_user_record(&value).is_err());
     assert!(Codec::open(root.path()).is_err());
     write_settings(root.path(), b"[]");
-    assert!(settings::read_app_settings(root.path()).is_err());
+    assert!(settings::read_settings(root.path()).is_err());
 }
 
 #[test]
@@ -690,4 +690,14 @@ async fn prefix_scan_treats_underscore_and_percent_literally() {
     assert_eq!(found, vec![b"memory:a_b:1".to_vec()]);
     let found = docs::scan(&mut connection, "memory:a%").await.unwrap();
     assert_eq!(found, vec![b"memory:a%b:1".to_vec()]);
+}
+
+#[test]
+fn shipped_storage_settings_keep_encryption_on() {
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/storage-settings.json"
+    ))
+    .unwrap();
+    assert!(settings::admin_encryption_enabled(&settings::parse(&bytes).unwrap()).unwrap());
 }

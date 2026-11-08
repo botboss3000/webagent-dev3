@@ -3,6 +3,7 @@
   "version": 1,
   "files": [
     "crates/modules/access/access-policy.json",
+    "crates/modules/accounts/authentication.json",
     "crates/modules/configuration/prompts/*.json",
     "crates/modules/configuration/prompts/*.md",
     "crates/modules/configuration/prompts/main_chat_skills/*.md",
@@ -18,6 +19,7 @@
     "crates/modules/media/voice.json",
     "crates/modules/models/models-runtime.json",
     "crates/modules/models/providers/*.json",
+    "crates/modules/storage/storage-settings.json",
     "crates/modules/webapp/app-settings.json",
     "src/plugin_packages/diagnostics/diagnostics.json",
     "ui/chat/chat.json"

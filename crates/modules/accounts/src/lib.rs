@@ -133,6 +133,8 @@ pub mod registration_api;
 pub mod self_service;
 pub use sessions::SessionCandidate;
 
+mod proxy_trust;
+pub use proxy_trust::{trust_settings, LIVE_AUTHENTICATION, PROOF_HASH};
 mod throttling;
 pub use throttling::{
     client_ip, AccountSlowdown, AddressBackoff, AddressLimits, Admission, AdmissionContext,

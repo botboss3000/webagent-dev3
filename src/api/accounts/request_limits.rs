@@ -16,7 +16,7 @@ struct Cached {
 static CACHE: SyncMutex<Option<Cached>> = SyncMutex::new(None);
 const FRESH: Duration = Duration::from_secs(5);
 
-/// The current limits and app settings; an unreadable policy keeps the defaults rather
+/// The current limits and proxy trust settings; an unreadable policy keeps the defaults rather
 /// than turning limits off.
 fn current(app: &App) -> (webagent_accounts::RequestLimits, Value) {
     let mut cache = CACHE
@@ -31,7 +31,7 @@ fn current(app: &App) -> (webagent_accounts::RequestLimits, Value) {
         .ok()
         .and_then(|policy| webagent_accounts::RequestLimits::from_policy(&policy).ok())
         .unwrap_or_default();
-    let settings = crate::store::read_app_settings(&app.store.root).unwrap_or_else(|_| json!({}));
+    let settings = webagent_accounts::trust_settings(&app.store.root).unwrap_or_else(|_| json!({}));
     *cache = Some(Cached {
         at: Instant::now(),
         limits,

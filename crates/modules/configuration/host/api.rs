@@ -37,7 +37,7 @@ pub(crate) fn live(id: &str) -> Option<&'static str> {
 fn path(app: &App, id: &str) -> Result<PathBuf> {
     Ok(match id {
         "loop_runtime" => app.runtime_path.clone(),
-        "app_settings" => app.store.root.join("config/app-settings.json"),
+        "app_settings" => crate::store::settings_path(&app.store.root),
         "access_policy" => app.store.access_policy_path(),
         _ => anyhow::bail!("Unknown configuration"),
     })
@@ -56,6 +56,9 @@ fn live_path(app: &App, id: &str) -> Option<String> {
     if id == "access_policy" {
         return follows(app.store.access_policy_path());
     }
+    if id == "app_settings" {
+        return follows(crate::store::settings_path(&app.store.root));
+    }
     live(id).map(str::to_owned)
 }
 /// The configuration id whose live file is `relative`, for saves made on its behalf.
@@ -71,9 +74,16 @@ pub(crate) fn validate(id: &str, value: &Value) -> Result<()> {
     match id {
         "app_settings" => {
             crate::store::admin_encryption_enabled(value)?;
-            // UI and development settings live in the `app_ui` live file, not the state root.
-            if value.get("ui").is_some() || value.get("development").is_some() {
-                anyhow::bail!("UI settings belong to app_ui");
+            // Only the encryption switch lives here; UI settings belong to `app_ui` and
+            // proxy trust to the accounts module.
+            let known = |key: &String| {
+                matches!(key.as_str(), "_instructions" | "admin_database_encryption")
+            };
+            if !value
+                .as_object()
+                .is_some_and(|object| object.keys().all(known))
+            {
+                anyhow::bail!("Unknown storage setting");
             }
         }
         "app_ui" => webagent_webapp::configuration::validate_app_settings(value)?,

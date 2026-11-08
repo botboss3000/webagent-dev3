@@ -71,8 +71,8 @@ pub fn validate_app_settings(settings: &Value) -> Result<()> {
     }
     Ok(())
 }
-/// The live UI settings file (`live-files.json`), relative to the checkout. Instance-only
-/// settings (database encryption, trusted proxies) stay in the state root's app-settings.json.
+/// The live UI settings file (`live-files.json`), relative to the checkout. Database
+/// encryption and trusted proxies belong to the Storage and Accounts live files.
 pub const LIVE_SETTINGS: &str = "crates/modules/webapp/app-settings.json";
 
 /// UI settings from `settings`: the live file when relative, that exact file when absolute

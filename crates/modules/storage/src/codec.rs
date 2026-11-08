@@ -92,7 +92,7 @@ impl Codec {
     }
     /// Validate the plaintext policy, then load or first-start publish the data-root key.
     pub fn open(root: &Path) -> Result<Self> {
-        crate::settings::admin_encryption_enabled(&crate::settings::read_app_settings(root)?)?;
+        crate::settings::admin_encryption_enabled(&crate::settings::read_settings(root)?)?;
         Self::new(&load_or_create_key(root)?)
     }
     /// Encode a JSON value with a fresh AES-GCM nonce and authenticated ciphertext.
@@ -174,13 +174,13 @@ impl Codec {
         Ok(serde_json::from_slice(&crate::compression::unpack(plain)?)?)
     }
     /// User-plane write policy. Only the fixed administrator account may store
-    /// authenticated plaintext, and only while app-settings disables encryption.
+    /// authenticated plaintext, and only while storage-settings disables encryption.
     /// Application/agent secrets and search cursors keep using `seal`.
     pub fn encode_user_record(&self, root: &Path, user_id: &str, value: &Value) -> Result<Vec<u8>> {
         if user_id != "admin" {
             return self.seal(value);
         }
-        if crate::settings::admin_encryption_enabled(&crate::settings::read_app_settings(root)?)? {
+        if crate::settings::admin_encryption_enabled(&crate::settings::read_settings(root)?)? {
             return self.seal(value);
         }
         let mut nonce = [0; 12];

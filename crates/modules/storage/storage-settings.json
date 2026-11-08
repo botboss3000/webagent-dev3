@@ -1,0 +1,7 @@
+{
+  "_instructions": "Storage settings shared by the API and loop. The encryption key stays private in the state root; only this switch ships here.",
+  "admin_database_encryption": {
+    "_instructions": "true seals the administrator account's records with the installation key (default; a missing or invalid file also keeps encryption on). false lets the fixed admin account store new records as authenticated plaintext for troubleshooting; other accounts and secrets are always sealed and existing records stay readable either way. Saved from the administrator encryption page; adopted at the next write in each process.",
+    "enabled": true
+  }
+}

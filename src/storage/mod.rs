@@ -67,8 +67,10 @@ use webagent_storage::{
     docs,
     pool::UserPlane,
 };
-// The app-settings policy is Storage-owned; existing callers keep the crate::store path.
-pub(crate) use webagent_storage::settings::{admin_encryption_enabled, read_app_settings};
+// The encryption switch is Storage-owned; existing callers keep the crate::store path.
+pub(crate) use webagent_storage::settings::{
+    admin_encryption_enabled, read_settings, settings_path,
+};
 
 /// Project retrieval diagnostics onto fixed content-free status and stage enums.
 
@@ -3191,7 +3193,7 @@ mod admin_storage_policy_tests {
     fn configure(root: &Path, enabled: bool) {
         std::fs::create_dir_all(root.join("config")).unwrap();
         std::fs::write(
-            root.join("config/app-settings.json"),
+            root.join("config/storage-settings.json"),
             serde_json::to_vec(&json!({"admin_database_encryption":{"enabled":enabled}})).unwrap(),
         )
         .unwrap();
@@ -3279,7 +3281,7 @@ mod admin_storage_policy_tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("config")).unwrap();
         std::fs::write(
-            root.path().join("config/app-settings.json"),
+            root.path().join("config/storage-settings.json"),
             br#"{"admin_database_encryption":{"enabled":"false"}}"#,
         )
         .unwrap();

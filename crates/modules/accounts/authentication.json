@@ -1,0 +1,4 @@
+{
+  "_instructions": "Front proxies whose forwarded client address (cf-connecting-ip) is trusted, as IP addresses (at most 32). 172.17.0.1 is the Docker bridge peer that the host Cloudflare connector reaches the app through. A request from a listed proxy is trusted only with the edge's secret proof header, whose SHA-256 stays private in the state root (proxy-proof.sha256), never here. Reread within seconds; no restart.",
+  "trusted_proxy_ips": ["172.17.0.1"]
+}
