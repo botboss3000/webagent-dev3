@@ -619,6 +619,14 @@ pub fn validate_path(path: &Value, session_id: &str, agent_id: &str) -> Result<S
             return Ok(parsed.path);
         }
     }
+    // A UI draft preview of this session's own workspace; the app checks ownership again.
+    if let Some(variant) = parsed.path.strip_prefix(&format!("{prefix}/ui-preview/")) {
+        if shaped(variant, 1, 32, |c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_'
+        }) {
+            return Ok(parsed.path);
+        }
+    }
     Err(Fault::rejected("Unsupported current-session read route"))
 }
 
@@ -951,4 +959,22 @@ fn valid_points(points: &Value) -> bool {
                 })
             })
     })
+}
+
+#[cfg(test)]
+mod preview_route_tests {
+    use super::validate_path;
+    use serde_json::Value;
+
+    #[test]
+    fn only_this_sessions_ui_preview_route_is_allowed() {
+        let sid = "083cd9bb-7c27-4022-a9de-09e7110a9e92";
+        let other = "21e5ab5f-89d9-46ee-a417-96b1de77c1a8";
+        let path = |p: String| validate_path(&Value::from(p), sid, "shared_default");
+        assert!(path(format!("/api/v3/sessions/{sid}/ui-preview/option-a")).is_ok());
+        assert!(path(format!("/api/v3/sessions/{sid}/ui-preview/off")).is_ok());
+        assert!(path(format!("/api/v3/sessions/{other}/ui-preview/option-a")).is_err());
+        assert!(path(format!("/api/v3/sessions/{sid}/ui-preview/../x")).is_err());
+        assert!(path(format!("/api/v3/sessions/{sid}/ui-preview/A")).is_err());
+    }
 }
