@@ -846,7 +846,10 @@ async fn run_process() -> Result<()> {
     }
     if std::env::args().nth(1).as_deref() == Some("--tool-worker") {
         // The tool worker, started by the container launcher under the worker identity.
+        #[cfg(feature = "local-worker")]
         return Ok(webagent_worker::serve(webagent_worker::Config::from_env()?).await?);
+        #[cfg(not(feature = "local-worker"))]
+        anyhow::bail!("This build has no local tool worker");
     }
     if std::env::args().any(|argument| argument == "--context-smoke") {
         println!("{}", crate::engine_components::context_smoke().await?);

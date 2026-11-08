@@ -24,9 +24,14 @@ len_without_is_empty = "warn"
 wrong_self_convention = "warn"
 
 [features]
-default = ["linked-context"]
+default = ["linked-context", "local-worker"]
 linked-context = ["webagent-engine/linked-context", "dep:webagent-usage-reports", "dep:webagent-model-discovery", "dep:webagent-context-assembly", "dep:webagent-background-dispatch", "dep:webagent-boot-supervisor", "dep:webagent-context-assets", "dep:webagent-capability-context", "dep:webagent-provider-projection"]
-live-context = ["webagent-engine/live-context"]
+# The server release build uses live-context alone, so it keeps the local worker.
+live-context = ["webagent-engine/live-context", "local-worker"]
+# The local tool worker: file tools, commands, terminals, browsers and Git under the
+# Linux workspace sandbox. Builds for platforms without it (phones, remote clients)
+# leave it out; their tool calls then report that no local worker is available.
+local-worker = ["dep:webagent-worker"]
 # Stable releases link ability plugins into the binary; dev runs them as packages.
 stable-abilities = ["dep:webagent-agent-management", "dep:webagent-web-search"]
 
@@ -60,7 +65,7 @@ webagent-notifications = { path = "crates/modules/notifications" }
 webagent-browser = { path = "crates/modules/browser" }
 webagent-actions = { path = "crates/modules/actions" }
 webagent-storage = { path = "crates/modules/storage" }
-webagent-worker = { path = "crates/modules/worker" }
+webagent-worker = { path = "crates/modules/worker", optional = true }
 webagent-host-core = { path = "crates/host-core" }
 webagent-assets-contracts={path="crates/assets-contracts"}
 webagent-capability-contracts={path="crates/capability-contracts"}

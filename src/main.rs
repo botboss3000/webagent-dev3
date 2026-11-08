@@ -186,35 +186,35 @@ mod agent_loop;
 #[path = "../crates/modules/manager/host/mod.rs"]
 mod manager;
 use agent_loop::*;
+/// The local tool worker's own process modes, which start without the async runtime's
+/// threads; `None` for every other role.
+#[cfg(feature = "local-worker")]
+fn local_worker_mode(mode: Option<&str>) -> Option<i32> {
+    use webagent_worker::{browser, git, launch, runner, terminal};
+    // Git runs this executable as its credential prompt (GIT_ASKPASS) with this marker.
+    if std::env::var_os("V3_GIT_ASKPASS").is_some_and(|marker| marker == "1") {
+        return Some(git::askpass::main());
+    }
+    let spec = || std::env::args().nth(2).unwrap_or_default();
+    Some(match mode? {
+        // The container launcher sets up and starts every process of the web container.
+        "--launch" => launch::run(),
+        "--terminal-supervisor" => terminal::supervise(&spec()),
+        // One chat session's private browser; it builds its own single-threaded runtime.
+        "--browser-session" => browser::session::run(),
+        // The per-command and per-plugin supervisors.
+        "--tool-runner" => runner::supervise(&spec()),
+        "--plugin-runner" => runner::supervise_plugin(&spec()),
+        _ => return None,
+    })
+}
+
 // Choose one role for this process. The API serves requests; the loop owns
 // recovery and execution; health only checks a recent loop heartbeat.
 fn main() -> Result<()> {
-    // Git runs this executable as its credential prompt (GIT_ASKPASS) with this marker.
-    if std::env::var_os("V3_GIT_ASKPASS").is_some_and(|marker| marker == "1") {
-        std::process::exit(webagent_worker::git::askpass::main());
-    }
-    // The tool worker's per-command supervisor starts without the async runtime's threads.
-    let mode = std::env::args().nth(1);
-    // The container launcher sets up and starts every process of the web container.
-    if mode.as_deref() == Some("--launch") {
-        std::process::exit(webagent_worker::launch::run());
-    }
-    if mode.as_deref() == Some("--terminal-supervisor") {
-        let spec = std::env::args().nth(2).unwrap_or_default();
-        std::process::exit(webagent_worker::terminal::supervise(&spec));
-    }
-    // One chat session's private browser, started by the tool worker; it builds its own
-    // single-threaded runtime.
-    if mode.as_deref() == Some("--browser-session") {
-        std::process::exit(webagent_worker::browser::session::run());
-    }
-    if matches!(mode.as_deref(), Some("--tool-runner" | "--plugin-runner")) {
-        let spec = std::env::args().nth(2).unwrap_or_default();
-        std::process::exit(if mode.as_deref() == Some("--tool-runner") {
-            webagent_worker::runner::supervise(&spec)
-        } else {
-            webagent_worker::runner::supervise_plugin(&spec)
-        });
+    #[cfg(feature = "local-worker")]
+    if let Some(code) = local_worker_mode(std::env::args().nth(1).as_deref()) {
+        std::process::exit(code);
     }
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
