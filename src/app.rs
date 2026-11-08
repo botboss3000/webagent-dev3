@@ -703,6 +703,10 @@ fn marker(app: &App, shutoff: bool) -> Result<()> {
     FileExt::unlock(&lock)?;
     result
 }
+/// Shared API/loop coordination folder (`/runtime/control`); never part of state.
+fn control_root() -> PathBuf {
+    PathBuf::from(std::env::var("V3_CONTROL_ROOT").unwrap_or_else(|_| "/runtime/control".into()))
+}
 /// Restore persisted global control after launcher initialization, including API-only replacement.
 /// Never infer enablement from container health: a saved shutoff remains disabled.
 async fn restore_worker_control(app: &App) -> Result<()> {
@@ -953,12 +957,14 @@ async fn run_process() -> Result<()> {
         return Err(anyhow!("Invalid v3 process role"));
     }
     std::fs::create_dir_all(&root)?;
+    // One loop per installation: the lock is runtime coordination, never kept in state.
     let lock = if role == "loop" {
+        std::fs::create_dir_all(control_root())?;
         let lock = OpenOptions::new()
             .create(true)
             .truncate(false)
             .write(true)
-            .open(root.join("runtime.lock"))?;
+            .open(control_root().join("loop.lock"))?;
         lock.try_lock_exclusive()
             .map_err(|_| anyhow!("Another v3 loop owns this state"))?;
         Some(lock)
@@ -1037,9 +1043,7 @@ async fn run_process() -> Result<()> {
         ready: Arc::new(AtomicBool::new(false)),
         stop: CancellationToken::new(),
         login_attempts: webagent_accounts::LoginAttempts::default(),
-        control_dir: PathBuf::from(
-            std::env::var("V3_CONTROL_ROOT").unwrap_or_else(|_| "/runtime/control".into()),
-        ),
+        control_dir: control_root(),
         tool_socket: PathBuf::from(
             std::env::var("V3_TOOL_SOCKET").unwrap_or_else(|_| "/runtime/worker/tools.sock".into()),
         ),

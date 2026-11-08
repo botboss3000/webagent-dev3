@@ -8,10 +8,17 @@ pub const BUILD_COMMAND:&str="npm install --prefix /tmp/webagent-wrangler --igno
 pub const PREVIEW_COMMAND:&str="node /tmp/webagent-wrangler/node_modules/wrangler/bin/wrangler.js preview --config wrangler.jsonc --ignore-base-config --name wa-$WORKERS_CI_COMMIT_SHA --json";
 pub const DEPLOY_COMMAND:&str="node /tmp/webagent-wrangler/node_modules/wrangler/bin/wrangler.js deploy --config wrangler.jsonc --tag $WORKERS_CI_COMMIT_SHA";
 pub const PREFIX: &str = "core_source_control:";
-pub const GITHUB_APP_INSTALL: &str = "https://github.com/apps/cloudflare-workers-and-pages/installations/new";
-fn main_branch() -> String { "main".into() }
-fn build_command() -> String { BUILD_COMMAND.into() }
-fn repository_root() -> String { "/".into() }
+pub const GITHUB_APP_INSTALL: &str =
+    "https://github.com/apps/cloudflare-workers-and-pages/installations/new";
+fn main_branch() -> String {
+    "main".into()
+}
+fn build_command() -> String {
+    BUILD_COMMAND.into()
+}
+fn repository_root() -> String {
+    "/".into()
+}
 /// Only the GitHub repository and Worker name are required. An empty Cloudflare account or
 /// build token is discovered with the saved Cloudflare token when the site is created.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -102,11 +109,12 @@ impl Configuration {
         );
         anyhow::ensure!(branch(&self.production_branch), "Invalid production branch");
         anyhow::ensure!(
-            self.cloudflare_account_id.is_empty() || self.cloudflare_account_id.len() == 32
-                && self
-                    .cloudflare_account_id
-                    .bytes()
-                    .all(|b| b.is_ascii_hexdigit()),
+            self.cloudflare_account_id.is_empty()
+                || self.cloudflare_account_id.len() == 32
+                    && self
+                        .cloudflare_account_id
+                        .bytes()
+                        .all(|b| b.is_ascii_hexdigit()),
             "Invalid Cloudflare account ID"
         );
         anyhow::ensure!(
@@ -119,7 +127,8 @@ impl Configuration {
             "Invalid Worker name"
         );
         anyhow::ensure!(
-            self.build_token_uuid.is_empty() || uuid::Uuid::parse_str(&self.build_token_uuid).is_ok(),
+            self.build_token_uuid.is_empty()
+                || uuid::Uuid::parse_str(&self.build_token_uuid).is_ok(),
             "Invalid Cloudflare build-token UUID"
         );
         anyhow::ensure!(
@@ -144,7 +153,9 @@ pub fn hostname(s: &str) -> bool {
             (1..=63).contains(&label.len())
                 && !label.starts_with('-')
                 && !label.ends_with('-')
-                && label.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         })
 }
 pub fn site_key(agent: &str, id: &str) -> String {
@@ -204,7 +215,12 @@ pub fn lock(store: &Store, agent: &str, id: &str) -> Result<File> {
         identifier(agent) && identifier(id),
         "Invalid Source Control identity"
     );
-    let folder = store.root.join("control");
+    // Runtime coordination lives in the shared control mount; fixtures use their state root.
+    let folder = if webagent_configuration::live::writable() {
+        std::path::PathBuf::from("/runtime/control/source-control")
+    } else {
+        store.root.join("control")
+    };
     std::fs::create_dir_all(&folder)?;
     let file = OpenOptions::new()
         .create(true)
