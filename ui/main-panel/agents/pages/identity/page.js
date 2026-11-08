@@ -25,6 +25,16 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
     host.append(message); return;
   }
   onSaved(agent);
+  // A save from another tab, device or agent moves the revision this page holds. Each save sends
+  // only its own fields, so on that conflict refresh the revision once and send it again.
+  const put = async (patch) => {
+    try { return await request(path,'PUT',{revision:agent.revision,...patch}); }
+    catch(error) {
+      if(error.status !== 409) throw error;
+      agent.revision = (await request(path)).revision;
+      return request(path,'PUT',{revision:agent.revision,...patch});
+    }
+  };
   const group = document.createElement('div'); group.className = 'agent-identity-settings agent-identity-settings--embedded';
   const content = document.createElement('div'); content.className = 'ac-category-body';
   group.append(content); host.append(group);
@@ -51,7 +61,7 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
         if(value === agent[field]) return;
         status('Saving…');
         try {
-          agent = await request(path,'PUT',{revision:agent.revision,[field]:value});
+          agent = await put({[field]:value});
           if(input.value.trim() === value && field === 'name') input.value = agent.name;
           status('Saved'); onSaved(agent);
         } catch(error) { status('Save failed: ' + error.message); }
@@ -63,7 +73,7 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
     }
   }
   const persist = (patch) => {
-    const task = queue.then(async()=>{ const saved=await request(path,'PUT',{revision:agent.revision,...patch}); agent=saved; onSaved(saved); return saved; });
+    const task = queue.then(async()=>{ const saved=await put(patch); agent=saved; onSaved(saved); return saved; });
     queue=task.catch(()=>{}); return task;
   };
   renderMemberAccess(content,agent,persist,request,{agentId,reload:()=>renderIdentity(host,request,{agentId,onSaved})});

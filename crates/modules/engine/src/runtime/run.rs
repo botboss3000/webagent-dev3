@@ -961,16 +961,20 @@ impl<
             )?;
             run["pending"] = json!({"call_id":call_id});
             let mut working_text = None;
+            let mut echoed = Vec::new();
             let result = if !enabled {
                 run["closing"] = Value::Null;
                 json!({"status":"denied","output":"Private control is not enabled"})
             } else if name == "publish_main_message" {
-                let preceding = engine_output::preceding_text(
+                let (preceding, ordinals) = engine_output::preceding_message(
                     run["input"].as_array().map_or(&[][..], Vec::as_slice),
                     call_id,
                 );
                 match gate_controls::working_text(&args, &preceding) {
                     Ok(text) => {
+                        if args.get("text").is_none() {
+                            echoed = ordinals;
+                        }
                         working_text = Some(text);
                         json!({"status":"ok","output":"Working message published"})
                     }
@@ -1005,7 +1009,17 @@ impl<
                 return Ok(std::ops::ControlFlow::Break(()));
             }
             if let Some(text) = working_text {
-                let message_id = format!("working:{id}:{}:{idx}", model_turn(&run));
+                let mut message_id = format!("working:{id}:{}:{idx}", model_turn(&run));
+                // `:echo:<ordinals>` names the reply messages this bubble repeats word for word,
+                // so the activity log hides them (src/storage/activity.rs reads it back).
+                let echo = echoed
+                    .iter()
+                    .map(usize::to_string)
+                    .collect::<Vec<_>>()
+                    .join("-");
+                if !echo.is_empty() && message_id.len() + echo.len() + 6 <= 256 {
+                    message_id = format!("{message_id}:echo:{echo}");
+                }
                 app.store
                     .save_run_observed(
                         &mut run,

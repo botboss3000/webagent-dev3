@@ -39,7 +39,7 @@ export function renderVisibility(content, agent, persist) {
       modeStatus.textContent='Saved';
       mode.value=savedMode;guidance.value=savedGuidance;applyMode();save.textContent='Saved';save.classList.add('is-saved');
     } catch(error) {
-      mode.value=savedMode;guidance.value=savedGuidance;applyMode();save.textContent='Save guidance';modeStatus.textContent='Save failed';status.textContent='Save failed: '+error.message;
+      mode.value=savedMode;guidance.value=savedGuidance;applyMode();save.textContent='Save guidance';modeStatus.textContent='Save failed';status.textContent=note.textContent='Save failed: '+error.message;
     } finally {
       mode.disabled=!agent.can_manage;guidance.disabled=!agent.can_manage;save.disabled=!agent.can_manage;
     }

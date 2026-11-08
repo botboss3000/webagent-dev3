@@ -5,9 +5,47 @@ fn boundary(row: &SqliteRow) -> String {
     row.get::<Option<String>, _>("boundary_item_id")
         .unwrap_or_else(|| format!("user:{}", row.get::<String, _>("run_id")))
 }
-fn event(row: &SqliteRow, store: &Store, sid: &str) -> Result<Value> {
+/// The private control that publishes working bubbles; its calls stay out of activity groups.
+const PUBLISH_CONTROL: &str = "publish_main_message";
+/// Interaction steps a working bubble repeats word for word, read from its chat ID:
+/// `working:<run>:auto:<turn>:<ordinal>` (automatic promotion) or
+/// `working:<run>:<turn>:<call>:echo:<o1>-<o2>` (`publish_main_message` without text).
+fn echoed_steps(id: &str) -> Vec<(String, String)> {
+    let parts = id
+        .strip_prefix("working:")
+        .map(|rest| rest.split(':').collect::<Vec<_>>())
+        .unwrap_or_default();
+    match parts.as_slice() {
+        [run, "auto", turn, ordinal] => vec![(run.to_string(), format!("model:{turn}:{ordinal}"))],
+        [run, turn, _, "echo", ordinals] => ordinals
+            .split('-')
+            .map(|ordinal| (run.to_string(), format!("model:{turn}:{ordinal}")))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+/// Every (run, step) in the session that a working bubble already shows, so activity groups
+/// hold only messages the user has not seen.
+async fn promoted_steps<'e, E: sqlx::SqliteExecutor<'e>>(
+    executor: E,
+    sid: &str,
+) -> Result<HashSet<(String, String)>> {
+    let ids: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM chat WHERE session_id=? AND id LIKE 'working:%'")
+            .bind(sid)
+            .fetch_all(executor)
+            .await?;
+    Ok(ids.iter().flat_map(|id| echoed_steps(id)).collect())
+}
+fn event(
+    row: &SqliteRow,
+    store: &Store,
+    sid: &str,
+    promoted: &HashSet<(String, String)>,
+) -> Result<Value> {
     let seq = row.get::<i64, _>("seq");
     let run = row.get::<String, _>("run_id");
+    let shown = promoted.contains(&(run.clone(), row.get::<String, _>("step")));
     let item = store.unseal(&row.get::<Vec<u8>, _>("item"))?;
     let (kind, payload) = match item["type"].as_str().unwrap_or("") {
         "function_call" => (
@@ -35,7 +73,7 @@ fn event(row: &SqliteRow, store: &Store, sid: &str) -> Result<Value> {
             };
             (
                 "agent_step_end",
-                json!({"asst_id":format!("interaction:{seq}"),"content":text}),
+                json!({"asst_id":format!("interaction:{seq}"),"content":text,"promoted":shown}),
             )
         }
         "compaction_call" => (
@@ -168,13 +206,14 @@ impl Store {
     /// Page only one caller-owned run's encrypted interactions. The API checks
     /// administrator and session authority before exposing this private log.
     pub async fn private_run_activity(&self, sid: &str, rid: &str, after: i64) -> Result<Value> {
-        let rows=sqlx::query("SELECT i.seq,i.run_id,i.item,i.execution_metadata,i.created_at,b.boundary_item_id FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? AND i.run_id=? AND i.seq>? ORDER BY i.seq LIMIT 101")
+        let rows=sqlx::query("SELECT i.seq,i.run_id,i.step,i.item,i.execution_metadata,i.created_at,b.boundary_item_id FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? AND i.run_id=? AND i.seq>? ORDER BY i.seq LIMIT 101")
             .bind(sid).bind(rid).bind(after).fetch_all(&self.pool).await?;
         let more = rows.len() > 100;
         let page = &rows[..rows.len().min(100)];
+        let promoted = promoted_steps(&self.pool, sid).await?;
         let events = page
             .iter()
-            .map(|row| event(row, self, sid))
+            .map(|row| event(row, self, sid, &promoted))
             .collect::<Result<Vec<_>>>()?;
         let cursor = page
             .last()
@@ -209,6 +248,7 @@ impl Store {
         for (index, r) in groups.iter().enumerate() {
             last_of_run.insert(r.get::<String, _>("run_id"), index);
         }
+        let promoted = promoted_steps(&self.pool, sid).await?;
         let mut segments = Vec::new();
         for (index, r) in groups.iter().enumerate() {
             let anchor = boundary(r);
@@ -225,19 +265,27 @@ impl Store {
                 continue;
             }
             let recorded = r.get::<Option<String>, _>("boundary_item_id");
-            let items=sqlx::query_scalar::<_,Vec<u8>>("SELECT i.item FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? AND i.run_id=? AND i.seq BETWEEN ? AND ? AND b.boundary_item_id IS ? ORDER BY i.seq")
+            let items=sqlx::query("SELECT i.step,i.item FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? AND i.run_id=? AND i.seq BETWEEN ? AND ? AND b.boundary_item_id IS ? ORDER BY i.seq")
                 .bind(sid).bind(&run).bind(first).bind(last).bind(&recorded).fetch_all(&self.pool).await?;
             // Same categories as the page's activityRows: one tool per call id, one update per message.
             let (mut tools, mut updates, mut compactions, mut retries) = (HashSet::new(), 0, 0, 0);
             // Whether the group's latest row is a scheduled retry, so its label can say so before
             // its events are loaded: "retry" while reconnecting, "recovering" for an automatic resume.
             let mut retrying = Value::Null;
-            for raw in &items {
-                let item = self.unseal(raw)?;
+            let mut controls = HashSet::new();
+            for row in &items {
+                let item = self.unseal(&row.get::<Vec<u8>, _>("item"))?;
+                let call_id = item["call_id"].as_str().unwrap_or("").to_owned();
                 match item["type"].as_str().unwrap_or("") {
-                    "function_call" | "function_call_output" => {
-                        tools.insert(item["call_id"].as_str().unwrap_or("").to_owned());
+                    "function_call" if item["name"] == PUBLISH_CONTROL => {
+                        controls.insert(call_id);
                     }
+                    "function_call_output" if controls.contains(&call_id) => {}
+                    "function_call" | "function_call_output" => {
+                        tools.insert(call_id);
+                    }
+                    "message"
+                        if promoted.contains(&(run.clone(), row.get::<String, _>("step"))) => {}
                     "message" => updates += 1,
                     "compaction_result" => compactions += 1,
                     "retry_scheduled" => retries += 1,
@@ -259,13 +307,14 @@ impl Store {
     }
     pub async fn private_activity(&self, sid: &str, after: i64) -> Result<Value> {
         let mut tx = self.pool.begin().await?;
-        let rows=sqlx::query("SELECT i.seq,i.run_id,i.item,i.execution_metadata,i.created_at,b.boundary_item_id FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? AND i.seq>? ORDER BY i.seq LIMIT 201")
+        let rows=sqlx::query("SELECT i.seq,i.run_id,i.step,i.item,i.execution_metadata,i.created_at,b.boundary_item_id FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? AND i.seq>? ORDER BY i.seq LIMIT 201")
             .bind(sid).bind(after).fetch_all(&mut *tx).await?;
         let more = rows.len() > 200;
         let page = &rows[..rows.len().min(200)];
+        let promoted = promoted_steps(&mut *tx, sid).await?;
         let events = page
             .iter()
-            .map(|row| event(row, self, sid))
+            .map(|row| event(row, self, sid, &promoted))
             .collect::<Result<Vec<_>>>()?;
         let cursor = page.last().map(|r| r.get::<i64, _>("seq")).unwrap_or(after);
         let groups=sqlx::query("SELECT i.run_id,b.boundary_item_id,MIN(i.seq) first_seq,MAX(i.seq) last_seq FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? GROUP BY i.run_id,b.boundary_item_id ORDER BY MIN(i.seq)")
@@ -288,6 +337,88 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A bubble that repeats reply messages hides them, and the publish control, from activity.
+    #[tokio::test]
+    async fn echoed_messages_and_publish_control_leave_activity_groups() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store
+            .put(
+                "session:s",
+                &json!({"id":"s","agent_id":"shared_default","status":"active"}),
+            )
+            .await
+            .unwrap();
+        let note = |text: &str| json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":text}]});
+        let mut tx = store.pool.begin().await.unwrap();
+        store
+            .insert_chat(&mut tx, "s", "r", "user", &json!("Hello"))
+            .await
+            .unwrap();
+        for (step, item) in [
+            ("model:1:0", note("private note")),
+            ("model:2:0", note("Plan: do X")),
+            (
+                "model:2:1",
+                json!({"type":"function_call","call_id":"p1","name":"publish_main_message","arguments":"{}"}),
+            ),
+            (
+                "tool:p1",
+                json!({"type":"function_call_output","call_id":"p1","output":"{}"}),
+            ),
+        ] {
+            store
+                .insert_interaction(&mut tx, "s", "r", step, &item)
+                .await
+                .unwrap();
+        }
+        tx.commit().await.unwrap();
+        let mut run = json!({"id":"r","session_id":"s","status":"running","generation":"g","lease_epoch":0,"input":[],"turns":2});
+        store
+            .save_run(
+                &mut run,
+                "working_message",
+                &json!({"id":"working:r:2:0:echo:0","text":"Plan: do X"}),
+            )
+            .await
+            .unwrap();
+        let data = store.private_activity("s", 0).await.unwrap();
+        let messages = data["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["kind"] == "agent_step_end")
+            .map(|event| {
+                (
+                    event["payload"]["content"].clone(),
+                    event["payload"]["promoted"].clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            messages,
+            vec![
+                (json!("private note"), json!(false)),
+                (json!("Plan: do X"), json!(true))
+            ]
+        );
+        let summary = store.private_activity_summary("s", 0, None).await.unwrap();
+        let (tools, updates) = summary["segments"].as_array().unwrap().iter().fold(
+            (0, 0),
+            |(tools, updates), segment| {
+                (
+                    tools + segment["counts"]["tools"].as_u64().unwrap(),
+                    updates + segment["counts"]["updates"].as_u64().unwrap(),
+                )
+            },
+        );
+        assert_eq!((tools, updates), (0, 1));
+        assert_eq!(
+            echoed_steps("working:r:auto:3:1"),
+            vec![("r".to_owned(), "model:3:1".to_owned())]
+        );
+        assert!(echoed_steps("working:r:2:0").is_empty());
+    }
     #[tokio::test]
     async fn compaction_rows_show_in_activity_but_not_in_context() {
         let root = tempfile::tempdir().unwrap();

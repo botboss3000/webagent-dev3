@@ -68,3 +68,13 @@ test('a scheduled retry is its own counted row, labelled by attempt, backup or a
     ['retries',true,false,'Switching to the backup model in 2 s']]);
   assert.equal(rows[0].text,'Bridge provider overloaded: busy');
 });
+
+test('promoted messages and the publish control stay out of activity rows',()=>{
+  const rows=activityRows([
+    {kind:'agent_step_end',event_id:'m1',payload:{asst_id:'a1',content:'private note',promoted:false}},
+    {kind:'agent_step_end',event_id:'m2',payload:{asst_id:'a2',content:'Plan: do X',promoted:true}},
+    {kind:'tool_call',event_id:'c1',payload:{tool:'publish_main_message',tool_call_id:'p1'}},
+    {kind:'tool_result',event_id:'c2',payload:{tool_call_id:'p1',output:'{}'}},
+  ]);
+  assert.deepEqual(rows.map(row=>row.text),['private note']);
+});

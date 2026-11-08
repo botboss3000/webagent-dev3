@@ -19,27 +19,34 @@ pub fn text(output: &[Value]) -> String {
         .join("")
 }
 
-/// Assistant text in the same reply before the `call_id` call: walk back past that reply's
-/// other calls and reasoning, stopping at an earlier tool result or input.
-pub fn preceding_text(input: &[Value], call_id: &str) -> String {
+/// The reply's assistant text before the `call_id` call, with each message's ordinal in that
+/// reply (its `model:<turn>:<ordinal>` step). The reply runs back to the previous tool result
+/// or input item, so its first item is ordinal 0.
+pub fn preceding_message(input: &[Value], call_id: &str) -> (String, Vec<usize>) {
     let Some(end) = input
         .iter()
         .position(|item| item["type"] == "function_call" && item["call_id"] == call_id)
     else {
-        return String::new();
+        return (String::new(), Vec::new());
     };
     let start = input[..end]
         .iter()
         .rposition(|item| {
-            !matches!(
-                item["type"].as_str(),
-                Some("message" | "reasoning" | "function_call")
-            ) || item["role"]
-                .as_str()
-                .is_some_and(|role| role != "assistant")
+            item["type"] == "function_call_output"
+                || item["type"].as_str().is_none()
+                || item["role"]
+                    .as_str()
+                    .is_some_and(|role| role != "assistant")
         })
         .map_or(0, |index| index + 1);
-    text(&input[start..end])
+    let reply = &input[start..end];
+    let ordinals = reply
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item["type"] == "message")
+        .map(|(ordinal, _)| ordinal)
+        .collect();
+    (text(reply), ordinals)
 }
 
 pub fn continuation(output: &[Value], control_name: &str) -> bool {
@@ -98,7 +105,7 @@ mod tests {
     }
 
     #[test]
-    fn preceding_text_is_the_same_reply_before_the_call() {
+    fn preceding_message_is_the_same_reply_before_the_call() {
         let msg = |role: &str, text: &str| json!({"type":"message","role":role,"content":[{"text":text}]});
         let call = |id: &str| json!({"type":"function_call","call_id":id,"name":"x"});
         let input = vec![
@@ -112,10 +119,22 @@ mod tests {
             call("b"),
             call("publish"),
         ];
-        assert_eq!(preceding_text(&input, "publish"), "Plan: do X");
-        assert_eq!(preceding_text(&input, "a"), "old note");
-        assert_eq!(preceding_text(&[msg("user", "ask"), call("c")], "c"), "");
-        assert_eq!(preceding_text(&input, "missing"), "");
+        assert_eq!(
+            preceding_message(&input, "publish"),
+            ("Plan: do X".to_owned(), vec![1, 2])
+        );
+        assert_eq!(
+            preceding_message(&input, "a"),
+            ("old note".to_owned(), vec![0])
+        );
+        assert_eq!(
+            preceding_message(&[msg("user", "ask"), call("c")], "c"),
+            (String::new(), vec![])
+        );
+        assert_eq!(
+            preceding_message(&input, "missing"),
+            (String::new(), vec![])
+        );
     }
 
     #[test]
