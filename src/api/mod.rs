@@ -267,6 +267,10 @@ pub(super) fn router(app: App) -> Router {
             get(administrator::notices),
         )
         .route(
+            "/sessions/{sid}/ui-preview/{variant}",
+            get(crate::ui_pages::ui_preview_start),
+        )
+        .route(
             "/sessions/{sid}/administrator/notices/{id}/review",
             post(administrator::review_notice),
         )
