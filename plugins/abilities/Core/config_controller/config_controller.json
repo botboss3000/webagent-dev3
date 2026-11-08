@@ -1,7 +1,7 @@
 {
   "display_name": "Configuration Controller",
   "kind": "ability",
-  "description": "Find and change app, agent and personal settings from the conversation. Changes to the user's own settings and their agents are on by default; app-wide changes need an administrator and approval.",
+  "description": "Find and change app, agent and personal settings from the conversation. Changes to the user's own settings and their agents are on by default; app-wide changes are off until an agent operator enables them, and then work only for administrators.",
   "icon": "sliders-horizontal",
   "color": "#e0af68",
   "order": 4,

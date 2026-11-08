@@ -1,5 +1,5 @@
 {
-  "name": "change_my_setting",
+  "name": "change_user_setting",
   "description": "Save one of the signed-in user's own settings (their personal preferences and profile), using the revision find_setting returned for the user layer. Affects only this user.",
   "effect": "write",
   "retry_risk": "none",

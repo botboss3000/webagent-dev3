@@ -1,7 +1,7 @@
 //! Configuration Controller ability (`plugins/abilities/Core/config_controller`): the
 //! configuration composer from an agent conversation. `find_setting` asks the composer which
 //! setting a request means and what it would change. Saving is split by layer so each has its
-//! own permission: `change_my_setting` (the user's own), `change_agent_setting` (an agent the
+//! own permission: `change_user_setting` (the user's own), `change_agent_setting` (an agent the
 //! user manages) and `change_app_setting` (everyone; administrators). All go through the same
 //! apply path as the API and act as the chat's signed-in user, so the composer's own page checks
 //! decide what they may see and change.
@@ -16,7 +16,7 @@ use crate::{api, shared_chat, App, State};
 /// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
 pub const TOOLS: &[&str] = &[
     "find_setting",
-    "change_my_setting",
+    "change_user_setting",
     "change_agent_setting",
     "change_app_setting",
 ];
@@ -55,7 +55,7 @@ pub async fn execute(
     let mut caller = app.clone();
     caller.store = app.store.for_user(&actor).await?;
     let layer = match name {
-        "change_my_setting" => "user",
+        "change_user_setting" => "user",
         "change_agent_setting" => "agent",
         "change_app_setting" => "app",
         _ => args["layer"].as_str().unwrap_or_default(),

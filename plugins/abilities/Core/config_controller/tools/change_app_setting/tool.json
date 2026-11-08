@@ -5,7 +5,7 @@
   "retry_risk": "none",
   "retry_hint": "call find_setting again: its current value shows whether the earlier change was saved, and a repeat with the old revision is refused",
   "default_access": {
-    "operator": "ask",
+    "operator": "deny",
     "member": "deny",
     "visitor": "deny"
   },

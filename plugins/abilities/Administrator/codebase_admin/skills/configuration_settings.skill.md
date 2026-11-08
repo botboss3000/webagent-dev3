@@ -8,7 +8,7 @@ minimum_access: registered
 
 # Configuration files and setting descriptors
 
-The Configuration Controller ability (`find_setting` and the `change_my_setting`, `change_agent_setting` and `change_app_setting` tools) and the composer API
+The Configuration Controller ability (`find_setting` and the `change_user_setting`, `change_agent_setting` and `change_app_setting` tools) and the composer API
 (`POST /api/v3/config/propose`, `/apply`) only know settings that have a **descriptor**. Every
 configuration change therefore ships its descriptor change in the same patch. The catalog tests
 in `crates/modules/configuration/src/catalog.rs` fail when a live file or one of its values is

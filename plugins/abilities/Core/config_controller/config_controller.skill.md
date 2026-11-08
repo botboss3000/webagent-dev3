@@ -16,9 +16,9 @@ Use this when the user asks to change how the app or this agent behaves ("make t
    - `review.proposed` is null for "bigger"/"smaller" with no amount: ask for a value.
    - `review.unavailable` explains a setting that can't be changed on that layer yet.
 3. Save with the tool for the layer `find_setting` used:
-   - `change_my_setting`: the user's own settings.
+   - `change_user_setting`: the user's own settings.
    - `change_agent_setting`: an agent's settings; pass the same `agent` you gave `find_setting`, if any.
-   - `change_app_setting`: app-wide settings. Usually needs the user's approval and only works for administrators.
+   - `change_app_setting`: app-wide settings. Off unless this agent's operator enabled it, and only works for administrators. If you don't have it, say app-wide changes aren't available here.
 
    Each takes `setting`, the full `value` (for a width `{"width": 40, "unit": "%"}`), `params` when the setting has them (for example `{"tier": "basic"}`) and the `revision` exactly as `find_setting` returned it. A conflict means the setting changed meanwhile: call `find_setting` again and show the new current value. A refusal for permission means that layer isn't open to this user: say so rather than trying another layer.
 
