@@ -2,12 +2,14 @@
 id: ui_proposals
 title: UI proposals with screenshots
 when_to_use: Use when the user wants to compare UI options, asks for proposals or variants, or wants to approve a UI change from screenshots before it is released.
-default_mode: discoverable
+default_mode: visible
 ---
 
 # UI proposals with screenshots
 
 Show the user each option rendered in the real app, let them choose, and release only the chosen one.
+
+Do not open a broker task or edit source until the user has chosen. Options are front-end only: if an option needs data the backend does not provide yet, derive or mock it in the variant's JavaScript and say so in its description. Screenshots come only from Browser Control; the shell has no usable browser. Write each variant's files with one batch of file_write calls.
 
 1. Read the files to change from `/code/ui` once, in one batch.
 2. For each option, write only the changed files into this session's workspace under `previews/<variant>/ui/`, keeping their path below `ui/` (for example `previews/option-a/ui/chat/elements/activity-group/style.css`). Variant names use lowercase letters, digits, `-` and `_`. Unchanged files come from the live UI automatically. Workspace writes release nothing.
