@@ -7,6 +7,8 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 /// The live access policy (`live-files.json`), relative to the checkout.
 pub const LIVE_POLICY: &str = "crates/modules/access/access-policy.json";
+/// Cross-process lock for policy saves; app-only (the tool worker cannot reach it).
+const POLICY_LOCK: &str = "/runtime/control/access-policy.lock";
 const POLICY_LIMIT: u64 = 4 * 1024 * 1024;
 /// Fresh-install tiers are explicit; only Operator receives codebase_admin.
 fn fresh_install_tiers() -> [Tier; 2] {
@@ -52,15 +54,25 @@ impl<C: RecordCodec> Repository<'_, C> {
         let path = self.access_policy_path();
         path.is_relative() || path.exists()
     }
+    /// Serializes policy saves across the API and loop processes. Runtime coordination lives
+    /// in the shared `/runtime/control` mount, never in `state/`; fixtures use their state root.
+    pub fn policy_lock_path(&self) -> std::path::PathBuf {
+        if webagent_configuration::live::writable() {
+            return std::path::PathBuf::from(POLICY_LOCK);
+        }
+        self.root.join("access-policy.lock")
+    }
     pub fn policy_lock(&self) -> Result<std::fs::File> {
         use fs2::FileExt;
-        let directory = self.root.join("config");
-        std::fs::create_dir_all(&directory)?;
+        let path = self.policy_lock_path();
+        if let Some(directory) = path.parent() {
+            std::fs::create_dir_all(directory)?;
+        }
         let lock = std::fs::OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
-            .open(directory.join("access-policy.lock"))?;
+            .open(path)?;
         lock.lock_exclusive()?;
         Ok(lock)
     }

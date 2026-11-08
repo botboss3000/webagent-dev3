@@ -236,7 +236,7 @@ pub(crate) async fn put_config(
     }
     let path = path(&app, &id)?;
     let lock_path = match id.as_str() {
-        "access_policy" => app.store.root.join("config/access-policy.lock"),
+        "access_policy" => app.store.access_repository().policy_lock_path(),
         _ => path.with_extension("json.publication.lock"),
     };
     let saved =
