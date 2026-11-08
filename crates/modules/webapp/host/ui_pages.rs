@@ -206,7 +206,18 @@ mod preview {
         }
         let clear = format!("{COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax");
         if variant == "off" {
-            return ([(header::SET_COOKIE, clear)], Redirect::to("/app")).into_response();
+            // Drop any draft copies the browser kept so the live UI shows at once.
+            return (
+                [
+                    (header::SET_COOKIE, clear),
+                    (
+                        header::HeaderName::from_static("clear-site-data"),
+                        "\"cache\"".into(),
+                    ),
+                ],
+                Redirect::to("/app"),
+            )
+                .into_response();
         }
         if !session_ok(&sid) || !variant_ok(&variant) {
             return (StatusCode::BAD_REQUEST, "Invalid session or variant").into_response();
@@ -245,9 +256,11 @@ mod preview {
             .await
             .map(IntoResponse::into_response)
             .unwrap_or_else(|_| StatusCode::NOT_FOUND.into_response());
-        response
-            .headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        // Without validators a stored draft can never be revalidated as the (older) live file.
+        let headers = response.headers_mut();
+        headers.remove(header::ETAG);
+        headers.remove(header::LAST_MODIFIED);
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         response
     }
 
