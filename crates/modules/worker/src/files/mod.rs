@@ -514,14 +514,16 @@ fn operation(roots: &Roots, base: &Path, args: &Map<String, Value>, name: &str) 
             match mkdirat(
                 &directory,
                 *part,
-                Mode::from_raw_mode(if checkout { 0o755 } else { 0o770 }),
+                Mode::from_raw_mode(if checkout { 0o2775 } else { 0o770 }),
             ) {
                 Ok(()) => {
                     if checkout {
                         rustix::fs::chmodat(
                             &directory,
                             *part,
-                            Mode::from_raw_mode(0o755),
+                            // Group-writable and setgid: new checkout files stay in
+                            // `webagent-source` for the owner and promotion.
+                            Mode::from_raw_mode(0o2775),
                             AtFlags::empty(),
                         )?;
                     }
@@ -719,7 +721,7 @@ fn write(
     }
     let mode = previous
         .as_ref()
-        .map_or(if checkout { 0o644 } else { 0o660 }, permission_bits);
+        .map_or(if checkout { 0o664 } else { 0o660 }, permission_bits);
     let temporary = Temporary {
         directory,
         name: temporary_name("write"),

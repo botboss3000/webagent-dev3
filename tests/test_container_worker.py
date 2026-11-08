@@ -13,7 +13,7 @@ class ContainerWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def test_worker_identity_and_live_source_access(self):
         if os.getuid() != 1100:
             self.skipTest("run as application uid 1100 inside v3 container")
-        # The Rust tool worker runs the same executable as uid 1000; the app is uid 1100.
+        # The Rust tool worker runs the same executable as webagent-worker 1103; the app is 1100.
         app_pid = next(int(p.name) for p in Path("/proc").iterdir() if p.name.isdigit()
                        and (p / "comm").read_text().strip() == "webagent-v3"
                        and "\nUid:\t1100\t" in (p / "status").read_text())
@@ -43,9 +43,9 @@ class ContainerWorkerTests(unittest.IsolatedAsyncioTestCase):
         await writer.wait_closed()
         self.assertEqual(response["status"], "success", response)
         result = json.loads(response["output"])
-        self.assertEqual(result["uid"], 1000)
-        # launch.py retains the checkout group; Codebase Admin commands read state too.
-        self.assertEqual(result["groups"], [1001])
+        self.assertEqual(result["uid"], 1103)
+        # The launcher adds only webagent-source; Codebase Admin commands read state too.
+        self.assertEqual(result["groups"], [1110])
         self.assertTrue(result["source_access"])
         self.assertFalse(result["v2_source_access"])
         self.assertTrue(result["state_access"])
@@ -55,7 +55,7 @@ class ContainerWorkerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_non_application_peer_rejected(self):
         if os.getuid() == 1100:
-            self.skipTest("run separately as checkout-owner uid 1000")
+            self.skipTest("run separately as worker uid 1103")
         reader, writer = await asyncio.open_unix_connection(SOCKET)
         writer.write((json.dumps({"version":2,"id":"forbidden","name":"shell",
             "workspace":str(uuid.uuid4()),"arguments":{"command":"printf bypass"}}) + "\n").encode())

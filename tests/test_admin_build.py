@@ -984,10 +984,11 @@ class BuildTests(unittest.TestCase):
                 root, before, after, changed, lambda _: None, standalone=True))
         finally:
             os.umask(previous)
-        self.assertEqual(0o755, (root / "new/deep/tool.sh").stat().st_mode & 0o777)
-        self.assertEqual(0o644, (root / "new/deep/data.json").stat().st_mode & 0o777)
+        # Group-writable for webagent-source; folders keep the group through setgid.
+        self.assertEqual(0o775, (root / "new/deep/tool.sh").stat().st_mode & 0o777)
+        self.assertEqual(0o664, (root / "new/deep/data.json").stat().st_mode & 0o777)
         for folder in (root / "new", root / "new/deep"):
-            self.assertEqual(0o755, folder.stat().st_mode & 0o777)
+            self.assertEqual(0o2775, folder.stat().st_mode & 0o7777)
         self.assertTrue(host.release.checkout_matches(
             root, after, changed, lambda _: None, standalone=True))
         self.assertEqual(0, host.release.promote_checkout(

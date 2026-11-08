@@ -18,15 +18,20 @@ use std::time::Duration;
 
 const APP_UID: u32 = 1100;
 const APP_GID: u32 = 1100;
+/// The checkout owner; the promotion broker keeps this identity.
 const OWNER_UID: u32 = 1000;
+/// The tool workers' own identity (`webagent-worker`), distinct from any host login.
+const WORKER_UID: u32 = 1103;
 const APP_BINARY: &str = "/usr/local/bin/webagent-v3";
 const PROMOTE_SOCKET: &str = "/runtime/promote/promote.sock";
-/// The workers keep the checkout owner's identity and no capabilities, so files the
-/// application alone owns, such as the encryption key, stay unreadable to tools.
+/// The workers run as `webagent-worker` (1103) in the app group, with only the
+/// `webagent-source` group (1110) added so checkout_edit can write the checkout, and no
+/// capabilities: application-only files such as the encryption key stay unreadable to tools
+/// and no host login's files are reachable.
 const WORKER_IDENTITY: [&str; 8] = [
-    "--reuid=1000",
+    "--reuid=1103",
     "--regid=1100",
-    "--groups=1001",
+    "--groups=1110",
     "--inh-caps=-all",
     "--ambient-caps=-all",
     "--no-new-privs",
@@ -89,11 +94,11 @@ fn exited(child: &mut Child) -> bool {
 }
 
 /// Waits up to five seconds for `socket` to appear while `process` and the broker run.
-/// Checks `socket` with the worker owner's effective identity: the worker folders are
+/// Checks `socket` with the worker's effective identity: the worker folders are
 /// private to that owner, and the launcher keeps no capability to read past file modes.
 fn exists_as_owner(socket: &str) -> io::Result<bool> {
     // SAFETY: seteuid takes a plain integer; the launcher is root here and returns to it.
-    if unsafe { libc::seteuid(OWNER_UID) } != 0 {
+    if unsafe { libc::seteuid(WORKER_UID) } != 0 {
         return Err(io::Error::last_os_error());
     }
     let found = Path::new(socket).exists();
@@ -195,9 +200,9 @@ fn launch() -> io::Result<i32> {
         chown(&format!("/runtime/control/{name}"), APP_UID, APP_GID)?;
     }
     directory("/runtime/control", APP_UID, 0o750)?;
-    directory("/runtime/worker", OWNER_UID, 0o750)?;
+    directory("/runtime/worker", WORKER_UID, 0o750)?;
     // Only the worker identity reaches the Python worker, through the Rust front.
-    directory("/runtime/worker-legacy", OWNER_UID, 0o700)?;
+    directory("/runtime/worker-legacy", WORKER_UID, 0o700)?;
     directory("/runtime/promote", APP_UID, 0o700)?;
     directory("/runtime", APP_UID, 0o755)?;
 
@@ -243,7 +248,7 @@ fn launch() -> io::Result<i32> {
             ("PATH", "/usr/bin:/bin"),
             ("LANG", "C.UTF-8"),
             ("V3_TOOL_SOCKET", "/runtime/worker-legacy/tools.sock"),
-            ("V3_TOOL_CLIENT_UID", "1000"),
+            ("V3_TOOL_CLIENT_UID", "1103"),
             ("V3_WORKSPACE_ROOT", "/workspaces"),
             ("V3_CODE_TEMPLATE", "/opt/v3/assets/current/v3"),
         ],

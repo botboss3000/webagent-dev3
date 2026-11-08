@@ -105,7 +105,7 @@ def validate(value):
  for k in ("app_uid","app_gid","worker_uid","worker_gid"):
   if type(v.get(k)) is not int or not 1<=v[k]<=2147483647:raise ValueError("Invalid container identity")
  if v["app_uid"]==v["service_uid"]:raise ValueError("App and service identities must differ")
- if tuple(v[k] for k in ("app_uid","app_gid","worker_uid","worker_gid"))!=(1100,1100,1000,1000):raise ValueError("Container identities must match the pinned image")
+ if tuple(v[k] for k in ("app_uid","app_gid","worker_uid","worker_gid"))!=(1100,1100,1103,1100):raise ValueError("Container identities must match the pinned image")
  for k in ("api_container","loop_container","gate_container"):
   if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,80}",v.get(k,"")) or v[k] in {"webagent","webagent-dev-v2"}:raise ValueError("Invalid or excluded container target")
  if len({v["api_container"],v["loop_container"],v["gate_container"]})!=3:raise ValueError("Distinct container targets required")
@@ -122,7 +122,7 @@ def defaults(root=None):
  try:user=pwd.getpwuid(os.getuid()).pw_name if os.getuid()!=0 else "webagent-build"
  except KeyError:user="webagent-build"
  install=Path("/var/lib/webagent/development/build-service")
- return dict(scheduler=scheduler_defaults(),api_pids_limit=256,code_index_ledger_max_bytes=768*1024**2,instance="development",checkout_root=str(root),service_account=user,source_owner=user,state_root=str(root/"build-jobs"),workspace_root=str(root/"workspaces"),runtime_root=str(root/"runtime/build"),app_state_root=str(root/"data"),install_root=str(install),service_dir=str(install/"releases/bootstrap"),app_uid=1100,app_gid=1100,worker_uid=1000,worker_gid=1000,api_container="webagent-dev-v3",loop_container="webagent-dev-v3-loop",gate_container="webagent-dev-v3-gate",bind_address="127.0.0.1",port=8081,public_origin="http://127.0.0.1:8081",worker_control="/var/lib/webagent-v3-build-worker/control.sock")
+ return dict(scheduler=scheduler_defaults(),api_pids_limit=256,code_index_ledger_max_bytes=768*1024**2,instance="development",checkout_root=str(root),service_account=user,source_owner=user,state_root=str(root/"build-jobs"),workspace_root=str(root/"workspaces"),runtime_root=str(root/"runtime/build"),app_state_root=str(root/"data"),install_root=str(install),service_dir=str(install/"releases/bootstrap"),app_uid=1100,app_gid=1100,worker_uid=1103,worker_gid=1100,api_container="webagent-dev-v3",loop_container="webagent-dev-v3-loop",gate_container="webagent-dev-v3-gate",bind_address="127.0.0.1",port=8081,public_origin="http://127.0.0.1:8081",worker_control="/var/lib/webagent-v3-build-worker/control.sock")
 def layout(c):
  """Host folder for each app container mount point. The gate's sockets live beside runtime/.
 

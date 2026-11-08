@@ -144,7 +144,7 @@ def write_live(root, relative, body, expected):
             output.write(body)
             output.flush()
             os.fsync(output.fileno())
-        temporary.chmod(0o644)
+        temporary.chmod(0o664)
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -452,12 +452,15 @@ def release_mounts(previous, root, asset_root=None, layout=None):
     return host
 
 def checkout_mode(mode):
-    """Shared source stays readable to every local identity; only the owner execute bit is source identity."""
-    return 0o755 if mode & 0o100 else 0o644
+    """Shared source stays readable to every local identity and writable to the
+    webagent-source group (checkout owner, tool worker); only the owner execute bit
+    is source identity."""
+    return 0o775 if mode & 0o100 else 0o664
 
 
 def make_source_parents(root, path):
-    """Create missing parent folders as 0755 regardless of the broker's private umask."""
+    """Create missing parent folders as 2775 (group-writable, keeping the checkout's
+    webagent-source group) regardless of the broker's private umask."""
     missing = []
     for parent in path.parents:
         if parent == root or parent.exists():
@@ -465,7 +468,7 @@ def make_source_parents(root, path):
         missing.append(parent)
     for parent in reversed(missing):
         parent.mkdir()
-        parent.chmod(0o755)
+        parent.chmod(0o2775)
 
 
 def promote_checkout(root, before_blob, after_blob, changed, validate, standalone=False, base_blob=None):
@@ -616,6 +619,8 @@ def write_source_receipt(destination, job_id, candidate_digest):
     metadata=destination/".code-index"
     if metadata.is_symlink():raise ValueError("Source metadata directory symlink")
     metadata.mkdir(mode=0o755,exist_ok=True)
+    # Explicit modes: the broker's private umask must not hide the receipt from runtime identities.
+    metadata.chmod(0o755)
     path=metadata/"source-release.json"
     if path.exists():
         if path.is_symlink()or json.loads(path.read_bytes())!=value:raise ValueError("Immutable source receipt differs")
@@ -623,6 +628,7 @@ def write_source_receipt(destination, job_id, candidate_digest):
         temporary=metadata/(".source-release-"+uuid.uuid4().hex)
         fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o644)
         with os.fdopen(fd,"w")as stream:
+            os.fchmod(stream.fileno(),0o644)
             json.dump(value,stream,sort_keys=True,separators=(",",":"));stream.flush();os.fsync(stream.fileno())
         os.rename(temporary,path)
         for parent in (metadata,destination):

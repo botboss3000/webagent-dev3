@@ -1402,7 +1402,8 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             if not path.is_dir() and not path.is_file():raise PermissionError("Published asset is not regular source")
         for path in paths:
             if path.is_dir():path.chmod(0o755)
-            else:path.chmod((path.stat().st_mode&0o111)|0o444)
+            # Any execute bit means executable for every runtime identity, as Git's 100755 does.
+            else:path.chmod(0o555 if path.stat().st_mode&0o111 else 0o444)
 
     def stage_assets(self, blob, job_id, *, asset_root=None, base_release_id=None):
         scanner = Path(CONFIG["service_dir"])/"index-scanner.py"

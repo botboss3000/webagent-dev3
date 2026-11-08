@@ -115,6 +115,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-cert
     && groupadd -g 1100 v3 && useradd -u 1100 -g 1100 -M -s /usr/sbin/nologin v3app \
     && useradd -u 1101 -g 1100 -M -s /usr/sbin/nologin v3tools
 COPY --from=preview_tunnel /usr/local/bin/cloudflared /usr/local/bin/cloudflared
+# Named service identities: webagent (1100) runs the app, webagent-worker (1103) the tool
+# workers with webagent-source (1110) for checkout writes, webagent-tools (1101) commands.
+RUN groupmod -n webagent v3 && usermod -l webagent v3app && usermod -l webagent-tools v3tools \
+    && groupadd -g 1110 webagent-source \
+    && useradd -u 1103 -g 1100 -G webagent-source -M -s /usr/sbin/nologin webagent-worker
 # Refresh inherited security packages even when the prepared runtime base is reused.
 RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade libpcre2-8-0 \
     && rm -rf /var/lib/apt/lists/*
@@ -174,6 +179,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 1100 v3 && useradd -u 1100 -g 1100 -M -s /usr/sbin/nologin v3loop
 COPY --from=tested_builder /out/webagent-v3 /usr/local/bin/webagent-v3
+RUN groupmod -n webagent v3 && usermod -l webagent v3loop
 # These libraries are inherited from the pinned base rather than installed above.
 RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade libpcre2-8-0 perl-base \
     && rm -rf /var/lib/apt/lists/*
