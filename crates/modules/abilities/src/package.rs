@@ -429,9 +429,6 @@ impl Package {
             return Ok(None);
         }
         // Existing native package adapters retain their own contract.
-        if id == "codebase_admin" && manifest.get("dispatch").is_none() {
-            return Ok(None);
-        }
         if manifest["dispatch"] != "isolated"
             || manifest["protocol"].as_u64() != Some(1)
             || manifest["interface"].as_u64() != Some(1)

@@ -836,33 +836,6 @@ impl<H: Host> Catalog<H> {
     }
 
     fn present(ability: &Ability) -> bool {
-        if ability.id == "codebase_admin" && !ability.frozen {
-            if let Some(path) = Self::published_skill(ability, "ability", "codebase_admin") {
-                let Some(folder) = path.parent() else {
-                    return false;
-                };
-                let metadata = read_bytes(&folder.join("plugin.json"), 4096)
-                    .ok()
-                    .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
-                let declaration =
-                    read_bytes(&folder.join("codebase_admin.json"), MAX_MANIFEST_BYTES)
-                        .ok()
-                        .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
-                return metadata.is_some_and(|v| {
-                    v["id"] == "codebase_admin"
-                        && v["protocol"] == 1
-                        && v["interface"] == 1
-                        && v["entrypoint"] == "runner.py"
-                        && v["runtime"] == "python3"
-                        && v["version"] == 1
-                        && v["tools"] == json!(ability.tools)
-                }) && declaration.is_some_and(|v| {
-                    v["tools"] == json!(ability.tools)
-                        && v["kind"] == "ability"
-                        && v["readiness"] == "ready"
-                }) && read_bytes(&folder.join("runner.py"), 2 * 1024 * 1024).is_ok();
-            }
-        }
         // MCP tools work only while its separately installed package is present.
         if ability.id == "mcp" && !H::mcp_available() {
             return false;

@@ -911,16 +911,6 @@
           "path": "src/api/live_configuration.rs",
           "start_line": 81,
           "end_line": 134
-        },
-        {
-          "path": "ability_plugin_worker.py",
-          "start_line": 1,
-          "end_line": 80
-        },
-        {
-          "path": "ability_plugin_worker.py",
-          "start_line": 81,
-          "end_line": 122
         }
       ],
       "configuration": {

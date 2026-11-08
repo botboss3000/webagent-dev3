@@ -215,9 +215,6 @@ async def execute_locked(request, lock):
     if request["name"]=="ability_plugins_protocol":
         fcntl.flock(lock,fcntl.LOCK_UN)
         return {"status":"success","output":{"protocol":1,"catalog":1,"dispatch":1}}
-    if request["name"]=="codebase_admin_protocol":
-        fcntl.flock(lock,fcntl.LOCK_UN)
-        return {"status":"success","output":{"protocol":1,"interface":1}}
     if request["name"] == "administrator_quiesce" and not (ROOT / str(uuid.UUID(request["workspace"]))).exists():
         return {"status": "success"}
     base = workspace_path(request["workspace"])

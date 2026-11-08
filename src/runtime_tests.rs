@@ -485,6 +485,22 @@ async fn running(app: &App, id: &str, generation: &str) {
         .claim_run(&mut run, "fixture-loop", generation)
         .await
         .unwrap());
+    // Renew the 30-second claim like the production loop, so build-server load cannot
+    // expire it mid-test. Renewal stops once the run ends or a later claim replaces it.
+    let epoch = app.run(id).await.unwrap()["lease_epoch"].as_i64().unwrap();
+    let (store, id, generation) = (app.store.clone(), id.to_owned(), generation.to_owned());
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            if !store
+                .renew_run_lease(&id, &generation, "fixture-loop", epoch)
+                .await
+                .unwrap_or(false)
+            {
+                break;
+            }
+        }
+    });
 }
 
 // Manual multi-turn journeys need the same fenced lease renewal as the production loop.

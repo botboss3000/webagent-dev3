@@ -168,22 +168,14 @@ status; clearance is not a build replay or outcome rewrite. Reminder review alon
 does not authorize deletion. No live database or session workspace is eligible.
 
 
-## Independent package publication
+## Where these tools run
 
-Protocol 1 runs runner.py in a bounded isolated Python process per invocation. The protected broker publishes complete immutable packages; API and loop read guidance at model-call boundaries and the worker pins one package directory per invocation. Compatible runner, existing guidance and manifest metadata updates use plugin_deploy without Cargo or replacing API, loop, worker or gate containers. The package build manifest separates runner.py from runtime guidance assets.
-
-Installed tool names and schemas remain interface 1. Tool additions/removals or incompatible protocol changes require a coordinated core release. Invalid/incomplete candidates are rejected before activation, retaining the current revision. Current invocations finish on their pinned package; cancellation terminates the child tree. Stateful prompt/session operations stay in core services; tasks, checks, promotion and deployment stay in the protected broker. Identity, policy, approval, leases and durable recovery remain authoritative in those services.
-
-
-### Verify which package executed
-
-Live file results report implementation_version and implementation_sha256 for
-the executable that handled the call. plugin_revision identifies the immutable
-published snapshot. Guidance or compatible catalog metadata can change while
-the executable hash stays the same. Compare the executable hash before diagnosing
-a stale implementation; a new snapshot ID alone does not prove executable bytes
-changed. New invocations pin the selected snapshot, and publication does not
-replace the API, agent loop, worker or gate processes.
+Every Codebase Admin tool runs natively: file tools and shell/python commands in the
+Rust tool worker (`crates/modules/worker`), the rest in the app. There is no Python
+package any more, so guidance and catalog metadata changes publish as ability
+assets without a Cargo build, and tool additions, removals or schema changes need a
+core release. Identity, policy, approval, leases and durable recovery stay in their
+services; tasks, checks, promotion and deployment stay in the protected broker.
 
 ## Logical completion and controlled builds
 

@@ -5,7 +5,7 @@
   "color": "#bb9af7",
   "description": "Inspect published or isolated source, run checks, and publish authorized broker work. Runtime configuration retains its owning APIs.",
   "skill_summary": "Chat identity is automatic. Use broker_id omitted to continue, new to separate an outcome, or a returned Broker ID to switch. Legacy task_id is a compatibility alias. Source edits are isolated; use returned Broker ID for private reads. Finish explicitly to deploy.",
-  "migration_note": "Independently published protocol-1 executable package; core authorization and protected broker services remain authoritative.",
+  "migration_note": "Native tools in the Rust tool worker and the app; core authorization and protected broker services remain authoritative.",
   "order": 1,
   "placeholder": false,
   "tools": [

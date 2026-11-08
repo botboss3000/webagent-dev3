@@ -18,7 +18,7 @@ MAX_PATCH = 1024 * 1024
 ALLOWED_DIRS = {"src", "plugins", "tests", "ui", "docs", "config"}
 ALLOWED_FILES = {
     "Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile", ".gitignore",
-    "README.md", "deploy.sh", "launch.py", "worker.py", "sandbox.py", "promote.py",
+    "README.md", "deploy.sh", "worker.py", "sandbox.py", "promote.py",
     "ui-baseline.json",
 }
 

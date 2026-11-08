@@ -132,7 +132,7 @@ COPY --from=tested_builder /out/webagent-diagnostics /usr/local/bin/webagent-dia
 COPY --from=tested_builder /out/webagent-optimization /usr/local/bin/webagent-optimization
 COPY --from=tested_builder /out/optimization-cargo /opt/optimization-cargo
 COPY --from=tested_builder /usr/local/rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu /opt/rust
-COPY v3/worker.py v3/ability_plugin_worker.py v3/sandbox.py v3/launch.py v3/promote.py /opt/v3/
+COPY v3/worker.py v3/sandbox.py v3/promote.py /opt/v3/
 COPY v3/build-service /opt/v3/build-service
 COPY v3/plugins/abilities /opt/v3/plugins/abilities
 COPY v3/plugins/engine /opt/v3/plugins/engine
@@ -167,7 +167,7 @@ WORKDIR /state
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=3 CMD curl --fail http://127.0.0.1:8080/health/ready || exit 1
 ENTRYPOINT ["/usr/bin/tini","--"]
-CMD ["/usr/bin/python3","-I","/opt/v3/launch.py"]
+CMD ["/usr/local/bin/webagent-v3","--launch"]
 
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS loop
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tini \

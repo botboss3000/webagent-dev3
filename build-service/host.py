@@ -78,7 +78,7 @@ BRIDGE_WORKSPACE = "94c353d5-70bd-44b2-9af0-757c4a979fc9"
 CONTEXT = (
     "v3/Dockerfile", "v3/Cargo.toml", "v3/Cargo.lock", "v3/build.rs", "v3/.gitignore",
     "v3/src", "v3/crates", "v3/services/system-monitoring", "v3/ui", "v3/plugins/engine", "v3/plugins/abilities", "v3/plugins/gates", "v3/worker.py",
-    "v3/sandbox.py", "v3/ability_plugin_worker.py", "v3/launch.py", "v3/promote.py", "v3/ui-baseline.json", "v3/live-files.json", "v3/rustfmt.toml", "v3/tests",
+    "v3/sandbox.py", "v3/promote.py", "v3/ui-baseline.json", "v3/live-files.json", "v3/rustfmt.toml", "v3/tests",
     "v3/README.md", "v3/docs", "v3/deploy.sh", "v3/config", "v3/build-service",
     "ui/shared/css/app1.css", "ui/shared/css/app2.css", "ui/shared/css/app3.css",
     "ui/shared/css/design-system.css", "ui/shared/css/index.css",
@@ -108,23 +108,11 @@ def checked_git_modes(patch):
 INDEX_METADATA_ROOT="v3/plugins/abilities/Administrator/code_index/"
 INDEX_METADATA_FILES={INDEX_METADATA_ROOT+"code-index-features.json",INDEX_METADATA_ROOT+"code_index.skill.md",INDEX_METADATA_ROOT+"skills/comment_maintenance.skill.md"}
 INDEX_METADATA_FILES.update(INDEX_METADATA_ROOT+"tools/"+name+".skill.md"for name in ("code_index_scan","code_index_lookup","code_index_coverage","code_index_trace","code_index_progress","code_index_maintenance"))
-CODEBASE_ROOT="v3/plugins/abilities/Administrator/codebase_admin/"
-CODEBASE_TOOLS=["file_list","file_read","file_search","file_edit","file_write","build_work",
-                "state_inspect","prompt_slot_read","prompt_slot_write","shell","python","checkout_edit"]
-# The package published before checkout_edit stays valid until its replacement deploys.
-CODEBASE_TOOL_LISTS=(CODEBASE_TOOLS,CODEBASE_TOOLS[:-1])
-def codebase_source_path(path):
-    if not path.startswith(CODEBASE_ROOT):return False
-    relative=path[len(CODEBASE_ROOT):]
-    return relative in {"runner.py","test_runner.py","plugin.json","codebase_admin.json","codebase_admin.skill.md"} or (
-        relative in {"tools/"+name+".skill.md" for name in CODEBASE_TOOLS}
-        or relative in {"skills/rust_quality.skill.md","skills/live_plugin_publication.skill.md","skills/ui_theming.skill.md","skills/ui_toggle_list.skill.md",
-                     "skills/security_practices.skill.md"})
 ABILITY_ROOT="v3/plugins/abilities/"
 def ability_asset_path(path):
     if not path.startswith(ABILITY_ROOT):return False
     # Rust adapters and legacy Python helpers still have core/image consumers.
-    return path.endswith((".json",".md")) or codebase_source_path(path)
+    return path.endswith((".json",".md"))
 def engine_component_source_path(path):
     """Recognize every registered implementation/contract family at each publication fence."""
     return path.startswith(("v3/plugins/engine/",
@@ -171,42 +159,6 @@ def native_package_migration(path,baseline):
 HOT_OPERATIONS={"ui_deploy","index_deploy","plugin_deploy"}
 # Limit no-compile publication to UI assets and explicit Code Index metadata paths.
 def hot_source_path(path):return path.startswith(UI_SOURCE_PREFIX)or path in INDEX_METADATA_FILES or ability_asset_path(path) or (path.startswith("v3/config/") and path.endswith(".json")) or path=="v3/src/engine/tools/administrator-schemas.json" or path=="v3/tests/test_codebase_plugin.py"
-
-EXPECTED_CODEBASE_MANIFEST={'version': 1, 'id': 'codebase_admin', 'protocol': 1, 'runtime': 'python3', 'entrypoint': 'runner.py', 'interface': 1, 'tools': CODEBASE_TOOLS, 'build': {'inputs': ['runner.py'], 'dependencies': [], 'toolchain': 'image-python3', 'flags': ['-I', '-B'], 'assets': ['codebase_admin.json', 'codebase_admin.skill.md', 'tools', 'skills']}}
-EXPECTED_CODEBASE_DECLARATION={'display_name': 'Codebase Admin', 'kind': 'ability', 'icon': 'folder-cog', 'color': '#bb9af7', 'description': 'Inspect and edit live development files or isolated source tasks, run checks, and release reviewed builds.', 'skill_summary': 'Use file tools without task_id for explicit live edits and runtime configuration; use one task_id for source changes intended for a build. Task creation is automatic. Finish explicitly to deploy.', 'migration_note': 'Unified file and protected broker workflow; runtime authorization remains authoritative.', 'order': 1, 'placeholder': False, 'tools': CODEBASE_TOOLS, 'readiness': 'ready', 'config': {'bias': {'key': 'destructive_caution', 'label': 'Caution on destructive actions', 'default': 'balanced', 'levels': {'cautious': 'Before any file delete, overwrite, bulk edit, or non-read-only shell command, STOP and ask the user to confirm in plain language what will change — even if they gave a broad instruction. Prefer the smallest reversible step and never act on your own initiative without an explicit go-ahead. (Restarting the server after a change is exempt — use restart_server.)', 'balanced': "Carry out the user's explicit file/shell commands directly, but ask first whenever YOU decide on your own initiative to delete, overwrite, or run something irreversible, and when an action is ambiguous or far-reaching.", 'trusted': "Act decisively on the user's intent without pausing to re-confirm routine writes, edits, or shell commands; only stop for clearly irreversible or repo-wide destructive actions (mass delete, force-push)."}}}}
-def validate_codebase_package(folder):
-    folder=Path(folder)
-    for name in ("plugin.json","runner.py","test_runner.py","codebase_admin.json","codebase_admin.skill.md"):
-        path=folder/name
-        bound={"plugin.json":4096,"runner.py":2*1024*1024,"test_runner.py":2*1024*1024,"codebase_admin.json":64*1024}.get(name)
-        if path.is_symlink() or not path.is_file() or (bound is not None and path.stat().st_size>bound):
-            raise ValueError("Incomplete or oversized Codebase Admin package")
-    manifest=json.loads((folder/"plugin.json").read_bytes())
-    tools=manifest.get("tools")
-    if tools not in CODEBASE_TOOL_LISTS or canonical(manifest)!=canonical({**EXPECTED_CODEBASE_MANIFEST,"tools":tools}):raise ValueError("Incompatible Codebase Admin plugin contract")
-    declaration=json.loads((folder/"codebase_admin.json").read_bytes())
-    if declaration.get("tools")!=tools or declaration.get("kind")!="ability" or declaration.get("readiness")!="ready":raise ValueError("Incompatible Codebase Admin catalog")
-    for field,bound in (("display_name",100),("description",1000),("skill_summary",2000),("migration_note",2000)):
-        value=declaration.get(field)
-        if value is None and field in ("skill_summary","migration_note"):continue
-        if not isinstance(value,str) or len(value.encode("utf-8"))>bound or (field in ("display_name","description") and not value):
-            raise ValueError("Invalid Codebase Admin catalog metadata")
-    for field in ("icon","color"):
-        if declaration.get(field) is not None and not isinstance(declaration[field],str):
-            raise ValueError("Invalid Codebase Admin catalog metadata")
-    if type(declaration.get("order",0)) is not int or not -(2**31)<=declaration.get("order",0)<2**31:
-        raise ValueError("Invalid Codebase Admin order")
-    if declaration.get("config") is not None and not isinstance(declaration["config"],dict):
-        raise ValueError("Invalid Codebase Admin configuration")
-    mutable={"display_name","description","skill_summary","migration_note","icon","color","config","order"}
-    if canonical({k:v for k,v in declaration.items() if k not in mutable})!=canonical({k:v for k,v in {**EXPECTED_CODEBASE_DECLARATION,"tools":tools}.items() if k not in mutable}):
-        raise ValueError("Codebase Admin interface/settings change needs coordinated installation")
-    compile((folder/"runner.py").read_bytes(),str(folder/"runner.py"),"exec")
-    for path in folder.rglob("*"):
-        if path.is_symlink():raise ValueError("Plugin symlink forbidden")
-        if path.is_file() and path.suffix==".md":
-            if not path.read_text(encoding="utf-8").strip():raise ValueError("Empty Codebase Admin guidance")
-    return hashlib.sha256((folder/"runner.py").read_bytes()).hexdigest()
 
 RUST_UI_FIXTURES = {"v3/ui/chat/chat_ui.json"}
 ASSET_ROOT = STATE / "ui-assets"
@@ -819,8 +771,8 @@ def inspect_source_patch_corrected(root, patch):
     counted_added = counted_removed = 0
     paths = []
     allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
-                     ".gitignore", "README.md", "deploy.sh", "launch.py",
-                     "worker.py", "ability_plugin_worker.py", "sandbox.py", "promote.py", "ui-baseline.json", "live-files.json", "rustfmt.toml"}
+                     ".gitignore", "README.md", "deploy.sh",
+                     "worker.py", "sandbox.py", "promote.py", "ui-baseline.json", "live-files.json", "rustfmt.toml"}
     allowed_dirs = {"crates", "src", "plugins", "tests", "ui", "docs", "config", "build-service"}
     for record in records:
         fields = record.split(b"\t", 2)
@@ -1079,7 +1031,7 @@ for directory,dirs,files in os.walk(root,followlinks=False,onerror=failed):
 # The mounted frozen source can be readable while the baked worker is not.
 # Check exact image bytes as the worker identity before any runtime is stopped.
 import hashlib
-runtime_files=("worker.py","ability_plugin_worker.py","sandbox.py","launch.py","promote.py")
+runtime_files=("worker.py","sandbox.py","promote.py")
 for name in runtime_files:
  path=pathlib.Path("/opt/v3")/name
  if path.is_symlink()or not path.is_file():raise RuntimeError("Baked runtime Python source identity")
@@ -1130,7 +1082,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 finally:subprocess.run(["docker","rm","-f",name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15)
                 value=json.loads(output)
                 if identity in {"application","worker_catalog"}and not isinstance(value.get("catalog_version"),str):raise ValueError("Candidate runtime catalog validator unavailable")
-                if identity=="worker"and(not value.get("files")or value.get("runtime_files")!=5):raise ValueError("Worker runtime source unreadable or incomplete")
+                if identity=="worker"and(not value.get("files")or value.get("runtime_files")!=3):raise ValueError("Worker runtime source unreadable or incomplete")
                 results.append({"role":role,"identity":identity,"uid":uid,"gid":gid,"status":"passed"})
         release.verify_publication(root,selected,manifest["candidate_sha256"])
         if publication_id and self.current_asset_id()!=publication_id:raise ValueError("Published source changed during runtime preflight")
@@ -1940,18 +1892,6 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         compiler_root=Path(active["release_root"])if active and active.get("job_id")==job_id and active.get("release_root")else None
         artifacts=self.build_ability_artifacts(job_id,source_root=compiler_root)
         if active is not None:active["plugin_artifacts"]=artifacts
-        if any(codebase_source_path(name) for name in changed):
-            validate_codebase_package(root / CODEBASE_ROOT)
-            image=self.inspect(TARGETS[0])["Image"]
-            # Validate in the retained consumer runtime, not host Python.
-            # No application state, credentials, network or sockets enter this process.
-            self.command(["docker","run","--rm","--network","none","--read-only",
-                "--cap-drop","ALL","--security-opt","no-new-privileges",
-                "--user",str(CONFIG["worker_uid"])+":"+str(CONFIG["worker_gid"]),
-                "--pids-limit","64","--memory","256m","--cpus","1",
-                "--tmpfs","/tmp:rw,size=64m,mode=1777",
-                "--mount","type=bind,src="+str(root / CODEBASE_ROOT)+",dst=/package,readonly",
-                "-w","/tmp","--entrypoint","python3",image,"-I","-B","/package/test_runner.py"],timeout=30)
         manifest=root/release.LIVE_MANIFEST
         live=release.live_patterns({release.LIVE_MANIFEST:(0o644,manifest.read_bytes())})if manifest.is_file()else()
         # Live files take the app's own configuration validators, as a full release does.
@@ -6032,8 +5972,8 @@ class Broker:
                 parts = name_path.split("/") if name_path else []
                 allowed_dirs = {"crates", "src", "plugins", "tests", "ui", "docs", "config", "build-service"}
                 allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
-                                 ".gitignore", "README.md", "deploy.sh", "launch.py",
-                                 "worker.py", "ability_plugin_worker.py", "sandbox.py", "promote.py", "ui-baseline.json", "live-files.json", "rustfmt.toml"}
+                                 ".gitignore", "README.md", "deploy.sh",
+                                 "worker.py", "sandbox.py", "promote.py", "ui-baseline.json", "live-files.json", "rustfmt.toml"}
                 if (name_path and (not re.fullmatch(r"[A-Za-z0-9_./-]+", name_path)
                         or any(part in ("", ".", "..") for part in parts)
                         or (parts[0] not in allowed_dirs and name_path not in {"services","services/system-monitoring"}

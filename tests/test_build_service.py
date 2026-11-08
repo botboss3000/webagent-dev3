@@ -6,20 +6,6 @@ import test_admin_build as fixtures
 def module(name,path):
  spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 config=module("portable_config",Path(__file__).resolve().parents[1]/"build-service/config.py")
-class CodebaseToolListTests(unittest.TestCase):
-    def test_codebase_package_accepts_previous_and_checkout_edit_tool_lists(self):
-        import shutil
-        package=Path(__file__).resolve().parents[1]/"plugins/abilities/Administrator/codebase_admin"
-        with tempfile.TemporaryDirectory()as temporary:
-            folder=Path(temporary)/"package";shutil.copytree(package,folder)
-            for tools in fixtures.host.CODEBASE_TOOL_LISTS+(fixtures.host.CODEBASE_TOOLS[:-2],):
-                for name in ("plugin.json","codebase_admin.json"):
-                    path=folder/name;value=json.loads(path.read_text());value["tools"]=list(tools);path.write_text(json.dumps(value))
-                (folder/"tools/checkout_edit.skill.md").write_text("# checkout_edit\n")
-                if tools in fixtures.host.CODEBASE_TOOL_LISTS:fixtures.host.validate_codebase_package(folder)
-                else:
-                    with self.assertRaises(ValueError):fixtures.host.validate_codebase_package(folder)
-
 class CandidateModeTests(unittest.TestCase):
     def test_mode_only_rewrite_is_not_a_change_but_executable_bit_is(self):
         release=fixtures.host.release;validate=fixtures.host.context_digest
@@ -466,44 +452,6 @@ class CodebasePublicationMetadataTests(unittest.TestCase):
    for invalid in ({"status":"success","output":output},{"version":1,"id":request_id,"result":{"status":"success","output":output}},{"version":2,"id":"wrong-id","result":{"status":"success","output":output}},{"version":2,"id":request_id,"result":{"status":"success","output":{}}}):
     with patch.object(runner,"command",return_value=json.dumps(invalid)):
      self.assertFalse(probe())
- def fixture(self,temporary):
-  import shutil
-  folder=Path(temporary)/"package"
-  shutil.copytree(Path(__file__).resolve().parents[1]/"plugins/abilities/Administrator/codebase_admin",folder)
-  return folder
- def test_catalog_types_utf8_bounds_and_contract_are_validated_before_activation(self):
-  with tempfile.TemporaryDirectory() as temporary:
-   folder=self.fixture(temporary);path=folder/"codebase_admin.json";original=json.loads(path.read_bytes())
-   for field,value in (("display_name",[]),("description",""),("description","é"*501),("skill_summary",True),("icon",[]),("order",True),("placeholder",0)):
-    with self.subTest(field=field):
-     path.write_text(json.dumps({**original,field:value}))
-     with self.assertRaises(ValueError):fixtures.host.validate_codebase_package(folder)
-   path.write_text(json.dumps(original));fixtures.host.validate_codebase_package(folder)
-   path=folder/"plugin.json";value=json.loads(path.read_bytes());value["protocol"]=True;path.write_text(json.dumps(value))
-   with self.assertRaises(ValueError):fixtures.host.validate_codebase_package(folder)
- def test_empty_guidance_and_new_catalog_ids_cannot_enter_the_hot_lane(self):
-  with tempfile.TemporaryDirectory() as temporary:
-   folder=self.fixture(temporary);(folder/"codebase_admin.skill.md").write_text("  ")
-   with self.assertRaises(ValueError):fixtures.host.validate_codebase_package(folder)
-  self.assertFalse(fixtures.host.codebase_source_path(fixtures.host.CODEBASE_ROOT+"skills/new_catalog_id.skill.md"))
-  self.assertFalse(fixtures.host.codebase_source_path(fixtures.host.CODEBASE_ROOT+"tools/not_registered.skill.md"))
- def test_package_tests_use_retained_image_and_isolated_worker_identity(self):
-  from unittest.mock import Mock
-  with tempfile.TemporaryDirectory() as temporary:
-   root=Path(temporary);job=str(uuid.uuid4());folder=root/"releases"/job/fixtures.host.CODEBASE_ROOT
-   folder.parent.mkdir(parents=True);import shutil;shutil.copytree(Path(__file__).resolve().parents[1]/"plugins/abilities/Administrator/codebase_admin",folder)
-   runner=fixtures.host.Runner();runner.inspect=Mock(return_value={"Image":"sha256:retained-runtime"})
-   runner.command=Mock(side_effect=["OK",json.dumps({"catalog_version":"f"*64}),"syntax valid"])
-   with patch.object(fixtures.host,"ASSET_ROOT",root):
-    runner.validate_ui(job,[fixtures.host.CODEBASE_ROOT+"runner.py"])
-   args=runner.command.call_args_list[0].args[0]
-   self.assertEqual(args[:3],["docker","run","--rm"])
-   self.assertEqual(args[args.index("--network")+1],"none")
-   self.assertEqual(args[args.index("--user")+1],str(fixtures.host.CONFIG["worker_uid"])+":"+str(fixtures.host.CONFIG["worker_gid"]))
-   self.assertIn("sha256:retained-runtime",args)
-   self.assertEqual(args[-3:],["-I","-B","/package/test_runner.py"])
-
-
  def test_foundation_catalog_validation_uses_tested_candidate_engine(self):
   from unittest.mock import Mock
   from types import SimpleNamespace
@@ -542,7 +490,7 @@ class CodebaseRegisteredGuidanceTests(unittest.TestCase):
   paths=list(folder.glob("*.skill.md"))
   self.assertGreaterEqual(len(paths),4)
   for path in paths:
-   self.assertTrue(fixtures.host.ability_asset_path(fixtures.host.CODEBASE_ROOT+"skills/"+path.name),path.name)
+   self.assertTrue(fixtures.host.ability_asset_path("v3/plugins/abilities/Administrator/codebase_admin/skills/"+path.name),path.name)
 
 
 class PluginCompilationConcurrencyTests(unittest.TestCase):
@@ -1318,7 +1266,7 @@ class RuntimeReadabilityTests(unittest.TestCase):
         self.calls=[]
         def command(argv,timeout):
             self.calls.append(argv)
-            return json.dumps({"files":10,"runtime_files":5}if "python3"in argv else{"catalog_version":"fixture"})
+            return json.dumps({"files":10,"runtime_files":3}if "python3"in argv else{"catalog_version":"fixture"})
         self.runner=types.SimpleNamespace(command=command,inspect=lambda name:self.previous["api"if name==fixtures.host.TARGETS[0]else"loop"],current_asset_id=lambda:self.identity)
     def run_preflight(self,publication_id=None):
         with patch.object(fixtures.host,"CONFIG",self.config),patch.object(fixtures.host,"ASSET_ROOT",self.assets),                patch.object(fixtures.host.release,"verify_publication",return_value={"candidate_sha256":"a"*64}),                patch.object(fixtures.host.subprocess,"run"):
@@ -1334,18 +1282,18 @@ class RuntimeReadabilityTests(unittest.TestCase):
                 if arg=="--mount":self.assertTrue(argv[i+1].endswith(",readonly"))
         self.assertEqual(self.calls[0][self.calls[0].index("--user")+1],str(self.config["app_uid"])+":"+str(self.config["app_gid"]))
         self.assertEqual(self.calls[1][self.calls[1].index("--user")+1],str(self.config["worker_uid"])+":"+str(self.config["worker_gid"]))
-    def test_worker_probe_checks_baked_bytes_and_compiles_all_five_scripts(self):
+    def test_worker_probe_checks_baked_bytes_and_compiles_all_three_scripts(self):
         import subprocess
         self.run_preflight();argv=next(c for c in self.calls if "python3"in c);program=argv[argv.index("-c")+1]
         self.assertIn("/opt/v3",program);self.assertIn("Baked runtime Python source differs",program)
         self.assertIn("compile(body",program);self.assertIn("runtime_files",program)
         self.assertEqual(argv[argv.index("--user")+1],str(self.config["worker_uid"])+":"+str(self.config["worker_gid"]))
         baked=self.root/"baked";baked.mkdir()
-        for name in ("worker.py","ability_plugin_worker.py","sandbox.py","launch.py","promote.py"):
+        for name in ("worker.py","sandbox.py","promote.py"):
             (baked/name).write_text("pass\n");(self.publication/"v3"/name).write_text("pass\n")
         program=program.replace('pathlib.Path("/opt/v3")','pathlib.Path('+repr(str(baked))+')')
         result=subprocess.run(["python3","-I","-B","-c",program,str(self.publication)],capture_output=True,text=True)
-        self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(json.loads(result.stdout)["runtime_files"],5)
+        self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(json.loads(result.stdout)["runtime_files"],3)
         (baked/"worker.py").write_text("changed=True\n")
         result=subprocess.run(["python3","-I","-B","-c",program,str(self.publication)],capture_output=True,text=True)
         self.assertNotEqual(result.returncode,0);self.assertIn("differs from frozen",result.stderr)
@@ -1377,7 +1325,7 @@ class RuntimeReadabilityTests(unittest.TestCase):
         self.run_preflight();argv=next(c for c in self.calls if "python3"in c);program=argv[argv.index("-c")+1]
         source=self.root/"worker-fixture";(source/"v3/config").mkdir(parents=True);(source/"v3/config/example.json").write_text("{}")
         baked=self.root/"configuration-runtime";baked.mkdir()
-        for name in ("worker.py","ability_plugin_worker.py","sandbox.py","launch.py","promote.py"):
+        for name in ("worker.py","sandbox.py","promote.py"):
             (baked/name).write_text("pass\n");(source/"v3"/name).write_text("pass\n")
         program=program.replace('pathlib.Path("/opt/v3")','pathlib.Path('+repr(str(baked))+')')
         passed=subprocess.run([sys.executable,"-c",program,str(source)],capture_output=True,timeout=5)

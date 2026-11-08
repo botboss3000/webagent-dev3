@@ -157,7 +157,7 @@ class RuntimeRecipeTests(unittest.TestCase):
         self.assertIn("FROM webagent_runtime_api AS api", output)
         self.assertIn("FROM webagent_runtime_loop AS loop", output)
         self.assertIn("COPY --from=tested_builder /out/webagent-v3", output)
-        self.assertIn('CMD ["/usr/bin/python3","-I","/opt/v3/launch.py"]', output)
+        self.assertIn('CMD ["/usr/local/bin/webagent-v3","--launch"]', output)
 
     def test_unknown_stage_and_repository_boundaries_require_review(self):
         for text in (

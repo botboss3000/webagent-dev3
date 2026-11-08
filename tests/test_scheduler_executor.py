@@ -353,13 +353,13 @@ class CacheTests(unittest.TestCase):
         dockerfile=(Path(__file__).parents[1]/"Dockerfile").read_text()
         files=fixtures.host.Runner.execution_entries(self.blob)
         files["v3/Dockerfile"]=(0o644,dockerfile.encode())
-        for name in ("worker.py","ability_plugin_worker.py","sandbox.py","launch.py","promote.py"):
+        for name in ("worker.py","sandbox.py","promote.py"):
             files["v3/"+name]=(0o700,b"pass\n")
         blob=fixtures.host.release.archive(files,fixtures.host.context_digest);before=hashlib.sha256(blob).hexdigest()
         output=self.worker.package(blob,self.artifacts,fixtures.host.Runner.execution_entries)
         with tarfile.open(fileobj=io.BytesIO(output))as archive:
             text=archive.extractfile("v3/Dockerfile").read().decode()
-            self.assertIn("COPY --chmod=0755 v3/worker.py v3/ability_plugin_worker.py v3/sandbox.py v3/launch.py v3/promote.py /opt/v3/",text)
+            self.assertIn("COPY --chmod=0755 v3/worker.py v3/sandbox.py v3/promote.py /opt/v3/",text)
             self.assertEqual(archive.getmember("v3/worker.py").mode,0o700)
             self.assertEqual(archive.extractfile("v3/worker.py").read(),b"pass\n")
         self.assertEqual(hashlib.sha256(blob).hexdigest(),before)

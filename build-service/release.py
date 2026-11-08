@@ -19,8 +19,10 @@ MAX_INSPECTION_FILE = 256 * 1024 * 1024
 # Gate settings moved to crates/modules/engine/gates (2026-10-29). Stored task baselines
 # and the release deployed before then still carry these copies: they stay readable,
 # are never snapshotted again and are dropped from every new candidate.
+# Removed inputs that open tasks' stored baselines may still hold; startup re-reads them.
 RETIRED_CONTEXT = ("v3/data/config/gates/message_visibility_v1.json",
-                   "v3/data/config/gates/closing_status_v1.json")
+                   "v3/data/config/gates/closing_status_v1.json",
+                   "v3/launch.py", "v3/ability_plugin_worker.py")
 
 
 def inspection_path(name):
