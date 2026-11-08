@@ -14,7 +14,7 @@ const STORES: [&str; 2] = ["agent_metadata", "user_profile"];
 const KINDS: [&str; 8] = [
     "boolean", "integer", "number", "enum", "string", "length", "object", "agent_id",
 ];
-const FIELDS: [&str; 18] = [
+const FIELDS: [&str; 19] = [
     "id",
     "description",
     "type",
@@ -33,6 +33,7 @@ const FIELDS: [&str; 18] = [
     "value_shape",
     "bounds",
     "notes",
+    "nullable",
 ];
 
 /// One validated descriptor, the descriptor file it came from and the live configuration file
@@ -190,7 +191,12 @@ fn validate<'a>(descriptor: &'a Value, config: Option<&Value>) -> Result<&'a str
             let value = config
                 .pointer(&pointer)
                 .ok_or_else(|| anyhow!("{id}: {pointer} is missing"))?;
-            ensure!(fits(kind, value)?, "{id}: {pointer} is not {kind}");
+            // `nullable` settings store null for "no limit".
+            let null_ok = value.is_null() && descriptor["nullable"] == true;
+            ensure!(
+                null_ok || fits(kind, value)?,
+                "{id}: {pointer} is not {kind}"
+            );
         }
     }
     Ok(id)

@@ -64,6 +64,8 @@ neither described nor excluded with a reason.
 - `areas`: 2–4 topic words. `unit`, `min`, `max` (or `recommended_max`, `max_length`) give the
   bounds the composer checks before saving; `bounds` says where they come from (`validator`
   when the owner's code enforces them, `proposed` otherwise). `notes` for anything else.
+- `nullable: true` when the live file stores `null` for "no limit"; the composer still sets
+  numbers only, so say in `notes` how to make it unlimited.
 - Descriptors hold no default or current values; those are always read live.
 
 If a setting has wording its type does not give ("close registration" = `restricted`, "by

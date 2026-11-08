@@ -1,10 +1,192 @@
 {
   "_instructions": "Setting descriptors for the configuration composer (see crates/modules/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
-  "settings": [],
+  "settings": [
+    {
+      "id": "storage.tier.user_storage_mb",
+      "description": "Total storage, in megabytes, one account at this account level may use across chats, attachments and its workspace; empty means unlimited.",
+      "type": "integer",
+      "pointer": "/tiers/{tier}/user_storage_mb",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "give base users 500 MB of storage",
+        "anonymous visitors get 10 megabytes",
+        "raise my storage limit",
+        "let people keep more files"
+      ],
+      "areas": [
+        "storage",
+        "limits",
+        "accounts"
+      ],
+      "unit": "MB",
+      "min": 0,
+      "parameters": {
+        "tier": [
+          "operator",
+          "basic",
+          "anonymous"
+        ]
+      },
+      "bounds": "validator",
+      "notes": "null means unlimited; the composer sets numbers only, so set unlimited in the JSON file.",
+      "nullable": true
+    },
+    {
+      "id": "storage.tier.agent_storage_mb",
+      "description": "Folder size, in megabytes, of each agent an account at this account level publishes; empty means unlimited.",
+      "type": "integer",
+      "pointer": "/tiers/{tier}/agent_storage_mb",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "agent folders can hold 1 GB",
+        "limit published agent files to 256 MB",
+        "make agents' file space unlimited for operators"
+      ],
+      "areas": [
+        "storage",
+        "agents",
+        "limits"
+      ],
+      "unit": "MB",
+      "min": 0,
+      "parameters": {
+        "tier": [
+          "operator",
+          "basic",
+          "anonymous"
+        ]
+      },
+      "bounds": "validator",
+      "notes": "null means unlimited; the composer sets numbers only, so set unlimited in the JSON file.",
+      "nullable": true
+    },
+    {
+      "id": "storage.tier.max_published_agents",
+      "description": "How many agents an account at this account level may publish; empty means unlimited.",
+      "type": "integer",
+      "pointer": "/tiers/{tier}/max_published_agents",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "base users can publish 10 agents",
+        "no published agents for anonymous visitors",
+        "let people create more agents"
+      ],
+      "areas": [
+        "agents",
+        "limits",
+        "accounts"
+      ],
+      "min": 0,
+      "parameters": {
+        "tier": [
+          "operator",
+          "basic",
+          "anonymous"
+        ]
+      },
+      "bounds": "validator",
+      "notes": "null means unlimited; the composer sets numbers only, so set unlimited in the JSON file.",
+      "nullable": true
+    },
+    {
+      "id": "storage.warning_percent",
+      "description": "Share of the storage limit, in percent, at which users are warned they are running out of space.",
+      "type": "integer",
+      "pointer": "/warning_percent",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "warn at 90 percent full",
+        "tell me earlier when storage is nearly full",
+        "storage warning threshold"
+      ],
+      "areas": [
+        "storage",
+        "limits",
+        "notifications"
+      ],
+      "unit": "%",
+      "min": 1,
+      "max": 100,
+      "bounds": "validator"
+    },
+    {
+      "id": "storage.compression.mode",
+      "description": "Whether saved chat text and files are compressed to save space.",
+      "type": "enum",
+      "pointer": "/compression/mode",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "turn off compression",
+        "compress saved data",
+        "stop squeezing stored text"
+      ],
+      "areas": [
+        "storage",
+        "compression"
+      ],
+      "enum": [
+        "off",
+        "on_save"
+      ],
+      "bounds": "validator"
+    },
+    {
+      "id": "storage.compression.level",
+      "description": "How hard saved data is compressed, from 1 (fastest) to 19 (smallest).",
+      "type": "integer",
+      "pointer": "/compression/level",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "compress harder",
+        "faster compression",
+        "use maximum compression"
+      ],
+      "areas": [
+        "storage",
+        "compression",
+        "performance"
+      ],
+      "min": 1,
+      "max": 19,
+      "bounds": "validator"
+    },
+    {
+      "id": "storage.compression.min_bytes",
+      "description": "Smallest item, in bytes, worth compressing; smaller items are stored as they are.",
+      "type": "integer",
+      "pointer": "/compression/min_bytes",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "only compress items over 1 KB",
+        "skip compressing tiny messages",
+        "compress everything regardless of size"
+      ],
+      "areas": [
+        "storage",
+        "compression"
+      ],
+      "unit": "bytes",
+      "min": 0,
+      "bounds": "validator"
+    }
+  ],
   "excluded": {
-    "/compress_idle_days": "Storage policy is edited in its JSON file; not offered by the composer in v1.",
-    "/compression/**": "Compression is edited in its JSON file; not offered by the composer in v1.",
-    "/tiers/**": "Per-tier storage limits are edited in their JSON file; not offered by the composer in v1.",
-    "/warning_percent": "Storage policy is edited in its JSON file; not offered by the composer in v1."
+    "/compress_idle_days": "Reserved for compaction tiers, which are not built yet; changing it has no effect.",
+    "/compression/algorithm": "Only zstd is supported; not a choice.",
+    "/compression/skip_media_types/**": "List of already-compressed media types; technical, edited in its JSON file."
   }
 }
