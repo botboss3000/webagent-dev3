@@ -33,8 +33,6 @@ use tokio::sync::{Mutex, Notify, OnceCell};
 /// One read page; small enough that the result is never cut off in the agent's context.
 const MAX_TEXT: usize = 12000;
 const MAX_SESSIONS: usize = 2;
-// Temporary headroom until folders are tied to chat-session lifetime.
-const MAX_PRIVATE_SESSIONS: usize = 100;
 const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 const STEP_WAIT: Duration = Duration::from_secs(5);
 const IDLE_SECONDS: u64 = 180;
@@ -231,7 +229,7 @@ fn make_private_dir(path: &Path) -> Result<(), Fault> {
 ///
 /// # Errors
 /// A rejection when the folder, its record or its artifacts are unsafe or another
-/// caller's, or when the session quota is reached.
+/// caller's. Folders are deleted with their chat session, so there is no folder cap.
 pub fn directory(root: &Path, sid: &str, user: &str) -> Result<PathBuf, Fault> {
     std::fs::DirBuilder::new()
         .recursive(true)
@@ -242,14 +240,6 @@ pub fn directory(root: &Path, sid: &str, user: &str) -> Result<PathBuf, Fault> {
         return Err(Fault::rejected("Invalid private browser root"));
     }
     let directory = root.join(sid);
-    if !directory.exists() {
-        let children = std::fs::read_dir(root).map_err(io_fault)?.count();
-        if children >= MAX_PRIVATE_SESSIONS {
-            return Err(Fault::rejected(
-                "Private browser storage session quota reached",
-            ));
-        }
-    }
     make_private_dir(&directory)?;
     if is_symlink(&directory) || !directory.is_dir() {
         return Err(Fault::rejected("Invalid private browser session"));

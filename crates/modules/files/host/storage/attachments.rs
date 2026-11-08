@@ -87,7 +87,8 @@ impl Store {
             }
         }
     }
-    /// Bytes in the workspaces of this user's sessions (`/workspaces/<session id>`).
+    /// Bytes in the workspaces and private browser folders of this user's sessions
+    /// (`/workspaces/<session id>`; browser bytes as the worker publishes them).
     async fn workspace_used(&self) -> Result<u64> {
         let ids: Vec<String> =
             sqlx::query_scalar("SELECT key FROM docs WHERE key LIKE 'session:%'")
@@ -96,11 +97,21 @@ impl Store {
         let root = std::path::PathBuf::from(
             std::env::var("V3_WORKSPACE_ROOT").unwrap_or_else(|_| "/workspaces".into()),
         );
+        let usage = std::env::var("V3_BROWSER_USAGE")
+            .unwrap_or_else(|_| "/runtime/worker/browser-usage.json".into());
         Ok(tokio::task::spawn_blocking(move || {
+            // Small (one number per session folder); missing until the worker first writes it.
+            let browser: std::collections::HashMap<String, u64> = std::fs::read(&usage)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or_default();
             ids.iter()
                 .filter_map(|key| key.strip_prefix("session:"))
                 .filter(|sid| webagent_files::uploads::upload_id_ok(sid))
-                .map(|sid| tree_bytes(&root.join(sid)))
+                .map(|sid| {
+                    tree_bytes(&root.join(sid))
+                        .saturating_add(browser.get(sid).copied().unwrap_or(0))
+                })
                 .fold(0u64, u64::saturating_add)
         })
         .await?)

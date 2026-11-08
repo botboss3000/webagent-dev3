@@ -136,6 +136,7 @@ impl webagent_agents::service::Effects for Bridge<'_> {
                     crate::api::session_stop::stop_session_work(&caller, sid, "agent-delete").await;
                 crate::api::quiesce(&caller, sid).await;
                 caller.store.delete_agent_session(sid).await?;
+                crate::phase3_api::purge_browser_folder(&caller, sid).await;
             }
         }
         store.shared_schema().await?;

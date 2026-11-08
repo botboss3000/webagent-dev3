@@ -12,6 +12,7 @@ serde_json = "1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt", "sync", "time"] }
 uuid = { version = "1", features = ["v4"] }
+webagent-browser = { path = "../browser" }
 
 [dev-dependencies]
 hex = "0.4"

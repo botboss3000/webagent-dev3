@@ -1145,6 +1145,7 @@ async fn run_process() -> Result<()> {
     let administrator_watch = tokio::spawn(futures_util::FutureExt::boxed(
         administrator_services::watch(app.clone()),
     ));
+    tokio::spawn(crate::phase3_api::sweep_browser_folders(app.clone()));
     let shutdown = app.clone();
     axum::serve(
         listener,

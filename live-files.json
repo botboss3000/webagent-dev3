@@ -4,6 +4,7 @@
   "files": [
     "crates/modules/access/access-policy.json",
     "crates/modules/accounts/authentication.json",
+    "crates/modules/browser/browser-limits.json",
     "crates/modules/configuration/prompts/*.json",
     "crates/modules/configuration/prompts/*.md",
     "crates/modules/configuration/prompts/main_chat_skills/*.md",

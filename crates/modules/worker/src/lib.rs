@@ -381,6 +381,36 @@ async fn handle(
         let result = json!({"status":"success","output":{"terminals":terminals,"tunnels":tunnels}});
         return write_reply(&mut client_write, &parsed["id"], result).await;
     }
+    if let Some(parsed) = parsed
+        .as_ref()
+        .filter(|_| name == "administrator_browser_purge")
+    {
+        // The chat session was deleted: its private browser folder goes with it.
+        if let Some(sid) = parsed["workspace"].as_str() {
+            persistent.browsers.purge(sid).await;
+        }
+        let result = json!({"status":"success"});
+        return write_reply(&mut client_write, &parsed["id"], result).await;
+    }
+    if let Some(parsed) = parsed
+        .as_ref()
+        .filter(|_| name == "administrator_browser_sweep")
+    {
+        // Every chat session that still exists, from the API at startup; other folders
+        // are orphans of deletions made before folders were deleted with their session.
+        let keep: Option<Vec<String>> = parsed["arguments"]["keep"].as_array().map(|keep| {
+            keep.iter()
+                .filter_map(|sid| sid.as_str().map(str::to_owned))
+                .collect()
+        });
+        let result = match keep {
+            Some(keep) => {
+                json!({"status":"success","output":{"removed":persistent.browsers.sweep(&keep).await}})
+            }
+            None => json!({"status":"error","output":"keep list required"}),
+        };
+        return write_reply(&mut client_write, &parsed["id"], result).await;
+    }
     if name == "administrator_quiesce" {
         // Commands, terminals, tunnels and browsers run here; stop them before the Python
         // worker quiesces the rest.

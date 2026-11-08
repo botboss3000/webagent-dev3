@@ -237,6 +237,65 @@ pub(crate) async fn quiesce_session_resources(app: &App, sid: &str) -> Result<()
     Ok(())
 }
 
+/// Delete a deleted chat session's private browser folder; best effort, since the session
+/// is already gone and the startup sweep removes anything left.
+pub(crate) async fn purge_browser_folder(app: &App, sid: &str) {
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        crate::tools::execute_trusted(
+            "administrator_browser_purge",
+            &json!({}),
+            sid,
+            &app.tool_socket,
+            None,
+            crate::CancellationToken::new(),
+        ),
+    )
+    .await;
+    if !matches!(result, Ok(Ok(ref value)) if value["status"] == "success") {
+        tracing::warn!("Browser folder purge deferred to the next startup sweep");
+    }
+}
+
+/// At startup, delete browser folders whose chat session no longer exists in any user's
+/// store. Retries while the worker starts; skips the sweep if any store cannot be listed.
+pub(crate) async fn sweep_browser_folders(app: App) {
+    let mut keep = Vec::new();
+    let Ok(users) = app.store.all_user_ids().await else {
+        return;
+    };
+    for user in users {
+        let Ok(store) = app.store.for_user(&user).await else {
+            return;
+        };
+        let Ok(sessions) = store.list("session:").await else {
+            return;
+        };
+        keep.extend(
+            sessions
+                .iter()
+                .filter(|session| session["status"] != "deleted")
+                .filter_map(|session| session["id"].as_str().map(str::to_owned)),
+        );
+    }
+    for _ in 0..30 {
+        let result = crate::tools::execute_trusted(
+            "administrator_browser_sweep",
+            &json!({"keep":keep}),
+            "00000000-0000-0000-0000-000000000000",
+            &app.tool_socket,
+            None,
+            crate::CancellationToken::new(),
+        )
+        .await;
+        if let Some(value) = result.ok().filter(|value| value["status"] == "success") {
+            tracing::info!(removed = %value["output"]["removed"], "Browser folder sweep");
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+    }
+}
+
 pub(crate) async fn quiesce_agent(app: &App, agent_id: &str, cause: &str) -> Result<(), ApiError> {
     let mut closure_error = None;
     for user_id in app.store.all_user_ids().await? {

@@ -2531,6 +2531,7 @@ dependencies = [
  "serde_json",
  "url",
  "uuid",
+ "webagent-configuration",
 ]
 
 [[package]]
@@ -3171,6 +3172,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
+ "webagent-browser",
 ]
 
 [[package]]

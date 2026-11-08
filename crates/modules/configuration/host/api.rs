@@ -5,7 +5,7 @@ use super::{
 };
 use anyhow::Context;
 use webagent_configuration::{digest, read};
-const IDS: [&str; 12] = [
+const IDS: [&str; 13] = [
     "app_settings",
     "app_ui",
     "chat",
@@ -18,6 +18,7 @@ const IDS: [&str; 12] = [
     "closing_status",
     "voice",
     "storage_policy",
+    "browser_limits",
 ];
 /// Live files (checkout-relative, listed in `live-files.json`) for configuration edited in place.
 pub(crate) fn live(id: &str) -> Option<&'static str> {
@@ -30,6 +31,7 @@ pub(crate) fn live(id: &str) -> Option<&'static str> {
         "closing_status" => "crates/modules/engine/gates/closing_status_v1.json",
         "voice" => webagent_media::settings::LIVE_VOICE,
         "storage_policy" => webagent_files::storage_policy::LIVE_POLICY,
+        "browser_limits" => webagent_browser::limits::LIVE_LIMITS,
         _ => return None,
     })
 }
@@ -102,6 +104,9 @@ pub(crate) fn validate(id: &str, value: &Value) -> Result<()> {
             let bytes = serde_json::to_vec(value)?;
             webagent_files::storage_policy::StoragePolicy::parse(&bytes)?;
             webagent_storage::compression::Compression::from_policy(&bytes)?;
+        }
+        "browser_limits" => {
+            webagent_browser::limits::Limits::parse(&serde_json::to_vec(value)?)?;
         }
         "tool_output_retention" => {
             serde_json::from_value::<tool_output::Policy>(value.clone())?.validate()?

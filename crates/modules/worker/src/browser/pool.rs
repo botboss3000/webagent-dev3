@@ -1,24 +1,28 @@
 //! The worker's side of Browser Control, ported from `worker.py` `BrowserPackages`: it
-//! owns global capacity (two private browsers) and each session process's lifecycle. A
-//! process is pinned to its caller's authority; a different authority, an exit, an
-//! uncertain or closing result, a broken transport, lease expiry or three idle minutes end
-//! it. A broken transport never authorizes replay. Screenshot reads are served here from
-//! the private folder without a browser.
+//! owns capacity (the live per-app and per-user limits, with a queue beyond them) and each
+//! session process's lifecycle. A process is pinned to its caller's authority; a different
+//! authority, an exit, an uncertain or closing result, a broken transport, lease expiry or
+//! the idle time end it. A broken transport never authorizes replay. Screenshot reads are
+//! served here from the private folder without a browser. Session folders are deleted with
+//! their chat session, and their bytes are published for the owner's storage quota.
 use super::rules::truthy;
 use super::service::{read_artifact, Limits};
 use super::{now, Settings, IMPLEMENTATION_VERSION};
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::Mutex;
+use webagent_browser::limits::Limits as Running;
 
-const CAPACITY: usize = 2;
-const IDLE: Duration = Duration::from_secs(180);
+/// A queued session that has not retried for this long has given up its place.
+const WAIT_TTL: Duration = Duration::from_secs(90);
+/// The folder holding the running browser's profile; deleted when it stops, so not counted.
+const PROFILE: &str = "chrome";
 const LIMIT: usize = 2 * 1024 * 1024;
 const CALL_TIMEOUT: Duration = Duration::from_secs(25);
 /// Signing in again to a saved site replays its steps, which takes longer than one action.
@@ -39,6 +43,7 @@ struct Item {
     /// The per-session lock: one exchange at a time.
     io: Mutex<(ChildStdin, BufReader<ChildStdout>)>,
     authority: Authority,
+    user: String,
     lease: StdMutex<(f64, Instant)>,
 }
 
@@ -47,9 +52,9 @@ impl Item {
         !matches!(self.process.lock().await.try_wait(), Ok(None))
     }
 
-    fn stale(&self) -> bool {
+    fn stale(&self, idle: Duration) -> bool {
         let lease = self.lease.lock().unwrap_or_else(PoisonError::into_inner);
-        now() >= lease.0 || lease.1.elapsed() > IDLE
+        now() >= lease.0 || lease.1.elapsed() > idle
     }
 
     /// SIGTERM to the process group, SIGKILL after five seconds, then SIGKILL to whatever
@@ -80,10 +85,66 @@ impl Item {
     }
 }
 
+/// A session waiting for a browser, in arrival order.
+struct Waiter {
+    sid: String,
+    user: String,
+    seen: Instant,
+}
+
 #[derive(Default)]
 struct Inner {
     sessions: HashMap<String, Arc<Item>>,
+    queue: Vec<Waiter>,
     reaping: bool,
+}
+
+impl Inner {
+    fn running(&self, user: &str) -> usize {
+        self.sessions
+            .values()
+            .filter(|item| item.user == user)
+            .count()
+    }
+
+    fn forget_stale_waiters(&mut self) {
+        self.queue
+            .retain(|waiter| waiter.seen.elapsed() <= WAIT_TTL);
+    }
+
+    /// Admits `sid` when both limits allow it and no session queued before it could start
+    /// now; otherwise queues it (once) and returns its 1-based position.
+    fn admit(&mut self, sid: &str, user: &str, limits: &Running) -> Result<(), usize> {
+        self.forget_stale_waiters();
+        let fits = |inner: &Self, user: &str| {
+            inner.sessions.len() < limits.per_app && inner.running(user) < limits.per_user
+        };
+        let place = self.queue.iter().position(|waiter| waiter.sid == sid);
+        let ahead = place.unwrap_or(self.queue.len());
+        let blocked = self.queue[..ahead]
+            .iter()
+            .any(|waiter| fits(self, &waiter.user));
+        if fits(self, user) && !blocked {
+            if let Some(place) = place {
+                self.queue.remove(place);
+            }
+            return Ok(());
+        }
+        match place {
+            Some(place) => {
+                self.queue[place].seen = Instant::now();
+                Err(place + 1)
+            }
+            None => {
+                self.queue.push(Waiter {
+                    sid: sid.to_owned(),
+                    user: user.to_owned(),
+                    seen: Instant::now(),
+                });
+                Err(self.queue.len())
+            }
+        }
+    }
 }
 
 /// Every session process of this worker.
@@ -91,6 +152,8 @@ pub struct Browsers {
     settings: Settings,
     limits: Limits,
     inner: Mutex<Inner>,
+    /// Bytes of each session folder, without a running profile.
+    usage: StdMutex<BTreeMap<String, u64>>,
 }
 
 fn invalid(output: &str) -> Value {
@@ -105,6 +168,7 @@ impl Browsers {
             settings,
             limits: Limits::default(),
             inner: Mutex::new(Inner::default()),
+            usage: StdMutex::new(BTreeMap::new()),
         }
     }
 
@@ -126,10 +190,107 @@ impl Browsers {
         }
     }
 
-    /// Ends the session's browser process: quiescence, cancellation and revocation.
+    /// Ends the session's browser process and its place in the queue: quiescence,
+    /// cancellation and revocation.
     pub async fn close(&self, sid: &str) {
         let mut inner = self.inner.lock().await;
+        inner.queue.retain(|waiter| waiter.sid != sid);
         Self::drop_locked(&mut inner, sid, None).await;
+    }
+
+    /// Ends the session's browser and deletes its private folder: the chat session was
+    /// deleted.
+    pub async fn purge(&self, sid: &str) {
+        self.close(sid).await;
+        if let Some(folder) = self.folder(sid) {
+            let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(folder)).await;
+        }
+        self.usage
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(sid);
+        self.publish_usage().await;
+    }
+
+    /// Deletes every folder whose session is not in `keep` (the chat sessions that still
+    /// exist), then recounts the rest. Called once the API has listed every user's sessions.
+    pub async fn sweep(&self, keep: &[String]) -> usize {
+        let root = self.settings.root.clone();
+        let keep = keep.to_vec();
+        let running: Vec<String> = self.inner.lock().await.sessions.keys().cloned().collect();
+        let swept = tokio::task::spawn_blocking(move || {
+            let Ok(entries) = std::fs::read_dir(&root) else {
+                return (0, BTreeMap::new());
+            };
+            let mut removed = 0;
+            let mut usage = BTreeMap::new();
+            for entry in entries.flatten() {
+                let Some(sid) = entry.file_name().to_str().and_then(session_name) else {
+                    continue;
+                };
+                let path = entry.path();
+                if keep.contains(&sid) || running.contains(&sid) {
+                    usage.insert(sid, folder_bytes(&path));
+                } else if !is_link(&path) && std::fs::remove_dir_all(&path).is_ok() {
+                    removed += 1;
+                }
+            }
+            (removed, usage)
+        })
+        .await
+        .unwrap_or_default();
+        *self.usage.lock().unwrap_or_else(PoisonError::into_inner) = swept.1;
+        self.publish_usage().await;
+        swept.0
+    }
+
+    /// The session's folder when `sid` is a canonical UUID and the folder is a real one.
+    fn folder(&self, sid: &str) -> Option<PathBuf> {
+        let sid = session_name(sid)?;
+        let folder = self.settings.root.join(sid);
+        (folder.is_dir() && !is_link(&folder)).then_some(folder)
+    }
+
+    /// Recounts one session's folder after a call that may have stored a screenshot.
+    async fn recount(&self, sid: &str) {
+        let Some(folder) = self.folder(sid) else {
+            return;
+        };
+        let bytes = tokio::task::spawn_blocking(move || folder_bytes(&folder))
+            .await
+            .unwrap_or(0);
+        let changed = self
+            .usage
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(sid.to_owned(), bytes)
+            != Some(bytes);
+        if changed {
+            self.publish_usage().await;
+        }
+    }
+
+    /// Writes `browser-usage.json` beside the browser root (group-readable by the API),
+    /// replacing it atomically: `{"<session id>": bytes}`.
+    async fn publish_usage(&self) {
+        let body = {
+            let usage = self.usage.lock().unwrap_or_else(PoisonError::into_inner);
+            serde_json::to_vec(&*usage).unwrap_or_default()
+        };
+        let path = usage_path(&self.settings.root);
+        let _ = tokio::task::spawn_blocking(move || {
+            use std::os::unix::fs::OpenOptionsExt;
+            let temporary = path.with_extension("json.tmp");
+            let _ = std::fs::remove_file(&temporary);
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o640)
+                .open(&temporary)?;
+            std::io::Write::write_all(&mut file, &body)?;
+            std::fs::rename(&temporary, &path)
+        })
+        .await;
     }
 
     async fn drop_item(&self, sid: &str, item: &Arc<Item>) {
@@ -141,18 +302,26 @@ impl Browsers {
     async fn reap(self: Arc<Self>) {
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
+            let limits = Running::live();
             let mut inner = self.inner.lock().await;
             if inner.sessions.is_empty() {
                 inner.reaping = false;
                 return;
             }
+            inner.forget_stale_waiters();
+            // A waiting session gets an idle browser's place sooner.
+            let idle = Duration::from_secs(if inner.queue.is_empty() {
+                limits.idle_seconds
+            } else {
+                limits.queued_idle_seconds
+            });
             let items: Vec<(String, Arc<Item>)> = inner
                 .sessions
                 .iter()
                 .map(|(sid, item)| (sid.clone(), Arc::clone(item)))
                 .collect();
             for (sid, item) in items {
-                if item.exited().await || item.stale() {
+                if item.exited().await || item.stale(idle) {
                     Self::drop_locked(&mut inner, &sid, Some(&item)).await;
                 }
             }
@@ -196,6 +365,7 @@ impl Browsers {
             process: Mutex::new(child),
             io: Mutex::new((stdin, BufReader::new(stdout))),
             authority: authority(trusted),
+            user: trusted["user_id"].as_str().unwrap_or_default().to_owned(),
             lease: StdMutex::new((
                 trusted["expires_at"].as_f64().unwrap_or(0.0),
                 Instant::now(),
@@ -249,9 +419,10 @@ impl Browsers {
                 if name == "browser_read" && args["action"] == "close" {
                     return json!({"status":"success","closed":true});
                 }
-                if inner.sessions.len() >= CAPACITY {
-                    return json!({"status":"error","error_kind":"browser_capacity",
-                        "output":"Two private browsers are already active; close one before opening another"});
+                let limits = Running::live();
+                let user = trusted["user_id"].as_str().unwrap_or_default();
+                if let Err(position) = inner.admit(&sid, user, &limits) {
+                    return queued(position, limits.queued_idle_seconds);
                 }
                 match self.start(supervisor, trusted) {
                     Ok(item) => {
@@ -282,6 +453,7 @@ impl Browsers {
         let exchanged =
             tokio::time::timeout(limit, exchange(&mut io, name, args, base, trusted)).await;
         drop(io);
+        self.recount(&sid).await;
         match exchanged {
             Ok(Some(result)) => {
                 if result["status"] == "uncertain"
@@ -322,6 +494,53 @@ impl Browsers {
             _ => transport_failed("administrator_artifact_get", args),
         }
     }
+}
+
+/// The reply to a session waiting for a browser: nothing ran, so retrying is safe.
+fn queued(position: usize, wait: u64) -> Value {
+    json!({"status":"error","error_kind":"browser_queued","queue_position":position,
+        "retry_after_seconds":wait,
+        "output":format!("All private browsers are busy. This chat is number {position} in the \
+            queue; nothing ran. Retry the same call in about {wait} seconds to keep the place.")})
+}
+
+/// `name` when it is a canonical (lower-case, hyphenated) UUID: a session folder.
+fn session_name(name: &str) -> Option<String> {
+    let parsed = uuid::Uuid::parse_str(name).ok()?;
+    (parsed.hyphenated().to_string() == name).then(|| name.to_owned())
+}
+
+fn is_link(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
+}
+
+/// Bytes stored under a session folder, skipping links and the running profile.
+fn folder_bytes(folder: &Path) -> u64 {
+    fn walk(path: &Path, top: bool) -> u64 {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return 0;
+        };
+        let mut total = 0u64;
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if meta.is_dir() {
+                if !(top && entry.file_name() == PROFILE) {
+                    total = total.saturating_add(walk(&entry.path(), false));
+                }
+            } else if meta.is_file() {
+                total = total.saturating_add(meta.len());
+            }
+        }
+        total
+    }
+    walk(folder, true)
+}
+
+/// Where the API reads browser folder bytes: `browser-usage.json` beside the browser root.
+fn usage_path(root: &Path) -> PathBuf {
+    root.with_file_name("browser-usage.json")
 }
 
 /// The package fields every browser result carries.
@@ -388,4 +607,100 @@ async fn exchange(
         .cloned()
         .unwrap_or(Value::Null);
     Some(result)
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::*;
+
+    fn limits(per_app: usize, per_user: usize) -> Running {
+        Running {
+            per_app,
+            per_user,
+            ..Running::default()
+        }
+    }
+
+    /// Marks `sid` running for `user` without a process; admission only counts entries.
+    fn run(inner: &mut Inner, sid: &str, user: &str) {
+        let child = tokio::process::Command::new("true")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut child = child;
+        let (stdin, stdout) = (child.stdin.take().unwrap(), child.stdout.take().unwrap());
+        inner.sessions.insert(
+            sid.into(),
+            Arc::new(Item {
+                pid: 0,
+                process: Mutex::new(child),
+                io: Mutex::new((stdin, BufReader::new(stdout))),
+                authority: Default::default(),
+                user: user.into(),
+                lease: StdMutex::new((0.0, Instant::now())),
+            }),
+        );
+    }
+
+    #[tokio::test]
+    async fn per_user_limit_queues_and_other_users_still_start() {
+        let mut inner = Inner::default();
+        let limits = limits(5, 2);
+        for sid in ["a1", "a2"] {
+            assert_eq!(inner.admit(sid, "alice", &limits), Ok(()));
+            run(&mut inner, sid, "alice");
+        }
+        assert_eq!(inner.admit("a3", "alice", &limits), Err(1));
+        // A waiter that cannot start does not block another user.
+        assert_eq!(inner.admit("b1", "bob", &limits), Ok(()));
+        run(&mut inner, "b1", "bob");
+        // Retrying keeps the place.
+        assert_eq!(inner.admit("a3", "alice", &limits), Err(1));
+        inner.sessions.remove("a1");
+        assert_eq!(inner.admit("a3", "alice", &limits), Ok(()));
+        assert!(inner.queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn app_limit_serves_the_queue_in_order() {
+        let mut inner = Inner::default();
+        let limits = limits(2, 4);
+        for sid in ["s1", "s2"] {
+            assert_eq!(inner.admit(sid, "alice", &limits), Ok(()));
+            run(&mut inner, sid, "alice");
+        }
+        assert_eq!(inner.admit("s3", "alice", &limits), Err(1));
+        assert_eq!(inner.admit("s4", "bob", &limits), Err(2));
+        inner.sessions.remove("s1");
+        // The first in line gets the free browser, not a later caller.
+        assert_eq!(inner.admit("s4", "bob", &limits), Err(2));
+        assert_eq!(inner.admit("s3", "alice", &limits), Ok(()));
+        run(&mut inner, "s3", "alice");
+        assert_eq!(inner.admit("s4", "bob", &limits), Err(1));
+    }
+
+    #[test]
+    fn silent_waiters_give_up_their_place() {
+        let mut inner = Inner::default();
+        inner.queue.push(Waiter {
+            sid: "gone".into(),
+            user: "alice".into(),
+            seen: Instant::now() - WAIT_TTL - Duration::from_secs(1),
+        });
+        inner.forget_stale_waiters();
+        assert!(inner.queue.is_empty());
+    }
+
+    #[test]
+    fn folder_bytes_skip_the_running_profile() {
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(folder.path().join("chrome/x")).unwrap();
+        std::fs::write(folder.path().join("chrome/x/big"), vec![0; 1000]).unwrap();
+        std::fs::create_dir_all(folder.path().join("artifacts")).unwrap();
+        std::fs::write(folder.path().join("artifacts/a.png"), vec![0; 10]).unwrap();
+        std::fs::write(folder.path().join("owner.json"), b"{}").unwrap();
+        assert_eq!(folder_bytes(folder.path()), 12);
+        assert_eq!(session_name("not-a-uuid"), None);
+    }
 }

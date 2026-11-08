@@ -1,0 +1,99 @@
+{
+  "_instructions": "Setting descriptors for the configuration composer (see crates/modules/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
+  "settings": [
+    {
+      "id": "browser.limits.max_running_per_app",
+      "description": "Private Control browsers that may run at once across all users; more sessions wait in a queue.",
+      "type": "integer",
+      "pointer": "/max_running_per_app",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "allow 8 browsers at once on the server",
+        "limit Browser Control to 3 running browsers",
+        "let more chats use the browser at the same time"
+      ],
+      "areas": [
+        "browser",
+        "capacity",
+        "memory"
+      ],
+      "unit": "browsers",
+      "min": 1,
+      "max": 50,
+      "bounds": "validator"
+    },
+    {
+      "id": "browser.limits.max_running_per_user",
+      "description": "Private Control browsers one user may run at once across their chat sessions; more wait in a queue.",
+      "type": "integer",
+      "pointer": "/max_running_per_user",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "let each user run 2 browsers at once",
+        "one browser per person",
+        "allow a user more parallel browser chats"
+      ],
+      "areas": [
+        "browser",
+        "capacity",
+        "users"
+      ],
+      "unit": "browsers",
+      "min": 1,
+      "max": 50,
+      "bounds": "validator"
+    },
+    {
+      "id": "browser.limits.idle_seconds",
+      "description": "Seconds an unused private browser stays open when nobody is waiting for one.",
+      "type": "integer",
+      "pointer": "/idle_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "close idle browsers after 5 minutes",
+        "keep the browser open longer between steps",
+        "free memory from unused browsers sooner"
+      ],
+      "areas": [
+        "browser",
+        "memory",
+        "timeout"
+      ],
+      "unit": "s",
+      "min": 30,
+      "max": 3600,
+      "bounds": "validator"
+    },
+    {
+      "id": "browser.limits.queued_idle_seconds",
+      "description": "Seconds an unused private browser stays open while another session is queued for one.",
+      "type": "integer",
+      "pointer": "/queued_idle_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "hand a browser to a waiting chat after 20 seconds",
+        "make queued browser sessions wait less"
+      ],
+      "areas": [
+        "browser",
+        "queue",
+        "timeout"
+      ],
+      "unit": "s",
+      "min": 10,
+      "max": 3600,
+      "bounds": "validator"
+    }
+  ],
+  "excluded": {
+    "/schema_version": "File format version."
+  }
+}

@@ -725,7 +725,10 @@ async fn delete_one(app: App, id: String, body: crate::store::session::SessionLi
         crate::phase3_api::quiesce_session_resources(&app, &id).await?;
     }
     match app.store.delete_session(&id, &body).await? {
-        SessionPatchOutcome::Saved(value) => Ok(Json(value)),
+        SessionPatchOutcome::Saved(value) => {
+            crate::phase3_api::purge_browser_folder(&app, &id).await;
+            Ok(Json(value))
+        }
         SessionPatchOutcome::NotFound => {
             Err(ApiError(StatusCode::NOT_FOUND, "Session not found".into()))
         }

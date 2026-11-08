@@ -7,6 +7,8 @@
 //! and the queued call's lifecycle. Browser Control runs in the worker's browser package;
 //! this crate holds its site-policy parsing. The root adapter (`host/browser.rs`) owns
 //! storage, routes, authority and tool dispatch.
+pub mod limits;
+
 use anyhow::{bail, Result};
 use serde_json::Value;
 
