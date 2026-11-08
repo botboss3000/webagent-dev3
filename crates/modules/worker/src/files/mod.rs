@@ -1309,6 +1309,13 @@ fn search(
         _ => return Err(rejected("search path must be a regular file or directory")),
     }
     *scan_limited = search.limited;
+    if search.found.is_empty() && search.limited {
+        // An empty page alone reads as "no matches"; say the scan stopped before covering the path.
+        return Ok(Written::Text(format!(
+            "No matches in the part scanned: the search stopped at its time or size budget \
+             before covering {raw}. Search a narrower path (for example ui/, src/ or one crate)."
+        )));
+    }
     Ok(Written::Text(search.found.join("\n")))
 }
 

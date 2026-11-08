@@ -371,6 +371,7 @@ fn search_and_listing_stop_at_their_budgets() {
         json!({"path":fixture.workspace.to_string_lossy(),"query":"missing"}),
     );
     assert_eq!(found["truncated"], true, "{found}");
+    assert!(found["output"].as_str().is_some_and(|text| text.contains("budget")), "{found}");
     let many = fixture.workspace.join("many");
     std::fs::create_dir_all(&many).expect("folder");
     for index in 0..10001 {
