@@ -8,20 +8,15 @@ def initialize_state(root,c):
  # Retained FDs prevent editable checkout paths from redirecting privileged ownership changes.
  installer_spec=importlib.util.spec_from_file_location("bootstrap_paths",Path(__file__).with_name("install.py"))
  installer=importlib.util.module_from_spec(installer_spec);installer_spec.loader.exec_module(installer)
- folder=Path(c.get("app_state_root") or root/"data");parent=installer.directory(folder.parent);state_fd=config_fd=None
+ folder=Path(c.get("app_state_root") or root/"data");parent=installer.directory(folder.parent);state_fd=None
  try:
   for name,previous in ((folder.name,parent),):
    try:os.mkdir(name,0o770,dir_fd=previous)
    except FileExistsError:pass
   state_fd=os.open(folder.name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
   os.fchown(state_fd,c["app_uid"],c["app_gid"]);os.fchmod(state_fd,0o770)
-  try:os.mkdir("config",0o770,dir_fd=state_fd)
-  except FileExistsError:pass
-  config_fd=os.open("config",os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=state_fd)
-  os.fchown(config_fd,c["app_uid"],c["app_gid"]);os.fchmod(config_fd,0o770)
-  os.fsync(config_fd);os.fsync(state_fd)
+  os.fsync(state_fd)
  finally:
-  if config_fd is not None:os.close(config_fd)
   if state_fd is not None:os.close(state_fd)
   os.close(parent)
 
