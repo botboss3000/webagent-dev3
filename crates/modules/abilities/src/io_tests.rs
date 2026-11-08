@@ -199,3 +199,24 @@ fn unconfigured_optional_metadata_edits_refresh_without_loading_empty_fallback()
     assert!(Arc::ptr_eq(&cache.current(&fallback).unwrap(), &next));
     OPTIONAL.with(|s| *s.borrow_mut() = None);
 }
+#[test]
+fn unchanged_publication_reuses_its_catalog_and_a_new_one_loads() {
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    package(first.path());
+    package(second.path());
+    let loaded = Catalog::<Fixture>::load_snapshot(first.path()).unwrap();
+    // Published revisions are immutable, so a same-revision request does not reread disk.
+    std::fs::write(
+        first.path().join("Custom/fixture_echo/fixture_echo.json"),
+        b"invalid",
+    )
+    .unwrap();
+    assert_eq!(
+        loaded.snapshot_current(first.path()).unwrap().version(),
+        loaded.version()
+    );
+    let next = loaded.snapshot_current(second.path()).unwrap();
+    assert_eq!(next.snapshot_root(), second.path());
+    assert!(next.published() && next.known("fixture_echo"));
+}

@@ -191,7 +191,10 @@ impl<H: webagent_abilities::Host> Catalog for webagent_abilities::Catalog<H> {
     }
     fn current(&self) -> Result<Self> {
         if let Some(root) = H::selected_source()? {
-            webagent_abilities::Catalog::<H>::load_snapshot(&root.join("plugins/abilities"))
+            webagent_abilities::Catalog::<H>::snapshot_current(
+                self,
+                &root.join("plugins/abilities"),
+            )
         } else {
             webagent_abilities::Catalog::<H>::load_current(self.snapshot_root())
         }

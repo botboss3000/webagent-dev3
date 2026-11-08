@@ -347,6 +347,16 @@ impl<H: Host> Catalog<H> {
         }
         Ok(catalog)
     }
+    /// The catalog of the selected publication `root`: `self` when it was loaded from that
+    /// same immutable revision under the current optimization generation, else a fresh load.
+    /// Guidance bodies and on-disk presence are still rechecked per use.
+    pub fn snapshot_current(&self, root: &Path) -> Result<Self> {
+        let generation = H::optimization_declaration()?.map(|(generation, _)| generation);
+        if self.published && self.root == root && self.optimization_generation == generation {
+            return Ok(self.clone());
+        }
+        Self::load_snapshot(root)
+    }
     pub(crate) fn optimization_generation(&self) -> &Option<String> {
         &self.optimization_generation
     }
