@@ -31,7 +31,7 @@
       "upload": 30
     }
   },
-  "revision": 53,
+  "revision": 54,
   "tier_names": {
     "anonymous": "Anonymous",
     "basic": "Base",
@@ -127,7 +127,7 @@
         "remote_tunnel": "auto",
         "reply_buttons": "auto",
         "terminal_control": "deny",
-        "ui_admin": "auto",
+        "ui_admin": "deny",
         "user_files": "auto",
         "v3_build": "auto",
         "v3_workspace": "auto",
@@ -144,7 +144,7 @@
       "max_active_runs": 200,
       "max_sessions": 10000,
       "model_policy": null,
-      "revision": 15,
+      "revision": 16,
       "tools": {
         "*": "auto",
         "python": "deny",
