@@ -43,6 +43,12 @@ impl Prepared {
         self.context_items.push(json!({"id":id,"name":record["name"],"media_type":record["media_type"],
             "sha256":record["sha256"],"text":if excerpt.is_empty(){unavailable}else{&excerpt},"truncated":text.chars().count()>EXCERPT_CHARS}));
         self.metadata.push(crate::uploads::metadata(&record));
+        // File-backed text is read from its file for this excerpt and never stored twice.
+        if record["schema_version"] == 3
+            && crate::uploads::textual_media(record["media_type"].as_str().unwrap_or(""))
+        {
+            record["text"] = json!("");
+        }
         self.records.push((crate::attachment_key(id), record));
     }
 }
@@ -150,6 +156,16 @@ mod tests {
         ] {
             assert!(prepare(Some(&value), "sid", "rid").is_err());
         }
+    }
+
+    #[test]
+    fn claimed_file_text_feeds_context_but_is_not_stored() {
+        let mut prepared = prepare(None, "sid", "rid").unwrap();
+        let record = json!({"schema_version":3,"id":"t","session_id":"sid","run_id":null,"name":"notes.txt",
+            "media_type":"text/plain","bytes":5,"sha256":"h","text":"hello","preview":false});
+        prepared.claim_upload("t", record, "rid");
+        assert_eq!(prepared.records[0].1["text"], "");
+        assert!(prepared.context_content("hi").unwrap().contains("hello"));
     }
 
     #[test]

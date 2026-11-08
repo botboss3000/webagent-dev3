@@ -335,6 +335,22 @@ pub(crate) async fn lookup(app: &App, sid: &str, aid: &str) -> Result<Value, Api
         .filter(|v| v["session_id"] == sid)
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Attachment not found".into()))
 }
+/// A text upload's record with its file text filled in, in memory only.
+async fn with_file_text(app: &App, mut record: Value) -> Result<Value, ApiError> {
+    if record["schema_version"] == 3
+        && files::textual_media(record["media_type"].as_str().unwrap_or(""))
+    {
+        let bytes = app
+            .store
+            .attachment_bytes(&record)
+            .await
+            .map_err(|_| bad("Attachment bytes unavailable"))?;
+        if let Some(text) = files::file_text(&record, &bytes) {
+            record["text"] = json!(text);
+        }
+    }
+    Ok(record)
+}
 fn draft_owner<'a>(app: &'a App, record: &'a Value) -> &'a str {
     files::draft_owner(record, app.store.current_user_id())
 }
@@ -364,6 +380,7 @@ pub(crate) async fn attachment_get(
         .get(&attachment_key(&aid))
         .await?
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Attachment not found".into()))?;
+    let record = with_file_text(&app, record).await?;
     files::sent_view(&record, &sid)
         .map(Json)
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Attachment not found".into()))
@@ -434,6 +451,7 @@ pub(crate) async fn prepare_uploads(
             return Err(conflict("Attachment is already sent"));
         }
         require_draft_owner(app, &record)?;
+        let record = with_file_text(app, record).await?;
         prepared.claim_upload(id, record, rid);
     }
     Ok(())

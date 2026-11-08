@@ -221,12 +221,20 @@ impl<S: Storage, A: Access, E: Effects> Service<'_, S, A, E> {
             bail!("Only the agent owner can archive it");
         }
         let pool = self.storage.agent_pool(agent).await?;
-        let value = Repository::new(&pool, agent, self.storage)?
+        let mut value = Repository::new(&pool, agent, self.storage)?
             .set_archived(expected, archived)
             .await?;
-        self.effects.status_event(&value).await?;
-        if archived {
-            self.effects.quiesce(agent).await?;
+        // The archive state is committed; a failed follow-up is reported, never as a failed change.
+        let follow_up = async {
+            self.effects.status_event(&value).await?;
+            if archived {
+                self.effects.quiesce(agent).await?;
+            }
+            anyhow::Ok(())
+        }
+        .await;
+        if let Err(error) = follow_up {
+            value["follow_up_error"] = json!(error.to_string());
         }
         Ok(value)
     }
@@ -241,7 +249,9 @@ impl<S: Storage, A: Access, E: Effects> Service<'_, S, A, E> {
             bail!("Only the agent owner can delete it permanently");
         }
         let pool = self.storage.agent_pool(agent).await?;
-        let status = Repository::new(&pool, agent, self.storage)?.status().await?;
+        let status = Repository::new(&pool, agent, self.storage)?
+            .status()
+            .await?;
         if status["revision"].as_u64() != Some(expected) {
             bail!("Agent revision changed");
         }
@@ -250,7 +260,8 @@ impl<S: Storage, A: Access, E: Effects> Service<'_, S, A, E> {
         }
         self.effects.quiesce(agent).await?;
         self.effects.erase(agent).await?;
-        let deleted = json!({"agent_id":agent,"status":"deleted","revision":expected.saturating_add(1)});
+        let deleted =
+            json!({"agent_id":agent,"status":"deleted","revision":expected.saturating_add(1)});
         self.effects.status_event(&deleted).await?;
         Ok(json!({"agent_id":agent,"deleted":true}))
     }

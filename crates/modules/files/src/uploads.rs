@@ -114,10 +114,7 @@ pub fn new_upload(
     let mut record = json!({"schema_version":3,"id":input.id,"session_id":input.session_id,"run_id":null,"uploader_id":input.uploader_id,"name":input.name,"media_type":media,
         "bytes":bytes.len(),"sha256":hash,"upload_digest":fingerprint,"created_at":input.created_at,"text":"",
         "preview":matches!(media,"image/png"|"image/jpeg"|"image/gif"|"image/webp")});
-    if media.starts_with("text/") || media.starts_with("application/") && media != "application/pdf"
-    {
-        record["text"] = json!(String::from_utf8_lossy(&bytes).into_owned());
-    }
+    // Text content stays only in the file; `file_text` reads it back when a message needs it.
     Ok(NewUpload {
         record,
         fingerprint,
@@ -200,6 +197,17 @@ pub fn content_bytes(record: &Value) -> Result<Vec<u8>> {
     STANDARD
         .decode(record["data"].as_str().unwrap_or(""))
         .map_err(|_| anyhow!("Attachment bytes unavailable"))
+}
+
+/// Media whose bytes are offered to the model as text.
+pub fn textual_media(media: &str) -> bool {
+    media.starts_with("text/") || media.starts_with("application/") && media != "application/pdf"
+}
+
+/// Text of a file-backed (schema 3) text upload, from its decoded bytes.
+pub fn file_text(record: &Value, bytes: &[u8]) -> Option<String> {
+    (record["schema_version"] == 3 && textual_media(record["media_type"].as_str().unwrap_or("")))
+        .then(|| String::from_utf8_lossy(bytes).into_owned())
 }
 
 /// SVG, HTML and other active content are always downloads, never same-origin documents.
