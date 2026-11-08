@@ -24,28 +24,59 @@ fn echoed_steps(id: &str) -> Vec<(String, String)> {
         _ => Vec::new(),
     }
 }
-/// Every (run, step) in the session that a working bubble already shows, so activity groups
-/// hold only messages the user has not seen.
-async fn promoted_steps<'e, E: sqlx::SqliteExecutor<'e>>(
+/// Every (run, step) whose message the chat already shows: messages a working bubble repeats
+/// and each completed run's final reply (the messages of its last model turn), so activity
+/// groups hold only messages the user has not seen.
+async fn in_chat_steps<'e, E: sqlx::SqliteExecutor<'e>>(
     executor: E,
     sid: &str,
 ) -> Result<HashSet<(String, String)>> {
-    let ids: Vec<String> =
-        sqlx::query_scalar("SELECT id FROM chat WHERE session_id=? AND id LIKE 'working:%'")
-            .bind(sid)
-            .fetch_all(executor)
-            .await?;
-    Ok(ids.iter().flat_map(|id| echoed_steps(id)).collect())
+    let rows = sqlx::query(
+        "SELECT id AS a,NULL AS b FROM chat WHERE session_id=? AND id LIKE 'working:%' \
+         UNION ALL SELECT i.run_id,i.step FROM interactions i JOIN chat c ON c.terminal_run_id=i.run_id \
+         WHERE c.session_id=? AND i.session_id=? AND i.step LIKE 'model:%'",
+    )
+    .bind(sid)
+    .bind(sid)
+    .bind(sid)
+    .fetch_all(executor)
+    .await?;
+    let turn = |step: &str| {
+        step.split(':')
+            .nth(1)
+            .and_then(|turn| turn.parse::<u64>().ok())
+    };
+    let mut steps = HashSet::new();
+    let mut finals: HashMap<String, (u64, Vec<String>)> = HashMap::new();
+    for row in &rows {
+        let a = row.get::<String, _>("a");
+        let Some(step) = row.get::<Option<String>, _>("b") else {
+            steps.extend(echoed_steps(&a));
+            continue;
+        };
+        let Some(number) = turn(&step) else { continue };
+        let last = finals.entry(a).or_insert((number, Vec::new()));
+        if number > last.0 {
+            *last = (number, Vec::new());
+        }
+        if number == last.0 {
+            last.1.push(step);
+        }
+    }
+    for (run, (_, last)) in finals {
+        steps.extend(last.into_iter().map(|step| (run.clone(), step)));
+    }
+    Ok(steps)
 }
 fn event(
     row: &SqliteRow,
     store: &Store,
     sid: &str,
-    promoted: &HashSet<(String, String)>,
+    in_chat: &HashSet<(String, String)>,
 ) -> Result<Value> {
     let seq = row.get::<i64, _>("seq");
     let run = row.get::<String, _>("run_id");
-    let shown = promoted.contains(&(run.clone(), row.get::<String, _>("step")));
+    let shown = in_chat.contains(&(run.clone(), row.get::<String, _>("step")));
     let item = store.unseal(&row.get::<Vec<u8>, _>("item"))?;
     let (kind, payload) = match item["type"].as_str().unwrap_or("") {
         "function_call" => (
@@ -73,7 +104,7 @@ fn event(
             };
             (
                 "agent_step_end",
-                json!({"asst_id":format!("interaction:{seq}"),"content":text,"promoted":shown}),
+                json!({"asst_id":format!("interaction:{seq}"),"content":text,"in_chat":shown}),
             )
         }
         "compaction_call" => (
@@ -210,10 +241,10 @@ impl Store {
             .bind(sid).bind(rid).bind(after).fetch_all(&self.pool).await?;
         let more = rows.len() > 100;
         let page = &rows[..rows.len().min(100)];
-        let promoted = promoted_steps(&self.pool, sid).await?;
+        let in_chat = in_chat_steps(&self.pool, sid).await?;
         let events = page
             .iter()
-            .map(|row| event(row, self, sid, &promoted))
+            .map(|row| event(row, self, sid, &in_chat))
             .collect::<Result<Vec<_>>>()?;
         let cursor = page
             .last()
@@ -248,7 +279,7 @@ impl Store {
         for (index, r) in groups.iter().enumerate() {
             last_of_run.insert(r.get::<String, _>("run_id"), index);
         }
-        let promoted = promoted_steps(&self.pool, sid).await?;
+        let in_chat = in_chat_steps(&self.pool, sid).await?;
         let mut segments = Vec::new();
         for (index, r) in groups.iter().enumerate() {
             let anchor = boundary(r);
@@ -284,8 +315,8 @@ impl Store {
                     "function_call" | "function_call_output" => {
                         tools.insert(call_id);
                     }
-                    "message"
-                        if promoted.contains(&(run.clone(), row.get::<String, _>("step"))) => {}
+                    "message" if in_chat.contains(&(run.clone(), row.get::<String, _>("step"))) => {
+                    }
                     "message" => updates += 1,
                     "compaction_result" => compactions += 1,
                     "retry_scheduled" => retries += 1,
@@ -311,10 +342,10 @@ impl Store {
             .bind(sid).bind(after).fetch_all(&mut *tx).await?;
         let more = rows.len() > 200;
         let page = &rows[..rows.len().min(200)];
-        let promoted = promoted_steps(&mut *tx, sid).await?;
+        let in_chat = in_chat_steps(&mut *tx, sid).await?;
         let events = page
             .iter()
-            .map(|row| event(row, self, sid, &promoted))
+            .map(|row| event(row, self, sid, &in_chat))
             .collect::<Result<Vec<_>>>()?;
         let cursor = page.last().map(|r| r.get::<i64, _>("seq")).unwrap_or(after);
         let groups=sqlx::query("SELECT i.run_id,b.boundary_item_id,MIN(i.seq) first_seq,MAX(i.seq) last_seq FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? GROUP BY i.run_id,b.boundary_item_id ORDER BY MIN(i.seq)")
@@ -337,9 +368,10 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    /// A bubble that repeats reply messages hides them, and the publish control, from activity.
+    /// Messages the chat shows (a bubble's repeated messages, the final reply) and the publish
+    /// control leave activity groups; private notes stay.
     #[tokio::test]
-    async fn echoed_messages_and_publish_control_leave_activity_groups() {
+    async fn chat_shown_messages_and_publish_control_leave_activity_groups() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         store
@@ -382,6 +414,16 @@ mod tests {
             )
             .await
             .unwrap();
+        let mut tx = store.pool.begin().await.unwrap();
+        store
+            .insert_interaction(&mut tx, "s", "r", "model:3:0", &note("All done"))
+            .await
+            .unwrap();
+        store
+            .insert_chat(&mut tx, "s", "r", "assistant", &json!("All done"))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
         let data = store.private_activity("s", 0).await.unwrap();
         let messages = data["events"]
             .as_array()
@@ -391,7 +433,7 @@ mod tests {
             .map(|event| {
                 (
                     event["payload"]["content"].clone(),
-                    event["payload"]["promoted"].clone(),
+                    event["payload"]["in_chat"].clone(),
                 )
             })
             .collect::<Vec<_>>();
@@ -399,7 +441,8 @@ mod tests {
             messages,
             vec![
                 (json!("private note"), json!(false)),
-                (json!("Plan: do X"), json!(true))
+                (json!("Plan: do X"), json!(true)),
+                (json!("All done"), json!(true))
             ]
         );
         let summary = store.private_activity_summary("s", 0, None).await.unwrap();

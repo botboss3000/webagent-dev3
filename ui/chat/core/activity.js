@@ -63,8 +63,8 @@ export function activityRows(events) {
   let compaction=null;
   for (const event of events) {
     const p=event.payload || {}, kind=event.kind;
-    // Messages already shown as chat bubbles, and the control that published them, stay out.
-    if (kind === 'agent_step_end' && p.promoted) continue;
+    // Messages the chat already shows (working bubbles, the final reply) and the publish control stay out.
+    if (kind === 'agent_step_end' && p.in_chat) continue;
     if (kind === 'tool_call' && p.tool === 'publish_main_message') {controls.add(p.tool_call_id); continue;}
     if (kind === 'tool_result' && controls.has(p.tool_call_id)) continue;
     if (kind === 'tool_call' || kind === 'tool_result') {
