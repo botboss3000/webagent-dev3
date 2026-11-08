@@ -965,12 +965,17 @@ impl<
                 run["closing"] = Value::Null;
                 json!({"status":"denied","output":"Private control is not enabled"})
             } else if name == "publish_main_message" {
-                match gate_controls::working_text(&args) {
+                let preceding = engine_output::preceding_text(
+                    run["input"].as_array().map_or(&[][..], Vec::as_slice),
+                    call_id,
+                );
+                match gate_controls::working_text(&args, &preceding) {
                     Ok(text) => {
                         working_text = Some(text);
                         json!({"status":"ok","output":"Working message published"})
                     }
-                    Err(_) => json!({"status":"denied","output":"Invalid working message"}),
+                    Err(error) => json!({"status":"denied",
+                        "output":format!("Invalid working message: {error}")}),
                 }
             } else {
                 let config = gate_registry::closing_config()?;

@@ -712,7 +712,8 @@ The integral module definitions and settings are single live JSON files at
 live-file reader; no runtime data enters the build. The visibility module adds the v2
 message-visibility guidance and private `publish_main_message` control before
 a model call. A validated call commits a nonterminal working chat row while
-the run continues. The closing module offers private `set_closer_status`
+the run continues; without `text` it publishes the assistant message written
+before the call in the same reply, so the model never retypes it. The closing module offers private `set_closer_status`
 with a configured flag and short notification. Rust stores this intent with
 the final reply; missing or invalid status becomes the configured
 `unverified` fallback without a repair turn. Its status does not itself

@@ -5,6 +5,6 @@
   "runtime": "rust",
   "config": {
     "tool_name": "publish_main_message",
-    "guidance": "Ordinary substantive non-final assistant text stays inside the current activity group automatically. Only when you intentionally need a user-visible working update, call `publish_main_message` with the complete clean text to show as a normal standalone assistant bubble while the run continues. Do not use that call for the final response. The call never asks for approval or pauses the run; continue work normally after it. Do not emit visibility markers or other control text in assistant prose."
+    "guidance": "Ordinary non-final assistant text stays inside the current activity group automatically. When something you just wrote is worth showing the user as a working update (the settled plan, a finding that changes the plan or that they would act on, a blocker or decision, an occasional milestone), call `publish_main_message` in the same reply with no arguments: it publishes the message you wrote just before the call, exactly as written, as a standalone assistant bubble while the run continues. Pass `text` only when the update should read differently from that message. Never publish narration such as \"let me check\". Do not use the call for the final response. The call never asks for approval or pauses the run; continue work normally after it. Do not emit visibility markers or other control text in assistant prose."
   }
 }

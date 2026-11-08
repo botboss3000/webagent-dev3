@@ -362,23 +362,29 @@ mod initial {
 
     pub fn working_schema(config: &VisibilityConfig) -> Value {
         json!({"type":"function","name":config.tool_name,
-        "description":"Publish a short user-visible working update while this run continues.",
+        "description":"Publish a user-visible working update while this run continues. Without text it publishes the message you wrote just before this call in the same reply.",
         "parameters":{"type":"object","additionalProperties":false,
-            "properties":{"text":{"type":"string","description":"Complete clean working update"}},
-            "required":["text"]}})
+            "properties":{"text":{"type":"string","description":"Optional replacement text; omit it to publish your preceding message as written"}}}})
     }
 
-    pub fn working_text(args: &Value) -> Result<String> {
+    /// The update to publish: `text` when given, otherwise `preceding`, the message the
+    /// model wrote before this call in the same reply, so it never retypes it.
+    pub fn working_text(args: &Value, preceding: &str) -> Result<String> {
         let object = args
             .as_object()
             .ok_or_else(|| anyhow!("Working update must be an object"))?;
-        if object.len() != 1 {
+        if object.keys().any(|key| key != "text") {
             bail!("Working update has unexpected fields");
         }
-        let text = object
-            .get("text")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("Working update text is missing"))?;
+        let text = match object.get("text") {
+            Some(text) => text
+                .as_str()
+                .ok_or_else(|| anyhow!("Working update text must be a string"))?,
+            None if preceding.trim().is_empty() => {
+                bail!("No message precedes this call in the same reply; pass text")
+            }
+            None => preceding,
+        };
         if text.trim().is_empty() || text.len() > 16384 {
             bail!("Working update text is empty or too large");
         }
@@ -438,11 +444,15 @@ mod initial {
         #[test]
         fn working_update_is_bounded_and_exact() {
             assert_eq!(
-                working_text(&json!({"text":"Progress"})).unwrap(),
+                working_text(&json!({"text":"Progress"}), "Earlier").unwrap(),
                 "Progress"
             );
-            assert!(working_text(&json!({"text":" ","extra":1})).is_err());
-            assert!(working_text(&json!({"text":"x".repeat(16385)})).is_err());
+            assert_eq!(working_text(&json!({}), "Earlier").unwrap(), "Earlier");
+            assert!(working_text(&json!({}), " ").is_err());
+            assert!(working_text(&json!({"text":3}), "Earlier").is_err());
+            assert!(working_text(&json!({"text":" ","extra":1}), "").is_err());
+            assert!(working_text(&json!({"text":"x".repeat(16385)}), "").is_err());
+            assert!(working_text(&json!({}), &"x".repeat(16385)).is_err());
         }
     }
 }
