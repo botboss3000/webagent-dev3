@@ -371,7 +371,12 @@ fn search_and_listing_stop_at_their_budgets() {
         json!({"path":fixture.workspace.to_string_lossy(),"query":"missing"}),
     );
     assert_eq!(found["truncated"], true, "{found}");
-    assert!(found["output"].as_str().is_some_and(|text| text.contains("budget")), "{found}");
+    assert!(
+        found["output"]
+            .as_str()
+            .is_some_and(|text| text.contains("budget")),
+        "{found}"
+    );
     let many = fixture.workspace.join("many");
     std::fs::create_dir_all(&many).expect("folder");
     for index in 0..10001 {
@@ -432,4 +437,25 @@ fn tools_reach_only_this_workspace_and_checkout_source() {
         json!({"path":fixture.path("mine.txt"),"content":"ok"}),
     );
     assert_eq!(mine["status"], "success");
+}
+
+#[test]
+fn search_treats_a_pipe_as_alternation() {
+    // Regex search runs rg, which the deployed worker image has and some test images lack.
+    if std::process::Command::new("rg").arg("--version").output().is_err() {
+        eprintln!("skipped: rg is absent");
+        return;
+    }
+    let fixture = fixture();
+    std::fs::create_dir_all(&fixture.workspace).expect("workspace");
+    std::fs::write(fixture.workspace.join("a.txt"), "alpha\nbeta\ngamma\n").expect("file");
+    let found = fixture.call(
+        "file_search",
+        json!({"path":fixture.workspace.to_string_lossy(),"query":"alpha|gamma"}),
+    );
+    let output = found["output"].as_str().expect("output");
+    assert!(
+        output.contains(":1:alpha") && output.contains(":3:gamma"),
+        "{found}"
+    );
 }

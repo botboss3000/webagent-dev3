@@ -1270,6 +1270,8 @@ fn search(
     ) else {
         return Err(rejected("invalid search options"));
     };
+    // Agents write `a|b` meaning alternation and forget `regex`; a literal pipe search is rare.
+    let regex = regex || query.contains('|');
     if query.is_empty() && !comments_only {
         return Err(rejected("query must not be empty"));
     }

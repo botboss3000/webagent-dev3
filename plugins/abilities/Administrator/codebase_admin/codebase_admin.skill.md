@@ -6,7 +6,7 @@ For ability/plugin changes and Markdown, JSON/configuration, UI assets, Python o
 
 For UI presentation/layout questions and every UI change, read `plugins/abilities/Core/ui_admin/ui_admin.skill.md` first. Use its general investigation workflow for visual properties and apply its button, touch-feedback, and border-state defaults when changing controls. UI Admin remains pending; read that file through Codebase Admin rather than assuming its legacy tools are available.
 
-For a question that asks where code lives, answer the scope asked: once the requested files and functions are found, report them and offer to trace further (backend data sources, tests) instead of tracing them unasked. Batch independent searches and reads in one step, and load only the abilities the task needs.
+For a question that asks where code lives, answer the scope asked: once the requested files and functions are found, report them and offer to trace further (backend data sources, tests) instead of tracing them unasked. Batch independent searches and reads in one step, and load only the abilities the task needs. This ability already includes shell, file_search and file_read for source questions; do not also load terminal_control or git_control to search or read code.
 
 For v3 Rust work, load the selectable rust_quality skill in this ability for ownership, async design, correctness, and measured optimization guidance. This standard skill remains authoritative for task editing and release workflow.
 

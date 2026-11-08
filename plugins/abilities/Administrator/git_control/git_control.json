@@ -3,7 +3,7 @@
   "kind": "ability",
   "icon": "git-branch",
   "color": "#9ece6a",
-  "description": "Git version control, remote GitHub source editing, and Cloudflare website previews and publishing.",
+  "description": "Git version control, remote GitHub source editing, and Cloudflare website previews and publishing. Not needed to read or search source code.",
   "skill_summary": null,
   "migration_note": "Remote provider tools require user-owned connections. Live GitHub/Cloudflare acceptance is pending; configuration and automated tests do not certify provider access.",
   "order": 3,

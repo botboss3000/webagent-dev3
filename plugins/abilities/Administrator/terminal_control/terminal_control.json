@@ -3,7 +3,7 @@
   "kind": "ability",
   "icon": "terminal",
   "color": "#f7768e",
-  "description": "Lets the agent open and drive interactive terminal programs (REPLs, CLIs) in its session workspace, under the same sandbox as the shell tool.",
+  "description": "Interactive terminal sessions for programs that need ongoing input (REPLs, TUIs, prompts), under the same sandbox as the shell tool. Not for searching, reading files or one-shot commands: use Codebase Admin shell, file_search and file_read.",
   "skill_summary": "Drive a session-scoped PTY with open, read, send, wait and close. Read before every send; use Codebase Admin shell for one-shot commands.",
   "migration_note": "Rust worker terminals: each command runs on a pseudo-terminal under the workspace sandbox. Execution still requires applicable installation, account-tier, agent, membership and session grants.",
   "order": 4,
