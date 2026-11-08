@@ -10,6 +10,7 @@ default_mode: visible
 Show the user each option rendered in the real app, let them choose, and release only the chosen one.
 
 Do not open a broker task or edit source until the user has chosen. Options are front-end only: if an option needs data the backend does not provide yet, derive or mock it in the variant's JavaScript and say so in its description. Screenshots come only from Browser Control; the shell has no usable browser. Write each variant's files with one batch of file_write calls.
+The preview link below is ready to use: do not read its implementation. The app's design tokens (`--bg-*`, `--fg-*`, `--font-*`, colours) are defined in `/code/build-service/shared-ui/ui/shared/css/design-system.css`, served at `/ui/shared/css/design-system.css`; `/code/ui` only uses them.
 
 1. Read the files to change from `/code/ui` once, in one batch.
 2. For each option, write only the changed files into this session's workspace under `previews/<variant>/ui/`, keeping their path below `ui/` (for example `previews/option-a/ui/chat/elements/activity-group/style.css`). Variant names use lowercase letters, digits, `-` and `_`. Unchanged files come from the live UI automatically. Workspace writes release nothing.

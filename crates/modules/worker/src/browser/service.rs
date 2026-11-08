@@ -33,7 +33,8 @@ use tokio::sync::{Mutex, Notify, OnceCell};
 /// One read page; small enough that the result is never cut off in the agent's context.
 const MAX_TEXT: usize = 12000;
 const MAX_SESSIONS: usize = 2;
-const MAX_PRIVATE_SESSIONS: usize = 32;
+// Temporary headroom until folders are tied to chat-session lifetime.
+const MAX_PRIVATE_SESSIONS: usize = 100;
 const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 const STEP_WAIT: Duration = Duration::from_secs(5);
 const IDLE_SECONDS: u64 = 180;
