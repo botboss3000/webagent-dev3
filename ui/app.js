@@ -367,8 +367,16 @@ const chat={
 async function openChatNow(){
   await ensureChat();
   const requested=new URL(location.href).searchParams.get('session_id');
-  if(requested){if(chat.sessionId===requested)return;try{await chat.open(requested,'replace');}catch(error){note('Conversation unavailable: '+error.message);}return;}
-  if(chat.sessionId)return;
+  if(requested){
+    if(chat.sessionId===requested)return;
+    try{await chat.open(requested,'replace');return;}catch(error){
+      note('Conversation unavailable: '+error.message);
+      if(!/not found/i.test(error.message||''))return;
+      // A deleted or unknown conversation must not stay in the address: reloads would reopen it.
+      const url=new URL(location.href);url.searchParams.delete('session_id');history.replaceState(history.state,'',url);
+    }
+  }
+  if(chat.sessionId&&chat.sessionId!==requested)return;
   let items=[];
   try{items=await chat.sessions();}catch(error){note(error.message);return;}
   if(items.length)try{await chat.open(items[0].id,'replace');}catch(error){note('Conversation unavailable: '+error.message);}
