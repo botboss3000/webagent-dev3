@@ -1512,6 +1512,66 @@ class Executor:
         stage=text[text.index("FROM rust:"):text.index("FROM debian:",text.index("FROM rust:"))]
         return hashlib.sha256(stage.encode()).hexdigest()in {CONTEXT_COMPILER_STAGE_SHA256,CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256,SHARED_RELEASE_CONTEXT_COMPILER_STAGE_SHA256,PARALLEL_COMPILER_STAGE_SHA256,MOLD_COMPILER_STAGE_SHA256}
 
+    def test_pass_key(self,blob,row,runtime_digest,support):
+        """One test executable's pass identity: its exact bytes, the helper programs it can start,
+        every non-Rust workspace file a test may read at runtime, and the test environment proof
+        (toolchain, compiler, kernel, identities, threads) without the whole-source digest."""
+        proof={k:v for k,v in self.test_proof(blob).items()if k!="source_sha256"}
+        body=json.dumps({"binary":row["sha256"],"runtime":runtime_digest,"support":support,"proof":proof},sort_keys=True)
+        return hashlib.sha256(body.encode()).hexdigest()
+
+    @staticmethod
+    def runtime_inputs_digest(application):
+        """Digest of every workspace file except Rust sources under crates/ and src/, which reach a
+        test only through its compiled executable. JSON, Markdown, UI, Python and plugin files
+        (including plugin .rs adapters) are read by tests at runtime, so any change reruns all."""
+        digest=hashlib.sha256()
+        for path in sorted(p for p in application.rglob("*")if p.is_file()and not p.is_symlink()):
+            name=path.relative_to(application).as_posix()
+            if name.startswith(("target/",".git/")):continue
+            if name.endswith(".rs")and name.startswith(("crates/","src/")):continue
+            digest.update(name.encode()+b"\0"+hashlib.sha256(path.read_bytes()).digest())
+        return digest.hexdigest()
+
+    def test_selection(self,job,blob,application,output,manifest):
+        """The suite command: doctests, then each package's test executables from its directory as
+        `cargo test` runs them, skipping any whose pass key already passed. Without the Cargo
+        metadata to place an executable, the whole workspace suite runs as before."""
+        threads="--test-threads="+str(self.tuning("test_threads",TEST_THREADS))
+        full={"argv":["cargo","test","--workspace","--locked","--offline","--",threads],"skipped":[],"run":[]}
+        metadata_path=output/"dependency-metadata.json"
+        if not metadata_path.is_file():return full
+        metadata=self.metadata_receipt(metadata_path)
+        directories={p.get("id"):posixpath.dirname(p.get("manifest_path",""))for p in metadata.get("packages",[])if p.get("source")is None}
+        support=sorted(item.get("sha256","")for item in [manifest.get("support")or{},*manifest.get("additional_support",[])])
+        runtime=self.runtime_inputs_digest(application)
+        ledger=Path(self.config["state_root"])/"test-pass-ledger"
+        if ledger.is_symlink():raise ValueError("Test pass ledger symlink")
+        ledger.mkdir(mode=0o700,exist_ok=True)
+        run,skipped=[],[]
+        for row in manifest.get("tests",[]):
+            directory=directories.get(row.get("package_id"),"")
+            if not directory.startswith("/build")or ".."in directory.split("/")or not re.fullmatch(r"tests/[a-z0-9_]+-[a-f0-9]{16}",row.get("file","")):return full
+            key=self.test_pass_key(blob,row,runtime,support)
+            entry={"file":row["file"],"directory":directory,"key":key}
+            (skipped if (ledger/(key+".json")).is_file()else run).append(entry)
+        script=["set -e","cargo test --workspace --locked --offline --doc -- "+threads,
+                'export LD_LIBRARY_PATH="$(rustc --print target-libdir)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"']
+        for entry in run:
+            script.append("cd "+shlex.quote(entry["directory"])+" && /output/artifacts/"+entry["file"]+" "+threads)
+        for entry in skipped:
+            script.append("echo "+shlex.quote("skipped "+entry["file"].removeprefix("tests/")+": identical executable and inputs already passed"))
+        job["test_selection"]={"run":len(run),"skipped":len(skipped),"runtime_inputs_sha256":runtime}
+        return {"argv":["sh","-c","\n".join(script)],"skipped":skipped,"run":run}
+
+    def record_test_passes(self,job,selection):
+        """After the whole suite passed, remember each executable that ran so an identical one is skipped."""
+        ledger=Path(self.config["state_root"])/"test-pass-ledger"
+        for entry in selection["run"]:
+            path=ledger/(entry["key"]+".json")
+            temporary=path.with_suffix(".new");temporary.write_text(json.dumps({"job_id":job["job_id"],"file":entry["file"],"at":time.time()}))
+            os.replace(temporary,path)
+
     def retain_test_manifest(self,output,artifacts):
         """Retain Cargo-attested tests and exact debug support; never substitute optimized binaries."""
         metadata=output/"test-artifacts.json"
@@ -1694,7 +1754,8 @@ class Executor:
         # made the suite and this compile take turns. The compile mounts its own offline copy at
         # the same /output/cargo path, keeping registry source paths (and fingerprints) unchanged.
         release_cargo=output/"cargo-release";shutil.rmtree(release_cargo,ignore_errors=True);shutil.copytree(cargo,release_cargo,symlinks=True)
-        suite=self.concurrent_phase(job,"test","test",application,output,["cargo","test","--workspace","--locked","--offline","--","--test-threads="+str(self.tuning("test_threads",TEST_THREADS))],"engine:rust1.90:test")
+        selection=self.test_selection(job,blob,application,output,manifest)
+        suite=self.concurrent_phase(job,"test","test",application,output,selection["argv"],"engine:rust1.90:test")
         try:live_log=self.phase(job,"compile_release","engine",linked_source/"v3",output,self.live_recipe(stable_release,job["cargo_incremental"]),"engine:rust1.90:release",cargo_home=release_cargo)
         finally:
             try:suite_output=suite.result()
@@ -1703,8 +1764,9 @@ class Executor:
                 shutil.rmtree(release_cargo,ignore_errors=True)
         logs+=suite_output
         counts=Executor.suite_totals(suite_output)
-        if not any(counts):raise ValueError("Suite executed no tests")
+        if not any(counts)and not selection["skipped"]:raise ValueError("Suite executed no tests")
         job["suite_counts"]={"passed":counts[0],"failed":counts[1],"ignored":counts[2]}
+        self.record_test_passes(job,selection)
         if self.runner.execution_source_digest(source)!=before:raise ValueError("Tests left changed application inputs")
         logs+=live_log
         logs+=self.phase(job,"live_smoke","test",application,output,self.smoke_recipe("live",profile=live_profile(stable_release)),"engine:rust1.90:live-smoke",90)
