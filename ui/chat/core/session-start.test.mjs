@@ -24,3 +24,7 @@ test('content in the open conversation allows another new session', () => {
   assert.equal(shouldCreateSession({ session: 'a', ready: true, draft: 'hi' }), true);
   assert.equal(shouldCreateSession({ session: 'a', ready: true, attachments: 1 }), true);
 });
+
+test('a conversation that failed to load does not block a new session', () => {
+  assert.equal(shouldCreateSession({ session: 'gone', ready: false, failed: true }), true);
+});
