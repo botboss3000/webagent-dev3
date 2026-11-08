@@ -1208,6 +1208,9 @@ impl<
                             read_only,
                         )
                     });
+                    for entry in entries.iter_mut() {
+                        *entry = webagent_abilities::discovery_row(entry);
+                    }
                 }
             } else if matches!(result["status"].as_str(), Some("ok" | "already_available")) {
                 // Authorization uses the fresh catalog, never the loader acknowledgment.

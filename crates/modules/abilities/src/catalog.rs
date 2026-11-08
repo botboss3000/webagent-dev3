@@ -248,6 +248,25 @@ pub fn near_word(query: &str, word: &str) -> bool {
     edits + usize::from(i < left.len() || j < right.len()) == 1
 }
 
+/// The model-facing list_abilities row: enough to choose and load an ability. Full config,
+/// skill text and tool policy arrive with load_ability, so discovery stays small.
+pub fn discovery_row(entry: &Value) -> Value {
+    let tools: Vec<&Value> = entry["tools"]
+        .as_array()
+        .map(|tools| tools.iter().map(|tool| &tool["name"]).collect())
+        .unwrap_or_default();
+    json!({
+        "id": entry["id"],
+        "name": entry["name"],
+        "description": entry["description"],
+        "group": entry["group_name"],
+        "availability": entry["availability"],
+        "requires_activation": entry["requires_activation"],
+        "tools": tools,
+        "selectable_skills": entry["selectable_skills"],
+    })
+}
+
 fn discovery_score(ability: &Value, query: &str) -> usize {
     let fields = [
         ("id", 5),
@@ -4183,5 +4202,25 @@ pub mod registered_tests {
                 state
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod discovery_row_tests {
+    use super::discovery_row;
+    use serde_json::json;
+
+    #[test]
+    fn discovery_row_keeps_choice_fields_and_drops_bulk() {
+        let row = discovery_row(&json!({
+            "id": "codebase_admin", "name": "Codebase Admin", "description": "Edit source",
+            "group_name": "Administrator", "availability": "discoverable",
+            "requires_activation": true, "selectable_skills": ["rust_quality"],
+            "tools": [{"name": "file_read", "policy": "allow", "mode": "visible"}],
+            "config": {"bias": {}}, "general_skills": ["long text"],
+        }));
+        assert_eq!(row["tools"], json!(["file_read"]));
+        assert_eq!(row["group"], "Administrator");
+        assert!(row.get("config").is_none() && row.get("general_skills").is_none());
     }
 }
