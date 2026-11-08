@@ -152,6 +152,40 @@ pub fn admit(
     }
 }
 
+/// Discovery tools whose repeats within a run are held: their catalog rarely changes during
+/// a run, and each listing is large. `include_available` widens a listing but is not a new
+/// question, so only the tool and its query identify a repeat.
+const DISCOVERY: &[&str] = &["list_abilities", "list_tools", "list_skills"];
+
+/// Hold a discovery listing that repeats one already returned in this run, unless the agent
+/// names the earlier call with `_repeat_of`. `None` means list normally.
+pub fn discovery_repeat(run: &mut Value, name: &str, args: &Value, call_id: &str) -> Option<Value> {
+    if !DISCOVERY.contains(&name) {
+        return None;
+    }
+    let query = args["query"].as_str().unwrap_or("").trim().to_lowercase();
+    let key = format!("{name}:{query}");
+    if !run["retry_guard"].is_object() {
+        run["retry_guard"] = json!({"actions":{},"decisions":[]});
+    }
+    let prior = run["retry_guard"]["discovery"][&key]
+        .as_str()
+        .map(str::to_owned);
+    if let Some(prior) = prior {
+        if args[REPEAT_ARG].as_str() != Some(prior.as_str()) {
+            decide(run, name, call_id, &prior, Risk::Low, "held");
+            return Some(json!({"status":"held","error_kind":"possible_duplicate",
+                "repeat_of":prior,"output":format!(
+                    "Not run: {name} already answered this in this run as call {prior}; use that \
+                     result. Loading an ability changes what is active, not the catalog. To list \
+                     again on purpose, call with \"{REPEAT_ARG}\":\"{prior}\".")}));
+        }
+        decide(run, name, call_id, &prior, Risk::Low, "repeat");
+    }
+    run["retry_guard"]["discovery"][key] = json!(call_id);
+    None
+}
+
 /// Mark `pending` as waiting for the user's approval of an intended repeat.
 pub fn require_approval(pending: &mut Value, args: &Value, retry: &Retry) {
     // Reuses the Actions rule: never converted by Auto mode and checked again at dispatch.
@@ -291,6 +325,20 @@ pub fn diagnostics(run: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn discovery_repeat_is_held_until_named() {
+        let mut run = json!({});
+        let list = |run: &mut Value, args: Value, id: &str| {
+            super::discovery_repeat(run, "list_abilities", &args, id)
+        };
+        assert!(list(&mut run, json!({}), "a").is_none());
+        let held = list(&mut run, json!({"include_available": true}), "b").expect("held");
+        assert_eq!(held["repeat_of"], "a");
+        assert!(list(&mut run, json!({"query": "git"}), "c").is_none());
+        assert!(list(&mut run, json!({"_repeat_of": "a"}), "d").is_none());
+        assert!(super::discovery_repeat(&mut run, "load_ability", &json!({}), "e").is_none());
+    }
+
     use super::*;
 
     fn high() -> Retry {

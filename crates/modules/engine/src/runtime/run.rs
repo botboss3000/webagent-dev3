@@ -1184,6 +1184,22 @@ impl<
                     .await?;
                 return Ok(std::ops::ControlFlow::Break(()));
             }
+            if let Some(result) = tools::retry_guard::discovery_repeat(
+                &mut run,
+                &name,
+                &args,
+                call["call_id"].as_str().unwrap_or_default(),
+            ) {
+                Self::append_tool(&mut run, &result)?;
+                app.store
+                    .save_run_observed(
+                        &mut run,
+                        "tool_result",
+                        &json!({"run_id":id,"name":name,"result":result}),
+                    )
+                    .await?;
+                return Ok(std::ops::ControlFlow::Continue(()));
+            }
             // Abilities needing a model role this agent lacks stay out of discovery.
             app.hide_without_model_role(agent_id, &policy, &mut visibility, &ability_state)
                 .await?;
