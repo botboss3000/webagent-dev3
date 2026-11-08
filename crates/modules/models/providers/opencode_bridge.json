@@ -6,135 +6,168 @@
   "models": [
     {
       "id": "opencode/beam-free",
-      "name": "beam-free (free)"
+      "name": "beam-free (free)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode/big-pickle",
-      "name": "big-pickle (free)"
+      "name": "big-pickle (free)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode/deepseek-v4.1-flash-free",
-      "name": "deepseek-v4.1-flash-free (free)"
+      "name": "deepseek-v4.1-flash-free (free)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/beam-free",
-      "name": "beam-free (Go)"
+      "name": "beam-free (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/claude-haiku-5-5",
-      "name": "claude-haiku-5-5 (Go)"
+      "name": "claude-haiku-5-5 (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/deepseek-v4-pro",
-      "name": "deepseek-v4-pro (Go)"
+      "name": "deepseek-v4-pro (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/deepseek-v4.1-flash",
-      "name": "deepseek-v4.1-flash (Go)"
+      "name": "deepseek-v4.1-flash (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/gemini-4-argon",
-      "name": "gemini-4-argon (Go)"
+      "name": "gemini-4-argon (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/glm-5.2",
-      "name": "glm-5.2 (Go)"
+      "name": "glm-5.2 (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/glm-5.3",
-      "name": "glm-5.3 (Go)"
+      "name": "glm-5.3 (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/glm-5.3-flash",
-      "name": "glm-5.3-flash (Go)"
+      "name": "glm-5.3-flash (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/gpt-5.6-luna",
-      "name": "gpt-5.6-luna (Go)"
+      "name": "gpt-5.6-luna (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/gpt-6-luna",
-      "name": "gpt-6-luna (Go)"
+      "name": "gpt-6-luna (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/grok-4.7",
-      "name": "grok-4.7 (Go)"
+      "name": "grok-4.7 (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/hy3",
-      "name": "hy3 (Go)"
+      "name": "hy3 (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/hy4-preview",
-      "name": "hy4-preview (Go)"
+      "name": "hy4-preview (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/iceman-contributor-free",
-      "name": "iceman-contributor-free (Go)"
+      "name": "iceman-contributor-free (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/kimi-k2.7-code",
-      "name": "kimi-k2.7-code (Go)"
+      "name": "kimi-k2.7-code (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/kimi-k3",
-      "name": "kimi-k3 (Go)"
+      "name": "kimi-k3 (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/kimi-k3.1-pro",
-      "name": "kimi-k3.1-pro (Go)"
+      "name": "kimi-k3.1-pro (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/longcat-2.0",
-      "name": "longcat-2.0 (Go)"
+      "name": "longcat-2.0 (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/mimo-v2.5",
-      "name": "mimo-v2.5 (Go)"
+      "name": "mimo-v2.5 (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/mimo-v2.5-pro",
-      "name": "mimo-v2.5-pro (Go)"
+      "name": "mimo-v2.5-pro (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/mimo-v2.6-flash",
-      "name": "mimo-v2.6-flash (Go)"
+      "name": "mimo-v2.6-flash (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/mimo-v2.6-pro",
-      "name": "mimo-v2.6-pro (Go)"
+      "name": "mimo-v2.6-pro (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/minimax-m3",
-      "name": "minimax-m3 (Go)"
+      "name": "minimax-m3 (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/minimax-m3.1-flash",
-      "name": "minimax-m3.1-flash (Go)"
+      "name": "minimax-m3.1-flash (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/muse-spark-1.2-contributor",
-      "name": "muse-spark-1.2-contributor (Go)"
+      "name": "muse-spark-1.2-contributor (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/muse-spark-1.3-contributor",
-      "name": "muse-spark-1.3-contributor (Go)"
+      "name": "muse-spark-1.3-contributor (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/qwen3.7-plus",
-      "name": "qwen3.7-plus (Go)"
+      "name": "qwen3.7-plus (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/qwen3.8-flash",
-      "name": "qwen3.8-flash (Go)"
+      "name": "qwen3.8-flash (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/qwen3.8-max",
-      "name": "qwen3.8-max (Go)"
+      "name": "qwen3.8-max (Go)",
+      "input": ["text", "image"]
     },
     {
       "id": "opencode-go/step-5-preview",
-      "name": "step-5-preview (Go)"
+      "name": "step-5-preview (Go)",
+      "input": ["text", "image"]
     }
   ]
 }
