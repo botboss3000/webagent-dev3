@@ -31,7 +31,7 @@
       "upload": 30
     }
   },
-  "revision": 52,
+  "revision": 53,
   "tier_names": {
     "anonymous": "Anonymous",
     "basic": "Base",
@@ -110,6 +110,7 @@
         "app_control": "auto",
         "automation": "auto",
         "base": "auto",
+        "browser_control": "auto",
         "code_index": "auto",
         "codebase_admin": "auto",
         "config_controller": "auto",
@@ -125,7 +126,7 @@
         "optimization": "auto",
         "remote_tunnel": "auto",
         "reply_buttons": "auto",
-        "terminal_control": "auto",
+        "terminal_control": "deny",
         "ui_admin": "auto",
         "user_files": "auto",
         "v3_build": "auto",
@@ -143,9 +144,13 @@
       "max_active_runs": 200,
       "max_sessions": 10000,
       "model_policy": null,
-      "revision": 14,
+      "revision": 15,
       "tools": {
-        "*": "auto"
+        "*": "auto",
+        "python": "deny",
+        "run_command": "deny",
+        "run_python": "deny",
+        "shell": "deny"
       }
     }
   }
