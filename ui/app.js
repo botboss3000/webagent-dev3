@@ -13,6 +13,7 @@ import { initHeaderCarousel } from './shared/header-carousel.js';
 initHeaderCarousel();
 import { wirePageTabCarousel, wirePageTabDrag } from './shared/page-tabs.js';
 import { purgeAllBrowserData } from './browser-data-reset.js';
+import { showNotification } from './chat/core/chat-action-panel.js';
 import { createFloatingChat,createChatLauncher } from './chat/widget/window.js';
 import { mountNativeWidget } from './chat/widget/native.js';
 import { authorizeEmbedPopup } from './embed/authorize.js';
@@ -370,8 +371,11 @@ async function openChatNow(){
   if(requested){
     if(chat.sessionId===requested)return;
     try{await chat.open(requested,'replace');return;}catch(error){
-      note('Conversation unavailable: '+error.message);
-      if(!/not found/i.test(error.message||''))return;
+      if(!/not found/i.test(error.message||'')){note('Conversation unavailable: '+error.message);return;}
+      // Shown in the chat panel, not the app-wide notice bar. A wrong, deleted or no-longer-shared
+      // conversation all answer "not found", so the wording covers each without guessing.
+      showNotification({key:'conversation-unavailable',title:'Conversation unavailable',
+        message:'Not found, or you do not have access to it.'});
       // A deleted or unknown conversation must not stay in the address: reloads would reopen it.
       const url=new URL(location.href);url.searchParams.delete('session_id');history.replaceState(history.state,'',url);
     }
