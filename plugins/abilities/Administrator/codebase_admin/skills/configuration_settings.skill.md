@@ -2,7 +2,7 @@
 id: configuration_settings
 title: Configuration files and setting descriptors
 when_to_use: Use whenever a change creates, extends, renames or removes a configuration value — a live JSON configuration file (listed in live-files.json), a key in one, an agent setting stored in agents.metadata, or a per-user setting — so the Configuration Controller can find and change it.
-default_mode: visible
+default_mode: discoverable
 minimum_access: registered
 ---
 

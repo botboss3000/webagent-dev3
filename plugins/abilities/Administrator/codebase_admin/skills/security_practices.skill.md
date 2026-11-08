@@ -2,7 +2,7 @@
 id: security_practices
 title: Security practices
 when_to_use: Use when adding or changing HTTP routes, storage lookups, shared or cross-user features, tool execution, UI rendering, or anything that handles request input.
-default_mode: visible
+default_mode: discoverable
 minimum_access: registered
 ---
 

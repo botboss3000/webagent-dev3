@@ -1212,9 +1212,11 @@ impl<
                 &ability_state,
             );
             if name == "list_abilities" {
+                let mut unavailable = Vec::new();
                 if let Some(entries) = result["abilities"].as_array_mut() {
                     entries.retain_mut(|entry| {
-                        app.filter_ability_entry(
+                        let (id, label) = (entry["id"].clone(), entry["name"].clone());
+                        let kept = app.filter_ability_entry(
                             &access,
                             entry,
                             &policy,
@@ -1222,11 +1224,24 @@ impl<
                             &ability_state,
                             &run["loaded_abilities"],
                             read_only,
-                        )
+                        );
+                        if !kept {
+                            unavailable.push(json!({"id":id,"name":label}));
+                        }
+                        kept
                     });
                     for entry in entries.iter_mut() {
                         *entry = webagent_abilities::discovery_row(entry);
                     }
+                }
+                // Abilities the agent or caller may not use are named, so the agent asks the
+                // user instead of hunting for a substitute. Off abilities never reach here.
+                if !unavailable.is_empty() {
+                    result["unavailable"] = json!(unavailable);
+                    result["unavailable_note"] = json!(
+                        "Not enabled for this agent, your access level or this session. Do not \
+                         look for a substitute; tell the user which ability is needed."
+                    );
                 }
             } else if matches!(result["status"].as_str(), Some("ok" | "already_available")) {
                 // Authorization uses the fresh catalog, never the loader acknowledgment.

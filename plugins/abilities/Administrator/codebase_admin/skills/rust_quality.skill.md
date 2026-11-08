@@ -2,7 +2,7 @@
 id: rust_quality
 title: Rust quality and optimization
 when_to_use: Use when writing, reviewing, refactoring, debugging, or optimizing WebAgent v3 Rust code.
-default_mode: visible
+default_mode: discoverable
 minimum_access: registered
 ---
 
