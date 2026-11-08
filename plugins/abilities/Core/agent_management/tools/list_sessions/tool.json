@@ -2,6 +2,7 @@
   "name": "list_sessions",
   "description": "List sessions in scope, newest first: ID, title, agent, last active, run status and relation (spawn, started_here or owned). 20 rows per page; pass the returned cursor for more.",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

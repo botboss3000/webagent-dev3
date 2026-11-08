@@ -2,6 +2,7 @@
   "name": "list_automations",
   "description": "list automations through the optional Automation service. Changes use revision checks; external adapters are unavailable.",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

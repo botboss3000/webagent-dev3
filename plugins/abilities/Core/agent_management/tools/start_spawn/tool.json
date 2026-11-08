@@ -2,6 +2,7 @@
   "name": "start_spawn",
   "description": "Start a sub agent: a child session shown as a tab in this conversation. It runs the task in text with this agent or agent_id, and you get a notice with its final reply when it finishes. End your turn after starting it; do not poll.",
   "effect": "write",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

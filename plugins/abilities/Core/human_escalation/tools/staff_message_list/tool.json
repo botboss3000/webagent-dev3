@@ -2,6 +2,7 @@
   "name": "staff_message_list",
   "description": "Staff only. List the newest visitor messages, optionally filtered by status.",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

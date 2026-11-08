@@ -2,6 +2,7 @@
   "name": "knowledge_file_get",
   "description": "Read one knowledge file's full text by ID.",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

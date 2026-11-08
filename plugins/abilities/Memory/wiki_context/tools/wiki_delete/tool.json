@@ -2,6 +2,7 @@
   "name": "wiki_delete",
   "description": "App administrators only. Remove an article for everyone; its history is kept and wiki_restore can bring it back. Prefer wiki_set_status draft to hide an article. Check wiki_backlinks first.",
   "effect": "write",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "ask"
   },

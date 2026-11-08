@@ -2,6 +2,7 @@
   "name": "v3_source_prepare",
   "description": "Generate and review an exact Git diff for one to eight new files in an open isolated V3 task. Returns a prepared_id to pass to v3_source_apply without copying patch text.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "deny",

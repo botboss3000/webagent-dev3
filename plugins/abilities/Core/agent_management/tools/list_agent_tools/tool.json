@@ -2,6 +2,7 @@
   "name": "list_agent_tools",
   "description": "Read an accessible agent's effective ability/tool catalog and revisions.",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

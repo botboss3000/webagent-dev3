@@ -4,6 +4,7 @@
   "effect": "write",
   "retry_risk": "none",
   "retry_hint": "call find_setting again: its current value shows whether the earlier change was saved, and a repeat with the old revision is refused",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "deny",
     "member": "deny",

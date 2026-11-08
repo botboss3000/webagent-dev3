@@ -2,6 +2,7 @@
   "name": "message_session",
   "description": "Send an attributed message to a session in scope. steer (default) delivers at its next turn boundary, queue after its current run, interrupt stops the current run. Returns admission, not the reply.",
   "effect": "write",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

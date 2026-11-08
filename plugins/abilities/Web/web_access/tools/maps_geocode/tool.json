@@ -2,6 +2,7 @@
   "name": "maps_geocode",
   "description": "Nominatim forward/reverse geocoding or local great-circle distance in km/miles",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

@@ -2,6 +2,7 @@
   "name": "source_publish",
   "description": "Fast-forward production to the reviewed preview commit and request its exact remote build.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "deny",

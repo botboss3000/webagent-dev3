@@ -2,6 +2,7 @@
   "name": "delete_source",
   "description": "Delete exactly one UI file through a reviewed full deletion diff. Requires path, patch, broker_id and the current task digest.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "auto",

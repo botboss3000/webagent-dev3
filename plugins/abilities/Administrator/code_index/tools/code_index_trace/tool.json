@@ -2,6 +2,7 @@
   "name": "code_index_trace",
   "description": "code index trace in this session isolated source snapshot; freshness is explicit",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "ask",

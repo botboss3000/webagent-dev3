@@ -2,6 +2,7 @@
   "name": "source_remote_commit",
   "description": "Commit exact UTF-8 file edits on a webagent/ draft branch through GitHub APIs; never publishes production.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "deny",

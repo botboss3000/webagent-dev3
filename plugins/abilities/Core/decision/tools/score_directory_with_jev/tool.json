@@ -2,6 +2,7 @@
   "name": "score_directory_with_jev",
   "description": "Discover and score files in an authorized directory, optionally recursively by basename glob and with bounded source excerpts",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

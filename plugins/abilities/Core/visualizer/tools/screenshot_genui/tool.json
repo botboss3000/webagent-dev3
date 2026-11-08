@@ -2,6 +2,7 @@
   "name": "screenshot_genui",
   "description": "Capture an actual PNG of a caller-private mini app in a fresh offline browser. Optional bounded CSS clicks verify this app only. No platform login or external origin is available. Returns a private attachment plus bounded visible text and console diagnostics. Requires the app's exact revision.",
   "effect": "write",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

@@ -2,6 +2,7 @@
   "name": "set_model",
   "description": "Select one existing model entry for the rest of this run. Applies at the next model boundary; does not edit agent assignments.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "auto",

@@ -2,6 +2,7 @@
   "name": "source_preview_start",
   "description": "Request a remote Cloudflare build for an exact GitHub draft commit. Return its receipt; inspect status until ready.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "deny",

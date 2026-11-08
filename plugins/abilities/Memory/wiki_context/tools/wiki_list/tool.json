@@ -2,6 +2,7 @@
   "name": "wiki_list",
   "description": "List Wiki articles newest first (title, tags, category, status, snippet), optionally in one category. At most 100 are returned with the total count.",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

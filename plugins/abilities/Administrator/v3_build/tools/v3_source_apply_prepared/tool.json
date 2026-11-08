@@ -2,6 +2,7 @@
   "name": "v3_source_apply_prepared",
   "description": "Apply the exact reviewed diff returned by v3_source_prepare using only its prepared_id; do not include patch text",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "deny",

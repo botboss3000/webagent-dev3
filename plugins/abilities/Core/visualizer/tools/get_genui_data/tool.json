@@ -2,6 +2,7 @@
   "name": "get_genui_data",
   "description": "Read a mini app's private JSON data snapshot. This is stored data, not a network fetch or a credential lookup.",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

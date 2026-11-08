@@ -2,6 +2,7 @@
   "name": "terminal_list",
   "description": "List only this session persistent PTYs",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "ask",

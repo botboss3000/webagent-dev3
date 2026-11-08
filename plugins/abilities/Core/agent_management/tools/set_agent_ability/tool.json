@@ -2,6 +2,7 @@
   "name": "set_agent_ability",
   "description": "Set availability for one installed ability without granting new authority. Request: visibility and expected_revision.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "auto",

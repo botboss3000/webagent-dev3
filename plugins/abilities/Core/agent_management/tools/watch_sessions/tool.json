@@ -2,6 +2,7 @@
   "name": "watch_sessions",
   "description": "Watch an accessible session for a settled turn through the installed Automation service. Creates a durable subscription delivering to this conversation; normal automation activation and permissions remain required.",
   "effect": "write",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

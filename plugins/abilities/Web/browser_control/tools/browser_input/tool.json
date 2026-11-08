@@ -4,6 +4,7 @@
   "effect": "write",
   "retry_risk": "none",
   "retry_hint": "read the page again to see whether the earlier click or typing already took effect; every input needs its own fresh read, so input cannot repeat blindly",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "ask",
     "member": "ask",

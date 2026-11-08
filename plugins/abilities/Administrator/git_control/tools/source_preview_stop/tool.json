@@ -2,6 +2,7 @@
   "name": "source_preview_stop",
   "description": "Cancel/reconcile pending build, delete only the recorded preview and verify its URLs. cleanup_pending is not disabled.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "deny",

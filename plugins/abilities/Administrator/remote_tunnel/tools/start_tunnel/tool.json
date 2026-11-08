@@ -2,6 +2,7 @@
   "name": "start_tunnel",
   "description": "Create a bounded authenticated preview lease for this session isolated app",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "deny",

@@ -2,6 +2,7 @@
   "name": "get_genui",
   "description": "Read one caller-private mini app's bounded HTML, data and revision.",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

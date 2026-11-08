@@ -2,6 +2,7 @@
   "name": "v3_cargo_task",
   "description": "Run fixed locked Cargo verification on a reviewed isolated snapshot; policy-gated",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "deny",

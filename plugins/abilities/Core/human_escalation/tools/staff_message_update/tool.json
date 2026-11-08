@@ -2,6 +2,7 @@
   "name": "staff_message_update",
   "description": "Staff only. Change a visitor message's status and optionally add a note, using the message's current revision.",
   "effect": "write",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

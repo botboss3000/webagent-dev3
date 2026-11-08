@@ -2,6 +2,7 @@
   "name": "mcp_list_tools",
   "description": "Read the explicitly permitted schemas for one enabled MCP connection",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

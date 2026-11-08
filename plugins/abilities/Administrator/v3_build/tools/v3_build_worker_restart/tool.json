@@ -2,6 +2,7 @@
   "name": "v3_build_worker_restart",
   "description": "Restart only the idle dedicated V3 development build worker; installation administrator only",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "deny",

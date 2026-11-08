@@ -2,6 +2,7 @@
   "name": "read_directory",
   "description": "List frontend directories in bounded broker pages.",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

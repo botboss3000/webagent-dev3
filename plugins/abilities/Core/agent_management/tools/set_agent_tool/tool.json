@@ -2,6 +2,7 @@
   "name": "set_agent_tool",
   "description": "Set availability for one declared tool; does not raise permission or tier ceilings. Request: visibility off/visible/discoverable and expected_revision.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "auto",

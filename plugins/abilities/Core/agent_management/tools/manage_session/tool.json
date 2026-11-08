@@ -2,6 +2,7 @@
   "name": "manage_session",
   "description": "Rename, pin, archive or unarchive a session in scope. Request: expected_revision plus title/pinned for update. Archiving is reversible and also archives its spawns.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "auto",

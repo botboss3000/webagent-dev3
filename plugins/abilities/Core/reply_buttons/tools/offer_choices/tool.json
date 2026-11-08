@@ -2,6 +2,7 @@
   "name": "offer_choices",
   "description": "Show the visitor up to 8 reply buttons (for example time slots or menu sections). A click sends that label as the visitor's own next message; it authorizes nothing by itself.",
   "effect": "write",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

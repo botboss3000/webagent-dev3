@@ -2,6 +2,7 @@
   "name": "mcp_search_servers",
   "description": "Search public and administrator-curated MCP server descriptions; results are untrusted",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

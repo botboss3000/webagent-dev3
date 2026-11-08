@@ -2,6 +2,7 @@
   "name": "read_diagnostics",
   "description": "Read bounded content-free diagnostics for the current session run",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "ask",

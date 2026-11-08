@@ -12,8 +12,12 @@ A compiled ability declares each tool in its own folder,
 its manifest; a packaged ability whose package contract checks the manifest list keeps
 it, naming exactly its tool folders. `tool.json` holds `name` (the folder name),
 `description`, JSON-schema `parameters`, optional `strict`, `effect` (`read` or
-`write`) and `default_access` per role (`operator`, `member`, `visitor`: `auto`,
-`ask` or `deny`); `tool.skill.md` is its optional guidance. The handler stays compiled Rust and lists the tool in its adapter's
+`write`), `policy_ceiling` and `default_access` per role (`operator`, `member`,
+`visitor`: `auto`, `ask` or `deny`); `tool.skill.md` is its optional guidance.
+`policy_ceiling` (`auto`, `ask` or `deny`) is the tool's installation-wide limit for
+every agent and the only place it is set: startup writes it into the installation
+policy, so a change applies with the next release. The Abilities page disables
+permission choices looser than it. The handler stays compiled Rust and lists the tool in its adapter's
 `TOOLS`. At startup every listed handler must have a valid folder and every folder a
 handler; a missing or invalid folder disables only that tool. A capability level with
 no saved permission for a tool uses `default_access` for its role, then the next role

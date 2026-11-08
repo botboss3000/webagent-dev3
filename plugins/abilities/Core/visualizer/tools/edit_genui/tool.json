@@ -2,6 +2,7 @@
   "name": "edit_genui",
   "description": "Edit one private mini app using its exact revision. Supply replacement html or exactly one old_text/new_text replacement. Displays the updated app in this conversation.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "auto",

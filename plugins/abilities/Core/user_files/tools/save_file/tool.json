@@ -2,6 +2,7 @@
   "name": "save_file",
   "description": "Save a file in the current caller's private files. Use revision 0 to create; read before replacing. Supply exactly one of text or base64 data.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "auto",

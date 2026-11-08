@@ -2,6 +2,7 @@
   "name": "wiki_set_status",
   "description": "App administrators only. Publish an article (published: visible to visitors) or make it internal (draft: staff only).",
   "effect": "write",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto"
   },

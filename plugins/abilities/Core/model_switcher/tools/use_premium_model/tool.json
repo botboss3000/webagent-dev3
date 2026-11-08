@@ -2,6 +2,7 @@
   "name": "use_premium_model",
   "description": "Use this agent's assigned Premium role for this run.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "auto",

@@ -2,6 +2,7 @@
   "name": "v3_source_list",
   "description": "List immediate files and directories in an open isolated V3 task source snapshot; omit path to list the V3 root",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "ask",

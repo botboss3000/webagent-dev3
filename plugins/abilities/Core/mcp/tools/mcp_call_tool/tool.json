@@ -3,6 +3,7 @@
   "description": "Call an explicitly permitted remote MCP tool. May modify external systems; never replay uncertain effects",
   "strict": false,
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "auto",

@@ -2,6 +2,7 @@
   "name": "browser_read",
   "description": "Look at web pages in a private server browser: navigate, read rendered text, measure element sizes and positions, sample rendered pixel colours, read page-load timing, wait for and time conditions, inspect animations, scroll, emulate phone/desktop and dark mode, and take screenshots that attach to the reply. Signed out on public sites; clicking and typing use browser_input",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "ask",

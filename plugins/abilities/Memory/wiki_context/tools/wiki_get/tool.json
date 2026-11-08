@@ -2,6 +2,7 @@
   "name": "wiki_get",
   "description": "Read one full Wiki article by slug, including its current revision.",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

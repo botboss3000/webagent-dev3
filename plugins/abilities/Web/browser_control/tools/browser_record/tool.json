@@ -2,6 +2,7 @@
   "name": "browser_record",
   "description": "Record up to 30 screenshots over 30 seconds of the private server browser; frames attach to the reply",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "ask",

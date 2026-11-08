@@ -2,6 +2,7 @@
   "name": "v3_worker_job",
   "description": "Poll a caller-owned durable build job; never rerun a mutation",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "ask",

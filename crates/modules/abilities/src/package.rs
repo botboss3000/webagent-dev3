@@ -891,7 +891,7 @@ pub mod registered_tests {
                 } else {
                     "write"
                 };
-                let tool = json!({"name":name,"description":"private schema fixture","effect":effect,"default_access":{},
+                let tool = json!({"name":name,"description":"private schema fixture","effect":effect,"policy_ceiling":"auto","default_access":{},
                 "parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}});
                 std::fs::write(
                     root.join(format!("tools/{name}/tool.json")),

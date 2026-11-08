@@ -2,6 +2,7 @@
   "name": "code_index_scan",
   "description": "code index scan in this session isolated source snapshot; freshness is explicit",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "deny",

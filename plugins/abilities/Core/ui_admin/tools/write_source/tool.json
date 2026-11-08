@@ -2,6 +2,7 @@
   "name": "write_source",
   "description": "Create or replace frontend text only in isolated UI broker work. An existing draft requires its latest expected_inputs_sha256.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "auto",

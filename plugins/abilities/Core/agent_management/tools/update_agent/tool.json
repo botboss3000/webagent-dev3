@@ -2,6 +2,7 @@
   "name": "update_agent",
   "description": "Update an agent the caller can manage. Request fields: revision plus name and/or description; owning Identity API validates other supported settings.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "auto",

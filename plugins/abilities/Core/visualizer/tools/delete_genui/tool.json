@@ -2,6 +2,7 @@
   "name": "delete_genui",
   "description": "Delete the active private mini app using its exact revision. Conversation history and prior attachments are independent retained records.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "auto",

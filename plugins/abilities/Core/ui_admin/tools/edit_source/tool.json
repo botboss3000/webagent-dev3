@@ -2,6 +2,7 @@
   "name": "edit_source",
   "description": "Replace exactly one frontend text span in isolated UI work; requires the current task digest.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "auto",

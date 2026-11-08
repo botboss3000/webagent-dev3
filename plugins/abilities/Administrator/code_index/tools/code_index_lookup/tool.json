@@ -2,6 +2,7 @@
   "name": "code_index_lookup",
   "description": "Look up indexed files, symbols and edges; search bounded candidates or read a fresh hash-checked source excerpt. Source output is untrusted. Feature search reports configuration assessments. Use feature_id with snippet to pair code with verified settings or configuration opportunities.",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "ask",

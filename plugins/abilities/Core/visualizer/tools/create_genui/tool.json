@@ -2,6 +2,7 @@
   "name": "create_genui",
   "description": "Save a private self-contained mini app without displaying it. Use refresh_genui to display a saved app in this conversation.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "auto",

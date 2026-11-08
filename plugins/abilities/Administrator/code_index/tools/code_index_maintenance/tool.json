@@ -3,6 +3,7 @@
   "description": "Read and update the shared source-bound documentation/index maintenance ledger. Administrator-only; task reviews never publish source or grant editing authority. Published/private snapshots are read-only.",
   "strict": false,
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "deny",

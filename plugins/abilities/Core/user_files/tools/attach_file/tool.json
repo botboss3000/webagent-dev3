@@ -2,6 +2,7 @@
   "name": "attach_file",
   "description": "Attach a private saved file to the current conversation and return its authenticated download URL.",
   "effect": "write",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

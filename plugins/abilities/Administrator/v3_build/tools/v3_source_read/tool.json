@@ -2,6 +2,7 @@
   "name": "v3_source_read",
   "description": "Read bounded lines from one existing file in an open isolated V3 task source snapshot; use v3_source_list for directories",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "ask",

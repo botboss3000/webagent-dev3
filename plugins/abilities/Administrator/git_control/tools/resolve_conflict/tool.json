@@ -2,6 +2,7 @@
   "name": "resolve_conflict",
   "description": "Resolve one conflict with an exact file hash; never stage implicitly",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "deny",

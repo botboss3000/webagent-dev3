@@ -2,6 +2,7 @@
   "name": "get_agent",
   "description": "Read one accessible agent's identity and current revision.",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

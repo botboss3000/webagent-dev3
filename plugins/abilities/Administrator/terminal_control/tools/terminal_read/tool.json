@@ -2,6 +2,7 @@
   "name": "terminal_read",
   "description": "Read bounded PTY output and receive a fresh observation sequence",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "ask",

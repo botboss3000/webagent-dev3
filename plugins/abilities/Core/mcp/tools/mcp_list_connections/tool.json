@@ -2,6 +2,7 @@
   "name": "mcp_list_connections",
   "description": "List this agent's enabled MCP connections and their revision",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

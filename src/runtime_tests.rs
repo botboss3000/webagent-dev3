@@ -8231,7 +8231,7 @@ async fn web_access_api_support_auth_csrf_revision_and_persistence() {
 }
 
 #[tokio::test]
-async fn web_access_policy_migration_preserves_denial_and_approval() {
+async fn tool_policy_ceilings_replace_saved_rules() {
     let (_root, app) = fixture().await;
     let mut p = policy_default();
     p["rules"]["web_search"] = json!("deny");
@@ -8241,9 +8241,16 @@ async fn web_access_policy_migration_preserves_denial_and_approval() {
     migrate_tool_policy_defaults(&app.store).await.unwrap();
     migrate_tool_policy_defaults(&app.store).await.unwrap();
     let migrated = app.store.get("policy").await.unwrap().unwrap();
-    assert_eq!(migrated["rules"]["web_search"], "deny");
-    assert_eq!(migrated["rules"]["get_weather"], "require_approval");
-    assert_eq!(migrated["rules"]["maps_geocode"], "deny");
+    // Each tool folder's policy_ceiling wins over the saved rule, missing or not.
+    for name in ["web_search", "get_weather", "maps_geocode"] {
+        let ceiling = webagent_abilities::tool_definitions::get(name)
+            .unwrap()
+            .policy_ceiling;
+        assert_eq!(
+            access::Permission::from_policy(policy_decision(&migrated, name)).unwrap(),
+            ceiling
+        );
+    }
     assert_eq!(migrated["version"], 2);
 }
 

@@ -99,7 +99,7 @@ mod tests {
         let folder = root.join(GROUP).join(ability).join("tools").join(name);
         fs::create_dir_all(&folder).expect("tool folder");
         let definition = json!({"name":name,"description":description,"effect":"read",
-            "default_access":{"operator":"auto"},
+            "policy_ceiling":"auto","default_access":{"operator":"auto"},
             "parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}});
         fs::write(folder.join("tool.json"), definition.to_string()).expect("tool.json");
     }

@@ -2,6 +2,7 @@
   "name": "v3_build_work",
   "description": "Register V3 source work, inspect coordination, or finish with an exact source digest to trigger one validated automatic build and deployment",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "deny",

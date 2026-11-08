@@ -2,6 +2,7 @@
   "name": "source_rollback",
   "description": "Restore the recorded previous Cloudflare version. Source history is preserved.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "deny",

@@ -114,6 +114,18 @@ pub(crate) async fn migrate_tool_policy_defaults(store: &Store) -> Result<()> {
         });
         changed = true;
     }
+    // A tool folder's `policy_ceiling` is its installation rule, set nowhere else.
+    for (name, definition) in webagent_abilities::tool_definitions::definitions() {
+        let rule = json!(match definition.policy_ceiling {
+            webagent_access::Permission::Auto => "allow",
+            webagent_access::Permission::Ask => "require_approval",
+            webagent_access::Permission::Deny => "deny",
+        });
+        if policy["rules"][name] != rule {
+            policy["rules"][name] = rule;
+            changed = true;
+        }
+    }
     for (name, _) in defaults["rules"].as_object().unwrap() {
         if policy["rules"][name].is_null() {
             policy["rules"][name] = json!("deny");
@@ -359,129 +371,6 @@ pub(crate) async fn policy_get(State(app): State<App>) -> Api {
         json!({"version":policy["version"],"rules":policy["rules"],"catalog_names":names}),
     ))
 }
-/// Save a complete policy for the request-pinned live catalog; running work picks it up at its next step.
-pub(crate) async fn policy_set(State(app): State<App>, Json(body): Json<Value>) -> Api {
-    let rules = body["rules"]
-        .as_object()
-        .ok_or_else(|| bad("rules required"))?;
-    // Discovery is dispatched by Rust rather than tools::execute, but its
-    // installation rules are still required by the same live permission check.
-    let names: std::collections::BTreeSet<String> = app
-        .abilities
-        .all_schemas()
-        .into_iter()
-        .chain(crate::mcp::all_schemas())
-        .filter_map(|schema| schema["name"].as_str().map(str::to_owned))
-        .chain(
-            ["list_abilities", "load_ability"]
-                .into_iter()
-                .map(str::to_owned),
-        )
-        .collect();
-    if rules.len() != names.len() {
-        return Err(bad("Specify every tool policy"));
-    }
-    for name in &names {
-        if !matches!(
-            rules.get(name).and_then(Value::as_str),
-            Some("allow" | "deny" | "require_approval")
-        ) {
-            return Err(bad("Invalid policy rule"));
-        }
-    }
-    let _guard = app.gate.lock().await;
-    let old = app.store.get("policy").await?.unwrap();
-    if body
-        .get("expected_version")
-        .is_some_and(|v| v != &old["version"])
-    {
-        return Err(conflict(
-            "Installation policy changed; reload before saving",
-        ));
-    }
-    let value = json!({"version":old["version"].as_u64().unwrap()+1,"rules":rules});
-    app.store.put("policy", &value).await?;
-    app.store
-        .event("", "policy_changed", &json!({"version":value["version"]}))
-        .await?;
-    // Configuration applies at the next step: policy and tool decisions are re-read per
-    // model call and before every tool, so running work is not stopped; only approvals
-    // waiting under the old settings are revoked.
-    phase3_api::revoke_waiting_approvals(&app, None, "the installation tool policy changed")
-        .await?;
-    Ok(Json(value))
-}
-#[cfg(test)]
-mod policy_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn policy_roundtrip_includes_discovery_and_preserves_restrictions() {
-        let (_root, app) = crate::runtime_tests::fixture().await;
-        let mut body = policy_default();
-        body["rules"]["file_write"] = json!("allow");
-        body["rules"]["shell"] = json!("require_approval");
-        body["rules"]["python"] = json!("deny");
-        body["rules"]["load_ability"] = json!("require_approval");
-        let saved = policy_set(State(app.clone()), Json(body.clone()))
-            .await
-            .unwrap()
-            .0;
-        assert_eq!(saved["rules"], body["rules"]);
-        assert_eq!(saved["version"], 2);
-        assert_eq!(app.store.get("policy").await.unwrap().unwrap(), saved);
-        let access = app
-            .store
-            .live_access("admin", "shared_default")
-            .await
-            .unwrap();
-        for (name, expected) in [
-            ("file_write", access::Permission::Auto),
-            ("shell", access::Permission::Ask),
-            ("python", access::Permission::Deny),
-        ] {
-            let permission =
-                access::Permission::from_policy(policy_decision(&saved, name)).unwrap();
-            assert_eq!(
-                access
-                    .tool_decision(name, permission, true, true, false, false)
-                    .permission,
-                expected
-            );
-        }
-        assert_eq!(
-            access
-                .tool_decision(
-                    "file_write",
-                    access::Permission::Auto,
-                    true,
-                    true,
-                    true,
-                    false
-                )
-                .permission,
-            access::Permission::Deny
-        );
-
-        for name in ["file_read", "list_abilities", "load_ability"] {
-            let mut missing = body.clone();
-            missing["rules"].as_object_mut().unwrap().remove(name);
-            assert!(policy_set(State(app.clone()), Json(missing)).await.is_err());
-        }
-        let mut unknown = body.clone();
-        unknown["rules"]
-            .as_object_mut()
-            .unwrap()
-            .remove("load_ability");
-        unknown["rules"]["unknown_tool"] = json!("allow");
-        assert!(policy_set(State(app.clone()), Json(unknown)).await.is_err());
-        let mut invalid = body;
-        invalid["rules"]["list_abilities"] = json!("invalid");
-        assert!(policy_set(State(app.clone()), Json(invalid)).await.is_err());
-        assert_eq!(app.store.get("policy").await.unwrap().unwrap(), saved);
-    }
-}
-
 // Tenant connections are the sole credential authority after the catalog migration.
 // Retire the global route so installation oversight cannot bypass connection ownership.
 pub(crate) async fn provider_start(State(app): State<App>) -> Api {

@@ -201,7 +201,7 @@ pub(super) fn router(app: App) -> Router {
                 .patch(crate::chat_config::patch)
                 .delete(crate::chat_config::reset),
         )
-        .route("/policy", get(policy_get).put(policy_set))
+        .route("/policy", get(policy_get))
         .route("/abilities", get(ability_catalog))
         .route("/provider/login", post(provider_start))
         .route("/provider/logout", post(provider_logout))

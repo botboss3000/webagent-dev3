@@ -2,6 +2,7 @@
   "name": "v3_workspace_receipt",
   "description": "Read this session durable operation receipt before retrying",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "ask",

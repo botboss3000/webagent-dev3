@@ -2,6 +2,7 @@
   "name": "list_event_subscriptions",
   "description": "list event subscriptions through the optional Automation service. Changes use revision checks; external adapters are unavailable.",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

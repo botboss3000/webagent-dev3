@@ -45,6 +45,9 @@ pub struct ToolDefinition {
     pub strict: Option<bool>,
     pub parameters: Value,
     pub effect: Effect,
+    /// Installation-wide upper limit for every agent: saved permissions and role defaults
+    /// can only be stricter. The only place a tool's ceiling is set; applies on release.
+    pub policy_ceiling: Permission,
     /// Access when an agent's capability level saves no explicit tool permission.
     /// A role left out gets the next role down; none at all means Deny.
     pub default_access: BTreeMap<String, Permission>,
@@ -349,7 +352,7 @@ mod tests {
     fn body(name: &str) -> Value {
         json!({"name":name,"description":"Look something up","effect":"read",
             "parameters":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"],"additionalProperties":false},
-            "default_access":{"operator":"auto","member":"ask"}})
+            "policy_ceiling":"auto","default_access":{"operator":"auto","member":"ask"}})
     }
 
     #[test]
@@ -408,6 +411,9 @@ mod tests {
         let mut unknown = body("lookup");
         unknown["default_access"]["admin"] = json!("auto");
         assert!(ToolDefinition::parse(&serde_json::to_vec(&unknown).unwrap(), "lookup").is_err());
+        let mut uncapped = body("lookup");
+        uncapped.as_object_mut().unwrap().remove("policy_ceiling");
+        assert!(ToolDefinition::parse(&serde_json::to_vec(&uncapped).unwrap(), "lookup").is_err());
     }
 
     #[test]

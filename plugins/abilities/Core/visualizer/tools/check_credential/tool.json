@@ -2,6 +2,7 @@
   "name": "check_credential",
   "description": "Check presence, revision and service origin for one caller-private credential. Returns metadata only; does not validate a remote provider or reveal the secret.",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

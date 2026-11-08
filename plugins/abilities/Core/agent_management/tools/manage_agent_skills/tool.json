@@ -2,6 +2,7 @@
   "name": "manage_agent_skills",
   "description": "List, read, save or remove an agent's self-authored selectable skills. Writes require agent administration and exact skill revision.",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "auto",

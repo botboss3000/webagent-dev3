@@ -2,6 +2,7 @@
   "name": "v3_source_apply",
   "description": "Apply a reviewed standard Git unified diff to an open isolated V3 task; use v3_source_apply_prepared for a prepared_id",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "deny",

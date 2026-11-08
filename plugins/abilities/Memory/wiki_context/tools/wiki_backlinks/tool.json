@@ -2,6 +2,7 @@
   "name": "wiki_backlinks",
   "description": "List the Wiki articles that link to this one with [[...]]. Check before renaming or deleting an article.",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

@@ -241,6 +241,8 @@ export async function renderAbilities(host, request, options) {
         // Deny because of the account tier, visibility or port status.
         permMode: toolPolicy()?.tool_permissions?.[tool.name] ||
           toolPolicy()?.tool_permissions?.['*'] || effectiveTool.default || 'auto',
+        // The tool.json policy_ceiling: picks looser than it are shown but disabled.
+        ceiling: { allow: 'auto', require_approval: 'ask', deny: 'deny' }[tool.policy],
       }, {
         canEdit: canManage && !previewUser && levelId==='operator',
         showPerm: true,

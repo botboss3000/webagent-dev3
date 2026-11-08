@@ -2,6 +2,7 @@
   "name": "read_source",
   "description": "Read frontend text from a protected UI source snapshot; optional broker_id selects private work.",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

@@ -2,6 +2,7 @@
   "name": "v3_build_image",
   "description": "Submit an immutable development image build; never deploy implicitly",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "deny",

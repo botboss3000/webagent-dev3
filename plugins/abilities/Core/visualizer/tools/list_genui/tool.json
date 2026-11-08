@@ -2,6 +2,7 @@
   "name": "list_genui",
   "description": "List caller-private mini app names and revisions without source or data.",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

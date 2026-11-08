@@ -2,6 +2,7 @@
   "name": "staff_message_send",
   "description": "Leave a message for staff to follow up: the visitor's contact details and request. Ask for consent first and include at least an email or phone number. Never collect payment card or government ID numbers.",
   "effect": "write",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

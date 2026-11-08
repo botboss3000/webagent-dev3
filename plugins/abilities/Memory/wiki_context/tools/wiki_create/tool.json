@@ -2,6 +2,7 @@
   "name": "wiki_create",
   "description": "App administrators only. Create a Wiki article; its slug is derived from the title. Search first to avoid duplicates. New articles are drafts (members only) unless status is published.",
   "effect": "write",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto"
   },

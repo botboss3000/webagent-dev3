@@ -2,6 +2,7 @@
   "name": "v3_worker_submit",
   "description": "Submit a fixed build or approved development deployment; installation administrator only",
   "effect": "write",
+  "policy_ceiling": "ask",
   "default_access": {
     "operator": "auto",
     "member": "deny",

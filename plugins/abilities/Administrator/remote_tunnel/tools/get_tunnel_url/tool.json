@@ -2,6 +2,7 @@
   "name": "get_tunnel_url",
   "description": "Read this session active preview lease",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "ask",

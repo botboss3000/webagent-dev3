@@ -2,6 +2,7 @@
   "name": "start_session",
   "description": "Start a separate session in the user's list. By default it is a fork of this agent carrying this conversation's history up to the last completed reply, told to do the task in text directly. notify (default false) sends you its final reply when its run ends.",
   "effect": "write",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "auto",

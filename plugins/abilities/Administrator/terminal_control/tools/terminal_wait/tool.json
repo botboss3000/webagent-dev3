@@ -2,6 +2,7 @@
   "name": "terminal_wait",
   "description": "Wait for bounded PTY output",
   "effect": "read",
+  "policy_ceiling": "auto",
   "default_access": {
     "operator": "auto",
     "member": "ask",

@@ -425,7 +425,7 @@ mod tests {
 
     fn tool(name: &str, description: &str, effect: &str, operator: &str) -> String {
         json!({"name":name,"description":description,"effect":effect,
-            "default_access":{"operator":operator},
+            "policy_ceiling":"auto","default_access":{"operator":operator},
             "parameters":{"type":"object","properties":{"q":{"type":"string"}},"required":[],"additionalProperties":false}})
             .to_string()
     }
