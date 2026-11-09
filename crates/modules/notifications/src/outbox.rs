@@ -54,6 +54,7 @@ pub async fn schema(pool: &SqlitePool, plane: Plane) -> Result<()> {
             CREATE TABLE IF NOT EXISTS notification_retention(singleton INTEGER PRIMARY KEY CHECK(singleton=1),pruned_through INTEGER NOT NULL);
             INSERT OR IGNORE INTO notification_retention VALUES(1,0);")
             .execute(pool).await?;
+        crate::alerts::schema(pool).await?;
     }
     Ok(())
 }

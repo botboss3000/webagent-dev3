@@ -5,7 +5,7 @@ use super::{
 };
 use anyhow::Context;
 use webagent_configuration::{digest, read};
-const IDS: [&str; 13] = [
+const IDS: [&str; 14] = [
     "app_settings",
     "app_ui",
     "chat",
@@ -19,6 +19,7 @@ const IDS: [&str; 13] = [
     "voice",
     "storage_policy",
     "browser_limits",
+    "admin_alerts",
 ];
 /// Live files (checkout-relative, listed in `live-files.json`) for configuration edited in place.
 pub(crate) fn live(id: &str) -> Option<&'static str> {
@@ -32,6 +33,7 @@ pub(crate) fn live(id: &str) -> Option<&'static str> {
         "voice" => webagent_media::settings::LIVE_VOICE,
         "storage_policy" => webagent_files::storage_policy::LIVE_POLICY,
         "browser_limits" => webagent_browser::limits::LIVE_LIMITS,
+        "admin_alerts" => webagent_notifications::alerts::LIVE_CONFIG,
         _ => return None,
     })
 }
@@ -107,6 +109,9 @@ pub(crate) fn validate(id: &str, value: &Value) -> Result<()> {
         }
         "browser_limits" => {
             webagent_browser::limits::Limits::parse(&serde_json::to_vec(value)?)?;
+        }
+        "admin_alerts" => {
+            webagent_notifications::alerts::Config::parse(&serde_json::to_vec(value)?)?;
         }
         "tool_output_retention" => {
             serde_json::from_value::<tool_output::Policy>(value.clone())?.validate()?

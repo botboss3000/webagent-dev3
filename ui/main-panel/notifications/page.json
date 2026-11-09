@@ -1,0 +1,7 @@
+{
+  "id": "notifications",
+  "label": "Notifications",
+  "order": 3,
+  "css": ["notifications.css"],
+  "entry": "notifications-page.js"
+}

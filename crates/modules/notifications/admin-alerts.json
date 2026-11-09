@@ -1,0 +1,39 @@
+{
+  "_instructions": "Administrator alerts shown on the Notifications page, read live. events: each kind raises one alert when it happens threshold times within window_seconds (counted in memory; a restart clears the count); notify false ignores the kind. severity is info, warning or critical. retention_days: how long alerts are kept. channels: in_app is the Notifications page; ntfy, email and twilio are not available yet and must stay disabled.",
+  "schema_version": 1,
+  "retention_days": 30,
+  "events": {
+    "login_failed": {
+      "notify": true,
+      "severity": "warning",
+      "threshold": 5,
+      "window_seconds": 600
+    },
+    "login_blocked": {
+      "notify": true,
+      "severity": "critical",
+      "threshold": 1,
+      "window_seconds": 600
+    },
+    "rate_limited": {
+      "notify": true,
+      "severity": "warning",
+      "threshold": 20,
+      "window_seconds": 600
+    }
+  },
+  "channels": {
+    "in_app": {
+      "enabled": true
+    },
+    "ntfy": {
+      "enabled": false
+    },
+    "email": {
+      "enabled": false
+    },
+    "twilio": {
+      "enabled": false
+    }
+  }
+}

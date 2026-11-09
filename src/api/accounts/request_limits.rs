@@ -63,6 +63,7 @@ async fn count(app: &App, key: String, cap: u32, what: &str) -> Option<Response>
         return None;
     }
     let wait = app.login_attempts.retry_after(&key, cap, at).await.max(1);
+    crate::api::notifications::alert(app, "rate_limited");
     Some(too_many(wait, what))
 }
 

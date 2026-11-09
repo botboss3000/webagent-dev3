@@ -144,6 +144,8 @@ pub(super) fn router(app: App) -> Router {
         )
         .route("/admin/events", get(notifications::read))
         .route("/admin/events/stream", get(notifications::stream))
+        .route("/admin/alerts", get(notifications::alerts))
+        .route("/admin/alerts/read", post(notifications::read_alerts))
         .route("/admin/modules", get(crate::modules::admin_list))
         .route("/admin/modules/{id}", post(crate::modules::lifecycle))
         .route("/status", get(overview))

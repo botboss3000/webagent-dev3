@@ -206,8 +206,10 @@ async function loadAgentRoster(){
   renderAgentCards();
 }
 let mainPages=[];
+// Main pages only administrators see; their APIs enforce this too.
+const adminPages=['builds','notifications'];
 // Lucide names for the mobile sidebar; pages without an entry use a plain square.
-const mobileNavIcons={app:'layout-grid',agents:'bot',account:'user-cog',builds:'hammer','session-metrics':'chart-line',wiki:'book-open'};
+const mobileNavIcons={app:'layout-grid',agents:'bot',account:'user-cog',builds:'hammer',notifications:'bell','session-metrics':'chart-line',wiki:'book-open'};
 let activeMainPage='';
 const protectedPageStarts=new Map();
 const protectedAsset=path=>typeof path==='string'&&path.startsWith('/api/v3/modules/');
@@ -761,13 +763,13 @@ let accountMe=null;
 function renderAccount(me){
   accountMe=me;
   // Main-page visibility follows the authenticated identity, including on sign-in changes.
-  for(const page of mainPages.filter(page=>page.id==='builds')){
+  for(const page of mainPages.filter(page=>adminPages.includes(page.id))){
     $('tab-button-'+page.id).hidden=!me.is_admin;
     $('mobile-nav-'+page.id).hidden=!me.is_admin;
     const option=$('main-tab-select').querySelector('option[value="'+page.id+'"]');
     if(option) option.disabled=!me.is_admin;
   }
-  if(!me.is_admin&&activeMainPage==='builds') showMainPage('agents','replace');
+  if(!me.is_admin&&adminPages.includes(activeMainPage)) showMainPage('agents','replace');
   const guest=me.role==='guest';
   // Main pages mount lazily, so render only the nodes that exist now; the account
   // partial is filled again when it mounts (see ensureMainPage).
@@ -788,7 +790,7 @@ function renderAccount(me){
 }
 function showAccountPanel(routeMode='push'){showMainPage('account',routeMode);}
 function showMainPage(id,routeMode='push'){
-  if(!mainPages.some(page=>page.id===id)||id==='builds'&&!accountMe?.is_admin)return;
+  if(!mainPages.some(page=>page.id===id)||adminPages.includes(id)&&!accountMe?.is_admin)return;
   closeMobileNav();
   activeMainPage=id;
   updateMainPageState();

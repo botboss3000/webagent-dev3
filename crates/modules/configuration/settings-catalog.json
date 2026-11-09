@@ -48,6 +48,10 @@
     {
       "config": "crates/modules/browser/browser-limits.json",
       "descriptors": "crates/modules/browser/browser-limits.settings.json"
+    },
+    {
+      "config": "crates/modules/notifications/admin-alerts.json",
+      "descriptors": "crates/modules/notifications/admin-alerts.settings.json"
     }
   ],
   "excluded_files": {

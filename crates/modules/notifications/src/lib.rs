@@ -5,11 +5,14 @@
 //! ([`outbox::relay`]), where retention prunes them ([`outbox::prune`]) and installation
 //! administrators read them by cursor ([`outbox::page`]). Readers authenticate with revocable
 //! event-reader credentials ([`readers`]) and hold bounded connections ([`connections`]).
+//! Administrator alerts for security events are separate rows with their own live
+//! configuration ([`alerts`]).
 //!
 //! This crate takes borrowed pools and transactions; the root `Store`, `App` and HTTP
 //! handlers are the host adapters under `host/`. Optional outbound delivery is the separate
 //! `webagent-outbound-notifications` package.
 
+pub mod alerts;
 pub mod connections;
 pub mod cursor;
 pub mod outbox;

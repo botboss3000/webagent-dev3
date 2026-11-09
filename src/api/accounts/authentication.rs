@@ -7,20 +7,31 @@ pub(crate) async fn login(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> std::result::Result<Response, ApiError> {
-    webagent_accounts::authentication_api::login(
-        &app.store.accounts_repository(),
-        &app,
-        &app.login_attempts,
-        &headers,
-        &body,
-        app.secure,
-        webagent_accounts::AdmissionContext {
-            now: now(),
-            client: throttle_client(&app, peer, &headers)?,
-        },
-    )
-    .await
-    .map_err(Into::into)
+    let result: std::result::Result<Response, ApiError> =
+        webagent_accounts::authentication_api::login(
+            &app.store.accounts_repository(),
+            &app,
+            &app.login_attempts,
+            &headers,
+            &body,
+            app.secure,
+            webagent_accounts::AdmissionContext {
+                now: now(),
+                client: throttle_client(&app, peer, &headers)?,
+            },
+        )
+        .await
+        .map_err(Into::into);
+    let status = match &result {
+        Ok(response) => response.status(),
+        Err(error) => error.0,
+    };
+    if status == StatusCode::UNAUTHORIZED {
+        crate::api::notifications::alert(&app, "login_failed");
+    } else if status == StatusCode::TOO_MANY_REQUESTS {
+        crate::api::notifications::alert(&app, "login_blocked");
+    }
+    result
 }
 pub(crate) async fn setup_status(State(app): State<App>) -> Api {
     webagent_accounts::authentication_api::setup_status(&app.store.accounts_repository())

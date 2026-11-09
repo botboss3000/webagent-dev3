@@ -1,0 +1,150 @@
+{
+  "_instructions": "Setting descriptors for the configuration composer (see crates/modules/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
+  "settings": [
+    {
+      "id": "notifications.alerts.retention_days",
+      "description": "Days administrator alerts stay on the Notifications page before they are deleted.",
+      "type": "integer",
+      "pointer": "/retention_days",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "keep admin alerts for 90 days",
+        "delete notifications after a week",
+        "how long security alerts are kept"
+      ],
+      "areas": [
+        "notifications",
+        "security",
+        "retention"
+      ],
+      "unit": "days",
+      "min": 1,
+      "max": 365,
+      "bounds": "validator"
+    },
+    {
+      "id": "notifications.alerts.notify",
+      "description": "Whether this security event raises an administrator alert on the Notifications page.",
+      "type": "boolean",
+      "pointer": "/events/{event}/notify",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "stop alerting me about rate limits",
+        "notify the admin about failed logins",
+        "turn off sign-in block alerts"
+      ],
+      "areas": [
+        "notifications",
+        "security",
+        "alerts"
+      ],
+      "parameters": {
+        "event": [
+          "login_failed",
+          "login_blocked",
+          "rate_limited"
+        ]
+      }
+    },
+    {
+      "id": "notifications.alerts.severity",
+      "description": "How serious this security event's administrator alert is shown: info, warning or critical.",
+      "type": "enum",
+      "enum": [
+        "info",
+        "warning",
+        "critical"
+      ],
+      "pointer": "/events/{event}/severity",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "make failed logins critical",
+        "show rate limit alerts as info",
+        "lower the alert level for blocked sign-ins"
+      ],
+      "areas": [
+        "notifications",
+        "security",
+        "alerts"
+      ],
+      "parameters": {
+        "event": [
+          "login_failed",
+          "login_blocked",
+          "rate_limited"
+        ]
+      },
+      "bounds": "validator"
+    },
+    {
+      "id": "notifications.alerts.threshold",
+      "description": "How many times this security event must happen within its window before the administrator is alerted.",
+      "type": "integer",
+      "pointer": "/events/{event}/threshold",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "alert after 10 failed logins",
+        "only notify after 50 rate limited requests",
+        "tell me about every blocked sign-in"
+      ],
+      "areas": [
+        "notifications",
+        "security",
+        "alerts"
+      ],
+      "unit": "events",
+      "min": 1,
+      "max": 10000,
+      "parameters": {
+        "event": [
+          "login_failed",
+          "login_blocked",
+          "rate_limited"
+        ]
+      },
+      "bounds": "validator"
+    },
+    {
+      "id": "notifications.alerts.window_seconds",
+      "description": "Length, in seconds, of the window in which this security event is counted toward its alert threshold.",
+      "type": "integer",
+      "pointer": "/events/{event}/window_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "count failed logins over an hour",
+        "use a 5 minute window for rate limit alerts",
+        "count blocked sign-ins per day"
+      ],
+      "areas": [
+        "notifications",
+        "security",
+        "alerts"
+      ],
+      "unit": "seconds",
+      "min": 60,
+      "max": 86400,
+      "parameters": {
+        "event": [
+          "login_failed",
+          "login_blocked",
+          "rate_limited"
+        ]
+      },
+      "bounds": "validator"
+    }
+  ],
+  "excluded": {
+    "/schema_version": "File format version.",
+    "/channels/**": "Delivery channels: only in_app exists; ntfy, email and twilio are not available yet."
+  }
+}

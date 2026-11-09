@@ -19,6 +19,45 @@ use webagent_notifications::readers::{self, ReaderBody};
 
 use crate::{access, bad, conflict, now, Api, ApiError, App, State};
 
+/// Count one security event of `kind`; record an administrator alert when it reaches its
+/// live threshold. Recording runs in the background so the request is not delayed.
+pub(crate) fn alert(app: &App, kind: &'static str) {
+    let Some(raised) = webagent_notifications::alerts::hit(kind, now()) else {
+        return;
+    };
+    tracing::warn!(target: "security", kind, count = raised.count, "administrator alert");
+    let pool = app.store.app_pool.clone();
+    tokio::spawn(async move {
+        if webagent_notifications::alerts::record(&pool, &raised, now() as i64)
+            .await
+            .is_err()
+        {
+            tracing::error!("Administrator alert not recorded");
+        }
+    });
+}
+
+/// The Notifications page: newest alerts, unread count and the live configuration.
+pub(super) async fn alerts(State(app): State<App>) -> Api {
+    let mut page = webagent_notifications::alerts::list(&app.store.app_pool, 200)
+        .await
+        .map_err(|_| bad("Alerts unavailable"))?;
+    page["config"] = webagent_notifications::alerts::Config::live().view();
+    Ok(Json(page))
+}
+
+/// Mark one alert (`{"id": n}`) or every unread alert (`{}`) as read.
+pub(super) async fn read_alerts(State(app): State<App>, Json(body): Json<Value>) -> Api {
+    let id = match body.get("id") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(value.as_i64().ok_or_else(|| bad("Invalid alert"))?),
+    };
+    let marked = webagent_notifications::alerts::mark_read(&app.store.app_pool, id, now() as i64)
+        .await
+        .map_err(|_| bad("Alerts unavailable"))?;
+    Ok(Json(json!({"marked": marked})))
+}
+
 /// Hold one event-read connection slot for `identity`.
 fn connection(identity: &Value) -> std::result::Result<Connection, ApiError> {
     Connection::acquire(
@@ -323,6 +362,13 @@ pub(crate) async fn service(app: App) {
         if now().saturating_sub(last_pruned) >= 60 {
             if app.store.prune_notifications(now() as i64).await.is_err() {
                 tracing::error!("Notification retention deferred");
+            }
+            let retention = webagent_notifications::alerts::Config::live().retention_days;
+            if webagent_notifications::alerts::prune(&app.store.app_pool, now() as i64, retention)
+                .await
+                .is_err()
+            {
+                tracing::error!("Administrator alert retention deferred");
             }
             last_pruned = now();
         }
