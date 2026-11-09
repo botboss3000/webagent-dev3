@@ -57,3 +57,6 @@
   .v2-activity-group-glimmer > summary::after { animation: none; }
   .session-row-agent-icon.activity-running::after { animation: none; }
 }
+/* A cluster of groups and sub-agent notices shows its members, indented, only while open. */
+.v3-cluster-hidden { display: none !important; }
+.v3-cluster-member { padding-left: 12px; box-sizing: border-box; }

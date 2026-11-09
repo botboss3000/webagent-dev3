@@ -981,11 +981,12 @@ async fn session_stop(
         .await
         .into_response()
 }
-/// Removes a reply-choice card the user answered or dismissed; anyone who may send in the
-/// session may do it, as clicking an option would.
+/// Records the user's answer to (body `answer`) or dismissal of a reply panel; anyone who
+/// may send in the session may do it, as clicking an option would.
 async fn component_dismiss(
     Extension(app): Extension<App>,
     Path((sid, cid)): Path<(String, String)>,
+    Json(body): Json<serde_json::Value>,
 ) -> Response {
     let app = match session_app(app, &sid).await {
         Ok(app) => app,
@@ -994,7 +995,11 @@ async fn component_dismiss(
     if let Err(e) = guard_access(&app, true, false) {
         return e.into_response();
     }
-    match app.store.base_component_dismiss(&sid, &cid).await {
+    match app
+        .store
+        .base_component_dismiss(&sid, &cid, &body["answer"])
+        .await
+    {
         Ok(removed) => Json(serde_json::json!({"dismissed":removed})).into_response(),
         Err(error) => {
             crate::ApiError(axum::http::StatusCode::BAD_REQUEST, error.to_string()).into_response()

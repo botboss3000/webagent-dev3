@@ -149,10 +149,20 @@ impl Store {
         Ok(seq.max(0) as u64)
     }
 
-    /// Removes reply-choice card `id` once the user picked an option or dismissed it. Only
-    /// `user_reply` choice cards can be dismissed; returns whether one was removed.
-    pub async fn base_component_dismiss(&self, sid: &str, id: &str) -> Result<bool> {
+    /// Records the user's answer to choice or form panel `id`, or its dismissal when `answer`
+    /// is null. The panel stays in the chat, read-only, so the answer survives reload. Only
+    /// `user_reply` panels can be answered; returns whether one was found.
+    pub async fn base_component_dismiss(
+        &self,
+        sid: &str,
+        id: &str,
+        answer: &Value,
+    ) -> Result<bool> {
         let key = artifact_key(sid, "component", id)?;
+        if !(answer.is_null() || answer.is_object()) || serde_json::to_vec(answer)?.len() > 8 * 1024
+        {
+            return Err(anyhow!("Invalid panel answer"));
+        }
         let mut tx = self.pool.begin().await?;
         let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
             .bind(&key)
@@ -161,18 +171,37 @@ impl Store {
         else {
             return Ok(false);
         };
-        let document = self.unseal(&raw)?;
+        let mut document = self.unseal(&raw)?;
         let card = &document["artifact"];
         if document["session_id"] != sid || card["authority"] != "user_reply" {
             return Err(anyhow!("Only choice and form panels can be dismissed"));
         }
-        sqlx::query("DELETE FROM docs WHERE key=?")
+        if card["type"] == "choice"
+            && !answer.is_null()
+            && !card["data"]["options"]
+                .as_array()
+                .is_some_and(|options| options.iter().any(|o| o["id"] == answer["option_id"]))
+        {
+            return Err(anyhow!("Unknown panel option"));
+        }
+        if card["lifecycle"]["user_state"].is_string() {
+            return Ok(true); // Already answered or dismissed; the first answer stands.
+        }
+        let next = document["revision"].as_u64().unwrap_or(0) + 1;
+        document["revision"] = json!(next);
+        document["artifact"]["lifecycle"] = if answer.is_null() {
+            json!({"user_state":"dismissed"})
+        } else {
+            json!({"user_state":"answered","answer":answer})
+        };
+        sqlx::query("UPDATE docs SET value=? WHERE key=?")
+            .bind(self.encode_user_record(&document)?)
             .bind(&key)
             .execute(&mut *tx)
             .await?;
         sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,'base_task_artifact',?)")
             .bind(sid)
-            .bind(self.encode_user_record(&json!({"kind":"component","id":id,"dismissed":true}))?)
+            .bind(self.encode_user_record(&json!({"kind":"component","id":id,"revision":next}))?)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;

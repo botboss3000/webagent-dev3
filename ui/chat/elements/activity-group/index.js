@@ -1,16 +1,7 @@
 // @code-index {"version":1,"feature":"chat-elements","aliases":["chat elements","activity group","typing ellipsis","mini transcript"],"purpose":"Owns modular chat elements. Config: ui/chat/chat.json -> chat_common.chat_elements and show_activity_groups, merged with desktop/mobile/widget profiles.","span_lines":30,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_common/chat_elements","/chat_common/show_activity_groups"],"profile_overrides":true}],"opportunities":[]}}
 // Activity group owns its compact label and disclosure; mini-transcript owns the body.
-/** Connect a persistent activity disclosure to an independently owned transcript. */
-export function createActivityGroup({transcript}) {
-  const node=document.createElement('details');node.className='v2-activity-group';
-  const summary=document.createElement('summary');
-  node.append(summary,transcript.element);
-  // Native details supplies pointer and keyboard disclosure semantics.
-  const toggle=()=>{node.open?transcript.open():transcript.close();};
-  node.addEventListener('toggle',toggle);
-  // Refresh counts/status without replacing the focused summary or open transcript.
-  function update(group,{error='',active=false}={}) {
-    node.dataset.activityGroupId=group.id;
+/** Compact group label: nonzero counts, any extra parts (such as sub-agent notices), then status. */
+export function activityLabel(group,{error='',extra=[]}={}) {
     // Summarize nonzero category counts without changing the underlying journal rows.
     const parts=Object.entries(group.counts).filter(([,count])=>count)
       .map(([kind,count])=>count+' '+(count===1?({retries:'retry'}[kind]||kind.replace(/s$/,'')):kind));
@@ -25,8 +16,21 @@ export function createActivityGroup({transcript}) {
       ? (group.state==='queued' ? 'Compaction queued…' : 'Compacting…') : phase;
     // Normal completion needs no status suffix; retain active and exceptional states.
     const status=error || (['completed','finished'].includes(group.state)?'':progress);
-    const label=[...parts,status,
+    return [...parts,...extra,status,
       group.boundary_quality==='legacy_unverified'?'Legacy boundary unverified':''].filter(Boolean).join(' · ');
+}
+/** Connect a persistent activity disclosure to an independently owned transcript. */
+export function createActivityGroup({transcript}) {
+  const node=document.createElement('details');node.className='v2-activity-group';
+  const summary=document.createElement('summary');
+  node.append(summary,transcript.element);
+  // Native details supplies pointer and keyboard disclosure semantics.
+  const toggle=()=>{node.open?transcript.open():transcript.close();};
+  node.addEventListener('toggle',toggle);
+  // Refresh counts/status without replacing the focused summary or open transcript.
+  function update(group,{error='',active=false}={}) {
+    node.dataset.activityGroupId=group.id;
+    const label=activityLabel(group,{error});
     node.firstElementChild.textContent=label;
     // A finished group with no rows and no status has nothing to disclose, such as a superseded stop.
     node.hidden=!label;

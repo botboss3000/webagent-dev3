@@ -265,58 +265,83 @@ function components(items){
   if(!Array.isArray(items))return;
   const current=new Set(items.map(row=>row?.component?.id));
   for(const node of [...$('chat-messages-inner').children])if(node.dataset.componentId&&!current.has(node.dataset.componentId))node.remove();
-  for(const row of items.slice(0,64)){
+  for(const row of items.slice(0,64))renderComponent(row);
+  placeCards();
+}
+/** Draws one component card in place; answered or dismissed reply panels stay, read-only. */
+function renderComponent(row){
     const spec=row?.component;
     const reply=spec?.authority==='user_reply'&&spec.type==='choice';
     const replyForm=spec?.authority==='user_reply'&&spec.type==='form';
     // A panel the agent closed is not shown.
-    if(spec?.lifecycle?.dismissed===true){for(const node of [...$('chat-messages-inner').children])if(node.dataset.componentId===spec.id)node.remove();continue;}
-    if(!spec||(spec.authority!=='display_only'&&!reply&&!replyForm)||!['status','todo_list','choice','approval','form'].includes(spec.type))continue;
-    const id=spec.id;if(typeof id!=='string'||!/^[-A-Za-z0-9_]{1,64}$/.test(id))continue;
+    if(spec?.lifecycle?.dismissed===true){for(const node of [...$('chat-messages-inner').children])if(node.dataset.componentId===spec.id)node.remove();return;}
+    if(!spec||(spec.authority!=='display_only'&&!reply&&!replyForm)||!['status','todo_list','choice','approval','form'].includes(spec.type))return;
+    const id=spec.id;if(typeof id!=='string'||!/^[-A-Za-z0-9_]{1,64}$/.test(id))return;
     const existing=[...$('chat-messages-inner').children].find(node=>node.dataset.componentId===id);
-    if(existing?.dataset.componentRevision===String(row.revision))continue;
+    // A locally recorded answer is ahead of the server until its revision arrives.
+    if(existing&&Number(existing.dataset.componentRevision)>=Number(row.revision))return;
     const card=document.createElement('article');card.className='v3-message assistant';card.dataset.componentId=id;card.dataset.componentRevision=String(row.revision);if(typeof row.run_id==='string')card.dataset.componentRun=row.run_id;if(Number.isFinite(row.created_at))card.dataset.componentCreated=String(row.created_at);
     const body=document.createElement('div');body.className='message-content';
     const heading=document.createElement('strong');heading.textContent=spec.title||'Session display';
     body.append(heading);
     const data=spec.data||{};
-    if(reply){
-      if(typeof data.prompt==='string'&&data.prompt){heading.textContent=data.prompt;}
-      const row=document.createElement('div');row.className='v3-reply-choices';
-      for(const option of Array.isArray(data.options)?data.options.slice(0,8):[]){
-        if(typeof option?.label!=='string'||!option.label)continue;
-        const button=document.createElement('button');button.type='button';button.textContent=option.label;
-        // A picked option is sent as the user's message; the answered card then goes away.
-        button.onclick=async()=>{for(const node of row.children)node.disabled=true;try{await submit(option.label);card.remove();void client.dismissComponent(session,id).catch(()=>{});}catch(error){note(error.message);for(const node of row.children)node.disabled=false;}};
-        row.append(button);
-      }
+    const place=()=>{card.append(body);if(existing?.isConnected)existing.replaceWith(card);else if(!card.isConnected)$('chat-messages-inner').append(card);placeCards();};
+    if(reply||replyForm){
+      // The answer is recorded on the panel so it shows, read-only, after reload; the first answer stands.
+      const state=spec.lifecycle?.user_state,answer=spec.lifecycle?.answer||{},title=spec.title||(reply?'Choice':'Form');
+      card.classList.add('v3-reply-panel');if(state)card.classList.add('is-'+state);
+      if(typeof data.prompt==='string'&&data.prompt){const prompt=document.createElement('p');prompt.className='v3-reply-prompt';prompt.textContent=data.prompt;body.append(prompt);}
+      const settle=(value)=>{spec.lifecycle=value?{user_state:'answered',answer:value}:{user_state:'dismissed'};renderComponent({...row,revision:Number(row.revision||0)+1});};
       const dismiss=document.createElement('button');dismiss.type='button';dismiss.className='v3-reply-dismiss';dismiss.textContent='Dismiss';
-      dismiss.onclick=async()=>{dismiss.disabled=true;try{await client.dismissComponent(session,id);card.remove();}catch(error){dismiss.disabled=false;note(error.message);}};
-      row.append(dismiss);
-      body.append(row);card.append(body);if(existing)existing.replaceWith(card);else $('chat-messages-inner').append(card);continue;
-    }
-    if(replyForm){
-      // A submitted form is sent as one user message, exactly as if typed: prompt, then "Label: value" lines.
-      if(typeof data.prompt==='string'&&data.prompt)heading.textContent=data.prompt;
+      dismiss.onclick=async()=>{dismiss.disabled=true;try{await client.dismissComponent(session,id,null);settle(null);}catch(error){dismiss.disabled=false;note(error.message);}};
+      const status=()=>{const line=document.createElement('small');line.className='v3-reply-state';line.textContent=state==='answered'?'Answered':'Dismissed';return line;};
+      if(reply){
+        const choices=document.createElement('div');choices.className='v3-reply-choices';
+        for(const option of Array.isArray(data.options)?data.options.slice(0,8):[]){
+          if(typeof option?.label!=='string'||!option.label)continue;
+          const button=document.createElement('button');button.type='button';button.textContent=option.label;
+          if(state){button.disabled=true;if(option.id===answer.option_id){button.classList.add('is-chosen');button.textContent='✓ '+option.label;}}
+          // A picked option is sent at once as the user's message "<title>: <label>", naming its panel.
+          else button.onclick=async()=>{for(const node of choices.children)node.disabled=true;try{await submit(title+': '+option.label,false,{componentId:id});void client.dismissComponent(session,id,{option_id:option.id}).catch(()=>{});settle({option_id:option.id});}catch(error){note(error.message);for(const node of choices.children)node.disabled=false;}};
+          choices.append(button);
+        }
+        if(!state)choices.append(dismiss);
+        body.append(choices);if(state)body.append(status());place();return;
+      }
+      // A submitted form is one user message: the title, then the values ("Title: A, C" for one field).
       const form=document.createElement('form');form.className='v3-reply-form';
+      const values=answer.values&&typeof answer.values==='object'?answer.values:{};
       const inputs=[];
       for(const field of Array.isArray(data.fields)?data.fields.slice(0,20):[]){
         if(typeof field?.name!=='string')continue;
-        const label=document.createElement('label');label.textContent=field.label||field.name;
+        const name=field.label||field.name,saved=values[field.name];
+        if(field.type==='multi'){
+          const group=document.createElement('fieldset');group.className='v3-reply-multi';const legend=document.createElement('legend');legend.textContent=name;group.append(legend);
+          const boxes=[];
+          for(const value of Array.isArray(field.options)?field.options.slice(0,8):[]){
+            const label=document.createElement('label');const box=document.createElement('input');box.type='checkbox';box.value=value;
+            box.checked=Array.isArray(saved)&&saved.includes(value);box.disabled=Boolean(state);label.append(box,document.createTextNode(' '+value));group.append(label);boxes.push(box);
+          }
+          form.append(group);inputs.push({field,name,read:()=>boxes.filter(box=>box.checked).map(box=>box.value),missing:()=>field.required===true&&!boxes.some(box=>box.checked)});continue;
+        }
+        const label=document.createElement('label');label.textContent=name;
         let input;
         if(field.type==='select'){input=document.createElement('select');for(const value of Array.isArray(field.options)?field.options:[])input.append(new Option(value,value));}
         else{input=document.createElement('input');input.type=['email','number'].includes(field.type)?field.type:'text';}
-        input.required=field.required===true;label.append(input);form.append(label);inputs.push([field.label||field.name,input]);
+        input.required=field.required===true;if(typeof saved==='string')input.value=saved;input.disabled=Boolean(state);label.append(input);form.append(label);inputs.push({field,name,read:()=>input.value,missing:()=>false});
       }
+      if(state){body.append(form,status());place();return;}
       const actions=document.createElement('div');actions.className='v3-reply-choices';
       const send=document.createElement('button');send.type='submit';send.textContent='Send';
-      const dismiss=document.createElement('button');dismiss.type='button';dismiss.className='v3-reply-dismiss';dismiss.textContent='Dismiss';
-      dismiss.onclick=async()=>{dismiss.disabled=true;try{await client.dismissComponent(session,id);card.remove();}catch(error){dismiss.disabled=false;note(error.message);}};
       actions.append(send,dismiss);form.append(actions);
-      form.onsubmit=async event=>{event.preventDefault();send.disabled=true;
-        const text=[data.prompt||'',...inputs.map(([name,input])=>name+': '+input.value)].filter(Boolean).join('\n');
-        try{await submit(text);card.remove();void client.dismissComponent(session,id).catch(()=>{});}catch(error){note(error.message);send.disabled=false;}};
-      body.append(form);card.append(body);if(existing)existing.replaceWith(card);else $('chat-messages-inner').append(card);continue;
+      form.onsubmit=async event=>{event.preventDefault();
+        if(inputs.some(item=>item.missing())){note('Choose at least one option');return;}
+        send.disabled=true;
+        const answers=inputs.map(item=>[item,item.read()]),shown=value=>Array.isArray(value)?value.join(', '):value;
+        const text=answers.length===1?title+': '+shown(answers[0][1]):[title,...answers.map(([item,value])=>item.name+': '+shown(value))].join('\n');
+        const submitted={values:Object.fromEntries(answers.map(([item,value])=>[item.field.name,value]))};
+        try{await submit(text,false,{componentId:id});void client.dismissComponent(session,id,submitted).catch(()=>{});settle(submitted);}catch(error){note(error.message);send.disabled=false;}};
+      body.append(form);place();return;
     }
     const lines=spec.type==='status'?data.sections?.map(item=>[item.label,item.value].filter(Boolean).join(': ')):
       spec.type==='todo_list'?data.items?.map(item=>(item.done?'☑ ':'☐ ')+item.label):
@@ -331,8 +356,6 @@ function components(items){
       const note=document.createElement('small');note.textContent='Display only — no action submitted';body.append(note);
     }
     card.append(body);if(existing)existing.replaceWith(card);else $('chat-messages-inner').append(card);
-  }
-  placeCards();
 }
 
 // Focus follows a session load only while the initiating focus choice is unchanged.
@@ -466,7 +489,7 @@ async function sendWithRetry(send){
   }
 }
 /** Submits text plus staged attachments/page context, preserving draft and session identity across awaits. */
-async function submit(text,clearInput=false){
+async function submit(text,clearInput=false,{componentId=''}={}){
   if(!text&&!media.count)throw Error('Enter a message');
   if(historyBusy||submitting||getState().shutoff||$('chat-send').disabled)throw Error('Chat is busy or execution is disabled');
   const origin=session,epoch=sessionGeneration,draft=$('chat-input').value;
@@ -479,7 +502,7 @@ async function submit(text,clearInput=false){
     const requestKey='message:'+sid+':'+content+':'+ids.join(',');
     const sent=await sendWithRetry(()=>sharedAccess?.operator_reply
       ? request('/sessions/'+encodeURIComponent(sid)+'/operator-replies','POST',{text:content,attachment_ids:ids,client_message_id:keyId(requestKey)})
-      : client.send(sid,{text:content,attachment_ids:ids,client_message_id:keyId(requestKey)}));
+      : client.send(sid,{text:content,attachment_ids:ids,client_message_id:keyId(requestKey),...(componentId?{component_id:componentId}:{})}));
     if(sid===session){
       progress.note(sent.stopped_run?'Stopped':sent.submission_id?'Message queued':sent.review_id?'Awaiting manager review…':'Message sent');
       const data=await client.snapshot(sid);
@@ -492,7 +515,7 @@ async function submit(text,clearInput=false){
     onEvent('sent',{session_id:sid});return {session_id:sid};
   }catch(error){
     // Fallback after automatic retries: the draft stays in the composer and Retry resubmits it.
-    chatActions.showSendError({message:error.message||'Message was not sent.',retry:()=>submit(text,clearInput)});
+    chatActions.showSendError({message:error.message||'Message was not sent.',retry:()=>submit(text,clearInput,{componentId})});
     throw error;
   }finally{submitting=false;await refresh();void loadAllowance();}
 }

@@ -1,7 +1,7 @@
 // @code-index {"version":1,"feature":"chat-tool-activity","aliases":["session activity groups","activity journal view"],"purpose":"Coordinates chat elements and authorized private activity. Config: ui/chat/chat.json -> chat_common.chat_elements and show_activity_groups, merged with desktop/mobile/widget profiles.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_common/show_activity_groups","/chat_common/chat_elements"],"profile_overrides":true}],"opportunities":[]}}
 import {activityRows} from '../core/activity.js';
 import {createMiniTranscript} from './mini-transcript/index.js';
-import {createActivityGroup} from './activity-group/index.js';
+import {createActivityGroup,activityLabel} from './activity-group/index.js';
 import {createTypingEllipsis} from './typing-ellipsis/index.js';
 
 // Own session-scoped chat elements and a separately authorized private activity view.
@@ -10,7 +10,7 @@ import {createTypingEllipsis} from './typing-ellipsis/index.js';
 export function createChatElements({app,isAdmin,chatUiFlag}) {
 let session=null, publicState=null, container=null, error='', enabled=false;
 let summaries=new Map(), requested=new Set(), cursor=null, timer=0, busy=false, generation=0;
-const nodes=new Map();
+const nodes=new Map(), clusters=new Map();
 let ellipsis=null;
 // Load each element-owned stylesheet once across session changes.
 function styles() {
@@ -102,7 +102,7 @@ function paint() {
   document.querySelector('#session-dropdown-icon')?.classList.toggle('activity-running',progressActive);
   const rows=new Map([...container.children].map(n=>[n.dataset.publicId,n]));
   const ordered=[...summaries.values()].sort((a,b)=>a.first_seq-b.first_seq);
-  const lastGroup=ordered.at(-1), keep=new Set(), tails=new Map();
+  const lastGroup=ordered.at(-1), keep=new Set(), tails=new Map(), shown=new Map();
   for(const summary of ordered) {
     const boundary=rows.get(summary.boundary_item_id);
     if(!boundary) continue; // Its message is outside the drawn window.
@@ -114,23 +114,57 @@ function paint() {
       entry=createActivityGroup({transcript:{...transcript,open(){transcript.open();if(!summaries.get(id)?.events)void loadEvents(id);}}});
       nodes.set(id,entry);
     }
-    const node=entry.element;
-    entry.update(displayed(summary,publicState.runs||[]),{error,active:progressActive && summary===lastGroup});
+    const node=entry.element,group=displayed(summary,publicState.runs||[]);
+    entry.update(group,{error,active:progressActive && summary===lastGroup});shown.set(node,group);
     const anchor=tails.get(summary.boundary_item_id) || boundary;
     if(anchor.nextSibling!==node) container.insertBefore(node,anchor.nextSibling);
     tails.set(summary.boundary_item_id,node);
   }
   for(const [id,entry] of nodes) if(!keep.has(id)) {entry.dispose();nodes.delete(id);}
+  cluster(shown,progressActive);
   if(ellipsis && container.lastElementChild!==ellipsis.element)container.append(ellipsis.element);
   app._reLandAnchor?.();
   // Newly drawn messages (window scroll, live replies) fetch their summaries right away.
   if([...rows.keys()].some(value=>value && !requested.has(value)))void refresh();
+}
+// Folds each unbroken run of activity groups and sub-agent notice rows (until the agent's next
+// visible message) under one summary; members stay in place and show when it is expanded.
+function cluster(shown,active) {
+  const used=new Set();let span=[];
+  const build=members=>{
+    const key=members[0].dataset.publicId||members[0].dataset.activityGroupId;used.add(key);
+    let element=clusters.get(key);
+    if(!element){element=document.createElement('details');element.className='v2-activity-group v3-activity-cluster';element.append(document.createElement('summary'));element.addEventListener('toggle',paint);clusters.set(key,element);}
+    if(members[0].previousSibling!==element)container.insertBefore(element,members[0]);
+    const groups=members.filter(node=>shown.has(node)).map(node=>shown.get(node)),counts={};
+    for(const group of groups)for(const [kind,count] of Object.entries(group.counts||{}))counts[kind]=(counts[kind]||0)+count;
+    const notices=members.reduce((sum,node)=>sum+Number(node.dataset.subagentNotices||0),0);
+    element.firstElementChild.textContent=activityLabel({...(groups.at(-1)||{state:'completed'}),counts},
+      {error,extra:notices?[notices+' sub-agent'+(notices===1?'':'s')]:[]});
+    element.setAttribute('aria-label','Activity group');
+    element.classList.toggle('v2-activity-group-glimmer',active && members.some(node=>node.classList.contains('v2-activity-group-glimmer')));
+    for(const node of members){node.classList.add('v3-cluster-member');node.classList.toggle('v3-cluster-hidden',!element.open);}
+  };
+  const flush=()=>{
+    const groups=span.filter(node=>shown.has(node)).length;
+    if(span.length>1 && (groups>1 || span.some(node=>node.dataset.subagentNotices)))build(span);
+    else for(const node of span)node.classList.remove('v3-cluster-member','v3-cluster-hidden');
+    span=[];
+  };
+  for(const node of [...container.children]) {
+    if(node.classList.contains('v3-activity-cluster'))continue;
+    if(shown.has(node) || node.dataset.subagentNotices)span.push(node);else flush();
+  }
+  flush();
+  for(const [key,element] of clusters) if(!used.has(key)){element.remove();clusters.delete(key);}
 }
 // Stop polling and drop every private summary and group, for a policy change or a new session.
 function stopActivity() {
   ++generation;enabled=false;busy=false;clearTimeout(timer);
   summaries=new Map();requested=new Set();cursor=null;
   for(const entry of nodes.values())entry.dispose();nodes.clear();
+  for(const element of clusters.values())element.remove();clusters.clear();
+  for(const node of container?.querySelectorAll('.v3-cluster-member')||[])node.classList.remove('v3-cluster-member','v3-cluster-hidden');
   document.querySelector('#session-dropdown-icon')?.classList.remove('activity-running');
 }
 // Stop the current watch and dispose rendered groups before changing session or policy.

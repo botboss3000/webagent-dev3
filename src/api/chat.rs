@@ -440,6 +440,23 @@ async fn prepare_message_inner(
     if !prepared.metadata.is_empty() {
         message["context_content"] = json!(prepared.context_content(text)?);
     }
+    // A choice or form panel answer names its panel so the agent can link the reply to it.
+    if let Some(panel) = body.get("component_id").and_then(Value::as_str) {
+        if panel.is_empty()
+            || panel.len() > 64
+            || !panel
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return Err(bad("Invalid component_id"));
+        }
+        let content = message["context_content"]
+            .as_str()
+            .unwrap_or(text)
+            .to_owned();
+        message["context_content"] = json!(format!("{content}\n\n[Answer to chat panel {panel}]"));
+        message["component_id"] = json!(panel);
+    }
     // A total stop leaves one note so the agent confirms before restarting stopped work.
     let stop_key = format!("session_stopped:{id}");
     let stop_record = app

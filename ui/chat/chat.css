@@ -371,3 +371,19 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 /* Leave a deliberate gutter at both transcript edges; mobile hides the
    scrollbar, so without this bubbles sit flush against the view. */
 #chat-messages-inner{padding-inline:8px!important}
+.v3-reply-prompt{margin:4px 0 0}
+.v3-reply-panel.is-answered .v3-reply-choices button,.v3-reply-panel.is-dismissed .v3-reply-choices button{opacity:.5}
+.v3-reply-choices button.is-chosen{opacity:1!important;border:2px solid var(--accent,var(--fg-1));color:var(--fg-1);font-weight:600}
+.v3-reply-state{display:block;margin-top:6px;color:var(--fg-2,var(--fg-1));font-size:13px}
+.v3-reply-multi{display:flex;flex-direction:column;gap:6px;border:0;margin:0;padding:0;min-width:0}
+.v3-reply-multi legend{font-size:14px;color:var(--fg-2,var(--fg-1));margin-bottom:4px;padding:0}
+.v3-reply-multi label{flex-direction:row!important;align-items:center;gap:8px!important;color:var(--fg-1)!important;overflow-wrap:anywhere}
+.v3-reply-multi input{width:auto!important;min-height:0!important;margin:0}
+.v3-reply-form input:disabled,.v3-reply-form select:disabled{opacity:.7}
+.v3-subagent-notices{display:flex;flex-direction:column;gap:2px;color:var(--fg-3);font-size:12px;min-width:0}
+.v3-subagent-row>summary{cursor:pointer;padding:0 8px;border-radius:var(--r-sm,8px);overflow-wrap:anywhere;list-style:none;-webkit-tap-highlight-color:transparent}
+.v3-subagent-row>summary::-webkit-details-marker{display:none}
+.v3-subagent-row>summary:hover{background:var(--bg-tint);color:var(--fg-1)}
+.v3-subagent-row>summary svg,.v3-subagent-row>summary i{width:13px;height:13px;vertical-align:-2px}
+.v3-subagent-report{margin:4px 8px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--r-sm,8px);color:var(--fg-1);font-size:14px;overflow-wrap:anywhere;max-height:50vh;overflow:auto}
+.v3-subagent-link{display:inline-block;margin:0 8px 6px;font-size:13px}

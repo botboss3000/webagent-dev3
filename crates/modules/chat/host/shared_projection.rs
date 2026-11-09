@@ -1,6 +1,6 @@
 //! Caller-specific public views for one canonical shared conversation.
-use webagent_accounts_host::AccountsStore;
 use crate::{json, shared_chat, App, Result, Value};
+use webagent_accounts_host::AccountsStore;
 pub(crate) fn observer(app: &App) -> bool {
     app.chat_access
         .as_ref()
@@ -18,6 +18,9 @@ pub(crate) async fn messages(app: &App, rows: &mut [Value]) -> Result<()> {
             row["agent_message"] = meta["agent_message"].clone();
             row["author_id"] = meta["author_id"].clone();
             row["author_name"] = meta["author_name"].clone();
+            if meta["platform_notice"].is_object() {
+                row["platform_notice"] = meta["platform_notice"].clone();
+            }
             row["message_kind"] = meta
                 .get("message_kind")
                 .or_else(|| meta.get("kind"))

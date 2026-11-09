@@ -42,6 +42,22 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
     const row=document.createElement('article');row.className='v3-message system';row.dataset.publicId=item.id;row.dataset.seq=String(item.seq);row.dataset.noticeRunId=item.run_id;
     row.append(createChatAction({title:(notice.status==='failed'?'Run failed':'Stopped')+(notice.error?' — '+notice.error:''),message:'To continue, write a new message in the chat.'}));return row;
   }
+  // Sub-agent completion notices show as compact activity rows, not user bubbles; the agent's context is unchanged.
+  const notices=item.message_kind==='agent_message'&&Array.isArray(item.platform_notice?.notices)?item.platform_notice.notices.slice(0,20):null;
+  if(notices?.length){
+    const row=document.createElement('article');row.className='v3-message v3-subagent-notices';row.dataset.publicId=item.id;row.dataset.msgId=item.id;row.dataset.seq=String(item.seq);row.dataset.turnId=item.run_id;row.dataset.subagentNotices=String(notices.length);
+    for(const notice of notices){
+      const entry=document.createElement('details');entry.className='v3-subagent-row';
+      const summary=document.createElement('summary');const icon=document.createElement('i');icon.dataset.lucide='git-branch';icon.setAttribute('aria-hidden','true');
+      const state=notice.status==='completed'?'finished':notice.status==='waiting_approval'?'waiting for approval':notice.status==='failed'||notice.status==='cancelled'?'failed':String(notice.status||'ended');
+      summary.append(icon,document.createTextNode(' '+(notice.title||'Sub-agent')+' · '+state));entry.append(summary);
+      const report=document.createElement('div');report.className='v3-subagent-report';
+      markdown(report,typeof notice.reply==='string'&&notice.reply?notice.reply:'(no reply text)');entry.append(report);
+      if(typeof notice.session_id==='string'&&/^[-A-Za-z0-9_]{1,128}$/.test(notice.session_id)){const link=document.createElement('a');link.href='/app?session_id='+encodeURIComponent(notice.session_id);link.textContent='Open sub-agent session';link.className='v3-subagent-link';entry.append(link);}
+      row.append(entry);
+    }
+    _refreshLucideIcons(row);return row;
+  }
   if(item.role==='system'){
     const row=document.createElement('article');row.className='v3-message system';row.dataset.publicId=item.id;row.dataset.seq=String(item.seq);
     const text=document.createElement('p');text.textContent=typeof item.content==='string'?item.content:JSON.stringify(item.content);row.append(text);return row;
@@ -106,7 +122,7 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
 /** Composes the shared transcript row; bubble identity owns actions while row metadata owns ordering/read tracking. */
 export function createMessageRow(item,options){
   const bubble=createMessage(item,options);
-  if(!bubble||item.role==='system'||item.role==='notice')return bubble;
+  if(!bubble||item.role==='system'||item.role==='notice'||bubble.dataset.subagentNotices)return bubble;
   const row=document.createElement('article');row.className='v3-message message-row '+(item.role==='user'?'user':'agent');
   for(const key of ['publicId','msgId','seq','turnId'])row.dataset[key]=bubble.dataset[key];
   // Move the configured gutter outside the painted surface for both roles without replacing its handlers.

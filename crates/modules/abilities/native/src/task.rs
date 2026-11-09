@@ -44,7 +44,7 @@ pub fn schemas() -> Vec<Value> {
                 "goal":{"type":"string","maxLength":1200},"criteria":{"type":"string","maxLength":1200},
                 "notes":{"type":"string","maxLength":1200},"title":{"type":"string","maxLength":80},
                 "checklist":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object"}}}), vec!["expected_revision","checklist"]),
-        ("present_chat_component", "Show the user a panel in the chat, after your message. choice: clickable options (data {prompt, options:[{label}]}, 1-8 one-line labels); a click sends that label as the user's message. form: fields the user fills and submits as one message (data {prompt, fields:[{name,label,type:text|email|number|select,required,options}]}). status and todo_list are display only. Reuse component_id with the latest revision to update a panel, including after a refused call; dismiss:true closes one you replace. Panels never authorize actions",
+        ("present_chat_component", "Show the user a panel in the chat, after your message. choice and form panels need a title naming their topic (for example \"For Bob\"); keep titles distinct across panels. choice: clickable options (data {prompt, options:[{label}]}, 1-8 one-line labels); a click sends \"<title>: <label>\" as the user's message. form: fields the user fills and submits as one message starting with the title (data {prompt, fields:[{name,label,type:text|email|number|select|multi,required,options}]}); multi is a checkbox group of 1-8 one-line options, sent as \"<title>: A, C\". Answered panels stay in the chat, read-only. status and todo_list are display only. Reuse component_id with the latest revision to update a panel, including after a refused call; dismiss:true closes one you replace. Panels never authorize actions",
             json!({"type":{"type":"string","enum":["todo_list","status","choice","form"]},
                 "title":{"type":"string","maxLength":80},"placement":{"type":"string","enum":["inline","hover","sticky"]},
                 "data":{"type":"object"},"component_id":{"type":"string","maxLength":64},
@@ -227,7 +227,16 @@ fn component(args: ComponentArgs, fallback_id: &str) -> Result<(String, Value, u
         "approval" => "Approval",
         _ => "Form",
     };
-    let title = short_title(&args.title, fallback)?;
+    let title = if matches!(kind, "choice" | "form") && !args.dismiss {
+        // The title prefixes the user's answer, so it must name the panel's topic.
+        let title = text(&args.title, 80)?;
+        if title.is_empty() || title.contains('\n') {
+            bail!("Choice and form panels need a one-line title naming their topic");
+        }
+        title
+    } else {
+        short_title(&args.title, fallback)?
+    };
     if args.dismiss {
         let spec = json!({"id":id,"type":kind,"title":title,"placement":placement,
             "data":{},"lifecycle":{"dismissed":true},"authority":"display_only"});
@@ -320,11 +329,31 @@ fn component(args: ComponentArgs, fallback_id: &str) -> Result<(String, Value, u
                     bail!("Invalid field name");
                 }
                 let field_type = field["type"].as_str().unwrap_or("text");
-                if !matches!(field_type, "text" | "email" | "number" | "select") {
+                if !matches!(field_type, "text" | "email" | "number" | "select" | "multi") {
                     bail!("Unsupported field type");
                 }
                 let mut choices = Vec::new();
-                if field_type == "select" {
+                if field_type == "multi" {
+                    let options = field["options"]
+                        .as_array()
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]);
+                    if options.is_empty() || options.len() > 8 {
+                        bail!("Multi fields need 1..8 options");
+                    }
+                    for option in options {
+                        let label = text(
+                            option
+                                .as_str()
+                                .ok_or_else(|| anyhow!("Multi options must be text"))?,
+                            80,
+                        )?;
+                        if label.is_empty() || label.contains('\n') {
+                            bail!("Multi options must be one non-empty line");
+                        }
+                        choices.push(label);
+                    }
+                } else if field_type == "select" {
                     for option in field["options"]
                         .as_array()
                         .map(Vec::as_slice)
@@ -597,8 +626,10 @@ mod tests {
         )
         .is_err());
         let (_, choice, _) = component(
-            serde_json::from_value(json!({"type":"choice","expected_revision":0,
-            "data":{"question":"Which?","options":[{"label":"A"},"B"]}}))
+            serde_json::from_value(
+                json!({"type":"choice","expected_revision":0,"title":"For Bob",
+            "data":{"question":"Which?","options":[{"label":"A"},"B"]}}),
+            )
             .unwrap(),
             "c",
         )
@@ -613,5 +644,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(closed["lifecycle"]["dismissed"], true);
+        assert!(component(
+            serde_json::from_value(json!({"type":"choice","expected_revision":0,
+            "data":{"options":["A"]}}))
+            .unwrap(),
+            "c",
+        )
+        .is_err());
+        let (_, form, _) = component(
+            serde_json::from_value(
+                json!({"type":"form","expected_revision":0,"title":"Options to combine",
+            "data":{"fields":[{"name":"pick","type":"multi","options":["A","B","C"]}]}}),
+            )
+            .unwrap(),
+            "c",
+        )
+        .unwrap();
+        assert_eq!(form["title"], "Options to combine");
+        assert_eq!(form["data"]["fields"][0]["options"][2], "C");
+        assert!(component(
+            serde_json::from_value(json!({"type":"form","expected_revision":0,"title":"T",
+            "data":{"fields":[{"name":"pick","type":"multi","options":[]}]}}))
+            .unwrap(),
+            "c",
+        )
+        .is_err());
     }
 }
