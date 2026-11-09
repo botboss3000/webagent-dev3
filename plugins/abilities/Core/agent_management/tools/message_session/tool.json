@@ -1,6 +1,6 @@
 {
   "name": "message_session",
-  "description": "Send an attributed message to a session in scope. steer (default) delivers at its next turn boundary, queue after its current run, interrupt stops the current run. Returns admission, not the reply.",
+  "description": "Send an attributed message to a session in scope. steer (default) delivers at its next model step; now also replaces its current model call (the run continues). Either starts a run if it is idle. Returns admission, not the reply.",
   "effect": "write",
   "policy_ceiling": "auto",
   "default_access": {
@@ -24,8 +24,7 @@
         "type": "string",
         "enum": [
           "steer",
-          "queue",
-          "interrupt"
+          "now"
         ]
       }
     },

@@ -350,29 +350,6 @@ impl<
                         if let Ok(runs) = crate::send_future(user_app.store.active_runs()).await {
                             for view in runs {
                                 let id = view["id"].as_str().unwrap().to_owned();
-                                if !crate::send_future(app.active.lock())
-                                    .await
-                                    .contains_key(&id)
-                                    && crate::send_future(user_app.interrupt_requested(&id))
-                                        .await
-                                        .unwrap_or(false)
-                                {
-                                    let Ok(mut interrupted) =
-                                        crate::send_future(user_app.run(&id)).await
-                                    else {
-                                        continue;
-                                    };
-                                    if let Err(error) =
-                                        crate::send_future(Self::settle_followup_interrupt(
-                                            &user_app,
-                                            &mut interrupted,
-                                        ))
-                                        .await
-                                    {
-                                        tracing::warn!(run_id=%id,"Followup interruption deferred: {error}");
-                                    }
-                                    continue;
-                                }
                                 if status(&view) == "paused" {
                                     if let Err(_) =
                                         crate::send_future(user_app.component_restore(&id)).await
@@ -556,25 +533,6 @@ impl<
                                                 {
                                                     tracing::warn!(run_id=%id,"Interrupt note not saved: {error}");
                                                 }
-                                            }
-                                        }
-                                    }
-                                    // Join paths that return early (approval and parallel tools)
-                                    // also settle durable interruption after their awaits finish.
-                                    {
-                                        let _settle_guard =
-                                            crate::send_future(cloned.handles.gate.lock()).await;
-                                        if let Ok(mut final_run) =
-                                            crate::send_future(cloned.run(&id)).await
-                                        {
-                                            if let Err(error) =
-                                                crate::send_future(Self::settle_followup_interrupt(
-                                                    &cloned,
-                                                    &mut final_run,
-                                                ))
-                                                .await
-                                            {
-                                                tracing::warn!(run_id=%id,"Followup handoff deferred: {error}");
                                             }
                                         }
                                     }

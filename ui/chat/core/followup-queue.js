@@ -12,8 +12,8 @@ export function mountFollowupQueue({root,client,getSession,guard,note,keyId,forg
   const busy=new Set();
   const terminal=new Set(['delivered','cancelled','rejected']);
   // Translate durable queue states into short status text for transcript controls.
-  // Every message joins the conversation at the agent's next step; running tools continue.
-  const label=entry=>held&&['pending','held'].includes(entry.status)?'Held'+(reason?': '+reason:''):({pending:'Sending — next step',reviewing:'Reviewing…',held:'Held — waiting to resume',delivered:'Delivered',cancelled:'Cancelled',rejected:'Not sent — rejected'})[entry.status]||entry.status;
+  // Every message joins the conversation at the agent's next step; Send now forces that step.
+  const label=entry=>held&&['pending','held'].includes(entry.status)?'Held'+(reason?': '+reason:''):entry.status==='pending'&&entry.send_now?'Sending now…':({pending:'Sending — next step',reviewing:'Reviewing…',held:'Held — waiting to resume',delivered:'Delivered',cancelled:'Cancelled',rejected:'Not sent — rejected'})[entry.status]||entry.status;
   // Create a text-only action button and pass its callback through the panel guard.
   function makeButton(text,action){const b=document.createElement('button');b.type='button';b.textContent=text;b.onclick=guard(action);return b;}
   // Reconcile visible delivery rows from the current queue while retaining focused controls.
@@ -34,7 +34,9 @@ export function mountFollowupQueue({root,client,getSession,guard,note,keyId,forg
       if(terminal.has(entry.status)){if(focused){status.tabIndex=-1;status.focus({preventScroll:true});}continue;}
       const actions=document.createElement('div');actions.className='followup-delivery-actions';actions.setAttribute('aria-label','Message delivery');
       // A held queue is resumed from its pending message; there is no separate banner.
-      const choices=[...(held?[['resume','Resume']]:[]),['cancel','Cancel']];
+      // Send now sits left of Cancel while a ready message waits for the next step.
+      const now=!held&&entry.status==='pending'&&!entry.send_now;
+      const choices=[...(held?[['resume','Resume']]:[]),...(now?[['now','Send now']]:[]),['cancel','Cancel']];
       for(const [choice,text] of choices){
         const button=makeButton(text,choice==='resume'?resume:()=>change(entry,choice));button.dataset.deliveryChoice=choice;button.disabled=!canWrite()||busy.has(entry.id);actions.append(button);
       }

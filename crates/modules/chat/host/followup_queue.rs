@@ -9,7 +9,6 @@ pub(crate) const RECOVERY_HOLD: &str = "Existing write outcome requires recovery
 const SHUTOFF_HOLD: &str = "Global shutoff is active";
 const ACCESS_HOLD: &str = "Agent access unavailable";
 const MODEL_HOLD: &str = "Model unavailable; restore access then resume queue";
-const INTERRUPT_MODEL_HOLD: &str = "Interrupted work is held because the model is unavailable";
 /// Retired: a waiting run is no longer recorded as a hold. Stored queues may still carry it.
 const EXISTING_WORK_HOLD: &str = "Existing work must be resolved before queue delivery";
 /// Condition holds lift once their cause is gone; decision holds wait for the user's
@@ -17,7 +16,7 @@ const EXISTING_WORK_HOLD: &str = "Existing work must be resolved before queue de
 async fn condition_cleared(app: &App, q: &Value) -> Result<bool> {
     Ok(match q["reason"].as_str().unwrap_or("") {
         EXISTING_WORK_HOLD | SHUTOFF_HOLD => true,
-        ACCESS_HOLD | MODEL_HOLD | INTERRUPT_MODEL_HOLD => {
+        ACCESS_HOLD | MODEL_HOLD => {
             let Some(e) = q["entries"]
                 .as_array()
                 .unwrap()
@@ -110,14 +109,8 @@ pub(crate) async fn submit(
     api::chat::record_admitted_turn(app, &agent, &message_id).await;
     Ok(result)
 }
-pub(crate) async fn interrupt_requested(app: &App, rid: &str) -> Result<bool> {
-    app.engine().interrupt_requested(rid).await
-}
 pub(crate) async fn apply_steering(app: &App, run: &mut Value) -> Result<bool> {
     app.engine().apply_steering(run).await
-}
-pub(crate) async fn finish_interrupt(app: &App, run: &mut Value) -> Result<bool> {
-    app.engine().finish_interrupt(run).await
 }
 async fn review_entry(app: App, s: String, e: Value) -> Result<()> {
     static REVIEW_LIMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
@@ -259,43 +252,6 @@ pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
         {
             continue;
         }
-        if let Some(interrupt) = q["entries"].as_array().unwrap().iter().find(|e| {
-            e["choice"] == "interrupt"
-                && e["status"] == "pending"
-                && e["review_status"] == "acceptable"
-        }) {
-            if let Some(target) = interrupt["target_run_id"].as_str() {
-                if let Some(mut parent) = app.store.get(&format!("run:{target}")).await? {
-                    if matches!(status(&parent), "cancelled" | "failed") {
-                        if parent["recovery_abandoned"] == true {
-                            crate::agent_loop::settle_abandoned_interrupt(&mut parent)?;
-                        }
-                        if !crate::agent_loop::settle_followup_interrupt(app, &mut parent).await? {
-                            let current = app.store.followup_queue(&s).await?;
-                            if current["held"] != true
-                                && current["entries"].as_array().unwrap().iter().any(|e| {
-                                    e["choice"] == "interrupt"
-                                        && e["status"] == "pending"
-                                        && e["review_status"] == "acceptable"
-                                        && (e["target_run_id"].is_null()
-                                            || e["target_run_id"] == parent["id"])
-                                })
-                            {
-                                app.store
-                                    .followup_hold(
-                                        &s,
-                                        "Interrupted work must be resolved before message delivery",
-                                    )
-                                    .await?;
-                            }
-                        }
-                        // A blocked targeted handoff must never fall through to
-                        // fresh consumption that drops its original tool checkpoint.
-                        continue;
-                    }
-                }
-            }
-        }
         if q["held"] == true {
             if !condition_cleared(app, &q).await? {
                 continue;
@@ -306,9 +262,7 @@ pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
         }
         let latest = app.store.followup_last_run(&s).await?;
         if latest.as_ref().is_some_and(|r| {
-            matches!(status(r), "failed" | "cancelled")
-                && r["interrupted_by"].is_null()
-                && q["resumed_after_run_id"] != r["id"]
+            matches!(status(r), "failed" | "cancelled") && q["resumed_after_run_id"] != r["id"]
         }) {
             app.store
                 .followup_hold(
@@ -318,19 +272,9 @@ pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
                 .await?;
             continue;
         }
-        let choice = if q["entries"].as_array().unwrap().iter().any(|x| {
-            x["choice"] == "interrupt"
-                && x["status"] == "pending"
-                && x["review_status"] == "acceptable"
-        }) {
-            "interrupt"
-        } else {
-            "queue"
-        };
+        // Steers left when a run ended start the next run together.
         let Some(e) = q["entries"].as_array().unwrap().iter().find(|e| {
-            e["status"] == "pending"
-                && e["review_status"] == "acceptable"
-                && (e["choice"] == choice || (choice == "queue" && e["choice"] == "steer"))
+            e["status"] == "pending" && e["review_status"] == "acceptable" && e["choice"] == "steer"
         }) else {
             continue;
         };
@@ -356,16 +300,8 @@ pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
         next["id"] = json!(successor_id(app, &s, &e)?);
         next["created_at"] = json!(now());
         next["updated_at"] = json!(now());
-        // An interrupt selected just as its original run completed becomes the next
-        // input; only that entry is consumed, ordinary queue entries remain pending.
-        if choice == "interrupt" {
-            let mut input = app.store.context(&s).await?;
-            webagent_engine::runtime::run::pair_unresolved_calls(&mut input);
-            next["input"] = json!(input);
-            next["context_hydration_pending"] = json!(false);
-        }
         app.store
-            .followup_consume(&s, choice, &mut next, None)
+            .followup_consume(&s, "next_run", &mut next)
             .await?;
     }
     Ok(())
@@ -385,7 +321,7 @@ mod lifecycle_tests {
                 )
                 .await
                 .unwrap();
-            let e = json!({"id":format!("message_{sid}"),"message_id":format!("user:message_{sid}"),"session_id":sid,"agent_id":"shared_default","revision":0,"choice":"queue","status":"pending","review_status":"acceptable","content":"pending","context_content":"pending","attachments":[]});
+            let e = json!({"id":format!("message_{sid}"),"message_id":format!("user:message_{sid}"),"session_id":sid,"agent_id":"shared_default","revision":0,"choice":"steer","status":"pending","review_status":"acceptable","content":"pending","context_content":"pending","attachments":[]});
             app.store
                 .followup_submit(sid, e, vec![], "submit", "digest", &json!({}))
                 .await
@@ -433,7 +369,7 @@ mod lifecycle_tests {
             )
             .await
             .unwrap();
-        let e = json!({"id":"message_held","message_id":"user:message_held","session_id":sid,"agent_id":"shared_default","revision":0,"choice":"queue","status":"pending","review_status":"acceptable","content":"pending","context_content":"pending","attachments":[]});
+        let e = json!({"id":"message_held","message_id":"user:message_held","session_id":sid,"agent_id":"shared_default","revision":0,"choice":"steer","status":"pending","review_status":"acceptable","content":"pending","context_content":"pending","attachments":[]});
         app.store
             .followup_submit(sid, e, vec![], "submit", "digest", &json!({}))
             .await

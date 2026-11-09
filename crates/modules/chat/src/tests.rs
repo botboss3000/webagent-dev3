@@ -610,7 +610,7 @@ mod followup {
         queue_reserve(&TaggedCodec, &mut tx, "s").await.unwrap();
         let mut q = queue_read_tx(&TaggedCodec, &mut tx, "s").await.unwrap();
         assert_eq!(q, empty("s"));
-        q["entries"] = json!([{"id":"e","revision":0,"content":"hi","context_content":"hi","attachments":[],"choice":"queue","status":"pending","interrupt_committed":true}]);
+        q["entries"] = json!([{"id":"e","revision":0,"content":"hi","context_content":"hi","attachments":[],"choice":"steer","status":"pending","send_now":true}]);
         queue_write_tx(&TaggedCodec, &mut tx, &mut q).await.unwrap();
         assert_eq!(
             queue_read_tx(&TaggedCodec, &mut tx, "s").await.unwrap()["revision"],
@@ -627,7 +627,12 @@ mod followup {
                 .await
                 .unwrap();
         assert_eq!(event[0], b'U');
-        assert_eq!(public(&q)["queue"][0]["status"], "interrupting");
+        assert_eq!(public(&q)["queue"][0]["send_now"], true);
+        for retired in ["queue", "interrupt"] {
+            let mut stale = q.clone();
+            stale["entries"][0]["choice"] = json!(retired);
+            assert!(validate_queue("s", &stale).is_err());
+        }
         put(&pool, "followup_queue:bad", &json!({"schema_version":2})).await;
         let mut tx = pool.begin().await.unwrap();
         assert!(queue_read_tx(&TaggedCodec, &mut tx, "bad").await.is_err());

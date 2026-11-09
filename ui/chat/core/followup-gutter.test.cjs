@@ -22,10 +22,11 @@ test('nested bubble identities keep one delivery label and one set of actions be
   const module=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'followup-queue.js'),'utf8'),{context});
   await module.link(()=>new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'chat-action-panel.js'),'utf8'),{context}));await module.evaluate();
   const queue=module.namespace.mountFollowupQueue({root,client:{},getSession:()=> 'fixture',guard:fn=>fn,note(){},keyId:()=> 'fixture',forgetKey(){},onSnapshot(){}});
-  for(const [revision,status,actions]of [[1,'pending',1],[2,'delivered',0],[3,'delivered',0]]){
-    queue.update({queue:[{id:'entry',message_id:'user:fixture',revision,choice:'steer',status}],queue_state:{revision}});
+  // A ready message offers Send now left of Cancel; once sent now only Cancel remains.
+  for(const [revision,status,actions,send_now=false]of [[1,'pending',['now','cancel']],[2,'pending',['cancel'],true],[3,'delivered',[]],[4,'delivered',[]]]){
+    queue.update({queue:[{id:'entry',message_id:'user:fixture',revision,choice:'steer',status,send_now}],queue_state:{revision}});
     assert.equal(root.querySelectorAll('.followup-delivery-status').length,1);
-    assert.equal(root.querySelectorAll('button').length,actions);
+    assert.deepEqual(root.querySelectorAll('button').map(button=>button.dataset.deliveryChoice),actions);
     assert.equal(bubble.querySelector('.followup-delivery'),null);
     assert.equal(row.children[1],gutter);
     assert.equal(row.children[2].className,'followup-delivery');

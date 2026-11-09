@@ -9,7 +9,7 @@ recipient answer, a particular response, or immediate completion.
 
 | Tool | Inputs | Outcome |
 | --- | --- | --- |
-| message_session | session_id UUID of a session in the agent's scope, nonempty text up to 65536 UTF-8 bytes, delivery steer (default), queue or interrupt | One attributed message admitted to another owner-private session. |
+| message_session | session_id UUID of a session in the agent's scope, nonempty text up to 65536 UTF-8 bytes, delivery steer (default) or now | One attributed message admitted to another owner-private session. |
 | start_spawn | text; optional agent_id, optional title | One sub agent session (parent_session_id set, shown as a tab of the sender) and its first message. Its run ends send the sender a notice. |
 | start_session | text; optional agent_id, title, notify (default false) | Without agent_id (or with the sender's agent): a fork carrying the sender's history through its last completed reply. With another agent_id: a fresh session of that agent, only when the sender's `allow_delegation` setting is on; when it is off the model's schema omits `agent_id` and preflight refuses one with a fixed reason. started_by_session_id is set. |
 | delegate_to_agent | text, agent_id, optional title | A fresh session of that agent and a browser handoff request. |
@@ -32,15 +32,14 @@ policy and execution mode. New sessions other than forks start with fresh contex
 workspace identity: no parent transcript, credentials, loaded abilities or
 approval grants are copied. An omitted title uses normal session preparation.
 
-Queue waits for ordinary run completion; steer is consumed at the next safe
-model boundary. Interrupt requires a currently running recipient bound by exact
-run identity/generation in the admission checks. A pending approval is not a
-running native interrupt target. Existing interruption machinery retains paired
-tool evidence and uncertain effects behind recovery controls. Human queue choices
-remain revision-fenced. Eligible queue or steer submissions are consumed as one combined
-input; interrupt handoff consumes one selected interrupt at a time. Review, participation and recovery
-holds can postpone consumption. Explicit Stop/failure holds queued work until
-Resume queue under the existing queue contract.
+Steer is consumed at the next safe model boundary; a pending steer left when a
+run ends starts the next run. Now is a steer that also cancels the recipient's
+current model call (its partial response is discarded and the run continues with
+the message) and detaches a running tool call without grace. Human queue choices
+(Send now, Cancel) remain revision-fenced. Eligible steers are consumed as one
+combined input. Review, participation and recovery holds can postpone
+consumption. Explicit Stop/failure holds queued work until Resume queue under
+the existing queue contract.
 
 The public bubble carries message_kind agent_message, source session/agent and
 sender title. Model context uses the attributed envelope from context(), saying
@@ -63,8 +62,8 @@ write-classified tools; it grants no other write tool.
 Approval follows the ordinary tool policy and session mode: Auto proceeds, and a
 tool set to Ask asks in Ask mode. When asked, the approval card displays source,
 destination, delivery and recipient mode. Its opt-in checkbox remembers only
-eligible queue/steer routes; a remembered route binds later sends to its
-revocation. Polling preserves the explicit checkbox choice; interrupt,
+eligible steer routes; a remembered route binds later sends to its
+revocation. Polling preserves the explicit checkbox choice; now,
 new-session and onward requests cannot grant a reusable route.
 
 Config: the Agent Management ability (plugins/abilities/Core/agent_management) holds the tool folders and settings.
@@ -86,8 +85,8 @@ placement could be configurable; they are not implemented routing settings.
 
 All records use the owner's existing encrypted user plane and retention model;
 there is no plaintext queue sidecar or new database migration. followup_queue:
-contains the durable delivery choice, origin envelope, template, review, revision,
-interrupt target and consumption identity. message_meta: carries the public origin
+contains the durable delivery choice, send-now flag, origin envelope, template,
+review, revision and consumption identity. message_meta: carries the public origin
 and context eligibility. messaging_route:<source>:<target> stores a directed,
 revisioned grant. receipt:agent_message: binds sender run/call identity and exact
 arguments; receipt:messaging_route: binds revocation request identity and revision.
@@ -137,7 +136,7 @@ These views do not grant authority; the API always rechecks it.
 | session_messaging::owns, schemas | Native dispatch membership and exact model-facing argument contracts. |
 | policy_defaults, queue, checked_text, stable_id | Preserve explicit policy rules, default delivery, reject blank/control/oversize bodies, derive stable per-call identities. |
 | AuthorityChanged::fmt, authority_changed | Type confirmed revocation separately from transient errors. |
-| private_session, recipient_capabilities, binding | Resolve private owner access and capture exact source/recipient/mode/catalog/interrupt authority without effects. |
+| private_session, recipient_capabilities, binding | Resolve private owner access and capture exact source/recipient/mode/catalog authority without effects. |
 | route_key, route_scope, route_for | Identify directed grants and require exact saved authority scope equality. |
 | preflight, preflight_inner | Heap-back the security checkpoint, invalidate stale decisions and calculate exact approval/remember eligibility. |
 | context, stamp | Build attributed model evidence and preserve origin on prepared message/run/manager-review records. |
@@ -146,7 +145,7 @@ These views do not grant authority; the API always rechecks it.
 | routes; api/session_messaging::list, revoke | Owner-only grant projection and strict revision/idempotency-fenced revocation. |
 | Store::messaging_commit, validate_agent_delivery_tx | Atomic queue/session/receipt admission and repeat authority validation inside the consuming writer transaction. |
 | Store::cancel_agent_delivery, revoke_messaging_route | Revision-fenced authority withdrawal and durable revocation retry. |
-| followup_queue::prepared_entry, submit, scheduler_tick, interrupt_requested | Share queue construction, retain ordinary human admission, revalidate before scheduler consumption or interrupt observation. |
+| followup_queue::prepared_entry, submit, scheduler_tick | Share queue construction, retain ordinary human admission, revalidate before scheduler consumption. |
 | Store::legacy_message_meta, followup_consume, followup_choice | Preserve origin, batch eligibility and owner choice; consumed agent entries mark the run as agent-origin. |
 | live_tool_decision, filter_ability_entry, effective_policy_for_mode | Keep ordinary policy/visibility checks while allowing only the dedicated read-only delegation exception. |
 | execute_run_inner; execute_parallel_batch; call_raw_inner; native_schemas | Apply the same preflight in single/batch paths, bind call-scoped delegation guidance and execute the native adapter. |
@@ -175,7 +174,7 @@ steer, and one newly created session with its initial delivery. Each had one
 persisted attributed input and one nonempty completed assistant reply. The harness
 initially used a missing approval path (404, no effect) and an inappropriate exact
 response marker; its correction preserves those failures and checks exact body
-and terminal uniqueness. No live actively running recipient interrupt was tested.
+and terminal uniqueness.
 The future inline-size regression is not proof of maximum polling-stack size;
 heap-backed preflight/revalidation also passed the ordinary-stack manager test.
 Prompt-restoration test drop restores original bytes, permissions and mtime so

@@ -14,11 +14,8 @@ pub fn public_entry(e: &Value) -> Value {
         "message_id": e["message_id"],
         "revision": e["revision"],
         "choice": e["choice"],
-        "status": if e["status"] == "pending" && e["interrupt_committed"] == true {
-            json!("interrupting")
-        } else {
-            e["status"].clone()
-        },
+        "status": e["status"],
+        "send_now": e["send_now"] == true,
         "content": e["content"],
         "attachments": e["attachments"],
         "consuming_run_id": e["consuming_run_id"],
@@ -46,10 +43,7 @@ pub fn validate_queue(s: &str, q: &Value) -> Result<()> {
                     || e["content"].as_str().is_none()
                     || e["context_content"].as_str().is_none()
                     || e["attachments"].as_array().is_none()
-                    || !matches!(
-                        e["choice"].as_str(),
-                        Some("queue" | "steer" | "interrupt" | "cancel")
-                    )
+                    || !matches!(e["choice"].as_str(), Some("steer" | "cancel"))
                     || !matches!(
                         e["status"].as_str(),
                         Some(

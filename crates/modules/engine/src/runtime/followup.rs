@@ -1,8 +1,8 @@
-//! Engine interruption detection, steering boundary and stable successor assembly.
+//! Engine steering boundary, send-now detection and stable successor assembly.
 //! Chat retains queue persistence, consumption transactions and delegation revalidation.
 use super::{config, models, native, ports::*, Runtime};
+use crate::digest;
 use crate::ports::{AdmissionEffects, ChatEffects, NotificationEffects, UsageEffects};
-use crate::{digest, now, status};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::future::Future;
@@ -20,14 +20,7 @@ pub trait FollowupQueue<S: Sync>: Clone + Send + Sync + 'static {
         sid: &'a str,
         choice: &'a str,
         run: &'a mut Value,
-        origin: Option<&'a mut Value>,
     ) -> impl Future<Output = Result<bool>> + Send + 'a;
-    fn followup_hold<'a>(
-        &'a self,
-        store: &'a S,
-        sid: &'a str,
-        reason: &'a str,
-    ) -> impl Future<Output = Result<()>> + Send + 'a;
 }
 
 pub fn successor_id(owner: &str, sid: &str, entry: &Value) -> Result<String> {
@@ -64,48 +57,23 @@ impl<
         X: AgentPolicy<S> + FollowupQueue<S> + native::NativeDispatch<S, C, B, H::Binding>,
     > Runtime<S, C, B, A, H, M, X>
 {
-    pub async fn interrupt_requested(&self, rid: &str) -> Result<bool> {
-        if let Some(r) = self.store.get(&format!("run:{rid}")).await? {
-            if let Some(s) = r["session_id"].as_str() {
-                self.native
-                    .messaging_revalidate(self.native_view(), s)
-                    .await?;
-            }
-        }
-        if let Some(run) = self.store.get(&format!("run:{rid}")).await? {
-            if run["requester_user_id"]
-                .as_str()
-                .is_some_and(|actor| actor != self.store.current_user_id())
-                || !self
-                    .chat
-                    .participation_allows_run(self.store.records(), &run)
-                    .await?
-            {
-                return Ok(false);
-            }
-        }
-        let Some(r) = self.store.get(&format!("run_view:{rid}")).await? else {
-            return Ok(false);
-        };
-        let q = self
-            .native
-            .followup_queue(self.store.records(), r["session_id"].as_str().unwrap_or(""))
-            .await?;
-        Ok(q["entries"].as_array().unwrap().iter().any(|e| {
-            e["choice"] == "interrupt"
-                && e["status"] == "pending"
-                && e["review_status"] == "acceptable"
-                && (e["target_run_id"].is_null() || e["target_run_id"] == rid)
-        }))
-    }
     /// Whether a user message is waiting to enter this run at its next model step.
     /// Running tool calls are detached and undispatched calls skipped when it is.
     pub async fn message_pending(&self, run: &Value) -> Result<bool> {
+        Ok(self.pending_steer(run).await?.is_some())
+    }
+    /// Whether the user chose "send now" for a waiting message: the current model
+    /// call is replaced and a running tool call detaches without grace.
+    pub async fn message_forced(&self, run: &Value) -> Result<bool> {
+        Ok(self.pending_steer(run).await? == Some(true))
+    }
+    /// `Some(forced)` when an acceptable steer waits; forced if any entry is sent now.
+    async fn pending_steer(&self, run: &Value) -> Result<Option<bool>> {
         if run["requester_user_id"]
             .as_str()
             .is_some_and(|actor| actor != self.store.current_user_id())
         {
-            return Ok(false);
+            return Ok(None);
         }
         let q = self
             .native
@@ -114,14 +82,20 @@ impl<
                 run["session_id"].as_str().unwrap_or(""),
             )
             .await?;
-        Ok(q["held"] != true
-            && q["entries"].as_array().is_some_and(|entries| {
-                entries.iter().any(|e| {
-                    e["choice"] == "steer"
-                        && e["status"] == "pending"
-                        && e["review_status"] == "acceptable"
-                })
-            }))
+        if q["held"] == true {
+            return Ok(None);
+        }
+        let waiting: Vec<&Value> = q["entries"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|e| {
+                e["choice"] == "steer"
+                    && e["status"] == "pending"
+                    && e["review_status"] == "acceptable"
+            })
+            .collect();
+        Ok((!waiting.is_empty()).then(|| waiting.iter().any(|e| e["send_now"] == true)))
     }
     pub async fn apply_steering(&self, run: &mut Value) -> Result<bool> {
         if run["requester_user_id"]
@@ -130,60 +104,9 @@ impl<
         {
             return Ok(false);
         }
-        if self
-            .interrupt_requested(run["id"].as_str().unwrap())
-            .await?
-        {
-            return Ok(false);
-        }
         let s = run["session_id"].as_str().unwrap().to_owned();
         self.native
-            .followup_consume(self.store.records(), &s, "steer", run, None)
-            .await
-    }
-    pub async fn finish_interrupt(&self, run: &mut Value) -> Result<bool> {
-        if run["requester_user_id"]
-            .as_str()
-            .is_some_and(|actor| actor != self.store.current_user_id())
-        {
-            return Ok(false);
-        }
-        if run["uncertain"] == true || matches!(status(run), "recovery" | "waiting_external") {
-            return Ok(false);
-        }
-        let s = run["session_id"].as_str().unwrap().to_owned();
-        let q = self.native.followup_queue(self.store.records(), &s).await?;
-        let Some(e) = q["entries"].as_array().unwrap().iter().find(|e| {
-            e["choice"] == "interrupt"
-                && e["status"] == "pending"
-                && e["review_status"] == "acceptable"
-                && (e["target_run_id"].is_null() || e["target_run_id"] == run["id"])
-        }) else {
-            return Ok(false);
-        };
-        if self.shutoff().await? {
-            return Ok(false);
-        }
-        let mut next = e["template"].clone();
-        if self.run_candidate(&next).await.is_err() {
-            self.native
-                .followup_hold(
-                    self.store.records(),
-                    &s,
-                    "Interrupted work is held because the model is unavailable",
-                )
-                .await?;
-            return Ok(false);
-        }
-        next["id"] = json!(successor_id(self.store.current_user_id(), &s, &e)?);
-        next["created_at"] = json!(now());
-        next["updated_at"] = json!(now());
-        next["input"] = run["input"].clone();
-        next["context_hydration_pending"] = json!(false);
-        next["interrupted_run_id"] = run["id"].clone();
-        next["input"].as_array_mut().ok_or_else(||anyhow!("Missing interrupted context"))?.push(json!({"role":"developer","content":"Previous run interrupted by user. Retained tool results describe completed work; interruption does not undo effects. Unknown writes require reconciliation before retry."}));
-        self.native
-            .followup_consume(self.store.records(), &s, "interrupt", &mut next, Some(run))
+            .followup_consume(self.store.records(), &s, "steer", run)
             .await
     }
 }

@@ -169,72 +169,6 @@ impl Store {
         Ok(())
     }
 
-    pub(crate) async fn transfer_requester_run(&self, origin: &Value, next: &Value) -> Result<()> {
-        self.reconcile_requester_slots().await?;
-        let old = origin["id"]
-            .as_str()
-            .ok_or_else(|| anyhow!("Origin id missing"))?;
-        let new = next["id"]
-            .as_str()
-            .ok_or_else(|| anyhow!("Successor id missing"))?;
-        let actor = origin["requester_user_id"]
-            .as_str()
-            .unwrap_or(self.current_user_id());
-        let sid = origin["session_id"]
-            .as_str()
-            .ok_or_else(|| anyhow!("Origin session missing"))?;
-        if old == new
-            || next["requester_user_id"]
-                .as_str()
-                .unwrap_or(self.current_user_id())
-                != actor
-            || next["session_id"] != sid
-            || actor != self.current_user_id()
-        {
-            return Err(anyhow!("Requester handoff identity mismatch"));
-        }
-        let limit = self
-            .live_access(actor, next["agent_id"].as_str().unwrap_or("shared_default"))
-            .await?
-            .max_active_runs() as i64;
-        let mut tx = self.app_pool.begin().await?;
-        sqlx::query("UPDATE requester_run_slots SET released=released WHERE run_id=?")
-            .bind(old)
-            .execute(&mut *tx)
-            .await?;
-        let previous=sqlx::query("SELECT requester_id,owner_id,session_id,released,replaced_by,sequence FROM requester_run_slots WHERE run_id=?").bind(old).fetch_one(&mut *tx).await?;
-        if previous.get::<String, _>("requester_id") != actor
-            || previous.get::<String, _>("owner_id") != self.current_user_id()
-            || previous.get::<String, _>("session_id") != sid
-        {
-            return Err(anyhow!("Requester handoff reservation mismatch"));
-        }
-        if previous.get::<i64, _>("released") != 0 {
-            if previous.get::<Option<String>, _>("replaced_by").as_deref() != Some(new) {
-                return Err(anyhow!("Requester handoff already reserved"));
-            }
-            let successor=sqlx::query("SELECT requester_id,owner_id,session_id,released FROM requester_run_slots WHERE run_id=?").bind(new).fetch_one(&mut *tx).await?;
-            if successor.get::<String, _>("requester_id") != actor
-                || successor.get::<String, _>("owner_id") != self.current_user_id()
-                || successor.get::<String, _>("session_id") != sid
-                || successor.get::<i64, _>("released") != 0
-            {
-                return Err(anyhow!("Requester successor reservation mismatch"));
-            }
-        } else {
-            let sequence: i64 = previous.get("sequence");
-            let rank:i64=sqlx::query_scalar("SELECT count(*) FROM requester_run_slots WHERE requester_id=? AND released=0 AND sequence<=?").bind(actor).bind(sequence).fetch_one(&mut *tx).await?;
-            if rank > limit {
-                return Err(anyhow!("Account run limit reached"));
-            }
-            sqlx::query("INSERT INTO requester_run_slots(run_id,requester_id,owner_id,session_id,sequence) VALUES(?,?,?,?,?)").bind(new).bind(actor).bind(self.current_user_id()).bind(sid).bind(sequence).execute(&mut *tx).await?;
-            sqlx::query("UPDATE requester_run_slots SET released=1,replaced_by=? WHERE run_id=? AND released=0").bind(new).bind(old).execute(&mut *tx).await?;
-        }
-        // This is a conservative handoff reservation, not evidence that the canonical
-        // old cancellation/new creation committed. No absence cleanup can undo it.
-        tx.commit().await?;
-        Ok(())
-    }
     pub(crate) async fn requester_claim_ready(&self, run: &Value) -> Result<bool> {
         self.reserve_requester_run(run).await?;
         let actor = run["requester_user_id"]
@@ -374,34 +308,6 @@ mod tests {
         one.put("run:legacy", &legacy).await.unwrap();
         assert!(two
             .reserve_requester_run(&run("blocked-by-legacy", &actor))
-            .await
-            .is_err());
-    }
-
-    #[tokio::test]
-    async fn interrupt_handoff_transfers_one_slot_atomically_and_retries_same_successor() {
-        let (_root, one, _two, _actor) = setup().await;
-        let actor = one.current_user_id();
-        let original = run("origin", actor);
-        let next = run("successor", actor);
-        one.reserve_requester_run(&original).await.unwrap();
-        one.put("run:origin", &original).await.unwrap();
-        one.transfer_requester_run(&original, &next).await.unwrap();
-        one.transfer_requester_run(&original, &next).await.unwrap();
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM requester_run_slots WHERE requester_id=? AND released=0",
-        )
-        .bind(actor)
-        .fetch_one(&one.app_pool)
-        .await
-        .unwrap();
-        assert_eq!(count, 1);
-        assert!(one
-            .transfer_requester_run(&original, &run("wrong-successor", actor))
-            .await
-            .is_err());
-        assert!(one
-            .reserve_requester_run(&run("extra", actor))
             .await
             .is_err());
     }

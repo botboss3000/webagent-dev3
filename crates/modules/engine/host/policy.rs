@@ -274,16 +274,7 @@ impl webagent_engine::runtime::followup::FollowupQueue<Store> for NativePolicy {
         sid: &'a str,
         choice: &'a str,
         run: &'a mut Value,
-        origin: Option<&'a mut Value>,
     ) -> impl std::future::Future<Output = Result<bool>> + Send + 'a {
-        store.followup_consume(sid, choice, run, origin)
-    }
-    fn followup_hold<'a>(
-        &'a self,
-        store: &'a Store,
-        sid: &'a str,
-        reason: &'a str,
-    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
-        store.followup_hold(sid, reason)
+        store.followup_consume(sid, choice, run)
     }
 }

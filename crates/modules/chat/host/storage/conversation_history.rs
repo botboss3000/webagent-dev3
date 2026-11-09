@@ -432,7 +432,7 @@ impl Store {
                         .cloned();
                     child_queue["entries"].as_array_mut().unwrap().push(json!({
                         "id":rid,"message_id":mid,"session_id":id,"agent_id":child["agent_id"],
-                        "revision":0,"choice":"queue","status":"delivered","review_status":"acceptable",
+                        "revision":0,"choice":"steer","status":"delivered","review_status":"acceptable",
                         "content":entry["content"],"context_content":context,"attachments":files,"agent_message":entry["agent_message"],
                         "consuming_run_id":consumer,"batch_id":entry["batch_id"]}));
                 }
@@ -1323,7 +1323,7 @@ mod tests {
         let context = prepared.context_content(text).unwrap();
         let files = json!(prepared.metadata.clone());
         let entry = json!({"id":id,"message_id":format!("user:{id}"),"session_id":"s",
-            "agent_id":"shared_default","revision":0,"choice":"queue","status":"pending",
+            "agent_id":"shared_default","revision":0,"choice":"steer","status":"pending",
             "review_status":"acceptable","content":text,"context_content":context,
             "attachments":files,"created_at":1,"consuming_run_id":null});
         let mut docs = prepared.records;
@@ -1348,7 +1348,7 @@ mod tests {
     /// Verify every unresolved queue mode blocks Undo without changing history, queue or receipts.
     #[tokio::test]
     async fn undo_blocks_every_undelivered_followup_state_transactionally() {
-        for state in ["pending", "held", "reviewing", "interrupt"] {
+        for state in ["pending", "held", "reviewing", "now"] {
             let (_root, store) = fixture().await;
             queue_history_message(&store, "followup", state, false).await;
             match state {
@@ -1358,14 +1358,14 @@ mod tests {
                         .await
                         .unwrap());
                 }
-                "interrupt" => {
+                "now" => {
                     store
                         .followup_choice(
                             "s",
                             Some("followup"),
                             0,
-                            "interrupt-choice",
-                            &json!({"choice":"interrupt"}),
+                            "now-choice",
+                            &json!({"choice":"now"}),
                         )
                         .await
                         .unwrap();
@@ -1410,13 +1410,13 @@ mod tests {
                 "s",
                 Some("steering"),
                 0,
-                "steer-choice",
-                &json!({"choice":"steer"}),
+                "now-choice",
+                &json!({"choice":"now"}),
             )
             .await
             .unwrap();
         assert!(store
-            .followup_consume("s", "steer", &mut run, None)
+            .followup_consume("s", "steer", &mut run)
             .await
             .unwrap());
         run["status"] = json!("completed");
@@ -1447,7 +1447,7 @@ mod tests {
         queue_history_message(&store, "after-r2", "completed followup", false).await;
         let mut run = queue_history_run("followup-run");
         assert!(store
-            .followup_consume("s", "queue", &mut run, None)
+            .followup_consume("s", "next_run", &mut run)
             .await
             .unwrap());
         run["status"] = json!("completed");
@@ -1475,7 +1475,7 @@ mod tests {
         assert_eq!(archive["archive"]["followups"][0]["status"], "delivered");
         let mut retry = queue_history_run("must-not-deliver");
         assert!(!reopened
-            .followup_consume("s", "queue", &mut retry, None)
+            .followup_consume("s", "next_run", &mut retry)
             .await
             .unwrap());
     }
@@ -1483,7 +1483,6 @@ mod tests {
     #[tokio::test]
     async fn fork_cutoff_omits_unconsumed_and_later_admitted_followups() {
         let (_root, store) = fixture().await;
-        queue_history_message(&store, "pending", "must remain queued only in source", true).await;
         queue_history_message(&store, "later", "admitted after chosen reply", true).await;
         let mut tx = store.pool.begin().await.unwrap();
         store
@@ -1497,21 +1496,12 @@ mod tests {
             .await
             .unwrap();
         tx.commit().await.unwrap();
-        store
-            .followup_choice(
-                "s",
-                Some("later"),
-                0,
-                "later-interrupt",
-                &json!({"choice":"interrupt"}),
-            )
-            .await
-            .unwrap();
         let mut later_run = queue_history_run("later-run");
         assert!(store
-            .followup_consume("s", "interrupt", &mut later_run, None)
+            .followup_consume("s", "next_run", &mut later_run)
             .await
             .unwrap());
+        queue_history_message(&store, "pending", "must remain queued only in source", true).await;
         let before = store.followup_queue("s").await.unwrap();
         let selected = request(&store, "working:r2:fork-cutoff", "fork-earlier").await;
         saved(
@@ -1556,7 +1546,7 @@ mod tests {
         let second = queue_history_message(&store, "second-file", "second input", true).await;
         let mut batch = queue_history_run("combined-run");
         assert!(store
-            .followup_consume("s", "queue", &mut batch, None)
+            .followup_consume("s", "next_run", &mut batch)
             .await
             .unwrap());
         let mut tx = store.pool.begin().await.unwrap();
@@ -1609,7 +1599,7 @@ mod tests {
         }
         for e in q["entries"].as_array().unwrap() {
             assert_eq!(e["status"], "delivered");
-            for key in ["template", "review", "interrupt_committed", "target_run_id"] {
+            for key in ["template", "review", "send_now"] {
                 assert!(e.get(key).is_none(), "{key}");
             }
             let aid = e["attachments"][0]["id"].as_str().unwrap();
@@ -1628,7 +1618,7 @@ mod tests {
                     e["id"].as_str(),
                     0,
                     "cannot-requeue",
-                    &json!({"choice":"interrupt"})
+                    &json!({"choice":"now"})
                 )
                 .await
                 .is_err());
@@ -1645,7 +1635,7 @@ mod tests {
         let mut forbidden =
             json!({"id":"must-not-run","session_id":"combined-child","status":"queued","input":[]});
         assert!(!reopened
-            .followup_consume("combined-child", "queue", &mut forbidden, None)
+            .followup_consume("combined-child", "next_run", &mut forbidden)
             .await
             .unwrap());
     }

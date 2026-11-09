@@ -167,7 +167,7 @@ pub(crate) async fn binding(app: &App, run: &Value, name: &str, args: &Value) ->
         (
             prepared.result["id"].as_str().unwrap().to_owned(),
             agent,
-            "queue".to_owned(),
+            "steer".to_owned(),
             mode,
             prepared.value["participation"].clone(),
             a.text,
@@ -186,7 +186,7 @@ pub(crate) async fn binding(app: &App, run: &Value, name: &str, args: &Value) ->
             &a.session_id,
         )
         .await?;
-        if !matches!(a.delivery.as_str(), "queue" | "steer" | "interrupt") {
+        if !matches!(a.delivery.as_str(), "steer" | "now") {
             bail!("Invalid delivery");
         }
         let target = private_session(app, &a.session_id).await?;
@@ -233,21 +233,10 @@ pub(crate) async fn binding(app: &App, run: &Value, name: &str, args: &Value) ->
         .store
         .live_access(app.store.current_user_id(), &agent)
         .await?;
-    let interrupt = if delivery == "interrupt" {
-        let active = app.store.active_runs().await?;
-        let r = active
-            .iter()
-            .find(|r| r["session_id"] == target && r["status"] == "running")
-            .ok_or_else(|| anyhow!("No running recipient to interrupt"))?;
-        let r = app.run(r["id"].as_str().unwrap()).await?;
-        json!({"id":r["id"],"generation":r["generation"],"lease_epoch":r["lease_epoch"]})
-    } else {
-        Value::Null
-    };
     Ok(
         json!({"spawn_limits":spawn_limits,"source_access_revision":app.store.live_access(app.store.current_user_id(),source_agent).await?.revision,"source_execution_epoch":s["execution_epoch"].as_u64().unwrap_or(0),"target_execution_epoch":if starts(name){0}else{app.store.get(&key("session",&target)).await?.and_then(|v|v["execution_epoch"].as_u64()).unwrap_or(0)},"source_session_id":source,"source_agent_id":source_agent,"source_title":s["title"],
   "target_title":if starts(name){title.as_deref().unwrap_or("New chat").to_owned()}else{app.store.get(&key("session",&target)).await?.and_then(|v|v["title"].as_str().map(str::to_owned)).unwrap_or_else(||"Conversation".into())},"target_session_id":target,"target_agent_id":agent,"delivery":delivery,"target_mode":mode,
-  "target_mode_raw":raw_mode,"participation":participation,"target_access_revision":access.revision,"interrupt_target":interrupt,
+  "target_mode_raw":raw_mode,"participation":participation,"target_access_revision":access.revision,
   "target_capabilities":recipient_capabilities(app,&target,&agent,&mode,starts(name)).await?,"text":text,"title":title,"notify":notify,"fork_message_id":fork_message,"source_kind":"agent_message","owner_user_id":app.store.current_user_id()}),
     )
 }
@@ -272,7 +261,7 @@ async fn route_for(app: &App, b: &Value) -> Result<Option<Value>> {
 }
 /// Bind exact destination authority; approval itself follows the ordinary tool policy and session mode.
 // Keep this security checkpoint heap-backed: embedding its state in every
-// nested run/interrupt poll can exhaust an ordinary debug executor stack.
+// nested run poll can exhaust an ordinary debug executor stack.
 pub(crate) fn preflight<'a>(
     app: &'a App,
     run: &'a mut Value,
@@ -305,7 +294,7 @@ async fn preflight_inner(app: &App, run: &mut Value, name: &str, args: &Value) -
         .map(|r| json!({"key":r["key"],"revision":r["revision"]}))
         .unwrap_or(Value::Null);
     run["pending"]["messaging_can_remember"] =
-        json!(name == "message_session" && b["delivery"] != "interrupt" && !onward);
+        json!(name == "message_session" && b["delivery"] != "now" && !onward);
     Ok(())
 }
 /// Render received messages as attributed evidence, never as direct human instructions.
@@ -508,8 +497,7 @@ pub(crate) async fn execute(
             .map_err(|e| anyhow!(e.1))?
     };
     stamp(&mut prepared, &b);
-    let (entry, extra_docs) =
-        crate::followup_queue::prepared_entry(prepared, b["delivery"].as_str().unwrap());
+    let (entry, extra_docs) = crate::followup_queue::prepared_entry(prepared, "steer");
     docs.extend(extra_docs);
     let entry_id = entry["id"].as_str().unwrap().to_owned();
     let mut entry = entry;
@@ -520,10 +508,8 @@ pub(crate) async fn execute(
     } else {
         json!({"key":route["key"],"revision":route["revision"]})
     };
-    if b["delivery"] == "interrupt" {
-        entry["target_run_id"] = b["interrupt_target"]["id"].clone();
-        entry["interrupt_committed"] = json!(true);
-        entry["interrupt_generation"] = b["interrupt_target"]["generation"].clone();
+    if b["delivery"] == "now" {
+        entry["send_now"] = json!(true);
     }
     let result = json!({"session_id":target,"message_id":entry["message_id"],"submission_id":entry_id,"delivery_state":"queued","run_id":null,"session_created":starts(name),
         "notify":b["notify"],"forked":fork,"next":if b["notify"] == true {"A notice with its final reply arrives when its run ends. End your turn now; do not poll."} else {"No completion notice is armed; use read_session to check on it."}});
@@ -558,9 +544,9 @@ pub(crate) async fn execute(
     crate::wake::notify(&target_app).await;
     Ok(json!({"status":"success","output":result}))
 }
-/// Revalidate pending delegations before model or interrupt consumption.
+/// Revalidate pending delegations before model consumption.
 // Keep this security checkpoint heap-backed: embedding its state in every
-// nested run/interrupt poll can exhaust an ordinary debug executor stack.
+// nested run poll can exhaust an ordinary debug executor stack.
 pub(crate) fn revalidate<'a>(
     app: &'a App,
     sid: &'a str,
@@ -643,16 +629,6 @@ async fn revalidate_inner(app: &App, sid: &str) -> Result<()> {
                     .ok_or_else(|| authority_changed("Route revoked"))?;
                 if r["revoked"] == true || r["revision"] != e["messaging_route"]["revision"] {
                     return Err(authority_changed("Route revoked"));
-                }
-            }
-            if e["choice"] == "interrupt" {
-                let r = app
-                    .store
-                    .get(&key("run", e["target_run_id"].as_str().unwrap_or("")))
-                    .await?
-                    .ok_or_else(|| authority_changed("Interrupt target changed"))?;
-                if r["generation"] != e["interrupt_generation"] || r["status"] == "completed" {
-                    return Err(authority_changed("Interrupt target changed"));
                 }
             }
             Ok::<(), anyhow::Error>(())
@@ -1042,7 +1018,7 @@ mod tests {
         let mut next = q["entries"][0]["template"].clone();
         next["id"] = json!(uuid());
         assert!(reopened
-            .followup_consume(&target, "queue", &mut next, None)
+            .followup_consume(&target, "next_run", &mut next)
             .await
             .unwrap());
         assert_eq!(next["received_agent_message"], true);

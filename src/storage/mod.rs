@@ -2619,7 +2619,7 @@ mod tests {
             .await
             .unwrap();
         let entry = json!({"id":"queued-followup","message_id":"user:queued-followup","session_id":"renew-session",
-            "agent_id":"shared_default","revision":0,"status":"pending","review_status":"acceptable","choice":"queue",
+            "agent_id":"shared_default","revision":0,"status":"pending","review_status":"acceptable","choice":"steer",
             "content":"ordinary followup","context_content":"ordinary followup","attachments":[]});
         // A real queue submission commits between the old renewal read/write.
         store

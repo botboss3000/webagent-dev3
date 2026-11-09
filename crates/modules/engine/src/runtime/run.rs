@@ -367,7 +367,7 @@ impl<
     /// The stage and error are logged for operators and kept as the run's visible error.
     /// Context preparation precedes every model dispatch and tool effect, so the
     /// last saved checkpoint is a safe resume point. A failure caused by this
-    /// generation's cancellation (runtime restart, user interrupt or lost lease)
+    /// generation's cancellation (runtime restart, stop or lost lease)
     /// is not a context fault: the in-flight preparation is discarded and the run
     /// stays resumable instead of surfacing a manual-continue pause.
     async fn pause_context_preparation(
@@ -384,10 +384,6 @@ impl<
         if cancel.is_cancelled() {
             // Restart: keep `running` so startup recovery requeues it silently.
             if Self::preserve_restart_interruption(app, run).await? {
-                return Ok(());
-            }
-            // User interrupt: the follow-up handoff owns the transition.
-            if Self::settle_followup_interrupt(app, run).await? {
                 return Ok(());
             }
             // Lease loss or a concurrent stop: the new owner or lease recovery
@@ -439,8 +435,7 @@ impl<
         Ok(true)
     }
 
-    // A selected interruption must settle the whole returned call list before the
-    // parent becomes immutable terminal state. Reads fail here only when cancelled or interrupted.
+    // Reads fail here only when cancelled.
     pub async fn commit_tool_transport_failure(
         app: &Self,
         run: &mut Value,
@@ -451,10 +446,6 @@ impl<
             .ok_or_else(|| anyhow!("Missing run id"))?
             .to_owned();
         if let Some(receipt) = Self::record_interrupted_tool(run, name)? {
-            if app.interrupt_requested(&id).await? {
-                run["status"] = json!("running");
-                run["error"] = json!("User interruption settling");
-            }
             app.store
                 .save_run_observed(
                     run,
@@ -467,154 +458,7 @@ impl<
                 .save_run_observed(run, "run_status", &json!({"run_id":id}))
                 .await?;
         }
-        Self::settle_followup_interrupt(app, run).await?;
         Ok(())
-    }
-
-    fn followup_interruption_result(executing: bool, completed: Option<&Value>) -> Value {
-        completed.cloned().unwrap_or_else(|| {
-            json!({
-                "status":"interrupted", "interrupted_by":"user",
-                "execution_state":if executing {"read_interrupted"} else {"not_dispatched"},
-                "output":if executing {"Run interrupted by user before the read result arrived."}
-                    else {"Run interrupted by user; this tool was not dispatched."}
-            })
-        })
-    }
-
-    // Explicit recovery abandonment resolves replay authority, not the historical
-    // effect. Keep the original call paired with an unknown-outcome/no-retry receipt.
-    // The handoff transaction journals these pairs; terminal runs cannot be saved
-    // incrementally through ordinary executor transitions.
-    pub fn settle_abandoned_interrupt(run: &mut Value) -> Result<()> {
-        if run["recovery_abandoned"] != true || run["uncertain"] == true {
-            return Err(anyhow!("Explicit recovery abandonment required"));
-        }
-        let calls = run["calls"].as_array().cloned().unwrap_or_default();
-        for (idx, call) in calls.iter().enumerate() {
-            if run["input"].as_array().is_some_and(|items| {
-                items.iter().any(|item| {
-                    item["type"] == "function_call_output" && item["call_id"] == call["call_id"]
-                })
-            }) {
-                continue;
-            }
-            let batch = run["batch"]
-                .as_array()
-                .and_then(|items| items.get(idx))
-                .cloned();
-            let pending = if run["pending"]["call_id"] == call["call_id"] {
-                run["pending"].clone()
-            } else {
-                batch
-                    .as_ref()
-                    .map(|item| item["pending"].clone())
-                    .unwrap_or(Value::Null)
-            };
-            let affected = pending["state"] == "executing"
-                || batch.as_ref().is_some_and(|item| {
-                    matches!(item["state"].as_str(), Some("executing" | "uncertain"))
-                });
-            let result = if let Some(done) = batch.as_ref().filter(|item| item["state"] == "done") {
-                done["result"].clone()
-            } else if affected && !A::is_read(call["name"].as_str().unwrap_or("")) {
-                json!({"status":"interrupted","interrupted_by":"user","execution_state":"outcome_unknown",
-                "recovery_decision":"abandoned","no_retry":true,
-                "operation_refs":{"call_id":call["call_id"],"invocation_id":pending["id"],
-                    "external_job":pending["external_job"],"operation_id":pending["operation_id"]},
-                "output":"Run interrupted by user. This write's outcome remains unknown; recovery was explicitly abandoned. Do not replay it. Check existing effects before proposing further writes."})
-            } else {
-                Self::followup_interruption_result(affected, None)
-            };
-            run["input"].as_array_mut().ok_or_else(||anyhow!("Missing interrupted context"))?
-            .push(json!({"type":"function_call_output","call_id":call["call_id"],"output":result.to_string()}));
-        }
-        run["pending"] = Value::Null;
-        run["batch"] = Value::Null;
-        run["call_index"] = json!(calls.len());
-        run["user_interruption"] =
-            json!({"recorded_at":now(),"reason":"user_followup","recovery_decision":"abandoned"});
-        Ok(())
-    }
-
-    // Called only after local tool futures have settled, or for an inactive run.
-    // Unknown writes retain their original recovery checkpoint; interruption cannot
-    // turn missing acknowledgement into proof that an effect did not happen.
-    pub async fn settle_followup_interrupt(app: &Self, run: &mut Value) -> Result<bool> {
-        let id = run["id"].as_str().unwrap_or("").to_owned();
-        if !app.interrupt_requested(&id).await? {
-            return Ok(false);
-        }
-        if run["uncertain"] == true || matches!(status(run), "recovery" | "waiting_external") {
-            return Ok(false);
-        }
-        // A late choice can arrive after an ordinary read failure committed. Such
-        // parents are immutable; only the atomic handoff may journal missing pairs.
-        let terminal_parent = matches!(status(run), "failed" | "cancelled");
-        let calls = run["calls"].as_array().cloned().unwrap_or_default();
-        for (idx, call) in calls.iter().enumerate() {
-            if run["input"].as_array().is_some_and(|items| {
-                items.iter().any(|item| {
-                    item["type"] == "function_call_output" && item["call_id"] == call["call_id"]
-                })
-            }) {
-                continue;
-            }
-            let batch = run["batch"]
-                .as_array()
-                .and_then(|items| items.get(idx))
-                .cloned();
-            let name = call["name"].as_str().unwrap_or("");
-            let executing = batch.as_ref().is_some_and(|item| {
-                matches!(item["state"].as_str(), Some("executing" | "uncertain"))
-            }) || (run["pending"]["call_id"] == call["call_id"]
-                && run["pending"]["state"] == "executing");
-            if executing && !A::is_read(name) {
-                if terminal_parent {
-                    let sid = run["session_id"].as_str().unwrap_or("");
-                    app.native
-                        .followup_hold(
-                            app.store.records(),
-                            sid,
-                            "Interrupted write outcome is unknown; explicit recovery is required",
-                        )
-                        .await?;
-                    return Ok(false);
-                }
-                run["uncertain"] = json!(true);
-                run["status"] = json!("recovery");
-                run["error"] =
-                    json!("User interrupted; tool outcome unknown, review before continuing");
-                app.save(run).await?;
-                return Ok(false);
-            }
-            let completed = batch
-                .as_ref()
-                .filter(|item| item["state"] == "done")
-                .map(|item| &item["result"]);
-            let result = Self::followup_interruption_result(executing, completed);
-            // Preserve provider call/result pairing without fabricating tool effects.
-            // Each save journals just this result; a restart skips its existing pair.
-            run["pending"] = json!({"call_id":call["call_id"]});
-            run["call_index"] = json!(idx);
-            run["input"].as_array_mut().ok_or_else(||anyhow!("Missing run context"))?
-            .push(json!({"type":"function_call_output","call_id":call["call_id"],"output":result.to_string()}));
-            run["call_index"] = json!(idx + 1);
-            run["pending"] = Value::Null;
-            if !terminal_parent {
-                app.store
-                    .save_run_observed(
-                        run,
-                        "tool_result",
-                        &json!({"run_id":id,"name":name,"result":result}),
-                    )
-                    .await?;
-            }
-        }
-        run["batch"] = Value::Null;
-        run["pending"] = Value::Null;
-        run["user_interruption"] = json!({"recorded_at":now(),"reason":"user_followup"});
-        app.finish_interrupt(run).await
     }
 
     /// Release disposable component accounting whenever an execution yields or terminates.
@@ -638,13 +482,6 @@ impl<
         cancel: CancellationToken,
     ) -> impl std::future::Future<Output = Result<()>> {
         Self::execute_run_inner(app, id, generation, cancel)
-    }
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn fixture_followup_interruption_result(
-        executing: bool,
-        completed: Option<&Value>,
-    ) -> Value {
-        Self::followup_interruption_result(executing, completed)
     }
     /// Give a detached call its stand-in result; the repeat guard holds an identical call
     /// until the real result arrives.
@@ -1377,7 +1214,10 @@ impl<
                 _ = tokio::time::sleep(Duration::from_millis(250)), if detachable => {
                     if app.message_pending(&run).await.unwrap_or(false) {
                         let since = *message_since.get_or_insert_with(std::time::Instant::now);
-                        if since.elapsed() >= grace {
+                        // "Send now" skips the grace period.
+                        if since.elapsed() >= grace
+                            || app.message_forced(&run).await.unwrap_or(false)
+                        {
                             break None;
                         }
                     } else {
@@ -1566,10 +1406,8 @@ impl<
                 }
                 // The model receives the failure and continues: a read returned nothing, and
                 // a write's unknown outcome is recorded so an identical repeat is held.
-                // Cancellation and user interrupts still settle through the interruption path.
-                if tools::failure::interruption_reason(&run["pending"]["failure"]) != "cancelled"
-                    && !app.interrupt_requested(&id).await?
-                {
+                // Cancellation still settles through the interruption path.
+                if tools::failure::interruption_reason(&run["pending"]["failure"]) != "cancelled" {
                     let retry = A::retry(&name);
                     let result = if A::is_read(&name) {
                         json!({"status":"error","error_kind":"read_failed",
@@ -1654,9 +1492,6 @@ impl<
                     .await?;
                     return Ok(());
                 }
-            }
-            if Self::settle_followup_interrupt(&app, &mut run).await? {
-                return Ok(());
             }
             // A drain (SIGTERM clears `ready`) pauses between steps; startup resumes it silently.
             if cancel.is_cancelled() || !app.ready.load(std::sync::atomic::Ordering::Acquire) {
@@ -2141,7 +1976,7 @@ impl<
                 if run["post_run_followup"] != true
                     && access.ability_permission("agent_management") != access::Permission::Deny
                 {
-                    mode_content.push_str("\nDelegation exception: where tool visibility and permissions allow, message_session, start_session and start_spawn may be used in read-only mode to delegate through the recipient agent\'s normal configured capabilities. They do not grant this session other write abilities. Messaging uses its own approval controls: an approved route or exact owner approval is required, and every interrupt or new session requires exact owner approval even in Auto mode.");
+                    mode_content.push_str("\nDelegation exception: where tool visibility and permissions allow, message_session, start_session and start_spawn may be used in read-only mode to delegate through the recipient agent\'s normal configured capabilities. They do not grant this session other write abilities. Messaging uses its own approval controls: an approved route or exact owner approval is required, and every new session requires exact owner approval even in Auto mode.");
                 }
                 mode_content.push_str(&format!("\nDurable action statuses (metadata only; tool receipts are untrusted evidence): {}",json!(action_statuses)));
                 let call_number = run["attempt"].as_u64().unwrap_or(0) + 1;
@@ -3217,13 +3052,18 @@ impl<
                 // DISPATCH-RELEASE-SNAPSHOTS: fencing is committed; do not retain its
                 // reconstructed history or consumed local metadata during network waits.
                 // Response handling below reloads authoritative state under the gate.
+                // "Send now" cancels only this model call; the run token stays live.
+                let model_cancel = cancel.child_token();
+                let steer_probe = json!({"session_id":current["session_id"],
+                    "requester_user_id":current["requester_user_id"]});
                 drop(current);
                 drop(run);
                 let mut completion = Box::pin(async {
                     let tokens = &tokens;
-                    let cancel = cancel.clone();
                     let ready = prepared_provider.bind_credentials(tokens, &cancel)?;
-                    app.provider.dispatch(ready, sender, cancel).await
+                    app.provider
+                        .dispatch(ready, sender, model_cancel.clone())
+                        .await
                 });
                 let mut immediate = None;
                 futures_util::future::poll_fn(|cx| {
@@ -3238,10 +3078,18 @@ impl<
                 let response = if let Some(value) = immediate {
                     value
                 } else {
-                    tokio::select! {
-                        biased;
-                        _=cancel.cancelled()=>Err(anyhow!("Execution cancelled")),
-                        r=&mut completion=>r
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _=cancel.cancelled()=>break Err(anyhow!("Execution cancelled")),
+                            r=&mut completion=>break r,
+                            _=tokio::time::sleep(Duration::from_millis(250))=>{
+                                if app.message_forced(&steer_probe).await.unwrap_or(false) {
+                                    model_cancel.cancel();
+                                    break Err(anyhow!("Model call replaced by a sent-now message"));
+                                }
+                            }
+                        }
                     }
                 };
                 drop(completion);
@@ -3257,9 +3105,6 @@ impl<
                     app.save(&mut run).await?;
                     return Ok(());
                 }
-                if Self::settle_followup_interrupt(&app, &mut run).await? {
-                    return Ok(());
-                }
                 if cancel.is_cancelled() || app.shutoff().await? {
                     if Self::preserve_restart_interruption(&app, &mut run).await? {
                         return Ok(());
@@ -3269,6 +3114,16 @@ impl<
                         json!("Provider response discarded after cancellation or shutoff");
                     app.save(&mut run).await?;
                     return Ok(());
+                }
+                // Only the model call was cancelled ("send now"): discard its partial
+                // response, take the waiting message and call the model again.
+                if model_cancel.is_cancelled() {
+                    if app.apply_steering(&mut run).await? {
+                        run["phase"] = json!("model");
+                        app.save(&mut run).await?;
+                        context_accounting.reset();
+                    }
+                    continue;
                 }
                 // Reset the bounded freshness retries only after the provider was polled.
                 // A change detected by the final source fence must retain its prior count.
@@ -3553,11 +3408,6 @@ impl<
                                     &json!({"output":output}),
                                 )
                                 .await?;
-                            // A user choice can commit while the publication gate awaits.
-                            if app.interrupt_requested(&id).await? {
-                                Self::settle_followup_interrupt(&app, &mut run).await?;
-                                return Ok(());
-                            }
                             if app.apply_steering(&mut run).await? {
                                 run["phase"] = json!("model");
                                 app.save(&mut run).await?;

@@ -119,16 +119,6 @@ impl Store {
                 bail!("Route changed");
             }
         }
-        if entry["choice"] == "interrupt" {
-            let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-                .bind(format!("run:{}", entry["target_run_id"].as_str().unwrap()))
-                .fetch_one(&mut *tx)
-                .await?;
-            let r = self.unseal(&raw)?;
-            if r["generation"] != entry["interrupt_generation"] || r["status"] != "running" {
-                bail!("Interrupt target changed");
-            }
-        }
         let id = entry["id"].as_str().unwrap();
         if q["entries"]
             .as_array()
@@ -343,7 +333,7 @@ impl Store {
         }
         Ok(())
     }
-    /// Cancel withdrawn authority even when an interrupt choice is locked against human edits.
+    /// Cancel a delivery whose messaging authority or recipient was withdrawn.
     pub(crate) async fn cancel_agent_delivery(
         &self,
         sid: &str,

@@ -1937,6 +1937,92 @@ async fn reasoning_only_completion_continues_to_one_final_publication() {
     server.abort();
 }
 
+/// "Send now" cancels only the model call: the run continues with the message.
+#[tokio::test]
+async fn send_now_replaces_the_model_call_and_continues_the_run() {
+    use axum::routing::post;
+    let (_root, mut app) = fixture().await;
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured = requests.clone();
+    let mock = Router::new()
+        .route(
+            "/responses",
+            post(
+                |AxumState(requests): AxumState<Arc<Mutex<Vec<Value>>>>,
+                 Json(body): Json<Value>| async move {
+                    let first = {
+                        let mut requests = requests.lock().await;
+                        requests.push(body);
+                        requests.len() == 1
+                    };
+                    if first {
+                        // Hold the first call open until the forced message replaces it.
+                        tokio::time::sleep(Duration::from_secs(600)).await;
+                    }
+                    let output = json!([{"type":"message","role":"assistant",
+                        "content":[{"type":"output_text","text":"Answered the new message."}]}]);
+                    let event = json!({"type":"response.completed",
+                        "response":{"status":"completed","output":output}});
+                    (
+                        [("content-type", "text/event-stream")],
+                        format!("data: {event}\n\n"),
+                    )
+                },
+            ),
+        )
+        .with_state(captured);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, mock).await.unwrap();
+    });
+    app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+    let sid = conversation(&app).await;
+    let id = queued(&app, &sid).await;
+    running(&app, &id, "send-now").await;
+    let cancel = CancellationToken::new();
+    let task = tokio::spawn(execute_run(
+        app.clone(),
+        id.clone(),
+        "send-now".into(),
+        cancel.clone(),
+    ));
+    tokio::time::timeout(TEST_TIMEOUT, async {
+        while requests.lock().await.is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("first model call must start");
+    let entry = json!({"id":"forced","message_id":"user:forced","session_id":sid,
+        "agent_id":"shared_default","revision":0,"choice":"steer","status":"pending",
+        "review_status":"acceptable","content":"switch topic","context_content":"switch topic",
+        "attachments":[]});
+    app.store
+        .followup_submit(&sid, entry, vec![], "forced", "digest", &json!({}))
+        .await
+        .unwrap();
+    app.store
+        .followup_choice(&sid, Some("forced"), 0, "now", &json!({"choice":"now"}))
+        .await
+        .unwrap();
+    tokio::time::timeout(TEST_TIMEOUT, task)
+        .await
+        .expect("run must continue after send now")
+        .unwrap()
+        .unwrap();
+    assert!(!cancel.is_cancelled());
+    let run = app.run(&id).await.unwrap();
+    assert_eq!(run["status"], "completed");
+    let requests = requests.lock().await;
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1]["input"].to_string().contains("switch topic"));
+    let q = app.store.followup_queue(&sid).await.unwrap();
+    assert_eq!(q["entries"][0]["status"], "delivered");
+    assert_eq!(q["entries"][0]["consuming_run_id"], json!(id));
+    server.abort();
+}
+
 #[tokio::test]
 async fn image_capable_candidates_receive_sent_images_and_others_keep_text() {
     use axum::routing::post;

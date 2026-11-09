@@ -215,39 +215,28 @@ impl Store {
             if e["revision"].as_u64().unwrap_or(0) != expected {
                 return Err(anyhow!("Queue revision changed"));
             }
-            if !matches!(e["status"].as_str(), Some("pending" | "reviewing" | "held"))
-                || e["interrupt_committed"] == true
-            {
+            if !matches!(e["status"].as_str(), Some("pending" | "reviewing" | "held")) {
                 return Err(anyhow!("Message delivery already claimed"));
             }
-            let choice = body["choice"]
-                .as_str()
-                .ok_or_else(|| anyhow!("Invalid follow-up record"))?;
-            if e["agent_message"].is_object() {
-                e["messaging_route"] = Value::Null;
-            }
-            e["choice"] = json!(choice);
-            e["revision"] = json!(expected + 1);
-            if choice == "cancel" {
-                self.legacy_message_meta(&mut t, e, false).await?;
-                e["status"] = json!("cancelled");
-            }
-            if choice == "interrupt" {
-                e["interrupt_committed"] = json!(true);
-                let target:Option<String>=sqlx::query_scalar("SELECT id FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed') ORDER BY enqueue_seq DESC LIMIT 1").bind(s).fetch_optional(&mut *t).await?;
-                if e["agent_message"].is_object() {
-                    let id = target
-                        .as_deref()
-                        .ok_or_else(|| anyhow!("No active recipient run to interrupt"))?;
-                    let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-                        .bind(format!("run:{id}"))
-                        .fetch_one(&mut *t)
-                        .await?;
-                    let target_run = self.unseal(&raw)?;
-                    e["interrupt_generation"] = target_run["generation"].clone();
+            match body["choice"].as_str() {
+                Some("cancel") => {
+                    if e["agent_message"].is_object() {
+                        e["messaging_route"] = Value::Null;
+                    }
+                    e["choice"] = json!("cancel");
+                    self.legacy_message_meta(&mut t, e, false).await?;
+                    e["status"] = json!("cancelled");
                 }
-                e["target_run_id"] = json!(target);
+                // "Send now" keeps the steer and asks the run to take it immediately.
+                Some("now") => {
+                    if e["status"] != "pending" || e["review_status"] != "acceptable" {
+                        return Err(anyhow!("Message is not ready to send"));
+                    }
+                    e["send_now"] = json!(true);
+                }
+                _ => return Err(anyhow!("Invalid delivery choice")),
             }
+            e["revision"] = json!(expected + 1);
         } else {
             if q["revision"].as_u64().unwrap_or(0) != expected {
                 return Err(anyhow!("Queue revision changed"));
@@ -377,7 +366,7 @@ impl Store {
             .any(|e| {
                 e["status"] == "pending"
                     && e["review_status"] == "acceptable"
-                    && matches!(e["choice"].as_str(), Some("steer" | "interrupt"))
+                    && e["choice"] == "steer"
             })
         {
             return Err(anyhow!("Pending followup prevents terminal publication"));
@@ -424,33 +413,26 @@ impl Store {
         s: &str,
         choice: &str,
         run: &mut Value,
-        mut origin: Option<&mut Value>,
     ) -> Result<bool> {
         let _g = self.context_gate.write().await;
         let mut t = self.pool.begin().await?;
         self.queue_reserve(&mut t, s).await?;
         let mut q = self.queue_read_tx(&mut t, s).await?;
-        if choice == "queue" && q["held"] == true {
+        // "steer" joins the claimed running run; "next_run" starts the given new run.
+        if choice == "next_run" && q["held"] == true {
             return Ok(false);
         }
-        let mut picked = q["entries"]
+        let picked = q["entries"]
             .as_array()
             .ok_or_else(|| anyhow!("Invalid follow-up queue"))?
             .iter()
             .filter(|e| {
                 e["status"] == "pending"
                     && e["review_status"] == "acceptable"
-                    && (e["choice"] == choice || (choice == "queue" && e["choice"] == "steer"))
+                    && e["choice"] == "steer"
             })
             .cloned()
             .collect::<Vec<_>>();
-        if choice == "interrupt" {
-            if let Some(parent) = origin.as_deref() {
-                picked
-                    .retain(|e| e["target_run_id"].is_null() || e["target_run_id"] == parent["id"]);
-            }
-            picked.truncate(1);
-        }
         if picked.is_empty() {
             return Ok(false);
         }
@@ -459,9 +441,6 @@ impl Store {
             self.legacy_followup_fence(&mut t, s, &entry["template"])
                 .await?;
             self.validate_agent_delivery_tx(&mut t, entry).await?;
-        }
-        if let Some(parent) = origin.as_deref() {
-            self.legacy_followup_fence(&mut t, s, parent).await?;
         }
 
         // The preflight template must still belong to the actual first consumer;
@@ -473,17 +452,7 @@ impl Store {
             return Ok(false);
         }
         if choice != "steer" {
-            let reservation = if let Some(parent) = origin.as_deref().filter(|parent| {
-                !matches!(
-                    parent["status"].as_str(),
-                    Some("completed" | "cancelled" | "stopped" | "failed")
-                )
-            }) {
-                self.transfer_requester_run(parent, run).await
-            } else {
-                self.reserve_requester_run(run).await
-            };
-            match reservation {
+            match self.reserve_requester_run(run).await {
                 Ok(()) => {}
                 Err(error) if error.to_string() == "Account run limit reached" => return Ok(false),
                 Err(error) => return Err(error),
@@ -494,7 +463,7 @@ impl Store {
             .ok_or_else(|| anyhow!("Missing delivery run"))?
             .to_owned();
         let busy:i64=sqlx::query_scalar("SELECT count(*) FROM run_index WHERE session_id=? AND id!=? AND status NOT IN ('completed','cancelled','failed')").bind(s).bind(&rid).fetch_one(&mut *t).await?;
-        if choice == "queue" && busy != 0 {
+        if choice == "next_run" && busy != 0 {
             return Ok(false);
         }
         let text = picked
@@ -540,7 +509,7 @@ impl Store {
         if picked.iter().any(|e| e["agent_message"].is_object()) {
             next["received_agent_message"] = json!(true);
         }
-        if choice == "steer" || choice == "interrupt" {
+        if choice == "steer" {
             next["input"]
                 .as_array_mut()
                 .ok_or_else(|| anyhow!("Missing run input"))?
@@ -548,83 +517,6 @@ impl Store {
         }
         let batch = uuid::Uuid::new_v4().to_string();
         next["followup_batch_id"] = json!(batch);
-        let mut saved_origin = None;
-        if let Some(original) = origin.as_deref() {
-            let mut old = original.clone();
-            let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
-                .bind(format!(
-                    "run:{}",
-                    old["id"]
-                        .as_str()
-                        .ok_or_else(|| anyhow!("Invalid follow-up record"))?
-                ))
-                .fetch_one(&mut *t)
-                .await?;
-            let previous = self.unseal(&raw)?;
-            if previous["run_revision"].as_u64().unwrap_or(0)
-                != old["run_revision"].as_u64().unwrap_or(0)
-                || previous["generation"] != old["generation"]
-            {
-                return Err(anyhow!("Run fence rejected interrupt handoff"));
-            }
-            old["status"] = json!("cancelled");
-            old["generation"] = json!(uuid::Uuid::new_v4().to_string());
-            old["interrupted_by"] = picked[0]["id"].clone();
-            old["run_revision"] = json!(old["run_revision"].as_u64().unwrap_or(0) + 1);
-            self.followup_lease_guard(&mut t, original, &previous)
-                .await?;
-            self.write_document(
-                &mut t,
-                &format!(
-                    "run:{}",
-                    old["id"]
-                        .as_str()
-                        .ok_or_else(|| anyhow!("Invalid follow-up record"))?
-                ),
-                &old,
-            )
-            .await?;
-            self.index_run(&mut t, &old).await?;
-            for item in old["input"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                // Input includes older runs' history. Only this interrupted
-                // call list can have newly synthesized results to journal here.
-                .filter(|i| {
-                    i["type"] == "function_call_output"
-                        && old["calls"].as_array().is_some_and(|calls| {
-                            calls.iter().any(|call| call["call_id"] == i["call_id"])
-                        })
-                })
-            {
-                if let Some(call) = item["call_id"].as_str() {
-                    self.insert_interaction(
-                        &mut t,
-                        s,
-                        old["id"]
-                            .as_str()
-                            .ok_or_else(|| anyhow!("Invalid follow-up record"))?,
-                        &format!("tool:{call}"),
-                        item,
-                    )
-                    .await?;
-                }
-            }
-            for entry in q["entries"]
-                .as_array_mut()
-                .ok_or_else(|| anyhow!("Invalid follow-up queue"))?
-            {
-                if entry["choice"] == "interrupt"
-                    && entry["status"] == "pending"
-                    && entry["target_run_id"] == old["id"]
-                {
-                    entry["target_run_id"] = json!(rid);
-                    entry["revision"] = json!(entry["revision"].as_u64().unwrap_or(0) + 1);
-                }
-            }
-            saved_origin = Some(old);
-        }
         if choice == "steer" {
             let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
                 .bind(format!("run:{rid}"))
@@ -665,17 +557,6 @@ impl Store {
         self.queue_write_tx(&mut t, &mut q).await?;
         t.commit().await?;
         *run = next;
-        if let (Some(target), Some(saved)) = (origin.as_deref_mut(), saved_origin) {
-            let old_id = saved["id"]
-                .as_str()
-                .ok_or_else(|| anyhow!("Invalid follow-up record"))?
-                .to_owned();
-            *target = saved;
-            self.cache
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .invalidate(&[format!("run:{old_id}"), format!("run_view:{old_id}")]);
-        }
         self.context_cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -726,16 +607,16 @@ mod tests {
     #[tokio::test]
     async fn combined_delivery_survives_reopen_without_duplicate_bubbles() {
         let (root, s) = fixture().await;
-        submit(&s, "a", "first", "queue").await;
-        submit(&s, "b", "second", "queue").await;
+        submit(&s, "a", "first", "steer").await;
+        submit(&s, "b", "second", "steer").await;
         let reopened = Store::open(root.path()).await.unwrap();
         let mut r = run("batch");
         assert!(reopened
-            .followup_consume("s", "queue", &mut r, None)
+            .followup_consume("s", "next_run", &mut r)
             .await
             .unwrap());
         assert!(!reopened
-            .followup_consume("s", "queue", &mut r, None)
+            .followup_consume("s", "next_run", &mut r)
             .await
             .unwrap());
         let context = reopened.context("s").await.unwrap();
@@ -753,7 +634,7 @@ mod tests {
     #[tokio::test]
     async fn cancellation_cas_retry_and_request_conflicts() {
         let (_root, s) = fixture().await;
-        submit(&s, "a", "first", "queue").await;
+        submit(&s, "a", "first", "steer").await;
         let b = json!({"choice":"cancel"});
         let first = s
             .followup_choice("s", Some("a"), 0, "request", &b)
@@ -765,19 +646,14 @@ mod tests {
                 .unwrap(),
             first
         );
-        assert!(s
-            .followup_choice("s", Some("a"), 0, "different", &json!({"choice":"steer"}))
-            .await
-            .is_err());
-        assert!(s
-            .followup_choice("s", Some("a"), 0, "request", &json!({"choice":"queue"}))
-            .await
-            .is_err());
+        for retired in ["steer", "queue", "interrupt"] {
+            assert!(s
+                .followup_choice("s", Some("a"), 0, retired, &json!({"choice":retired}))
+                .await
+                .is_err());
+        }
         let mut r = run("batch");
-        assert!(!s
-            .followup_consume("s", "queue", &mut r, None)
-            .await
-            .unwrap());
+        assert!(!s.followup_consume("s", "next_run", &mut r).await.unwrap());
         assert!(s.context("s").await.unwrap().is_empty());
     }
     #[tokio::test]
@@ -800,47 +676,47 @@ mod tests {
             .to_string()
             .contains("Pending followup"));
         r["input"] = json!([{"role":"assistant","content":"private work"}]);
-        assert!(s
-            .followup_consume("s", "steer", &mut r, None)
-            .await
-            .unwrap());
+        assert!(s.followup_consume("s", "steer", &mut r).await.unwrap());
         assert_eq!(r["input"][0]["content"], "private work");
         assert_eq!(r["input"][1]["content"], "steer");
-        assert!(!s
-            .followup_consume("s", "steer", &mut r, None)
-            .await
-            .unwrap());
+        assert!(!s.followup_consume("s", "steer", &mut r).await.unwrap());
     }
     #[tokio::test]
-    async fn interrupt_only_selected_then_steer_and_resume_hold() {
+    async fn send_now_marks_a_ready_steer_and_rejects_retired_choices() {
         let (_root, s) = fixture().await;
-        let mut old = run("old");
-        s.put("run:old", &old).await.unwrap();
-        submit(&s, "a", "interrupt", "interrupt").await;
-        submit(&s, "b", "steer", "steer").await;
-        submit(&s, "c", "later", "queue").await;
-        let mut next = run("replacement");
-        next["input"] = json!([{"role":"assistant","content":"retained"}]);
+        submit(&s, "a", "now please", "steer").await;
+        submit(&s, "b", "under review", "steer").await;
         assert!(s
-            .followup_consume("s", "interrupt", &mut next, Some(&mut old))
+            .followup_review_cas("s", "b", 0, "reviewing", None)
             .await
             .unwrap());
-        assert_eq!(old["status"], "cancelled");
-        assert_eq!(next["input"][1]["content"], "interrupt");
+        let shown = s
+            .followup_choice("s", Some("a"), 0, "now", &json!({"choice":"now"}))
+            .await
+            .unwrap();
+        assert_eq!(shown["queue"][0]["send_now"], true);
         let q = s.followup_queue("s").await.unwrap();
-        assert_eq!(q["entries"][1]["status"], "pending");
-        assert_eq!(q["entries"][2]["status"], "pending");
-        s.followup_hold("s", "Stopped").await.unwrap();
+        assert_eq!(
+            (&q["entries"][0]["choice"], &q["entries"][0]["status"]),
+            (&json!("steer"), &json!("pending"))
+        );
+        // Only a ready message can be forced; retired choices are refused outright.
         assert!(s
-            .followup_choice(
-                "s",
-                None,
-                q["revision"].as_u64().unwrap(),
-                "resume",
-                &json!({})
-            )
+            .followup_choice("s", Some("b"), 1, "now-b", &json!({"choice":"now"}))
             .await
             .is_err());
+        for retired in ["queue", "interrupt"] {
+            assert!(s
+                .followup_choice("s", Some("a"), 1, retired, &json!({"choice":retired}))
+                .await
+                .is_err());
+        }
+        // A forced steer still joins the running run at its next consumption.
+        let mut live = run("live");
+        live["status"] = json!("running");
+        s.put("run:live", &live).await.unwrap();
+        assert!(s.followup_consume("s", "steer", &mut live).await.unwrap());
+        assert_eq!(live["input"][0]["content"], "now please");
     }
     #[tokio::test]
     async fn releasing_a_hold_needs_its_own_reason() {
@@ -858,7 +734,7 @@ mod tests {
     #[tokio::test]
     async fn review_cancellation_wins_and_queue_is_encrypted() {
         let (root, s) = fixture().await;
-        submit(&s, "a", "private fixture", "queue").await;
+        submit(&s, "a", "private fixture", "steer").await;
         s.followup_choice("s", Some("a"), 0, "cancel", &json!({"choice":"cancel"}))
             .await
             .unwrap();
@@ -889,43 +765,12 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn multiple_interrupts_retarget_and_consume_separately() {
-        let (_root, s) = fixture().await;
-        let mut old = run("old");
-        s.put("run:old", &old).await.unwrap();
-        submit(&s, "a", "one", "queue").await;
-        submit(&s, "b", "two", "queue").await;
-        s.followup_choice("s", Some("a"), 0, "i1", &json!({"choice":"interrupt"}))
-            .await
-            .unwrap();
-        s.followup_choice("s", Some("b"), 0, "i2", &json!({"choice":"interrupt"}))
-            .await
-            .unwrap();
-        let mut first = run("first");
-        assert!(s
-            .followup_consume("s", "interrupt", &mut first, Some(&mut old))
-            .await
-            .unwrap());
-        let q = s.followup_queue("s").await.unwrap();
-        assert_eq!(q["entries"][1]["target_run_id"], "first");
-        assert_eq!(q["entries"][1]["status"], "pending");
-        let mut second = run("second");
-        second["input"] = first["input"].clone();
-        assert!(s
-            .followup_consume("s", "interrupt", &mut second, Some(&mut first))
-            .await
-            .unwrap());
-        assert_eq!(second["input"].as_array().unwrap().len(), 2);
-        assert_eq!(second["input"][1]["content"], "two");
-        assert_eq!(s.context("s").await.unwrap().len(), 2);
-    }
-    #[tokio::test]
     async fn resume_records_terminal_parent_and_lease_takeover_rejects_steering() {
         let (_root, s) = fixture().await;
         let mut stopped = run("stopped");
         stopped["status"] = json!("cancelled");
         s.put("run:stopped", &stopped).await.unwrap();
-        submit(&s, "a", "later", "queue").await;
+        submit(&s, "a", "later", "steer").await;
         s.followup_hold("s", "Stopped").await.unwrap();
         let q = s.followup_queue("s").await.unwrap();
         s.followup_choice(
@@ -947,101 +792,20 @@ mod tests {
         s.put("run:live", &live).await.unwrap();
         submit(&s, "b", "steer", "steer").await;
         sqlx::query("UPDATE run_index SET lease_epoch=2,lease_owner='loop-two',lease_expires_at=strftime('%s','now')+30 WHERE id='live'").execute(&s.pool).await.unwrap();
-        assert!(s
-            .followup_consume("s", "steer", &mut live, None)
-            .await
-            .is_err());
+        assert!(s.followup_consume("s", "steer", &mut live).await.is_err());
         assert_eq!(
             s.followup_queue("s").await.unwrap()["entries"][1]["status"],
             "pending"
         );
     }
     #[tokio::test]
-    async fn abandoned_handoff_does_not_rejournal_historical_tool_results() {
-        let (_root, s) = fixture().await;
-        let historical_call = json!({"type":"function_call","call_id":"historical-call","name":"file_read","arguments":"{}"});
-        let historical_result = json!({"type":"function_call_output","call_id":"historical-call","output":"historical result"});
-        let mut historical = run("historical-run");
-        historical["status"] = json!("running");
-        historical["turns"] = json!(1);
-        historical["input"] = json!([historical_call.clone()]);
-        s.put("run:historical-run", &historical).await.unwrap();
-        s.save_run(
-            &mut historical,
-            "model_output",
-            &json!({"output":[historical_call]}),
-        )
-        .await
-        .unwrap();
-        historical["input"]
-            .as_array_mut()
-            .unwrap()
-            .push(historical_result);
-        historical["status"] = json!("failed");
-        s.save_run(&mut historical, "tool_result", &json!({}))
-            .await
-            .unwrap();
-        let current_call = json!({"type":"function_call","call_id":"current-write","name":"file_write","arguments":"{}"});
-        let mut old = run("current-run");
-        old["status"] = json!("running");
-        old["turns"] = json!(1);
-        old["input"] = json!(s.context("s").await.unwrap());
-        old["input"]
-            .as_array_mut()
-            .unwrap()
-            .push(current_call.clone());
-        old["calls"] = json!([current_call.clone()]);
-        old["pending"] = json!({"name":"file_write","call_id":"current-write","id":"invocation","state":"executing"});
-        s.put("run:current-run", &old).await.unwrap();
-        s.save_run(&mut old, "model_output", &json!({"output":[current_call]}))
-            .await
-            .unwrap();
-        old["status"] = json!("cancelled");
-        old["recovery_abandoned"] = json!(true);
-        old["uncertain"] = json!(false);
-        s.save_run(&mut old, "run_status", &json!({}))
-            .await
-            .unwrap();
-        let mut e = entry("interrupt-entry", "inspect existing effects", "interrupt");
-        e["target_run_id"] = json!("current-run");
-        s.followup_submit("s", e, vec![], "interrupt-entry", "digest", &json!({}))
-            .await
-            .unwrap();
-        crate::agent_loop::settle_abandoned_interrupt(&mut old).unwrap();
-        let mut next = run("replacement");
-        next["input"] = old["input"].clone();
-        assert!(s
-            .followup_consume("s", "interrupt", &mut next, Some(&mut old))
-            .await
-            .unwrap());
-        let context = s.context("s").await.unwrap();
-        assert_eq!(context.len(), 5);
-        assert_eq!(
-            context
-                .iter()
-                .filter(|item| item["type"] == "function_call_output"
-                    && item["call_id"] == "historical-call")
-                .count(),
-            1
-        );
-        assert_eq!(context[0]["call_id"], "historical-call");
-        assert_eq!(context[1]["call_id"], "historical-call");
-        assert_eq!(context[2]["call_id"], "current-write");
-        assert_eq!(context[3]["call_id"], "current-write");
-        let result: Value = serde_json::from_str(context[3]["output"].as_str().unwrap()).unwrap();
-        assert_eq!(result["execution_state"], "outcome_unknown");
-        assert_eq!(result["no_retry"], true);
-        assert_eq!(context[4]["content"], "inspect existing effects");
-    }
-
-    #[tokio::test]
     async fn followup_queue_lifecycle_cancels_choices_and_deletes_receipts() {
         let (root, s) = fixture().await;
         s.session_read_summary("s").await.unwrap();
-        for choice in ["queue", "steer", "interrupt"] {
-            submit(&s, choice, choice, choice).await;
+        for id in ["queue", "steer", "later"] {
+            submit(&s, id, id, "steer").await;
         }
-        submit(&s, "review", "pending review", "queue").await;
+        submit(&s, "review", "pending review", "steer").await;
         assert!(s
             .followup_review_cas("s", "review", 0, "reviewing", None)
             .await
@@ -1050,7 +814,7 @@ mod tests {
         s.put("message_attachments:queue", &json!([{"id":"attachment"}]))
             .await
             .unwrap();
-        s.followup_choice("s", Some("steer"), 0, "choose", &json!({"choice":"steer"}))
+        s.followup_choice("s", Some("steer"), 0, "choose", &json!({"choice":"now"}))
             .await
             .unwrap();
         let metadata = s.session_read_summary("s").await.unwrap();
@@ -1092,13 +856,13 @@ mod tests {
                 Some("queue"),
                 0,
                 "late-choice",
-                &json!({"choice":"interrupt"})
+                &json!({"choice":"now"})
             )
             .await
             .is_err());
         let mut next = run("must-not-replay");
         assert!(!reopened
-            .followup_consume("s", "queue", &mut next, None)
+            .followup_consume("s", "next_run", &mut next)
             .await
             .unwrap());
         assert!(reopened.context("s").await.unwrap().is_empty());
@@ -1144,7 +908,7 @@ mod tests {
     #[tokio::test]
     async fn private_queued_text_stays_excluded_after_deactivation_and_reactivation() {
         let (_root, s) = fixture().await;
-        submit(&s, "private-sentinel", "PRIVATE-QUEUED-SENTINEL", "queue").await;
+        submit(&s, "private-sentinel", "PRIVATE-QUEUED-SENTINEL", "steer").await;
         assert!(!s
             .model_message_allowed("s", "private-sentinel")
             .await
