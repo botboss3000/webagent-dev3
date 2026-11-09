@@ -14,4 +14,7 @@ A short look back at this task's own wasted steps, ending in at most three propo
 3. Propose at most 3 fixes. Each names where it belongs: skill text, tool description, or tool mechanics.
 4. Show them to the user in a few lines. Only if the user agrees, record them as a Main Notes entry with `main_notes_write` (it follows its own approval setting).
 
+Sub-agent: do not ask anyone or record notes; end your final report with a short "Self-review" section (at most 3 lines: waste and proposed fix).
+Parent: combine your sub-agents' Self-review sections with your own findings, merge duplicates (the same issue from several sub-agents is one fix), and present one list to the user.
+
 Proposals only: never edit your own skills, prompts, policies or tool files. Keep the review brief; skip it when nothing was wasted.
