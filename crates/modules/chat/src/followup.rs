@@ -58,9 +58,21 @@ pub fn validate_queue(s: &str, q: &Value) -> Result<()> {
             })
         })
     {
-        return Err(anyhow!("Invalid or unsupported followup queue record"));
+        return Err(anyhow!(
+            "Invalid or unsupported followup queue record for session {s}"
+        ));
     }
     Ok(())
+}
+
+/// Records stored before steer-only delivery may still hold the retired `queue` and
+/// `interrupt` choices; both now deliver as a steer.
+pub fn retire_legacy_choices(q: &mut Value) {
+    for e in q["entries"].as_array_mut().into_iter().flatten() {
+        if matches!(e["choice"].as_str(), Some("queue" | "interrupt")) {
+            e["choice"] = json!("steer");
+        }
+    }
 }
 
 pub async fn legacy_followup_fence<C: RecordCodec>(
@@ -133,10 +145,11 @@ pub async fn queue_read_tx<C: RecordCodec>(
         .bind(format!("followup_queue:{s}"))
         .fetch_optional(&mut **t)
         .await?;
-    let q = r
+    let mut q = r
         .map(|v| codec.unseal(&v))
         .transpose()?
         .unwrap_or_else(|| empty(s));
+    retire_legacy_choices(&mut q);
     validate_queue(s, &q)?;
     Ok(q)
 }

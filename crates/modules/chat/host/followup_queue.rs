@@ -195,115 +195,124 @@ pub(crate) async fn scheduler_tick(app: &App) -> Result<()> {
         if s.is_empty() {
             continue;
         }
-        // Archived or deleted chats retain history, but cannot dispatch work.
-        // Skip them here so one inactive ledger cannot stall other conversations.
-        let Some(session) = app.store.get(&format!("session:{s}")).await? else {
-            continue;
-        };
-        if session["status"].as_str().unwrap_or("active") != "active"
-            || app.store.participation_state(&s).await?["active"] != true
+        // One unreadable or failing ledger defers only its own session.
+        if let Err(error) = tick_session(app, &s).await {
+            tracing::warn!(session_id = %s, "Followup queue reconciliation deferred: {error}");
+        }
+    }
+    Ok(())
+}
+
+async fn tick_session(app: &App, s: &str) -> Result<()> {
+    let s = s.to_owned();
+    // Archived or deleted chats retain history, but cannot dispatch work.
+    // Skip them here so one inactive ledger cannot stall other conversations.
+    let Some(session) = app.store.get(&format!("session:{s}")).await? else {
+        return Ok(());
+    };
+    if session["status"].as_str().unwrap_or("active") != "active"
+        || app.store.participation_state(&s).await?["active"] != true
+    {
+        return Ok(());
+    }
+    crate::session_messaging::revalidate(app, &s).await?;
+    let q = app.store.followup_queue(&s).await?;
+    for e in q["entries"].as_array().unwrap() {
+        if e["review_status"] == "pending_review" {
+            tokio::spawn(review_entry(app.clone(), s.clone(), e.clone()));
+        } else if e["review_status"] == "reviewing"
+            && e["review"]["deadline"].as_u64().unwrap_or(0) <= now()
         {
-            continue;
-        }
-        crate::session_messaging::revalidate(app, &s).await?;
-        let q = app.store.followup_queue(&s).await?;
-        for e in q["entries"].as_array().unwrap() {
-            if e["review_status"] == "pending_review" {
-                tokio::spawn(review_entry(app.clone(), s.clone(), e.clone()));
-            } else if e["review_status"] == "reviewing"
-                && e["review"]["deadline"].as_u64().unwrap_or(0) <= now()
-            {
-                let mut r = e["review"].clone();
-                r["status"] = json!("review_error");
-                app.store
-                    .followup_review_cas(
-                        &s,
-                        e["id"].as_str().unwrap(),
-                        e["revision"].as_u64().unwrap_or(0),
-                        "held",
-                        Some(&r),
-                    )
-                    .await?;
-            }
-        }
-        if app.shutoff().await? {
-            app.store.followup_hold(&s, SHUTOFF_HOLD).await?;
-            continue;
-        }
-        let active = app.store.active_runs().await?;
-        if let Some(r) = active.iter().find(|r| r["session_id"] == s) {
-            // Delivery simply waits for live work; only an uncertain write is recorded
-            // as a hold, because it needs a decision before anything runs again.
-            if r["uncertain"] == true
-                && matches!(
-                    status(r),
-                    "stopped" | "paused" | "recovery" | "waiting_external"
-                )
-            {
-                app.store.followup_hold(&s, RECOVERY_HOLD).await?;
-            }
-            continue;
-        }
-        if app
-            .store
-            .get(&format!("manager_pending:{s}"))
-            .await?
-            .is_some()
-        {
-            continue;
-        }
-        if q["held"] == true {
-            if !condition_cleared(app, &q).await? {
-                continue;
-            }
-            let reason = q["reason"].as_str().unwrap_or("").to_owned();
-            app.store.followup_release_hold(&s, &reason).await?;
-            continue;
-        }
-        let latest = app.store.followup_last_run(&s).await?;
-        if latest.as_ref().is_some_and(|r| {
-            matches!(status(r), "failed" | "cancelled") && q["resumed_after_run_id"] != r["id"]
-        }) {
+            let mut r = e["review"].clone();
+            r["status"] = json!("review_error");
             app.store
-                .followup_hold(
+                .followup_review_cas(
                     &s,
-                    "Previous run stopped or failed; resume the queue when ready",
+                    e["id"].as_str().unwrap(),
+                    e["revision"].as_u64().unwrap_or(0),
+                    "held",
+                    Some(&r),
                 )
                 .await?;
-            continue;
         }
-        // Steers left when a run ended start the next run together.
-        let Some(e) = q["entries"].as_array().unwrap().iter().find(|e| {
-            e["status"] == "pending" && e["review_status"] == "acceptable" && e["choice"] == "steer"
-        }) else {
-            continue;
-        };
-        let agent = e["agent_id"].as_str().unwrap_or("shared_default");
-        let access = app
-            .store
-            .live_access(app.store.current_user_id(), agent)
-            .await?;
-        if !access.admitted() {
-            app.store.followup_hold(&s, ACCESS_HOLD).await?;
-            continue;
-        }
-        if active.len() >= app.runtime.read().await.scheduler.max_unresolved_runs
-            || active.len() >= access.max_active_runs() as usize
-        {
-            continue;
-        }
-        let mut next = e["template"].clone();
-        if app.run_candidate(&next).await.is_err() {
-            app.store.followup_hold(&s, MODEL_HOLD).await?;
-            continue;
-        }
-        next["id"] = json!(successor_id(app, &s, &e)?);
-        next["created_at"] = json!(now());
-        next["updated_at"] = json!(now());
-        app.store
-            .followup_consume(&s, "next_run", &mut next)
-            .await?;
     }
+    if app.shutoff().await? {
+        app.store.followup_hold(&s, SHUTOFF_HOLD).await?;
+        return Ok(());
+    }
+    let active = app.store.active_runs().await?;
+    if let Some(r) = active.iter().find(|r| r["session_id"] == s) {
+        // Delivery simply waits for live work; only an uncertain write is recorded
+        // as a hold, because it needs a decision before anything runs again.
+        if r["uncertain"] == true
+            && matches!(
+                status(r),
+                "stopped" | "paused" | "recovery" | "waiting_external"
+            )
+        {
+            app.store.followup_hold(&s, RECOVERY_HOLD).await?;
+        }
+        return Ok(());
+    }
+    if app
+        .store
+        .get(&format!("manager_pending:{s}"))
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+    if q["held"] == true {
+        if !condition_cleared(app, &q).await? {
+            return Ok(());
+        }
+        let reason = q["reason"].as_str().unwrap_or("").to_owned();
+        app.store.followup_release_hold(&s, &reason).await?;
+        return Ok(());
+    }
+    let latest = app.store.followup_last_run(&s).await?;
+    if latest.as_ref().is_some_and(|r| {
+        matches!(status(r), "failed" | "cancelled") && q["resumed_after_run_id"] != r["id"]
+    }) {
+        app.store
+            .followup_hold(
+                &s,
+                "Previous run stopped or failed; resume the queue when ready",
+            )
+            .await?;
+        return Ok(());
+    }
+    // Steers left when a run ended start the next run together.
+    let Some(e) = q["entries"].as_array().unwrap().iter().find(|e| {
+        e["status"] == "pending" && e["review_status"] == "acceptable" && e["choice"] == "steer"
+    }) else {
+        return Ok(());
+    };
+    let agent = e["agent_id"].as_str().unwrap_or("shared_default");
+    let access = app
+        .store
+        .live_access(app.store.current_user_id(), agent)
+        .await?;
+    if !access.admitted() {
+        app.store.followup_hold(&s, ACCESS_HOLD).await?;
+        return Ok(());
+    }
+    if active.len() >= app.runtime.read().await.scheduler.max_unresolved_runs
+        || active.len() >= access.max_active_runs() as usize
+    {
+        return Ok(());
+    }
+    let mut next = e["template"].clone();
+    if app.run_candidate(&next).await.is_err() {
+        app.store.followup_hold(&s, MODEL_HOLD).await?;
+        return Ok(());
+    }
+    next["id"] = json!(successor_id(app, &s, &e)?);
+    next["created_at"] = json!(now());
+    next["updated_at"] = json!(now());
+    app.store
+        .followup_consume(&s, "next_run", &mut next)
+        .await?;
     Ok(())
 }
 
@@ -340,6 +349,21 @@ mod lifecycle_tests {
             .unwrap();
         app.store
             .put("control", &json!({"shutoff":true}))
+            .await
+            .unwrap();
+        // An unreadable ledger sorted first defers only its own session.
+        app.store
+            .put(
+                "session:0_bad",
+                &json!({"id":"0_bad","status":"active","agent_id":"shared_default"}),
+            )
+            .await
+            .unwrap();
+        app.store
+            .put(
+                "followup_queue:0_bad",
+                &json!({"schema_version":2,"session_id":"0_bad"}),
+            )
             .await
             .unwrap();
         scheduler_tick(&app).await.unwrap();

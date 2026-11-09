@@ -632,6 +632,9 @@ mod followup {
             let mut stale = q.clone();
             stale["entries"][0]["choice"] = json!(retired);
             assert!(validate_queue("s", &stale).is_err());
+            retire_legacy_choices(&mut stale);
+            assert_eq!(stale["entries"][0]["choice"], "steer");
+            validate_queue("s", &stale).unwrap();
         }
         put(&pool, "followup_queue:bad", &json!({"schema_version":2})).await;
         let mut tx = pool.begin().await.unwrap();
