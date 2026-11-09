@@ -1712,3 +1712,19 @@ async fn script_runs_steps_and_returns_only_marked_screenshots() {
     assert_eq!(failed["failed_step"], 1, "{failed}");
     assert_eq!(failed["steps"].as_array().map(Vec::len), Some(1));
 }
+
+#[tokio::test]
+async fn input_script_reads_its_target_before_clicking() {
+    let f = fixture();
+    let script = f
+        .tool(
+            "browser_input",
+            json!({"action":"script","steps":[
+                {"action":"navigate","url":"/api/v3/auth/me"},
+                {"action":"click","selector":"#button"}]}),
+            &f.trusted,
+        )
+        .await;
+    assert_eq!(script["status"], "success", "{script}");
+    assert_eq!(script["steps"][1]["action"], "click");
+}

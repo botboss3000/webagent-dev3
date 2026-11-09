@@ -2031,11 +2031,21 @@ impl<
                     &run["loaded_abilities"],
                     &run["loaded_skills"],
                 );
-                match app
-                    .native
-                    .own_skill_guidance(app.native_view(), &sid, &id, read_only)
-                    .await
-                {
+                // A release elsewhere can change skills mid-read; retry before pausing the run.
+                let mut guidance_read = Err(anyhow::anyhow!("Skill guidance unavailable"));
+                for attempt in 0..3 {
+                    guidance_read = app
+                        .native
+                        .own_skill_guidance(app.native_view(), &sid, &id, read_only)
+                        .await;
+                    if guidance_read.is_ok() {
+                        break;
+                    }
+                    if attempt < 2 {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
+                }
+                match guidance_read {
                     Ok(blocks) => guidance_blocks.extend(blocks),
                     Err(error) => {
                         Self::pause_context_preparation(

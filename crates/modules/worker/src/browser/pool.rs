@@ -556,7 +556,7 @@ fn transport_failed(name: &str, args: &Value) -> Value {
         name == "browser_input" || (name == "browser_read" && args["action"] == "navigate");
     json!({"status":if mutating {"uncertain"} else {"error"},"uncertain":mutating,
         "error_kind":"browser_transport_failed",
-        "output":"Browser process interrupted; inspect before retrying an input action"})
+        "output":"Browser process interrupted (the app may have restarted); navigate again, check the page, then retry"})
 }
 
 /// Sends one frame and reads its reply; `None` when the transport or reply is broken.

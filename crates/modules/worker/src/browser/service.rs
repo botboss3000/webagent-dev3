@@ -1857,6 +1857,24 @@ impl Service {
                     "step {index}: {action} is not a {name} script action"
                 ));
             };
+            // An input step needs a fresh read of its target; a script reads it first, the same
+            // check a separate read call would pass.
+            if tool == "browser_input" {
+                let mut read = json!({"action":"read"});
+                if let Some(selector) = step.get("selector") {
+                    read["selector"] = selector.clone();
+                }
+                let observed = self.call_one("browser_read", &read, base, trusted).await;
+                if observed["status"] != "success" {
+                    self.script_screenshot(index, None, base, trusted, &mut artifacts)
+                        .await;
+                    return json!({"status":observed["status"].clone(),
+                        "error_kind":observed["error_kind"].clone(),
+                        "output":format!("Step {index} ({action}) failed reading its target: {}",
+                            observed["output"].as_str().unwrap_or("")),
+                        "failed_step":index,"steps":results,"artifacts":artifacts});
+                }
+            }
             let output = self
                 .call_one(tool, &Value::Object(step), base, trusted)
                 .await;
