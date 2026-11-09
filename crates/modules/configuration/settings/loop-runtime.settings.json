@@ -85,6 +85,52 @@
       "min": 1,
       "max": 1000,
       "bounds": "validator"
+    },
+    {
+      "id": "loop.workflow.self_review.min_failed_calls",
+      "description": "Failed tool calls in one run after which the agent is reminded to review its own work.",
+      "pointer": "/workflow/self_review/min_failed_calls",
+      "examples": [
+        "suggest a self-review after 3 failed calls",
+        "remind the agent to review its errors sooner",
+        "stop the self-review reminder for failures"
+      ],
+      "areas": [
+        "agent",
+        "self-review",
+        "errors"
+      ],
+      "type": "integer",
+      "layers": [
+        "app"
+      ],
+      "min": 0,
+      "max": 1000,
+      "bounds": "validator",
+      "notes": "0 turns this trigger off."
+    },
+    {
+      "id": "loop.workflow.self_review.min_repeated_calls",
+      "description": "Repeated identical tool calls in one run after which the agent is reminded to review its own work.",
+      "pointer": "/workflow/self_review/min_repeated_calls",
+      "examples": [
+        "self-review after 2 repeated calls",
+        "remind the agent when it keeps retrying the same thing",
+        "turn off the repeat reminder"
+      ],
+      "areas": [
+        "agent",
+        "self-review",
+        "retries"
+      ],
+      "type": "integer",
+      "layers": [
+        "app"
+      ],
+      "min": 0,
+      "max": 1000,
+      "bounds": "validator",
+      "notes": "0 turns this trigger off."
     }
   ],
   "excluded": {

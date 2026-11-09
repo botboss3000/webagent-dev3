@@ -36,6 +36,7 @@ pub fn model_turn(run: &Value) -> u64 {
 pub fn advance_turn(run: &mut Value) {
     run["model_turn"] = json!(model_turn(run) + 1);
     run["turns"] = json!(run["turns"].as_u64().expect("run counters are numbers") + 1);
+    super::health::record_step(run);
 }
 /// Drop each result that does not follow its own unanswered call. Providers and
 /// context projection reject such a result; resumed runs used to lose their calls
@@ -295,6 +296,7 @@ impl<
             &previous_skills,
         )?;
         crate::tool_output::record(run, result)?;
+        super::health::record_result(run, result);
         let call_id = run["pending"]["call_id"].clone();
         run["input"]
         .as_array_mut()
@@ -2029,6 +2031,16 @@ impl<
                     turn: run["turns"].as_u64().unwrap_or(0),
                     call: call_number,
                 }];
+                let limits = config::Config::<C>::read(&app.runtime_path)?
+                    .workflow
+                    .self_review;
+                let turn = run["turns"].as_u64().unwrap_or(0);
+                contributions.extend(super::health::contribution(
+                    &mut run,
+                    &limits,
+                    turn,
+                    call_number,
+                ));
                 if run["module_binding"].is_object() {
                     // Only runtime identifiers enter this call-scoped contribution.
                     // Trigger payloads and remembered values remain untrusted history evidence.

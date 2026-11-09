@@ -19,6 +19,7 @@ pub mod components;
 pub mod config;
 pub mod failure;
 pub mod followup;
+pub mod health;
 pub mod images;
 pub mod lane;
 pub mod models;

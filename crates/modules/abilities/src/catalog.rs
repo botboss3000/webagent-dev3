@@ -806,7 +806,10 @@ impl<H: Host> Catalog<H> {
                 .iter()
                 .map(|(tool, text)| (tool.to_string(), text.to_string()))
                 .collect(),
-            selectable_skills: BTreeMap::new(),
+            selectable_skills: crate::base::SELECTABLE_SKILLS
+                .iter()
+                .map(|(name, text)| (name.to_string(), text.to_string()))
+                .collect(),
         });
         abilities.sort_by(|a, b| {
             (a.group_order, &a.group_name, a.order, &a.name, &a.id).cmp(&(
@@ -970,6 +973,7 @@ impl<H: Host> Catalog<H> {
             let declared = match kind {
                 "ability" => name == ability.id,
                 "tool" => ability.tool_skills.contains_key(name),
+                "selectable" => ability.selectable_skills.contains_key(name),
                 _ => false,
             };
             return declared.then_some(Cow::Borrowed(cached));

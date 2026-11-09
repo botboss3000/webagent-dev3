@@ -1,6 +1,7 @@
 //! Read-only private projection. Public chat is never hydrated from this journal.
 use super::*;
 use std::collections::{HashMap, HashSet};
+use webagent_engine::runtime::health::result_status;
 fn boundary(row: &SqliteRow) -> String {
     row.get::<Option<String>, _>("boundary_item_id")
         .unwrap_or_else(|| format!("user:{}", row.get::<String, _>("run_id")))
@@ -67,44 +68,6 @@ async fn in_chat_steps<'e, E: sqlx::SqliteExecutor<'e>>(
         steps.extend(last.into_iter().map(|step| (run.clone(), step)));
     }
     Ok(steps)
-}
-/// Tool result statuses the chat UI (`ui/chat/core/activity.js`) marks as failed.
-const FAILED_STATUSES: [&str; 8] = [
-    "error",
-    "rejected",
-    "denied",
-    "failed",
-    "cancelled",
-    "timeout",
-    "uncertain",
-    "interrupted",
-];
-/// Classifies a stored tool output as success, error, uncertain or denied, with its `error_kind`.
-/// Mirrors the chat UI: only a JSON object whose `status` is a failure status counts as failed.
-fn result_status(output: &Value) -> (&'static str, Option<String>) {
-    let parsed;
-    let value = match output {
-        Value::String(text) => match serde_json::from_str::<Value>(text) {
-            Ok(value) => {
-                parsed = value;
-                &parsed
-            }
-            Err(_) => return ("success", None),
-        },
-        other => other,
-    };
-    let kind = value["error_kind"].as_str().map(str::to_owned);
-    let status = value["status"].as_str().unwrap_or("");
-    let class = if value["uncertain"] == true || matches!(status, "uncertain" | "interrupted") {
-        "uncertain"
-    } else if matches!(status, "denied" | "rejected" | "held") {
-        "denied"
-    } else if FAILED_STATUSES.contains(&status) {
-        "error"
-    } else {
-        return ("success", None);
-    };
-    (class, kind)
 }
 fn event(
     row: &SqliteRow,
@@ -838,32 +801,6 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
-    }
-    #[test]
-    fn classifies_tool_results_like_the_chat_ui() {
-        let cases = [
-            (json!("plain text"), "success", None),
-            (json!(r#"{"status":"ok","output":"x"}"#), "success", None),
-            (
-                json!(r#"{"status":"error","error_kind":"not_found"}"#),
-                "error",
-                Some("not_found"),
-            ),
-            (
-                json!(r#"{"status":"error","uncertain":true,"error_kind":"outcome_unknown"}"#),
-                "uncertain",
-                Some("outcome_unknown"),
-            ),
-            (json!({"status":"denied","output":"no"}), "denied", None),
-            (json!(r#"{"status":"timeout"}"#), "error", None),
-        ];
-        for (output, status, kind) in cases {
-            assert_eq!(
-                result_status(&output),
-                (status, kind.map(str::to_owned)),
-                "{output}"
-            );
-        }
     }
     #[tokio::test]
     async fn errors_filter_keeps_only_failed_results_and_paging() {

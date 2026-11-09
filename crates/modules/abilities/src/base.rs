@@ -63,6 +63,12 @@ pub const SKILL: &str = include_str!("../base/base.skill.md");
 /// One skill covers the three session-script tools.
 const SCRIPTS_SKILL: &str = include_str!("../base/tools/session_scripts.skill.md");
 
+/// Selectable skills of Base, listed and loaded like an ability folder's `skills/`.
+pub const SELECTABLE_SKILLS: &[(&str, &str)] = &[(
+    "self_review",
+    include_str!("../base/skills/self_review.skill.md"),
+)];
+
 /// Usage guidance per tool, served like a tool folder's `tool.skill.md`.
 pub const TOOL_SKILLS: &[(&str, &str)] = &[
     (
