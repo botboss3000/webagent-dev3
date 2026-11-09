@@ -127,7 +127,7 @@ function paint() {
   // Newly drawn messages (window scroll, live replies) fetch their summaries right away.
   if([...rows.keys()].some(value=>value && !requested.has(value)))void refresh();
 }
-// Folds each unbroken run of activity groups and sub-agent notice rows (until the agent's next
+// Folds each unbroken run of activity groups and background notice rows (until the agent's next
 // visible message) under one summary; members stay in place and show when it is expanded.
 function cluster(shown,active) {
   const used=new Set();let span=[];
@@ -139,8 +139,10 @@ function cluster(shown,active) {
     const groups=members.filter(node=>shown.has(node)).map(node=>shown.get(node)),counts={};
     for(const group of groups)for(const [kind,count] of Object.entries(group.counts||{}))counts[kind]=(counts[kind]||0)+count;
     const notices=members.reduce((sum,node)=>sum+Number(node.dataset.subagentNotices||0),0);
+    // Builds and background calls read as updates; only sub-agent rows say sub-agent.
+    const noun=members.some(node=>node.dataset.noticeLabel==='update')?' update':' sub-agent';
     element.firstElementChild.textContent=activityLabel({...(groups.at(-1)||{state:'completed'}),counts},
-      {error,extra:notices?[notices+' sub-agent'+(notices===1?'':'s')]:[]});
+      {error,extra:notices?[notices+noun+(notices===1?'':'s')]:[]});
     element.setAttribute('aria-label','Activity group');
     element.classList.toggle('v2-activity-group-glimmer',active && members.some(node=>node.classList.contains('v2-activity-group-glimmer')));
     for(const node of members){node.classList.add('v3-cluster-member');node.classList.toggle('v3-cluster-hidden',!element.open);}

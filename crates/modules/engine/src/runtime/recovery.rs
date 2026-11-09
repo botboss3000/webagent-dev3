@@ -275,10 +275,13 @@ impl<
                         .await?;
                     if let Some((reason, text)) = alert {
                         let reason = reason.as_str();
-                        app.stage_background_notice(&sid, &format!("build:{job_id}:{reason}:{now}"),
-                            json!({"source":"build","title":job_task.unwrap_or_else(|| job_id.clone()),
-                            "status":reason,"job_id":job_id,"run_id":task["run_id"],"reply":text}))
-                            .await?;
+                        app.stage_background_notice(
+                            &sid,
+                            &format!("build:{job_id}:{reason}:{now}"),
+                            json!({"source":"build","title":job_title(&follow),"task":job_task,
+                            "status":reason,"job_id":job_id,"run_id":task["run_id"],"reply":text}),
+                        )
+                        .await?;
                     }
                 }
                 Ok(Ok(BuildPoll::Done(result))) => {
@@ -297,7 +300,7 @@ impl<
                     })
                     .await?;
                     let reply = build_tasks::ended_line(output)
-                        .unwrap_or_else(|| result.to_string().chars().take(8000).collect());
+                        .unwrap_or_else(|| ended_summary(output, &job_id));
                     let revision = task["revision"].as_u64().unwrap_or(0);
                     task["result"] = result.clone();
                     task["status"] = json!("completed");
@@ -311,7 +314,7 @@ impl<
                         .background_delivered(&task, "background_notice")
                         .await?;
                     app.stage_background_notice(&sid, &format!("build:{job_id}:ended"),
-                        json!({"source":"build","title":job_task.unwrap_or_else(|| job_id.clone()),
+                        json!({"source":"build","title":job_title(&follow),"task":job_task,
                         "status":output["status"].as_str().unwrap_or("ended"),"job_id":job_id,
                         "run_id":task["run_id"],"task_id":task["id"],"reply":reply,"result":result}))
                         .await?;
@@ -743,6 +746,41 @@ impl<
         }
         Ok(())
     }
+}
+
+/// A short name for a background broker job's notice row: the check kind or "Release build".
+fn job_title(follow: &Value) -> String {
+    let args = &follow["pending"]["arguments"];
+    match args["action"].as_str() {
+        Some("check") => format!("check {}", args["check"].as_str().unwrap_or(""))
+            .trim()
+            .to_owned(),
+        Some("finish") => "release build".to_owned(),
+        _ => "job".to_owned(),
+    }
+}
+
+/// Readable notice text for a job that ended without an alert line: status, reason and a
+/// bounded log excerpt, never the raw receipt.
+fn ended_summary(output: &Value, job_id: &str) -> String {
+    let mut text = format!(
+        "Job {} {}.",
+        job_id.get(..8).unwrap_or(job_id),
+        output["status"].as_str().unwrap_or("ended")
+    );
+    if let Some(reason) = output["reason"].as_str() {
+        text.push_str(&format!(
+            " {}",
+            reason.chars().take(300).collect::<String>()
+        ));
+    }
+    if let Some(log) = output["log"].as_str().filter(|log| !log.is_empty()) {
+        text.push_str(&format!(
+            "\n\n{}",
+            log.chars().take(2000).collect::<String>()
+        ));
+    }
+    text
 }
 
 /// Whether a broker reply leaves the call waiting on its job: an accepted finish, or a
