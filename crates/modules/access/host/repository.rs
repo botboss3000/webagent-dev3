@@ -435,8 +435,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(active["access_revision"], 2);
+        // An access change applies through the revision and keeps the account's sign-ins.
         let after = store.account_by_id(id).await.unwrap().unwrap();
-        assert_ne!(before["generation"], after["generation"]);
+        assert_eq!(before["generation"], after["generation"]);
         assert!(store
             .update_account_access(id, 1, AccountStatus::Suspended, Role::User, "basic")
             .await

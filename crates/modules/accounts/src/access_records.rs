@@ -116,7 +116,11 @@ impl<C: RecordCodec> Repository<'_, C> {
         account["access_revision"] = json!(revision
             .checked_add(1)
             .ok_or_else(|| anyhow!("Account revision overflow"))?);
-        account["generation"] = json!(uuid::Uuid::new_v4().to_string());
+        // Role and tier apply from the next request through the access revision; only a
+        // deactivation ends the account's sign-ins.
+        if update.status != AccountStatus::Active {
+            account["generation"] = json!(uuid::Uuid::new_v4().to_string());
+        }
         account["is_approved"] = json!(update.status == AccountStatus::Active);
         sqlx::query("UPDATE user_accounts SET value=? WHERE user_id=?")
             .bind(self.seal(&account)?)
@@ -155,10 +159,10 @@ impl<C: RecordCodec> Repository<'_, C> {
                 == expected,
             "Account revision changed"
         );
+        // A tier edit applies from the next request; it does not sign the tier's accounts out.
         account["access_revision"] = json!(expected
             .checked_add(1)
             .ok_or_else(|| anyhow!("Account revision overflow"))?);
-        account["generation"] = json!(uuid::Uuid::new_v4().to_string());
         sqlx::query("UPDATE user_accounts SET value=? WHERE user_id=?")
             .bind(self.seal(&account)?)
             .bind(id)
