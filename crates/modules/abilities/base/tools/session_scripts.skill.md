@@ -26,6 +26,8 @@ Writing a script:
 
 - Make anything that differs between callers a param: URLs, session or conversation IDs,
   labels, names. Never hard-code your own session or context.
+- A session's browser can open only its own conversation. A script that views a conversation
+  takes it as a param, and each caller passes its own: `/app?session_id=<your session id>`.
 - Wait for what each step depends on, for example a `wait_for` visible step before reading
   or clicking something the page draws later.
 - Keep it small and single-purpose; describe each param in the description.
