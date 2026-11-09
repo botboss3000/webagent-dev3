@@ -44,7 +44,8 @@
       "offset": {
         "type": "integer",
         "minimum": 0,
-        "description": "read: character offset; measure: element offset. Use next_offset from the previous result"
+        "description": "read: character offset; measure: element offset. Use next_offset from the previous result",
+        "maximum": 1000000
       },
       "condition": {
         "type": "string",
@@ -126,11 +127,13 @@
           "properties": {
             "x": {
               "type": "integer",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 1599
             },
             "y": {
               "type": "integer",
-              "minimum": 0
+              "minimum": 0,
+              "maximum": 1199
             }
           },
           "required": [

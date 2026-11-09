@@ -67,7 +67,71 @@
         "minItems": 1,
         "maxItems": 20,
         "items": {
-          "type": "object"
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "description": "a browser_read action (navigate, read, wait_for, scroll, ...) or click, type, press"
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 10000,
+              "description": "wait_for only: give up after this long (default 5000)"
+            },
+            "quiet_ms": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 3000,
+              "description": "wait_for quiet/network_idle: how long it must stay still (default 500)"
+            },
+            "dx": {
+              "type": "integer",
+              "minimum": -20000,
+              "maximum": 20000,
+              "description": "scroll only: horizontal pixels"
+            },
+            "dy": {
+              "type": "integer",
+              "minimum": -20000,
+              "maximum": 20000,
+              "description": "scroll only: vertical pixels"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "read: character offset; measure: element offset. Use next_offset from the previous result",
+              "maximum": 1000000
+            },
+            "points": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1599
+                  },
+                  "y": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1199
+                  }
+                },
+                "required": [
+                  "x",
+                  "y"
+                ],
+                "additionalProperties": false
+              },
+              "description": "pixels only: viewport points in CSS px"
+            }
+          },
+          "required": [
+            "action"
+          ]
         },
         "description": "script only: up to 20 steps run in order in one call and approved once. Each step is an object with a browser_read action (navigate, read, wait_for, viewport, screenshot, ...) or click/type/press and their fields. Add \"screenshot\": true to a step to get an image after it; no other step returns one. A failed step stops the script and returns a screenshot of that moment. A step's \"label\" names its screenshot in the chat."
       }

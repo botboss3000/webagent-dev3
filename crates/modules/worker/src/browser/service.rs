@@ -89,6 +89,8 @@ struct State {
     observed_url: String,
     observed_selector: String,
     observed_at: Instant,
+    /// The last read's selector matched nothing; input on it reports the missing target.
+    observed_missing: bool,
     viewport: Option<&'static str>,
     media: BTreeMap<String, String>,
     last_action: String,
@@ -680,6 +682,7 @@ impl Service {
             observed_url: String::new(),
             observed_selector: String::new(),
             observed_at: Instant::now(),
+            observed_missing: false,
             viewport: None,
             media: BTreeMap::new(),
             last_action: String::new(),
@@ -1299,7 +1302,16 @@ impl Service {
         vault: bool,
         keys: bool,
     ) -> Result<(Element, Value), Fault> {
-        if !state.fresh(&wd::current_url(state.driver()).await?) {
+        let current = wd::current_url(state.driver()).await?;
+        if state.observed_missing
+            && state.observed_selector == selector
+            && state.observed_url == current
+        {
+            return Err(Fault::rejected(format!(
+                "Target `{selector}` not found on the page; check the selector, or wait_for it to appear"
+            )));
+        }
+        if !state.fresh(&current) {
             return Err(Fault::rejected(
                 "Read the current page (a region containing the target) before each input action",
             ));
@@ -1436,6 +1448,7 @@ impl Service {
             "navigate" if state.signed_in => {
                 let route = validate_url(&args["url"], &trusted.scope(), &self.origin)?;
                 state.observed = false;
+                state.observed_missing = false;
                 let url = format!("{}{route}", self.origin);
                 wd::get(state.driver(), &url).await?;
                 state.acted("navigate");
@@ -1456,6 +1469,7 @@ impl Service {
                 let url = validate_url(&args["url"], &trusted.scope(), &self.origin)?;
                 let site = trusted.site.as_ref();
                 state.observed = false;
+                state.observed_missing = false;
                 Self::restore_site(state, site).await?;
                 wd::get(state.driver(), &url).await?;
                 state.acted("navigate");
@@ -1507,14 +1521,12 @@ impl Service {
                 read.insert("text".into(), Value::from(text));
                 // Any read that found its region permits input inside that region until
                 // navigation or input.
-                if truthy(read.get("missing")) {
-                    state.observed = false;
-                } else {
-                    state.observed = true;
-                    state.observed_url = wd::current_url(state.driver()).await?;
-                    state.observed_selector = selector.unwrap_or("body").to_owned();
-                    state.observed_at = Instant::now();
-                }
+                let missing = truthy(read.get("missing"));
+                state.observed = !missing;
+                state.observed_missing = missing;
+                state.observed_url = wd::current_url(state.driver()).await?;
+                state.observed_selector = selector.unwrap_or("body").to_owned();
+                state.observed_at = Instant::now();
                 // Errors first, so a long page never pushes them out of view.
                 let mut result = Map::new();
                 result.insert("page_errors".into(), Self::errors_value(state).await);
@@ -1975,7 +1987,9 @@ impl Service {
             Ok(Err(Fault::Uncertain(_))) => {
                 drop_session().await;
                 json!({"status":"uncertain","error_kind":"browser_uncertain",
-                    "output":"Browser changed origin or input outcome is uncertain; no automatic replay"})
+                    "output":"Browser changed origin or input outcome is uncertain; no automatic replay. \
+                        The browser was closed: start the next call or script with navigate (or read after \
+                        navigate); the page from an earlier call is not trusted for input."})
             }
             Ok(Err(fault @ (Fault::Startup | Fault::Authentication | Fault::Capacity))) => {
                 let kind = match fault {

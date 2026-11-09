@@ -22,19 +22,19 @@ pub fn owns(name: &str) -> bool {
 pub fn schemas() -> Vec<Value> {
     let step = json!({"type":"object","properties":{
         "tool":{"type":"string","description":"Tool name: a read-only tool, browser_read or browser_input"},
-        "arguments":{"type":"object","description":"The tool's arguments; {{param}} inside a string is replaced at run time"}},
+        "arguments":{"type":"object","description":"The tool's arguments, under 16 KiB as JSON; {{param}} inside a string is replaced at run time"}},
         "required":["tool","arguments"],"additionalProperties":false});
     [
         ("script_save", "Save a named sequence of read-only or Browser Control tool calls for this conversation and its sub-agents; the same name replaces it. No approval needed; a step that would need approval is refused", json!({
             "name":{"type":"string","pattern":"^[A-Za-z0-9_-]{1,64}$"},
-            "description":{"type":"string","maxLength":200},
-            "steps":{"type":"array","minItems":1,"items":step},
-            "params":{"type":"array","items":{"type":"string","pattern":"^[A-Za-z0-9_]{1,32}$"},"description":"Names usable as {{name}} in step argument strings"}}),
+            "description":{"type":"string","minLength":1,"maxLength":200,"description":"1-200 characters"},
+            "steps":{"type":"array","minItems":1,"items":step,"description":"1 to the configured step limit (20 by default)"},
+            "params":{"type":"array","maxItems":10,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9_]{1,32}$"},"description":"Up to 10 distinct names usable as {{name}} in step argument strings"}}),
             vec!["name","description","steps"]),
         ("script_list", "List the session scripts saved for this conversation tree: name, description and params", json!({}), vec![]),
         ("script_run", "Run a saved session script's steps in order as ordinary tool calls; stops at the first failed step and returns every step's result", json!({
             "name":{"type":"string","pattern":"^[A-Za-z0-9_-]{1,64}$"},
-            "args":{"type":"object","additionalProperties":{"type":"string"},"description":"Text for each declared param"}}),
+            "args":{"type":"object","additionalProperties":{"type":"string","maxLength":2000},"description":"Text for each declared param, up to 2000 characters each"}}),
             vec!["name"]),
     ]
     .into_iter()
@@ -379,6 +379,25 @@ mod tests {
             {"tool":"calculate","arguments":{"operation":"add","operands":[1,2]}},
             {"tool":"get_time","arguments":{"timezone":"{{x}}"}},
             {"tool":"calculate","arguments":{"operation":"add","operands":[3,4]}}]})
+    }
+
+    #[test]
+    fn save_schema_declares_the_limits() {
+        let save = schemas()
+            .into_iter()
+            .find(|s| s["name"] == "script_save")
+            .unwrap();
+        let props = &save["parameters"]["properties"];
+        assert_eq!(props["description"]["maxLength"], 200);
+        assert_eq!(props["params"]["maxItems"], 10);
+        let run = schemas()
+            .into_iter()
+            .find(|s| s["name"] == "script_run")
+            .unwrap();
+        assert_eq!(
+            run["parameters"]["properties"]["args"]["additionalProperties"]["maxLength"],
+            2000
+        );
     }
 
     #[tokio::test]

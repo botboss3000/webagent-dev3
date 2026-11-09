@@ -627,6 +627,11 @@ pub fn validate_path(path: &Value, session_id: &str, agent_id: &str) -> Result<S
             return Ok(parsed.path);
         }
     }
+    if !parsed.path.starts_with("/api/") {
+        return Err(Fault::rejected(
+            "The browser opens app pages (/app?...) only; read source files such as CSS or JS with file_read",
+        ));
+    }
     Err(Fault::rejected("Unsupported current-session read route"))
 }
 
@@ -978,5 +983,19 @@ mod preview_route_tests {
         assert!(path(format!("/api/v3/sessions/{other}/ui-preview/option-a")).is_err());
         assert!(path(format!("/api/v3/sessions/{sid}/ui-preview/../x")).is_err());
         assert!(path(format!("/api/v3/sessions/{sid}/ui-preview/A")).is_err());
+    }
+
+    #[test]
+    fn source_asset_route_points_to_file_read() {
+        let sid = "083cd9bb-7c27-4022-a9de-09e7110a9e92";
+        let fault = validate_path(
+            &Value::from("/v3-ui/chat/elements/activity-group/style.css"),
+            sid,
+            "shared_default",
+        )
+        .unwrap_err();
+        assert!(format!("{fault:?}").contains("file_read"));
+        let api = validate_path(&Value::from("/api/v3/other"), sid, "shared_default").unwrap_err();
+        assert!(format!("{api:?}").contains("Unsupported current-session read route"));
     }
 }

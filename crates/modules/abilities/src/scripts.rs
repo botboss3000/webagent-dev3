@@ -65,8 +65,9 @@ impl Script {
         if !identifier(&self.name, MAX_NAME, true) {
             bail!("name must be 1-{MAX_NAME} letters, digits, '_' or '-'");
         }
-        if self.description.trim().is_empty() || self.description.len() > MAX_DESCRIPTION {
-            bail!("description must be 1-{MAX_DESCRIPTION} bytes");
+        if self.description.trim().is_empty() || self.description.chars().count() > MAX_DESCRIPTION
+        {
+            bail!("description must be 1-{MAX_DESCRIPTION} characters");
         }
         if self.params.len() > MAX_PARAMS
             || self.params.iter().any(|p| !identifier(p, 32, false))
@@ -102,8 +103,10 @@ impl Script {
                 bail!("unknown argument {key}");
             }
             match value.as_str() {
-                Some(text) if text.len() <= MAX_VALUE => values.insert(key.as_str(), text),
-                _ => bail!("argument {key} must be a string under {MAX_VALUE} bytes"),
+                Some(text) if text.chars().count() <= MAX_VALUE => {
+                    values.insert(key.as_str(), text)
+                }
+                _ => bail!("argument {key} must be a string of up to {MAX_VALUE} characters"),
             };
         }
         if let Some(missing) = self
@@ -201,5 +204,15 @@ mod tests {
         assert!(step_kind_allowed("get_time", true));
         assert!(!step_kind_allowed("file_write", false));
         assert!(!step_kind_allowed("script_run", true));
+    }
+
+    #[test]
+    fn description_limit_counts_characters_like_the_schema() {
+        let mut s = script(json!([{"tool":"get_time"}]), json!([]));
+        s.description = "\u{b7}".repeat(MAX_DESCRIPTION);
+        s.validate(20).unwrap();
+        s.description.push('x');
+        let error = s.validate(20).unwrap_err().to_string();
+        assert!(error.contains("1-200 characters"), "{error}");
     }
 }

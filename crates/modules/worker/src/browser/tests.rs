@@ -1728,3 +1728,48 @@ async fn input_script_reads_its_target_before_clicking() {
     assert_eq!(script["status"], "success", "{script}");
     assert_eq!(script["steps"][1]["action"], "click");
 }
+
+#[tokio::test]
+async fn scroll_keeps_a_fresh_read_and_a_missing_target_is_named() {
+    let f = fixture();
+    f.call(json!({"action":"navigate","url":"/app"})).await;
+    f.driver(0).on_script(Box::new(|source, args| {
+        let arg = |index: usize| args.get(index).and_then(Value::as_str).unwrap_or("");
+        Some(Ok(if source.contains("V3_SCROLL") {
+            json!({"missing":false,"scroll_y":0})
+        } else if source.contains("V3_READ") {
+            json!({"text":"","missing":arg(0) == "#gone","truncated":false})
+        } else {
+            return None;
+        }))
+    }));
+    // Scrolling is not a page-changing input, so the read still covers the click.
+    f.call(json!({"action":"read","selector":"#button"})).await;
+    let scrolled = f.call(json!({"action":"scroll","dy":200})).await;
+    assert_eq!(scrolled["status"], "success", "{scrolled}");
+    let clicked = f.call(json!({"action":"click","selector":"#button"})).await;
+    assert_eq!(clicked["status"], "success", "{clicked}");
+    // A click on a selector the last read did not find names the missing target.
+    f.call(json!({"action":"read","selector":"#gone"})).await;
+    let missing = f.call(json!({"action":"click","selector":"#gone"})).await;
+    assert!(output(&missing).contains("`#gone` not found"), "{missing}");
+    // The script's automatic read reports the same.
+    let script = f
+        .tool(
+            "browser_input",
+            json!({"action":"script","steps":[{"action":"click","selector":"#gone"}]}),
+            &f.trusted,
+        )
+        .await;
+    assert!(output(&script).contains("`#gone` not found"), "{script}");
+}
+
+#[tokio::test]
+async fn uncertain_input_says_to_start_with_navigate() {
+    let f = fixture();
+    f.call(json!({"action":"read"})).await;
+    f.driver(0).page().escape_on_click = true;
+    let result = f.call(json!({"action":"click","selector":"#button"})).await;
+    assert_eq!(result["status"], "uncertain", "{result}");
+    assert!(output(&result).contains("start the next call or script with navigate"));
+}
