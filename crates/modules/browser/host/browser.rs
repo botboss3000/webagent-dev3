@@ -420,6 +420,17 @@ async fn server_authority(
     let (_, _, visibility, _) = host.ability_controls(sid).await?;
     let settings = &visibility["settings"][rules::SERVER_ABILITY];
     let origin = webagent_webapp::pages::public_origin();
+    // A script signs in, or out, as its first navigate step would on its own.
+    let first_navigate = (args["action"] == "script")
+        .then(|| {
+            args["steps"]
+                .as_array()?
+                .iter()
+                .find(|step| step["action"] == "navigate")
+                .cloned()
+        })
+        .flatten();
+    let args = first_navigate.as_ref().unwrap_or(args);
     let navigating = args["action"] == "navigate";
     let agent = host.session_agent_id(sid).await?;
     // One sign-in at a time, so parallel calls share a session instead of revoking each other's.
