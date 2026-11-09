@@ -27,9 +27,15 @@ pub fn schemas() -> Vec<Value> {
     [
         ("script_save", "Save a named sequence of read-only or Browser Control tool calls for this conversation and its sub-agents; the same name replaces it. No approval needed; a step that would need approval is refused", json!({
             "name":{"type":"string","pattern":"^[A-Za-z0-9_-]{1,64}$"},
-            "description":{"type":"string","minLength":1,"maxLength":200,"description":"1-200 characters"},
+            "description":{"type":"string","minLength":1,"maxLength":1000,"description":"One short sentence, about 150 characters: what the script does. Describe each param in its own description"},
             "steps":{"type":"array","minItems":1,"items":step,"description":"1 to the configured step limit (20 by default)"},
-            "params":{"type":"array","maxItems":10,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9_]{1,32}$"},"description":"Up to 10 distinct names usable as {{name}} in step argument strings"}}),
+            "params":{"type":"array","maxItems":10,"items":{"anyOf":[
+                {"type":"object","properties":{
+                    "name":{"type":"string","pattern":"^[A-Za-z0-9_]{1,32}$"},
+                    "description":{"type":"string","maxLength":1000,"description":"A few words: what text to pass"}},
+                    "required":["name"],"additionalProperties":false},
+                {"type":"string","pattern":"^[A-Za-z0-9_]{1,32}$"}]},
+                "description":"Up to 10 distinct params usable as {{name}} in step argument strings"}}),
             vec!["name","description","steps"]),
         ("script_list", "List the session scripts saved for this conversation tree: name, description and params", json!({}), vec![]),
         ("script_run", "Run a saved session script's steps in order as ordinary tool calls; stops at the first failed step and returns every step's result", json!({
@@ -149,9 +155,32 @@ async fn list(app: &App, sid: &str) -> Result<Value> {
         .as_object()
         .into_iter()
         .flatten()
-        .map(|(name, s)| json!({"name":name,"description":s["description"],"params":s["params"]}))
+        .map(|(name, s)| {
+            let params: Vec<Value> = s["params"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|p| match p {
+                    // Scripts saved before params had descriptions store bare names.
+                    Value::String(name) => json!({"name":name}),
+                    p => json!({"name":p["name"],"description":brief(&p["description"])}),
+                })
+                .collect();
+            json!({"name":name,"description":brief(&s["description"]),"params":params})
+        })
         .collect();
     Ok(json!({"status":"success","output":{"scripts":scripts}}))
+}
+
+/// A listed description, cut to about one line.
+fn brief(text: &Value) -> String {
+    const LIST_CHARS: usize = 160;
+    let text = text.as_str().unwrap_or_default();
+    if text.chars().count() <= LIST_CHARS {
+        return text.to_owned();
+    }
+    let cut: String = text.chars().take(LIST_CHARS - 1).collect();
+    format!("{}\u{2026}", cut.trim_end())
 }
 
 /// Record `step` as the run's nested pending call, or remove it (`None`).
@@ -388,7 +417,7 @@ mod tests {
             .find(|s| s["name"] == "script_save")
             .unwrap();
         let props = &save["parameters"]["properties"];
-        assert_eq!(props["description"]["maxLength"], 200);
+        assert_eq!(props["description"]["maxLength"], 1000);
         assert_eq!(props["params"]["maxItems"], 10);
         let run = schemas()
             .into_iter()
@@ -400,6 +429,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn list_descriptions_are_cut_to_one_line() {
+        assert_eq!(brief(&json!("Short")), "Short");
+        let long = brief(&json!("x".repeat(400)));
+        assert_eq!(long.chars().count(), 160);
+        assert!(long.ends_with('\u{2026}'));
+    }
+
     #[tokio::test]
     async fn save_list_run_and_stop_at_first_failure() {
         let (_root, app) = fixture().await;
@@ -408,7 +445,10 @@ mod tests {
         assert_eq!(saved["status"], "success", "{saved}");
         let listed = tool(&app, &sid, "script_list", json!({})).await;
         assert_eq!(listed["output"]["scripts"][0]["name"], "sum");
-        assert_eq!(listed["output"]["scripts"][0]["params"], json!(["x"]));
+        assert_eq!(
+            listed["output"]["scripts"][0]["params"],
+            json!([{"name":"x","description":""}])
+        );
         // An unknown time zone fails step 2; step 3 never runs.
         let run = tool(
             &app,

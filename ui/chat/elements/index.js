@@ -4,6 +4,29 @@ import {createMiniTranscript} from './mini-transcript/index.js';
 import {createActivityGroup,activityLabel} from './activity-group/index.js';
 import {createTypingEllipsis} from './typing-ellipsis/index.js';
 
+// UI preview captures: `/app?session_id=<id>&ui_sample=activity` replaces the session's activity with one
+// fixed sample group after its first message, so screenshots never depend on live work. Static text only;
+// no journal is read.
+const sample=new URLSearchParams(location.search).get('ui_sample')==='activity';
+const SAMPLE_EVENTS=[
+  ['agent_step_end',{asst_id:'s1',content:'Reading the activity group styles before changing the layout.'}],
+  ['tool_call',{tool:'file_read',tool_call_id:'c1'}],['tool_result',{tool:'file_read',tool_call_id:'c1',output:'{"status":"success"}'}],
+  ['agent_step_end',{asst_id:'s2',content:'Writing the step rail variant.'}],
+  ['tool_call',{tool:'file_write',tool_call_id:'c2'}],
+  ['tool_result',{tool:'file_write',tool_call_id:'c2',output:'{"status":"error","output":"Path is outside the session workspace"}'}],
+  ['tool_call',{tool:'file_write',tool_call_id:'c3'}],['tool_result',{tool:'file_write',tool_call_id:'c3',output:'{"status":"success"}'}],
+  ['agent_step_end',{asst_id:'s3',content:'Capturing desktop and phone screenshots.'}],
+  ['tool_call',{tool:'browser_input',tool_call_id:'c4'}],['tool_result',{tool:'browser_input',tool_call_id:'c4',output:'{"status":"success"}'}],
+].map(([kind,payload],index)=>({session_id:'sample',run_id:'sample',event_id:'sample-'+(index+1),seq:index+1,kind,payload}));
+let sampleShown=false;
+async function sampleGet(url) {
+  if(url.includes('/logs?'))return {events:SAMPLE_EVENTS,cursor:SAMPLE_EVENTS.length,has_more:false};
+  const first=new URL(url,location.origin).searchParams.get('boundaries')?.split(',')[0];
+  if(!first || sampleShown)return {segments:[],cursor:0};
+  sampleShown=true;
+  return {segments:[{id:'sample',run_id:'sample',boundary_item_id:first,first_seq:1,last_seq:SAMPLE_EVENTS.length,
+    closed:true,latest:false,last_of_run:true,counts:{tools:4,updates:3,responses:0,modes:0,compactions:0}}],cursor:0};
+}
 // Own session-scoped chat elements and a separately authorized private activity view.
 // Group summaries (counts, flags) load only for drawn messages; a group's events load only
 // when it is expanded, so the private journal is never downloaded wholesale.
@@ -22,7 +45,7 @@ function styles() {
   }
 }
 const base=id=>'/api/v3/sessions/'+encodeURIComponent(id);
-const get=(url,signal)=>fetch(url,{credentials:'same-origin',cache:'no-store',signal}).then(response=>{
+const get=(url,signal)=>sample?sampleGet(url):fetch(url,{credentials:'same-origin',cache:'no-store',signal}).then(response=>{
   if(response.ok)return response.json();
   const failure=new Error('Activity unavailable ('+response.status+')');failure.status=response.status;throw failure;});
 // Derives display state from the server's segment flags and the matching run snapshot.
@@ -167,7 +190,7 @@ function cluster(shown,active) {
 // Stop polling and drop every private summary and group, for a policy change or a new session.
 function stopActivity() {
   ++generation;enabled=false;busy=false;clearTimeout(timer);
-  summaries=new Map();requested=new Set();cursor=null;
+  summaries=new Map();requested=new Set();cursor=null;sampleShown=false;
   for(const entry of nodes.values())entry.dispose();nodes.clear();
   for(const element of clusters.values())element.remove();clusters.clear();
   for(const node of container?.querySelectorAll('.v3-cluster-member')||[])node.classList.remove('v3-cluster-member','v3-cluster-hidden');

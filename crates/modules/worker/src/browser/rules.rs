@@ -11,7 +11,7 @@ use std::path::Path;
 
 /// URL parameters the app itself writes. Invite and embed authentication parameters stay
 /// excluded.
-const APP_PARAMS: [&str; 11] = [
+const APP_PARAMS: [&str; 12] = [
     "agent",
     "agentScope",
     "agentView",
@@ -22,6 +22,7 @@ const APP_PARAMS: [&str; 11] = [
     "session_id",
     "tab",
     "theme",
+    "ui_sample",
     "window",
 ];
 pub(crate) const READ_ACTIONS: [&str; 12] = [

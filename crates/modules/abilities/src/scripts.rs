@@ -14,7 +14,8 @@ pub const TOOLS: &[&str] = &["script_save", "script_list", "script_run"];
 /// Write tools a phase-1 script may still use; every other step must be a read.
 pub const BROWSER_WRITES: &[&str] = &["browser_input"];
 const MAX_NAME: usize = 64;
-const MAX_DESCRIPTION: usize = 200;
+/// An abuse cap only; the schema asks for one short sentence.
+pub const MAX_DESCRIPTION: usize = 1000;
 const MAX_PARAMS: usize = 10;
 const MAX_VALUE: usize = 2000;
 const MAX_ARGUMENTS_BYTES: usize = 16 * 1024;
@@ -34,7 +35,43 @@ pub struct Script {
     pub description: String,
     pub steps: Vec<Step>,
     #[serde(default)]
-    pub params: Vec<String>,
+    pub params: Vec<Param>,
+}
+
+/// A declared `{{name}}` parameter. A plain string is accepted as a name alone.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(from = "ParamInput")]
+pub struct Param {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ParamInput {
+    Name(String),
+    Full(ParamFields),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ParamFields {
+    name: String,
+    #[serde(default)]
+    description: String,
+}
+
+impl From<ParamInput> for Param {
+    fn from(input: ParamInput) -> Self {
+        match input {
+            ParamInput::Name(name) => Self {
+                name,
+                description: String::new(),
+            },
+            ParamInput::Full(ParamFields { name, description }) => Self { name, description },
+        }
+    }
 }
 
 fn empty_object() -> Value {
@@ -67,13 +104,20 @@ impl Script {
         }
         if self.description.trim().is_empty() || self.description.chars().count() > MAX_DESCRIPTION
         {
-            bail!("description must be 1-{MAX_DESCRIPTION} characters");
+            bail!("description must be one short sentence (at most {MAX_DESCRIPTION} characters)");
         }
         if self.params.len() > MAX_PARAMS
-            || self.params.iter().any(|p| !identifier(p, 32, false))
-            || (1..self.params.len()).any(|i| self.params[..i].contains(&self.params[i]))
+            || self.params.iter().any(|p| !identifier(&p.name, 32, false))
+            || (1..self.params.len()).any(|i| self.declares(&self.params[i].name, i))
         {
             bail!("params must be up to {MAX_PARAMS} distinct names of letters, digits or '_'");
+        }
+        if self
+            .params
+            .iter()
+            .any(|p| p.description.chars().count() > MAX_DESCRIPTION)
+        {
+            bail!("a param description must be short (at most {MAX_DESCRIPTION} characters)");
         }
         if self.steps.is_empty() || self.steps.len() > max_steps {
             bail!("a script has 1-{max_steps} steps");
@@ -91,6 +135,11 @@ impl Script {
         Ok(())
     }
 
+    /// Whether one of the first `before` params is named `name`.
+    fn declares(&self, name: &str, before: usize) -> bool {
+        self.params[..before].iter().any(|p| p.name == name)
+    }
+
     /// The steps with `{{param}}` replaced by `args` inside string values only. Keys,
     /// tool names and the step list never change, so arguments cannot add or pick tools.
     ///
@@ -99,7 +148,7 @@ impl Script {
     pub fn bind(&self, args: &Map<String, Value>) -> Result<Vec<Step>> {
         let mut values = BTreeMap::new();
         for (key, value) in args {
-            if !self.params.contains(key) {
+            if !self.declares(key, self.params.len()) {
                 bail!("unknown argument {key}");
             }
             match value.as_str() {
@@ -112,9 +161,9 @@ impl Script {
         if let Some(missing) = self
             .params
             .iter()
-            .find(|p| !values.contains_key(p.as_str()))
+            .find(|p| !values.contains_key(p.name.as_str()))
         {
-            bail!("missing argument {missing}");
+            bail!("missing argument {}", missing.name);
         }
         Ok(self
             .steps
@@ -213,6 +262,26 @@ mod tests {
         s.validate(20).unwrap();
         s.description.push('x');
         let error = s.validate(20).unwrap_err().to_string();
-        assert!(error.contains("1-200 characters"), "{error}");
+        assert!(error.contains("1000 characters"), "{error}");
+    }
+
+    #[test]
+    fn params_take_names_or_described_objects() {
+        let s = script(
+            json!([{"tool":"get_time"}]),
+            json!(["a", {"name":"b","description":"The time zone"}]),
+        );
+        s.validate(20).unwrap();
+        assert_eq!(s.params[0].description, "");
+        assert_eq!(s.params[1].description, "The time zone");
+        assert!(s
+            .bind(json!({"a":"1","b":"2"}).as_object().unwrap())
+            .is_ok());
+        let mut long = s.clone();
+        long.params[1].description = "x".repeat(MAX_DESCRIPTION + 1);
+        assert!(long.validate(20).is_err());
+        assert!(serde_json::from_value::<Param>(json!({"name":"a","x":1})).is_err());
+        let duplicate = script(json!([{"tool":"get_time"}]), json!(["a", {"name":"a"}]));
+        assert!(duplicate.validate(20).is_err());
     }
 }

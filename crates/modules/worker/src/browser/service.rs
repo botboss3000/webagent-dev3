@@ -36,6 +36,12 @@ const MAX_SESSIONS: usize = 2;
 /// Steps in one `script` call.
 const MAX_SCRIPT_STEPS: usize = 20;
 const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
+/// WebDriver input failures returned before any event is dispatched.
+const NOT_DISPATCHED: [&str; 3] = [
+    "StaleElementReferenceException",
+    "ElementClickInterceptedException",
+    "ElementNotInteractableException",
+];
 const STEP_WAIT: Duration = Duration::from_secs(5);
 const IDLE_SECONDS: u64 = 180;
 /// Agent turns between a read and the input often take over 30 s; the target is
@@ -1542,7 +1548,7 @@ impl Service {
                     ));
                 }
                 let selector = selector.unwrap_or_default();
-                let (target, used) = self
+                let (mut target, mut used) = self
                     .fresh_target(state, selector, vault.is_some(), false)
                     .await?;
                 state.observed = false;
@@ -1553,17 +1559,42 @@ impl Service {
                     }
                     None => args.get("text").and_then(Value::as_str).map(str::to_owned),
                 };
-                let applied = async {
-                    if action == "click" {
-                        wd::click(state.driver(), &target).await?;
+                let mut redrawn = false;
+                let applied = loop {
+                    let sent = if action == "click" {
+                        wd::click(state.driver(), &target).await
                     } else {
-                        wd::send_keys(state.driver(), &target, text.as_deref().unwrap_or(""))
-                            .await?;
+                        wd::send_keys(state.driver(), &target, text.as_deref().unwrap_or("")).await
+                    };
+                    match sent {
+                        Ok(()) => {
+                            state.acted(action);
+                            break self.safe_url(state).await.map(drop).map_err(drop);
+                        }
+                        // WebDriver refuses these before dispatching any input, so nothing
+                        // happened. A live page that redrew the target is looked up once more
+                        // under the same rules; the others are ordinary refusals.
+                        Err(Fault::Backend {
+                            name,
+                            crashed: false,
+                        }) if NOT_DISPATCHED.contains(&name.as_str()) => {
+                            if name == "StaleElementReferenceException" && !redrawn {
+                                redrawn = true;
+                                state.observed = true;
+                                (target, used) = self
+                                    .fresh_target(state, selector, vault.is_some(), false)
+                                    .await?;
+                                state.observed = false;
+                                continue;
+                            }
+                            return Err(Fault::rejected(
+                                "The target changed, is covered or cannot take input; nothing was \
+                                 applied. Read the page and try again",
+                            ));
+                        }
+                        Err(_) => break Err(()),
                     }
-                    state.acted(action);
-                    self.safe_url(state).await
-                }
-                .await;
+                };
                 if applied.is_err() {
                     return Err(Fault::Uncertain(
                         "Input outcome is uncertain; inspect the page before another action".into(),

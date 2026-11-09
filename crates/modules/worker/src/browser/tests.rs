@@ -35,6 +35,8 @@ struct Page {
     typed: Vec<String>,
     ready: String,
     escape_on_click: bool,
+    /// WebDriver errors the next clicks answer with, before dispatching anything.
+    click_errors: Vec<&'static str>,
     closed: bool,
     failure: bool,
     signin: bool,
@@ -176,6 +178,9 @@ impl Mock {
             }
             ("GET", _, Some((_, "displayed" | "enabled"))) => json!(true),
             ("POST", _, Some((_, "click"))) => {
+                if !page.click_errors.is_empty() {
+                    return Err(Fault::backend(page.click_errors.remove(0)));
+                }
                 page.clicks += 1;
                 if page.escape_on_click {
                     page.current_url = "https://outside.invalid/".into();
@@ -1048,6 +1053,30 @@ async fn input_escape_is_uncertain_not_replayed_and_closes_profile() {
     // The next call opens a fresh browser.
     f.call(json!({"action":"read"})).await;
     assert_eq!(f.started(), 2);
+}
+
+#[tokio::test]
+async fn redrawn_target_is_found_again_and_refusals_keep_the_browser() {
+    let f = fixture();
+    f.call(json!({"action":"read"})).await;
+    f.driver(0).page().click_errors = vec!["StaleElementReferenceException"];
+    let result = f.call(json!({"action":"click","selector":"#button"})).await;
+    assert_eq!(result["status"], "success", "{result}");
+    assert_eq!(f.driver(0).page().clicks, 1);
+    f.call(json!({"action":"read"})).await;
+    f.driver(0).page().click_errors = vec![
+        "StaleElementReferenceException",
+        "StaleElementReferenceException",
+    ];
+    let result = f.call(json!({"action":"click","selector":"#button"})).await;
+    assert_eq!(result["error_kind"], "browser_invalid_request", "{result}");
+    f.call(json!({"action":"read"})).await;
+    f.driver(0).page().click_errors = vec!["ElementClickInterceptedException"];
+    let result = f.call(json!({"action":"click","selector":"#button"})).await;
+    assert_eq!(result["error_kind"], "browser_invalid_request", "{result}");
+    assert_eq!(f.driver(0).page().clicks, 1);
+    assert!(!f.driver(0).page().closed);
+    assert_eq!(f.started(), 1);
 }
 
 #[tokio::test]

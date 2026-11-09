@@ -5,10 +5,11 @@ top-level conversation and every sub-agent session started from it, at any depth
 one when you or your sub-agents will run the same sequence more than once, for example
 the same set of browser screenshots for several design options.
 
-- `script_save {name, description, steps:[{tool, arguments}], params:[names]}` stores it
+- `script_save {name, description, steps:[{tool, arguments}], params:[{name, description}]}` stores it
   for the tree; saving the same name again replaces it. Up to 20 steps and 100 scripts per
   tree (live limits in `loop-runtime.json`).
-- `script_list {}` shows the tree's scripts: name, description and params.
+- `script_list {}` shows the tree's scripts: name, description and params (long descriptions
+  are cut to one line).
 - `script_run {name, args:{param: "text"}}` runs the steps in order and returns each
   step's result. It stops at the first step that fails; screenshots from steps attach as
   they do for direct calls.
@@ -30,7 +31,8 @@ Writing a script:
   takes it as a param, and each caller passes its own: `/app?session_id=<your session id>`.
 - Wait for what each step depends on, for example a `wait_for` visible step before reading
   or clicking something the page draws later.
-- Keep it small and single-purpose; describe each param in the description.
+- Keep it small and single-purpose. Keep the script description to one short sentence
+  (about 150 characters) and describe each param in its own `description` (a few words).
 - Test it once with `script_run` before telling sub-agents or siblings to use it.
 - If a shared script does not fit your case, pass different args or save a variant under a
   new name; do not overwrite a script others use.
