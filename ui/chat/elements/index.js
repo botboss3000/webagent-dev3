@@ -138,11 +138,15 @@ function cluster(shown,active) {
     if(members[0].previousSibling!==element)container.insertBefore(element,members[0]);
     const groups=members.filter(node=>shown.has(node)).map(node=>shown.get(node)),counts={};
     for(const group of groups)for(const [kind,count] of Object.entries(group.counts||{}))counts[kind]=(counts[kind]||0)+count;
-    const notices=members.reduce((sum,node)=>sum+Number(node.dataset.subagentNotices||0),0);
-    // Builds and background calls read as updates; only sub-agent rows say sub-agent.
-    const noun=members.some(node=>node.dataset.noticeLabel==='update')?' update':' sub-agent';
+    // Background notice rows count by kind: sub-agents, builds and background calls.
+    const kinds={};
+    for(const node of members){
+      let parsed={};try{parsed=JSON.parse(node.dataset.noticeKinds||'{}');}catch{}
+      if(!node.dataset.noticeKinds&&node.dataset.subagentNotices)parsed={'sub-agent':Number(node.dataset.subagentNotices)};
+      for(const [kind,count] of Object.entries(parsed))kinds[kind]=(kinds[kind]||0)+count;
+    }
     element.firstElementChild.textContent=activityLabel({...(groups.at(-1)||{state:'completed'}),counts},
-      {error,extra:notices?[notices+noun+(notices===1?'':'s')]:[]});
+      {error,extra:Object.entries(kinds).map(([kind,count])=>count+' '+kind+(count===1?'':'s'))});
     element.setAttribute('aria-label','Activity group');
     element.classList.toggle('v2-activity-group-glimmer',active && members.some(node=>node.classList.contains('v2-activity-group-glimmer')));
     for(const node of members){node.classList.add('v3-cluster-member');node.classList.toggle('v3-cluster-hidden',!element.open);}

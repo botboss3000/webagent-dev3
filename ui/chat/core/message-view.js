@@ -45,7 +45,7 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
   // Background notices (sub-agents, broker builds, background tool calls) show as compact activity rows, not user bubbles.
   const notices=item.message_kind==='agent_message'&&Array.isArray(item.platform_notice?.notices)?item.platform_notice.notices.slice(0,20):null;
   if(notices?.length){
-    const row=document.createElement('article');row.className='v3-message v3-subagent-notices';row.dataset.publicId=item.id;row.dataset.msgId=item.id;row.dataset.seq=String(item.seq);row.dataset.turnId=item.run_id;row.dataset.subagentNotices=String(notices.length);row.dataset.noticeLabel=notices.every(n=>!n.source||n.source==='sub_agent'||n.source==='session')?'sub-agent':'update';
+    const row=document.createElement('article');row.className='v3-message v3-subagent-notices';row.dataset.publicId=item.id;row.dataset.msgId=item.id;row.dataset.seq=String(item.seq);row.dataset.turnId=item.run_id;row.dataset.subagentNotices=String(notices.length);row.dataset.noticeKinds=JSON.stringify(notices.reduce((kinds,n)=>{const kind=n.source==='build'?'build':n.source==='tool'?'background call':'sub-agent';kinds[kind]=(kinds[kind]||0)+1;return kinds;},{}));
     for(const notice of notices){
       const entry=document.createElement('details');entry.className='v3-subagent-row';
       const source=notice.source||(notice.spawn?'sub_agent':'session');
