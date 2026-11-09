@@ -68,6 +68,44 @@ async fn in_chat_steps<'e, E: sqlx::SqliteExecutor<'e>>(
     }
     Ok(steps)
 }
+/// Tool result statuses the chat UI (`ui/chat/core/activity.js`) marks as failed.
+const FAILED_STATUSES: [&str; 8] = [
+    "error",
+    "rejected",
+    "denied",
+    "failed",
+    "cancelled",
+    "timeout",
+    "uncertain",
+    "interrupted",
+];
+/// Classifies a stored tool output as success, error, uncertain or denied, with its `error_kind`.
+/// Mirrors the chat UI: only a JSON object whose `status` is a failure status counts as failed.
+fn result_status(output: &Value) -> (&'static str, Option<String>) {
+    let parsed;
+    let value = match output {
+        Value::String(text) => match serde_json::from_str::<Value>(text) {
+            Ok(value) => {
+                parsed = value;
+                &parsed
+            }
+            Err(_) => return ("success", None),
+        },
+        other => other,
+    };
+    let kind = value["error_kind"].as_str().map(str::to_owned);
+    let status = value["status"].as_str().unwrap_or("");
+    let class = if value["uncertain"] == true || matches!(status, "uncertain" | "interrupted") {
+        "uncertain"
+    } else if matches!(status, "denied" | "rejected" | "held") {
+        "denied"
+    } else if FAILED_STATUSES.contains(&status) {
+        "error"
+    } else {
+        return ("success", None);
+    };
+    (class, kind)
+}
 fn event(
     row: &SqliteRow,
     store: &Store,
@@ -83,10 +121,15 @@ fn event(
             "tool_call",
             json!({"tool_call_id":item["call_id"],"tool":item["name"],"arguments":item["arguments"]}),
         ),
-        "function_call_output" => (
-            "tool_result",
-            json!({"tool_call_id":item["call_id"],"output":item["output"]}),
-        ),
+        "function_call_output" => ("tool_result", {
+            let (status, error_kind) = result_status(&item["output"]);
+            let mut payload =
+                json!({"tool_call_id":item["call_id"],"output":item["output"],"status":status});
+            if let Some(kind) = error_kind {
+                payload["error_kind"] = json!(kind);
+            }
+            payload
+        }),
         "message" => {
             let text = if let Some(text) = item["content"].as_str() {
                 text.to_owned()
@@ -336,7 +379,14 @@ impl Store {
         }
         Ok(json!({"segments":segments,"cursor":cursor}))
     }
-    pub async fn private_activity(&self, sid: &str, after: i64) -> Result<Value> {
+    /// One activity page; `errors_only` keeps just non-success tool results. The cursor and
+    /// `has_more` still follow the scanned rows, so a filtered page may be short or empty.
+    pub async fn private_activity(
+        &self,
+        sid: &str,
+        after: i64,
+        errors_only: bool,
+    ) -> Result<Value> {
         let mut tx = self.pool.begin().await?;
         let rows=sqlx::query("SELECT i.seq,i.run_id,i.step,i.item,i.execution_metadata,i.created_at,b.boundary_item_id FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? AND i.seq>? ORDER BY i.seq LIMIT 201")
             .bind(sid).bind(after).fetch_all(&mut *tx).await?;
@@ -346,6 +396,12 @@ impl Store {
         let events = page
             .iter()
             .map(|row| event(row, self, sid, &in_chat))
+            .filter(|event| {
+                !errors_only
+                    || event.as_ref().map_or(true, |e| {
+                        e["kind"] == "tool_result" && e["payload"]["status"] != "success"
+                    })
+            })
             .collect::<Result<Vec<_>>>()?;
         let cursor = page.last().map(|r| r.get::<i64, _>("seq")).unwrap_or(after);
         let groups=sqlx::query("SELECT i.run_id,b.boundary_item_id,MIN(i.seq) first_seq,MAX(i.seq) last_seq FROM interactions i LEFT JOIN activity_boundaries b ON b.interaction_seq=i.seq WHERE i.session_id=? GROUP BY i.run_id,b.boundary_item_id ORDER BY MIN(i.seq)")
@@ -424,7 +480,7 @@ mod tests {
             .await
             .unwrap();
         tx.commit().await.unwrap();
-        let data = store.private_activity("s", 0).await.unwrap();
+        let data = store.private_activity("s", 0, false).await.unwrap();
         let messages = data["events"]
             .as_array()
             .unwrap()
@@ -641,7 +697,7 @@ mod tests {
             .await
             .unwrap();
         tx.commit().await.unwrap();
-        let data = store.private_activity("s", 0).await.unwrap();
+        let data = store.private_activity("s", 0, false).await.unwrap();
         assert_eq!(data["events"].as_array().unwrap().len(), 2);
         assert_eq!(data["segments"].as_array().unwrap().len(), 2);
         assert_eq!(data["segments"][0]["boundary_item_id"], "user:r");
@@ -658,14 +714,17 @@ mod tests {
         assert_eq!(chat.len(), 2);
         assert!(chat.iter().all(|r| !r.to_string().contains("PRIVATE step")));
         let next = store
-            .private_activity("s", data["cursor"].as_i64().unwrap())
+            .private_activity("s", data["cursor"].as_i64().unwrap(), false)
             .await
             .unwrap();
         assert!(next["events"].as_array().unwrap().is_empty());
         assert_eq!(next["segments"], data["segments"]);
         drop(store);
         let reopened = Store::open(root.path()).await.unwrap();
-        assert_eq!(reopened.private_activity("s", 0).await.unwrap(), data);
+        assert_eq!(
+            reopened.private_activity("s", 0, false).await.unwrap(),
+            data
+        );
     }
     #[tokio::test]
     async fn summary_counts_groups_without_events_and_selects_by_window_or_cursor() {
@@ -734,7 +793,7 @@ mod tests {
             .await
             .unwrap();
         tx.commit().await.unwrap();
-        let full = store.private_activity("s", 0).await.unwrap();
+        let full = store.private_activity("s", 0, false).await.unwrap();
         let first = store
             .private_activity_summary("s", 0, Some(&["user:r".to_owned()]))
             .await
@@ -779,5 +838,80 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
+    }
+    #[test]
+    fn classifies_tool_results_like_the_chat_ui() {
+        let cases = [
+            (json!("plain text"), "success", None),
+            (json!(r#"{"status":"ok","output":"x"}"#), "success", None),
+            (
+                json!(r#"{"status":"error","error_kind":"not_found"}"#),
+                "error",
+                Some("not_found"),
+            ),
+            (
+                json!(r#"{"status":"error","uncertain":true,"error_kind":"outcome_unknown"}"#),
+                "uncertain",
+                Some("outcome_unknown"),
+            ),
+            (json!({"status":"denied","output":"no"}), "denied", None),
+            (json!(r#"{"status":"timeout"}"#), "error", None),
+        ];
+        for (output, status, kind) in cases {
+            assert_eq!(
+                result_status(&output),
+                (status, kind.map(str::to_owned)),
+                "{output}"
+            );
+        }
+    }
+    #[tokio::test]
+    async fn errors_filter_keeps_only_failed_results_and_paging() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store
+            .put(
+                "session:s",
+                &json!({"id":"s","agent_id":"shared_default","status":"active"}),
+            )
+            .await
+            .unwrap();
+        let mut tx = store.pool.begin().await.unwrap();
+        for (step, item) in [
+            (
+                "model:1:0",
+                json!({"type":"function_call","call_id":"a","name":"t","arguments":"{}"}),
+            ),
+            (
+                "tool:a",
+                json!({"type":"function_call_output","call_id":"a","output":r#"{"status":"ok"}"#}),
+            ),
+            (
+                "model:1:1",
+                json!({"type":"function_call","call_id":"b","name":"t","arguments":"{}"}),
+            ),
+            (
+                "tool:b",
+                json!({"type":"function_call_output","call_id":"b","output":r#"{"status":"error","error_kind":"bad"}"#}),
+            ),
+        ] {
+            store
+                .insert_interaction(&mut tx, "s", "r", step, &item)
+                .await
+                .unwrap();
+        }
+        tx.commit().await.unwrap();
+        let full = store.private_activity("s", 0, false).await.unwrap();
+        let errors = store.private_activity("s", 0, true).await.unwrap();
+        let events = errors["events"].as_array().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["payload"]["tool_call_id"], "b");
+        assert_eq!(events[0]["payload"]["status"], "error");
+        assert_eq!(events[0]["payload"]["error_kind"], "bad");
+        assert_eq!(full["events"][1]["payload"]["status"], "success");
+        assert_eq!(
+            (errors["cursor"].clone(), errors["has_more"].clone()),
+            (full["cursor"].clone(), full["has_more"].clone())
+        );
     }
 }

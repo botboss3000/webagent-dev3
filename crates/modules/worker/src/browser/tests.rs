@@ -1762,6 +1762,25 @@ async fn scroll_keeps_a_fresh_read_and_a_missing_target_is_named() {
         )
         .await;
     assert!(output(&script).contains("`#gone` not found"), "{script}");
+    // Still named when the app rewrites its URL between the automatic read and the click.
+    let driver = f.driver(0);
+    f.driver(0).on_script(Box::new(move |source, args| {
+        if !source.contains("V3_READ") {
+            return None;
+        }
+        driver.page().current_url = format!("{ORIGIN}/app?moved=1");
+        let gone = args.first().and_then(Value::as_str) == Some("#gone");
+        Some(Ok(json!({"text":"","missing":gone,"truncated":false})))
+    }));
+    let moved = f
+        .tool(
+            "browser_input",
+            json!({"action":"script","steps":[{"action":"click","selector":"#gone"}]}),
+            &f.trusted,
+        )
+        .await;
+    assert_eq!(moved["status"], "error", "{moved}");
+    assert!(output(&moved).contains("`#gone` not found"), "{moved}");
 }
 
 #[tokio::test]

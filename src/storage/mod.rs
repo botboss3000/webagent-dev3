@@ -2509,7 +2509,10 @@ mod tests {
         assert_eq!(chat[0]["content"], "First");
         assert_eq!(chat[1]["id"], "working:auto-run:auto:1:2");
         assert_eq!(chat[1]["content"], "Second");
-        let activity = store.private_activity("auto-session", 0).await.unwrap();
+        let activity = store
+            .private_activity("auto-session", 0, false)
+            .await
+            .unwrap();
         assert_eq!(activity["events"].as_array().unwrap().len(), 3);
         assert_eq!(activity["segments"].as_array().unwrap().len(), 2);
         let mut oversized = json!({"id":"too-large","session_id":"auto-session","status":"running",

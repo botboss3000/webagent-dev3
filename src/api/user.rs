@@ -521,6 +521,8 @@ struct ActivityArgs {
     view: Option<String>,
     /// Comma-separated boundary message ids (summary view only).
     boundaries: Option<String>,
+    /// `errors=1` returns only tool results that did not succeed (full view only).
+    errors: Option<u8>,
 }
 async fn activity(
     Extension(app): Extension<App>,
@@ -537,7 +539,11 @@ async fn activity(
             return Err(crate::bad("Invalid activity cursor"));
         }
         let data = match args.view.as_deref() {
-            None => app.store.private_activity(&id, after).await?,
+            None => {
+                app.store
+                    .private_activity(&id, after, args.errors == Some(1))
+                    .await?
+            }
             Some("summary") => {
                 let boundaries = args.boundaries.as_deref().map(|list| {
                     list.split(',')

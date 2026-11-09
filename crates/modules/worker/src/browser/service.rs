@@ -1886,6 +1886,19 @@ impl Service {
                             observed["output"].as_str().unwrap_or("")),
                         "failed_step":index,"steps":results,"artifacts":artifacts});
                 }
+                // A read that matched nothing names the target, as an explicit read would;
+                // input is still refused.
+                if truthy(observed.get("missing")) {
+                    self.script_screenshot(index, None, base, trusted, &mut artifacts)
+                        .await;
+                    let selector = step
+                        .get("selector")
+                        .and_then(Value::as_str)
+                        .unwrap_or("body");
+                    return json!({"status":"error","error_kind":"browser_invalid_request",
+                        "output":format!("Step {index} ({action}) failed: Target `{selector}` not found on the page; check the selector, or wait_for it to appear"),
+                        "failed_step":index,"steps":results,"artifacts":artifacts});
+                }
             }
             let output = self
                 .call_one(tool, &Value::Object(step), base, trusted)
