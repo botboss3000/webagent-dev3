@@ -24,7 +24,7 @@ const APP_PARAMS: [&str; 11] = [
     "theme",
     "window",
 ];
-const READ_ACTIONS: [&str; 12] = [
+pub(crate) const READ_ACTIONS: [&str; 12] = [
     "animations",
     "close",
     "emulate",
@@ -672,6 +672,7 @@ fn permitted(action: &str) -> &'static [&'static str] {
         "scroll" => &["selector", "dx", "dy"],
         "press" => &["key", "selector"],
         "emulate" => &["color_scheme", "reduced_motion"],
+        "screenshot" => &["label"],
         _ => &[],
     }
 }
@@ -710,6 +711,7 @@ pub fn validate_args(name: &str, args: &mut Map<String, Value>) -> Result<&'stat
                     "styles",
                     "points",
                     "expected_sequence",
+                    "label",
                 ],
                 found,
             )

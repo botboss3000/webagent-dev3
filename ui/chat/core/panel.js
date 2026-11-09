@@ -255,7 +255,9 @@ const reviewTimer=setInterval(async()=>{
   finally{reviewRefreshBusy=false;}
 },1000);
 /** Inserts or updates a public message row, observes it for read tracking, and repaints activity. */
-function message(item,repaint=true){historyLastSeq=Math.max(historyLastSeq,item.seq||0);const target=$('chat-messages-inner');const existing=[...target.children].find(row=>row.dataset.publicId===item.id);if(existing){updateAdmission(existing,item.admission);return;}const row=createMessage(item,{resolveAsset,/* Supplies the latest cached run for gutter actions. */getRun:()=>gutterRuns.get(item.run_id),client,/* Resolves the currently selected session for message actions. */getSession:()=>session,note,historyAction,/* Opens usage/context details for the selected run. */showContext:run=>stats.show(run)});if(!row)return false;const before=[...target.children].find(node=>Number(node.dataset.seq)>item.seq);target.insertBefore(row,before||null);readObserver.observe(row);if(repaint)paintActivity();return true;}
+function message(item,repaint=true){historyLastSeq=Math.max(historyLastSeq,item.seq||0);const target=$('chat-messages-inner');const existing=[...target.children].find(row=>row.dataset.publicId===item.id);if(existing){updateAdmission(existing,item.admission);return;}const row=createMessage(item,{resolveAsset,/* Supplies the latest cached run for gutter actions. */getRun:()=>gutterRuns.get(item.run_id),client,/* Resolves the currently selected session for message actions. */getSession:()=>session,note,historyAction,/* Opens usage/context details for the selected run. */showContext:run=>stats.show(run)});if(!row)return false;const before=[...target.children].find(node=>Number(node.dataset.seq)>item.seq);target.insertBefore(row,before||null);readObserver.observe(row);placeCards();if(repaint)paintActivity();return true;}
+/** Keeps each component card right after the last message of the run that wrote it, so later turns follow it. */
+function placeCards(){const target=$('chat-messages-inner');for(const card of [...target.children].filter(node=>node.dataset.componentRun)){const rows=[...target.children].filter(node=>node.dataset.turnId===card.dataset.componentRun&&!node.dataset.componentId);const last=rows[rows.length-1];if(last&&last.nextElementSibling!==card)last.after(card);}}
 // Base presentation is display-only. Never turn model-supplied choice or
 // approval descriptions into an action or an authorization control. The one
 // exception is a user_reply choice: a click only sends its label as the user's
@@ -272,7 +274,7 @@ function components(items){
     const id=spec.id;if(typeof id!=='string'||!/^[-A-Za-z0-9_]{1,64}$/.test(id))continue;
     const existing=[...$('chat-messages-inner').children].find(node=>node.dataset.componentId===id);
     if(existing?.dataset.componentRevision===String(row.revision))continue;
-    const card=document.createElement('article');card.className='v3-message assistant';card.dataset.componentId=id;card.dataset.componentRevision=String(row.revision);
+    const card=document.createElement('article');card.className='v3-message assistant';card.dataset.componentId=id;card.dataset.componentRevision=String(row.revision);if(typeof row.run_id==='string')card.dataset.componentRun=row.run_id;
     const body=document.createElement('div');body.className='message-content';
     const heading=document.createElement('strong');heading.textContent=spec.title||'Session display';
     body.append(heading);
@@ -283,9 +285,13 @@ function components(items){
       for(const option of Array.isArray(data.options)?data.options.slice(0,8):[]){
         if(typeof option?.label!=='string'||!option.label)continue;
         const button=document.createElement('button');button.type='button';button.textContent=option.label;
-        button.onclick=async()=>{for(const node of row.children)node.disabled=true;try{await submit(option.label);}catch(error){note(error.message);for(const node of row.children)node.disabled=false;}};
+        // A picked option is sent as the user's message; the answered card then goes away.
+        button.onclick=async()=>{for(const node of row.children)node.disabled=true;try{await submit(option.label);card.remove();void client.dismissComponent(session,id).catch(()=>{});}catch(error){note(error.message);for(const node of row.children)node.disabled=false;}};
         row.append(button);
       }
+      const dismiss=document.createElement('button');dismiss.type='button';dismiss.className='v3-reply-dismiss';dismiss.textContent='Dismiss';
+      dismiss.onclick=async()=>{dismiss.disabled=true;try{await client.dismissComponent(session,id);card.remove();}catch(error){dismiss.disabled=false;note(error.message);}};
+      row.append(dismiss);
       body.append(row);card.append(body);if(existing)existing.replaceWith(card);else $('chat-messages-inner').append(card);continue;
     }
     if(spec.type==='visual'){const frame=mountVisualFrame(spec);if(!frame)continue;body.append(frame);card.append(body);if(existing)existing.replaceWith(card);else $('chat-messages-inner').append(card);continue;}
@@ -303,6 +309,7 @@ function components(items){
     }
     card.append(body);if(existing)existing.replaceWith(card);else $('chat-messages-inner').append(card);
   }
+  placeCards();
 }
 
 // Focus follows a session load only while the initiating focus choice is unchanged.

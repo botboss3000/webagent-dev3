@@ -1654,3 +1654,61 @@ fn private_directories_are_owner_bound() {
         Err(Fault::Rejected(text)) if text == "Private browser belongs to another caller"
     ));
 }
+
+#[tokio::test]
+async fn script_runs_steps_and_returns_only_marked_screenshots() {
+    let f = fixture();
+    let script = f
+        .tool(
+            "browser_read",
+            json!({"action":"script","steps":[
+                {"action":"navigate","url":"/api/v3/auth/me"},
+                {"action":"read"},
+                {"action":"read","screenshot":true,"label":"Option A · phone"}]}),
+            &f.trusted,
+        )
+        .await;
+    assert_eq!(script["status"], "success", "{script}");
+    assert_eq!(script["steps"].as_array().map(Vec::len), Some(3));
+    assert_eq!(
+        script["artifacts"].as_array().map(Vec::len),
+        Some(1),
+        "{script}"
+    );
+    assert_eq!(script["steps"][2]["screenshot"], 0);
+    assert_eq!(script["artifacts"][0]["label"], "Option A · phone");
+    assert!(script["steps"][1].get("session_id").is_none());
+    // Input steps need browser_input; a bad step stops the script before it runs.
+    let refused = f
+        .tool(
+            "browser_read",
+            json!({"action":"script","steps":[{"action":"click","selector":"button"}]}),
+            &f.trusted,
+        )
+        .await;
+    assert_eq!(
+        refused["error_kind"], "browser_invalid_request",
+        "{refused}"
+    );
+    let empty = f
+        .tool(
+            "browser_read",
+            json!({"action":"script","steps":[]}),
+            &f.trusted,
+        )
+        .await;
+    assert_eq!(empty["error_kind"], "browser_invalid_request");
+    // A failed step stops the script and reports which one.
+    let failed = f
+        .tool(
+            "browser_read",
+            json!({"action":"script","steps":[
+                {"action":"read"},
+                {"action":"navigate","url":"/api/v3/admin/secrets"},
+                {"action":"read"}]}),
+            &f.trusted,
+        )
+        .await;
+    assert_eq!(failed["failed_step"], 1, "{failed}");
+    assert_eq!(failed["steps"].as_array().map(Vec::len), Some(1));
+}

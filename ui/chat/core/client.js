@@ -198,6 +198,7 @@ export function createChatClient({request, note, issues, clearNoticeFrom = () =>
     background: id => request('/sessions/' + encodeURIComponent(id) + '/background'),
     /** Total stop: also ends the conversation's background work. */
     stopSession: (id, body) => request('/sessions/' + encodeURIComponent(id) + '/stop', 'POST', body),
+    dismissComponent: (id, cid) => request('/sessions/' + encodeURIComponent(id) + '/components/' + encodeURIComponent(cid) + '/dismiss', 'POST', {}),
     /** Submits a decision for a pending approval. */
     decide: (id, body) => request('/approvals/' + id + '/decision', 'POST', body),
     /** Resolves an uncertain run through its recovery endpoint. */

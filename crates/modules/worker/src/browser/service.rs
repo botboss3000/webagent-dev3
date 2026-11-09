@@ -33,6 +33,8 @@ use tokio::sync::{Mutex, Notify, OnceCell};
 /// One read page; small enough that the result is never cut off in the agent's context.
 const MAX_TEXT: usize = 12000;
 const MAX_SESSIONS: usize = 2;
+/// Steps in one `script` call.
+const MAX_SCRIPT_STEPS: usize = 20;
 const MAX_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 const STEP_WAIT: Duration = Duration::from_secs(5);
 const IDLE_SECONDS: u64 = 180;
@@ -1603,7 +1605,22 @@ impl Service {
                     "steps":steps.len(),"site_login":{"origin":origin,"cookies":cookies,
                     "steps":steps,"login_url":login_url}})
             }
-            "screenshot" => self.screenshot(state).await?,
+            "screenshot" => {
+                let mut shot = self.screenshot(state).await?;
+                // The user's name for this image; it becomes the attachment's file name.
+                let label: String = args
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .chars()
+                    .filter(|c| c.is_alphanumeric() || " -_.,()·:".contains(*c))
+                    .take(80)
+                    .collect();
+                if !label.trim().is_empty() {
+                    shot["label"] = json!(label.trim());
+                }
+                shot
+            }
             "viewport" => {
                 // Device emulation changes width, touch and mobile media queries; navigate
                 // again so boot-time layout reruns.
@@ -1772,9 +1789,141 @@ impl Service {
         )
     }
 
-    /// Runs one browser tool call under its time bound and publishes only sanitized known
-    /// or uncertain outcomes.
+    /// Runs one browser tool call, or a `script` of them, and publishes only sanitized
+    /// known or uncertain outcomes.
     pub async fn call(
+        self: &Arc<Self>,
+        name: &str,
+        args: &Value,
+        base: &Path,
+        trusted: &Value,
+    ) -> Value {
+        if args.get("action").and_then(Value::as_str) == Some("script") {
+            return self.script(name, args, base, trusted).await;
+        }
+        self.call_one(name, args, base, trusted).await
+    }
+
+    /// Runs `steps` in order, each as its own call with its own time bound and checks.
+    /// Only steps marked `screenshot` return an image (taken after the step's action); a
+    /// failed step stops the script and returns a screenshot of that moment. Input steps
+    /// run only in a `browser_input` script, so that call's approval covers them.
+    async fn script(
+        self: &Arc<Self>,
+        name: &str,
+        args: &Value,
+        base: &Path,
+        trusted: &Value,
+    ) -> Value {
+        let rejected = |message: String| {
+            json!({"status":"error","error_kind":"browser_invalid_request",
+                "output":format!("Private browser request rejected: {message}")})
+        };
+        let Some(steps) = args
+            .get("steps")
+            .and_then(Value::as_array)
+            .filter(|steps| (1..=MAX_SCRIPT_STEPS).contains(&steps.len()))
+        else {
+            return rejected(format!("a script needs 1 to {MAX_SCRIPT_STEPS} steps"));
+        };
+        let mut results = Vec::new();
+        let mut artifacts: Vec<Value> = Vec::new();
+        for (index, step) in steps.iter().enumerate() {
+            let Some(mut step) = step.as_object().cloned() else {
+                return rejected(format!("step {index} must be an object"));
+            };
+            let shot = step.remove("screenshot") == Some(Value::Bool(true));
+            // A step's label names the screenshot taken after it; only a screenshot step keeps it.
+            let label = if step.get("action").and_then(Value::as_str) == Some("screenshot") {
+                None
+            } else {
+                step.remove("label")
+            };
+            let action = step
+                .get("action")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let tool = if super::rules::READ_ACTIONS.contains(&action.as_str()) {
+                "browser_read"
+            } else if name == "browser_input"
+                && matches!(action.as_str(), "click" | "type" | "press")
+            {
+                "browser_input"
+            } else {
+                return rejected(format!(
+                    "step {index}: {action} is not a {name} script action"
+                ));
+            };
+            let output = self
+                .call_one(tool, &Value::Object(step), base, trusted)
+                .await;
+            let mut summary = Self::step_summary(index, &action, &output);
+            if output["status"] != "success" {
+                self.script_screenshot(index, None, base, trusted, &mut artifacts)
+                    .await;
+                return json!({"status":output["status"].clone(),
+                    "error_kind":output["error_kind"].clone(),
+                    "output":format!("Step {index} ({action}) failed: {}",
+                        output["output"].as_str().unwrap_or("")),
+                    "failed_step":index,"steps":results,"artifacts":artifacts});
+            }
+            if action == "screenshot" {
+                summary = json!({"step":index,"action":action,"screenshot":artifacts.len()});
+                artifacts.push(Self::step_summary(index, &action, &output));
+            } else if shot {
+                if let Some(at) = self
+                    .script_screenshot(index, label.as_ref(), base, trusted, &mut artifacts)
+                    .await
+                {
+                    summary["screenshot"] = json!(at);
+                } else {
+                    summary["screenshot_error"] = json!("screenshot failed");
+                }
+            }
+            results.push(summary);
+        }
+        json!({"status":"success","steps":results,"artifacts":artifacts})
+    }
+
+    /// Takes one script screenshot; its index in `artifacts`, or `None` when it failed.
+    async fn script_screenshot(
+        self: &Arc<Self>,
+        index: usize,
+        label: Option<&Value>,
+        base: &Path,
+        trusted: &Value,
+        artifacts: &mut Vec<Value>,
+    ) -> Option<usize> {
+        let mut args = json!({"action":"screenshot"});
+        if let Some(label) = label {
+            args["label"] = label.clone();
+        }
+        let output = self.call_one("browser_read", &args, base, trusted).await;
+        (output["status"] == "success").then(|| {
+            artifacts.push(Self::step_summary(index, "screenshot", &output));
+            artifacts.len() - 1
+        })
+    }
+
+    /// A step's own result without the fields every browser result repeats.
+    fn step_summary(index: usize, action: &str, output: &Value) -> Value {
+        let mut summary = json!({"step":index,"action":action});
+        if let Value::Object(fields) = output {
+            for (key, value) in fields {
+                if !matches!(
+                    key.as_str(),
+                    "status" | "backend" | "signed_in" | "session_id" | "source_kind" | "user_id"
+                ) {
+                    summary[key] = value.clone();
+                }
+            }
+        }
+        summary
+    }
+
+    /// Runs one browser tool call under its time bound.
+    async fn call_one(
         self: &Arc<Self>,
         name: &str,
         args: &Value,

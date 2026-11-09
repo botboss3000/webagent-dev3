@@ -170,6 +170,39 @@ impl Store {
         Ok(seq.max(0) as u64)
     }
 
+    /// Removes reply-choice card `id` once the user picked an option or dismissed it. Only
+    /// `user_reply` choice cards can be dismissed; returns whether one was removed.
+    pub async fn base_component_dismiss(&self, sid: &str, id: &str) -> Result<bool> {
+        let key = artifact_key(sid, "component", id)?;
+        let mut tx = self.pool.begin().await?;
+        let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+            .bind(&key)
+            .fetch_optional(&mut *tx)
+            .await?
+        else {
+            return Ok(false);
+        };
+        let document = self.unseal(&raw)?;
+        let card = &document["artifact"];
+        if document["session_id"] != sid
+            || card["authority"] != "user_reply"
+            || card["type"] != "choice"
+        {
+            return Err(anyhow!("Only choice cards can be dismissed"));
+        }
+        sqlx::query("DELETE FROM docs WHERE key=?")
+            .bind(&key)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,'base_task_artifact',?)")
+            .bind(sid)
+            .bind(self.encode_user_record(&json!({"kind":"component","id":id,"dismissed":true}))?)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
     // Safe API projection: only previously validated declarative specs.
     pub async fn base_chat_components(&self, sid: &str) -> Result<Vec<Value>> {
         artifact_key(sid, "checkpoint", "task")?;
@@ -198,8 +231,9 @@ impl Store {
             {
                 return Err(anyhow!("Invalid stored chat component"));
             }
-            components
-                .push(json!({"revision":document["revision"],"component":document["artifact"]}));
+            // The run that wrote the card anchors it in the transcript.
+            components.push(json!({"revision":document["revision"],
+                "run_id":document["updated_by_run"],"component":document["artifact"]}));
         }
         tx.commit().await?;
         Ok(components)

@@ -25,7 +25,8 @@
           "viewport",
           "emulate",
           "screenshot",
-          "close"
+          "close",
+          "script"
         ]
       },
       "url": {
@@ -139,6 +140,20 @@
           "additionalProperties": false
         },
         "description": "pixels only: viewport points in CSS px"
+      },
+      "steps": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 20,
+        "items": {
+          "type": "object"
+        },
+        "description": "script only: up to 20 read steps run in order in one call, each an object with this tool's fields (action, selector, url, preset, condition, ...). Add \"screenshot\": true to a step to get an image after it; no other step returns one. A failed step stops the script and returns a screenshot of that moment."
+      },
+      "label": {
+        "type": "string",
+        "maxLength": 80,
+        "description": "screenshot (or a script step with \"screenshot\": true): a short name shown under the image in the chat, for example \"Option A \u00b7 step rail \u00b7 phone\". Always label screenshots the user will compare."
       }
     },
     "required": [

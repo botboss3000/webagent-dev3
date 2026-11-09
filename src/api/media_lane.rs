@@ -21,8 +21,7 @@ fn api_error(error: LaneError) -> ApiError {
         {
             ApiError(
                 StatusCode::BAD_GATEWAY,
-                "Voice or image model did not complete; check its assignment and connection"
-                    .into(),
+                "Voice or image model did not complete; check its assignment and connection".into(),
             )
         }
         LaneError::Dispatch(error) | LaneError::Internal(error) => error.into(),
@@ -60,6 +59,23 @@ pub(crate) async fn lane_answer(
 pub(crate) async fn limit(request: Request, next: Next) -> Response {
     static SLOTS: std::sync::OnceLock<Semaphore> = std::sync::OnceLock::new();
     let Ok(_permit) = SLOTS.get_or_init(|| Semaphore::new(4)).try_acquire() else {
+        return ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Media is busy; try again shortly".into(),
+        )
+        .into_response();
+    };
+    next.run(request).await
+}
+
+/// Attachment reads (a strip of screenshot thumbnails loads together) wait briefly for one of
+/// sixteen slots instead of sharing the four model-call slots and failing at once.
+pub(crate) async fn limit_reads(request: Request, next: Next) -> Response {
+    static SLOTS: std::sync::OnceLock<Semaphore> = std::sync::OnceLock::new();
+    let slots = SLOTS.get_or_init(|| Semaphore::new(16));
+    let Ok(Ok(_permit)) =
+        tokio::time::timeout(std::time::Duration::from_secs(10), slots.acquire()).await
+    else {
         return ApiError(
             StatusCode::TOO_MANY_REQUESTS,
             "Media is busy; try again shortly".into(),

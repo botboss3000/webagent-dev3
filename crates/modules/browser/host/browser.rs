@@ -561,6 +561,7 @@ async fn attach_screenshot(
     call: tools::native::Call<'_>,
     authority: &Value,
     id: &str,
+    label: Option<&str>,
     cancel: CancellationToken,
 ) -> Result<Value> {
     let image = tools::execute_trusted(
@@ -575,7 +576,10 @@ async fn attach_screenshot(
     let data = image["png_base64"]
         .as_str()
         .ok_or_else(|| anyhow!("Screenshot bytes unavailable"))?;
-    let name = format!("screenshot-{}.png", id.get(..8).unwrap_or(id));
+    let name = label.map_or_else(
+        || format!("screenshot-{}.png", id.get(..8).unwrap_or(id)),
+        |label| format!("{label}.png"),
+    );
     crate::api::uploads::publish_reply_file(
         app,
         call.sid,
@@ -657,27 +661,36 @@ async fn execute_server(
         record["last_used"] = json!(now());
         store.put(&site_key(&origin), &record).await?;
     }
-    let ids: Vec<String> = if output["status"] != "success" {
-        Vec::new()
-    } else if name == "browser_read" && args["action"] == "screenshot" {
-        output["artifact_id"]
+    let entry = |shot: &Value| {
+        shot["artifact_id"]
             .as_str()
-            .map(str::to_owned)
-            .into_iter()
-            .collect()
-    } else if name == "browser_record" && args["action"] == "stop" {
+            .map(|id| (id.to_owned(), shot["label"].as_str().map(str::to_owned)))
+    };
+    // A failed script still attaches the screenshot of its failing step.
+    let ids: Vec<(String, Option<String>)> = if name == "browser_read"
+        && args["action"] == "screenshot"
+        && output["status"] == "success"
+    {
+        entry(&output).into_iter().collect()
+    } else if (name == "browser_record"
+        && args["action"] == "stop"
+        && output["status"] == "success")
+        || args["action"] == "script"
+    {
         output["artifacts"]
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|frame| frame["artifact_id"].as_str().map(str::to_owned))
+            .filter_map(entry)
             .collect()
     } else {
         Vec::new()
     };
-    for (index, id) in ids.iter().enumerate() {
-        match attach_screenshot(app, call, &authority, id, cancel.clone()).await {
-            Ok(file) if name == "browser_read" => output["attachment"] = file,
+    for (index, (id, label)) in ids.iter().enumerate() {
+        match attach_screenshot(app, call, &authority, id, label.as_deref(), cancel.clone()).await {
+            Ok(file) if name == "browser_read" && args["action"] == "screenshot" => {
+                output["attachment"] = file;
+            }
             Ok(file) => output["artifacts"][index]["attachment"] = file,
             Err(error) => output["attachment_error"] = json!(error.to_string()),
         }

@@ -19,7 +19,8 @@
           "click",
           "type",
           "press",
-          "save_login"
+          "save_login",
+          "script"
         ]
       },
       "selector": {
@@ -60,6 +61,15 @@
       "origin": {
         "type": "string",
         "description": "save_login only: the https origin of the site the browser is signed in to, for example https://example.com"
+      },
+      "steps": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 20,
+        "items": {
+          "type": "object"
+        },
+        "description": "script only: up to 20 steps run in order in one call and approved once. Each step is an object with a browser_read action (navigate, read, wait_for, viewport, screenshot, ...) or click/type/press and their fields. Add \"screenshot\": true to a step to get an image after it; no other step returns one. A failed step stops the script and returns a screenshot of that moment. A step's \"label\" names its screenshot in the chat."
       }
     },
     "required": [

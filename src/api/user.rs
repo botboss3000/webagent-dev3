@@ -900,6 +900,10 @@ pub(crate) fn router() -> Router<App> {
         .route("/sessions/{id}/queue/resume", post(followup_resume))
         .route("/sessions/{id}/background", get(session_background))
         .route("/sessions/{id}/stop", post(session_stop))
+        .route(
+            "/sessions/{id}/components/{cid}/dismiss",
+            post(component_dismiss),
+        )
         .route("/sessions/{id}/voice/capabilities", get(voice_capabilities))
         .route(
             "/sessions/{id}/voice/reply",
@@ -919,12 +923,17 @@ pub(crate) fn router() -> Router<App> {
         .route(
             "/sessions/{id}/attachments/{aid}",
             get(attachment)
+                .layer(axum::middleware::from_fn(
+                    crate::api::media_lane::limit_reads,
+                ))
                 .delete(upload_delete)
                 .layer(axum::middleware::from_fn(crate::api::media_lane::limit)),
         )
         .route(
             "/sessions/{id}/attachments/{aid}/content",
-            get(upload_content).layer(axum::middleware::from_fn(crate::api::media_lane::limit)),
+            get(upload_content).layer(axum::middleware::from_fn(
+                crate::api::media_lane::limit_reads,
+            )),
         )
         .route(
             "/sessions/{id}/attachments/{aid}/describe",
@@ -971,6 +980,26 @@ async fn session_stop(
     crate::api::session_stop::stop(State(app), Path(sid), Json(body))
         .await
         .into_response()
+}
+/// Removes a reply-choice card the user answered or dismissed; anyone who may send in the
+/// session may do it, as clicking an option would.
+async fn component_dismiss(
+    Extension(app): Extension<App>,
+    Path((sid, cid)): Path<(String, String)>,
+) -> Response {
+    let app = match session_app(app, &sid).await {
+        Ok(app) => app,
+        Err(e) => return e.into_response(),
+    };
+    if let Err(e) = guard_access(&app, true, false) {
+        return e.into_response();
+    }
+    match app.store.base_component_dismiss(&sid, &cid).await {
+        Ok(removed) => Json(serde_json::json!({"dismissed":removed})).into_response(),
+        Err(error) => {
+            crate::ApiError(axum::http::StatusCode::BAD_REQUEST, error.to_string()).into_response()
+        }
+    }
 }
 async fn messaging_routes(Extension(app): Extension<App>, Path(sid): Path<String>) -> Response {
     let app = match session_app(app, &sid).await {

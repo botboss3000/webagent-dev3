@@ -130,6 +130,9 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 .chat-attachments a {display:block;flex:0 0 auto;box-sizing:border-box;width:var(--chat-att-thumb,56px);height:var(--chat-att-thumb,56px);margin:0;padding:0;border:var(--border-width) solid var(--chat-attachment-frame,var(--border));border-radius:var(--chat-att-radius,var(--r-sm));overflow:hidden;color:inherit;scroll-snap-align:start;}
 .chat-attachments a.chat-attachment-file {display:inline-flex;width:auto;height:auto;max-width:100%;align-items:center;gap:6px;padding:4px 8px;border-radius:var(--chat-att-radius,var(--r-sm));}
 .chat-attachments img {display:block;width:100%;height:100%;object-fit:cover;border:0;border-radius:inherit;cursor:zoom-in;}
+.chat-attachments figure.chat-attachment-labeled {display:flex;flex-direction:column;gap:3px;flex:0 0 auto;width:104px;margin:0;scroll-snap-align:start;}
+.chat-attachments figure.chat-attachment-labeled a {width:104px;height:72px;}
+.chat-attachments figure.chat-attachment-labeled figcaption {font-size:11px;line-height:1.25;color:var(--fg-2,inherit);overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word;}
 /* Full-screen image preview shared by composer tiles and published attachments. */
 .chat-image-preview-backdrop {position:fixed;inset:0;z-index:10070;display:grid;place-items:center;padding:24px;background:color-mix(in oklab,#000 74%,transparent);}
 .chat-image-preview {position:relative;display:flex;align-items:center;justify-content:center;max-width:100%;max-height:100%;margin:0;}
@@ -356,6 +359,7 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 .v3-reply-choices{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .v3-reply-choices button{font:inherit;color:var(--fg-1);background:var(--bg-elev);border:1px solid var(--border);border-radius:999px;padding:6px 12px;min-height:34px;cursor:pointer;-webkit-tap-highlight-color:transparent}
 .v3-reply-choices button:hover:not(:disabled){border-color:color-mix(in oklab,var(--fg-1) 35%,transparent)}
+.v3-reply-choices button.v3-reply-dismiss{background:transparent;color:var(--fg-2,var(--fg-1));border-style:dashed}
 .v3-reply-choices button:disabled{opacity:.55;cursor:default}
 /* Admission review blocked this message: the agent never saw it. */
 .message-admission-status.is-blocked{display:block;margin:8px 0 0;padding:8px 10px;border-radius:8px;border:1px solid rgba(var(--warning-rgb),.55);background:var(--warning-soft);color:var(--fg-1);font-size:13px;font-weight:600;line-height:1.35;opacity:1}

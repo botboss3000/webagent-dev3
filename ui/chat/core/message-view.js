@@ -76,7 +76,10 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
       if(resolveAsset){const url=link.href;
         if(!image)link.addEventListener('click',event=>{if(ready)return;event.preventDefault();note(assetError?'Attachment unavailable: '+assetError:'Attachment is loading; try again shortly.');});
         resolveAsset(url).then(blobUrl=>{if(!link.isConnected)return;ready=true;link.href=blobUrl;if(image)image.src=blobUrl;}).catch(error=>{assetError=error.message;});}
-      files.append(link);
+      // Agent images named by a label (not the default screenshot-<id>.png) show that label under the tile.
+      const caption=image&&role==='agent'&&!/^screenshot-[0-9a-f]{8}\.png$/i.test(name)?name.replace(/\.png$/i,''):'';
+      if(caption){const cell=document.createElement('figure');cell.className='chat-attachment-labeled';const text=document.createElement('figcaption');text.textContent=caption;cell.append(link,text);files.append(cell);}
+      else files.append(link);
     }
     if(files.childElementCount)bubble.append(files); // Empty or filtered attachment lists must not reserve spacing.
   }
