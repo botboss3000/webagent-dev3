@@ -746,6 +746,9 @@ def mcp_stub(work):
 # A step that streams nothing (no reasoning, text or tool events) for this long is checked with a probe.
 STALL_SECS = 120
 PROBE_SECS = 30
+# Healthy probes in a row with the call itself still silent before the call counts as stuck: the
+# provider is up but this call is not progressing, so it fails as "stalled" and WebAgent retries it.
+SLOW_PROBES = 2
 
 
 class StallWatch:
@@ -758,6 +761,7 @@ class StallWatch:
     def __init__(self, server, work, model, process):
         self.server, self.work, self.model, self.process = server, work, model, process
         self.last, self.failure, self.closed, self.response = time.time(), None, False, None
+        self.probing, self.slow = False, 0
         threading.Thread(target=self.listen, daemon=True).start()
         threading.Thread(target=self.check, daemon=True).start()
 
@@ -775,7 +779,9 @@ class StallWatch:
                 if b'"type":"session.retry.scheduled"' in line:
                     self.provider_failed(json.loads(line[5:]).get("data") or {})
                     return
-                self.last = time.time()
+                # The probe's own session reports on this server too; only the call's events are progress.
+                if not self.probing:
+                    self.last, self.slow = time.time(), 0
         except Exception:  # closed on purpose, or no stream: the call then runs unwatched
             pass
 
@@ -793,10 +799,17 @@ class StallWatch:
             if time.time() - self.last < STALL_SECS or self.closed:
                 continue
             silent = round(time.time() - self.last)
-            error = self.probe()
+            self.probing = True
+            try:
+                error = self.probe()
+            finally:
+                self.probing = False
             if error is None:
-                self.last = time.time()
-                continue
+                self.slow += 1
+                if self.slow < SLOW_PROBES:
+                    self.last = time.time()
+                    continue
+                error = f"the model answers probes but this call has been silent {self.slow} times running"
             upstream = classify(error) or ("stalled", None)
             self.failure = HarnessFailure(f"no response for {silent} s and a probe failed: {error}"[:300],
                                           "upstream", *upstream)
