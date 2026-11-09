@@ -41,6 +41,50 @@
       "min": 1,
       "max": 16,
       "bounds": "proposed"
+    },
+    {
+      "id": "loop.tools.scripts.max_steps",
+      "description": "Most tool calls one saved session script may contain.",
+      "type": "integer",
+      "pointer": "/tools/scripts/max_steps",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "allow longer session scripts",
+        "scripts with up to 30 steps",
+        "limit script length"
+      ],
+      "areas": [
+        "tools",
+        "scripts",
+        "limits"
+      ],
+      "min": 1,
+      "max": 50,
+      "bounds": "validator"
+    },
+    {
+      "id": "loop.tools.scripts.max_per_tree",
+      "description": "Most session scripts one conversation and its sub-agents can keep saved.",
+      "type": "integer",
+      "pointer": "/tools/scripts/max_per_tree",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "let a conversation save more scripts",
+        "at most 50 saved scripts per chat",
+        "fewer saved scripts"
+      ],
+      "areas": [
+        "tools",
+        "scripts",
+        "limits"
+      ],
+      "min": 1,
+      "max": 1000,
+      "bounds": "validator"
     }
   ],
   "excluded": {

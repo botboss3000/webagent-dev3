@@ -70,6 +70,22 @@ pub(crate) fn denial_message(reason: access::Reason, invalid_arguments: bool) ->
     format!("Tool invocation denied: {cause}")
 }
 
+/// The pending call `id` on `run`: the single call, a parallel batch item, or a session
+/// script's nested step (`script_steps`, dispatched while its `script_run` call executes).
+#[must_use]
+pub fn pending_call(run: &Value, id: &str) -> Option<Value> {
+    if run["pending"]["id"] == id {
+        return Some(run["pending"].clone());
+    }
+    ["batch", "script_steps"].iter().find_map(|field| {
+        run[*field]
+            .as_array()?
+            .iter()
+            .find(|item| item["pending"]["id"] == id)
+            .map(|item| item["pending"].clone())
+    })
+}
+
 pub fn executing_write<A: tool_execution::ActionCatalog>(run: &Value) -> bool {
     run["batch"].as_array().is_some_and(|items| {
         items.iter().any(|item| {

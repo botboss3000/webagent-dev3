@@ -117,6 +117,25 @@ pub struct Tools {
     /// Seconds a tool approval may wait before it counts as declined; 0 never expires.
     #[serde(default)]
     pub approval_expiry_seconds: u64,
+    /// Session script limits (`script_save`).
+    #[serde(default)]
+    pub scripts: Scripts,
+}
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Scripts {
+    /// Most steps in one script.
+    pub max_steps: usize,
+    /// Most scripts one conversation tree keeps.
+    pub max_per_tree: usize,
+}
+impl Default for Scripts {
+    fn default() -> Self {
+        Self {
+            max_steps: 20,
+            max_per_tree: 100,
+        }
+    }
 }
 impl Default for Tools {
     fn default() -> Self {
@@ -135,6 +154,7 @@ impl Default for Tools {
             max_parallel_calls: 4,
             parallel_modes,
             approval_expiry_seconds: 0,
+            scripts: Scripts::default(),
         }
     }
 }
@@ -227,7 +247,10 @@ impl<C: SchemaCatalog> Config<C> {
             }
         }
         // BATCH-CONFIG-VALIDATION: unknown names and modes fail closed at startup.
-        if !(1..=4).contains(&self.tools.max_parallel_calls) || self.tools.parallel_modes.len() > 64
+        if !(1..=4).contains(&self.tools.max_parallel_calls)
+            || self.tools.parallel_modes.len() > 64
+            || !(1..=50).contains(&self.tools.scripts.max_steps)
+            || !(1..=1000).contains(&self.tools.scripts.max_per_tree)
         {
             bail!("Invalid parallel tool configuration");
         }

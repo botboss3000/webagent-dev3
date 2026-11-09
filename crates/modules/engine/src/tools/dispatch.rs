@@ -275,15 +275,8 @@ impl<
                 );
             }
             let mut run = app.run(&run_id).await?;
-            let mut pending = if run["pending"]["id"] == pending_id {
-                run["pending"].clone()
-            } else {
-                run["batch"]
-                    .as_array()
-                    .and_then(|items| items.iter().find(|i| i["pending"]["id"] == pending_id))
-                    .map(|i| i["pending"].clone())
-                    .unwrap_or(Value::Null)
-            };
+            let mut pending =
+                crate::runtime::batch::pending_call(&run, &pending_id).unwrap_or(Value::Null);
             if pending["new_intent_confirmation"] == true && pending["human_approved"] != true {
                 return Ok(
                     json!({"status":"denied","output":"Additional matching action needs specific human authorization"}),
@@ -326,7 +319,11 @@ impl<
                 }
             }
             let result=async {
-        let _permit=tool_execution::acquire_with_budget::<A>(app.store.current_user_id(),&agent_id,&name,&settings,&cancel,total_budget).await?;
+        // A session script holds no permit itself: each of its steps takes its own, and
+        // holding an exclusive one here would block them.
+        let _permit=if name=="script_run" {None} else {
+            Some(tool_execution::acquire_with_budget::<A>(app.store.current_user_id(),&agent_id,&name,&settings,&cancel,total_budget).await?)
+        };
         if config::Config::<C>::read(&app.runtime_path)?.tools.max_parallel_calls!=total_budget
             || tool_execution::resolve::<A>(&app.session_agent_abilities(&sid).await?,&name)?!=settings
             || !app.foreground_authorized(&sid,&run_id,&generation,&name,&args,&pending_id).await?
@@ -383,19 +380,7 @@ impl<
                 {
                     return Ok(false);
                 }
-                let pending = if run["pending"]["id"] == pending_id {
-                    Some(run["pending"].clone())
-                } else {
-                    run["batch"]
-                        .as_array()
-                        .and_then(|items| {
-                            items
-                                .iter()
-                                .find(|item| item["pending"]["id"] == pending_id)
-                        })
-                        .map(|item| item["pending"].clone())
-                };
-                if let Some(pending) = pending {
+                if let Some(pending) = crate::runtime::batch::pending_call(&run, pending_id) {
                     if !app
                         .native
                         .valid(app.store.records(), &run, &pending)

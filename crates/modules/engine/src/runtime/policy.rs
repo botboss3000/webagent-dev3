@@ -187,15 +187,7 @@ impl<
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<Value> {
         let mut run = self.run(rid).await?;
-        let pending = if run["pending"]["id"] == pending_id {
-            run["pending"].clone()
-        } else {
-            run["batch"]
-                .as_array()
-                .and_then(|xs| xs.iter().find(|x| x["pending"]["id"] == pending_id))
-                .map(|v| v["pending"].clone())
-                .unwrap_or(Value::Null)
-        };
+        let pending = crate::runtime::batch::pending_call(&run, pending_id).unwrap_or(Value::Null);
         if cancel.is_cancelled()
             || self.shutoff().await?
             || run["session_id"] != sid

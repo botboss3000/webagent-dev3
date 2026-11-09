@@ -18,6 +18,8 @@ pub(crate) mod core_mode;
 pub(crate) mod core_prompt;
 #[path = "../../../crates/modules/abilities/host/base/recall_adapter.rs"]
 pub(crate) mod core_recall;
+#[path = "../../../crates/modules/abilities/host/base/scripts_adapter.rs"]
+pub(crate) mod core_scripts;
 #[path = "../../../crates/modules/abilities/host/base/session_adapter.rs"]
 pub(crate) mod core_session;
 #[path = "../../../crates/modules/abilities/host/base/skills_adapter.rs"]
@@ -91,6 +93,9 @@ pub fn is_read(name: &str) -> bool {
         || native::webhooks::is_read(name)
         || native::vault::is_read(name)
         || name == "main_notes_read"
+        // Session scripts count as reads: they store only this tree's step lists, and each
+        // step is checked as its own call, so a write step is denied in read-only modes.
+        || webagent_abilities::scripts::TOOLS.contains(&name)
         || crate::modules::is_read(name)
         || matches!(
             name,
@@ -332,6 +337,7 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         schemas.extend(native::schemas(webagent_browser::TOOLS));
         schemas.extend(native::session::schemas());
         schemas.extend(crate::main_chat::schemas());
+        schemas.extend(core_scripts::schemas());
         schemas.extend(core_skills::schemas());
         schemas.extend(native::context_assets::schemas());
         schemas.extend(native::prompt::schemas());

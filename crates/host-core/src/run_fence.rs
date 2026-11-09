@@ -48,10 +48,13 @@ impl StoreCore {
         if let Some(pending_id) = pending_id {
             let single =
                 run["pending"]["id"] == pending_id && run["pending"]["state"] == "executing";
-            let parallel = run["batch"].as_array().is_some_and(|batch| {
-                batch
-                    .iter()
-                    .any(|item| item["pending"]["id"] == pending_id && item["state"] == "executing")
+            // A parallel batch item, or a session script's nested step.
+            let parallel = ["batch", "script_steps"].iter().any(|field| {
+                run[*field].as_array().is_some_and(|items| {
+                    items.iter().any(|item| {
+                        item["pending"]["id"] == pending_id && item["state"] == "executing"
+                    })
+                })
             });
             if !single && !parallel {
                 return Err(anyhow!("Task call is no longer the pending tool dispatch"));

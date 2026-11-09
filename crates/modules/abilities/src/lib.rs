@@ -7,6 +7,7 @@ pub mod controls;
 pub mod drift;
 pub mod package;
 mod ports;
+pub mod scripts;
 pub mod selection;
 pub mod tool_definitions;
 pub mod user_files;

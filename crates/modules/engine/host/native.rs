@@ -286,6 +286,15 @@ impl
                 .await
             } else if crate::mcp::owns(&name) {
                 crate::mcp::execute(&app, &sid, &name, &args, cancel).await
+            } else if tools::core_scripts::owns(&name) {
+                Box::pin(tools::core_scripts::execute(
+                    &app,
+                    native_call,
+                    &name,
+                    &args,
+                    cancel,
+                ))
+                .await
             } else if crate::main_chat::owns(&name) {
                 crate::main_chat::tool(&app, &sid, &run_id, &name, &args).await
             } else if crate::modules::owns_tool(&name) {

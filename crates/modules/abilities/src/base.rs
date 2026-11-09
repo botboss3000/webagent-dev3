@@ -48,6 +48,9 @@ pub const TOOLS: &[&str] = &[
     "request_agent_login",
     "main_notes_read",
     "main_notes_write",
+    "script_save",
+    "script_list",
+    "script_run",
     "request_credential",
     "check_credential",
     "list_vault_keys",
@@ -56,6 +59,9 @@ pub const TOOLS: &[&str] = &[
 ];
 
 pub const SKILL: &str = include_str!("../base/base.skill.md");
+
+/// One skill covers the three session-script tools.
+const SCRIPTS_SKILL: &str = include_str!("../base/tools/session_scripts.skill.md");
 
 /// Usage guidance per tool, served like a tool folder's `tool.skill.md`.
 pub const TOOL_SKILLS: &[(&str, &str)] = &[
@@ -93,6 +99,9 @@ pub const TOOL_SKILLS: &[(&str, &str)] = &[
         "main_notes_write",
         include_str!("../base/tools/main_notes_write.skill.md"),
     ),
+    ("script_save", SCRIPTS_SKILL),
+    ("script_list", SCRIPTS_SKILL),
+    ("script_run", SCRIPTS_SKILL),
     (
         "read_attachment",
         include_str!("../base/tools/read_attachment.skill.md"),
