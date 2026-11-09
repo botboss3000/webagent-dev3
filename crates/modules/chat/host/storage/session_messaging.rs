@@ -195,7 +195,7 @@ impl Store {
         self.cache.lock().unwrap().invalidate(&keys);
         Ok(())
     }
-    /// Stage one parent notice when a run of a session armed for notices ends or waits on an
+    /// Stage one background notice for the parent when a run of a session armed for notices ends or waits on an
     /// approval. It shares the run save transaction, so every committed outcome keeps its notice.
     pub(crate) async fn stage_session_notice(
         &self,
@@ -220,8 +220,8 @@ impl Store {
         else {
             return Ok(());
         };
-        let marker = format!("session_notice:{parent}:{}", notice.event_key);
-        let sent = format!("receipt:session_notice:{}", notice.event_key);
+        let marker = format!("background_notice:{parent}:{}", notice.event_key);
+        let sent = format!("receipt:background_notice:{}", notice.event_key);
         let known: i64 = sqlx::query_scalar("SELECT count(*) FROM docs WHERE key IN (?,?)")
             .bind(&marker)
             .bind(&sent)
@@ -241,7 +241,9 @@ impl Store {
         } else {
             Value::Null
         };
-        let record = json!({"key":marker,"event_key":notice.event_key,"session_id":parent,"child_session_id":sid,"child_title":session["title"],
+        let spawn = session["parent_session_id"] == parent;
+        let record = json!({"key":marker,"event_key":notice.event_key,"session_id":parent,
+   "source":if spawn {"sub_agent"} else {"session"},"child_session_id":sid,"child_title":session["title"],
    "child_agent_id":session["agent_id"],"spawn":session["parent_session_id"]==parent,"status":notice.status,"run_id":notice.run_id,
    "reply":reply,"tool":if notice.status=="waiting_approval"{run["pending"]["name"].clone()}else{Value::Null},"reason":end_reason(run),"created_at":crate::now()});
         self.write_document(tx, &marker, &record).await

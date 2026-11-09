@@ -219,14 +219,14 @@ impl<
             .unwrap_or("v3_build_work")
             .to_owned();
         let call_id = pending["call_id"].as_str().unwrap_or("").to_owned();
-        tools::retry_guard::mark_running(run, &name, &args, &call_id, &A::retry(&name));
+        tools::retry_guard::mark_running(run, &name, &args, &call_id, &task_id, &A::retry(&name));
         let job = pending["external_job"]["job_id"]
             .as_str()
             .unwrap_or("unknown");
         let result = json!({"status":"running","task_id":task_id,"output":format!(
             "Build job {job} is still running as background task {task_id}: the user sent a \
-             message, so you can answer it now. The build result is delivered to you \
-             automatically when the job ends. Do not submit this build again.")});
+             message, so you can answer it now. You get a background notice when the job \
+             ends or a stage runs slow or stalls. Do not submit this build again.")});
         Self::append_tool(run, &result)?;
         run["status"] = json!("queued");
         run["error"] = Value::Null;
@@ -240,7 +240,8 @@ impl<
             .await?;
         Ok(true)
     }
-    /// Complete detached build tasks whose broker job has ended.
+    /// Follow background build tasks: keep the Broker chip current, report a slow or stalled
+    /// stage, and report the job's end as a background notice that wakes the agent.
     async fn follow_detached_builds(app: &Self) -> Result<()> {
         for mut task in app.store.background_scan(None).await? {
             if task["detached"] != true
@@ -249,21 +250,74 @@ impl<
             {
                 continue;
             }
-            let follow = json!({"id":task["run_id"],"session_id":task["session_id"],
+            let sid = task["session_id"].as_str().unwrap_or_default().to_owned();
+            let follow = json!({"id":task["run_id"],"session_id":sid,
                 "pending":task["external_pending"]});
             let poll =
                 tokio::time::timeout(Duration::from_secs(3), Self::build_result(app, &follow))
                     .await;
-            let Ok(Ok(BuildPoll::Done(result))) = poll else {
-                continue;
-            };
-            let revision = task["revision"].as_u64().unwrap_or(0);
-            task["result"] = result;
-            task["status"] = json!("completed");
-            task["completed_at"] = json!(now());
-            task["lease_until"] = json!(0);
-            app.store.background_cas(&task, Some(revision)).await?;
-            crate::wake::notify(&app.control_dir).await;
+            let now = now();
+            match poll {
+                Ok(Ok(BuildPoll::Waiting(Some(progress)))) => {
+                    let Some(job_id) = progress["job_id"].as_str().map(str::to_owned) else {
+                        continue;
+                    };
+                    let (alert, job_task) =
+                        build_tasks::update(app.store.records(), &sid, |record| {
+                            let job = job_entry(record, &follow, &job_id, now);
+                            build_tasks::broker_answered(job);
+                            build_tasks::snapshot(job, &progress, now);
+                            let alert = build_tasks::alert(job, &progress);
+                            let job_task = build_tasks::task_of(record, &job_id);
+                            build_tasks::trim(record);
+                            (alert, job_task)
+                        })
+                        .await?;
+                    if let Some((reason, text)) = alert {
+                        let reason = reason.as_str();
+                        app.stage_background_notice(&sid, &format!("build:{job_id}:{reason}:{now}"),
+                            json!({"source":"build","title":job_task.unwrap_or_else(|| job_id.clone()),
+                            "status":reason,"job_id":job_id,"run_id":task["run_id"],"reply":text}))
+                            .await?;
+                    }
+                }
+                Ok(Ok(BuildPoll::Done(result))) => {
+                    let output = &result["output"];
+                    let job_id = output["job_id"].as_str().unwrap_or("unknown").to_owned();
+                    let job_task = build_tasks::update(app.store.records(), &sid, |record| {
+                        let job = job_entry(record, &follow, &job_id, now);
+                        build_tasks::broker_answered(job);
+                        if output["stages"].is_object() {
+                            build_tasks::snapshot(job, &output["stages"], now);
+                        }
+                        job["status"] = output["status"].clone();
+                        let job_task = build_tasks::task_of(record, &job_id);
+                        build_tasks::trim(record);
+                        job_task
+                    })
+                    .await?;
+                    let reply = build_tasks::ended_line(output)
+                        .unwrap_or_else(|| result.to_string().chars().take(8000).collect());
+                    let revision = task["revision"].as_u64().unwrap_or(0);
+                    task["result"] = result.clone();
+                    task["status"] = json!("completed");
+                    task["completed_at"] = json!(now);
+                    task["lease_until"] = json!(0);
+                    task["delivery_run_id"] = json!("background_notice");
+                    if !app.store.background_cas(&task, Some(revision)).await? {
+                        continue;
+                    }
+                    app.store
+                        .background_delivered(&task, "background_notice")
+                        .await?;
+                    app.stage_background_notice(&sid, &format!("build:{job_id}:ended"),
+                        json!({"source":"build","title":job_task.unwrap_or_else(|| job_id.clone()),
+                        "status":output["status"].as_str().unwrap_or("ended"),"job_id":job_id,
+                        "run_id":task["run_id"],"task_id":task["id"],"reply":reply,"result":result}))
+                        .await?;
+                }
+                _ => {}
+            }
         }
         Ok(())
     }

@@ -494,7 +494,7 @@ impl<
         task_id: &str,
     ) -> Result<std::ops::ControlFlow<()>> {
         let call_id = run["pending"]["call_id"].as_str().unwrap_or("").to_owned();
-        tools::retry_guard::mark_running(&mut run, name, args, &call_id, &A::retry(name));
+        tools::retry_guard::mark_running(&mut run, name, args, &call_id, task_id, &A::retry(name));
         let result = json!({"status":"running","task_id":task_id,"output":format!(
             "Still running as background task {task_id}: the user sent a message, so this \
              call continues in the background while you answer it. Its result is delivered \
@@ -1088,6 +1088,16 @@ impl<
             }
             let retry = A::retry(&name);
             let call_id = run["pending"]["call_id"].as_str().unwrap_or("").to_owned();
+            // A background call this run waits on has ended: record its outcome first.
+            if let Some(task_id) = tools::retry_guard::running_task(&run, &name, &args) {
+                if let Some(task) = app.store.background_get(&task_id).await? {
+                    if task["status"] != "running" {
+                        let prior = task["call_id"].as_str().unwrap_or("").to_owned();
+                        let outcome = (task["status"] == "completed").then_some(&task["result"]);
+                        tools::retry_guard::record(&mut run, &name, &args, &prior, outcome, &retry);
+                    }
+                }
+            }
             // A call detached from an earlier run is still running: hold its repeat here too.
             let same = tools::retry_guard::key(&name, &args);
             for task in app.store.background_scan(Some(sid)).await? {
@@ -1096,7 +1106,8 @@ impl<
                     && tools::retry_guard::key(&name, &task["arguments"]) == same
                 {
                     let prior = task["call_id"].as_str().unwrap_or("");
-                    tools::retry_guard::mark_running(&mut run, &name, &args, prior, &retry);
+                    let id = task["id"].as_str().unwrap_or("");
+                    tools::retry_guard::mark_running(&mut run, &name, &args, prior, id, &retry);
                 }
             }
             match tools::retry_guard::admit(&mut run, &name, &args, &call_id, &retry, None) {
@@ -1331,16 +1342,46 @@ impl<
                     && value["status"] == "success"
                     && super::recovery::awaits_broker_job(&args["action"], &value["output"])
                 {
-                    // The broker owns the job across our own container replacement.
-                    // Keep this model call pending; recovery reads its receipt and
-                    // returns one result under the original call_id.
+                    // The broker owns the job across our own container replacement. It runs
+                    // as a background task: the agent is free, and recovery follows the job
+                    // and reports its end, or a slow or stalled stage, as a background notice.
                     run["pending"]["external_job"] = json!({"kind":"v3_build",
                             "task_id":args["task_id"],"expected_inputs_sha256":args["expected_inputs_sha256"],
                             "job_id":value["output"]["job_id"],"submitted_at":now()});
-                    run["status"] = json!("waiting_external");
-                    run["error"] = Value::Null;
                     super::recovery::note_build_job(app.store.records(), &run, &value["output"])
                         .await;
+                    let external = run["pending"].clone();
+                    if let Some(task_id) =
+                        app.background_detach_record(&run, &args, external).await?
+                    {
+                        let call_id = run["pending"]["call_id"].as_str().unwrap_or("").to_owned();
+                        tools::retry_guard::mark_running(
+                            &mut run,
+                            &name,
+                            &args,
+                            &call_id,
+                            &task_id,
+                            &A::retry(&name),
+                        );
+                        let job = value["output"]["job_id"].as_str().unwrap_or("unknown");
+                        let result = json!({"status":"running","task_id":task_id,"job_id":job,"output":format!(
+                            "Broker job {job} is running as background task {task_id}. You get a \
+                             background notice when it ends, and if a stage runs slow or stalls. End \
+                             your turn now: do not poll or wait. Use build_work status only if the \
+                             user asks how it is going, and build_work cancel to stop it.")});
+                        Self::append_tool(&mut run, &result)?;
+                        app.store
+                            .save_run_observed(
+                                &mut run,
+                                "tool_result",
+                                &json!({"run_id":id,"name":name,"result":result}),
+                            )
+                            .await?;
+                        return Ok(std::ops::ControlFlow::Continue(()));
+                    }
+                    // No task capacity: wait on the job as before.
+                    run["status"] = json!("waiting_external");
+                    run["error"] = Value::Null;
                     app.save(&mut run).await?;
                     return Ok(std::ops::ControlFlow::Break(()));
                 }

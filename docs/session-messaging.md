@@ -18,11 +18,17 @@ Session scope (`agent_management.session_scope`): `started` reaches the sender's
 sub agents and the sessions it started; `owned` adds every owner-private session.
 The Default Agent defaults to `owned` and to delegation allowed.
 
-Notices: when a run of a sub agent (or a start_session session with notify) ends
-or waits for an approval, the run save stages `session_notice:<parent>:<event>`
-in the same transaction. The follow-up scheduler delivers all staged notices for a
-parent as one steer message (`platform_notice`), committing
-`receipt:session_notice:<event>` with it so a retry never repeats one. A parent
+Background notices: when a run of a sub agent (or a start_session session with
+notify) ends or waits for an approval, the run save stages
+`background_notice:<parent>:<event>` (source `sub_agent` or `session`) in the same
+transaction. Broker builds (source `build`: job ended, stage slow or stalled) and
+tool calls that kept running in the background after a user message (source
+`tool`) stage the same records from the engine. The follow-up scheduler delivers
+all staged notices for a conversation as one steer message (`platform_notice`,
+framed as a background report, never user instructions), committing
+`receipt:background_notice:<event>` with it so a retry never repeats one. The message
+wakes an idle agent and joins a running one at its next step without cutting off
+its work. A parent
 that is archived or deleted drops its notices. Archiving a session archives its
 sub agents; deleting it deletes them and cancels automations delivering into it.
 

@@ -432,10 +432,6 @@ impl<
                                                 );
                                             }
                                             super::run::pair_unresolved_calls(&mut input);
-                                            // A continuation's own new input follows its history.
-                                            if let Some(tail) = run["hydration_tail"].as_array() {
-                                                input.extend(tail.iter().cloned());
-                                            }
                                             run["input"] = json!(input);
                                             run["context_hydration_pending"] = json!(false);
                                         }

@@ -252,9 +252,16 @@ pub fn record(
         json!({"call_id":call_id,"state":state,"tool":name});
 }
 
-/// Record a call that is still running in the background (detached for a user message),
-/// so an identical call is held with "wait for its result" until its result is recorded.
-pub fn mark_running(run: &mut Value, name: &str, args: &Value, call_id: &str, retry: &Retry) {
+/// Record a call that is still running as background task `task_id`, so an identical call
+/// is held with "wait for its result" until [`settle_running`] records its outcome.
+pub fn mark_running(
+    run: &mut Value,
+    name: &str,
+    args: &Value,
+    call_id: &str,
+    task_id: &str,
+    retry: &Retry,
+) {
     if matches!(retry.risk, Risk::None | Risk::Exempt) {
         return;
     }
@@ -262,7 +269,16 @@ pub fn mark_running(run: &mut Value, name: &str, args: &Value, call_id: &str, re
         run["retry_guard"] = json!({"actions":{},"decisions":[]});
     }
     run["retry_guard"]["actions"][key(name, args)] =
-        json!({"call_id":call_id,"state":"running","tool":name});
+        json!({"call_id":call_id,"state":"running","tool":name,"task_id":task_id});
+}
+
+/// The background task a running entry for this call waits on, if any.
+#[must_use]
+pub fn running_task(run: &Value, name: &str, args: &Value) -> Option<String> {
+    let entry = &run["retry_guard"]["actions"][key(name, args)];
+    (entry["state"] == "running")
+        .then(|| entry["task_id"].as_str().map(str::to_owned))
+        .flatten()
 }
 
 /// The agent-facing result for a write whose outcome is unknown.
@@ -349,7 +365,7 @@ mod tests {
     fn detached_call_holds_repeats_until_its_result_is_recorded() {
         let mut run = json!({});
         let args = json!({"command":"cargo test"});
-        mark_running(&mut run, "shell", &args, "c1", &high());
+        mark_running(&mut run, "shell", &args, "c1", "bg_c1", &high());
         let Admission::Held(result) = admit(&mut run, "shell", &args, "c2", &high(), None) else {
             panic!("expected a held repeat while the detached call runs");
         };

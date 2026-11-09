@@ -90,9 +90,11 @@ impl<
             .into_iter()
             .flatten()
             .filter(|e| {
+                // Background notices join at the next step without cutting off work.
                 e["choice"] == "steer"
                     && e["status"] == "pending"
                     && e["review_status"] == "acceptable"
+                    && e["platform_notice"].is_null()
             })
             .collect();
         Ok((!waiting.is_empty()).then(|| waiting.iter().any(|e| e["send_now"] == true)))
