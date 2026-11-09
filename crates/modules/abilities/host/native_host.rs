@@ -107,19 +107,6 @@ impl NativeHost for Host<'_> {
                 .map_err(|e| anyhow!(e.1))
         })
     }
-    fn ui_admin<'a>(
-        &'a self,
-        sid: &'a str,
-        run_id: &'a str,
-        tool: &'a str,
-        operation: &'a str,
-        args: &'a Value,
-        cancel: CancellationToken,
-    ) -> Pending<'a, Result<Value>> {
-        Box::pin(tools::administrator::ui_host(
-            self.0, sid, run_id, tool, operation, args, cancel,
-        ))
-    }
     fn upload<'a>(&'a self, sid: &'a str, body: Value) -> Pending<'a, Result<Value>> {
         Box::pin(async move {
             let upload = api::uploads::upload(

@@ -146,16 +146,30 @@ pub(crate) fn prompt_slot_error(error: anyhow::Error) -> ApiError {
     }
 }
 pub(crate) async fn execute_prompt_slot(app: &App, name: &str, args: &Value) -> Result<Value> {
-    execute_prompt_slot_receipted(app,name,args,None).await
+    execute_prompt_slot_receipted(app, name, args, None).await
 }
-pub(crate) async fn execute_prompt_slot_receipted(app:&App,name:&str,args:&Value,pending:Option<&str>)->Result<Value> {
-    let receipt_key=pending.map(|id|format!("agent:{}:action_prompt:{id}",app.store.current_agent_id()));
-    let hash=digest(args);
-    let receipt=receipt_key.as_deref().map(|key|(key,hash.as_str()));
+pub(crate) async fn execute_prompt_slot_receipted(
+    app: &App,
+    name: &str,
+    args: &Value,
+    pending: Option<&str>,
+) -> Result<Value> {
+    let receipt_key =
+        pending.map(|id| format!("agent:{}:action_prompt:{id}", app.store.current_agent_id()));
+    let hash = digest(args);
+    let receipt = receipt_key.as_deref().map(|key| (key, hash.as_str()));
     // A tool grant controls use; editing agent configuration also requires tenant authority.
-    if name=="prompt_slot_write" && !app.store.agent_authority(crate::shared_chat::actor(app),app.store.current_agent_id()).await?
-        ["can_manage"].as_bool().unwrap_or(false) {
-        return Ok(json!({"status":"denied","output":"Agent administration required to edit prompts"}));
+    if name == "prompt_slot_write"
+        && !app
+            .store
+            .agent_authority(crate::shared_chat::actor(app), app.store.current_agent_id())
+            .await?["can_manage"]
+            .as_bool()
+            .unwrap_or(false)
+    {
+        return Ok(
+            json!({"status":"denied","output":"Agent administration required to edit prompts"}),
+        );
     }
     if name == "prompt_slot_read" {
         let Ok(query) = serde_json::from_value::<PromptReadArgs>(args.clone()) else {
@@ -192,7 +206,11 @@ pub(crate) async fn execute_prompt_slot_receipted(app:&App,name:&str,args:&Value
                 .map(|slot| json!({"slot":slot}))
         } else {
             app.store
-                .delete_prompt_slot_receipted(&command.slot_name, command.expected_revision,receipt)
+                .delete_prompt_slot_receipted(
+                    &command.slot_name,
+                    command.expected_revision,
+                    receipt,
+                )
                 .await
                 .map(|deleted| json!({"deleted":deleted,"slot_name":command.slot_name}))
         };
@@ -213,17 +231,20 @@ pub(crate) async fn execute_prompt_slot_receipted(app:&App,name:&str,args:&Value
     }
 }
 pub(crate) async fn prompt_slots_api(State(app): State<App>, Path(id): Path<String>) -> Api {
-    let app=admin_agent_view(&app,&id).await?;
+    let app = admin_agent_view(&app, &id).await?;
     Ok(Json(json!({"slots":app.store.list_prompt_slots().await?})))
 }
-pub(crate) async fn prompt_slot_api(State(app): State<App>, Path((id, name)): Path<(String, String)>) -> Api {
+pub(crate) async fn prompt_slot_api(
+    State(app): State<App>,
+    Path((id, name)): Path<(String, String)>,
+) -> Api {
     if !valid_slot_name(&name) {
         return Err(ApiError(
             StatusCode::NOT_FOUND,
             "Prompt slot not found".into(),
         ));
     }
-    let app=admin_agent_view(&app,&id).await?;
+    let app = admin_agent_view(&app, &id).await?;
     let slot = app
         .store
         .get_prompt_slot(&name)
@@ -236,7 +257,7 @@ pub(crate) async fn prompt_slot_put_api(
     Path((id, name)): Path<(String, String)>,
     Json(body): Json<PromptSlotPutBody>,
 ) -> Api {
-    let app=admin_agent_view(&app,&id).await?;
+    let app = admin_agent_view(&app, &id).await?;
     let command = PromptWriteArgs {
         action: "put".into(),
         slot_name: name,
@@ -268,7 +289,7 @@ pub(crate) async fn prompt_slot_delete_api(
     Path((id, name)): Path<(String, String)>,
     Json(body): Json<PromptSlotDeleteBody>,
 ) -> Api {
-    let app=admin_agent_view(&app,&id).await?;
+    let app = admin_agent_view(&app, &id).await?;
     let command = PromptWriteArgs {
         action: "delete".into(),
         slot_name: name,
@@ -365,7 +386,9 @@ pub(crate) async fn session_ability_set(
         }
     };
     if unchanged {
-        if desired=="suppressed" {phase3_api::quiesce_session_resources(&app,&id).await?;}
+        if desired == "suppressed" {
+            phase3_api::stop_session_runs(&app, &id).await?;
+        }
         return Ok(Json(state));
     }
     state["active"]
@@ -398,7 +421,7 @@ pub(crate) async fn session_ability_set(
     app.store
         .atomic_docs_event(docs, &id, "session_abilities_changed", &state)
         .await?;
-    phase3_api::quiesce_session_resources(&app,&id).await?;
+    phase3_api::stop_session_runs(&app, &id).await?;
     Ok(Json(state))
 }
 pub(crate) async fn session_abilities(State(app): State<App>, Path(id): Path<String>) -> Api {
@@ -408,12 +431,28 @@ pub(crate) async fn session_abilities(State(app): State<App>, Path(id): Path<Str
     let (policy, _) = effective_policy(&app, &id).await?;
     let visibility = session_agent_abilities(&app, &id).await?;
     let state = session_ability_state(&app, &id).await?;
-    let mode=session_mode(&app,&id).await?;
-    let agent_id=session_agent_id(&app,&id).await?;
-    let access=crate::shared_chat::live_access(&app.store,crate::shared_chat::actor(&app),&id,&agent_id).await?;
-    let mut abilities=app.abilities.catalog_with(&policy,&visibility,&state);
-    abilities.retain_mut(|entry|filter_ability_entry(&app,&access,entry,
-        &policy,&visibility,&state,&json!([]),mode["mode"]=="read_only"));
+    let mode = session_mode(&app, &id).await?;
+    let agent_id = session_agent_id(&app, &id).await?;
+    let access = crate::shared_chat::live_access(
+        &app.store,
+        crate::shared_chat::actor(&app),
+        &id,
+        &agent_id,
+    )
+    .await?;
+    let mut abilities = app.abilities.catalog_with(&policy, &visibility, &state);
+    abilities.retain_mut(|entry| {
+        filter_ability_entry(
+            &app,
+            &access,
+            entry,
+            &policy,
+            &visibility,
+            &state,
+            &json!([]),
+            mode["mode"] == "read_only",
+        )
+    });
     Ok(Json(json!({"mode":mode,
         "catalog_version":app.abilities.version(),
         "visibility_revision":visibility["revision"],"state":state,
@@ -452,38 +491,79 @@ pub(crate) async fn source_review(State(app): State<App>, Path(id): Path<String>
 }
 
 /// Read only caller-owned task milestones; no arguments, results or claim credentials cross this API.
-pub(crate) async fn background_task_metadata_api(State(app):State<App>,Path((sid,id)):Path<(String,String)>)->Api {
- if id.len()!=67 || !id.starts_with("bg_") || !id[3..].bytes().all(|b|b.is_ascii_hexdigit()){return Err(bad("Invalid task ID"));}
- let missing=||ApiError(StatusCode::NOT_FOUND,"Task not found".into());
- let task=app.store.background_get(&id).await?.ok_or_else(missing)?;
- if task["session_id"]!=sid || task["user_id"]!=app.store.current_user_id(){return Err(missing());}
- use webagent_background_contracts::{TaskSummary,State};
- let state=match task["status"].as_str(){Some("queued")=>State::Queued,Some("running")=>State::Running,Some("completed")=>State::Completed,Some("cancelled")=>State::Cancelled,Some("failed")=>State::Failed,_=>return Err(missing())};
- let mut summary=serde_json::to_value(TaskSummary{version:1,task_id:id,session_id:sid,
-  run_id:task["run_id"].as_str().ok_or_else(missing)?.into(),status:state,
-  created_at_ms:task["created_at_ms"].as_u64(),claimed_at_ms:task["claimed_at_ms"].as_u64(),completed_at_ms:task["completed_at_ms"].as_u64()}).map_err(anyhow::Error::from)?;
- if let Some(value)=task.get("execution_metadata") {
-  let metadata:webagent_context_contracts::execution::Metadata=serde_json::from_value(value.clone()).map_err(anyhow::Error::from)?;metadata.validate()?;
-  summary["execution_metadata"]=value.clone();
- }
- Ok(Json(summary))
+pub(crate) async fn background_task_metadata_api(
+    State(app): State<App>,
+    Path((sid, id)): Path<(String, String)>,
+) -> Api {
+    if id.len() != 67 || !id.starts_with("bg_") || !id[3..].bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(bad("Invalid task ID"));
+    }
+    let missing = || ApiError(StatusCode::NOT_FOUND, "Task not found".into());
+    let task = app.store.background_get(&id).await?.ok_or_else(missing)?;
+    if task["session_id"] != sid || task["user_id"] != app.store.current_user_id() {
+        return Err(missing());
+    }
+    use webagent_background_contracts::{State, TaskSummary};
+    let state = match task["status"].as_str() {
+        Some("queued") => State::Queued,
+        Some("running") => State::Running,
+        Some("completed") => State::Completed,
+        Some("cancelled") => State::Cancelled,
+        Some("failed") => State::Failed,
+        _ => return Err(missing()),
+    };
+    let mut summary = serde_json::to_value(TaskSummary {
+        version: 1,
+        task_id: id,
+        session_id: sid,
+        run_id: task["run_id"].as_str().ok_or_else(missing)?.into(),
+        status: state,
+        created_at_ms: task["created_at_ms"].as_u64(),
+        claimed_at_ms: task["claimed_at_ms"].as_u64(),
+        completed_at_ms: task["completed_at_ms"].as_u64(),
+    })
+    .map_err(anyhow::Error::from)?;
+    if let Some(value) = task.get("execution_metadata") {
+        let metadata: webagent_context_contracts::execution::Metadata =
+            serde_json::from_value(value.clone()).map_err(anyhow::Error::from)?;
+        metadata.validate()?;
+        summary["execution_metadata"] = value.clone();
+    }
+    Ok(Json(summary))
 }
 
-#[cfg(test)]mod background_metadata_tests {
- use super::*;
- /// Milestone reads reject another session and never return private task fields.
- #[tokio::test]async fn background_dispatch_metadata_is_content_free_and_session_fenced(){
-  let (_root,app)=crate::runtime_tests::fixture().await;
-  let sid=crate::runtime_tests::conversation(&app).await;let id=format!("bg_{}", "a".repeat(64));
-  let task=json!({"id":id,"session_id":sid,"user_id":app.store.current_user_id(),"run_id":"run",
+#[cfg(test)]
+mod background_metadata_tests {
+    use super::*;
+    /// Milestone reads reject another session and never return private task fields.
+    #[tokio::test]
+    async fn background_dispatch_metadata_is_content_free_and_session_fenced() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let sid = crate::runtime_tests::conversation(&app).await;
+        let id = format!("bg_{}", "a".repeat(64));
+        let task = json!({"id":id,"session_id":sid,"user_id":app.store.current_user_id(),"run_id":"run",
    "status":"completed","revision":0,"created_at_ms":1,"claimed_at_ms":2,"completed_at_ms":3,
    "arguments":{"private":"fixture-content"},"result":"fixture-content","claim_id":"fixture-claim",
    "execution_metadata":{"version":1,"rpc_calls":[{"peer":"tool-worker","id":"routing"}]}});
-  assert!(app.store.background_cas(&task,None).await.unwrap());
-  let value=background_task_metadata_api(State(app.clone()),Path((sid.clone(),id.clone()))).await.unwrap().0;
-  assert_eq!(value["completed_at_ms"],3);assert_eq!(value.as_object().unwrap().len(),9);
-  assert_eq!(value["execution_metadata"],task["execution_metadata"]);
-  for key in ["arguments","result","claim_id","authorization"]{assert!(value.get(key).is_none());}
-  assert_eq!(background_task_metadata_api(State(app),Path(("other".into(),id))).await.err().unwrap().0,StatusCode::NOT_FOUND);
- }
+        assert!(app.store.background_cas(&task, None).await.unwrap());
+        let value =
+            background_task_metadata_api(State(app.clone()), Path((sid.clone(), id.clone())))
+                .await
+                .unwrap()
+                .0;
+        assert_eq!(value["completed_at_ms"], 3);
+        assert_eq!(value.as_object().unwrap().len(), 9);
+        assert_eq!(value["execution_metadata"], task["execution_metadata"]);
+        for key in ["arguments", "result", "claim_id", "authorization"] {
+            assert!(value.get(key).is_none());
+        }
+        assert_eq!(
+            background_task_metadata_api(State(app), Path(("other".into(), id)))
+                .await
+                .err()
+                .unwrap()
+                .0,
+            StatusCode::NOT_FOUND
+        );
+    }
 }

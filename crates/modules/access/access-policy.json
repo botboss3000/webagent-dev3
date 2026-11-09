@@ -126,7 +126,6 @@
         "remote_tunnel": "auto",
         "reply_buttons": "deny",
         "terminal_control": "deny",
-        "ui_admin": "deny",
         "user_files": "auto",
         "v3_build": "auto",
         "v3_workspace": "auto",

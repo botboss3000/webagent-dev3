@@ -1,4 +1,12 @@
-# UI Admin — Presentation investigation and interaction guidance
+---
+id: ui_controls
+title: UI controls and presentation
+when_to_use: Use before creating or changing WebAgent UI buttons or other controls (tap highlight, touch haptics, border states), and when investigating a UI element's presentation or layout.
+default_mode: discoverable
+minimum_access: registered
+---
+
+# UI controls and presentation
 
 Read this for questions about WebAgent UI presentation and before creating or
 changing UI controls. The interaction defaults below apply
@@ -6,14 +14,8 @@ across the v3 interface: text and icon buttons, tabs, switches, menu actions,
 button-like links, and actionable rows, including panel, mobile, widget, and
 portaled controls. Preserve an explicit user-requested exception.
 
-This is frontend guidance, not execution authority. Native V3 UI source aliases
-read and edit frontend text below ui/ through the protected broker, retaining
-installation administrator authority, live policy and legacy source ceilings.
-Read the selected snapshot first. Existing drafts require broker_id and the latest
-expected_inputs_sha256. patch_source uses a checked UI-only unified diff;
-delete_source requires a full deletion diff for exactly its named UI file.
-No direct live checkout writes, backend edits or arbitrary execution are supplied
-by these aliases. Publication uses the protected broker release workflow.
+This is frontend guidance, not execution authority. Edit and publish UI source
+with this ability's tools through the protected broker release workflow.
 For changes, read the checkout instructions and relevant implementation. Before
 a browser journey, resolve its registered route. Loading or reading this document
 grants no tool permissions.

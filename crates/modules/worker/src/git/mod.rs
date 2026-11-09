@@ -377,7 +377,7 @@ async fn command_os(root: &Path, repo: &Path, argv: &[&OsStr], run: Run<'_>) -> 
     }
     let mut child = git.spawn().map_err(|_| generic())?;
     let group = child.id().map_or(0, |pid| pid as i32);
-    // A call dropped mid-run (caller hung up, workspace quiesced) ends Git's session, as the
+    // A call dropped mid-run (caller hung up, workspace runs stopped) ends Git's session, as the
     // adapter's cancellation did.
     let mut armed = Armed(group);
     let mut stdout = child.stdout.take().ok_or_else(generic)?;

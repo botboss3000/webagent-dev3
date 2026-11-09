@@ -34,7 +34,7 @@ use crate::{
 };
 
 /// Drop this caller's dictation for `sid`; a result still in flight can no longer land in it.
-pub(crate) async fn quiesce(app: &App, sid: &str) {
+pub(crate) async fn drop_dictation(app: &App, sid: &str) {
     dictations().lock().await.remove(&dictation_key(app, sid));
 }
 /// One caller's dictation in one conversation; neither id can be read as part of the other.

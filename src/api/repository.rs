@@ -269,7 +269,7 @@ pub(crate) async fn put(
         .bind(store.seal(&json!({"actor_id":caller,"connection_id":id,"revision":next.revision,"revoked":body.revoked}))?)
         .execute(&mut *tx).await.map_err(anyhow::Error::from)?;
     tx.commit().await.map_err(anyhow::Error::from)?;
-    crate::phase3_api::quiesce_agent(&app, &agent, "this agent's repository connections changed")
+    crate::phase3_api::stop_agent_runs(&app, &agent, "this agent's repository connections changed")
         .await?;
     Ok(Json(projection(&app, &agent, &next, &caller).await?))
 }

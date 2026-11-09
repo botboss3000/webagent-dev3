@@ -58,7 +58,7 @@ pub trait Storage: RecordCodec {
         value: &'a Value,
     ) -> impl Future<Output = Result<()>> + Send + 'a;
 }
-/// Model assignment and Engine quiescence stay with their production owners.
+/// Model assignment and Engine run stops stay with their production owners.
 pub trait Effects: Sync {
     fn seed_model<'a>(
         &'a self,
@@ -69,8 +69,8 @@ pub trait Effects: Sync {
         &'a self,
         status: &'a Value,
     ) -> impl Future<Output = Result<()>> + Send + 'a;
-    fn quiesce<'a>(&'a self, agent: &'a str) -> impl Future<Output = Result<()>> + Send + 'a;
-    /// Erase every session, catalog reference, registration and file of a quiesced agent.
+    fn stop_runs<'a>(&'a self, agent: &'a str) -> impl Future<Output = Result<()>> + Send + 'a;
+    /// Erase every session, catalog reference, registration and file of a stopped agent.
     fn erase<'a>(&'a self, agent: &'a str) -> impl Future<Output = Result<()>> + Send + 'a;
 }
 
@@ -188,7 +188,7 @@ impl<S: Storage, A: Access, E: Effects> Service<'_, S, A, E> {
             .set_status(expected, status)
             .await?;
         self.effects.status_event(&value).await?;
-        self.effects.quiesce(agent).await?;
+        self.effects.stop_runs(agent).await?;
         Ok(value)
     }
     /// Remove takes an agent off the caller's list: the owner archives it, anyone else leaves it.
@@ -228,7 +228,7 @@ impl<S: Storage, A: Access, E: Effects> Service<'_, S, A, E> {
         let follow_up = async {
             self.effects.status_event(&value).await?;
             if archived {
-                self.effects.quiesce(agent).await?;
+                self.effects.stop_runs(agent).await?;
             }
             anyhow::Ok(())
         }
@@ -258,7 +258,7 @@ impl<S: Storage, A: Access, E: Effects> Service<'_, S, A, E> {
         if !crate::archived(&status) {
             bail!("Archive the agent before deleting it");
         }
-        self.effects.quiesce(agent).await?;
+        self.effects.stop_runs(agent).await?;
         self.effects.erase(agent).await?;
         let deleted =
             json!({"agent_id":agent,"status":"deleted","revision":expected.saturating_add(1)});

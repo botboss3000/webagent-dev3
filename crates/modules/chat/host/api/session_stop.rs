@@ -141,7 +141,7 @@ pub(crate) async fn stop_session_work(
         }
     }
     crate::modules::pause_session_automations(app, sid).await?;
-    crate::phase3_api::quiesce_session_resources(app, sid).await?;
+    crate::phase3_api::stop_session_runs(app, sid).await?;
     // `session_id` lets permanent deletion remove this record with the conversation.
     let record =
         json!({"session_id":sid,"processes":processes,"stopped_at":now(),"delivered":false});

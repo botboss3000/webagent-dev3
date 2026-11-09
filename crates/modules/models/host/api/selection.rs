@@ -225,7 +225,7 @@ async fn member_set(
             crate::conflict("Membership update rejected: check authority, account and revision")
         })?;
     // MEMBERSHIP-REVOCATION: stop active work now, preserving uncertain effects for review.
-    crate::phase3_api::quiesce_user(
+    crate::phase3_api::stop_user_runs(
         &app,
         &body.user_id,
         Some(&id),

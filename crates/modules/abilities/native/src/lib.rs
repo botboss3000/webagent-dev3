@@ -38,7 +38,6 @@ pub mod session;
 pub mod task;
 pub mod text_search;
 pub mod tool_search;
-pub mod ui_admin;
 pub mod user_files;
 pub mod utilities;
 pub mod vault;
@@ -109,16 +108,6 @@ pub trait NativeHost: Sync {
     ) -> Pending<'a, Result<Value>>;
     /// The attachment limits of session `sid`'s agent.
     fn attachment_limits<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<AttachmentLimits>>;
-    /// Forward an authorized UI Admin `operation` for `tool` to the Administration host.
-    fn ui_admin<'a>(
-        &'a self,
-        sid: &'a str,
-        run_id: &'a str,
-        tool: &'a str,
-        operation: &'a str,
-        args: &'a Value,
-        cancel: CancellationToken,
-    ) -> Pending<'a, Result<Value>>;
     /// Attach a file to session `sid` as the actor's upload; `body` is an upload request
     /// (`client_upload_id`, `name`, `media_type`, `data`). Returns the upload record.
     fn upload<'a>(&'a self, sid: &'a str, body: Value) -> Pending<'a, Result<Value>>;

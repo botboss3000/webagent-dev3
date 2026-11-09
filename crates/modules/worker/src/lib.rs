@@ -157,7 +157,7 @@ impl Persistent {
     }
 }
 
-/// The workspace folder a control request names, when it exists. Quiesce and resource
+/// The workspace folder a control request names, when it exists. Run stop and resource
 /// counts work while execution is disabled and never create a workspace.
 fn existing_workspace(roots: &files::Roots, request: &Value) -> Option<PathBuf> {
     let session = request["workspace"].as_str()?;
@@ -169,7 +169,7 @@ fn existing_workspace(roots: &files::Roots, request: &Value) -> Option<PathBuf> 
     path.is_dir().then_some(path)
 }
 
-/// The commands running in each workspace, so a quiesce can stop them.
+/// The commands running in each workspace, so a run stop can end them.
 /// A running command's workspace and its stop signal.
 type Running = (String, Arc<Notify>);
 
@@ -279,7 +279,7 @@ async fn handle(
         let result = tokio::select! {
             result = git_call(&config.files, parsed) => result,
             () = hang_up(&mut client_read) => return Ok(()),
-            // A call its workspace's quiesce cancelled.
+            // A call its workspace's run stop cancelled.
             () = stop.notified() => json!({"status":"failed","output":"Session not found"}),
         };
         return write_reply(&mut client_write, &parsed["id"], result).await;
@@ -304,11 +304,11 @@ async fn handle(
         let workspace = parsed["workspace"].as_str().unwrap_or_default();
         let (id, stop) = active.start(workspace);
         let _registered = Registered { active, id };
-        // Dropping the call (hang-up or quiesce) ends the command's session.
+        // Dropping the call (hang-up or run stop) ends the command's session.
         let result = tokio::select! {
             result = commands::call(&config.files, &config.runner, parsed) => result,
             () = hang_up(&mut client_read) => return Ok(()),
-            // A call its workspace's quiesce cancelled.
+            // A call its workspace's run stop cancelled.
             () = stop.notified() => json!({"status":"failed","output":"Session not found"}),
         };
         return write_reply(&mut client_write, &parsed["id"], result).await;
@@ -415,7 +415,7 @@ async fn handle(
         let result = protocol(&config.files, output).await;
         return write_reply(&mut client_write, &parsed["id"], result).await;
     }
-    if let Some(parsed) = parsed.as_ref().filter(|_| name == "administrator_quiesce") {
+    if let Some(parsed) = parsed.as_ref().filter(|_| name == "run_stop") {
         // Stops the workspace's commands, terminals, tunnels and browsers.
         if let Some(workspace) = parsed["workspace"].as_str() {
             active.stop(workspace);
@@ -791,7 +791,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn quiesce_succeeds_for_present_and_absent_workspaces() {
+    async fn run_stop_succeeds_for_present_and_absent_workspaces() {
         let fixture = fixture();
         let workspace = "2244991a-c2e3-415b-ae5c-054570c91d32";
         let workspaces = fixture.socket.parent().expect("root").join("workspaces");
@@ -801,7 +801,7 @@ mod tests {
             }
             let reply = call(
                 &fixture.socket,
-                json!({"version":2,"id":"q","name":"administrator_quiesce","workspace":workspace}),
+                json!({"version":2,"id":"q","name":"run_stop","workspace":workspace}),
             )
             .await;
             assert_eq!(reply["id"], "q");

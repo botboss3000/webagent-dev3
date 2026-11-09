@@ -120,7 +120,7 @@ pub(crate) async fn revoke_waiting_approvals(
 }
 
 /// Called while holding App.gate after an access mutation.
-pub(crate) async fn quiesce_user(
+pub(crate) async fn stop_user_runs(
     app: &App,
     user_id: &str,
     agent_filter: Option<&str>,
@@ -145,7 +145,7 @@ pub(crate) async fn quiesce_user(
             .as_str()
             .filter(|sid| uuid::Uuid::parse_str(sid).is_ok())
         {
-            if let Err(error) = quiesce_session_resources(&caller, sid).await {
+            if let Err(error) = stop_session_runs(&caller, sid).await {
                 closure_error = Some(error);
             }
         }
@@ -157,7 +157,7 @@ pub(crate) async fn quiesce_user(
 }
 
 /// Close the caller-owned session's persistent resources after a durable restriction.
-pub(crate) async fn quiesce_session_resources(app: &App, sid: &str) -> Result<(), ApiError> {
+pub(crate) async fn stop_session_runs(app: &App, sid: &str) -> Result<(), ApiError> {
     if uuid::Uuid::parse_str(sid).is_err() {
         return Err(invalid("Invalid session identifier"));
     }
@@ -206,7 +206,7 @@ pub(crate) async fn quiesce_session_resources(app: &App, sid: &str) -> Result<()
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             crate::tools::execute_trusted(
-                "administrator_quiesce",
+                "run_stop",
                 &json!({}),
                 sid,
                 &app.tool_socket,
@@ -221,9 +221,9 @@ pub(crate) async fn quiesce_session_resources(app: &App, sid: &str) -> Result<()
         .event(
             sid,
             if failed {
-                "administrator_quiesce_failed"
+                "run_stop_failed"
             } else {
-                "administrator_quiesced"
+                "run_stopped"
             },
             &json!({"reason":"session_access_changed"}),
         )
@@ -296,10 +296,14 @@ pub(crate) async fn sweep_browser_folders(app: App) {
     }
 }
 
-pub(crate) async fn quiesce_agent(app: &App, agent_id: &str, cause: &str) -> Result<(), ApiError> {
+pub(crate) async fn stop_agent_runs(
+    app: &App,
+    agent_id: &str,
+    cause: &str,
+) -> Result<(), ApiError> {
     let mut closure_error = None;
     for user_id in app.store.all_user_ids().await? {
-        if let Err(error) = quiesce_user(app, &user_id, Some(agent_id), cause).await {
+        if let Err(error) = stop_user_runs(app, &user_id, Some(agent_id), cause).await {
             closure_error = Some(error);
         }
     }
@@ -308,7 +312,7 @@ pub(crate) async fn quiesce_agent(app: &App, agent_id: &str, cause: &str) -> Res
     }
     Ok(())
 }
-async fn quiesce_tier(app: &App, tier_id: &str) -> Result<(), ApiError> {
+async fn stop_tier_runs(app: &App, tier_id: &str) -> Result<(), ApiError> {
     let cause = format!("account tier \"{tier_id}\" changed");
     let policy = app.store.read_access_policy()?;
     let order = crate::access::account_ladder::order(&policy)?;
@@ -319,7 +323,7 @@ async fn quiesce_tier(app: &App, tier_id: &str) -> Result<(), ApiError> {
     let mut error = None;
     for tier in &order[index..] {
         for user in app.store.access_repository().tier_user_ids(tier).await? {
-            if let Err(failure) = quiesce_user(app, &user, None, &cause).await {
+            if let Err(failure) = stop_user_runs(app, &user, None, &cause).await {
                 error = Some(failure);
             }
         }
@@ -364,7 +368,7 @@ async fn change_account(
         )
         .await
         .map_err(|_| stale("Account update rejected; reload the account and tier"))?;
-    quiesce_user(
+    stop_user_runs(
         &app,
         &id,
         None,
@@ -442,7 +446,7 @@ async fn tier_order(
         app.store.access_repository().write_access_policy(&policy)?;
     }
     for user in app.store.all_user_ids().await? {
-        quiesce_user(&app, &user, None, "the account tier order changed").await?;
+        stop_user_runs(&app, &user, None, "the account tier order changed").await?;
     }
     Ok(Json(json!({"saved":true})))
 }
@@ -480,7 +484,7 @@ async fn change_tier(
         .save_entitlement_tier(body.tier, body.expected_revision)
         .await
         .map_err(|_| stale("Tier update rejected; reload the tier and grants"))?;
-    quiesce_tier(&app, &id).await?;
+    stop_tier_runs(&app, &id).await?;
     Ok(Json(json!({"tier":tier})))
 }
 async fn membership(
@@ -527,7 +531,7 @@ async fn change_membership(
         )
         .await
         .map_err(|_| stale("Membership update rejected; reload the account and agent"))?;
-    quiesce_user(
+    stop_user_runs(
         &app,
         &user_id,
         Some(&agent_id),
@@ -701,7 +705,7 @@ async fn change_page_policy(
         .save_page_policy(body.pages, body.expected_revision)
         .map_err(|_| stale("Policy changed; reload before saving"))?;
     for id in app.store.all_user_ids().await? {
-        quiesce_user(&app, &id, None, "the page access policy changed").await?;
+        stop_user_runs(&app, &id, None, "the page access policy changed").await?;
     }
     app.store
         .event(
@@ -819,7 +823,7 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn session_resource_quiesce_withdraws_only_own_browser_and_requires_worker_ack() {
+    async fn session_run_stop_withdraws_only_own_browser_and_requires_worker_ack() {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         let (_root, app) = fixture().await;
         let sid = crate::uuid();
@@ -864,7 +868,7 @@ mod tests {
             let mut line = String::new();
             reader.read_line(&mut line).await.unwrap();
             let request: Value = serde_json::from_str(&line).unwrap();
-            assert_eq!(request["name"], "administrator_quiesce");
+            assert_eq!(request["name"], "run_stop");
             assert_eq!(request["workspace"], expected);
             let response = format!(
                 "{}\n",
@@ -876,7 +880,7 @@ mod tests {
                 .await
                 .unwrap();
         });
-        quiesce_session_resources(&app, &sid).await.unwrap();
+        stop_session_runs(&app, &sid).await.unwrap();
         worker.await.unwrap();
         assert!(app
             .store
@@ -964,8 +968,6 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(quiesce_session_resources(&app, &crate::uuid())
-            .await
-            .is_err());
+        assert!(stop_session_runs(&app, &crate::uuid()).await.is_err());
     }
 }

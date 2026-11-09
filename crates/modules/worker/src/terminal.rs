@@ -259,7 +259,7 @@ impl Terminals {
         self.of(base).len()
     }
 
-    /// Revocation and quiesce: fences pending opens, then closes the workspace's terminals.
+    /// Revocation and run stop: fences pending opens, then closes the workspace's terminals.
     pub async fn close_all(&self, base: &Path) {
         *self.inner().generations.entry(base.to_owned()).or_insert(0) += 1;
         let lock = self.lock(base);

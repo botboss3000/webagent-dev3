@@ -1779,7 +1779,7 @@ async fn agent_loop_creates_reviewable_proposal_without_dispatching_broker() {
             let mut line = String::new();
             reader.read_line(&mut line).await.unwrap();
             let call: Value = serde_json::from_str(&line).unwrap();
-            if call["name"] == "administrator_quiesce" {
+            if call["name"] == "run_stop" {
                 assert_eq!(call["arguments"], json!({}));
                 let reply = json!({"id":call["id"],"status":"success"});
                 let reply = test_rpc_reply(&call, reply);
@@ -8250,7 +8250,7 @@ async fn ability_revocation_keeps_parallel_write_outcomes_uncertain() {
         {"state":"executing","pending":{"name":"file_read","call_id":"read"}}]);
     app.save(&mut run).await.unwrap();
     let _guard = app.gate.lock().await;
-    phase3_api::quiesce_agent(&app, "shared_default", "test change")
+    phase3_api::stop_agent_runs(&app, "shared_default", "test change")
         .await
         .unwrap();
     let after = app.run(&id).await.unwrap();
@@ -11850,7 +11850,7 @@ async fn late_single_control_reply(stream: tokio::net::UnixStream) {
     let request: Value = serde_json::from_str(&line).unwrap();
     assert!(matches!(
         request["name"].as_str(),
-        Some("administrator_quiesce" | "administrator_host_revoke")
+        Some("run_stop" | "administrator_host_revoke")
     ));
     let reply = test_rpc_reply(
         &request,

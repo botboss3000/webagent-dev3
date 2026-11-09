@@ -172,15 +172,6 @@ impl
                     cancel,
                 )
                 .await
-            } else if tools::native::ui_admin::owns(&name) {
-                tools::native::ui_admin::execute(
-                    &tools::native_host::Host(&app),
-                    native_call,
-                    &name,
-                    &args,
-                    cancel,
-                )
-                .await
             } else if tools::native::app_control::owns(&name) {
                 tools::native::app_control::execute(
                     &tools::native_host::Host(&app),

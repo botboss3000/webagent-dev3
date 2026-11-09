@@ -190,7 +190,7 @@ impl Browsers {
         }
     }
 
-    /// Ends the session's browser process and its place in the queue: quiescence,
+    /// Ends the session's browser process and its place in the queue: a run stop,
     /// cancellation and revocation.
     pub async fn close(&self, sid: &str) {
         let mut inner = self.inner.lock().await;

@@ -215,12 +215,12 @@ async fn task_scoped_commands_are_refused() {
     assert_eq!(result["output"], "Task scope unsupported");
 }
 
-async fn a_quiesce_stops_the_workspace_commands() {
+async fn a_run_stop_stops_the_workspace_commands() {
     if !sandbox_available() {
         return;
     }
     let worker = worker().await;
-    let marker = worker.workspace().join("after-quiesce");
+    let marker = worker.workspace().join("after-run-stop");
     let (stream, ()) = worker
         .send(
             "shell",
@@ -229,8 +229,8 @@ async fn a_quiesce_stops_the_workspace_commands() {
         )
         .await;
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let quiesced = worker.call("administrator_quiesce", json!({}), 30).await;
-    assert_eq!(quiesced, json!({"status":"success"}));
+    let stopped = worker.call("run_stop", json!({}), 30).await;
+    assert_eq!(stopped, json!({"status":"success"}));
     let mut line = Vec::new();
     BufReader::new(stream)
         .read_until(b'\n', &mut line)
@@ -239,7 +239,7 @@ async fn a_quiesce_stops_the_workspace_commands() {
     let reply: Value = serde_json::from_slice(&line).expect("reply is JSON");
     assert_eq!(reply["result"]["output"], "Session not found");
     tokio::time::sleep(Duration::from_secs(3)).await;
-    assert!(!marker.exists(), "the command outlived the quiesce");
+    assert!(!marker.exists(), "the command outlived the run stop");
 }
 
 const DOUBLE_FORK: &str = "import os,time\n\
@@ -379,8 +379,8 @@ fn main() {
         ("task_scoped_commands_are_refused", || {
             Box::pin(task_scoped_commands_are_refused())
         }),
-        ("a_quiesce_stops_the_workspace_commands", || {
-            Box::pin(a_quiesce_stops_the_workspace_commands())
+        ("a_run_stop_stops_the_workspace_commands", || {
+            Box::pin(a_run_stop_stops_the_workspace_commands())
         }),
         (
             "a_cancelled_command_takes_its_double_forked_new_session_child_with_it",

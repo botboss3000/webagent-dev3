@@ -2158,7 +2158,7 @@ impl Service {
             "format":"bounded_png_frames","max_frames":MAX_FRAMES,"max_seconds":30,"video":false}))
     }
 
-    /// Stops recording and closes one session's profile during trusted worker quiescence.
+    /// Stops recording and closes one session's profile during a trusted worker run stop.
     pub async fn close_all(&self, base: &Path) {
         let Some(sid) = base
             .file_name()

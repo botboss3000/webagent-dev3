@@ -187,7 +187,7 @@ async fn a_terminal_writes_only_its_workspace() {
     assert!(!outside.exists());
 }
 
-async fn quiesce_closes_terminals_and_resources_count_them() {
+async fn run_stop_closes_terminals_and_resources_count_them() {
     if !sandbox_available() {
         return;
     }
@@ -200,8 +200,8 @@ async fn quiesce_closes_terminals_and_resources_count_them() {
         json!({"terminals":1,"tunnels":0}),
         "{counted}"
     );
-    let quiesced = worker.call("administrator_quiesce", json!({})).await;
-    assert_eq!(quiesced, json!({"status":"success"}), "{quiesced}");
+    let stopped = worker.call("run_stop", json!({})).await;
+    assert_eq!(stopped, json!({"status":"success"}), "{stopped}");
     let counted = worker.call("administrator_resources", json!({})).await;
     assert_eq!(
         counted["output"],
@@ -253,8 +253,8 @@ fn main() {
         ("a_terminal_writes_only_its_workspace", || {
             Box::pin(a_terminal_writes_only_its_workspace())
         }),
-        ("quiesce_closes_terminals_and_resources_count_them", || {
-            Box::pin(quiesce_closes_terminals_and_resources_count_them())
+        ("run_stop_closes_terminals_and_resources_count_them", || {
+            Box::pin(run_stop_closes_terminals_and_resources_count_them())
         }),
         (
             "a_preview_needs_a_port_a_workspace_terminal_listens_on",

@@ -19,7 +19,7 @@ Encrypted membership records add `agent_administrator`, limited to agent/model
 administration. Owner, member, caller (visitor), and revoked keep their existing
 tool-policy meaning. Membership writes check actor authority, target account,
 directory ownership, and expected revision in one application transaction,
-then rotate account access generation and quiesce affected work. Initial owner
+then rotate account access generation and stop affected work. Initial owner
 creation advances the access revision but preserves sign-in generation; it grants
 new ownership and must allow the same authenticated creator to configure models.
 
@@ -52,7 +52,7 @@ ability grants. Level names never confer administrative authority.
 One live Rust access snapshot meets installation tool policy, account tier,
 agent base policy and membership capability level before discovery, guidance,
 schemas, approval and dispatch. Visibility cannot grant execution. Revisions
-and resolved grants enter the context fingerprint; edits quiesce affected runs,
+and resolved grants enter the context fingerprint; edits stop affected runs,
 and recovery still rechecks live policy. Capability-level and base-policy CAS
 updates commit encrypted agent-owned audit receipts with metadata in the agent
 file. Membership assignment and its audit commit in the application file and

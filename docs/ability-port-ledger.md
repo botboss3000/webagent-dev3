@@ -72,7 +72,7 @@ Paths named `plugin <id>.py` refer to the owning V2 folder matching the ID and g
 | Core/image_vision | plugin image_vision.py; source handlers/adapter | pending; no registered V3 adapter/configuration path | vision provider credential/endpoint | 1 declared / 0 skills |
 | Core/model_switcher | plugin model_switcher.py; source handlers/adapter | pending; no registered V3 adapter/configuration path | No external secret indicated; scoped settings/runtime authority; 1 declared settings | 5 declared / 0 skills |
 | Core/p2p | plugin p2p.py; app/p2p/ | pending; no registered V3 adapter/configuration path | peer identity/keys and sync transport | 4 declared / 0 skills |
-| Core/ui_admin | plugin ui_admin.py; plugins/admin/ui_tools.py | pending; no registered V3 adapter/configuration path | No external secret indicated; scoped settings/runtime authority | 7 declared / 1 ability skill (frontend guidance; execution remains pending) |
+| Core/ui_admin | removed 2026-11-08 | superseded by Administrator/codebase_admin (file tools; ui_controls skill) | — | — |
 | Core/user_files | plugin user_files.py; app/user_workspace.py | pending; no registered V3 adapter/configuration path | No external secret indicated; scoped settings/runtime authority | 4 declared / 0 skills |
 | Core/visualizer | plugin visualizer.py; app/visualizer/ | pending; no registered V3 adapter/configuration path | user vault + artifact service; 1 declared settings | 16 declared / 0 skills |
 | Developer/github | Product placeholder; no executable contract | placeholder; intentionally unavailable | Separate product specification required | 0 declared / 0 skills |
@@ -125,7 +125,7 @@ Paths named `plugin <id>.py` refer to the owning V2 folder matching the ID and g
 
 Define migration before exposure: retain the two current ready abilities for existing intended users, use explicit account-tier ability-ID grants, and deny newly introduced IDs by default. Agent base policy and membership capability levels are separate; owner/delegated administrator authority never follows from a capability grant. Seed visitor/member/administrator levels with explicit revisioned policies. Owners retain immutable ownership except explicit transfer.
 
-One Rust resolver must return configured and effective decisions with reasons across installation policy, account tier, agent base policy, membership level, readiness/configuration, session mode, and activation/suppression. Visibility grants no execution. Preserve deny, require_approval, and allow. Include relevant revisions in context fingerprints and diagnostics; edits quiesce/recheck affected work, including previously approved and recovered dispatch.
+One Rust resolver must return configured and effective decisions with reasons across installation policy, account tier, agent base policy, membership level, readiness/configuration, session mode, and activation/suppression. Visibility grants no execution. Preserve deny, require_approval, and allow. Include relevant revisions in context fingerprints and diagnostics; edits stop/recheck affected work, including previously approved and recovered dispatch.
 
 Expose selected-agent management to owner/delegated administrators, sanitized reads to members, and global tier edits only to installation administrators. Keep CSRF, optimistic conflicts, audit receipts, private tenant projections, and agent-before-store routing. Existing installation oversight must not expose another tenant's credentials or silently grant ownership.
 

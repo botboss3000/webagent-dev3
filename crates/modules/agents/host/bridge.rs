@@ -87,9 +87,14 @@ impl webagent_agents::service::Access for Bridge<'_> {
     async fn leave(&self, agent: &str) -> Result<()> {
         let user = self.identity["_user_id"].as_str().unwrap_or("");
         self.app.store.leave_agent(user, agent).await?;
-        crate::phase3_api::quiesce_user(self.app, user, Some(agent), "the account left this agent")
-            .await
-            .map_err(|e| anyhow!(e.1))
+        crate::phase3_api::stop_user_runs(
+            self.app,
+            user,
+            Some(agent),
+            "the account left this agent",
+        )
+        .await
+        .map_err(|e| anyhow!(e.1))
     }
 }
 impl webagent_agents::service::Effects for Bridge<'_> {
@@ -109,8 +114,8 @@ impl webagent_agents::service::Effects for Bridge<'_> {
         .await?;
         Ok(())
     }
-    async fn quiesce(&self, agent: &str) -> Result<()> {
-        crate::phase3_api::quiesce_agent(
+    async fn stop_runs(&self, agent: &str) -> Result<()> {
+        crate::phase3_api::stop_agent_runs(
             self.app,
             agent,
             "this agent was disabled, archived or deleted",
@@ -134,7 +139,7 @@ impl webagent_agents::service::Effects for Bridge<'_> {
                 // Stop its runs, sub agents, background work and automations first.
                 let _ =
                     crate::api::session_stop::stop_session_work(&caller, sid, "agent-delete").await;
-                crate::api::quiesce(&caller, sid).await;
+                crate::api::drop_dictation(&caller, sid).await;
                 caller.store.delete_agent_session(sid).await?;
                 crate::phase3_api::purge_browser_folder(&caller, sid).await;
             }

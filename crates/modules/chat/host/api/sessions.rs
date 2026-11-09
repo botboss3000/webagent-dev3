@@ -493,7 +493,7 @@ async fn change_session_mode_authorized(
                 return Err(conflict("Mode call receipt mismatch"));
             }
             if mode == "read_only" {
-                phase3_api::quiesce_session_resources(app, id).await?;
+                phase3_api::stop_session_runs(app, id).await?;
             }
             return Ok(Json(saved["result"].clone()));
         }
@@ -556,7 +556,7 @@ async fn change_session_mode_authorized(
     }
     if current["mode"] == mode && named.is_none() && current["execution_mode"].is_null() {
         if mode == "read_only" {
-            phase3_api::quiesce_session_resources(&app, &id).await?;
+            phase3_api::stop_session_runs(&app, &id).await?;
         }
         return Ok(Json(current));
     }
@@ -583,7 +583,7 @@ async fn change_session_mode_authorized(
     app.store
         .atomic_docs_event(docs, &id, "session_mode_changed", &next)
         .await?;
-    phase3_api::quiesce_session_resources(&app, &id).await?;
+    phase3_api::stop_session_runs(&app, &id).await?;
     Ok(Json(next))
 }
 #[derive(Deserialize)]
@@ -721,8 +721,8 @@ async fn delete_one(app: App, id: String, body: crate::store::session::SessionLi
         if session["metadata_revision"].as_u64() != Some(body.expected_revision) {
             return Err(conflict("Session metadata revision changed"));
         }
-        crate::api::voice::quiesce(&app, &id).await;
-        crate::phase3_api::quiesce_session_resources(&app, &id).await?;
+        crate::api::voice::drop_dictation(&app, &id).await;
+        crate::phase3_api::stop_session_runs(&app, &id).await?;
     }
     match app.store.delete_session(&id, &body).await? {
         SessionPatchOutcome::Saved(value) => {
@@ -760,7 +760,7 @@ async fn lifecycle_session_api(
                     .await?
                     .is_some_and(|s| s["status"] == "archived")
             {
-                crate::api::voice::quiesce(&app, &id).await;
+                crate::api::voice::drop_dictation(&app, &id).await;
                 // Run cancels take the gate; archive then stops sub-agents, automations and resources.
                 drop(guard);
                 crate::api::session_stop::stop_session_work(&app, &id, "archive").await?;

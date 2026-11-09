@@ -4,7 +4,7 @@ For code review, test assessment, diagnosis without fixes, or release-readiness 
 
 For ability/plugin changes and Markdown, JSON/configuration, UI assets, Python or other non-Rust files, load the selectable live_plugin_publication skill in this ability before choosing a release path. It covers independently replaceable app components, dependency-aware compilation, and live asset/configuration publication while distinguishing the intended architecture from currently supported broker lanes.
 
-When changing buttons or other controls, apply the tap-highlight, touch-feedback and border-state defaults in `plugins/abilities/Core/ui_admin/ui_admin.skill.md` (read only that section). UI Admin's own tools are not available; do not load it.
+When changing buttons or other controls, or investigating a UI element's presentation, load the selectable ui_controls skill in this ability for the tap-highlight, touch-feedback and border-state defaults.
 
 For a question that asks where code lives, answer the scope asked: once the requested files and functions are found, report them and offer to trace further (backend data sources, tests) instead of tracing them unasked. Batch independent searches and reads in one step, and load only the abilities the task needs. This ability already includes shell, file_search and file_read for source questions; do not also load terminal_control or git_control to search or read code.
 

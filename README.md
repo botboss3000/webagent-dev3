@@ -599,7 +599,7 @@ An agent owns its model roster and role assignments. Its owner can appoint agent
 administrators, who manage model configuration and assign existing accounts as
 members or visitors. Installation administrators retain oversight without becoming
 owners. Credentials and connection sharing remain under each connection owner's
-control. Membership changes invalidate access and quiesce affected runs. Creating
+control. Membership changes invalidate access and stop affected runs. Creating
 an agent's initial owner membership preserves the creator's sign-in so they can
 configure models immediately; later membership edits still revoke sign-ins.
 
@@ -930,7 +930,7 @@ model arguments never select a tenant, credential, host origin or Docker command
 Agent-owned settings use revision-checked encrypted metadata. Cautious settings
 strengthen approvals; they cannot raise the installation or account-tier ceiling.
 Repository connections have owner-bound, separately encrypted token references;
-rotation/revocation quiesces affected resources. Public views never return tokens.
+rotation/revocation stops affected runs. Public views never return tokens.
 
 The tool worker executes isolated source/Git/PTY operations. `sandbox.py`
 requires Landlock ABI 6 or newer and denies other workspaces, state, control sockets

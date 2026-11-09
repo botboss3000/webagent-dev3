@@ -27,7 +27,7 @@ struct Fixture {
     guest: AtomicBool,
     fail_receipt: AtomicBool,
     pool_reads: AtomicUsize,
-    quiesced: AtomicUsize,
+    stopped_runs: AtomicUsize,
     events: Mutex<Vec<Value>>,
     gate: tokio::sync::Mutex<()>,
 }
@@ -158,10 +158,11 @@ impl Effects for Fixture {
         self.events.lock().unwrap().push(value.clone());
         Ok(())
     }
-    async fn quiesce(&self, _agent: &str) -> Result<()> {
-        self.quiesced.fetch_add(1, Ordering::SeqCst);
+    async fn stop_runs(&self, _agent: &str) -> Result<()> {
+        self.stopped_runs.fetch_add(1, Ordering::SeqCst);
         Ok(())
-    }    async fn erase(&self, _agent: &str) -> Result<()> {
+    }
+    async fn erase(&self, _agent: &str) -> Result<()> {
         Ok(())
     }
 }
@@ -204,7 +205,7 @@ impl Fixture {
             guest: AtomicBool::new(false),
             fail_receipt: AtomicBool::new(false),
             pool_reads: AtomicUsize::new(0),
-            quiesced: AtomicUsize::new(0),
+            stopped_runs: AtomicUsize::new(0),
             events: Mutex::new(Vec::new()),
             gate: tokio::sync::Mutex::new(()),
         };
@@ -438,7 +439,7 @@ async fn pre_registration_retry_and_guest_creation_rejection() {
     assert_eq!(f.service().create(&req, 5).await.unwrap()["id"], id);
 }
 #[tokio::test]
-async fn status_change_retains_references_and_quiesces_active_work() {
+async fn status_change_retains_references_and_stops_active_work() {
     let f = Fixture::new().await;
     sqlx::query("INSERT INTO retained_work VALUES('run-1','shared_default')")
         .execute(&f.pools["shared_default"])
@@ -450,14 +451,14 @@ async fn status_change_retains_references_and_quiesces_active_work() {
         .await
         .unwrap();
     assert_eq!(saved["revision"], 2);
-    assert_eq!(f.quiesced.load(Ordering::SeqCst), 1);
+    assert_eq!(f.stopped_runs.load(Ordering::SeqCst), 1);
     assert_eq!(f.events.lock().unwrap().len(), 1);
     assert!(f
         .service()
         .set_status("shared_default", 1, "active")
         .await
         .is_err());
-    assert_eq!(f.quiesced.load(Ordering::SeqCst), 1);
+    assert_eq!(f.stopped_runs.load(Ordering::SeqCst), 1);
     assert_eq!(f.repo().status().await.unwrap()["status"], "disabled");
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM retained_work")
         .fetch_one(&f.pools["shared_default"])
@@ -536,7 +537,7 @@ async fn archive_status(f: &Fixture, id: &str) -> Value {
         .unwrap()
 }
 #[tokio::test]
-async fn archive_hides_quiesces_unarchives_and_never_lifts_a_disable() {
+async fn archive_hides_stops_runs_unarchives_and_never_lifts_a_disable() {
     let f = Fixture::new().await;
     let id = f.service().create(&request(), 2).await.unwrap()["id"]
         .as_str()
@@ -555,7 +556,7 @@ async fn archive_hides_quiesces_unarchives_and_never_lifts_a_disable() {
         .is_err());
     let archived = f.service().set_archived(&id, revision, true).await.unwrap();
     assert_eq!(archived["status"], "archived");
-    assert_eq!(f.quiesced.load(Ordering::SeqCst), 1);
+    assert_eq!(f.stopped_runs.load(Ordering::SeqCst), 1);
     let listed = f.service().list().await.unwrap();
     assert!(listed["agents"]
         .as_array()
@@ -575,7 +576,7 @@ async fn archive_hides_quiesces_unarchives_and_never_lifts_a_disable() {
         .unwrap();
     assert_eq!(unarchived["status"], "active");
     assert_eq!(
-        f.quiesced.load(Ordering::SeqCst),
+        f.stopped_runs.load(Ordering::SeqCst),
         1,
         "unarchiving has no work to stop"
     );

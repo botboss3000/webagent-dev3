@@ -1,6 +1,6 @@
 //! Root composition of the Administration module (`webagent-administration-host`): the
 //! [`AdministrationHost`] it calls back into, run authority for Administrator calls, and
-//! the routing of Source Control and UI Admin adapters that stay with their abilities.
+//! the routing of Source Control adapters that stay with their abilities.
 //! Model arguments never choose identity, agent, workspace, credentials, host
 //! origin or a Docker command.
 use super::failure::{boundary, request, Code, Delivery, Failure, Stage};
@@ -122,10 +122,9 @@ pub(crate) async fn host_fingerprint(
             || (ceiling == access::Permission::Ask && work_permission != access::Permission::Ask)
     };
     let legacy = match name {
-        "file_list" | "read_directory" => Some("v3_source_list"),
-        "file_read" | "file_search" | "read_source" | "search_source" => Some("v3_source_read"),
-        "file_edit" | "file_write" | "write_source" | "edit_source" | "patch_source"
-        | "delete_source" => Some("v3_source_apply"),
+        "file_list" => Some("v3_source_list"),
+        "file_read" | "file_search" => Some("v3_source_read"),
+        "file_edit" | "file_write" => Some("v3_source_apply"),
         "build_work" | "build_work_finish" | "v3_build_work_finish" => Some("v3_build_work"),
         _ => None,
     };
@@ -423,47 +422,6 @@ pub async fn execute(
         policy_version,
     };
     webagent_administration_host::tools::execute(&Host(app), call, cancel).await
-}
-
-/// Narrow UI Admin aliases use their own tool decision plus unchanged protected source
-/// ceilings.
-pub(crate) async fn ui_host(
-    app: &App,
-    sid: &str,
-    rid: &str,
-    tool: &str,
-    operation: &str,
-    args: &Value,
-    cancel: CancellationToken,
-) -> Result<Value> {
-    if !super::native::ui_admin::owns(tool)
-        || !matches!(
-            operation,
-            "file_list"
-                | "file_read"
-                | "file_search"
-                | "file_write"
-                | "file_edit"
-                | "v3_source_apply"
-        )
-    {
-        bail!("Invalid UI broker operation");
-    }
-    let fingerprint = host_fingerprint(app, sid, rid, tool).await?;
-    let trusted = webagent_administration_host::trusted(
-        crate::shared_chat::actor(app),
-        sid,
-        &json!(fingerprint),
-    );
-    tools::execute_host_trusted(
-        operation,
-        args,
-        sid,
-        &build_socket(app),
-        Some(trusted),
-        cancel,
-    )
-    .await
 }
 
 #[cfg(test)]

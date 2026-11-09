@@ -403,7 +403,8 @@ async fn save(
         return Err(error);
     }
     if previous.is_some() {
-        crate::phase3_api::quiesce_agent(app, agent, "this agent's MCP connection changed").await?;
+        crate::phase3_api::stop_agent_runs(app, agent, "this agent's MCP connection changed")
+            .await?;
     }
     if !old_reference.is_empty() && old_reference != reference {
         app.store.delete(&old_reference).await?;
@@ -532,7 +533,7 @@ pub(crate) async fn remove(
     let reference = record.credential_ref.clone();
     next.connections.remove(&id);
     persist(&store, &agent, &id, &caller, &mut next, old).await?;
-    crate::phase3_api::quiesce_agent(&app, &agent, "this agent's MCP connection was removed")
+    crate::phase3_api::stop_agent_runs(&app, &agent, "this agent's MCP connection was removed")
         .await?;
     if !reference.is_empty() {
         app.store.delete(&reference).await?;

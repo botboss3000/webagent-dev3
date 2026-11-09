@@ -129,7 +129,7 @@ async fn update(
         let approved = !body.blocked && body.level_id.is_some();
         notify_access_decision(&app, &id, &body.user_id, approved).await?;
     }
-    crate::phase3_api::quiesce_user(
+    crate::phase3_api::stop_user_runs(
         &app,
         &body.user_id,
         Some(&id),
