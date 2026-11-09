@@ -3243,6 +3243,24 @@ impl<
                     }
                     let chosen = super::images::select(&sid, &projected_input, &records);
                     super::images::apply(&mut projected_input, &chosen);
+                    // The model sees its own tool screenshots instead of asking another model about them.
+                    let found = super::images::tool_images(&projected_input);
+                    let mut shots = std::collections::HashMap::new();
+                    for (id, _) in found.iter().take(super::images::MAX_IMAGES) {
+                        if let Some(record) = app
+                            .store
+                            .get(&format!("attachment:{id}"))
+                            .await?
+                            .filter(|r| r["session_id"] == sid)
+                        {
+                            if let Ok(record) = app.store.attachment_with_data(record).await {
+                                shots.insert(id.clone(), record);
+                            }
+                        }
+                    }
+                    if let Some(item) = super::images::tool_image_item(&sid, &found, &shots) {
+                        projected_input.push(item);
+                    }
                 }
                 let prepared_provider = match crate::provider::CallDraft::new(
                     &selection,
