@@ -806,10 +806,7 @@ impl<H: Host> Catalog<H> {
                 .iter()
                 .map(|(tool, text)| (tool.to_string(), text.to_string()))
                 .collect(),
-            selectable_skills: crate::base::SELECTABLE_SKILLS
-                .iter()
-                .map(|(name, text)| (name.to_string(), text.to_string()))
-                .collect(),
+            selectable_skills: BTreeMap::new(),
         });
         abilities.sort_by(|a, b| {
             (a.group_order, &a.group_name, a.order, &a.name, &a.id).cmp(&(
