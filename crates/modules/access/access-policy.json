@@ -111,7 +111,6 @@
         "automation": "auto",
         "base": "auto",
         "browser_control": "auto",
-        "code_index": "auto",
         "codebase_admin": "auto",
         "config_controller": "auto",
         "decision": "auto",

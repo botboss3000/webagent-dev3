@@ -170,9 +170,8 @@ cost or latency improvement is claimed by these correctness tests.
 
 Identity's **Suppress identical tool results** defaults enabled. Each tool's
 Abilities panel independently includes/excludes it through **Suppress identical
-results**. Default inclusion is file_read, file_list, file_search, v3_source_read,
-v3_source_list, code_index_lookup, code_index_coverage, code_index_trace and
-code_index_progress; all other tools default excluded. Inclusion grants no
+results**. Default inclusion is file_read, file_list, file_search, v3_source_read
+and v3_source_list; all other tools default excluded. Inclusion grants no
 permission and never skips execution. Lifetime/budget eviction remains separately
 preserved as **Under development · Experimental — disabled**; effective forces
 that policy off while retaining saved settings.

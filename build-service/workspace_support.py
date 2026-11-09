@@ -4,7 +4,7 @@ from pathlib import Path
 def configure(worker):
  global WORKER_PATH
  WORKER_PATH=Path(worker.__file__).resolve()
- for name in ("CONTROL","LIMIT","ROOT","TEMPLATE","git_capture","administrator_plugin","terminate"):
+ for name in ("CONTROL","LIMIT","ROOT","TEMPLATE","git_capture","terminate"):
   globals()[name]=getattr(worker,name)
 def source_review(base):
     """Show tracked and new source changes without altering the Git index."""
@@ -191,6 +191,23 @@ def _seed_ignore(root):
     return ignore
 
 
+def _source_digest(destination):
+    """Same algorithm as release.asset_source_digest: the published source receipt's hash."""
+    destination=Path(destination);rows=[]
+    for path in sorted(destination.rglob("*")):
+        relative=path.relative_to(destination).as_posix()
+        if relative.split("/")[0]in {".code-index",".git"}:continue
+        info=path.lstat()
+        if stat.S_ISDIR(info.st_mode):continue
+        if not stat.S_ISREG(info.st_mode):raise ValueError("Invalid immutable source inode")
+        if len(rows)>=50000:raise ValueError("Source receipt file bound exceeded")
+        content=hashlib.sha256()
+        with path.open("rb")as stream:
+            for block in iter(lambda:stream.read(1024*1024),b""):content.update(block)
+        rows.append([relative,info.st_mode&0o100,content.hexdigest()])
+    return hashlib.sha256(json.dumps(rows,separators=(",",":")).encode()).hexdigest()
+
+
 def _seed_capture(path, include_git=False):
     digest = hashlib.sha256()
     count = size = 0
@@ -286,27 +303,15 @@ def _seed_inner(spec):
     baseline = git("rev-parse", "HEAD")
     if git("status", "--porcelain") or _seed_capture(stage) != before or _seed_capture(template, True) != before:
         raise ValueError("seed baseline changed")
-    index = template.parent/".code-index"
-    index_digest = None
-    ready_index=index.is_dir()and(index/"manifest.json").is_file()and(index/"index.sqlite").is_file()
-    if index.is_symlink():raise ValueError("Published index directory symlink")
-    if spec.get("published") and not ready_index:
-        # A source-only release is usable while its separate index job is pending.
+    if spec.get("published"):
         receipt=template.parent/".code-index/source-release.json"
-        if receipt.is_symlink()or not receipt.is_file()or receipt.stat().st_size>4096:raise ValueError("Published source/index pair unavailable")
+        if receipt.is_symlink()or not receipt.is_file()or receipt.stat().st_size>4096:raise ValueError("Published source receipt unavailable")
         published=json.loads(receipt.read_bytes())
-        module=administrator_plugin("code_index")
-        if published.get("publication_mode")!="post_deployment_indexing_v1"or published.get("release_id")!=template.parent.name or published.get("source_sha256")!=module.source_digest(template.parent):raise ValueError("Published source receipt mismatch")
-    if ready_index:
-        # Source and bootstrap index use the same already-resolved template.
-        module = administrator_plugin("code_index")
-        module.seed_private_index(template.parent,stage)
-        index_digest = module.read_published(stage)[1]["index_sha256"]
+        if published.get("release_id")!=template.parent.name or published.get("source_sha256")!=_source_digest(template.parent):raise ValueError("Published source receipt mismatch")
     os.chmod(stage, 0o770)
     info = stage.stat(follow_symlinks=False)
     return {"stage": spec["stage"], "identity": [info.st_dev, info.st_ino],
-            "snapshot": _seed_capture(stage, True), "source": before, "baseline_commit": baseline,
-            "index_sha256":index_digest}
+            "snapshot": _seed_capture(stage, True), "source": before, "baseline_commit": baseline}
 
 
 def _seed_spec(base):
@@ -353,12 +358,7 @@ def _seed_finish(spec, raw):
         info = os.fstat(stagefd)
         if [info.st_dev, info.st_ino] != result["identity"] or _seed_capture(stagefd, True) != result["snapshot"]:
             raise ValueError("seed changed before publication")
-        if result.get("index_sha256") is not None:
-            actual=administrator_plugin("code_index").read_published(
-                Path(spec["base"])/spec["stage"])[1]["index_sha256"]
-            if actual != result["index_sha256"]:
-                raise ValueError("Seed index changed before publication")
-        elif (Path(spec["base"])/spec["stage"]/".code-index").exists():
+        if (Path(spec["base"])/spec["stage"]/".code-index").exists():
             raise ValueError("Unexpected seed index")
         with (CONTROL / "dispatch.lock").open("rb") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)

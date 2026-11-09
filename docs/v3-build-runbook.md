@@ -87,53 +87,6 @@ status never reveals other callers' jobs; administrator Builds views may compare
 all callers. Only path names and fingerprints are examined, never credentials
 or runtime databases. Behavioral conflicts across different files still need tests.
 
-## Optional Code Index
-
-The current protected policy (`post_deployment_indexing`, `after_deployment`)
-publishes source with an immutable source receipt and no index, and records no
-review obligations. An index is built only when an operator explicitly requests
-`retry_post_deployment`. The text below describes how an index is built and
-verified, and the legacy indexed publication mode. The protected installed
-`index-scanner.py` parses candidate source as data in a networkless, read-only,
-unprivileged Docker process with memory, process and time bounds; candidate
-Python code is never imported.
-
-Each immutable assets release carries `.code-index/index.sqlite` and
-`manifest.json`. The manifest binds the release ID, complete archive digest,
-complete source digest, SQLite digest, schema/index version, parser code digest and
-parser dependency versions. Enumeration/scanner limits reject the release;
-supported files cannot be silently omitted. Unsupported/generated/directory
-exclusions and uncertain/limited parsers are recorded explicitly. Zero physical
-line gaps, stale files and unindexed supported files are mandatory for an index.
-
-Activation validates the pair before atomic pointer replacement and directory
-fsync. Failed staging or an interrupted switch retains the prior pair. Rollback
-must select a release containing a verified pair; historical unindexed assets
-fail closed and need a reviewed backfill/migration rather than silent selection.
-The index is derived metadata, never a session database. Do not copy or inspect
-session databases for this workflow.
-
-Before any full or UI-only release is staged, the protected broker requires the
-candidate v3/plugins/abilities/Administrator/code_index/adapter.py bytes to
-match its installed index-scanner.py. A mismatch fails before asset staging or
-the indexing executor, preserving the active release.
-
-Every adapter change requires installing that reviewed task's parser before
-finish. The root operator runs the protected installer with
---install --install-tree <exact-64-character-task-tree-hash> while preserving
-the exact task source, waits until all builds are idle, and restarts the
-protected broker supervisor. Finishing the same task then creates a source/index
-pair bound to the matching parser. Do not alter a frozen published index or
-finish a task against a mismatched scanner. Gate changes to broker code follow
-the same exact-task install and idle-restart sequence. The source is confined to
-the broker task namespace; source ownership, single-link checks and
-unchanged-input verification still apply. Never restart a busy broker. Session
-seeding resolves the active release once; published tools are read only and
-subject to normal Rust authorization.
-Modified session workspaces and private
-indexes are retained independently.
-
-
 ## Retained task reminder post-process
 
 The protected broker reconciles reminders every 60 seconds, with a default

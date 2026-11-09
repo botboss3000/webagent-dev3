@@ -6,7 +6,7 @@ class PublicationTests(unittest.TestCase):
     def test_general_assets_and_core_inputs_use_different_lanes(self):
         for path in ("plugins/abilities/Core/base/base.skill.md","plugins/abilities/Custom/new/new.json","plugins/abilities/Custom/new/skills/extra.skill.md","config/prompts.json"):
             self.assertTrue(fixtures.host.hot_source_path("v3/"+path),path)
-        for path in ("src/abilities.rs","worker.py","plugins/abilities/Core/base/adapter.rs","plugins/abilities/Custom/new/runner.py"):
+        for path in ("src/abilities.rs","sandbox.py","plugins/abilities/Core/base/adapter.rs","plugins/abilities/Custom/new/runner.py"):
             self.assertFalse(fixtures.host.hot_source_path("v3/"+path),path)
     def test_executable_inputs_require_an_explicit_package_manifest(self):
         prefix="v3/plugins/abilities/Custom/new/"
@@ -24,9 +24,7 @@ class PublicationTests(unittest.TestCase):
         self.assertTrue(fixtures.host.native_package_migration(prefix+"runner.py",previous))
         previous=fixtures.context(extra={prefix+"existing.json":json.dumps({"readiness":"pending","kind":"ability"})})
         self.assertFalse(fixtures.host.native_package_migration(prefix+"runner.py",previous))
-    def test_bridge_source_and_generated_adoption_probe_parse(self):
-        for name in ("worker.py",):
-            compile((ROOT/name).read_bytes(),name,"exec")
+    def test_generated_adoption_probe_parses(self):
         runner=fixtures.host.Runner()
         runner.inspect=lambda name:{"Mounts":[{"Destination":"/opt/v3/assets","Source":str(fixtures.host.ASSET_ROOT),"RW":False}],"Config":{"Env":["V3_UI_ROOT=/opt/v3/assets/current/v3/ui"]}}
         def command(args,**kwargs):

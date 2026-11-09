@@ -2,13 +2,7 @@
 //! `plugins/abilities/Administrator/<ability>/tools/<tool>/`.
 
 /// Every Administrator native tool.
-pub const TOOLS: [&str; 45] = [
-    "code_index_scan",
-    "code_index_lookup",
-    "code_index_coverage",
-    "code_index_trace",
-    "code_index_progress",
-    "code_index_maintenance",
+pub const TOOLS: [&str; 39] = [
     "git_tool",
     "resolve_conflict",
     "commit_and_push",

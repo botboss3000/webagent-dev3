@@ -167,14 +167,14 @@ class ReleaseClaimTests(unittest.TestCase):
   self.assertTrue(self.acquire(r,["module:broker"])["acquired"])
 
 class BrokerTestClassificationTests(unittest.TestCase):
- def test_index_and_ui_policy_tests_do_not_reserve_engine(self):
+ def test_named_broker_tests_do_not_reserve_engine(self):
   with tempfile.TemporaryDirectory()as root:
-   for p in ("tests/test_code_index_maintenance.py","tests/test_published_code_index.py","tests/test_index_queue.py","tests/test_ui_policy.py"):
+   for p in ("tests/test_ui_policy.py","tests/test_admin_build_install.py","tests/test_buildctl_wait.py"):
     self.assertEqual(m.Components(root).scopes([p]),["module:broker","path:"+p])
     self.assertEqual(m.Components(root,[p]).scopes([p]),["module:broker","path:"+p])
  def test_unrelated_tests_reserve_only_the_shared_workspace_scope(self):
   with tempfile.TemporaryDirectory()as root:
-   self.assertEqual(m.Components(root).scopes(["tests/test_worker.py"]),["module:workspace","path:tests/test_worker.py"])
+   self.assertEqual(m.Components(root).scopes(["tests/test_sandbox.py"]),["module:workspace","path:tests/test_sandbox.py"])
 
 class UIPathTests(unittest.TestCase):
  def test_ui_files_are_independent_but_legacy_remains_broad(self):
@@ -361,7 +361,7 @@ class CargoModuleReservationTests(unittest.TestCase):
     def test_no_path_derives_the_legacy_global_scope(self):
         self.write('crates/modules/models/Cargo.toml','invalid toml = [')
         for path in ['Cargo.toml','Cargo.lock','build.rs','Dockerfile','crates/unknown/src/lib.rs','crates/modules/models/src/private.rs',
-            'crates/engine-service/src/lib.rs','crates/context-contracts/src/lib.rs','src/main.rs','tests/test_worker.py',
+            'crates/engine-service/src/lib.rs','crates/context-contracts/src/lib.rs','src/main.rs','tests/test_sandbox.py',
             'plugins/engine/new/component.json','plugins/abilities/Core/base/runtime.rs','config/chat.json']:
             self.assertNotIn('module:engine',m.Components(self.root,[path]).scopes([path]),path)
     def test_invalid_cargo_table_falls_back_to_the_layout_without_blocking_repair(self):

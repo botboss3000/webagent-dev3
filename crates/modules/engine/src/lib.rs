@@ -28,7 +28,6 @@ pub mod context {
     pub mod memory;
     pub mod retained_recall;
     pub mod retention;
-    pub mod retrieval;
 }
 pub mod tools {
     pub mod dispatch;

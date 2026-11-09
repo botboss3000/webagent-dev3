@@ -117,7 +117,7 @@ controls remain disabled until the runtime advertises composer support. Abilitie
 and notification actions remain pending and are marked red. Provider-reported token usage and cost are persisted per run, with transactional session totals. The composer context strip opens the v2-style context panel with measured JSON-byte composition and separate reported tokens. Calls made before usage recording was installed cannot be reconstructed; totals cover recorded calls. Unknown usage/cost is labeled unavailable; no tokenizer or price is invented. Message gutters retain the v2 action order and More menu; undo, delete, fork, stored-row details, schema access and per-session compaction actions are red until their backend contracts are ported. Other v2 controls
 remain unsupported until their v3 features are implemented. Run and approval
 cards remain visible above the composer regardless of footer layout, so
-approvals stay accessible. Rust, Python worker, and dependency changes still
+approvals stay accessible. Rust, tool worker, and dependency changes still
 require an image rebuild.
 
 V3 main panel pages live in v3/ui/main-panel/<id> with a page.json descriptor.
@@ -289,9 +289,8 @@ The model first receives `list_abilities` and `load_ability`. Loading a catalog 
 makes its currently permitted worker schemas available for that run; execution checks the
 current policy again. Named Auto mode runs allowed tools without per-tool approval; Deny still blocks them. The authenticated
 `GET /api/v3/abilities` endpoint exposes the visible catalog and effective tool policies.
-The Administrator catalog contains ten abilities. This coding port implements Codebase Admin,
-Code Index, Git Control, Terminal Control, Diagnostics, Remote Tunnel, V3 Build and
-V3 Workspace. Computer Control and Program Screenshot are explicitly excluded. New
+The Administrator catalog contains nine abilities. This coding port implements Codebase Admin,
+Git Control, Terminal Control, Diagnostics, Remote Tunnel, V3 Build and V3 Workspace. Computer Control and Program Screenshot are explicitly excluded. New
 adapters passed authenticated API acceptance; tier and capability-level
 grants do not expand merely because a plugin is installed. See
 [Administrator coding](docs/administrator-coding.md) for configuration and contracts.
@@ -367,7 +366,7 @@ checkout owner, accepts only the app's private socket, obeys global shutoff, and
 limits changes to v3 source, plugins, tests, UI, docs, configuration and selected v3 root files. Runtime data and workspaces remain excluded.
 UI files and runtime data are excluded from promotion.
 
-The Python worker owns actual filesystem operations and approved shell/Python processes.
+The tool worker owns actual filesystem operations and approved shell/Python processes.
 Its `file_edit` operation replaces one exact span in an existing workspace file, supports
 a SHA-256 precondition, and requires approval through the Rust policy gate.
 `file_write` publishes a fully written and synced same-directory temporary file;
@@ -741,7 +740,7 @@ Settings are read at each model-call boundary and held immutable through the sum
 Administrators can read and update this same live file through
 `GET/PUT /api/v3/admin/context-compaction`; writes validate the full schema,
 require the returned digest, and are saved by the broker's `live_file_write`. The chat context panel
-edits the principal budgets. The Python worker rereads the file for every search. Agent Identity may override the history trigger and verbatim tail; app defaults retain every other safety limit. The resolved settings remain immutable through each summary call.
+edits the principal budgets. The tool worker rereads the file for every search. Agent Identity may override the history trigger and verbatim tail; app defaults retain every other safety limit. The resolved settings remain immutable through each summary call.
 
 Defaults are a 40,000 estimated-token history trigger, 10,000-token verbatim tail,
 and 2,000-token summary prompt target, using four characters per estimated token.
@@ -933,7 +932,7 @@ strengthen approvals; they cannot raise the installation or account-tier ceiling
 Repository connections have owner-bound, separately encrypted token references;
 rotation/revocation quiesces affected resources. Public views never return tokens.
 
-The Python worker executes isolated source/index/Git/PTY operations. `sandbox.py`
+The tool worker executes isolated source/Git/PTY operations. `sandbox.py`
 requires Landlock ABI 6 or newer and denies other workspaces, state, control sockets
 and signals outside the child domain. Preview listener ports are assigned per
 workspace below the ephemeral test-listener range. A trusted supervisor reaps

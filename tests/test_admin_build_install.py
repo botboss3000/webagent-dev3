@@ -40,13 +40,9 @@ class InstallTests(unittest.TestCase):
         (self.source / "install.py").write_bytes(b"# fixture bootstrap\n")
         (self.source / "release.py").write_bytes(b"# fixture release\n")
         (self.source / "performance.py").write_bytes(b"# fixture protected performance\n")
-        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","executor_worker.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py","ownership.py","scheduler.py","resources.py","resource_control.py","docker_retention.py","docker_guard_dispatch.py","executor.py","engine_components.py","source_status.py","monitoring_component.py","boot_host.py","index_queue.py","index_coordinator.py","review_store.py","review_policy.py","post_deployment.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","ui_policy.py","ui_publication.py","ui-test.Dockerfile","compiler.Dockerfile"):
+        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","executor_worker.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py","ownership.py","scheduler.py","resources.py","resource_control.py","docker_retention.py","docker_guard_dispatch.py","executor.py","engine_components.py","source_status.py","monitoring_component.py","boot_host.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","ui_policy.py","ui_publication.py","ui-test.Dockerfile","compiler.Dockerfile"):
             (self.source/name).write_bytes(b"# fixture module\n")
         (self.source/"scheduler-defaults.json").write_text("{}")
-        index_source=self.v3/"plugins/abilities/Administrator/code_index"
-        index_source.mkdir(parents=True)
-        (index_source/"adapter.py").write_bytes(b"# fixture protected parser\n")
-        (index_source/"maintenance.py").write_bytes(b"# fixture protected ledger\n")
         self.fake = FakePrivileges()
         self.patches = [patch.object(installer.shutil, "disk_usage", return_value=types.SimpleNamespace(free=5*1024*1024*1024)),
                         patch.object(installer, "PRIVILEGES", self.fake),
@@ -70,25 +66,24 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(0o644, (service / "host.py").stat().st_mode & 0o777)
         self.assertEqual(0o600, (service / "installed.json").stat().st_mode & 0o777)
         self.assertEqual(0, self.fake.owner((service / "host.py").stat()))
-        self.assertEqual(hashlib.sha256(b"# fixture protected parser\n").hexdigest(),result["scanner_sha256"])
-        self.assertEqual(0,self.fake.owner((service/"index-scanner.py").stat()))
+        self.assertNotIn("scanner_sha256",result)
+        self.assertFalse((service/"index-scanner.py").exists())
         self.assertEqual(hashlib.sha256(b"# fixture protected performance\n").hexdigest(), result["performance_sha256"])
         self.assertEqual(0o644,(service/"performance.py").stat().st_mode & 0o777)
         self.assertEqual(0,self.fake.owner((service/"performance.py").stat()))
-        for name in ("ownership.py","scheduler.py","resources.py","resource_control.py","docker_retention.py","docker_guard_dispatch.py","executor.py","engine_components.py","source_status.py","monitoring_component.py","boot_host.py","index_queue.py","index_coordinator.py","review_store.py","review_policy.py","post_deployment.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","ui_policy.py","ui_publication.py","ui-test.Dockerfile","compiler.Dockerfile","scheduler-defaults.json"):
+        for name in ("ownership.py","scheduler.py","resources.py","resource_control.py","docker_retention.py","docker_guard_dispatch.py","executor.py","engine_components.py","source_status.py","monitoring_component.py","boot_host.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","ui_policy.py","ui_publication.py","ui-test.Dockerfile","compiler.Dockerfile","scheduler-defaults.json"):
             self.assertEqual(hashlib.sha256((self.source/name).read_bytes()).hexdigest(),result["modules"][name])
             self.assertEqual((self.source/name).read_bytes(),(service/name).read_bytes())
         self.assertEqual(result, installer.install())
 
-    def test_reviewed_tree_install_is_confined_and_protects_parser(self):
+    def test_reviewed_tree_install_is_confined(self):
         key="a"*64
         task=self.v3/"build-jobs/coordination/trees"/key/"v3"
         task.mkdir(parents=True)
         import shutil
         shutil.copytree(self.source,task/"build-service")
-        shutil.copytree(self.v3/"plugins/abilities/Administrator/code_index",task/"plugins/abilities/Administrator/code_index")
         result=installer.install(key)
-        self.assertIn("scanner_sha256",result)
+        self.assertEqual(hashlib.sha256(self.host).hexdigest(),result["host_sha256"])
         for invalid in ("../escape","a"*63,"z"*64):
             with self.assertRaises(ValueError):installer.install(invalid)
 

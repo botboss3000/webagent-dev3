@@ -353,20 +353,23 @@ class CacheTests(unittest.TestCase):
         dockerfile=(Path(__file__).parents[1]/"Dockerfile").read_text()
         files=fixtures.host.Runner.execution_entries(self.blob)
         files["v3/Dockerfile"]=(0o644,dockerfile.encode())
-        for name in ("worker.py","sandbox.py","promote.py"):
+        for name in ("sandbox.py","promote.py"):
             files["v3/"+name]=(0o700,b"pass\n")
         blob=fixtures.host.release.archive(files,fixtures.host.context_digest);before=hashlib.sha256(blob).hexdigest()
         output=self.worker.package(blob,self.artifacts,fixtures.host.Runner.execution_entries)
         with tarfile.open(fileobj=io.BytesIO(output))as archive:
             text=archive.extractfile("v3/Dockerfile").read().decode()
-            self.assertIn("COPY --chmod=0755 v3/worker.py v3/sandbox.py v3/promote.py /opt/v3/",text)
-            self.assertEqual(archive.getmember("v3/worker.py").mode,0o700)
-            self.assertEqual(archive.extractfile("v3/worker.py").read(),b"pass\n")
+            self.assertIn("COPY --chmod=0755 v3/sandbox.py v3/promote.py /opt/v3/",text)
+            self.assertEqual(archive.getmember("v3/sandbox.py").mode,0o700)
+            self.assertEqual(archive.extractfile("v3/sandbox.py").read(),b"pass\n")
         self.assertEqual(hashlib.sha256(blob).hexdigest(),before)
         self.assertEqual(module.Executor.runtime_python_modes(text),text)
     def test_unknown_runtime_python_copy_contract_fails_closed(self):
-        for text in ("COPY v3/worker.py /other/", "COPY --chmod=0777 v3/worker.py /opt/v3/"):
+        for text in ("COPY v3/sandbox.py /other/", "COPY --chmod=0777 v3/sandbox.py v3/promote.py /opt/v3/"):
             with self.assertRaisesRegex(ValueError,"COPY contract"):module.Executor.runtime_python_modes(text)
+    def test_transitional_worker_copy_form_is_still_normalized(self):
+        old="COPY v3/worker.py v3/sandbox.py v3/promote.py /opt/v3/"
+        self.assertEqual(module.Executor.runtime_python_modes(old),old.replace("COPY ","COPY --chmod=0755 ",1))
 
     def test_exact_suite_proof_reuses_tests_but_changed_fixture_runs_them(self):
         from unittest.mock import patch
@@ -759,7 +762,7 @@ class HostFocusedVerificationTests(unittest.TestCase):
         self.assertEqual([p["id"]for p in plan],["host-prompt-restoration"])
         plan=self.worker.focused_test_plan(["v3/plugins/engine/context-assets/component.json"],{})
         self.assertEqual([p["id"]for p in plan],["host-offline-descriptor-identity"])
-        for path in ["v3/ui/chat/a.js","v3/worker.py","v3/docs/context.md","v3/src/unrelated.rs","v3/crates/unrelated/src/lib.rs"]:
+        for path in ["v3/ui/chat/a.js","v3/sandbox.py","v3/docs/context.md","v3/src/unrelated.rs","v3/crates/unrelated/src/lib.rs"]:
             self.assertEqual(self.worker.focused_test_plan([path],{}),[])
     def test_exact_names_profile_input_recipe_counts_and_timing(self):
         self.run_focus();proof=self.job["focused_verification"]

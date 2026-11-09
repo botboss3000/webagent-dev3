@@ -119,12 +119,6 @@ mod tests {
             .map(|schema| schema["name"].clone())
             .collect();
         assert_eq!(names, TOOLS.map(Value::from).to_vec());
-        let maintenance = &loaded.schemas[5];
-        assert_eq!(maintenance["name"], "code_index_maintenance");
-        assert_eq!(
-            maintenance["strict"], false,
-            "the folder keeps the schema's strict flag"
-        );
     }
 
     #[test]

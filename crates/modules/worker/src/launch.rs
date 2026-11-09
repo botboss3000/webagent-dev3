@@ -1,7 +1,7 @@
 //! The web container's launcher (`webagent-v3 --launch`), ported from `launch.py`, which
 //! now only hands over to it. A short privileged setup creates the protected directories,
-//! control files and the promotion socket; the promotion broker, the Python and Rust tool
-//! workers and the API then run under restricted identities, and the launcher itself
+//! control files and the promotion socket; the promotion broker, the tool worker and the
+//! API then run under restricted identities, and the launcher itself
 //! drops to the application identity. The separate loop and gate containers have their
 //! own entry points.
 use std::ffi::CString;
@@ -20,11 +20,11 @@ const APP_UID: u32 = 1100;
 const APP_GID: u32 = 1100;
 /// The checkout owner; the promotion broker keeps this identity.
 const OWNER_UID: u32 = 1000;
-/// The tool workers' own identity (`webagent-worker`), distinct from any host login.
+/// The tool worker's own identity (`webagent-worker`), distinct from any host login.
 const WORKER_UID: u32 = 1103;
 const APP_BINARY: &str = "/usr/local/bin/webagent-v3";
 const PROMOTE_SOCKET: &str = "/runtime/promote/promote.sock";
-/// The workers run as `webagent-worker` (1103) in the app group, with only the
+/// The worker runs as `webagent-worker` (1103) in the app group, with only the
 /// `webagent-source` group (1110) added so checkout_edit can write the checkout, and no
 /// capabilities: application-only files such as the encryption key stay unreadable to tools
 /// and no host login's files are reachable.
@@ -162,7 +162,6 @@ fn launch() -> io::Result<i32> {
         "/runtime",
         "/runtime/control",
         "/runtime/worker",
-        "/runtime/worker-legacy",
         "/runtime/promote",
     ] {
         directory(folder, 0, 0o700)?;
@@ -201,8 +200,6 @@ fn launch() -> io::Result<i32> {
     }
     directory("/runtime/control", APP_UID, 0o750)?;
     directory("/runtime/worker", WORKER_UID, 0o750)?;
-    // Only the worker identity reaches the Python worker, through the Rust front.
-    directory("/runtime/worker-legacy", WORKER_UID, 0o700)?;
     directory("/runtime/promote", APP_UID, 0o700)?;
     directory("/runtime", APP_UID, 0o755)?;
 
@@ -235,37 +232,18 @@ fn launch() -> io::Result<i32> {
     if exited(&mut broker) {
         return Err(failed("promotion broker failed"));
     }
-    // SAFETY: plain system calls; the launcher keeps root only to start the workers.
+    // SAFETY: plain system calls; the launcher keeps root only to start the worker.
     unsafe {
         if libc::setgroups(0, std::ptr::null()) != 0 || libc::setgid(APP_GID) != 0 {
             return Err(io::Error::last_os_error());
         }
     }
-    // The Python worker serves the tools the Rust worker does not run itself yet.
-    let mut legacy = worker(
-        &["/usr/bin/python3", "-I", "/opt/v3/worker.py"],
-        &[
-            ("PATH", "/usr/bin:/bin"),
-            ("LANG", "C.UTF-8"),
-            ("V3_TOOL_SOCKET", "/runtime/worker-legacy/tools.sock"),
-            ("V3_TOOL_CLIENT_UID", "1103"),
-            ("V3_WORKSPACE_ROOT", "/workspaces"),
-            ("V3_CODE_TEMPLATE", "/opt/v3/assets/current/v3"),
-        ],
-    )?;
-    wait_for(
-        "/runtime/worker-legacy/tools.sock",
-        &mut legacy,
-        &mut broker,
-        "Python tool worker",
-    )?;
     let mut tools = worker(
         &[APP_BINARY, "--tool-worker"],
         &[
             ("PATH", "/usr/bin:/bin"),
             ("LANG", "C.UTF-8"),
             ("V3_TOOL_SOCKET", "/runtime/worker/tools.sock"),
-            ("V3_LEGACY_TOOL_SOCKET", "/runtime/worker-legacy/tools.sock"),
             ("V3_TOOL_CLIENT_UID", "1100"),
         ],
     )?;
@@ -302,7 +280,7 @@ fn launch() -> io::Result<i32> {
         if STOPPING.swap(false, Ordering::SeqCst) {
             terminate_app();
         }
-        if exited(&mut app) || exited(&mut tools) || exited(&mut legacy) || exited(&mut broker) {
+        if exited(&mut app) || exited(&mut tools) || exited(&mut broker) {
             break;
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -311,7 +289,7 @@ fn launch() -> io::Result<i32> {
         terminate_app();
     }
     // As launch.py: the first process that ended with a non-zero code decides the exit.
-    let code = [&mut app, &mut tools, &mut legacy, &mut broker]
+    let code = [&mut app, &mut tools, &mut broker]
         .into_iter()
         .filter_map(|child| child.try_wait().ok().flatten())
         .map(|status| {

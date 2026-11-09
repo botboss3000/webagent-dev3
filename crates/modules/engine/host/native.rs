@@ -88,15 +88,6 @@ impl
                     cancel,
                 ))
                 .await
-            } else if tools::native::visual_capture::owns(&name) {
-                tools::native::visual_capture::execute(
-                    &tools::native_host::Host(&app),
-                    native_call,
-                    &name,
-                    &args,
-                    cancel,
-                )
-                .await
             } else if tools::native::vault::owns(&name) {
                 tools::native::vault::execute(
                     &tools::native_host::Host(&app),
@@ -672,34 +663,6 @@ impl
         >,
     ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         async move { crate::followup_queue::scheduler_tick(&self.host.app(view)).await }
-    }
-
-    fn code_index_configuration_attach<'a>(
-        &'a self,
-        view: View<
-            'a,
-            Store,
-            loop_runtime::NativeSchemas,
-            abilities::Catalog,
-            shared_chat::SessionAccess,
-        >,
-        args: &'a Value,
-        result: &'a mut Value,
-        cancel: &'a CancellationToken,
-    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
-        async move {
-            let app = self.host.app(view);
-            webagent_administration_host::code_index::attach_configuration(
-                &crate::tools::administrator::Host(&app),
-                args,
-                result,
-                cancel,
-            )
-            .await
-        }
-    }
-    fn code_index_configuration_snippet_bytes(source: &Value) -> usize {
-        webagent_administration::code_index::snippet_bytes(source)
     }
 
     fn messaging_revalidate<'a>(

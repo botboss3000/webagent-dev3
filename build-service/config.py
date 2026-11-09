@@ -42,10 +42,8 @@ def validate(value):
  allowed={"instance","checkout_root","service_account","source_owner","state_root","workspace_root","runtime_root","app_state_root","install_root","service_dir","app_uid","app_gid","worker_uid","worker_gid","api_container","loop_container","gate_container","bind_address","port","public_origin","worker_control","api_pids_limit","scheduler","code_index_ledger_max_bytes"}
  if set(value)-allowed:raise ValueError("Unknown installation field")
  v=dict(value)
- # Ledger capacity is protected installation policy, never a caller override.
- v.setdefault("code_index_ledger_max_bytes",768*1024**2)
- ledger=v["code_index_ledger_max_bytes"]
- if type(ledger)is not int or not 512*1024**2<=ledger<=1024**3 or ledger%4096:raise ValueError("Invalid review ledger storage budget")
+ # Retired Code Index keys (code_index_ledger_max_bytes, post_deployment_indexing,
+ # documentation_review_order) stay accepted so existing installed configs still load.
  policy=v.get("scheduler",{})
  if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes","task_aware_cleanup","disk_min_free_bytes","disk_grace_seconds","disk_cleanup_batch","documentation_review_order","post_deployment_indexing","package_cache_enabled","package_cache_download_workers","package_cache_max_age_seconds","package_cache_retention_seconds","package_cache_max_bytes","package_cache_prepare_memory_bytes","failure_grace_seconds"}-RESOURCE_KEYS-TUNING_KEYS:raise ValueError("Invalid scheduler policy")
  policy={**scheduler_defaults(),**policy}
@@ -54,7 +52,6 @@ def validate(value):
  if type(cpu["cpu_priority"])is not str or cpu["cpu_priority"]not in {"balanced","broker"}:raise ValueError("Invalid CPU priority")
  policy.update(cpu)
  validate_tuning(policy)
- if policy.get("documentation_review_order","before_deployment")not in {"before_deployment","after_deployment"}:raise ValueError("Invalid documentation review order")
  if policy["mode"]not in {"observe","enforce"}or type(policy["orphan_after_seconds"])is not int or not 60<=policy["orphan_after_seconds"]<=86400:raise ValueError("Invalid ownership policy")
  if type(policy.get("failure_grace_seconds",1800))is not int or not 300<=policy.get("failure_grace_seconds",1800)<=7200:raise ValueError("Invalid failed-release grace window")
  for key,default,low,high in [("reserve_bytes",768*1024**2,256*1024**2,16*1024**3),("reserve_percent",10,5,50),("max_phases",4,1,16),("max_parked",2,0,8),("memory_pressure_percent",5,1,50)]:
@@ -62,8 +59,6 @@ def validate(value):
   if type(policy[key])is not int or not low<=policy[key]<=high:raise ValueError("Invalid scheduler resource policy: "+key)
  if type(policy.get("concurrent_ui_preparation",False))is not bool:raise ValueError("Invalid UI preparation policy")
  if type(policy.get("component_indexing",False))is not bool:raise ValueError("Invalid component index policy")
- if type(policy.get("post_deployment_indexing",False))is not bool:raise ValueError("Invalid post-deployment index policy")
- if policy.get("post_deployment_indexing",False)and policy.get("documentation_review_order")!="after_deployment":raise ValueError("Post-deployment indexing requires post-deployment documentation review")
  if type(policy.get("ui_file_reservations",False))is not bool:raise ValueError("Invalid UI reservation policy")
  if type(policy.get("max_ui_preparations",1))is not int or not 1<=policy.get("max_ui_preparations",1)<=2:raise ValueError("Invalid UI preparation limit")
  if policy["concurrent_ui_preparation"]and(policy["mode"]!="enforce"or not policy["component_indexing"]):raise ValueError("Concurrent UI preparation requires enforced scheduling and measured component indexing")
@@ -122,7 +117,7 @@ def defaults(root=None):
  try:user=pwd.getpwuid(os.getuid()).pw_name if os.getuid()!=0 else "webagent-build"
  except KeyError:user="webagent-build"
  install=Path("/var/lib/webagent/development/build-service")
- return dict(scheduler=scheduler_defaults(),api_pids_limit=256,code_index_ledger_max_bytes=768*1024**2,instance="development",checkout_root=str(root),service_account=user,source_owner=user,state_root=str(root/"build-jobs"),workspace_root=str(root/"workspaces"),runtime_root=str(root/"runtime/build"),app_state_root=str(root/"data"),install_root=str(install),service_dir=str(install/"releases/bootstrap"),app_uid=1100,app_gid=1100,worker_uid=1103,worker_gid=1100,api_container="webagent-dev-v3",loop_container="webagent-dev-v3-loop",gate_container="webagent-dev-v3-gate",bind_address="127.0.0.1",port=8081,public_origin="http://127.0.0.1:8081",worker_control="/var/lib/webagent-v3-build-worker/control.sock")
+ return dict(scheduler=scheduler_defaults(),api_pids_limit=256,instance="development",checkout_root=str(root),service_account=user,source_owner=user,state_root=str(root/"build-jobs"),workspace_root=str(root/"workspaces"),runtime_root=str(root/"runtime/build"),app_state_root=str(root/"data"),install_root=str(install),service_dir=str(install/"releases/bootstrap"),app_uid=1100,app_gid=1100,worker_uid=1103,worker_gid=1100,api_container="webagent-dev-v3",loop_container="webagent-dev-v3-loop",gate_container="webagent-dev-v3-gate",bind_address="127.0.0.1",port=8081,public_origin="http://127.0.0.1:8081",worker_control="/var/lib/webagent-v3-build-worker/control.sock")
 def layout(c):
  """Host folder for each app container mount point. The gate's sockets live beside runtime/.
 

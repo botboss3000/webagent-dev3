@@ -42,7 +42,6 @@ pub mod ui_admin;
 pub mod user_files;
 pub mod utilities;
 pub mod vault;
-pub mod visual_capture;
 pub mod visualizer;
 pub mod web_access;
 pub mod webhooks;

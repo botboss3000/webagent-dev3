@@ -43,7 +43,7 @@ class CleanupTests(unittest.TestCase):
         self.assertFalse(any("prune"in c for c in self.calls))
     def test_dry_run_has_candidates_but_no_docker_deletion(self):
         self.pin_old();r=self.guard.cleanup();self.assertEqual(len(r["eligible"]),1);self.assertIn(self.image,self.images)
-    def test_queued_running_review_waiting_and_unresolved_jobs_remain(self):
+    def test_queued_running_waiting_and_unresolved_jobs_remain(self):
         self.pin_old()
         for state in ["queued","running","needs_decision","failed","uncertain","interrupted","unknown"]:
             self.receipt(self.job,state);self.assertEqual(self.guard.cleanup(True)["removed"],[])
@@ -277,27 +277,5 @@ class CleanupLockAdmissionTests(unittest.TestCase):
         module,control=self.control(TimeoutError("Retention lock busy"))
         with patch.object(module.os,"geteuid",return_value=0),self.assertRaises(TimeoutError):
             control.handle({"operation":"disk_finish"})
-
-class IndexSeedSafetyTests(unittest.TestCase):
-    """Optional cache rejection must not certify a corrupt published pair."""
-    def test_invalid_published_seed_is_not_reused(self):
-        from unittest.mock import patch
-        from types import SimpleNamespace
-        import test_admin_build as fixtures
-        runner=fixtures.host.Runner.__new__(fixtures.host.Runner)
-        def invalid(root):raise ValueError("Published source/index binding mismatch")
-        with patch.object(fixtures.host.maintenance_engine,"load_scanner",return_value=SimpleNamespace(read_published=invalid)):
-            self.assertIsNone(runner.verified_index_seed(Path("/invalid-published-fixture")))
-    def test_verified_seed_can_be_reused(self):
-        from unittest.mock import patch
-        from types import SimpleNamespace
-        import test_admin_build as fixtures
-        runner=fixtures.host.Runner.__new__(fixtures.host.Runner);root=Path("/verified-published-fixture");seen=[]
-        with patch.object(fixtures.host.maintenance_engine,"load_scanner",return_value=SimpleNamespace(read_published=lambda p:seen.append(p)or(b"index",{}))):
-            self.assertEqual(runner.verified_index_seed(root),root)
-        self.assertEqual(seen,[root])
-    def test_no_seed_requires_no_published_read(self):
-        import test_admin_build as fixtures
-        self.assertIsNone(fixtures.host.Runner.__new__(fixtures.host.Runner).verified_index_seed(None))
 
 if __name__=="__main__":unittest.main(verbosity=2)

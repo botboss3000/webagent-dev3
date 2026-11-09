@@ -38,11 +38,10 @@ def restrictor():
 
 def administrator_plugin(name):
     # Static ownership, not manifest-driven imports or a model supplied path.
-    if name not in ("code_index", "v3_workspace"):
+    if name != "v3_workspace":
         raise ValueError("unknown installed Administrator adapter")
     if name not in PLUGINS:
-        path = (SERVICE / "workspace.py" if name == "v3_workspace"
-                else APP / "plugins/abilities/Administrator" / name / "adapter.py")
+        path = SERVICE / "workspace.py"
         spec = importlib.util.spec_from_file_location("v3_admin_" + name, path)
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
@@ -188,8 +187,7 @@ def runner(argv):
         if set(spec) not in ({"base", "template", "stage"}, {"base", "template", "stage", "published"}) or type(spec.get("published", False)) is not bool or Path(spec["base"]).resolve() != Path.cwd() or not spec["stage"].startswith(".v3-seed-") or "/" in spec["stage"]:
             raise ValueError("invalid trusted seed invocation")
         read_paths = (Path(spec["template"]).parent if (Path(spec["template"]).parent / ".code-index").is_dir() else Path(spec["template"]),
-                      SERVICE, (APP / "sandbox.py").resolve(),
-                      APP / "plugins/abilities/Administrator/code_index/adapter.py")
+                      SERVICE, (APP / "sandbox.py").resolve())
     # Cargo reads system folders and the checkout's source files and writes only this
     # workspace; state, other workspaces, control sockets and checkout runtime folders stay out.
     if not read_paths:

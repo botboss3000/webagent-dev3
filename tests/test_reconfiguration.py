@@ -29,7 +29,7 @@ class BootstrapMigrationTests(unittest.TestCase):
   spec=importlib.util.spec_from_file_location("migration_installer",path);installer=importlib.util.module_from_spec(spec);spec.loader.exec_module(installer)
   with tempfile.TemporaryDirectory()as temporary,patch.object(installer,"V3",Path(temporary)),patch.object(installer,"root_only",lambda:None):
    self.assertTrue(installer.snapshot_context(("v3/ability_plugin_worker.py",)))
-   with self.assertRaises(FileNotFoundError):installer.snapshot_context(("v3/worker.py",))
+   with self.assertRaises(FileNotFoundError):installer.snapshot_context(("v3/sandbox.py",))
 
 class ListenerPreflightTests(unittest.TestCase):
  def test_active_listener_is_rejected(self):

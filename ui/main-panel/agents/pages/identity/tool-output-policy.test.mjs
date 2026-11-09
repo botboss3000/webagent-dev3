@@ -24,7 +24,7 @@ function fixture(agent, persist) {
 }
 function agent(canManage=true) {
   return {can_manage:canManage,tool_result_deduplication:{enabled:true},
-    tool_output_policy:{enabled:true,scope:'code_index',tools:[],lifetime_calls:6,
+    tool_output_policy:{enabled:true,scope:'all_eligible',tools:[],lifetime_calls:6,
       ordinary_chars:24000,promoted_chars:24000,refresh_on_recall:true,promote_on_edit:true},
     tool_output_eligible_tools:['file_read']};
 }

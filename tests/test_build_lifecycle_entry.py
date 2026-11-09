@@ -44,7 +44,7 @@ class StaleTreeGuardTests(unittest.TestCase):
         self.assertEqual(lifecycle.stale_tree(tree,release),["host.py"])
     def test_tree_based_on_the_installed_release_passes(self):
         tree,release=self.layout(base={"host.py":b"theirs","install.py":b"i"},tree={"host.py":b"mine","install.py":b"i2"},
-                                 installed={"host.py":b"theirs","bootstrap.py":b"i","index-maintenance.py":b"x"})
+                                 installed={"host.py":b"theirs","bootstrap.py":b"i","retired-helper.py":b"x"})
         self.assertEqual(lifecycle.stale_tree(tree,release),[])
     def test_tree_that_already_carries_the_installed_bytes_passes(self):
         tree,release=self.layout(base={"host.py":b"old"},tree={"host.py":b"theirs"},installed={"host.py":b"theirs"})

@@ -374,12 +374,6 @@ impl AdministrationHost for Host<'_> {
     fn stopping(&self) -> CancellationToken {
         self.0.stop.child_token()
     }
-    fn chat_ui_config_path(&self) -> &Path {
-        &self.0.chat_ui_config_path
-    }
-    fn compaction_config_path(&self) -> &Path {
-        &self.0.compaction_config_path
-    }
 }
 
 /// Run a workspace operation on the broker under a renewed lease.
@@ -395,7 +389,7 @@ pub async fn workspace_host(
 }
 
 /// Run one Administrator tool call. Source Control calls go to their ability adapter;
-/// everything else, Code Index included, runs in the Administration module.
+/// everything else runs in the Administration module.
 #[allow(clippy::too_many_arguments)]
 pub async fn execute(
     app: &App,
@@ -418,45 +412,17 @@ pub async fn execute(
     if crate::source_control::owns(name) {
         return Box::pin(crate::source_control::execute(app, sid, name, args, cancel)).await;
     }
-    match name {
-        "code_index_maintenance" => {
-            webagent_administration_host::code_index::maintenance(
-                &Host(app),
-                sid,
-                run_id,
-                args,
-                cancel,
-            )
-            .await
-        }
-        "code_index_lookup" => {
-            let trusted = None;
-            let mut result =
-                tools::execute_trusted(name, args, sid, &app.tool_socket, trusted, cancel.clone())
-                    .await?;
-            webagent_administration_host::code_index::attach_configuration(
-                &Host(app),
-                args,
-                &mut result,
-                &cancel,
-            )
-            .await?;
-            Ok(result)
-        }
-        _ => {
-            let call = webagent_administration_host::tools::Call {
-                sid,
-                run_id,
-                run: &run,
-                agent: &agent,
-                name,
-                args,
-                pending_id,
-                policy_version,
-            };
-            webagent_administration_host::tools::execute(&Host(app), call, cancel).await
-        }
-    }
+    let call = webagent_administration_host::tools::Call {
+        sid,
+        run_id,
+        run: &run,
+        agent: &agent,
+        name,
+        args,
+        pending_id,
+        policy_version,
+    };
+    webagent_administration_host::tools::execute(&Host(app), call, cancel).await
 }
 
 /// Narrow UI Admin aliases use their own tool decision plus unchanged protected source
@@ -525,118 +491,5 @@ mod tests {
             .map(Value::from)
             .to_vec();
         assert_eq!(names, expected);
-    }
-
-    #[tokio::test]
-    async fn feature_settings_attach_without_an_agent_turn_and_respect_scope() {
-        use webagent_accounts_host::AccountsStore;
-        use webagent_administration_host::code_index::attach_configuration as attach;
-        let (root, mut app) = crate::runtime_tests::fixture().await;
-        app.chat_ui_config_path = root.path().join("chat.json");
-        app.compaction_config_path = root.path().join("context.json");
-        tokio::fs::write(&app.chat_ui_config_path,br#"{"chat_common":{"message_bubbles":{"user":{"bg_dark":"blue"}}},"chat_desktop":{"message_bubbles":{"user":{"bg_dark":"red"}}}}"#).await.unwrap();
-        tokio::fs::write(&app.compaction_config_path, br#"{"trigger_tokens":4096}"#)
-            .await
-            .unwrap();
-        let original = json!({"status":"success","results":[{"text":"paint()","stale":false,"configuration":{"status":"configured","references":[
-            {"path":"ui/chat/chat.json","pointers":["/chat_common/message_bubbles/user/bg_dark"],"profile_overrides":true},
-            {"path":"crates/modules/context/context-compaction.json","pointers":["/trigger_tokens"]},
-            {"path":root.path().join("forbidden.json").to_string_lossy(),"pointers":["/secret"]}
-        ]}}]});
-        let args = json!({"action":"snippet","root":"published","max_chars":512});
-        let cancel = CancellationToken::new();
-        let snippet_bytes = webagent_administration::code_index::snippet_bytes;
-        let mut result = original.clone();
-        attach(&Host(&app), &args, &mut result, &cancel)
-            .await
-            .unwrap();
-        let rows = result["results"][0]["configuration_snippets"]
-            .as_array()
-            .unwrap();
-        assert_eq!(rows[0]["text"], json!("\"blue\""));
-        assert_eq!(rows[1]["text"], json!("\"red\""));
-        assert_eq!(rows[2]["status"], "unset");
-        assert_eq!(rows[4]["text"], "4096");
-        assert_eq!(rows[5]["status"], "unavailable");
-        assert!(snippet_bytes(&result["results"][0]) + 7 <= 512);
-        assert!(rows[0]["runtime_path"]
-            .as_str()
-            .unwrap()
-            .ends_with("chat.json"));
-        let hash = rows[0]["sha256"].clone();
-        tokio::fs::write(
-            &app.chat_ui_config_path,
-            br#"{"chat_common":{"message_bubbles":{"user":{"bg_dark":"green"}}}}"#,
-        )
-        .await
-        .unwrap();
-        let mut fresh = original.clone();
-        attach(&Host(&app), &args, &mut fresh, &cancel)
-            .await
-            .unwrap();
-        assert_eq!(
-            fresh["results"][0]["configuration_snippets"][0]["text"],
-            json!("\"green\"")
-        );
-        assert_ne!(
-            fresh["results"][0]["configuration_snippets"][0]["sha256"],
-            hash
-        );
-        let mut private = original.clone();
-        attach(
-            &Host(&app),
-            &json!({"action":"snippet","root":"webagent-v3","max_chars":512}),
-            &mut private,
-            &cancel,
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            private["results"][0]["configuration_snippets"][0]["status"],
-            "snapshot_only"
-        );
-        assert_eq!(snippet_bytes(&private["results"][0]), 0);
-        let account = app
-            .store
-            .create_user_account("config_reader", "fixture-password-hash-only")
-            .await
-            .unwrap();
-        let user = account["user_id"].as_str().unwrap();
-        app.store
-            .update_account_access(
-                user,
-                1,
-                crate::access::AccountStatus::Active,
-                crate::access::Role::User,
-                "basic",
-            )
-            .await
-            .unwrap();
-        app.store = app.store.for_user(user).await.unwrap();
-        let mut ordinary = original.clone();
-        attach(&Host(&app), &args, &mut ordinary, &cancel)
-            .await
-            .unwrap();
-        assert_eq!(
-            ordinary["results"][0]["configuration_snippets"][4]["status"],
-            "not_permitted"
-        );
-        app.store
-            .update_account_access(
-                user,
-                2,
-                crate::access::AccountStatus::Disabled,
-                crate::access::Role::User,
-                "basic",
-            )
-            .await
-            .unwrap();
-        assert!(attach(&Host(&app), &args, &mut original.clone(), &cancel)
-            .await
-            .is_err());
-        cancel.cancel();
-        assert!(attach(&Host(&app), &args, &mut original.clone(), &cancel)
-            .await
-            .is_err());
     }
 }

@@ -1823,9 +1823,12 @@ class Executor:
     @staticmethod
     def runtime_python_modes(dockerfile):
         """Normalize only baked runtime scripts; frozen source and private modes stay intact."""
-        source="COPY v3/worker.py v3/sandbox.py v3/promote.py /opt/v3/"
+        # The worker.py form is accepted until every open task's Dockerfile has dropped it.
+        lines=dockerfile.splitlines()
+        source=next((s for s in ("COPY v3/sandbox.py v3/promote.py /opt/v3/","COPY v3/worker.py v3/sandbox.py v3/promote.py /opt/v3/")
+                     if s in lines or s.replace("COPY ","COPY --chmod=0755 ",1)in lines),"COPY v3/sandbox.py v3/promote.py /opt/v3/")
         normalized=source.replace("COPY ","COPY --chmod=0755 ",1)
-        if dockerfile.splitlines().count(source)+dockerfile.splitlines().count(normalized)!=1:
+        if lines.count(source)+lines.count(normalized)!=1:
             raise ValueError("Reviewed runtime Python COPY contract required")
         return dockerfile.replace(source,normalized)
 

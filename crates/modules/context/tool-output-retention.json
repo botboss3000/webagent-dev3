@@ -1,6 +1,6 @@
 {
   "enabled": false,
-  "scope": "code_index",
+  "scope": "all_eligible",
   "tools": [],
   "lifetime_calls": 6,
   "ordinary_chars": 24000,

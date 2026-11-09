@@ -172,12 +172,6 @@ def install(tree=None):
         bootstrap = read_regular(source, "install.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
         release = read_regular(source, "release.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
         performance = read_regular(source, "performance.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
-        index_source = directory(source_path.parent / "plugins/abilities/Administrator/code_index")
-        try:
-            maintenance = read_regular(index_source, "maintenance.py", 2*1024*1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
-            scanner = read_regular(index_source, "adapter.py", 2*1024*1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
-        finally:
-            os.close(index_source)
         service = protected_directory(parent,SERVICE.name)
         # Compile without importing or executing source. The installed service
         # subsequently runs its protected copy, never this writable checkout.
@@ -185,16 +179,12 @@ def install(tree=None):
         compile(bootstrap, "bootstrap.py", "exec")
         compile(release, "release.py", "exec")
         compile(performance, "performance.py", "exec")
-        compile(scanner, "index-scanner.py", "exec")
-        compile(maintenance,"index-maintenance.py","exec")
         publish(service, "host.py", host, 0o644)
         publish(service, "bootstrap.py", bootstrap, 0o644)
         publish(service, "release.py", release, 0o644)
         publish(service, "performance.py", performance, 0o644)
-        publish(service, "index-scanner.py", scanner, 0o644)
-        publish(service,"index-maintenance.py",maintenance,0o644)
-        extra={"index-maintenance.py":hashlib.sha256(maintenance).hexdigest()}
-        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","executor_worker.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py","ownership.py","scheduler.py","index_queue.py","index_coordinator.py","review_store.py","review_policy.py","post_deployment.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","ui_policy.py","ui_publication.py","ui-test.Dockerfile","compiler.Dockerfile","resources.py","resource_control.py","docker_retention.py","docker_guard_dispatch.py","executor.py","engine_components.py","monitoring_component.py","source_status.py","boot_host.py","scheduler-defaults.json"):
+        extra={}
+        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","executor_worker.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py","ownership.py","scheduler.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","ui_policy.py","ui_publication.py","ui-test.Dockerfile","compiler.Dockerfile","resources.py","resource_control.py","docker_retention.py","docker_guard_dispatch.py","executor.py","engine_components.py","monitoring_component.py","source_status.py","boot_host.py","scheduler-defaults.json"):
             body=read_regular(source,name,2*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
             if name.endswith(".py"):compile(body,name,"exec")
             elif name.endswith(".json"):json.loads(body)
@@ -214,18 +204,11 @@ def install(tree=None):
                     parentfd=directory(cursor);childfd=protected_directory(parentfd,part);os.close(childfd);os.close(parentfd);cursor=cursor/part
                 inputfd=directory(file.parent);body=read_regular(inputfd,file.name,4*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]));os.close(inputfd)
                 outputfd=directory(cursor);publish(outputfd,file.name,body,0o644);os.close(outputfd)
-        manifest = {"modules":extra,"performance_sha256": hashlib.sha256(performance).hexdigest(), "host_sha256": hashlib.sha256(host).hexdigest(), "bootstrap_sha256": hashlib.sha256(bootstrap).hexdigest(), "release_sha256": hashlib.sha256(release).hexdigest(), "scanner_sha256":hashlib.sha256(scanner).hexdigest()}
+        manifest = {"modules":extra,"performance_sha256": hashlib.sha256(performance).hexdigest(), "host_sha256": hashlib.sha256(host).hexdigest(), "bootstrap_sha256": hashlib.sha256(bootstrap).hexdigest(), "release_sha256": hashlib.sha256(release).hexdigest()}
         publish(service, "installed.json", json.dumps(manifest, sort_keys=True).encode())
         if read_regular(source, "performance.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"])) != performance or read_regular(source, "host.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"])) != host or read_regular(source, "install.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"])) != bootstrap or read_regular(source, "release.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"])) != release:
             raise ValueError("installation raced a source edit; repeat after writers pause")
-        index_source = directory(source_path.parent / "plugins/abilities/Administrator/code_index")
-        try:
-            if read_regular(index_source, "adapter.py", 2*1024*1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"])) != scanner or read_regular(index_source,"maintenance.py",2*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))!=maintenance:
-                raise ValueError("installation raced an index parser edit")
-        finally:
-            os.close(index_source)
         for name,expected in extra.items():
-            if name=="index-maintenance.py":continue # Ability source was rechecked through its pinned directory above.
             if hashlib.sha256(read_regular(source,name,2*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))).hexdigest()!=expected:raise ValueError("Installation raced a module edit")
         return manifest
     finally:
@@ -744,7 +727,7 @@ def start():
     runtime = directory(RUNTIME)
     try:
         manifest = json.loads(read_regular(service, "installed.json", 4096, owner=0))
-        for name, key in (("host.py", "host_sha256"), ("bootstrap.py", "bootstrap_sha256"), ("release.py", "release_sha256"), ("index-scanner.py", "scanner_sha256"), ("performance.py", "performance_sha256")):
+        for name, key in (("host.py", "host_sha256"), ("bootstrap.py", "bootstrap_sha256"), ("release.py", "release_sha256"), ("performance.py", "performance_sha256")):
             body = read_regular(service, name, 2 * 1024 * 1024, owner=0)
             if hashlib.sha256(body).hexdigest() != manifest[key]:
                 raise ValueError("installed broker code digest changed")
@@ -820,7 +803,7 @@ def main():
         if Path(__file__).resolve()!=SERVICE/"bootstrap.py":raise PermissionError("Installed bootstrap required")
         service=directory(SERVICE)
         manifest=json.loads(read_regular(service,"installed.json",8192,owner=0))
-        for name,key in (("host.py","host_sha256"),("bootstrap.py","bootstrap_sha256"),("release.py","release_sha256"),("performance.py","performance_sha256"),("index-scanner.py","scanner_sha256")):
+        for name,key in (("host.py","host_sha256"),("bootstrap.py","bootstrap_sha256"),("release.py","release_sha256"),("performance.py","performance_sha256")):
             if hashlib.sha256(read_regular(service,name,2*1024*1024,owner=0)).hexdigest()!=manifest[key]:raise ValueError("Installed code changed")
         for name,expected in manifest.get("modules",{}).items():
             if hashlib.sha256(read_regular(service,name,2*1024*1024,owner=0)).hexdigest()!=expected:raise ValueError("Installed module changed")

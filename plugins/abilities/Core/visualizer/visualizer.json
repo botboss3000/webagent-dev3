@@ -1,7 +1,7 @@
 {
   "display_name": "Visualizer",
   "kind": "ability",
-  "description": "Create and edit caller-private self-contained mini apps with data, live sandboxed chat displays, private credential setup and isolated browser captures.",
+  "description": "Create and edit caller-private self-contained mini apps with data, live sandboxed chat displays and private credential setup.",
   "icon": "layout",
   "color": "#7aa2f7",
   "order": 11,

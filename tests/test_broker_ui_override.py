@@ -139,7 +139,7 @@ class OperatorAcceptTests(unittest.TestCase):
             with self.assertRaises(PermissionError): self.accept([A, B], trusted=other)
             app = dict(self.local); app.pop("local_caller")
             with self.assertRaises(PermissionError): self.accept([A, B], trusted=app)
-            self.job["phase"] = "awaiting_prepared_reviews"
+            self.job["phase"] = "building"
             with self.assertRaisesRegex(ValueError, "not paused"): self.accept([A, B])
             self.job["phase"] = "awaiting_ui_test_decision"; self.job["ui_test_failure"]["inputs_sha256"] = "9" * 64
             with self.assertRaisesRegex(ValueError, "stale"): self.accept([A, B])

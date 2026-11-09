@@ -1923,7 +1923,7 @@
     },
     "tool-output-retention.json": {
       "enabled": false,
-      "scope": "code_index",
+      "scope": "all_eligible",
       "tools": [],
       "lifetime_calls": 6,
       "ordinary_chars": 24000,
@@ -1971,7 +1971,6 @@
           "ability_permissions": {
             "automation": "auto",
             "base": "auto",
-            "code_index": "auto",
             "codebase_admin": "auto",
             "decision": "auto",
             "diagnostics": "auto",
@@ -2004,7 +2003,6 @@
         },
         "code_index_accept_20261009": {
           "ability_permissions": {
-            "code_index": "auto",
             "decision": "auto"
           },
           "allowed_models": [
@@ -2041,7 +2039,6 @@
         "core_api_e12c46dfbc1f": {
           "ability_permissions": {
             "base": "auto",
-            "code_index": "auto",
             "codebase_admin": "auto",
             "diagnostics": "auto",
             "git_control": "auto",
@@ -2062,11 +2059,6 @@
             "browser_read": "ask",
             "browser_record": "ask",
             "calculate": "auto",
-            "code_index_coverage": "ask",
-            "code_index_lookup": "ask",
-            "code_index_progress": "ask",
-            "code_index_scan": "ask",
-            "code_index_trace": "ask",
             "commit_and_push": "ask",
             "file_list": "ask",
             "file_read": "ask",
@@ -2145,7 +2137,6 @@
         "operator": {
           "ability_permissions": {
             "base": "auto",
-            "code_index": "auto",
             "codebase_admin": "auto",
             "decision": "auto",
             "diagnostics": "auto",

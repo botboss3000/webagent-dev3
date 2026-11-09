@@ -414,18 +414,6 @@
         "size": 18207
       },
       {
-        "installed_path": "index-maintenance.py",
-        "source": "plugins/abilities/Administrator/code_index/maintenance.py",
-        "sha256": "203540884e6e43120a9e325129bd59832f110a104380ade80925bcbed995faf7",
-        "size": 29207
-      },
-      {
-        "installed_path": "index-scanner.py",
-        "source": "plugins/abilities/Administrator/code_index/adapter.py",
-        "sha256": "a5f5aa5d3fff20612c88af26bc78f29d2a006d4bea932d6bf74185a0152509de",
-        "size": 96390
-      },
-      {
         "installed_path": "index_coordinator.py",
         "source": "build-service/index_coordinator.py",
         "sha256": "c89821f435a66df7ad2a81877d402a7298b65270a591d8e3a1860c2aee7cdabe",

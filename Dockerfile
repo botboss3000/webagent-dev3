@@ -137,7 +137,7 @@ COPY --from=tested_builder /out/webagent-diagnostics /usr/local/bin/webagent-dia
 COPY --from=tested_builder /out/webagent-optimization /usr/local/bin/webagent-optimization
 COPY --from=tested_builder /out/optimization-cargo /opt/optimization-cargo
 COPY --from=tested_builder /usr/local/rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu /opt/rust
-COPY v3/worker.py v3/sandbox.py v3/promote.py /opt/v3/
+COPY v3/sandbox.py v3/promote.py /opt/v3/
 COPY v3/build-service /opt/v3/build-service
 COPY v3/plugins/abilities /opt/v3/plugins/abilities
 COPY v3/plugins/engine /opt/v3/plugins/engine
@@ -154,7 +154,7 @@ COPY v3/plugins/gates /opt/v3/plugins/gates
 COPY --from=voice /opt/voice /opt/voice
 RUN chmod -R a+rX /opt/v3/plugins
 RUN chmod 0755 /opt/v3 /opt/v3/plugins /opt/v3/plugins/gates /opt/v3/plugins/gates/publication_size_guard_v1 && chmod 0444 /opt/v3/plugins/gates/publication_size_guard_v1/gate.json
-RUN chmod a+r /opt/v3/*.py && python3 -c "import os,pathlib; os.setgid(1100); os.setuid(1101); files=[pathlib.Path('/opt/v3/plugins/abilities/Core/visualizer/capture.py')]; [compile(p.read_text(),str(p),'exec') for p in files]"
+RUN chmod a+r /opt/v3/*.py
 COPY v3 /opt/v3/source-template
 COPY v3/ui /opt/v3/ui
 COPY v3/ui-baseline.json /opt/v3/ui-baseline.json

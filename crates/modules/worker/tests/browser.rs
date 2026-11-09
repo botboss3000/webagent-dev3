@@ -27,7 +27,6 @@ async fn worker(origin: &str) -> Worker {
     let socket = dir.path().join("tools.sock");
     let config = Config {
         socket: socket.clone(),
-        legacy_socket: dir.path().join("legacy.sock"),
         client_uid: std::fs::metadata(dir.path()).expect("directory").uid(),
         files: Roots {
             workspaces: dir.path().join("workspaces"),

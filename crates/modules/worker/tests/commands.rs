@@ -36,7 +36,6 @@ async fn worker() -> Worker {
     let socket = dir.path().join("tools.sock");
     let config = Config {
         socket: socket.clone(),
-        legacy_socket: dir.path().join("legacy.sock"),
         client_uid: std::fs::metadata(dir.path()).expect("directory").uid(),
         files: Roots {
             workspaces: dir.path().join("workspaces"),
@@ -230,8 +229,8 @@ async fn a_quiesce_stops_the_workspace_commands() {
         )
         .await;
     tokio::time::sleep(Duration::from_millis(300)).await;
-    // No Python worker here: the quiesce itself fails after stopping the command.
-    worker.call("administrator_quiesce", json!({}), 30).await;
+    let quiesced = worker.call("administrator_quiesce", json!({}), 30).await;
+    assert_eq!(quiesced, json!({"status":"success"}));
     let mut line = Vec::new();
     BufReader::new(stream)
         .read_until(b'\n', &mut line)

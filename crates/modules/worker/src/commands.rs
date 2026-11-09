@@ -101,8 +101,8 @@ fn plan(name: &str, args: &Value) -> Result<Vec<String>, String> {
         .collect())
 }
 
-/// The workspace's four preview ports, claimed once in the shared claim directory (the
-/// Python worker's terminals read the same files) under an exclusive lock.
+/// The workspace's four preview ports, claimed once in the shared claim directory under an
+/// exclusive lock.
 pub(crate) fn network_ports(directory: &Path, base: &Path) -> io::Result<Vec<u16>> {
     let key = std::fs::canonicalize(base)?;
     std::fs::DirBuilder::new()

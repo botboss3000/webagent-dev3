@@ -28,7 +28,7 @@ try {
     const {renderToolOutputPolicy}=await import('/ui/main-panel/agents/pages/identity/tool-output-policy.js');
     const {vibrationConfigReady}=await import('/ui/shared/vibrate.js');await vibrationConfigReady;
     const stored=JSON.parse(localStorage.getItem('dedup-fixture')||'true');
-    const agent={can_manage:canManage,compaction_thresholds:{trigger_tokens:150000,tail_tokens:20000},compaction_defaults:{trigger_tokens:150000,tail_tokens:20000,summary_tokens:5000},tool_output_policy:{enabled:true,scope:'code_index',tools:[],lifetime_calls:6,ordinary_chars:24000,promoted_chars:24000,refresh_on_recall:true,promote_on_edit:true},tool_output_eligible_tools:['file_read']};
+    const agent={can_manage:canManage,compaction_thresholds:{trigger_tokens:150000,tail_tokens:20000},compaction_defaults:{trigger_tokens:150000,tail_tokens:20000,summary_tokens:5000},tool_output_policy:{enabled:true,scope:'all_eligible',tools:[],lifetime_calls:6,ordinary_chars:24000,promoted_chars:24000,refresh_on_recall:true,promote_on_edit:true},tool_output_eligible_tools:['file_read']};
     if(available)agent.tool_result_deduplication={enabled:stored};
     window.fixture={writes:[],fail:false,agent};
     document.querySelector('#host').replaceChildren();

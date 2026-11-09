@@ -20,7 +20,7 @@ import urllib.parse
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-ABILITIES = ("codebase_admin", "code_index", "git_control", "terminal_control", "v3_workspace", "v3_build", "diagnostics", "browser_control", "remote_tunnel")
+ABILITIES = ("codebase_admin", "git_control", "terminal_control", "v3_workspace", "v3_build", "diagnostics", "browser_control", "remote_tunnel")
 SCHEMAS = [json.loads(path.read_text()) for path in sorted((ROOT / "plugins/abilities/Administrator").glob("*/tools/*/tool.json"))]
 TOOLS = {s["name"] for s in SCHEMAS} | {"workspace_seed", "file_read", "file_write", "file_list", "shell", "python"}
 FORBIDDEN_APPROVALS = {"promotion_propose", "propose_promotion", "v3_worker_submit"}
@@ -204,14 +204,13 @@ class Harness:
         if self.args.resume and self.data["cases"].get(name, {}).get("workflow_completed"): return
         client = self.admin if name.startswith("build") else self.owner
         agent = "shared_default" if client is self.admin else self.fixture["agent_id"]
-        groups = {"workspace": {"v3_workspace"}, "cargo": {"v3_workspace"}, "index": {"v3_workspace", "code_index"}, "terminal": {"terminal_control"}, "git": {"terminal_control", "git_control"}, "diagnostics": {"diagnostics", "browser_control"}, "tunnel": {"terminal_control", "remote_tunnel"}, "build_status": {"v3_build"}, "build": {"v3_build"}}
+        groups = {"workspace": {"v3_workspace"}, "cargo": {"v3_workspace"}, "terminal": {"terminal_control"}, "git": {"terminal_control", "git_control"}, "diagnostics": {"diagnostics", "browser_control"}, "tunnel": {"terminal_control", "remote_tunnel"}, "build_status": {"v3_build"}, "build": {"v3_build"}}
         sid = self.session(client, agent, groups[name])
-        if name in {"workspace", "index", "cargo"}:
+        if name in {"workspace", "cargo"}:
             self.run(name + "_seed", client, sid, "Call v3_workspace_action action=seed request_id=seed-acceptance, then v3_workspace_receipt request_id=seed-acceptance and v3_workspace_status. Confirm seeded source belongs only to this session.", {"v3_workspace_action", "v3_workspace_receipt", "v3_workspace_status"})
         instructions = {
             "workspace": "Call v3_workspace_action action=review request_id=review-acceptance. Then read src/main.rs using action=read request_id=read-acceptance. Read that receipt with v3_workspace_receipt. Finally call action=patch request_id=stale-acceptance with expected_review_sha256 all zeroes and a harmless main.rs patch; it must reject as stale and leave review unchanged. Report ok=true for this expected stale rejection.",
             "cargo": "Review the seeded source to obtain its current review SHA. Call v3_workspace_action action=check request_id=check-acceptance and action=test request_id=test-acceptance with that exact SHA and timeout_seconds=600, then read both receipts. Do not run host Cargo or build an image.",
-            "index": "Use code_index_scan action=discover root=webagent-v3 limit=20. Then action=scan_file file_path=src/main.rs root=webagent-v3 with discover's exact returned revision. Use code_index_lookup action=file root=webagent-v3 file_path=src/main.rs; code_index_coverage action=report; code_index_trace kind=symbol value=main; and code_index_progress action=list. Use root=webagent-v3 on every index call. Confirm actual indexed source.",
             "terminal": "Open terminal_open with exactly these arguments: {\"command\": \"printf \\\"READY\\\\n\\\"; read answer; printf \\\"RESULT:%s\\\\n\\\" \\\"$answer\\\"\"}. Read/wait until READY. Obtain a fresh terminal_read sequence, then terminal_send using the same terminal_id, that expected_sequence, and text containing acceptance followed by one real newline (JSON text=\"acceptance\\n\"). Use terminal_wait then terminal_read until RESULT:acceptance. Call terminal_list then terminal_close. Do not use shell/python adapters.",
             "git": "First call repository_access verify_remote=false to inspect sanitized current-agent repository metadata, even if no external connection is configured. Then use terminal_open/read/close to create a fresh ordinary git repository named acceptance-repo and a bare acceptance-remote inside this session workspace. Fixed commands only: git init --initial-branch=main acceptance-repo; git init --bare acceptance-remote; cd acceptance-repo; printf 'initial\\n' > README.txt; git add README.txt; git -c user.name=Acceptance -c user.email=acceptance@localhost commit -m initial; git remote add acceptance ../acceptance-remote. Then git_tool operation=status repo=acceptance-repo, branch_create name=acceptance-check with observed expected_head, branch_list, diff. Using another terminal modify README.txt to 'changed\\n', close it, get fresh git_tool status review SHA/HEAD; commit_and_push repo=acceptance-repo paths=[README.txt] message='acceptance change' remote=acceptance with both exact fences. Confirm local ordinary push succeeded; no external remote or credentials.",
             "diagnostics": "Call read_diagnostics for this run. Use browser_read action=navigate url=https://dev.webagent.live/api/v3/auth/me, browser_read action=read, browser_record action=start, browser_read action=screenshot, browser_record action=stop, then browser_read action=close. This is API-driven tool acceptance only; no navigation journey, clicks or typing. Include the screenshot artifact_id as field artifact_id in final JSON, without cookie/token text.",
@@ -219,7 +218,7 @@ class Harness:
             "build_status": "Call v3_build_status once. Confirm actual development-only broker inputs SHA and both API/loop container states, without raw environment or logs. Include inputs_sha256 in final JSON.",
             "build": "Call v3_build_status to get exact current inputs_sha256. Call v3_build_image with request_id=api-build-acceptance and that SHA. Read v3_worker_job for the returned job ID. Do not deploy, stop or replace anything. Include job_id and inputs_sha256 in final JSON. Set ok=true if the build job was accepted, including when its state is still queued or running; the harness polls completion separately."
         }
-        required = {"workspace": {"v3_workspace_action", "v3_workspace_receipt"}, "cargo": {"v3_workspace_action", "v3_workspace_receipt"}, "index": {"code_index_scan", "code_index_lookup", "code_index_coverage", "code_index_trace", "code_index_progress"}, "terminal": {"terminal_open", "terminal_read", "terminal_send", "terminal_wait", "terminal_list", "terminal_close"}, "git": {"repository_access", "terminal_open", "terminal_read", "terminal_close", "git_tool", "commit_and_push"}, "diagnostics": {"read_diagnostics", "browser_read", "browser_record"}, "tunnel": {"terminal_open", "terminal_read", "terminal_list", "start_tunnel", "get_tunnel_url"}, "build_status": {"v3_build_status"}, "build": {"v3_build_status", "v3_build_image", "v3_worker_job"}}[name]
+        required = {"workspace": {"v3_workspace_action", "v3_workspace_receipt"}, "cargo": {"v3_workspace_action", "v3_workspace_receipt"}, "terminal": {"terminal_open", "terminal_read", "terminal_send", "terminal_wait", "terminal_list", "terminal_close"}, "git": {"repository_access", "terminal_open", "terminal_read", "terminal_close", "git_tool", "commit_and_push"}, "diagnostics": {"read_diagnostics", "browser_read", "browser_record"}, "tunnel": {"terminal_open", "terminal_read", "terminal_list", "start_tunnel", "get_tunnel_url"}, "build_status": {"v3_build_status"}, "build": {"v3_build_status", "v3_build_image", "v3_worker_job"}}[name]
         summary = self.run(name, client, sid, instructions[name], required, timeout=1400 if name == "cargo" else 300)
         if name == "workspace":
             first_line = (ROOT / "src/main.rs").read_text().splitlines()[0]
@@ -326,15 +325,15 @@ class Harness:
         preview = self.owner.get("/api/v3/agents/" + agent + "/abilities/effective?level_id=api_acceptance_denied")
         self.check("denied level effective preview has no usable Administrator ability", not any(a["id"] in ABILITIES and a.get("available") for a in preview["abilities"]))
         latest = self.owner.get("/api/v3/agents/" + agent + "/abilities")
-        prior = latest.get("visibility", {}).get("code_index", "discoverable")
-        self.owner.put("/api/v3/agents/" + agent + "/abilities/code_index/visibility", {"expected_revision": latest["revision"], "visibility": "off"})
+        prior = latest.get("visibility", {}).get("remote_tunnel", "discoverable")
+        self.owner.put("/api/v3/agents/" + agent + "/abilities/remote_tunnel/visibility", {"expected_revision": latest["revision"], "visibility": "off"})
         try:
             disabled_sid = self.owner.post("/api/v3/sessions", {"client_request_id": "admin-api-disabled-" + secrets.token_hex(8), "title": "Disabled ability API acceptance", "agent_id": agent})["id"]
             disabled = self.owner.get("/api/v3/sessions/" + disabled_sid + "/abilities")["abilities"]
-            self.check("agent disabled ability withdrawn from discovery", not any(a["id"] == "code_index" for a in disabled))
+            self.check("agent disabled ability withdrawn from discovery", not any(a["id"] == "remote_tunnel" for a in disabled))
         finally:
             current = self.owner.get("/api/v3/agents/" + agent + "/abilities")
-            self.owner.put("/api/v3/agents/" + agent + "/abilities/code_index/visibility", {"expected_revision": current["revision"], "visibility": prior})
+            self.owner.put("/api/v3/agents/" + agent + "/abilities/remote_tunnel/visibility", {"expected_revision": current["revision"], "visibility": prior})
         sid = self.session(self.owner, agent, {"terminal_control"})
         opened = self.run("persistent_terminal_open", self.owner, sid, "Call terminal_open with {\"command\": \"printf READY; sleep 120\"} then terminal_read until READY. Leave this terminal running; report terminal_running=true only when actual read says running=true.", {"terminal_open", "terminal_read"})
         self.check("API-created terminal persists beyond its completed run", opened.get("terminal_running") is True)
@@ -362,7 +361,7 @@ def main():
     parser.add_argument("--origin", default="http://100.112.23.15:8081")
     parser.add_argument("--fixture", type=Path, default=ROOT / "target/core-api-acceptance.json")
     parser.add_argument("--output", type=Path, default=ROOT / "target/administrator-api.json")
-    parser.add_argument("--cases", default="workspace,index,terminal,git,diagnostics,tunnel,policy,build_status")
+    parser.add_argument("--cases", default="workspace,terminal,git,diagnostics,tunnel,policy,build_status")
     parser.add_argument("--configure", action="store_true")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--cargo", action="store_true")
@@ -379,7 +378,7 @@ def main():
         if args.build: cases.append("build")
         for case in cases:
             if case == "policy": harness.policy()
-            elif case in {"workspace", "index", "terminal", "git", "diagnostics", "tunnel", "build_status", "cargo", "build"}: harness.case(case)
+            elif case in {"workspace", "terminal", "git", "diagnostics", "tunnel", "build_status", "cargo", "build"}: harness.case(case)
             else: raise ValueError("Unknown bounded case")
         print(json.dumps({"cases": {k: v.get("pass", False) for k, v in harness.data["cases"].items()}, "checks": len(harness.data["checks"])}))
     except Exception as error:

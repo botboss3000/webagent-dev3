@@ -1,8 +1,7 @@
 //! The v3 tool worker. It owns the tool socket the API and loop call and accepts only the
-//! application identity. File tools ([`files`]) and workspace commands ([`commands`]) run
-//! here, as do the private browsers ([`browser`]); every other request is forwarded
-//! unchanged to the Python worker on a private socket. Tool groups move from the Python worker into this crate one at a time (Rust
-//! conversion item A2).
+//! application identity. File tools ([`files`]), workspace commands ([`commands`]),
+//! terminals, preview tunnels, ability plugins and the private browsers ([`browser`]) all
+//! run here; a request for any other tool fails as unknown.
 pub mod browser;
 pub mod commands;
 pub mod files;
@@ -26,18 +25,16 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufRead
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Notify;
 
-/// Longest request line accepted, matching the Python worker's stream limit.
+/// Longest request line accepted.
 const REQUEST_LIMIT: u64 = 2 * 1024 * 1024;
-/// A caller has this long to send its request line, as with the Python worker.
+/// A caller has this long to send its request line.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Where the worker listens, whom it serves and where it forwards.
+/// Where the worker listens and whom it serves.
 #[derive(Debug, Clone)]
 pub struct Config {
     /// The socket the API and loop connect to.
     pub socket: PathBuf,
-    /// The Python worker's private socket.
-    pub legacy_socket: PathBuf,
     /// The only caller UID served; other callers are disconnected unanswered.
     pub client_uid: u32,
     /// Where the native file tools work.
@@ -53,8 +50,7 @@ pub struct Config {
 }
 
 impl Config {
-    /// Reads `V3_TOOL_SOCKET`, `V3_LEGACY_TOOL_SOCKET` and `V3_TOOL_CLIENT_UID`, defaulting
-    /// to the container layout.
+    /// Reads `V3_TOOL_SOCKET` and `V3_TOOL_CLIENT_UID`, defaulting to the container layout.
     ///
     /// # Errors
     /// When `V3_TOOL_CLIENT_UID` is not a number.
@@ -68,7 +64,6 @@ impl Config {
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid client UID"))?;
         Ok(Self {
             socket: path("V3_TOOL_SOCKET", "/runtime/worker/tools.sock"),
-            legacy_socket: path("V3_LEGACY_TOOL_SOCKET", "/runtime/worker-legacy/tools.sock"),
             client_uid,
             files: files::Roots::container(),
             // The app executable's supervisor mode, dispatched before its async runtime.
@@ -236,11 +231,10 @@ async fn write_reply(
     writer.shutdown().await
 }
 
-/// Answers one call: file tools and commands run here, anything else goes to the Python
-/// worker. A caller that hangs up (or sends more) before a forwarded reply ends the
-/// forwarded connection, which cancels the call exactly as a direct disconnect would; a
-/// command is stopped the same way. A native file call always completes, so a write is
-/// never left half done.
+/// Answers one call. A caller that hangs up (or sends more) before the reply stops its
+/// command, plugin or browser call. A file call always completes, so a write is never
+/// left half done. An unknown tool or a request outside protocol 2 fails unanswered by
+/// any tool.
 async fn handle(
     client: UnixStream,
     config: &Config,
@@ -285,7 +279,7 @@ async fn handle(
         let result = tokio::select! {
             result = git_call(&config.files, parsed) => result,
             () = hang_up(&mut client_read) => return Ok(()),
-            // As the Python worker answers a call its quiesce cancelled.
+            // A call its workspace's quiesce cancelled.
             () = stop.notified() => json!({"status":"failed","output":"Session not found"}),
         };
         return write_reply(&mut client_write, &parsed["id"], result).await;
@@ -314,7 +308,7 @@ async fn handle(
         let result = tokio::select! {
             result = commands::call(&config.files, &config.runner, parsed) => result,
             () = hang_up(&mut client_read) => return Ok(()),
-            // As the Python worker answers a call its quiesce cancelled.
+            // A call its workspace's quiesce cancelled.
             () = stop.notified() => json!({"status":"failed","output":"Session not found"}),
         };
         return write_reply(&mut client_write, &parsed["id"], result).await;
@@ -340,14 +334,15 @@ async fn handle(
     }
     if let Some(parsed) = parsed.as_ref().filter(|_| browser::handles(name)) {
         if name == "browser_protocol" {
-            let result = protocol(&config.files).await;
+            let output = json!({"protocol":1,"interface":1,"stateful":true});
+            let result = protocol(&config.files, output).await;
             return write_reply(&mut client_write, &parsed["id"], result).await;
         }
         let workspace = parsed["workspace"].as_str().unwrap_or_default();
         let (id, stop) = active.start(workspace);
         let _registered = Registered { active, id };
-        // A call that ends early closes the session's browser, as the Python worker's
-        // cancellation did; a screenshot read holds no browser.
+        // A call that ends early closes the session's browser; a screenshot read holds no
+        // browser.
         let cancel = || async {
             if name != "administrator_artifact_get" {
                 persistent.browsers.close(workspace).await;
@@ -411,40 +406,43 @@ async fn handle(
         };
         return write_reply(&mut client_write, &parsed["id"], result).await;
     }
-    if name == "administrator_quiesce" {
-        // Commands, terminals, tunnels and browsers run here; stop them before the Python
-        // worker quiesces the rest.
-        if let Some(parsed) = parsed.as_ref() {
-            if let Some(workspace) = parsed["workspace"].as_str() {
-                active.stop(workspace);
-            }
-            if let Some(base) = existing_workspace(&config.files, parsed) {
-                persistent.terminals.close_all(&base).await;
-                persistent.tunnels.close_workspace(&base).await;
-                if let Some(sid) = base.file_name().and_then(|name| name.to_str()) {
-                    persistent.browsers.close(sid).await;
-                }
-            }
-        }
+    if let Some(parsed) = parsed
+        .as_ref()
+        .filter(|_| name == "ability_plugins_protocol")
+    {
+        // The ability plugin contract the broker checks before a hot swap.
+        let output = json!({"protocol":1,"catalog":1,"dispatch":1});
+        let result = protocol(&config.files, output).await;
+        return write_reply(&mut client_write, &parsed["id"], result).await;
     }
-    let upstream = match UnixStream::connect(&config.legacy_socket).await {
-        Ok(upstream) => upstream,
-        Err(_) => {
-            let id = serde_json::from_slice::<Value>(&request)
-                .ok()
-                .and_then(|value| value.get("id").cloned());
-            return reply(&mut client_write, id, "Tool worker unavailable").await;
+    if let Some(parsed) = parsed.as_ref().filter(|_| name == "administrator_quiesce") {
+        // Stops the workspace's commands, terminals, tunnels and browsers.
+        if let Some(workspace) = parsed["workspace"].as_str() {
+            active.stop(workspace);
         }
+        if let Some(base) = existing_workspace(&config.files, parsed) {
+            persistent.terminals.close_all(&base).await;
+            persistent.tunnels.close_workspace(&base).await;
+            if let Some(sid) = base.file_name().and_then(|name| name.to_str()) {
+                persistent.browsers.close(sid).await;
+            }
+        }
+        return write_reply(
+            &mut client_write,
+            &parsed["id"],
+            json!({"status":"success"}),
+        )
+        .await;
+    }
+    let id = serde_json::from_slice::<Value>(&request)
+        .ok()
+        .and_then(|value| value.get("id").cloned());
+    let problem = if parsed.is_some() {
+        "Unknown tool"
+    } else {
+        "Worker RPC protocol 2 required; no operation dispatched"
     };
-    let (mut upstream_read, mut upstream_write) = upstream.into_split();
-    upstream_write.write_all(&request).await?;
-    tokio::select! {
-        copied = tokio::io::copy(&mut upstream_read, &mut client_write) => {
-            copied?;
-            client_write.shutdown().await
-        }
-        () = hang_up(&mut client_read) => Ok(()),
-    }
+    reply(&mut client_write, id, problem).await
 }
 
 /// Admits and runs one Git Control request or repository watch.
@@ -510,9 +508,9 @@ async fn file_manager_call(roots: &files::Roots, request: &Value) -> Value {
         .unwrap_or_else(|_| json!({"status":"error","output":"File Manager operation failed"}))
 }
 
-/// The browser contract the broker checks before a hot swap, behind the same shutoff
+/// A contract the broker checks before a hot swap, `output`, behind the same shutoff
 /// switch as every call.
-async fn protocol(roots: &files::Roots) -> Value {
+async fn protocol(roots: &files::Roots, output: Value) -> Value {
     let control = roots.control.clone();
     let admitted = tokio::task::spawn_blocking(move || -> io::Result<bool> {
         let lock = std::fs::File::open(control.join("dispatch.lock"))?;
@@ -521,12 +519,10 @@ async fn protocol(roots: &files::Roots) -> Value {
     })
     .await;
     match admitted {
-        Ok(Ok(true)) => {
-            json!({"status":"success","output":{"protocol":1,"interface":1,"stateful":true}})
-        }
+        Ok(Ok(true)) => json!({"status":"success","output":output}),
         Ok(Ok(false)) => json!({"status":"failed","output":"execution disabled"}),
         Ok(Err(error)) => json!({"status":"failed","output":error.to_string()}),
-        Err(_) => json!({"status":"failed","output":"Browser admission failed"}),
+        Err(_) => json!({"status":"failed","output":"Protocol admission failed"}),
     }
 }
 
@@ -679,13 +675,11 @@ mod tests {
     struct Fixture {
         _dir: tempfile::TempDir,
         socket: PathBuf,
-        legacy: PathBuf,
     }
 
     fn fixture() -> Fixture {
         let dir = tempfile::tempdir().expect("temporary directory");
         let socket = dir.path().join("tools.sock");
-        let legacy = dir.path().join("legacy.sock");
         let control = dir.path().join("control");
         std::fs::create_dir_all(&control).expect("control");
         std::fs::write(control.join("dispatch.lock"), "").expect("lock");
@@ -707,16 +701,11 @@ mod tests {
                 origin: "http://127.0.0.1:9".into(),
             },
             socket: socket.clone(),
-            legacy_socket: legacy.clone(),
             // The test process owns the directory it just created.
             client_uid: std::fs::metadata(dir.path()).expect("directory").uid(),
         };
         tokio::spawn(serve(config));
-        Fixture {
-            _dir: dir,
-            socket,
-            legacy,
-        }
+        Fixture { _dir: dir, socket }
     }
 
     async fn connect(path: &Path) -> UnixStream {
@@ -739,35 +728,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_call_reaches_the_python_worker_and_its_reply_comes_back() {
-        let fixture = fixture();
-        let legacy = UnixListener::bind(&fixture.legacy).expect("legacy socket");
-        tokio::spawn(async move {
-            let (stream, _) = legacy.accept().await.expect("forwarded call");
-            let (read, mut write) = stream.into_split();
-            let mut line = Vec::new();
-            BufReader::new(read)
-                .read_until(b'\n', &mut line)
-                .await
-                .expect("request");
-            let request: Value = serde_json::from_slice(&line).expect("request is JSON");
-            let reply = json!({"version":2,"id":request["id"],"result":{"status":"success","output":request["name"]}});
-            write
-                .write_all(format!("{reply}\n").as_bytes())
-                .await
-                .expect("reply");
-        });
-        let mut client = connect(&fixture.socket).await;
-        client
-            .write_all(b"{\"version\":2,\"id\":\"a\",\"name\":\"code_index_lookup\"}\n")
-            .await
-            .expect("request");
-        let reply = read_line(&mut client).await;
-        assert_eq!(reply["id"], "a");
-        assert_eq!(reply["result"]["output"], "code_index_lookup");
-    }
-
-    #[tokio::test]
     async fn a_file_tool_runs_in_the_worker_without_the_python_worker() {
         let fixture = fixture();
         let mut client = connect(&fixture.socket).await;
@@ -783,44 +743,69 @@ mod tests {
         assert_eq!(reply["result"]["implementation_version"], "2.0.0");
     }
 
-    #[tokio::test]
-    async fn a_missing_python_worker_fails_the_call_with_its_id() {
-        let fixture = fixture();
-        let mut client = connect(&fixture.socket).await;
+    async fn call(socket: &Path, request: Value) -> Value {
+        let mut client = connect(socket).await;
         client
-            .write_all(b"{\"version\":2,\"id\":\"b\",\"name\":\"code_index_lookup\"}\n")
+            .write_all(format!("{request}\n").as_bytes())
             .await
             .expect("request");
-        let reply = read_line(&mut client).await;
-        assert_eq!(reply["id"], "b");
-        assert_eq!(reply["result"]["status"], "failed");
-        assert_eq!(reply["result"]["output"], "Tool worker unavailable");
+        read_line(&mut client).await
     }
 
     #[tokio::test]
-    async fn a_caller_that_hangs_up_closes_the_forwarded_call() {
+    async fn an_unknown_tool_fails_with_its_id() {
         let fixture = fixture();
-        let legacy = UnixListener::bind(&fixture.legacy).expect("legacy socket");
-        let closed = tokio::spawn(async move {
-            let (stream, _) = legacy.accept().await.expect("forwarded call");
-            let mut reader = BufReader::new(stream);
-            let mut line = Vec::new();
-            reader.read_until(b'\n', &mut line).await.expect("request");
-            // Like the Python worker, wait for the caller to leave instead of replying.
-            let mut rest = Vec::new();
-            reader.read_to_end(&mut rest).await.expect("end of call");
-            rest.is_empty()
-        });
-        let mut client = connect(&fixture.socket).await;
-        client
-            .write_all(b"{\"version\":2,\"id\":\"c\",\"name\":\"code_index_lookup\"}\n")
-            .await
-            .expect("request");
-        drop(client);
-        let closed = tokio::time::timeout(Duration::from_secs(5), closed)
-            .await
-            .expect("forwarded call closed")
-            .expect("legacy task");
-        assert!(closed);
+        let reply = call(
+            &fixture.socket,
+            json!({"version":2,"id":"b","name":"retired_tool"}),
+        )
+        .await;
+        assert_eq!(reply["id"], "b");
+        assert_eq!(
+            reply["result"],
+            json!({"status":"failed","output":"Unknown tool"})
+        );
+        let old = call(&fixture.socket, json!({"id":"c","name":"file_list"})).await;
+        assert_eq!(old["id"], "c");
+        assert_eq!(old["result"]["status"], "failed");
+    }
+
+    #[tokio::test]
+    async fn the_ability_plugin_protocol_is_answered_behind_the_shutoff_switch() {
+        let fixture = fixture();
+        let request = json!({"version":2,"id":"p","name":"ability_plugins_protocol",
+            "workspace":"2244991a-c2e3-415b-ae5c-054570c91d32","arguments":{}});
+        let reply = call(&fixture.socket, request.clone()).await;
+        assert_eq!(reply["id"], "p");
+        assert_eq!(
+            reply["result"],
+            json!({"status":"success","output":{"protocol":1,"catalog":1,"dispatch":1}})
+        );
+        let control = fixture.socket.parent().expect("root").join("control");
+        std::fs::write(control.join("shutoff"), "1").expect("shutoff");
+        let disabled = call(&fixture.socket, request).await;
+        assert_eq!(
+            disabled["result"],
+            json!({"status":"failed","output":"execution disabled"})
+        );
+    }
+
+    #[tokio::test]
+    async fn quiesce_succeeds_for_present_and_absent_workspaces() {
+        let fixture = fixture();
+        let workspace = "2244991a-c2e3-415b-ae5c-054570c91d32";
+        let workspaces = fixture.socket.parent().expect("root").join("workspaces");
+        for present in [false, true] {
+            if present {
+                std::fs::create_dir_all(workspaces.join(workspace)).expect("workspace");
+            }
+            let reply = call(
+                &fixture.socket,
+                json!({"version":2,"id":"q","name":"administrator_quiesce","workspace":workspace}),
+            )
+            .await;
+            assert_eq!(reply["id"], "q");
+            assert_eq!(reply["result"], json!({"status":"success"}));
+        }
     }
 }

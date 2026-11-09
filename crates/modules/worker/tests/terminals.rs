@@ -36,7 +36,6 @@ async fn worker() -> Worker {
     let socket = dir.path().join("tools.sock");
     let config = Config {
         socket: socket.clone(),
-        legacy_socket: dir.path().join("legacy.sock"),
         client_uid: std::fs::metadata(dir.path()).expect("directory").uid(),
         files: Roots {
             workspaces: dir.path().join("workspaces"),
@@ -201,9 +200,8 @@ async fn quiesce_closes_terminals_and_resources_count_them() {
         json!({"terminals":1,"tunnels":0}),
         "{counted}"
     );
-    // The Python worker is absent here, so the forwarded quiesce reports unavailable after
-    // the native part ran.
-    worker.call("administrator_quiesce", json!({})).await;
+    let quiesced = worker.call("administrator_quiesce", json!({})).await;
+    assert_eq!(quiesced, json!({"status":"success"}), "{quiesced}");
     let counted = worker.call("administrator_resources", json!({})).await;
     assert_eq!(
         counted["output"],

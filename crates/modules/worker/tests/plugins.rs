@@ -153,7 +153,6 @@ async fn one_frame_reaches_the_plugin_and_its_reply_comes_back() {
     let socket = fixture.dir.path().join("tools.sock");
     tokio::spawn(serve(Config {
         socket: socket.clone(),
-        legacy_socket: fixture.dir.path().join("legacy.sock"),
         client_uid: std::fs::metadata(fixture.dir.path()).expect("dir").uid(),
         files: Roots {
             workspaces: fixture.dir.path().join("workspaces"),

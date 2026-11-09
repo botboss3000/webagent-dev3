@@ -57,7 +57,7 @@ class Scheduler:
         for item in list(self.broker.work.values()):
             value=rows.get(item.get("key"))
             if value is None or item.get("mode")!="isolated"or item["status"]=="open"or not self.settled(item):continue
-            if item.get("acquisition_refresh")or any(l.get("task_key")==item["key"]for l in self.broker.code_index_leases.values()):continue
+            if item.get("acquisition_refresh"):continue
             if item["status"]=="abandoned":
                 self.store.retire(item["key"],"Abandoned task keeps no claims or queued requests",abandon=True)
             elif not value["scopes"]:
@@ -150,7 +150,7 @@ class Scheduler:
                 raise ValueError("Another scheduler transition requires recovery")
             if item.get("status")!="open"or item.get("job_id"):
                 raise ValueError("Unpublished open draft required")
-            if any(j.get("ownership_id")==key and j["status"]in {"queued","running","needs_decision","uncertain","interrupted"}for j in self.broker.jobs.values())or self.broker.code_index_leases:
+            if any(j.get("ownership_id")==key and j["status"]in {"queued","running","needs_decision","uncertain","interrupted"}for j in self.broker.jobs.values()):
                 raise ValueError("Reconcile execution and active reviews before acquisition recovery")
             refresh=item.get("acquisition_refresh")
             if refresh!={"revision":committed["revision"]}and not(released is not None and refresh is None):
@@ -376,7 +376,7 @@ class Scheduler:
         closure=set()
         if job["operation"]=="build_deploy":
             closure={p for p in files if p.startswith("v3/src/")}
-            closure.update({"v3/Cargo.toml","v3/Cargo.lock","v3/build.rs","v3/Dockerfile","v3/worker.py","v3/sandbox.py"})
+            closure.update({"v3/Cargo.toml","v3/Cargo.lock","v3/build.rs","v3/Dockerfile","v3/sandbox.py"})
             if hasattr(self.broker.runner,"core_compile_inputs"):closure.update(self.broker.runner.core_compile_inputs())
         else:
             for scope in current["scopes"]:
@@ -389,58 +389,12 @@ class Scheduler:
         checks=job.get("rust_tests",{"status":"not_required"})
         if checks.get("status")not in {"passed","not_required"}:raise ValueError("Release checks incomplete")
         return {"generation":self.store.get(item["key"])["generation"],"release_id":job["job_id"],"inputs_sha256":job["inputs_sha256"],"promoted_hashes":promoted,"checks":[checks],"acceptance":acceptance,"commit":commit}
-    # @code-index {"version":1,"feature":"prepared-review-lease","aliases":["review ownership expiry","paused source review"],"purpose":"Keep exact authorized sealed-review ownership alive without execution resources. Config: build-service/scheduler-defaults.json -> orphan_after_seconds controls ordinary inactive owners; delegated authorization deadlines remain authoritative.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/orphan_after_seconds"]}]}}
-    def review_wait(self,job,*,reset=False,activity=False,authority_until=None):
-        """Keep an exact frozen review delegation alive without extending execution authority.
-
-        Calls: ownership.touch only after owner/epoch/generation and staged-index bindings match.
-        Config: scheduler.orphan_after_seconds controls ordinary inactivity, not review authorization.
-        """
-        if job.get("status")!="needs_decision"or job.get("phase")!="awaiting_prepared_reviews":return False
-        now=time.time();previous=dict(job.get("review_wait",{}));record=dict(previous)
-        state="active"
-        try:
-            value=self.store.get(job["ownership_id"]);item=self.broker.work.get(value["id"],{})
-            if value["owner"]!=self.owner({"user_id":job["user_id"]},job["workspace"])or value["epoch"]!=job["ownership_epoch"]or value["generation"]!=job["source_generation"]:raise ValueError("Review ownership binding changed")
-            if value["state"]not in {"owned","validating"}:state="ownership_recovery_required"
-            if item.get("job_id")!=job["job_id"]or item.get("status")!="closed":raise ValueError("Review task generation changed")
-            path=Path(job["prepared_assets"]);manifest_path=path/".code-index/manifest.json"
-            if path.is_symlink()or manifest_path.is_symlink()or not manifest_path.is_file()or manifest_path.stat().st_size>2*1024*1024:raise ValueError("Review index unavailable")
-            info=manifest_path.stat();identity=[info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns,info.st_ctime_ns]
-            cached=previous.get("binding",{})
-            if previous.get("manifest_identity")==identity and cached:
-                manifest={"release_id":cached["job_id"],"candidate_sha256":cached["candidate_sha256"],"source_sha256":cached["source_sha256"],"index_sha256":cached["index_sha256"],"gaps":0,"stale_count":0,"unindexed_count":0}
-            else:manifest=json.loads(manifest_path.read_bytes())
-            if manifest.get("release_id")!=job["job_id"]or manifest.get("candidate_sha256")!=job["inputs_sha256"]or any(manifest.get(k)!=0 for k in ("gaps","stale_count","unindexed_count")):raise ValueError("Review candidate changed")
-            if any(not re.fullmatch(r"[a-f0-9]{64}",manifest.get(k,""))for k in ("source_sha256","index_sha256")):raise ValueError("Review index binding invalid")
-            binding={"task_id":job["task_id"],"job_id":job["job_id"],"ownership_id":value["id"],"epoch":value["epoch"],"generation":value["generation"],"candidate_sha256":job["inputs_sha256"],"source_sha256":manifest["source_sha256"],"index_sha256":manifest["index_sha256"],"prepared_assets":str(path)}
-            if not previous and not(reset or activity):return False
-            if previous and previous.get("binding")!=binding and not reset:raise ValueError("Review delegation binding changed")
-            if reset or not previous:record={"binding":binding,"started_at":now,"last_activity_at":now}
-            deadline=job.get("lease_until",0)
-            if authority_until is not None:deadline=min(deadline,authority_until)
-            if not(reset or activity):deadline=min(deadline,record.get("expires_at",0))
-            record["manifest_identity"]=identity
-            record["expires_at"]=deadline
-            if job.get("revoked")or deadline<=now:state="authorization_expired"
-            if activity and now-record.get("last_activity_at",0)>=1:record["last_activity_at"]=now
-            record["state"]=state
-            if state=="active":
-                self.store.touch(value["id"],value["owner"],value["epoch"])
-        except (KeyError,OSError,ValueError,TypeError):
-            record["state"]="binding_invalid";state="binding_invalid"
-        if record!=previous:
-            job["review_wait"]=record;self.broker._save(job)
-        return state=="active"
-
     def housekeeping(self):
         """Keep authorized delegated execution active; orphaned source never becomes available automatically."""
         if self.mode!="enforce":return
         for job in self.broker.jobs.values():
             if job.get("ownership_id")and job["status"]in {"queued","running"}and not job.get("revoked")and job.get("lease_until",0)>time.time():
                 self.store.touch(job["ownership_id"],self.owner({"user_id":job["user_id"]},job["workspace"]),job["ownership_epoch"])
-            elif job.get("ownership_id")and job.get("status")=="needs_decision"and job.get("phase")=="awaiting_prepared_reviews":
-                self.review_wait(job)
         # Scope holders get a 30-minute floor: local checks and commit close-out make no broker call.
         self.store.orphan(self.orphan_after,max(self.orphan_after,1800))
         self.settle()
@@ -519,19 +473,12 @@ class Scheduler:
         """Owners control their own jobs; the existing Builds administrator may inspect/control all."""
         if set(args)-{"action","job_id","phase_id","request_id","expected_revision","priority","memory_bytes"}:raise ValueError("Unsupported resource arguments")
         admin=trusted.get("local_caller")is True or(trusted["user_id"]=="admin"and workspace=="00000000-0000-0000-0000-000000000000")
-        def find_job(job_id):
-            """Recover only sealed index phase ownership, never a caller-supplied PID or path."""
-            job=self.broker.jobs.get(job_id)
-            if job is not None:return job
-            with self.broker.resources.lock:
-                row=next((r for r in self.broker.resources.rows.values()if r.get("job_id")==job_id and r.get("internal_index")and r.get("kind")=="index"),None)
-                return {"job_id":job_id,"user_id":row["owner_user"],"workspace":row["owner_workspace"]}if row else None
-        job=find_job(args.get("job_id"))
+        job=self.broker.jobs.get(args.get("job_id"))
         if args["action"]=="resources":
             if args.get("job_id")and(not job or not(admin or self.broker._owned(job,trusted,workspace))):raise PermissionError("Resource job denied")
             if not args.get("job_id")and not admin:
                 result=self.broker.resources.snapshot()
-                result["phases"]={n:r for n,r in result["phases"].items()if (j:=find_job(r["job_id"]))and self.broker._owned(j,trusted,workspace)}
+                result["phases"]={n:r for n,r in result["phases"].items()if (j:=self.broker.jobs.get(r["job_id"]))and self.broker._owned(j,trusted,workspace)}
                 result["profiles"]={};return result
             return self.broker.resources.snapshot(args.get("job_id"))
         if not job or not(admin or self.broker._owned(job,trusted,workspace)):raise PermissionError("Resource job denied")
@@ -657,7 +604,7 @@ class Scheduler:
         if not job or (job.get("status")!="completed"and not(job.get("status")=="failed"and not job.get("effects_started")))or job.get("task_id")!=item["task_id"]or job.get("user_id")!=item["user_id"]or job.get("workspace")!=workspace:
             raise ValueError("Completed or pre-effect failed owned generation required")
         if any(j.get("ownership_id")==key and j.get("status")in {"queued","running","interrupted","uncertain","needs_decision"}for j in self.broker.jobs.values()):raise ValueError("Reconcile active execution first")
-        if any(l.get("task_key")==key for l in self.broker.code_index_leases.values())or item.get("acquisition_refresh"):raise ValueError("Reconcile active maintenance or acquisition first")
+        if item.get("acquisition_refresh"):raise ValueError("Reconcile active acquisition first")
         folder=self.broker.work_dir/"continuations"/key/original_path.stem
         baseline=folder/"baseline.tar";tree=self.broker.work_dir/"trees"/key
         archive=self.broker.work_dir/"generations"/key/job["job_id"]
@@ -767,8 +714,8 @@ class Scheduler:
                 raise ValueError("Reconcile task execution before clearing requests")
             if any(j.get("effects_started")and j.get("status")!="completed"for j in jobs):
                 raise ValueError("Reconcile deployment effects before clearing requests")
-            if item.get("acquisition_refresh")or any(l.get("task_key")==item["key"]for l in self.broker.code_index_leases.values()):
-                raise ValueError("Reconcile task transition or maintenance before clearing requests")
+            if item.get("acquisition_refresh"):
+                raise ValueError("Reconcile task transition before clearing requests")
             return self.store.clear_pending_requests(value["id"],owner,revision,epoch,args.get("reason"),request)
         if action=="reopen":
             if set(args)!={"action","task_id","expected_revision","expected_epoch","request_id"}:raise ValueError("Exact reopen request required")

@@ -121,19 +121,13 @@ def install(args):
  digest.update(b"scheduler-defaults.json\0"+(reviewed/"scheduler-defaults.json").read_bytes())
  digest.update(b"ui-test.Dockerfile\0"+(reviewed/"ui-test.Dockerfile").read_bytes())
  digest.update(b"compiler.Dockerfile\0"+(reviewed/"compiler.Dockerfile").read_bytes())
- digest.update((reviewed.parent/"plugins/abilities/Administrator/code_index/adapter.py").read_bytes())
- digest.update((reviewed.parent/"plugins/abilities/Administrator/code_index/maintenance.py").read_bytes())
  release=digest.hexdigest();value["service_dir"]=str(install_root/"releases"/release);cfg.validate(value)
  boot=boot_pin(value);boot_home=Path(value["install_root"]).parent/"boot-supervisor"
  if boot:secure_dirs(boot_home)
  config_path=Path(args.config or "/etc/webagent/"+args.instance+"/build-service.json")
  secure_dirs(config_path.parent);secure_dirs(Path(value["service_dir"]).parent)
- ledger_root=Path(value["install_root"]).parent/"code-index-maintenance"
- secure_dirs(ledger_root.parent)
- if ledger_root.is_symlink():raise PermissionError("Ledger root symlink")
- ledger_root.mkdir(mode=0o700,exist_ok=True)
+ secure_dirs(Path(value["install_root"]).parent)
  account=pwd.getpwnam(value["service_account"])
- os.chown(ledger_root,account.pw_uid,account.pw_gid);os.chmod(ledger_root,0o700)
  if account.pw_uid!=pwd.getpwnam(value["source_owner"]).pw_uid:
   import shutil
   if not shutil.which("setfacl"):raise RuntimeError("Install the Linux acl package before using a separate service account")
@@ -145,7 +139,7 @@ def install(args):
    subprocess.run(["setfacl","-R","-m","u:"+account.pw_name+":rwX",str(path)],check=True)
    for directory in [path,*[p for p in path.rglob("*") if p.is_dir() and not p.is_symlink()]]:
     if directory.is_dir():subprocess.run(["setfacl","-m","d:u:"+account.pw_name+":rwX,d:u:"+value["source_owner"]+":rwX",str(directory)],check=True)
-  for relative in ("Cargo.toml","Cargo.lock","build.rs","Dockerfile",".gitignore","README.md","deploy.sh","worker.py","sandbox.py","promote.py","ui-baseline.json","live-files.json","rustfmt.toml","gate.Dockerfile","gate_worker.py"):
+  for relative in ("Cargo.toml","Cargo.lock","build.rs","Dockerfile",".gitignore","README.md","deploy.sh","sandbox.py","promote.py","ui-baseline.json","live-files.json","rustfmt.toml","gate.Dockerfile","gate_worker.py"):
    file=checkout/relative
    if file.is_symlink():raise PermissionError("Source ACL file is a symlink")
    if file.is_file():subprocess.run(["setfacl","-m","u:"+account.pw_name+":rw",str(file)],check=True)

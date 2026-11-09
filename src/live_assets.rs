@@ -62,10 +62,8 @@ pub(crate) fn record_adoption(
     file.persist(path).map_err(anyhow::Error::from)?;
     Ok(())
 }
-/// Read authoritative published defaults, or immutable packaged defaults when publication is not configured.
-pub(crate) fn prompt_defaults() -> Result<Vec<u8>> {
-    prompt_defaults_at(None)
-}
+/// Read authoritative published defaults from `source`, or immutable packaged defaults when
+/// publication is not configured.
 pub(crate) fn prompt_defaults_at(source: Option<&std::path::Path>) -> Result<Vec<u8>> {
     webagent_configuration::prompts::prompt_defaults_at(source, &fallback_directory())
 }
@@ -131,7 +129,7 @@ pub(crate) mod native_schema_file_tests {
             .join("tool.json")
     }
     pub(crate) fn change_parameter(root: &std::path::Path) {
-        let path = definition(root, "code_index_scan");
+        let path = definition(root, "v3_source_list");
         let mut tool: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_ne!(tool["parameters"]["properties"]["limit"]["maximum"], 123);
         tool["parameters"]["properties"]["limit"]["maximum"] = json!(123);
@@ -155,7 +153,7 @@ pub(crate) mod native_schema_file_tests {
         let schema = fresh
             .all_schemas()
             .into_iter()
-            .find(|s| s["name"] == "code_index_scan")
+            .find(|s| s["name"] == "v3_source_list")
             .unwrap();
         assert_eq!(schema["parameters"]["properties"]["limit"]["maximum"], 123);
     }
@@ -163,7 +161,7 @@ pub(crate) mod native_schema_file_tests {
     fn an_invalid_folder_withdraws_only_its_tool() {
         let root = source_fixture();
         let plugins = root.path().join("plugins/abilities");
-        let path = definition(root.path(), "code_index_scan");
+        let path = definition(root.path(), "v3_source_list");
         for bytes in [
             b"not-json".to_vec(),
             b"{}".to_vec(),
@@ -176,8 +174,8 @@ pub(crate) mod native_schema_file_tests {
                 .into_iter()
                 .map(|s| s["name"].clone())
                 .collect();
-            assert!(!names.contains(&json!("code_index_scan")));
-            assert!(names.contains(&json!("code_index_lookup")));
+            assert!(!names.contains(&json!("v3_source_list")));
+            assert!(names.contains(&json!("v3_source_read")));
             let loaded = webagent_administration::schemas::load(&plugins).unwrap();
             assert!(
                 !loaded.problems.is_empty(),

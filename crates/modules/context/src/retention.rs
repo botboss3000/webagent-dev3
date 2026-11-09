@@ -30,8 +30,10 @@ pub const LIVE_POLICY: &str = "crates/modules/context/tool-output-retention.json
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Scope {
-    CodeIndex,
     Selected,
+    /// Saved policies from the retired Code Index ability load as this scope; the live
+    /// policy is never enabled, so the wider scope changes no run.
+    #[serde(alias = "code_index")]
     AllEligible,
 }
 
@@ -52,7 +54,7 @@ impl Default for Policy {
     fn default() -> Self {
         Self {
             enabled: false,
-            scope: Scope::CodeIndex,
+            scope: Scope::AllEligible,
             tools: Vec::new(),
             lifetime_calls: 6,
             ordinary_chars: 24_000,
@@ -123,13 +125,6 @@ impl Policy {
             return false;
         }
         match self.scope {
-            Scope::CodeIndex => matches!(
-                name,
-                "code_index_lookup"
-                    | "code_index_coverage"
-                    | "code_index_trace"
-                    | "code_index_progress"
-            ),
             Scope::Selected => self.tools.iter().any(|tool| tool == name),
             Scope::AllEligible => true,
         }
@@ -234,10 +229,6 @@ pub fn eligible(name: &str) -> bool {
 
 pub fn eligible_tools() -> &'static [&'static str] {
     &[
-        "code_index_lookup",
-        "code_index_coverage",
-        "code_index_trace",
-        "code_index_progress",
         "file_list",
         "file_read",
         "file_search",
@@ -331,16 +322,11 @@ fn call_arguments(call: &Value) -> Value {
     }
 }
 
-fn source_location(name: &str, args: &Value) -> (String, String) {
-    let default_root = if name.starts_with("code_index_") {
-        "webagent-v3"
-    } else {
-        ""
-    };
+fn source_location(args: &Value) -> (String, String) {
     let root = args
         .get("root")
         .and_then(Value::as_str)
-        .unwrap_or(default_root)
+        .unwrap_or("")
         .to_owned();
     let path = ["file_path", "path", "scope"]
         .iter()
@@ -424,7 +410,7 @@ pub fn register(run: &mut Value, call: &Value, output: &Value, policy: &Policy) 
         return;
     }
     let run_id = rid(run).to_owned();
-    let (root, path) = source_location(name, &call_arguments(call));
+    let (root, path) = source_location(&call_arguments(call));
     let hash = hash_output(output);
     let state = state_mut(run);
     let clock = state["clock"].as_u64().unwrap_or(0);
@@ -947,10 +933,6 @@ pub const DEDUP_DEFAULT_TOOLS: &[&str] = &[
     "file_search",
     "v3_source_read",
     "v3_source_list",
-    "code_index_lookup",
-    "code_index_coverage",
-    "code_index_trace",
-    "code_index_progress",
 ];
 
 pub fn dedup_included(settings: &Value, name: &str) -> bool {
@@ -1597,7 +1579,7 @@ mod tests {
         let mut r = run();
         let c = call(
             "c1",
-            "code_index_lookup",
+            "file_read",
             json!({"root":"webagent-v3","file_path":"src/lib.rs"}),
         );
         let o = output("c1", "success", "small");
@@ -1627,7 +1609,7 @@ mod tests {
         let mut indexed = run();
         let indexed_call = call(
             "indexed",
-            "code_index_lookup",
+            "file_read",
             json!({
             "root":"webagent-v3","file_path":"src/a.rs"}),
         );
@@ -1748,6 +1730,18 @@ mod tests {
         let loaded = Policy::read_in(&[dir.path().join("x")]).unwrap();
         assert!(loaded.eligible("file_read"));
         assert!(!loaded.eligible("file_edit"));
+    }
+
+    #[test]
+    fn saved_code_index_scope_loads_as_all_eligible() {
+        let saved = json!({"enabled":false,"scope":"code_index","tools":[]});
+        let policy: Policy = serde_json::from_value(saved).unwrap();
+        assert_eq!(policy.scope, Scope::AllEligible);
+        policy.validate().unwrap();
+        assert_eq!(
+            serde_json::to_value(policy.scope).unwrap(),
+            json!("all_eligible")
+        );
     }
 
     #[test]

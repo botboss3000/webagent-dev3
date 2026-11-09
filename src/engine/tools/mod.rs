@@ -2,7 +2,6 @@ use anyhow::{bail, Result};
 pub(crate) use webagent_engine::tools::outcome;
 // Single and parallel turns share the same Rust dispatch for native and worker tools.
 pub(crate) mod administrator;
-pub(crate) mod code_index_retrieval;
 #[path = "../../../crates/modules/abilities/host/agent_management.rs"]
 pub(crate) mod core_agent_management;
 #[path = "../../../crates/modules/abilities/host/app_control.rs"]
@@ -146,7 +145,6 @@ pub(crate) fn folder_handlers() -> impl Iterator<Item = &'static str> {
         native::orchestration::TOOLS,
         native::visualizer::TOOLS,
         native::vault::TOOLS,
-        native::visual_capture::TOOLS,
         webagent_browser::TOOLS,
     ]
     .into_iter()
@@ -338,7 +336,6 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         schemas.extend(native::webhooks::schemas());
         schemas.extend(native::schemas(native::visualizer::TOOLS));
         schemas.extend(native::schemas(native::vault::TOOLS));
-        schemas.extend(native::schemas(native::visual_capture::TOOLS));
         schemas.extend(native::schemas(webagent_browser::TOOLS));
         schemas.extend(native::session::schemas());
         schemas.extend(crate::main_chat::schemas());

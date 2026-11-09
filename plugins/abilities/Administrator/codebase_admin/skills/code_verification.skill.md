@@ -113,32 +113,6 @@ files; a truncated diff is incomplete evidence. Obtain repository Git status and
 baseline evidence through the permitted inspection path or authorized bounded
 shell; file listings alone do not prove Git state.
 
-### Code Index navigation and freshness
-
-Load Code Index and its comment_maintenance guidance when relevant. Use lookup
-and trace to locate source, then read both ends of important relationships.
-Static edges, lexical coverage and parser fallback spans are navigation evidence,
-not proof of runtime behavior or semantic completeness. For deployed-source
-inspection use root="published"; private workspace roots describe their own
-snapshots. Do not confuse either with an isolated broker task.
-
-Inspect coverage pages, exclusions and parser limitations. Require zero gaps,
-stale files and unindexed supported files for a freshness claim. Reads do not
-silently rescan. Derived scans may be used when permitted by the review scope;
-published snapshots are immutable and cannot be rescanned in place.
-
-Code Index coverage and maintenance reviews are not release-readiness
-requirements; do not report their absence as a release blocker.
-
-Distinguish derived indexing from human maintenance certification. A review-only
-request does not authorize source comments, feature-map edits, claims or ledger
-completion writes. Inspect existing maintenance evidence and report missing
-reviews. When documentation maintenance is explicitly authorized, follow
-comment_maintenance: task sync, bounded claims, verified connections/configuration,
-all five checks, current hashes/revisions, and child completion before file
-completion. Scanning alone never certifies documentation accuracy. Report exact
-unfinished affected units rather than silently completing them.
-
 ### Existing checks and evidence identity
 
 Use build_work(action="check", task_id=..., expected_inputs_sha256=...,

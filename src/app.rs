@@ -165,14 +165,7 @@ async fn public_runs(app: &App, views: Vec<Value>) -> Result<Vec<Value>> {
         // Paused views need the owning record's private component marker; old
         // views need its model fields; runs under review need their parallel calls,
         // which views omit. Read through Store and project only safe fields.
-        let has_retrieval_marker = view["code_index_retrieval_attempted"].is_boolean()
-            && view["code_index_retrieval_status"].as_str().is_some()
-            && view["code_index_retrieval_stage"].as_str().is_some();
-        if view["status"] == "paused"
-            || view["status"] == "recovery"
-            || view["model"].is_null()
-            || !has_retrieval_marker
-        {
+        if view["status"] == "paused" || view["status"] == "recovery" || view["model"].is_null() {
             let run = app
                 .run(
                     view["id"]
@@ -187,36 +180,6 @@ async fn public_runs(app: &App, views: Vec<Value>) -> Result<Vec<Value>> {
     }
     shared_projection::runs(app, &mut result).await?;
     Ok(result)
-}
-fn public_code_index_retrieval(run: &Value) -> Value {
-    let attempted = run["code_index_retrieval_attempted"] == true;
-    let status = match run["code_index_retrieval_status"].as_str() {
-        Some("not_attempted") if !attempted => "not_attempted",
-        Some("attached") => "attached",
-        Some("attached_candidates") => "attached_candidates",
-        Some("no_matches" | "disabled_or_no_matches") => "no_matches",
-        Some("access_changed") => "access_changed",
-        Some("timeout") => "timeout",
-        Some("unavailable") => "unavailable",
-        None if !attempted => "not_attempted",
-        _ => "unavailable",
-    };
-    let stage = if !attempted {
-        "not_started"
-    } else {
-        match run["code_index_retrieval_stage"].as_str() {
-            Some("preflight") => "preflight",
-            Some("lookup") => "lookup",
-            Some("pre_jev") => "pre_jev",
-            Some("jev_parse") => "jev_parse",
-            Some("snippet") => "snippet",
-            Some("authorization") => "authorization",
-            Some("complete") => "complete",
-            Some("unknown") => "unknown",
-            _ => "unknown",
-        }
-    };
-    json!({"status":status,"stage":stage})
 }
 // Project existing public run fields and fixed host component-pause metadata without private context.
 /// Parallel calls awaiting recovery review: what ran, with which arguments, and the IDs
@@ -244,7 +207,6 @@ fn uncertain_calls(run: &Value) -> Value {
 fn public_run(run: &Value) -> Value {
     json!({"id":run["id"],"session_id":run["session_id"],"status":run["status"],"error":run["error"],
         "component_pause":if run["status"]=="paused"&&run["component_pause"]["version"]==1&&run["component_pause"]["component"].as_str().is_some_and(crate::engine_components::working_component) {json!({"version":1,"component":run["component_pause"]["component"],"reason":"component_unavailable"})}else{Value::Null},
-        "code_index_retrieval":public_code_index_retrieval(run),
         "pending":run["pending"],"uncertain":run["uncertain"],"turns":run["turns"],
         "phase":crate::task_progress::known_phase(&run["phase"]),
         "uncertain_calls":uncertain_calls(run),
@@ -513,7 +475,7 @@ fn validate_system_summary_input(
 }
 
 #[cfg(test)]
-mod code_index_run_projection_tests {
+mod model_authorization_stage_tests {
     use super::*;
     #[test]
     fn model_authorization_failure_stage_is_bounded_and_content_free() {
@@ -546,42 +508,6 @@ mod code_index_run_projection_tests {
         assert_eq!(
             bounded_model_authorization_failure_stage(&hostile),
             "unknown"
-        );
-    }
-
-    #[test]
-    fn public_code_index_outcome_is_an_allowlisted_content_free_projection() {
-        let run = json!({"id":"run","session_id":"session","status":"running",
-            "code_index_retrieval_attempted":true,"code_index_retrieval_status":"secret query and source excerpt",
-            "code_index_retrieval_stage":"provider said: secret","code_index_query":"private query",
-            "code_index_source":"private source","code_index_retrieval_error":"upstream body"});
-        let public = public_run(&run);
-        assert_eq!(
-            public["code_index_retrieval"],
-            json!({"status":"unavailable","stage":"unknown"})
-        );
-        let rendered = public.to_string();
-        for secret in [
-            "secret query",
-            "provider said",
-            "private query",
-            "private source",
-            "upstream body",
-        ] {
-            assert!(!rendered.contains(secret));
-        }
-    }
-    #[test]
-    fn public_code_index_outcome_exposes_only_valid_status_and_stage() {
-        let run = json!({"code_index_retrieval_attempted":true,"code_index_retrieval_status":"attached_candidates",
-            "code_index_retrieval_stage":"complete","code_index_query":"private"});
-        assert_eq!(
-            public_code_index_retrieval(&run),
-            json!({"status":"attached_candidates","stage":"complete"})
-        );
-        assert_eq!(
-            public_code_index_retrieval(&json!({})),
-            json!({"status":"not_attempted","stage":"not_started"})
         );
     }
 }

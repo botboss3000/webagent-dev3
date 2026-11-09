@@ -2,7 +2,6 @@
 import concurrent.futures
 import fnmatch
 import io
-import importlib.util
 import hashlib
 import json
 import os
@@ -22,7 +21,7 @@ MAX_INSPECTION_FILE = 256 * 1024 * 1024
 # Removed inputs that open tasks' stored baselines may still hold; startup re-reads them.
 RETIRED_CONTEXT = ("v3/data/config/gates/message_visibility_v1.json",
                    "v3/data/config/gates/closing_status_v1.json",
-                   "v3/launch.py", "v3/ability_plugin_worker.py")
+                   "v3/launch.py", "v3/ability_plugin_worker.py", "v3/worker.py")
 
 
 def inspection_path(name):
@@ -639,9 +638,9 @@ def write_source_receipt(destination, job_id, candidate_digest):
 
 
 def verify_publication(destination, job_id, candidate_digest=None):
-    """Validate source activation without requiring its derived index to exist."""
+    """Validate a published release against its source receipt."""
     destination=Path(destination);path=destination/".code-index/source-release.json";uuid.UUID(job_id)
-    if not path.exists():return verify_index(destination,job_id,candidate_digest)
+    if not path.exists():raise ValueError("Source publication receipt missing")
     if destination.is_symlink()or (destination/".code-index").is_symlink()or path.is_symlink()or not path.is_file()or path.stat().st_size>4096:raise ValueError("Invalid source publication receipt")
     value=json.loads(path.read_bytes())
     if any(not isinstance(value.get(k),str)or len(value[k])!=64 or any(c not in "0123456789abcdef"for c in value[k])for k in ("candidate_sha256","source_sha256")):raise ValueError("Invalid source publication digest")
@@ -688,19 +687,6 @@ def current_asset_id(root):
     return job_id
 
 
-def verify_index(destination, job_id, candidate_digest=None):
-    # Installed broker loads only its protected scanner. Unit tests load the
-    # reviewed checkout adapter; no module inside a candidate is executed.
-    scanner = Path(__file__).with_name("index-scanner.py")
-    if not scanner.exists():
-        scanner = Path(__file__).resolve().parent.parent / "plugins/abilities/Administrator/code_index/adapter.py"
-    spec = importlib.util.spec_from_file_location("published_index", scanner)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    _blob, manifest = module.read_published(Path(destination), job_id)
-    if candidate_digest is not None and manifest["candidate_sha256"] != candidate_digest:
-        raise ValueError("Published candidate/index digest mismatch")
-    return manifest
 
 
 def activate_assets(root, job_id):

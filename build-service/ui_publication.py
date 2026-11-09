@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 import re
 import shutil
-import sqlite3
 import time
 import uuid
 import threading
@@ -46,25 +45,6 @@ class UIPublication:
     def runtime(self):
         """Capture retained consumer identities without serializing credentials or configuration."""
         return {role:{"id":value["Id"],"image":value["Image"],"pid":value.get("State",{}).get("Pid")}for role,name in zip(("api","loop"),self.broker.publication_targets)for value in [self.broker.runner.inspect(name)]}
-
-    def reviews(self,folder,changed):
-        """Require current applicable reviews in the exact sealed candidate index."""
-        scanner=self.broker.code_index_ledger.scanner
-        if (folder/".code-index/source-release.json").is_file():
-            manifest=self.release.verify_publication(folder,folder.name)
-            return manifest,[path for path in changed if Path(path).suffix in scanner.SUFFIXES]
-        blob,manifest=scanner.read_published(folder,folder.name)
-        conn=sqlite3.connect(":memory:")
-        try:
-            conn.deserialize(blob)
-            rows=[json.loads(row[0])for row in conn.execute("SELECT body FROM maintenance_records")]
-        finally:conn.close()
-        pending=[]
-        for path in changed:
-            if Path(path).suffix not in scanner.SUFFIXES:continue
-            selected=[row for row in rows if row["file_path"]==path]
-            if not selected or any(row["status"]!="complete"for row in selected):pending.append(path)
-        return manifest,pending
 
     def cancelled(self,job):
         """Check cancellation without holding a publication or authority lock."""
@@ -163,7 +143,7 @@ class UIPublication:
                     if stale:continue
                     raise
             validated=0.0 if host_only else clock()-validation_started
-            manifest,pending=self.reviews(destination,job.get("changed_paths",()))
+            self.release.verify_publication(destination,destination.name)
             evidence=self.policy.dependencies(self.release.entries(blob,self.validate),job.get("changed_paths",()))
             evidence["runtime_images"]=dict(job.get("images",{}))if tested_runtime else{role:identity["image"]for role,identity in runtime.items()}
             if host_only:
@@ -182,26 +162,10 @@ class UIPublication:
                 job.setdefault("ui_verification_history",[]).append({"attempt":attempt,"base_release_id":revision,"result":test_result})
                 job["ui_test_evidence"]=test_result
                 job["preparation"]["frontend_tests_seconds"]=clock()-test_started
-                job["preparation"].update(attempts=attempt,indexing_seconds=0 if manifest.get("publication_mode")=="post_deployment_indexing_v1"else indexed,
-                    source_preparation_seconds=indexed if manifest.get("publication_mode")=="post_deployment_indexing_v1"else 0,
-                    index_deferred=manifest.get("publication_mode")=="post_deployment_indexing_v1",validation_seconds=validated,
-                    total_seconds=clock()-started,parsed_files=manifest.get("indexing",{}).get("parsed_files"),
-                    reused_files=manifest.get("indexing",{}).get("reused_files"),dependency_sha256=evidence["sha256"],
+                job["preparation"].update(attempts=attempt,source_preparation_seconds=indexed,validation_seconds=validated,
+                    total_seconds=clock()-started,dependency_sha256=evidence["sha256"],
                     conservative_validation=evidence["conservative"],required_tests=evidence["tests"])
                 job["prepared_assets"]=str(destination);self.broker._save(job)
-            if self.broker.review_policy.defer_by_policy():pending=[]
-            if pending and self.broker.review_policy.allows(job,destination):
-                with self.broker.lock:
-                    job["deferred_documentation"]["pending_paths"]=pending
-                    self.broker._save(job)
-                pending=[]
-            if pending:
-                with self.broker.lock:
-                    job.update(status="needs_decision",phase="awaiting_prepared_reviews",reason="Complete applicable reviews against the sealed prepared candidate before resuming")
-                    job["preparation"]["pending_review_paths"]=pending[:32]
-                    if not self.broker.scheduler.review_wait(job,reset=True):raise PermissionError("Prepared review delegation unavailable")
-                    self.broker._save(job)
-                return None
             self.broker._phase(job,"waiting_publication")
             wait_started=clock();self.acquire(job);guard=None;held=True
             try:
@@ -360,13 +324,6 @@ class UIPublication:
             try:os.fsync(fd)
             finally:os.close(fd)
         job["legacy_recovery_runtime"]=bound;self.broker._save(job)
-        failed=self.assets/"releases"/job["job_id"];index=failed/".code-index"
-        paths=[index/"manifest.json",index/"index.sqlite"]
-        if failed.is_symlink()or index.is_symlink()or any(p.is_symlink()or not p.is_file()for p in paths):raise ValueError("Legacy failed index path invalid")
-        if paths[0].stat().st_size>2*1024**2 or paths[1].stat().st_size>self.broker.code_index_ledger.scanner.MAX_DB_BYTES:raise ValueError("Legacy failed index exceeds bounds")
-        receipt=json.loads(paths[0].read_bytes());scanner=self.broker.code_index_ledger.scanner
-        # A corrupt index is the reason for restoring; require its exact hashed source/bytes, not readable tables.
-        if receipt.get("release_id")!=job["job_id"]or receipt.get("candidate_sha256")!=job["inputs_sha256"]or receipt.get("source_sha256")!=scanner.source_digest(failed)or receipt.get("index_sha256")!=hashlib.sha256(paths[1].read_bytes()).hexdigest():raise ValueError("Legacy failed source/index receipt changed")
         return bound
 
     def backend_predecessor_capture(self,folder):
@@ -612,10 +569,8 @@ class UIPublication:
             if self.broker.runner.current_asset_id()!=job["job_id"]:raise ValueError("Active pointer advanced; cannot complete this activation")
             active_root=self.assets/"releases"/job["job_id"]
             self.release.verify_publication(active_root,job["job_id"],job["inputs_sha256"])
-            self.reviews(active_root,job.get("changed_paths",()))
             job["publication_recovery"]={"digest":digest,"request_id":args["request_id"],"action":args["action"],"done":False}
             self.broker._save(job)
-            self.broker._code_index_activated(job["job_id"])
             self.broker.runner.verify_ui(job.get("changed_paths",()))
             for role,name in zip(("api","loop"),self.broker.publication_targets):
                 if not self.broker.runner.healthy(name,bound[role]["image"]):raise ValueError("Recovered consumer unhealthy")

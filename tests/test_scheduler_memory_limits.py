@@ -373,25 +373,12 @@ class SupervisorLoadingTests(unittest.TestCase):
             self.assertEqual(result["values"],config.memory_policy(POLICY))
             self.assertEqual(result["sha256"],config.memory_policy_digest(POLICY))
 
-class LedgerCapacityTests(unittest.TestCase):
-    """A protected storage ceiling resolves saturation without disabling the guard."""
-    def test_default_and_installation_bounds(self):
-        self.assertEqual(config.defaults()["code_index_ledger_max_bytes"],768*1024**2)
-        for value in (512*1024**2,768*1024**2,1024**3):
-            self.assertEqual(config.validate({**config.defaults(),"code_index_ledger_max_bytes":value})["code_index_ledger_max_bytes"],value)
-        for value in (True,0,512*1024**2-4096,1024**3+4096,768*1024**2+1):
-            with self.subTest(value=value),self.assertRaises(ValueError):config.validate({**config.defaults(),"code_index_ledger_max_bytes":value})
-    def test_exhaustion_still_rejects_transaction_and_preserves_prior_state(self):
-        import importlib.util
-        spec=importlib.util.spec_from_file_location("memory_ledger",Path(__file__).parents[1]/"plugins/abilities/Administrator/code_index/maintenance.py")
-        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-        with tempfile.TemporaryDirectory()as temporary:
-            ledger=module.Ledger(temporary,max_bytes=1024*1024)
-            with ledger.connect()as db:db.execute("CREATE TABLE capacity_fixture(value BLOB)")
-            ledger.max_bytes=ledger.path.stat().st_size
-            with self.assertRaisesRegex(ValueError,"storage budget"):
-                with ledger.connect()as db:db.execute("INSERT INTO capacity_fixture VALUES(?)",(b"x"*65536,))
-            with ledger.connect()as db:self.assertEqual(db.execute("SELECT COUNT(*) FROM capacity_fixture").fetchone()[0],0)
+class RetiredConfigKeyTests(unittest.TestCase):
+    """Retired Code Index keys stay accepted so existing installed configs still load."""
+    def test_retired_keys_are_accepted(self):
+        self.assertNotIn("code_index_ledger_max_bytes",config.defaults())
+        config.validate({**config.defaults(),"code_index_ledger_max_bytes":768*1024**2})
+        config.validate({**config.defaults(),"scheduler":{"documentation_review_order":"before_deployment","post_deployment_indexing":False}})
 
 class RootSwapSealTests(unittest.TestCase):
     """An admission seal records no new budget and accepts only an existing exact cap."""

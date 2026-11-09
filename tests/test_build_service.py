@@ -345,7 +345,7 @@ class HostSourceReleaseTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as temporary:
    broker=fixtures.host.Broker(Path(temporary)/"jobs",fixtures.FakeRunner())
    try:
-    for path in ("v3/src/app.rs","v3/worker.py","v3/build-service/workspace_executor.py","v3/build-service/config.py","v3/plugins/abilities/catalog.json"):
+    for path in ("v3/src/app.rs","v3/sandbox.py","v3/build-service/workspace_executor.py","v3/build-service/config.py","v3/plugins/abilities/catalog.json"):
      self.assertFalse(broker.host_source_only([path],b"unused",{"local_caller":True}))
     self.assertFalse(broker.host_source_only(["v3/build-service/host.py"],b"unused",{}))
    finally:broker.shutdown()
@@ -376,7 +376,7 @@ class InstalledWorkspacePublicationTests(unittest.TestCase):
     with patch.object(fixtures.host,"CONFIG",{**fixtures.host.CONFIG,"service_dir":str(root)}),patch.object(fixtures.host.os,"fstat",return_value=protected):
      self.assertTrue(broker.host_source_only(changed,blob,{"local_caller":True}))
      self.assertFalse(broker.host_source_only(changed,blob,{}))
-     self.assertFalse(broker.host_source_only(changed+["v3/worker.py"],blob,{"local_caller":True}))
+     self.assertFalse(broker.host_source_only(changed+["v3/sandbox.py"],blob,{"local_caller":True}))
      (root/"workspace.py").write_bytes(b"different")
      self.assertFalse(broker.host_source_only(changed,blob,{"local_caller":True}))
    finally:broker.shutdown()
@@ -401,7 +401,7 @@ class InstalledOwnershipPublicationTests(unittest.TestCase):
      (root/"ownership.py").write_bytes(b"different installed bytes")
      self.assertFalse(broker.host_source_only(changed,blob,{"local_caller":True}))
      self.assertFalse(broker.host_source_only(changed,blob,{}))
-     self.assertFalse(broker.host_source_only(changed+["v3/worker.py"],blob,{"local_caller":True}))
+     self.assertFalse(broker.host_source_only(changed+["v3/sandbox.py"],blob,{"local_caller":True}))
    finally:broker.shutdown()
 
 
@@ -837,7 +837,7 @@ class SuccessorRecoveryTests(unittest.TestCase):
         self.assertFalse(self.broker.scheduler.store.get(item["key"])["scopes"])
         self.assertEqual((Path(item["workspace_path"])/"README.md").read_text(),"other writer\n")
 
-    def test_atomic_transfer_preserves_closed_source_and_review_lookup(self):
+    def test_atomic_transfer_preserves_closed_source(self):
         original,job=self.proposal(False);item,args=self.request(job);args["transfer_claims"]=True
         held=self.broker.scheduler.store.get(original["key"])
         result=self.call("build_work",args)
@@ -847,7 +847,6 @@ class SuccessorRecoveryTests(unittest.TestCase):
         self.assertEqual(source["state"],"abandoned");self.assertEqual(source["epoch"],held["epoch"]+1)
         self.assertEqual(source["scopes"],[])
         self.assertEqual(set(self.broker.scheduler.store.get(item["key"])["scopes"]),set(held["scopes"]))
-        self.assertIn(original["key"],self.broker.review_policy.task_keys())
         self.assertEqual(self.call("build_work",args),result)
         self.assertEqual((Path(original["workspace_path"])/"README.md").read_text(),"proposal\n")
 
@@ -1266,7 +1265,7 @@ class RuntimeReadabilityTests(unittest.TestCase):
         self.calls=[]
         def command(argv,timeout):
             self.calls.append(argv)
-            return json.dumps({"files":10,"runtime_files":3}if "python3"in argv else{"catalog_version":"fixture"})
+            return json.dumps({"files":10,"runtime_files":2}if "python3"in argv else{"catalog_version":"fixture"})
         self.runner=types.SimpleNamespace(command=command,inspect=lambda name:self.previous["api"if name==fixtures.host.TARGETS[0]else"loop"],current_asset_id=lambda:self.identity)
     def run_preflight(self,publication_id=None):
         with patch.object(fixtures.host,"CONFIG",self.config),patch.object(fixtures.host,"ASSET_ROOT",self.assets),                patch.object(fixtures.host.release,"verify_publication",return_value={"candidate_sha256":"a"*64}),                patch.object(fixtures.host.subprocess,"run"):
@@ -1282,19 +1281,19 @@ class RuntimeReadabilityTests(unittest.TestCase):
                 if arg=="--mount":self.assertTrue(argv[i+1].endswith(",readonly"))
         self.assertEqual(self.calls[0][self.calls[0].index("--user")+1],str(self.config["app_uid"])+":"+str(self.config["app_gid"]))
         self.assertEqual(self.calls[1][self.calls[1].index("--user")+1],str(self.config["worker_uid"])+":"+str(self.config["worker_gid"]))
-    def test_worker_probe_checks_baked_bytes_and_compiles_all_three_scripts(self):
+    def test_worker_probe_checks_baked_bytes_and_compiles_both_scripts(self):
         import subprocess
         self.run_preflight();argv=next(c for c in self.calls if "python3"in c);program=argv[argv.index("-c")+1]
         self.assertIn("/opt/v3",program);self.assertIn("Baked runtime Python source differs",program)
         self.assertIn("compile(body",program);self.assertIn("runtime_files",program)
         self.assertEqual(argv[argv.index("--user")+1],str(self.config["worker_uid"])+":"+str(self.config["worker_gid"]))
         baked=self.root/"baked";baked.mkdir()
-        for name in ("worker.py","sandbox.py","promote.py"):
+        for name in ("sandbox.py","promote.py"):
             (baked/name).write_text("pass\n");(self.publication/"v3"/name).write_text("pass\n")
         program=program.replace('pathlib.Path("/opt/v3")','pathlib.Path('+repr(str(baked))+')')
         result=subprocess.run(["python3","-I","-B","-c",program,str(self.publication)],capture_output=True,text=True)
-        self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(json.loads(result.stdout)["runtime_files"],3)
-        (baked/"worker.py").write_text("changed=True\n")
+        self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(json.loads(result.stdout)["runtime_files"],2)
+        (baked/"sandbox.py").write_text("changed=True\n")
         result=subprocess.run(["python3","-I","-B","-c",program,str(self.publication)],capture_output=True,text=True)
         self.assertNotEqual(result.returncode,0);self.assertIn("differs from frozen",result.stderr)
     def test_incomplete_baked_probe_does_not_certify_readability(self):
@@ -1325,7 +1324,7 @@ class RuntimeReadabilityTests(unittest.TestCase):
         self.run_preflight();argv=next(c for c in self.calls if "python3"in c);program=argv[argv.index("-c")+1]
         source=self.root/"worker-fixture";(source/"v3/config").mkdir(parents=True);(source/"v3/config/example.json").write_text("{}")
         baked=self.root/"configuration-runtime";baked.mkdir()
-        for name in ("worker.py","sandbox.py","promote.py"):
+        for name in ("sandbox.py","promote.py"):
             (baked/name).write_text("pass\n");(source/"v3"/name).write_text("pass\n")
         program=program.replace('pathlib.Path("/opt/v3")','pathlib.Path('+repr(str(baked))+')')
         passed=subprocess.run([sys.executable,"-c",program,str(source)],capture_output=True,timeout=5)
@@ -2187,23 +2186,6 @@ class HostPhaseTimingTests(unittest.TestCase):
   self.assertLessEqual(len(job["phase_timings"]),128)
   self.assertEqual(job["phase_timings"][-1]["phase"],"checking_ui")
 
-
-class InstalledInventoryEnginePublicationTests(unittest.TestCase):
- def test_maintenance_requires_exact_installed_engine_and_operator(self):
-  with tempfile.TemporaryDirectory()as tmp:
-   root=Path(tmp);(root/"host.py").write_bytes(b"host");(root/"index-maintenance.py").write_bytes(b"engine")
-   broker=fixtures.host.Broker(root/"jobs",fixtures.FakeRunner())
-   path="v3/plugins/abilities/Administrator/code_index/maintenance.py"
-   blob=fixtures.context(extra={"v3/build-service/host.py":"host",path:"engine"})
-   protected=types.SimpleNamespace(st_mode=0o100644,st_uid=0,st_nlink=1)
-   try:
-    with patch.object(fixtures.host,"CONFIG",{**fixtures.host.CONFIG,"service_dir":str(root)}),patch.object(fixtures.host.os,"fstat",return_value=protected):
-     self.assertTrue(broker.host_source_only([path],blob,{"local_caller":True}))
-     self.assertFalse(broker.host_source_only([path],blob,{}))
-     (root/"index-maintenance.py").write_bytes(b"other")
-     self.assertFalse(broker.host_source_only([path],blob,{"local_caller":True}))
-     self.assertFalse(broker.host_source_only([path,"v3/worker.py"],blob,{"local_caller":True}))
-   finally:broker.shutdown()
 
 class EngineModulePathTests(unittest.TestCase):
  def test_native_schema_keeps_asset_publication_after_move(self):

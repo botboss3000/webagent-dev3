@@ -932,10 +932,7 @@ impl<H: Host> Catalog<H> {
         name: &str,
         ui_root: Option<&Path>,
     ) -> Option<PathBuf> {
-        if ability.frozen
-            || !matches!(ability.id.as_str(), "code_index" | "codebase_admin")
-            || !valid_id(name)
-        {
+        if ability.frozen || ability.id != "codebase_admin" || !valid_id(name) {
             return None;
         }
         let root = ui_root.filter(|root| root.ends_with(Path::new("v3/ui")))?;
@@ -2296,12 +2293,7 @@ pub mod registered_tests {
             let mut ability = catalog.abilities[0].clone();
             let ui = root.path().join("assets/current/v3/ui");
             assert_eq!(Catalog::<H>::published_skill_path(&ability, "ability", "codebase_admin", Some(&ui)).unwrap(),root.path().join("assets/current/v3/plugins/abilities/Administrator/codebase_admin/codebase_admin.skill.md"));
-            ability.id = "code_index".into();
-            ability.tools = vec!["code_index_lookup".into()];
-            let path =
-                Catalog::<H>::published_skill_path(&ability, "ability", "code_index", Some(&ui))
-                    .unwrap();
-            assert_eq!(path, root.path().join("assets/current/v3/plugins/abilities/Administrator/code_index/code_index.skill.md"));
+            ability.tools = vec!["file_read".into()];
             assert!(
                 Catalog::<H>::published_skill_path(&ability, "tool", "../secret", Some(&ui))
                     .is_none()
@@ -2316,17 +2308,12 @@ pub mod registered_tests {
             assert!(Catalog::<H>::published_skill_path(
                 &ability,
                 "ability",
-                "code_index",
+                "codebase_admin",
                 Some(Path::new("/tmp/other"))
             )
             .is_none());
-            let tool = Catalog::<H>::published_skill_path(
-                &ability,
-                "tool",
-                "code_index_lookup",
-                Some(&ui),
-            )
-            .unwrap();
+            let tool = Catalog::<H>::published_skill_path(&ability, "tool", "file_read", Some(&ui))
+                .unwrap();
             fs::create_dir_all(tool.parent().unwrap()).unwrap();
             fs::write(&tool, "First published instructions").unwrap();
             assert_eq!(
@@ -3585,33 +3572,6 @@ pub mod registered_tests {
                 &loaded
             ));
             assert_eq!(state, json!({"active":[],"suppressed":[]}));
-        }
-
-        pub fn code_index_comment_maintenance_skill_is_discoverable<H: crate::TestHost>() {
-            let catalog = H::native_fixture();
-            let visibility = json!({"visibility":{"code_index":"visible"}});
-            let active = json!({"active":["code_index"],"suppressed":[]});
-            let listed = catalog
-                .bundled_skill_list("code_index", &visibility, &active, |_| true, |_| true)
-                .unwrap();
-            assert!(listed
-                .iter()
-                .any(|skill| skill["kind"] == "selectable"
-                    && skill["skill_id"] == "comment_maintenance"));
-            let loaded = catalog
-                .bundled_skill_load(
-                    "code_index",
-                    "selectable",
-                    "comment_maintenance",
-                    &visibility,
-                    &active,
-                    |_| true,
-                    |_| true,
-                )
-                .unwrap();
-            assert_eq!(loaded["source_kind"], "untrusted_bundled_guidance");
-            assert_eq!(loaded["activates"], false);
-            assert!(loaded["text"].as_str().unwrap().contains("chat footer"));
         }
 
         /// Verify native seed inventory against the tools actually registered by the current host.

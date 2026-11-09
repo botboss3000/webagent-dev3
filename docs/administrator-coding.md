@@ -1,8 +1,8 @@
 # V3 Administrator coding contracts
 
-This development slice covers eight Administrator abilities: Codebase Admin, Code Index, Git Control, Terminal Control, Diagnostics, Remote Tunnel, V3 Build and V3 Workspace. Computer Control and Program Screenshot are excluded. The broader ability catalog still contains pending ports and placeholders; these eight do not establish complete catalog parity.
+This development slice covers seven Administrator abilities: Codebase Admin, Git Control, Terminal Control, Diagnostics, Remote Tunnel, V3 Build and V3 Workspace. Computer Control and Program Screenshot are excluded. The broader ability catalog still contains pending ports and placeholders; these seven do not establish complete catalog parity.
 
-All eight selected Administrator abilities are marked ready after focused tests and authenticated V3 API acceptance. Codebase Admin retains its existing ready status. A manifest or UI row cannot register executable code. Validation used tool calls through the API, including a private Diagnostics PNG artifact; no UI journey or theme journey was run.
+All seven selected Administrator abilities are marked ready after focused tests and authenticated V3 API acceptance. Codebase Admin retains its existing ready status. A manifest or UI row cannot register executable code. Validation used tool calls through the API, including a private Diagnostics PNG artifact; no UI journey or theme journey was run.
 
 ## Authority and execution
 
@@ -15,15 +15,12 @@ A separate protected host broker handles installation image builds and developme
 | Ability | Implemented execution contract |
 | --- | --- |
 | Codebase Admin | Container file access, search, checked edits/patches, complete change review, shell/Python execution, typed session inspection and revisioned prompt slots. Direct coding starts in the live checkout; seeded workspace source remains available for isolated review. |
-| Code Index | Five bounded scan/coverage/progress/lookup/trace tools over the caller's source snapshot. Hashed physical lines, symbols and static edges are derived metadata. Lookups report stale entries instead of rescanning implicitly. |
 | Git Control | Bounded Git operations, conflict resolution, commit/push and agent-owned HTTPS repository connections. Private transport credentials are trusted worker metadata, never model arguments or tool results. |
 | Terminal Control | Session-owned supervised terminals, bounded read/wait/input and close. Restart does not replay terminal input or adopt another session's process. |
 | Diagnostics | Native content-free current-session/run diagnostics and a private fixed-origin Chromium browser. Rust mints a short-lived current-caller cookie; the worker verifies identity. Bounded DOM reads, fresh reads before input, private PNG artifacts and at most 30 recording frames are supported. |
 | Remote Tunnel | A separate authenticated, leased preview of a supervised current-session server. It does not expose the WebAgent application or alter the permanent named development tunnel. |
 | V3 Build | Fixed workspace Cargo jobs and protected host status/build/deploy receipts. Source inputs are captured and rechecked; raced results are stale. Deployment is a separate action against a known successful unchanged build. |
 | V3 Workspace | Seed/status/review/read/checked-patch actions for the isolated `webagent-v3` snapshot. Frozen promotion proposals and their durable receipts remain Rust-owned. |
-
-Python AST and optional Tree-sitter JavaScript provide Code Index symbols; unavailable parsers return explicitly uncertain fallback coverage. Static edges guide inspection and do not prove runtime behavior. A workspace index cannot establish freshness for edits to the shared server checkout.
 
 ## Agent settings and repository connections
 

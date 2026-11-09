@@ -872,22 +872,22 @@ class BuildTests(unittest.TestCase):
         target = host.release.release_mounts(loop, root)["Mounts"][0]
         self.assertEqual(str(root / "v3/plugins/abilities"), target["Source"])
 
-    def test_index_gate_failure_blocks_full_and_ui_effects(self):
+    def test_staging_failure_blocks_full_and_ui_effects(self):
         for ui_only in (False, True):
             with self.subTest(ui_only=ui_only):
                 self.runner.hot_assets=ui_only
                 self.runner.blob=context(extra={"v3/ui/index.html":"<main>baseline</main>"})
-                task_id="index-gate-"+str(ui_only)
+                task_id="staging-gate-"+str(ui_only)
                 task=self.call("v3_build_work",dict(action="begin",task_id=task_id,summary="gate",mode="isolated"))
                 path=Path(task["workspace_path"])/("ui/index.html" if ui_only else "README.md")
                 path.write_text("<main>edited</main>" if ui_only else "runtime edit")
                 digest=self.call("v3_build_work",dict(action="status",task_id=task_id))["own"][0]["workspace_inputs_sha256"]
                 self.runner.calls.clear()
-                with patch.object(self.runner,"stage_assets",side_effect=ValueError("incomplete published index")):
+                with patch.object(self.runner,"stage_assets",side_effect=ValueError("incomplete source receipt")):
                     job=self.call("v3_build_work",dict(action="finish",task_id=task_id,expected_inputs_sha256=digest))
                     result=self.wait(job)
                 self.assertEqual("failed",result["status"])
-                self.assertIn("incomplete published index",result["reason"])
+                self.assertIn("incomplete source receipt",result["reason"])
                 self.assertFalse(any(c[0] in ("stop","activate_assets","promote") for c in self.runner.calls))
 
     def test_stable_asset_mount_and_atomic_pointer(self):
@@ -899,17 +899,12 @@ class BuildTests(unittest.TestCase):
         second = str(uuid.uuid4())
         release = host.release
         release.stage_assets(root, first, blob, host.context_digest)
-        scanner_path=PATH.parent.parent/"plugins/abilities/Administrator/code_index/adapter.py"
-        scanner_spec=importlib.util.spec_from_file_location("fixture_scanner",scanner_path)
-        scanner=importlib.util.module_from_spec(scanner_spec);scanner_spec.loader.exec_module(scanner)
-        scanner.build_published(root/"releases"/first,root/"releases"/first/".code-index",
-                                first,host.context_digest(blob)[0])
+        release.write_source_receipt(root/"releases"/first,first,host.context_digest(blob)[0])
         self.assertIsNone(release.current_asset_id(root))
         self.assertIsNone(release.activate_assets(root, first))
         self.assertEqual(first, release.current_asset_id(root))
         release.stage_assets(root, second, blob, host.context_digest)
-        scanner.build_published(root/"releases"/second,root/"releases"/second/".code-index",
-                                second,host.context_digest(blob)[0])
+        release.write_source_receipt(root/"releases"/second,second,host.context_digest(blob)[0])
         self.assertEqual(first, release.activate_assets(root, second))
         self.assertEqual(second, release.current_asset_id(root))
         release.stage_assets(root, second, blob, host.context_digest)
@@ -1470,61 +1465,6 @@ class BuildTests(unittest.TestCase):
 
         self.assertEqual([(full["job_id"],compiler_source)]*2,prepared)
         self.assertEqual([(full["job_id"],self.broker.jobs[full["job_id"]]["inputs_sha256"])],frozen)
-
-    def test_mixed_index_switches_during_build_and_runtime_inherits_metadata(self):
-        bootstrap = self.call("v3_build_work", {"action": "begin", "task_id": "bootstrap-ui",
-            "summary": "Migrate asset mount", "mode": "isolated"})
-        first_file = Path(bootstrap["workspace_path"], "src/bootstrap.rs")
-        first_file.parent.mkdir(exist_ok=True)
-        first_file.write_text("bootstrap")
-        digest = self.call("v3_build_work", {"action": "status", "task_id": "bootstrap-ui"})["own"][0]["workspace_inputs_sha256"]
-        first = self.call("v3_build_work", {"action": "finish", "task_id": "bootstrap-ui",
-            "expected_inputs_sha256": digest})
-        self.assertEqual("completed", self.wait(first)["status"])
-
-        runtime = self.call("v3_build_work", {"action": "begin", "task_id": "running-runtime",
-            "summary": "Runtime work", "mode": "isolated"})
-        ui = self.call("v3_build_work", {"action": "begin", "task_id": "parallel-ui",
-            "summary": "UI work", "mode": "isolated"})
-        runtime_file = Path(runtime["workspace_path"], "src/runtime.rs")
-        runtime_file.parent.mkdir(exist_ok=True)
-        runtime_file.write_text("runtime")
-        ui_file = Path(ui["workspace_path"], "ui/parallel.css")
-        ui_file.parent.mkdir(exist_ok=True)
-        ui_file.write_text("body {}")
-        metadata=Path(ui["workspace_path"])/"plugins/abilities/Administrator/code_index/code_index.skill.md"
-        metadata.parent.mkdir(parents=True,exist_ok=True);metadata.write_text("Validated guidance")
-        digests = {item["task_id"]: item["workspace_inputs_sha256"]
-                   for item in self.call("v3_build_work", {"action": "status"})["own"]}
-        self.runner.block = threading.Event()
-        full = self.call("v3_build_work", {"action": "finish", "task_id": "running-runtime",
-            "expected_inputs_sha256": digests["running-runtime"]})
-        for _ in range(100):
-            if self.broker.jobs[full["job_id"]]["phase"] == "building_api":
-                break
-            time.sleep(.01)
-        self.assertEqual("building_api", self.broker.jobs[full["job_id"]]["phase"])
-        fast = self.call("v3_build_work", {"action": "finish", "task_id": "parallel-ui",
-            "expected_inputs_sha256": digests["parallel-ui"]})
-        self.assertEqual("running", self.broker.jobs[full["job_id"]]["status"])
-        self.assertEqual(self.broker.jobs[fast["job_id"]]["operation"],"index_deploy")
-        self.assertTrue(self.broker.jobs[fast["job_id"]].get("parallel_ui"))
-        for _ in range(100):
-            if self.call("v3_worker_job", {"job_id": fast["job_id"]})["status"] == "completed":
-                break
-            time.sleep(.01)
-        self.assertEqual("completed", self.call("v3_worker_job", {"job_id": fast["job_id"]})["status"])
-        self.assertEqual("running", self.call("v3_worker_job", {"job_id": full["job_id"]})["status"])
-        self.assertEqual(fast["job_id"], self.runner.asset_id)
-        self.runner.block.set()
-        final = self.wait(full)
-        self.assertEqual("completed", final["status"])
-        self.assertIn("built_inputs_sha256", self.broker.jobs[full["job_id"]])
-        combined = host.release.entries(
-            (self.state / full["job_id"] / "candidate.tar").read_bytes(), host.context_digest)
-        self.assertIn("v3/ui/parallel.css", combined)
-        self.assertIn("v3/src/runtime.rs", combined)
-        self.assertIn("v3/plugins/abilities/Administrator/code_index/code_index.skill.md",combined)
 
     def test_ui_release_passes_queued_build_and_later_build_inherits_assets(self):
         tasks = []
@@ -2360,95 +2300,6 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(["new"], value["Cmd"])
         self.assertEqual({"MODE=new", "ADDED=yes", "TOKEN=private", "CUSTOM=yes"}, set(value["Env"]))
         self.assertEqual({"image": "new", "custom": "yes"}, value["Labels"])
-
-
-    def test_index_metadata_and_ledger_only_use_no_compile_lane(self):
-        self.runner.hot_assets=True
-        for n,files in enumerate(({}, {"plugins/abilities/Administrator/code_index/code-index-features.json": '{"version":1,"features":[]}'}, {"plugins/abilities/Administrator/code_index/code_index.skill.md": "Reviewed guidance", "ui/index.html": "<main>paired</main>"})):
-            task_id="index-hot-"+str(n)
-            task=self.call("v3_build_work", {"action":"begin","task_id":task_id,"summary":"Index metadata","mode":"isolated"})
-            for path,body in files.items():
-                target=Path(task["workspace_path"])/path;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(body)
-            digest=self.call("v3_build_work",{"action":"status","task_id":task_id})["own"][0]["workspace_inputs_sha256"]
-            job=self.wait(self.call("v3_build_work",{"action":"finish","task_id":task_id,"expected_inputs_sha256":digest}))
-            self.assertEqual("index_deploy",job["operation"]);self.assertEqual("completed",job["status"])
-        self.assertFalse(any(call[0]=="build" for call in self.runner.calls))
-    def test_maintenance_cross_session_writes_require_operator_and_live_authority(self):
-        task=self.call("v3_build_work",{"action":"begin","task_id":"index-auth-task","summary":"Reviews","mode":"isolated"})
-        root=Path(task["workspace_path"]);(root/"one.py").write_text("def first(): pass\n")
-        key=root.parent.name
-        sync={"action":"sync","task_id":"index-auth-task","scope":"one.py","request_id":"index-sync-one"}
-        result=self.call("code_index_maintenance",sync)
-        self.assertEqual(result["task_key"],key)
-        rows=self.call("code_index_maintenance",{"action":"list","task_id":"index-auth-task"})["results"]
-        self.assertEqual(len(rows),2)
-        foreign={**self.trusted,"user_id":"another"}
-        with self.assertRaises(PermissionError):self.call("code_index_maintenance",{**sync,"task_key":key},trusted=foreign)
-        operator={**foreign,"local_caller":True}
-        result=self.call("code_index_maintenance",{**sync,"task_key":key,"request_id":"operator-sync"},trusted=operator)
-        self.assertEqual(result["task_key"],key)
-        with self.assertRaises(PermissionError):self.call("code_index_maintenance",{**sync,"request_id":"expired-sync"},trusted={**self.trusted,"lease_until":0})
-
-class IndexParserPairingTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
-        self.source = self.root / "source"
-        (self.source / "host-build-service").mkdir(parents=True)
-        self.config_patch=patch.dict(host.CONFIG,{"service_dir":str(self.source/"host-build-service")});self.config_patch.start()
-        self.assets = self.root / "assets"
-        (self.assets / "releases").mkdir(parents=True)
-
-    def tearDown(self):
-        self.config_patch.stop()
-        self.temp.cleanup()
-
-    def blob(self, adapter):
-        return context(extra={"v3/plugins/abilities/Administrator/code_index/maintenance.py": Path(host._maintenance_path).read_text(),host.INDEX_ADAPTER_MEMBER: adapter.decode("utf-8"),
-                              "v3/ui/index.html": "<main>fixture</main>"})
-
-    def runner(self):
-        runner = host.Runner(source=self.source, snapshot_socket=None)
-        runner.inspect = lambda _name: {"Image": "sha256:" + "1" * 64}
-        return runner
-
-    def test_matching_parser_allows_index_stage_and_executor(self):
-        adapter = b"# reviewed parser source\n"
-        (self.source / "host-build-service/index-scanner.py").write_bytes(adapter)
-        runner = self.runner()
-        executed = []
-
-        def execute(argv, timeout=120):
-            executed.append(argv)
-            output_mount = next(arg for arg in argv if arg.endswith(":/output:rw"))
-            output = Path(output_mount.split(":", 1)[0])
-            (output / "manifest.json").write_text("{}", encoding="utf-8")
-            (output / "index.sqlite").write_bytes(b"fixture")
-
-        runner.command = execute
-        with patch.object(host, "ASSET_ROOT", self.assets), \
-             patch.object(host.release, "verify_index", return_value={"index_version": 2}) as verify:
-            job = str(uuid.uuid4())
-            destination = runner.stage_assets(self.blob(adapter), job)
-        self.assertEqual(destination, self.assets / "releases" / job)
-        self.assertTrue((destination / ".code-index/index.sqlite").is_file())
-        self.assertEqual(len(executed), 1)
-        verify.assert_called_once()
-
-    def test_mismatch_preserves_current_release_and_never_calls_executor(self):
-        old = str(uuid.uuid4())
-        (self.assets / "releases" / old).mkdir()
-        (self.assets / "current").symlink_to("releases/" + old)
-        (self.source / "host-build-service/index-scanner.py").write_bytes(b"installed parser v1")
-        runner = self.runner()
-        executed = []
-        runner.command = lambda *args, **kwargs: executed.append(args)
-        with patch.object(host, "ASSET_ROOT", self.assets):
-            with self.assertRaisesRegex(ValueError, "differs.*Install the reviewed Code Index parser.*restart"):
-                runner.stage_assets(self.blob(b"candidate parser v2"), str(uuid.uuid4()))
-        self.assertEqual(host.release.current_asset_id(self.assets), old)
-        self.assertFalse(executed)
-        self.assertEqual({p.name for p in (self.assets / "releases").iterdir()}, {old})
 
 
 class InheritedSocketTests(unittest.IsolatedAsyncioTestCase):

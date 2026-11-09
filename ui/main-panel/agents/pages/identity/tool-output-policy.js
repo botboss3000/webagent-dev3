@@ -2,7 +2,6 @@
 import {createSettingsRow} from './settings-row.js';
 
 const scopeOptions = [
-  ['code_index', 'Code Index tools'],
   ['selected', 'Selected tools'],
   ['all_eligible', 'All eligible read tools'],
 ];
@@ -133,7 +132,7 @@ function renderExperimentalPolicy(host, agent, persist, available, enabled) {
     agent = saved;
     policy = structuredClone(saved.tool_output_policy || saved.tool_output_defaults || {});
     enabled.checked = Boolean(policy.enabled);
-    scope.value = policy.scope || 'code_index';
+    scope.value = policy.scope || 'all_eligible';
     const selected = new Set(Array.isArray(policy.tools) ? policy.tools : []);
     for (const [name, check] of toolChecks) check.checked = selected.has(name);
     for (const [key, input] of numbers) input.value = String(policy[key]);

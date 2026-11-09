@@ -28,10 +28,10 @@ These examples do not limit the properties or elements you can investigate.
 1. Identify the element, requested properties, and relevant surfaces, themes,
    roles, breakpoints, and states from the request and existing context.
    Ask only when ambiguity changes the answer; continue independent inspection.
-2. Locate the owning feature and actual renderer/style consumer. Read configuration
-   references and all relevant configuration_snippets returned by Code Index,
-   alongside source text. Check each value's own status and truncation before
-   relying on it; another snippet's truncation does not erase a complete value.
+2. Locate the owning feature and actual renderer/style consumer. Read the
+   configuration it references alongside source text. Check each value's own
+   status and truncation before relying on it; another value's truncation does not
+   erase a complete value.
    Unset overrides inherit according to the verified merge rules.
 3. Collect related requested values together. Search the owning file for the
    setting, then read its complete bounded section. Follow a next page only when
