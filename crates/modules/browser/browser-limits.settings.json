@@ -91,6 +91,29 @@
       "min": 10,
       "max": 3600,
       "bounds": "validator"
+    },
+    {
+      "id": "browser.limits.max_wait_seconds",
+      "description": "Seconds a Browser Control call waits in the queue for a free browser before it answers that the browser is busy.",
+      "type": "integer",
+      "pointer": "/max_wait_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "wait up to 5 minutes for a browser",
+        "give up on a busy browser sooner",
+        "let chats wait longer for a free browser"
+      ],
+      "areas": [
+        "browser",
+        "queue",
+        "timeout"
+      ],
+      "unit": "s",
+      "min": 30,
+      "max": 3600,
+      "bounds": "validator"
     }
   ],
   "excluded": {

@@ -639,13 +639,29 @@ async fn execute_server(
             }
         }
     }
-    let mut output = tools::execute_trusted(
-        name,
-        args,
-        call.sid,
-        &app.tool_socket,
-        Some(trusted),
-        cancel.clone(),
+    // A full browser pool queues the call; it waits here rather than costing model steps.
+    let max_wait = rules::limits::Limits::live().max_wait_seconds;
+    let mut output = rules::queue::wait(
+        max_wait,
+        || {
+            tools::execute_trusted(
+                name,
+                args,
+                call.sid,
+                &app.tool_socket,
+                Some(trusted.clone()),
+                cancel.clone(),
+            )
+        },
+        |seconds| {
+            let cancel = cancel.clone();
+            async move {
+                tokio::select! {
+                    () = cancel.cancelled() => false,
+                    () = tokio::time::sleep(Duration::from_secs(seconds)) => true,
+                }
+            }
+        },
     )
     .await?;
     if let Some(login) = output.as_object_mut().and_then(|o| o.remove("site_login")) {

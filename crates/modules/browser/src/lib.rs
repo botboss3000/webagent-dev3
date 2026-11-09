@@ -8,6 +8,7 @@
 //! this crate holds its site-policy parsing. The root adapter (`host/browser.rs`) owns
 //! storage, routes, authority and tool dispatch.
 pub mod limits;
+pub mod queue;
 
 use anyhow::{bail, Result};
 use serde_json::Value;

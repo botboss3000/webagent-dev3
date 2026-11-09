@@ -1,8 +1,9 @@
 {
-  "_instructions": "Browser Control limits, read live by the worker on each new browser. max_running_per_app: private browsers running at once across all users. max_running_per_user: running at once for one user, across their chat sessions. A session over either limit is queued and told its position; while anyone waits, an idle browser closes after queued_idle_seconds instead of idle_seconds.",
+  "_instructions": "Browser Control limits, read live by the worker on each new browser. max_running_per_app: private browsers running at once across all users. max_running_per_user: running at once for one user, across their chat sessions. A session over either limit is queued and told its position; while anyone waits, an idle browser closes after queued_idle_seconds instead of idle_seconds. max_wait_seconds: how long a queued tool call waits for a browser before it answers that the browser is busy.",
   "schema_version": 1,
-  "max_running_per_app": 2,
+  "max_running_per_app": 5,
   "max_running_per_user": 4,
   "idle_seconds": 180,
-  "queued_idle_seconds": 30
+  "queued_idle_seconds": 30,
+  "max_wait_seconds": 600
 }

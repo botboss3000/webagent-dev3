@@ -13,6 +13,8 @@ pub struct Limits {
     pub per_user: usize,
     pub idle_seconds: u64,
     pub queued_idle_seconds: u64,
+    /// How long a tool call waits in the queue before it answers that the browser is busy.
+    pub max_wait_seconds: u64,
 }
 
 impl Default for Limits {
@@ -23,6 +25,7 @@ impl Default for Limits {
             per_user: 4,
             idle_seconds: 180,
             queued_idle_seconds: 30,
+            max_wait_seconds: 600,
         }
     }
 }
@@ -44,13 +47,14 @@ impl Limits {
         let Some(object) = value.as_object() else {
             bail!("Browser limits must be an object");
         };
-        const KEYS: [&str; 6] = [
+        const KEYS: [&str; 7] = [
             "_instructions",
             "schema_version",
             "max_running_per_app",
             "max_running_per_user",
             "idle_seconds",
             "queued_idle_seconds",
+            "max_wait_seconds",
         ];
         if object.keys().any(|key| !KEYS.contains(&key.as_str())) {
             bail!("Unknown browser limit");
@@ -62,11 +66,13 @@ impl Limits {
         let per_user = bounded(&value, "max_running_per_user", 1, 50)?;
         let idle_seconds = bounded(&value, "idle_seconds", 30, 3600)?;
         let queued_idle_seconds = bounded(&value, "queued_idle_seconds", 10, idle_seconds)?;
+        let max_wait_seconds = bounded(&value, "max_wait_seconds", 30, 3600)?;
         Ok(Self {
             per_app: usize::try_from(per_app)?,
             per_user: usize::try_from(per_user)?,
             idle_seconds,
             queued_idle_seconds,
+            max_wait_seconds,
         })
     }
 
@@ -91,7 +97,7 @@ mod tests {
 
     #[test]
     fn refuses_out_of_range_and_unknown() {
-        let base = r#"{"schema_version":1,"max_running_per_app":5,"max_running_per_user":4,"idle_seconds":180,"queued_idle_seconds":30"#;
+        let base = r#"{"schema_version":1,"max_running_per_app":5,"max_running_per_user":4,"idle_seconds":180,"queued_idle_seconds":30,"max_wait_seconds":600"#;
         assert!(Limits::parse(format!("{base}}}").as_bytes()).is_ok());
         assert!(Limits::parse(format!("{base},\"extra\":1}}").as_bytes()).is_err());
         let zero = base.replace("\"max_running_per_user\":4", "\"max_running_per_user\":0");
