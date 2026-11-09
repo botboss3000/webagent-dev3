@@ -33,8 +33,6 @@ migration does not deploy or activate new functionality.
 - `program_screenshot`: ability; pending. Adapt independently in a later functional wave.
 - `remote_tunnel`: ability; Rust worker preview proxy and leased quick tunnel (`crates/modules/worker/src/tunnel.rs`).
 - `terminal_control`: ability; Rust worker pseudo-terminals under the workspace sandbox (`crates/modules/worker/src/terminal.rs`).
-- `v3_build`: ability; pending. Adapt independently in a later functional wave.
-- `v3_workspace`: ability; pending. Adapt independently in a later functional wave.
 
 ### CRM
 

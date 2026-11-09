@@ -329,7 +329,7 @@ trusted supervisors cancel descendants. Diagnostics profiles and preview authent
 remain outside the shell-readable workspace. The preview proxy rechecks that the
 listener belongs to the same workspace terminal before forwarding.
 
-`plugins/abilities/Administrator/v3_build/host.py` is installed as a protected host
+`build-service/host.py` is installed as a protected host
 service, with a root-created Unix listener and narrow frozen-input snapshot channel.
 Generated Python bytecode caches are excluded from both protected and direct image
 build inputs.

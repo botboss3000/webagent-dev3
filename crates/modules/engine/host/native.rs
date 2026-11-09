@@ -293,11 +293,7 @@ impl
                     .await
             } else if matches!(
                 name.as_str(),
-                "workspace_seed"
-                    | "source_review"
-                    | "source_patch"
-                    | "v3_workspace_status"
-                    | "v3_cargo_task"
+                "workspace_seed" | "source_review" | "source_patch"
             ) {
                 tools::administrator::workspace_host(&app, &sid, &name, &args, None, cancel).await
             } else if tools::administrator::owns(&name) {

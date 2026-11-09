@@ -6902,7 +6902,7 @@ async fn phase3_http_tier_tools_and_agent_disable_reject_stale_approval() {
     let response=router(app.clone()).oneshot(request(&admin_token,"admin-csrf","PUT",
         "/api/v3/admin/access/tiers/basic",
         json!({"expected_revision":1,"tier":{"id":"basic","revision":1,
-            "allowed_models":[granted_model],"tools":{"file_read":"auto","file_write":"ask","v3_build_status":"auto"},
+            "allowed_models":[granted_model],"tools":{"file_read":"auto","file_write":"ask","v3_build_work":"auto"},
             "ability_permissions":{"codebase_admin":"auto"},"max_sessions":10,"max_active_runs":2}}))).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let access = app
@@ -6953,7 +6953,7 @@ async fn phase3_http_tier_tools_and_agent_disable_reject_stale_approval() {
         access::Permission::Deny
     );
     let host = access.tool_decision(
-        "v3_build_status",
+        "v3_source_read",
         access::Permission::Auto,
         true,
         true,
@@ -6963,7 +6963,7 @@ async fn phase3_http_tier_tools_and_agent_disable_reject_stale_approval() {
     assert_eq!(host.permission, access::Permission::Deny);
     assert_eq!(host.reason, access::Reason::CallerDenied);
     let restart = access.tool_decision(
-        "v3_build_worker_restart",
+        "v3_worker_submit",
         access::Permission::Auto,
         true,
         true,
@@ -11352,12 +11352,7 @@ fn consolidated_codebase_schema_and_guidance_contract() {
             .tool_gate("build_work", &visibility, &state, &json!([]))
             .1
     );
-    for name in [
-        "v3_source_apply",
-        "v3_workspace_action",
-        "workspace_seed",
-        "source_patch",
-    ] {
+    for name in ["v3_source_apply", "workspace_seed", "source_patch"] {
         assert!(!catalog.tool_gate(name, &visibility, &state, &json!([])).0);
     }
     assert!(provider::DEFAULT_INSTRUCTIONS.contains("without task_id"));
@@ -11974,7 +11969,7 @@ async fn late_single_tool_case(name: &str, action: &str, mutation: &str, success
             policy["rules"][tool] = json!("allow");
         }
         app.store.put("policy", &policy).await.unwrap();
-        // The protected host retains the legacy build-ability ceilings.
+        // The protected host checks the older build-name ceilings under Codebase Admin.
         let mut tier = app
             .store
             .entitlement_tier("operator")
@@ -11983,7 +11978,7 @@ async fn late_single_tool_case(name: &str, action: &str, mutation: &str, success
             .unwrap();
         let revision = tier.revision;
         tier.ability_permissions
-            .insert("v3_build".into(), access::Permission::Auto);
+            .insert("codebase_admin".into(), access::Permission::Auto);
         app.store
             .save_entitlement_tier(tier, revision)
             .await
@@ -12002,7 +11997,7 @@ async fn late_single_tool_case(name: &str, action: &str, mutation: &str, success
             .capability_level;
         level
             .ability_permissions
-            .insert("v3_build".into(), access::Permission::Auto);
+            .insert("codebase_admin".into(), access::Permission::Auto);
         app.store
             .save_capability_level("shared_default", level, revision)
             .await

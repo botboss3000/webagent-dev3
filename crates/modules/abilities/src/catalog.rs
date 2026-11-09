@@ -529,12 +529,12 @@ impl<H: Host> Catalog<H> {
                 let ability_path = folder.path();
                 // Pin exactly the bytes parsed here; live edits withdraw cached authority
                 // until a freshly validated catalog reload adopts the new declaration.
-                // Retired coding abilities keep their backend files for operator
-                // commands and durable recovery, but are no longer catalog entries.
+                // `native_tools` only holds definitions of Administrator native tools no
+                // ability owns a folder for; retired abilities keep backend files only.
                 if group_id == "Administrator"
                     && matches!(
                         id.as_str(),
-                        "v3_build" | "v3_workspace" | "computer_control" | "program_screenshot"
+                        "native_tools" | "computer_control" | "program_screenshot"
                     )
                     && !ability_path.join(format!("{id}.json")).exists()
                 {

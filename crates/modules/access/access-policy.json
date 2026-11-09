@@ -127,8 +127,6 @@
         "reply_buttons": "deny",
         "terminal_control": "deny",
         "user_files": "auto",
-        "v3_build": "auto",
-        "v3_workspace": "auto",
         "web_access": "auto"
       },
       "allowed_models": [

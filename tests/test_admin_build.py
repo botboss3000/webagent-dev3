@@ -989,19 +989,6 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(0, host.release.promote_checkout(
             root, before, after, changed, lambda _: None, standalone=True))
 
-    def test_source_apply_schemas_have_disjoint_arguments(self):
-        tools = Path(__file__).resolve().parents[1] / "plugins/abilities/Administrator/v3_build/tools"
-        schemas = {name: json.loads((tools / name / "tool.json").read_text())["parameters"]
-                   for name in ("v3_source_apply_prepared", "v3_source_apply")}
-        prepared = schemas["v3_source_apply_prepared"]
-        raw = schemas["v3_source_apply"]
-        self.assertEqual({"task_id", "request_id", "prepared_id", "expected_inputs_sha256"},
-                         set(prepared["properties"]))
-        self.assertEqual(set(prepared["properties"]), set(prepared["required"]))
-        self.assertEqual({"task_id", "request_id", "patch", "expected_inputs_sha256"},
-                         set(raw["properties"]))
-        self.assertEqual(set(raw["properties"]), set(raw["required"]))
-
     def test_prepared_new_files_apply_exact_reviewed_patch(self):
         task = self.call("v3_build_work", {"action": "begin", "task_id": "prepare-task",
             "summary": "Prepare", "mode": "isolated"})

@@ -499,7 +499,7 @@ impl<
             "Still running as background task {task_id}: the user sent a message, so this \
              call continues in the background while you answer it. Its result is delivered \
              to you automatically when it finishes. Do not repeat this call; if the user \
-             asks to stop it, cancel it with task_cancel.")});
+             asks to stop it, cancel it with background_cancel.")});
         Self::append_tool(&mut run, &result)?;
         app.store
             .save_run_observed(

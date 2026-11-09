@@ -223,7 +223,7 @@ fn root() -> tempfile::TempDir {
 async fn broker_calls_carry_authority_and_register_renewal_only_for_long_work() {
     let dir = root();
     let host = Fake::new(dir.path()).await;
-    call(&host, "v3_build_status", json!({"task_id":"t"}))
+    call(&host, "v3_source_list", json!({"task_id":"t"}))
         .await
         .unwrap();
     assert!(host
@@ -292,30 +292,6 @@ async fn live_files_use_the_worker_with_the_run_revision() {
     .await
     .unwrap();
     assert_eq!(host.sent()[1].socket, "broker");
-}
-
-#[tokio::test]
-async fn workspace_receipts_run_once_and_replay() {
-    let dir = root();
-    let host = Fake::new(dir.path()).await;
-    let args = json!({"action":"review","request_id":"review-1"});
-    let first = call(&host, "v3_workspace_action", args.clone())
-        .await
-        .unwrap();
-    assert_eq!(first["status"], "success");
-    let replay = call(&host, "v3_workspace_action", args).await.unwrap();
-    assert_eq!(replay["replayed_receipt"], true);
-    assert_eq!(host.sent().len(), 1, "a replay never re-runs the mutation");
-    let conflict = json!({"action":"seed","request_id":"review-1"});
-    assert!(call(&host, "v3_workspace_action", conflict).await.is_err());
-    let receipt = call(
-        &host,
-        "v3_workspace_receipt",
-        json!({"request_id":"review-1"}),
-    )
-    .await
-    .unwrap();
-    assert_eq!(receipt["output"]["request_id"], "review-1");
 }
 
 #[tokio::test]

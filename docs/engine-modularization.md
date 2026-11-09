@@ -430,7 +430,7 @@ Reliability factors traced against the current implementation:
   reject stale digests and hint the loop. Scheduler adoption installs the new
   value before its second hint. External invalid JSON is rejected by the
   scheduler rather than silently accepted; use validated saves and reconcile
-  invalid files. The normal scheduler, worker supervision and task_wait timing
+  invalid files. The normal scheduler and worker supervision timing
   remain separate from this background fallback.
 - Expected non-delivery: stop/silent policies, manual pauses, cancellation,
   recycled sessions and revoked permission must remain respected. A completed

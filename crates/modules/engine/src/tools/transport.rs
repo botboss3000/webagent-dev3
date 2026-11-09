@@ -36,9 +36,6 @@ pub async fn execute(
             | "terminal_wait"
             | "terminal_list"
             | "terminal_close"
-            | "v3_workspace_status"
-            | "v3_workspace_action"
-            | "v3_cargo_task"
     ) {
         bail!("unknown tool");
     }

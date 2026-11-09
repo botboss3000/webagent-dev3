@@ -107,7 +107,7 @@ pub(crate) async fn host_fingerprint(
         access
             .tool_decision_for_abilities(
                 name,
-                &["v3_build".into()],
+                &["codebase_admin".into()],
                 installation,
                 true,
                 true,

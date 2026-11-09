@@ -65,42 +65,6 @@ pub fn build_work(args: &Value) -> Result<Value> {
     Ok(Value::Object(pick(object, relevant)))
 }
 
-/// `v3_workspace_action` arguments for the worker: the fixed action and its keys.
-/// Null optional fields are dropped; the caller's receipt still digests the raw input.
-pub fn workspace_action(args: &Value) -> Result<Value> {
-    let object = args.as_object().ok_or_else(|| anyhow!("Object required"))?;
-    const KNOWN: &[&str] = &[
-        "request_id",
-        "action",
-        "path",
-        "offset",
-        "limit",
-        "patch",
-        "expected_review_sha256",
-        "timeout_seconds",
-        "summary",
-    ];
-    if object.keys().any(|key| !KNOWN.contains(&key.as_str())) {
-        bail!("Unknown workspace action argument");
-    }
-    let action = args["action"].as_str().unwrap_or("");
-    let relevant: &[&str] = match action {
-        "seed" | "review" => &[],
-        "read" => &["path", "offset", "limit"],
-        "patch" => &["patch", "expected_review_sha256"],
-        "check" | "test" => &["expected_review_sha256", "timeout_seconds"],
-        "propose" => &["expected_review_sha256", "summary"],
-        _ => bail!("Unknown fixed workspace action"),
-    };
-    let mut projected = json!({"action":action});
-    for key in relevant {
-        if let Some(value) = object.get(*key).filter(|value| !value.is_null()) {
-            projected[*key] = value.clone();
-        }
-    }
-    Ok(projected)
-}
-
 /// The source-relative path of a `file_edit`/`file_write` that enters an owned broker
 /// draft, or `None` when the write targets an explicit runtime or workspace path.
 /// The source-relative part of a checkout path. `/live-checkout/` is the image's
@@ -363,36 +327,6 @@ mod tests {
         assert_eq!(build_work(&decision).ok(), Some(decision));
         let preflight = json!({"action":"preflight","task_id":"sync-task","offset":40});
         assert_eq!(build_work(&preflight).ok(), Some(preflight));
-    }
-
-    #[test]
-    fn seed_projects_schema_optional_defaults_without_changing_receipt_input() {
-        let raw = json!({"action":"seed","expected_review_sha256":"0".repeat(64),"limit":1,
-            "offset":1,"patch":"","path":"","request_id":"seed-exact","summary":"",
-            "timeout_seconds":1});
-        let before = digest(&raw);
-        assert_eq!(workspace_action(&raw).ok(), Some(json!({"action":"seed"})));
-        assert_eq!(digest(&raw), before);
-        let review = json!({"action":"review","path":null});
-        assert_eq!(
-            workspace_action(&review).ok(),
-            Some(json!({"action":"review"}))
-        );
-    }
-
-    #[test]
-    fn read_preserves_pagination_and_rejects_unknown_keys() {
-        let read = json!({"action":"read","path":"README.md","offset":2,"limit":1,"patch":""});
-        assert_eq!(
-            workspace_action(&read).ok(),
-            Some(json!({"action":"read","path":"README.md","offset":2,"limit":1}))
-        );
-        let nulls = json!({"action":"read","path":"README.md","offset":null,"limit":null});
-        assert_eq!(
-            workspace_action(&nulls).ok(),
-            Some(json!({"action":"read","path":"README.md"}))
-        );
-        assert!(workspace_action(&json!({"action":"seed","command":"id"})).is_err());
     }
 
     #[test]

@@ -39,9 +39,8 @@ pub const TOOLS: &[&str] = &[
     "get_webhook_log",
     "update_task_checkpoint",
     "get_task_checkpoint",
-    "task_status",
-    "task_wait",
-    "task_cancel",
+    "background_status",
+    "background_cancel",
     "present_plan",
     "present_chat_component",
     "manage_agent_profiles",
@@ -111,16 +110,12 @@ pub const TOOL_SKILLS: &[(&str, &str)] = &[
         include_str!("../base/tools/search_tools.skill.md"),
     ),
     (
-        "task_cancel",
-        include_str!("../base/tools/task_cancel.skill.md"),
+        "background_cancel",
+        include_str!("../base/tools/background_cancel.skill.md"),
     ),
     (
-        "task_status",
-        include_str!("../base/tools/task_status.skill.md"),
-    ),
-    (
-        "task_wait",
-        include_str!("../base/tools/task_wait.skill.md"),
+        "background_status",
+        include_str!("../base/tools/background_status.skill.md"),
     ),
 ];
 

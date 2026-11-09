@@ -43,9 +43,9 @@ upper tier still caps the tiers below it (`crates/modules/abilities/src/ability_
 must stay administrator-only checks that in its own code.
 
 Administrator native tools (`webagent_administration::tools::TOOLS`) use the same
-folders under `plugins/abilities/Administrator/`. Tools with no catalog ability (the
-in-app broker tools) live in the retired `v3_build` and `v3_workspace` folders, which the
-catalog does not list. Each catalog snapshot reads these schemas from its own folders, so a published
+folders under `plugins/abilities/Administrator/`. Codebase Admin's broker tool `build_work`, the
+Optimization tool `performance_work` and the older `v3_*` build and source names it keeps as
+permission ceilings live in `Administrator/native_tools/`, which the catalog does not list as an ability. Each catalog snapshot reads these schemas from its own folders, so a published
 description edit needs no Rust build; release validation refuses a missing or invalid
 Administrator folder.
 

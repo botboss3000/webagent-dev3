@@ -37,7 +37,7 @@ pub async fn execute(
         name,
         args,
         pending_id,
-        policy_version,
+        policy_version: _,
     } = call;
     match name {
         "file_list" | "file_read" | "file_search" | "file_edit" | "file_write" => {
@@ -92,37 +92,8 @@ pub async fn execute(
             }
             None => diagnostics(host, None, sid),
         }),
-        "v3_workspace_receipt" => {
-            let id = arguments::request_id(args)?;
-            let receipt = host
-                .store()
-                .get(&receipt_key(sid, id))
-                .await?
-                .ok_or_else(|| anyhow!("Receipt not found in current session"))?;
-            Ok(json!({"status":receipt["status"],
-                "uncertain":receipt["result"]["uncertain"]==true,"output":receipt}))
-        }
-        "v3_workspace_action" => {
-            let request = Receipted {
-                sid,
-                run_id,
-                pending_id,
-                policy_version,
-            };
-            receipt_action(host, request, args, cancel).await
-        }
-        "v3_build_status"
-        | "v3_build_worker_restart"
-        | "v3_build_image"
-        | "v3_worker_submit"
-        | "v3_worker_job"
-        | "v3_build_work"
-        | "v3_source_list"
-        | "v3_source_read"
-        | "v3_source_prepare"
-        | "v3_source_apply"
-        | "v3_source_apply_prepared"
-        | "v3_source_receipt" => broker_call(host, sid, run_id, name, args, cancel).await,
+        "v3_worker_submit" | "v3_build_work" | "v3_source_list" | "v3_source_read"
+        | "v3_source_apply" => broker_call(host, sid, run_id, name, args, cancel).await,
         "git_tool" | "resolve_conflict" | "commit_and_push" => {
             git(host, sid, name, args, cancel).await
         }
@@ -135,10 +106,6 @@ fn codebase_revision(run: &Value) -> Option<Value> {
     run["asset_revision"]
         .as_str()
         .map(|revision| json!({"codebase_revision":revision}))
-}
-
-fn receipt_key(sid: &str, id: &str) -> String {
-    format!("administrator_receipt:{sid}:{id}")
 }
 
 fn renewal_key(sid: &str) -> String {
@@ -330,88 +297,6 @@ async fn git(
     let repository = Some(json!({"repository":transport}));
     host.worker("administrator_file_git", &request, sid, repository, cancel)
         .await
-}
-
-/// A `v3_workspace_action` call's identity: one receipt per session and request ID.
-struct Receipted<'a> {
-    sid: &'a str,
-    run_id: &'a str,
-    pending_id: &'a str,
-    policy_version: u64,
-}
-
-/// Run a workspace mutation at most once per request ID. A repeated ID replays its
-/// receipt; an interrupted one is reported uncertain and never re-run automatically.
-async fn receipt_action(
-    host: &dyn AdministrationHost,
-    request: Receipted<'_>,
-    args: &Value,
-    cancel: CancellationToken,
-) -> Result<Value> {
-    let Receipted {
-        sid,
-        run_id,
-        pending_id,
-        policy_version,
-    } = request;
-    let forwarded = arguments::workspace_action(args)?;
-    let id = arguments::request_id(args)?;
-    let key = receipt_key(sid, id);
-    let fingerprint = digest(args);
-    {
-        let _guard = host.gate().lock().await;
-        if let Some(old) = host.store().get(&key).await? {
-            if old["request_sha256"] != fingerprint {
-                bail!("request_id already used with different arguments");
-            }
-            let interrupted = old["status"] == "executing" || old["status"] == "uncertain";
-            let status = if interrupted {
-                "uncertain"
-            } else {
-                old["status"].as_str().unwrap_or("error")
-            };
-            return Ok(json!({"status":status,"uncertain":interrupted,"output":old,
-                "replayed_receipt":true}));
-        }
-        let claim = json!({"request_id":id,"session_id":sid,"request_sha256":fingerprint,
-            "status":"executing","created_at":now(),
-            "note":"If interrupted, reconcile this receipt; never replay the mutation automatically"});
-        host.store().put(&key, &claim).await?;
-    }
-    let action = args["action"].as_str().unwrap_or("");
-    let result = if action == "propose" {
-        let proposal = json!({"expected_review_sha256":args["expected_review_sha256"],
-            "summary":args["summary"]});
-        let request = promotion::Proposal {
-            sid,
-            request_id: pending_id,
-            run_id,
-            policy_version,
-        };
-        promotion::propose(host, request, &proposal, cancel).await
-    } else if matches!(action, "check" | "test") {
-        let timeout = args
-            .get("timeout_seconds")
-            .filter(|value| !value.is_null())
-            .cloned()
-            .unwrap_or(json!(600));
-        let task = json!({"task":action,"expected_review_sha256":args["expected_review_sha256"],
-            "timeout_seconds":timeout});
-        workspace_host(host, sid, "v3_cargo_task", &task, cancel).await
-    } else {
-        workspace_host(host, sid, "v3_workspace_action", &forwarded, cancel).await
-    };
-    let value = result.unwrap_or_else(|_| {
-        json!({"status":"uncertain","uncertain":true,
-            "output":"Operation interrupted; inspect source and receipt before another request"})
-    });
-    let receipt = json!({"request_id":id,"session_id":sid,"request_sha256":fingerprint,
-        "status":value["status"],"result":value,"finished_at":now()});
-    host.store().put(&key, &receipt).await?;
-    Ok(
-        json!({"status":receipt["status"],"uncertain":receipt["result"]["uncertain"]==true,
-        "output":receipt}),
-    )
 }
 
 /// Cancel or reconcile an existing performance request by its original identity. It uses

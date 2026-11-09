@@ -100,14 +100,14 @@ pub(crate) fn fallback_directory() -> PathBuf {
 pub(crate) mod native_schema_file_tests {
     use super::*;
     /// A source root whose Administrator tool folders are copies of the checked-in ones,
-    /// all under the retired `v3_build` folder the catalog does not list as an ability.
+    /// all gathered under the `native_tools` folder.
     pub(crate) fn source_fixture() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
         let checkout =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities/Administrator");
         let target = root
             .path()
-            .join("plugins/abilities/Administrator/v3_build/tools");
+            .join("plugins/abilities/Administrator/native_tools/tools");
         for ability in std::fs::read_dir(&checkout).unwrap().flatten() {
             let Ok(tools) = std::fs::read_dir(ability.path().join("tools")) else {
                 continue;
@@ -124,7 +124,7 @@ pub(crate) mod native_schema_file_tests {
         root
     }
     fn definition(root: &std::path::Path, name: &str) -> PathBuf {
-        root.join("plugins/abilities/Administrator/v3_build/tools")
+        root.join("plugins/abilities/Administrator/native_tools/tools")
             .join(name)
             .join("tool.json")
     }

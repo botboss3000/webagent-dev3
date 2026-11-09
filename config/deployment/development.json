@@ -1977,8 +1977,6 @@
             "git_control": "auto",
             "remote_tunnel": "auto",
             "terminal_control": "auto",
-            "v3_build": "auto",
-            "v3_workspace": "auto",
             "web_access": "auto"
           },
           "allowed_models": [
@@ -2043,9 +2041,7 @@
             "diagnostics": "auto",
             "git_control": "auto",
             "remote_tunnel": "auto",
-            "terminal_control": "auto",
-            "v3_build": "auto",
-            "v3_workspace": "auto"
+            "terminal_control": "auto"
           },
           "allowed_models": [
             "*"
@@ -2084,14 +2080,7 @@
             "terminal_read": "ask",
             "terminal_send": "ask",
             "terminal_wait": "ask",
-            "v3_build_image": "ask",
-            "v3_build_status": "ask",
-            "v3_cargo_task": "ask",
-            "v3_worker_job": "ask",
             "v3_worker_submit": "ask",
-            "v3_workspace_action": "ask",
-            "v3_workspace_receipt": "ask",
-            "v3_workspace_status": "ask",
             "workspace_seed": "ask"
           }
         },
@@ -2144,8 +2133,6 @@
             "mcp": "auto",
             "remote_tunnel": "auto",
             "terminal_control": "auto",
-            "v3_build": "auto",
-            "v3_workspace": "auto",
             "web_access": "auto"
           },
           "allowed_models": [
@@ -2164,8 +2151,7 @@
           "ability_permissions": {
             "base": "auto",
             "codebase_admin": "auto",
-            "optimization": "auto",
-            "v3_build": "auto"
+            "optimization": "auto"
           },
           "allowed_models": [
             "*"

@@ -11,13 +11,15 @@ use tokio_util::sync::CancellationToken;
 use webagent_access as access;
 
 pub fn schemas() -> Vec<Value> {
-    ["task_status","task_wait","task_cancel"].into_iter().map(|name|json!({
-        "type":"function","name":name,"description":"Inspect, wait for, or cancel a caller-owned background task (a background read, or a call moved to the background when the user sent a message)",
+    [("background_status","Read the status of a caller-owned background task (a background read, or a call moved to the background when the user sent a message). Its result arrives on its own; do not poll."),
+     ("background_cancel","Cancel a caller-owned background task, for example when the user asks to stop a call that is still running in the background.")]
+    .into_iter().map(|(name,description)|json!({
+        "type":"function","name":name,"description":description,
         "parameters":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false}
     })).collect()
 }
 pub fn owns(name: &str) -> bool {
-    matches!(name, "task_status" | "task_wait" | "task_cancel")
+    matches!(name, "background_status" | "background_cancel")
 }
 fn timestamp_ms() -> u64 {
     std::time::SystemTime::now()
@@ -335,7 +337,7 @@ impl<
         Ok(Some(id))
     }
     /// Own a detached call until it ends: renew its lease, cancel it when its task is
-    /// cancelled (task_cancel or Stop), then store its result for delivery.
+    /// cancelled (background_cancel or Stop), then store its result for delivery.
     pub fn background_follow_detached(
         &self,
         id: String,
@@ -395,7 +397,7 @@ impl<
         _rid: &str,
         name: &str,
         args: &Value,
-        cancel: CancellationToken,
+        _cancel: CancellationToken,
     ) -> Result<Value> {
         let app = self;
         if !owns(name) {
@@ -404,7 +406,6 @@ impl<
         let id = args["task_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing task ID"))?;
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
             let mut task = app
                 .store
@@ -414,7 +415,7 @@ impl<
             if task["session_id"] != sid {
                 return Err(anyhow!("Task not found"));
             }
-            if name == "task_cancel" && !finished(&task) {
+            if name == "background_cancel" && !finished(&task) {
                 let revision = task["revision"].as_u64().unwrap_or(0);
                 task["status"] = json!("cancelled");
                 if !app.store.background_cas(&task, Some(revision)).await? {
@@ -422,11 +423,7 @@ impl<
                 }
                 crate::wake::notify(&app.control_dir).await;
             }
-            if name != "task_wait" || finished(&task) || tokio::time::Instant::now() >= deadline {
-                return Ok(json!({"task_id":id,"status":task["status"]}));
-            }
-            tokio::select! { _=cancel.cancelled()=>return Err(anyhow!("Task wait cancelled")),
-            _=tokio::time::sleep(Duration::from_millis(100))=>{} }
+            return Ok(json!({"task_id":id,"status":task["status"]}));
         }
     }
     pub async fn background_collect(&self, run: &mut Value) -> Result<bool> {

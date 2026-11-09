@@ -1,8 +1,10 @@
 //! The Administrator native tools. Each has a compiled handler and a tool folder under
-//! `plugins/abilities/Administrator/<ability>/tools/<tool>/`.
+//! `plugins/abilities/Administrator/<ability>/tools/<tool>/`. The `v3_*` entries are
+//! older build and source names kept only as permission ceilings for Codebase Admin tools.
+//! Tools no ability owns a folder for live under `Administrator/native_tools/`.
 
 /// Every Administrator native tool.
-pub const TOOLS: [&str; 39] = [
+pub const TOOLS: [&str; 28] = [
     "git_tool",
     "resolve_conflict",
     "commit_and_push",
@@ -21,22 +23,11 @@ pub const TOOLS: [&str; 39] = [
     "terminal_wait",
     "terminal_list",
     "terminal_close",
-    "v3_workspace_status",
-    "v3_workspace_action",
-    "v3_workspace_receipt",
-    "v3_cargo_task",
     "v3_build_work",
     "v3_source_list",
     "v3_source_read",
-    "v3_source_prepare",
-    "v3_source_apply_prepared",
     "v3_source_apply",
-    "v3_source_receipt",
-    "v3_build_status",
-    "v3_build_worker_restart",
-    "v3_build_image",
     "v3_worker_submit",
-    "v3_worker_job",
     "read_diagnostics",
     "start_tunnel",
     "get_tunnel_url",
@@ -58,7 +49,7 @@ pub const CHECKOUT_TOOLS: [&str; 6] = [
 /// the job's lease while it runs.
 #[must_use]
 pub fn renews(name: &str, action: Option<&str>) -> bool {
-    matches!(name, "v3_build_image" | "v3_worker_submit")
+    name == "v3_worker_submit"
         || (matches!(name, "v3_build_work" | "build_work")
             && matches!(action, Some("finish" | "decide" | "check")))
 }

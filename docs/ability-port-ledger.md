@@ -40,8 +40,6 @@ Paths named `plugin <id>.py` refer to the owning V2 folder matching the ID and g
 | Administrator/program_screenshot | plugin program_screenshot.py; source handlers/adapter | pending; explicitly excluded by user | Not installed | 1 declared / 2 skills |
 | Administrator/remote_tunnel | Rust worker `tunnel.rs` | ready; owned preview lease, unowned-port denial and expiry passed API checks | Session-owned server port and separate quicktunnel connector | 2 declared / 3 skills |
 | Administrator/terminal_control | Rust worker `terminal.rs` (`--terminal-supervisor`) | ready; sandboxed PTY input/output and revocation closure passed API checks | Session workspace, assigned ports and revisioned caution setting | 6 declared / 7 skills |
-| Administrator/v3_build | plugin v3_build.py; source handlers/adapter | ready; protected image build, immutable inputs, durable job and rollback deployment verified | Installation-administrator host authority; durable job/lease receipts | 6 declared / 7 skills |
-| Administrator/v3_workspace | plugin v3_workspace.py; source handlers/adapter | ready; seed, checked patch, proposal and fixed Cargo check/test passed API checks | Session-owned snapshot and pinned review digest | 3 declared / 4 skills |
 | CRM/hubspot | Product placeholder; no executable contract | placeholder; intentionally unavailable | Separate product specification required | 0 declared / 0 skills |
 | CRM/mailchimp | Product placeholder; no executable contract | placeholder; intentionally unavailable | Separate product specification required | 0 declared / 0 skills |
 | CRM/salesforce | Product placeholder; no executable contract | placeholder; intentionally unavailable | Separate product specification required | 0 declared / 0 skills |

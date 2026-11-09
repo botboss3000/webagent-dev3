@@ -94,9 +94,8 @@ pub fn is_read(name: &str) -> bool {
         || crate::modules::is_read(name)
         || matches!(
             name,
-            "task_status"
-                | "task_wait"
-                | "task_cancel"
+            "background_status"
+                | "background_cancel"
                 | "search_tools"
                 | "list_tools"
                 | "load_tool"

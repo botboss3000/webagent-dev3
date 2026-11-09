@@ -20,7 +20,7 @@ import urllib.parse
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-ABILITIES = ("codebase_admin", "git_control", "terminal_control", "v3_workspace", "v3_build", "diagnostics", "browser_control", "remote_tunnel")
+ABILITIES = ("codebase_admin", "git_control", "terminal_control", "diagnostics", "browser_control", "remote_tunnel")
 SCHEMAS = [json.loads(path.read_text()) for path in sorted((ROOT / "plugins/abilities/Administrator").glob("*/tools/*/tool.json"))]
 TOOLS = {s["name"] for s in SCHEMAS} | {"workspace_seed", "file_read", "file_write", "file_list", "shell", "python"}
 FORBIDDEN_APPROVALS = {"promotion_propose", "propose_promotion", "v3_worker_submit"}
@@ -204,7 +204,7 @@ class Harness:
         if self.args.resume and self.data["cases"].get(name, {}).get("workflow_completed"): return
         client = self.admin if name.startswith("build") else self.owner
         agent = "shared_default" if client is self.admin else self.fixture["agent_id"]
-        groups = {"workspace": {"v3_workspace"}, "cargo": {"v3_workspace"}, "terminal": {"terminal_control"}, "git": {"terminal_control", "git_control"}, "diagnostics": {"diagnostics", "browser_control"}, "tunnel": {"terminal_control", "remote_tunnel"}, "build_status": {"v3_build"}, "build": {"v3_build"}}
+        groups = {"workspace": {"v3_workspace"}, "cargo": {"v3_workspace"}, "terminal": {"terminal_control"}, "git": {"terminal_control", "git_control"}, "diagnostics": {"diagnostics", "browser_control"}, "tunnel": {"terminal_control", "remote_tunnel"}, "build_status": {"codebase_admin"}, "build": {"codebase_admin"}}
         sid = self.session(client, agent, groups[name])
         if name in {"workspace", "cargo"}:
             self.run(name + "_seed", client, sid, "Call v3_workspace_action action=seed request_id=seed-acceptance, then v3_workspace_receipt request_id=seed-acceptance and v3_workspace_status. Confirm seeded source belongs only to this session.", {"v3_workspace_action", "v3_workspace_receipt", "v3_workspace_status"})

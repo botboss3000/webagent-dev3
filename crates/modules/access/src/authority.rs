@@ -306,18 +306,11 @@ impl LiveAccess {
         if matches!(
             name,
             "build_work"
-                | "v3_build_status"
-                | "v3_build_worker_restart"
-                | "v3_build_image"
                 | "v3_worker_submit"
-                | "v3_worker_job"
                 | "v3_build_work"
                 | "v3_source_list"
                 | "v3_source_read"
-                | "v3_source_prepare"
                 | "v3_source_apply"
-                | "v3_source_apply_prepared"
-                | "v3_source_receipt"
         ) && !self.principal.administrator()
         {
             return ToolDecision {
