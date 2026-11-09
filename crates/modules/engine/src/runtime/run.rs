@@ -3043,9 +3043,7 @@ impl<
                             }
                         }
                     }
-                    if let Some(item) = super::images::tool_image_item(&sid, &found, &shots) {
-                        projected_input.push(item);
-                    }
+                    super::images::insert_tool_images(&mut projected_input, &sid, &found, &shots);
                 }
                 let prepared_provider = match crate::provider::CallDraft::new(
                     &selection,
