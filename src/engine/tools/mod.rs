@@ -24,8 +24,6 @@ pub(crate) mod core_session;
 pub(crate) mod core_skills;
 #[path = "../../../crates/modules/abilities/host/vault.rs"]
 pub(crate) mod core_vault;
-#[path = "../../../crates/modules/abilities/host/visualizer.rs"]
-pub(crate) mod core_visualizer;
 #[path = "../../../crates/modules/abilities/host/webhooks.rs"]
 pub(crate) mod core_webhooks;
 mod dispatch;
@@ -91,6 +89,7 @@ pub fn is_read(name: &str) -> bool {
     }
     crate::source_control::is_read(name)
         || native::webhooks::is_read(name)
+        || native::vault::is_read(name)
         || name == "main_notes_read"
         || crate::modules::is_read(name)
         || matches!(
@@ -142,8 +141,6 @@ pub(crate) fn folder_handlers() -> impl Iterator<Item = &'static str> {
         core_config_controller::TOOLS,
         native::app_control::TOOLS,
         native::orchestration::TOOLS,
-        native::visualizer::TOOLS,
-        native::vault::TOOLS,
         webagent_browser::TOOLS,
     ]
     .into_iter()
@@ -205,7 +202,7 @@ pub(crate) fn definition_problems() -> Vec<String> {
 pub(crate) fn tool_defaults(name: &str, rungs: &[String]) -> Option<webagent_access::Permission> {
     if webagent_abilities::base::owns(name) {
         let read = is_read(name) || webagent_abilities::is_discovery(name);
-        return Some(webagent_abilities::base::default_access(rungs, read));
+        return Some(webagent_abilities::base::default_access(name, rungs, read));
     }
     // Role defaults edited in the live checkout apply at once.
     if let Some(definition) = crate::ability_drift::current().definition(name) {
@@ -332,8 +329,7 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         schemas.extend(native::schemas(native::orchestration::TOOLS));
         schemas.extend(native::base_extras::schemas());
         schemas.extend(native::webhooks::schemas());
-        schemas.extend(native::schemas(native::visualizer::TOOLS));
-        schemas.extend(native::schemas(native::vault::TOOLS));
+        schemas.extend(native::vault::schemas());
         schemas.extend(native::schemas(webagent_browser::TOOLS));
         schemas.extend(native::session::schemas());
         schemas.extend(crate::main_chat::schemas());

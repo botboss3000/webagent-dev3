@@ -96,8 +96,7 @@ impl webagent_engine::runtime::ports::NativePolicy for NativePolicy {
             .chain(tools::native::schemas(tools::native::orchestration::TOOLS))
             .chain(tools::native::base_extras::schemas())
             .chain(tools::native::webhooks::schemas())
-            .chain(tools::native::schemas(tools::native::visualizer::TOOLS))
-            .chain(tools::native::schemas(tools::native::vault::TOOLS))
+            .chain(tools::native::vault::schemas())
             .chain(tools::native::schemas(webagent_browser::TOOLS))
             .chain(tools::native::schemas(
                 tools::native::human_escalation::TOOLS,

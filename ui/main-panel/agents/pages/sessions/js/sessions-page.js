@@ -232,22 +232,15 @@ function _flashStatus(timeEl) {
   }, 1000);
 }
 
-// Small icon badges marking sessions that built/edited a genui (has_genui)
-// and/or drove the live web browser (has_browser). Both are derived server-side
-// from the tool_executions log. Renders an em-dash when neither applies.
-// The badges are clickable: a click switches the chat to that session and opens
-// the Gen UI or Browser tab so you can jump straight to the artifact
-// the session produced. (Handled by the delegated tbody click in _wireDom.)
+// Small icon badge marking sessions that drove the live web browser
+// (has_browser), derived server-side from the tool_executions log. Renders an
+// em-dash when it does not apply. The badge is clickable: a click switches the
+// chat to that session and opens the Browser tab. (Handled by the delegated
+// tbody click in _wireDom.)
 function _linkBadges(s) {
   const sid = _esc(s.session_id);
   const aid = _esc(s.agent_id || '');
   let html = '';
-  if (s.has_genui) {
-    html += `<span class="sess-link-badge genui" role="button" tabindex="0"
-      data-link-kind="genui" data-session-id="${sid}" data-agent-id="${aid}"
-      title="Open this session's genui">
-      <i data-lucide="layout-dashboard" style="width:12px;height:12px;"></i></span>`;
-  }
   if (s.has_browser) {
     html += `<span class="sess-link-badge browser" role="button" tabindex="0"
       data-link-kind="browser" data-session-id="${sid}" data-agent-id="${aid}"
@@ -1636,8 +1629,7 @@ function _setRowLoading(tr, on) {
 }
 
 // Make `sessionId` the active chat session (switching agent if needed) and
-// optionally jump to a main-panel tab afterwards ('genui' = Gen UI,
-// 'browser' = Browser page). Shared by row clicks and the Links badges.
+// optionally jump to a main-panel tab afterwards ('browser' = Browser page). Shared by row clicks and the Links badges.
 // `row` (when given) shows a per-row loading animation until the chat resolves.
 async function _switchToSession(sessionId, agentId, { tab = null, title = null, row = null } = {}) {
   if (!sessionId) return;
@@ -2374,12 +2366,11 @@ function _wireDom() {
         _toggleCheck(checkCell);
         return;
       }
-      // Links column: open the genui / browser for that session.
+      // Links column: open the browser for that session.
       const linkBadge = e.target.closest('.sess-link-badge');
       if (linkBadge) {
         e.stopPropagation();
-        const tab = linkBadge.dataset.linkKind === 'genui' ? 'genui' : 'browser';
-        _switchToSession(linkBadge.dataset.sessionId, linkBadge.dataset.agentId, { tab });
+        _switchToSession(linkBadge.dataset.sessionId, linkBadge.dataset.agentId, { tab: 'browser' });
         return;
       }
       // "archived" chip on cross-catalog search rows — two-click unarchive.

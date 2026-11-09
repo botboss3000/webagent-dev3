@@ -78,7 +78,7 @@ migration does not deploy or activate new functionality.
 - `p2p`: ability; pending. Adapt independently in a later functional wave.
 - `ui_admin`: removed 2026-11-08; its UI control guidance lives in `codebase_admin` (`ui_controls` skill).
 - `user_files`: ability; pending. Adapt independently in a later functional wave.
-- `visualizer`: ability; pending. Adapt independently in a later functional wave.
+- `visualizer`: removed 2026-11-08; its credential vault tools (`request_credential`, `check_credential`, `list_vault_keys`) moved to Base.
 
 ### Developer
 

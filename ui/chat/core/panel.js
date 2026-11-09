@@ -1,6 +1,5 @@
 import { createAppViewDispatcher, appViewUrl, credentialRequest } from './app-control.js';
 import { openRegistrationDialog } from './registration.js';
-import { mountVisualFrame, syncVisualThemes } from './visual-frame.js';
 import {createMainNotes} from '../elements/main-notes/index.js';
 // @code-index {"version":1,"feature":"chat-panel","aliases":["chat panel","conversation panel","session transcript"],"purpose":"Locates the v3 chat panel lifecycle, transcript, and run controls Config: data/config/chat.json -> chat_display.default and chat_common.composer.keyboard_focus. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides. Touch feedback: ui/vibrate.json -> enabled, duration_ms; gestures stay client-owned.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common/composer/keyboard_focus"],"profile_overrides":true},{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
 // V2-style panel/client separation; markup and message protocol remain V3.
@@ -49,7 +48,6 @@ export async function mountChatPanel({root = document.getElementById('chat-panel
   const $ = id => root.querySelector('#' + id);
   let session = '';
   const dispatchAppView=createAppViewDispatcher();
-  const visualThemeObserver=new MutationObserver(()=>syncVisualThemes(root));visualThemeObserver.observe(document.body,{attributes:true,attributeFilter:['class']});
   // Chat elements share the panel session, public runs and merged profile; private groups retain admin gating.
   const activity=createChatElements({app:{/* Reads the current selected session. */get currentSessionId(){return session;}},/* Returns the current account's admin flag. */isAdmin:()=>!!getIdentity().is_admin,/* Uses profile configuration when set, otherwise the default. */chatUiFlag:(key,fallback)=>currentChatProfile()?.[key]??fallback});
   let activityRuns=[],ownRunsBusy=false;
@@ -273,7 +271,7 @@ function components(items){
     const replyForm=spec?.authority==='user_reply'&&spec.type==='form';
     // A panel the agent closed is not shown.
     if(spec?.lifecycle?.dismissed===true){for(const node of [...$('chat-messages-inner').children])if(node.dataset.componentId===spec.id)node.remove();continue;}
-    if(!spec||(spec.authority!=='display_only'&&!reply&&!replyForm)||!['status','todo_list','choice','approval','form','visual'].includes(spec.type))continue;
+    if(!spec||(spec.authority!=='display_only'&&!reply&&!replyForm)||!['status','todo_list','choice','approval','form'].includes(spec.type))continue;
     const id=spec.id;if(typeof id!=='string'||!/^[-A-Za-z0-9_]{1,64}$/.test(id))continue;
     const existing=[...$('chat-messages-inner').children].find(node=>node.dataset.componentId===id);
     if(existing?.dataset.componentRevision===String(row.revision))continue;
@@ -320,7 +318,6 @@ function components(items){
         try{await submit(text);card.remove();void client.dismissComponent(session,id).catch(()=>{});}catch(error){note(error.message);send.disabled=false;}};
       body.append(form);card.append(body);if(existing)existing.replaceWith(card);else $('chat-messages-inner').append(card);continue;
     }
-    if(spec.type==='visual'){const frame=mountVisualFrame(spec);if(!frame)continue;body.append(frame);card.append(body);if(existing)existing.replaceWith(card);else $('chat-messages-inner').append(card);continue;}
     const lines=spec.type==='status'?data.sections?.map(item=>[item.label,item.value].filter(Boolean).join(': ')):
       spec.type==='todo_list'?data.items?.map(item=>(item.done?'☑ ':'☐ ')+item.label):
       spec.type==='choice'?data.options?.map(item=>'Option: '+item.label):
@@ -523,7 +520,7 @@ $('chat-stop-btn').onclick=guard(()=>$('chat-stop-btn').dataset.run?cancel($('ch
   /** Clears session visuals and disconnects every session-scoped transport/control. */
   function disconnect(){issues?.select('');brokerChip.disconnect();messagingRoutes.disconnect();screenAwake.select('');followups.reset();session='';activityRuns=[];elementContext='';anchor.reset();progress.reset();chatActions.clearRuns();chatActions.clearSendError();closeGutterOverlays();gutterRuns.clear();stats.disconnect();media.disconnect();controls.disconnect();sharing.disconnect();activity.disconnect();closeChatElementFullView();window.speechSynthesis?.cancel();resetReads();client.disconnect();}
   /** Disconnects and disposes panel-owned timers, observers, listeners, and mounted child controls. */
-  function destroy(){visualThemeObserver.disconnect();
+  function destroy(){
     mainNotes?.destroy();disposeFeedback();screenAwake.destroy();++sessionGeneration;closeUndoDialog?.();
     disconnect();followups.destroy();chatActions.destroy();anchor.destroy();transcriptWindow.destroy();uiTrace.then(dispose=>dispose());disposeFooterGestures();disposeHeaderGestures();disposeZoom();progress.destroy();clearInterval(gutterClock);clearInterval(reviewTimer);stats.destroy();media.destroy();voiceReply.destroy();controls.destroy();sharing.destroy();sessionList.destroy();dropdown.destroy();readAbort.abort();chatClearanceObserver.disconnect();
     $('sessions').onchange=null;$('new').onclick=null;$('composer').onsubmit=null;

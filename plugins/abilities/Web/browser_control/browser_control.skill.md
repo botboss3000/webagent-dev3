@@ -12,7 +12,7 @@ A private Chromium browser on the WebAgent server for looking at web pages: read
 
 The user can keep this browser signed in to other sites without you ever seeing a password, code or cookie:
 
-1. Ask the user to save each value with `request_credential` (Core): a plain `name` such as `example_password`, and the site's https `origin`, for example `https://example.com`. Save the user name too if they prefer, and an authenticator secret for sites with app-based 2FA.
+1. Ask the user to save each value with `request_credential` (Base): a plain `name` such as `example_password`, and the site's https `origin`, for example `https://example.com`. Save the user name too if they prefer, and an authenticator secret for sites with app-based 2FA.
 2. Navigate to the site's sign-in page and read it. Fill the fields with `browser_input` `type` and `vault` set to the entry's name (`totp: true` for the authenticator code), then submit with a click or `press` Enter. Values go only into sign-in fields on the entry's own site. For a code the site sends by email or text, ask the user to save it with `request_credential` and type that entry.
 3. When the page shows the user signed in, call `browser_input` `save_login` with the site's `origin`. The user approves it; the cookies and your steps since the navigate are saved, private to the user.
 

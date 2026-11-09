@@ -21,7 +21,6 @@ fn artifact_key(sid: &str, kind: &str, id: &str) -> Result<String> {
         "core_profile" => Ok(format!("core_profile:{id}")),
         "core_rating" => Ok(format!("core_rating:{id}")),
         "core_webhook" => Ok(format!("core_webhook:{id}")),
-        "core_visual" => Ok(format!("core_visual:{id}")),
         _ => Err(anyhow!("Invalid task artifact kind")),
     }
 }
@@ -67,12 +66,7 @@ impl Store {
             || !pending_id
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-            || serde_json::to_vec(artifact)?.len()
-                > if kind == "core_visual" {
-                    96 * 1024
-                } else {
-                    MAX_ARTIFACT_BYTES
-                }
+            || serde_json::to_vec(artifact)?.len() > MAX_ARTIFACT_BYTES
         {
             return Err(anyhow!("Task artifact exceeds bounds"));
         }
@@ -130,30 +124,6 @@ impl Store {
             "id":id,"session_id":sid,"updated_by_run":rid,"created_at":created_at,"artifact":artifact});
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
             .bind(&key).bind(if kind=="core_webhook"{self.seal(&document)?}else{self.encode_user_record(&document)?}).execute(&mut *tx).await?;
-        if kind == "core_visual" && artifact["publish"] == true {
-            let component_id = format!("visual-{id}");
-            let component_key = artifact_key(sid, "component", &component_id)?;
-            if artifact["deleted"] == true {
-                sqlx::query("DELETE FROM docs WHERE key=?")
-                    .bind(&component_key)
-                    .execute(&mut *tx)
-                    .await?;
-            } else {
-                let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM docs WHERE key=?")
-                    .bind(&component_key)
-                    .fetch_one(&mut *tx)
-                    .await?;
-                let count: i64 = sqlx::query_scalar("SELECT count(*) FROM docs WHERE key LIKE ?")
-                    .bind(format!("base_component:{sid}:%"))
-                    .fetch_one(&mut *tx)
-                    .await?;
-                if exists == 0 && count >= 64 {
-                    return Err(anyhow!("Conversation display quota reached"));
-                }
-                let component = json!({"schema_version":1,"revision":next,"kind":"component","id":component_id,"session_id":sid,"artifact":{"id":component_id,"type":"visual","title":artifact["name"],"placement":"inline","authority":"display_only","data":{"visual_id":id,"revision":next}}});
-                sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(component_key).bind(self.encode_user_record(&component)?).execute(&mut *tx).await?;
-            }
-        }
         let output = json!({"revision":next,"kind":kind,"id":id,"artifact":artifact});
         let receipt = json!({"fingerprint":fingerprint,"output":output});
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")

@@ -19,6 +19,8 @@ pub fn plane_for(key: &str) -> Plane {
         || key.starts_with("core_source_control:")
         || key.starts_with("core_vault:")
         || key.starts_with("receipt:core_vault:")
+        // Retired Visualizer mini apps: old rows stay in their owner's database and are
+        // erased with their session.
         || key.starts_with("core_visual:")
         || key.starts_with("core_tool:")
         || key.starts_with("core_profile:")

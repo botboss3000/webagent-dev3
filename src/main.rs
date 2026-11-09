@@ -241,7 +241,6 @@ mod tests {
             "create_agent",
             "edit_agent_prompt",
             "register_webhook",
-            "render_visual",
             "request_credential",
             "delegate_to_agent",
             "promote_spawn",

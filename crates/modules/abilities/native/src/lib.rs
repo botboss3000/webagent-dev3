@@ -41,7 +41,6 @@ pub mod tool_search;
 pub mod user_files;
 pub mod utilities;
 pub mod vault;
-pub mod visualizer;
 pub mod web_access;
 pub mod webhooks;
 pub mod wiki;

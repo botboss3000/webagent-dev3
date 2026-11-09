@@ -406,7 +406,6 @@ pub(super) fn router(app: App) -> Router {
                 .layer(DefaultBodyLimit::max(16384))
                 .delete(tools::core_vault::dismiss),
         )
-        .route("/core/visuals/{id}/view", get(tools::core_visualizer::view))
         .route(
             "/core/webhooks/{id}/setup",
             get(tools::core_webhooks::setup),

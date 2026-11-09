@@ -5,8 +5,8 @@ use webagent_access::Permission;
 
 pub const ID: &str = "base";
 pub const NAME: &str = "Base";
-pub const DESCRIPTION: &str = "Core conversation tools for bounded utilities, caller-owned session search, context compaction and recall, prompt and skill edits, task checkpoints, and declarative presentation. Remaining declarations need separate V3 contracts.";
-pub const MIGRATION_NOTE: &str = "Native V3 Base tools include utilities, discovery, skills, private profiles and ratings, task artifacts, presentations, context controls, bounded saved functions, protected account/connection setup and private webhook inboxes. Live policy and exact owning API authority still apply.";
+pub const DESCRIPTION: &str = "Core conversation tools for bounded utilities, caller-owned session search, context compaction and recall, prompt and skill edits, task checkpoints, declarative presentation and the caller-private credential vault. Remaining declarations need separate V3 contracts.";
+pub const MIGRATION_NOTE: &str = "Native V3 Base tools include utilities, discovery, skills, private profiles and ratings, task artifacts, presentations, context controls, bounded saved functions, protected account/connection setup, the caller-private credential vault and private webhook inboxes. Live policy and exact owning API authority still apply.";
 pub const ICON: &str = "box";
 pub const COLOR: &str = "#7dcfff";
 
@@ -49,6 +49,9 @@ pub const TOOLS: &[&str] = &[
     "request_agent_login",
     "main_notes_read",
     "main_notes_write",
+    "request_credential",
+    "check_credential",
+    "list_vault_keys",
     #[cfg(feature = "test-support")]
     "test_owner_purchase",
 ];
@@ -125,15 +128,38 @@ pub fn owns(name: &str) -> bool {
     TOOLS.contains(&name)
 }
 
+/// Role defaults (operator, member, visitor) that differ from the coded rule: the
+/// credential vault keeps the defaults it had as a Visualizer tool, so private setup
+/// stays open to Members and its metadata reads to Visitors.
+const ROLE_DEFAULTS: &[(&str, [Permission; 3])] = &[
+    (
+        "request_credential",
+        [Permission::Auto, Permission::Auto, Permission::Ask],
+    ),
+    (
+        "check_credential",
+        [Permission::Auto, Permission::Auto, Permission::Auto],
+    ),
+    (
+        "list_vault_keys",
+        [Permission::Auto, Permission::Auto, Permission::Auto],
+    ),
+];
+
 /// Coded role defaults: Operators get every Base tool; Members and Visitors may ask to
-/// use read tools and get no write tools. A custom level takes the next role down.
-pub fn default_access(rungs: &[String], is_read: bool) -> Permission {
-    match rungs
-        .iter()
-        .find(|rung| crate::tool_definitions::ROLES.contains(&rung.as_str()))
-        .map(String::as_str)
-    {
-        Some("operator") => Permission::Auto,
+/// use read tools and get no write tools, unless `ROLE_DEFAULTS` names the tool. A custom
+/// level takes the next role down.
+pub fn default_access(name: &str, rungs: &[String], is_read: bool) -> Permission {
+    let role = rungs.iter().find_map(|rung| {
+        crate::tool_definitions::ROLES
+            .iter()
+            .position(|role| role == rung)
+    });
+    if let Some((_, defaults)) = ROLE_DEFAULTS.iter().find(|(tool, _)| *tool == name) {
+        return role.map_or(Permission::Deny, |index| defaults[index]);
+    }
+    match role {
+        Some(0) => Permission::Auto,
         Some(_) if is_read => Permission::Ask,
         _ => Permission::Deny,
     }
@@ -147,17 +173,39 @@ mod tests {
     fn role_defaults_and_skills_name_real_tools() {
         let rungs = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
         assert_eq!(
-            default_access(&rungs(&["operator", "member", "visitor"]), false),
+            default_access(
+                "get_time",
+                &rungs(&["operator", "member", "visitor"]),
+                false
+            ),
             Permission::Auto
         );
         assert_eq!(
-            default_access(&rungs(&["trusted", "member", "visitor"]), true),
+            default_access("get_time", &rungs(&["trusted", "member", "visitor"]), true),
             Permission::Ask
         );
         assert_eq!(
-            default_access(&rungs(&["visitor"]), false),
+            default_access("get_time", &rungs(&["visitor"]), false),
             Permission::Deny
         );
+        // The vault keeps its earlier tool-folder defaults.
+        assert_eq!(
+            default_access("request_credential", &rungs(&["trusted", "member"]), false),
+            Permission::Auto
+        );
+        assert_eq!(
+            default_access("request_credential", &rungs(&["visitor"]), false),
+            Permission::Ask
+        );
+        assert_eq!(
+            default_access("list_vault_keys", &rungs(&["visitor"]), true),
+            Permission::Auto
+        );
+        assert_eq!(
+            default_access("check_credential", &rungs(&["trusted"]), true),
+            Permission::Deny
+        );
+        assert!(ROLE_DEFAULTS.iter().all(|(tool, _)| owns(tool)));
         assert!(TOOL_SKILLS
             .iter()
             .all(|(tool, text)| owns(tool) && !text.trim().is_empty()));
