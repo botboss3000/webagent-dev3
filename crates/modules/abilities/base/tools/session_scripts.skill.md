@@ -22,6 +22,17 @@ set or would need approval here. Each step still runs through the normal permiss
 checks as if you called it: a script never gains permission, so a sub-agent whose
 permissions differ may see a step denied.
 
+Writing a script:
+
+- Make anything that differs between callers a param: URLs, session or conversation IDs,
+  labels, names. Never hard-code your own session or context.
+- Wait for what each step depends on, for example a `wait_for` visible step before reading
+  or clicking something the page draws later.
+- Keep it small and single-purpose; describe each param in the description.
+- Test it once with `script_run` before telling sub-agents or siblings to use it.
+- If a shared script does not fit your case, pass different args or save a variant under a
+  new name; do not overwrite a script others use.
+
 Sub-agents: the parent saves the script before starting them and names it in each
 brief, with the args to pass. A sub-agent runs it with `script_run`; it does not need to
 save its own copy. Scripts are private to this user and agent and to this tree; other
