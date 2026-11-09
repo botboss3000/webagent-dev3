@@ -257,7 +257,7 @@ const reviewTimer=setInterval(async()=>{
 /** Inserts or updates a public message row, observes it for read tracking, and repaints activity. */
 function message(item,repaint=true){historyLastSeq=Math.max(historyLastSeq,item.seq||0);const target=$('chat-messages-inner');const existing=[...target.children].find(row=>row.dataset.publicId===item.id);if(existing){updateAdmission(existing,item.admission);return;}const row=createMessage(item,{resolveAsset,/* Supplies the latest cached run for gutter actions. */getRun:()=>gutterRuns.get(item.run_id),client,/* Resolves the currently selected session for message actions. */getSession:()=>session,note,historyAction,/* Opens usage/context details for the selected run. */showContext:run=>stats.show(run)});if(!row)return false;const before=[...target.children].find(node=>Number(node.dataset.seq)>item.seq);target.insertBefore(row,before||null);readObserver.observe(row);placeCards();if(repaint)paintActivity();return true;}
 /** Keeps each component card right after the last message of the run that wrote it, so later turns follow it. */
-function placeCards(){const target=$('chat-messages-inner');for(const card of [...target.children].filter(node=>node.dataset.componentRun)){const rows=[...target.children].filter(node=>node.dataset.turnId===card.dataset.componentRun&&!node.dataset.componentId);const last=rows[rows.length-1];if(last&&last.nextElementSibling!==card)last.after(card);}}
+function placeCards(){const target=$('chat-messages-inner');const anchors=new Map();for(const card of [...target.children].filter(node=>node.dataset.componentRun).sort((a,b)=>Number(a.dataset.componentCreated||0)-Number(b.dataset.componentCreated||0))){const run=card.dataset.componentRun;let after=anchors.get(run);if(!after){const rows=[...target.children].filter(node=>node.dataset.turnId===run&&!node.dataset.componentId);after=rows[rows.length-1];}if(!after)continue;if(after.nextElementSibling!==card)after.after(card);anchors.set(run,card);}}
 // Base presentation is display-only. Never turn model-supplied choice or
 // approval descriptions into an action or an authorization control. The one
 // exception is a user_reply choice: a click only sends its label as the user's
@@ -277,7 +277,7 @@ function components(items){
     const id=spec.id;if(typeof id!=='string'||!/^[-A-Za-z0-9_]{1,64}$/.test(id))continue;
     const existing=[...$('chat-messages-inner').children].find(node=>node.dataset.componentId===id);
     if(existing?.dataset.componentRevision===String(row.revision))continue;
-    const card=document.createElement('article');card.className='v3-message assistant';card.dataset.componentId=id;card.dataset.componentRevision=String(row.revision);if(typeof row.run_id==='string')card.dataset.componentRun=row.run_id;
+    const card=document.createElement('article');card.className='v3-message assistant';card.dataset.componentId=id;card.dataset.componentRevision=String(row.revision);if(typeof row.run_id==='string')card.dataset.componentRun=row.run_id;if(Number.isFinite(row.created_at))card.dataset.componentCreated=String(row.created_at);
     const body=document.createElement('div');body.className='message-content';
     const heading=document.createElement('strong');heading.textContent=spec.title||'Session display';
     body.append(heading);

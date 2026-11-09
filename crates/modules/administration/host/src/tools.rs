@@ -44,7 +44,15 @@ pub async fn execute(
             if let Some(draft) = arguments::broker_file(sid, pending_id, name, args)? {
                 broker_call(host, sid, run_id, name, &draft, cancel).await
             } else {
-                let live = arguments::live_file(args)?;
+                // An argument mistake is refused before any effect, so it must not read as an
+                // unknown write outcome.
+                let live = match arguments::live_file(args) {
+                    Ok(live) => live,
+                    Err(error) => {
+                        return Ok(json!({"status":"rejected","error_kind":"invalid_arguments",
+                            "output":format!("Not run; nothing changed. {error}")}))
+                    }
+                };
                 host.worker(name, &live, sid, codebase_revision(run), cancel)
                     .await
             }

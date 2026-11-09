@@ -117,8 +117,17 @@ impl Store {
         let next = revision
             .checked_add(1)
             .ok_or_else(|| anyhow!("Task revision exhausted"))?;
+        // The first write's time orders panels as the agent created them.
+        let created_at = prior
+            .as_ref()
+            .and_then(|value| value["created_at"].as_u64())
+            .unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |elapsed| elapsed.as_millis() as u64)
+            });
         let document = json!({"schema_version":1,"revision":next,"kind":kind,
-            "id":id,"session_id":sid,"updated_by_run":rid,"artifact":artifact});
+            "id":id,"session_id":sid,"updated_by_run":rid,"created_at":created_at,"artifact":artifact});
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
             .bind(&key).bind(if kind=="core_webhook"{self.seal(&document)?}else{self.encode_user_record(&document)?}).execute(&mut *tx).await?;
         if kind == "core_visual" && artifact["publish"] == true {
@@ -230,9 +239,11 @@ impl Store {
             }
             // The run that wrote the card anchors it in the transcript.
             components.push(json!({"revision":document["revision"],
-                "run_id":document["updated_by_run"],"component":document["artifact"]}));
+                "run_id":document["updated_by_run"],"created_at":document["created_at"],
+                "component":document["artifact"]}));
         }
         tx.commit().await?;
+        components.sort_by_key(|row| row["created_at"].as_u64().unwrap_or(0));
         Ok(components)
     }
 }

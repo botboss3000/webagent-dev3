@@ -109,7 +109,7 @@ AUTO_PROMPT = ("You are the language model behind a WebAgent agent. Act exactly 
     "agent instructions and conversation you are given and decide the next assistant turn. WebAgent's tools are "
     "your mcp__harness__* tools (mcp__harness__<name> for a tool listed as <name>). Calling one hands it to "
     "WebAgent, which runs it and sends the result in your next message, so after your tool calls end your turn "
-    "without waiting or describing them. Images are saved as files you may Read. Your final text is the agent's reply.")
+    "without waiting. Images are saved as files you may Read. Your final text is the agent's reply.")
 OPENCODE_PROMPT = ("You are the language model behind a WebAgent agent. Act exactly as that model: follow the "
     "agent instructions and conversation you are given and decide the next assistant turn. WebAgent's tools are "
     "your webagent_* tools (webagent_<name> for a tool listed as <name>). Calling one hands it to WebAgent, which "
@@ -891,8 +891,9 @@ def opencode_turn(command, prompt, work, model):
         raise watch.failure
     if errors or not session or (process.returncode and not stopped):
         raise harness_failure(errors, process.returncode, "".join(stderr))
-    # The last assistant message is the turn's answer; earlier ones led up to its tool calls.
-    return session, "".join(list(texts.values())[-1]) if texts else "", usage
+    # Every assistant message of the turn reaches WebAgent: a sentence written before the tool
+    # calls is the agent's progress note.
+    return session, "\n\n".join("".join(parts) for parts in texts.values() if "".join(parts).strip()), usage
 
 
 def answer_opencode(call, folder, state, delta):

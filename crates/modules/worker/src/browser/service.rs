@@ -564,7 +564,7 @@ impl Service {
             }
             if !current.starts_with("http://") && !current.starts_with("https://") {
                 return Err(Fault::rejected(
-                    "The last navigation was blocked or failed; navigate to another URL",
+                    "No page is open, or the last navigation was blocked or failed; navigate to another URL first",
                 ));
             }
             let sites = state.sites.clone().unwrap_or(Sites {
@@ -1409,7 +1409,9 @@ impl Service {
         // Navigation may leave a page whose URL is outside the routes; other actions may not
         // act on one.
         state.touched = Instant::now();
-        if action != "navigate" {
+        // Viewport and emulation only set how pages render, so they may come before the first
+        // navigate.
+        if !matches!(action, "navigate" | "viewport" | "emulate") {
             self.safe_url(state).await?;
         }
         let result = self.act(state, action, &args, &trusted).await?;

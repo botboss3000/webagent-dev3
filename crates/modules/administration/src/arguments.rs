@@ -188,7 +188,7 @@ pub fn live_file(args: &Value) -> Result<Value> {
         object.remove("broker_id");
         object.retain(|_, value| !value.is_null());
         if object.contains_key("expected_inputs_sha256") || object.contains_key("request_id") {
-            bail!("Task write arguments require task_id; live fallback denied");
+            bail!("request_id and expected_inputs_sha256 apply only to broker task files (broker_id); remove them for workspace or live checkout files");
         }
     }
     Ok(live)
