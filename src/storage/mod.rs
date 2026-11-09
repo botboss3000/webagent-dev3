@@ -1053,6 +1053,19 @@ impl Store {
     pub async fn recent_runs(&self, sid: Option<&str>) -> Result<Vec<Value>> {
         self.engine_repository().recent_runs(sid).await
     }
+    /// Stored run views carrying a run-health record (newest first, bounded) for a session's
+    /// conversation tree, or for all of this user's runs.
+    pub async fn issue_views(&self, session: Option<&str>, since: i64) -> Result<Vec<Value>> {
+        self.engine_repository()
+            .health_views(session, since, 500)
+            .await
+    }
+    /// Grouped run-health issues (counts, kinds, tool names and templates only).
+    pub async fn issues(&self, session: Option<&str>, since: i64) -> Result<Value> {
+        Ok(webagent_engine::runtime::health::aggregate(
+            &self.issue_views(session, since).await?,
+        ))
+    }
     /// Append an encoded event to the application or user plane selected by session identity.
     pub async fn event(&self, sid: &str, kind: &str, payload: &Value) -> Result<()> {
         let destination = if sid.is_empty() {

@@ -43,10 +43,6 @@
       "publication": [
         "closing_status_v1"
       ]
-    },
-    "self_review": {
-      "min_failed_calls": 5,
-      "min_repeated_calls": 3
     }
   }
 }

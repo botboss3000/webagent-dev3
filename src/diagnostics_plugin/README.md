@@ -67,6 +67,12 @@ recovery timeline; lifecycle paths outside the observed save wrappers need separ
 * `GET /api/v3/admin/diagnostics/status`: per-process configuration digest,
   switches, queues, drops, write errors and capture skips; heartbeat older than
   15 seconds is marked stale. Disabled capture still permits retained reads while the package is present.
+* `GET /api/v3/admin/diagnostics/issues`: grouped run-health issues (tool, error
+  kind, message template, retries, recoveries, rework counts) for one session tree
+  (`session_id`), one account (`user_id`) or every account, runs updated since
+  `since` (Unix seconds); at most 2000 run views. Owners read their own tree at
+  `GET /api/v3/sessions/{sid}/issues`; the in-app view is `read_diagnostics` with
+  `issues: true`.
 * `GET /api/v3/sessions/{sid}/runs/{rid}/diagnostics`: content-free latest
   assembly attempt, distinct from numeric last-successful context accounting.
 * `GET /api/v3/sessions/{sid}/runs/{rid}/diagnostics/context/{attempt_id}`:

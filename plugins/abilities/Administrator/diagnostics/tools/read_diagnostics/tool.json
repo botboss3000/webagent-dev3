@@ -1,6 +1,6 @@
 {
   "name": "read_diagnostics",
-  "description": "Read bounded content-free diagnostics for the current session run",
+  "description": "Read bounded content-free diagnostics for the current session run, or with issues=true the grouped tool-failure issues of this conversation tree",
   "effect": "read",
   "policy_ceiling": "auto",
   "default_access": {
@@ -14,6 +14,10 @@
       "run_id": {
         "type": "string",
         "description": "Omit, leave empty, or use current for the active run; otherwise provide a known canonical run UUID from this session"
+      },
+      "issues": {
+        "type": "boolean",
+        "description": "true: return this conversation's grouped tool-failure issues instead (this session, its root and sub-agents): per group tool, error kind, message template, failed calls, retries, recoveries; plus rework counts. run_id is ignored."
       }
     },
     "required": [],

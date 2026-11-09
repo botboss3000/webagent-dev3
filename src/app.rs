@@ -379,6 +379,14 @@ async fn run_diagnostics_api(
         json!(app.store.reasoning_cleanup_total(&sid).await?);
     Ok(Json(diagnostic))
 }
+/// Grouped run-health issues of the session's conversation tree (the session, its spawn root
+/// and the sub-agents under it): counts, kinds, tool names and message templates only.
+async fn session_issues_api(State(app): State<App>, Path(sid): Path<String>) -> Api {
+    if app.store.get(&key("session", &sid)).await?.is_none() {
+        return Err(ApiError(StatusCode::NOT_FOUND, "Session not found".into()));
+    }
+    Ok(Json(app.store.issues(Some(&sid), 0).await?))
+}
 // Session access is checked again against the durable run before projecting
 // progress. The projection contains no model, tool, or user message content.
 async fn run_progress_api(State(app): State<App>, Path((sid, rid)): Path<(String, String)>) -> Api {

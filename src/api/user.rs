@@ -435,6 +435,7 @@ async fn build_job_stop(
 path_json!(session_patch => patch_session_api, String, crate::store::session::SessionPatch);
 path_arg!(diagnostics => run_diagnostics_api, (String, String));
 path_arg!(progress => run_progress_api, (String, String));
+path_arg!(issues => session_issues_api, String);
 path_arg!(chat_controls => chat_controls_get, String);
 path_arg!(chat_usage => chat_usage_get, String);
 path_json!(chat_model => chat_model_set, String, crate::api::ChatModelBody);
@@ -830,6 +831,7 @@ pub(crate) fn router() -> Router<App> {
             get(context_snapshot),
         )
         .route("/sessions/{sid}/runs/{rid}/progress", get(progress))
+        .route("/sessions/{sid}/issues", get(issues))
         .route("/sessions/{sid}/build-tasks", get(build_tasks_list))
         .route("/sessions/{sid}/build-tasks/clear", post(build_tasks_clear))
         .route(

@@ -274,6 +274,7 @@ async fn read_routes_reject_public_and_other_admin_accounts() {
         for route in [
             "/api/v3/admin/diagnostics",
             "/api/v3/admin/diagnostics/status",
+            "/api/v3/admin/diagnostics/issues",
         ] {
             let req = HttpRequest::builder()
                 .uri(route)

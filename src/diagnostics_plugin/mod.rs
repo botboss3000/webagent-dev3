@@ -3,6 +3,7 @@ use crate::{context_assembly::Prepared, context_input::Request, Store};
 use axum::{extract::Query, routing::get, Extension, Json, Router};
 use serde_json::{json, Value};
 use std::{path::Path, sync::OnceLock};
+use webagent_accounts_host::AccountsStore;
 use webagent_diagnostics::{self as package, Recorder};
 static RECORDER: OnceLock<Recorder<Store>> = OnceLock::new();
 mod background;
@@ -125,6 +126,52 @@ async fn status(
         package::status(RECORDER.get()).await.map_err(api_error)?,
     ))
 }
+/// Most run views read across users for one issues view.
+const MAX_ISSUE_VIEWS: usize = 2000;
+#[derive(serde::Deserialize)]
+struct IssueFilter {
+    session_id: Option<String>,
+    user_id: Option<String>,
+    /// Unix seconds; runs updated earlier are left out.
+    since: Option<i64>,
+}
+/// Administrator view of grouped run-health issues: one session tree (found in whichever
+/// account owns it), one account, or every account. Counts, kinds and templates only.
+async fn issues(
+    Extension(app): Extension<crate::App>,
+    Extension(identity): Extension<Value>,
+    Query(filter): Query<IssueFilter>,
+) -> crate::Api {
+    authorize(&app, &identity).await?;
+    let mut users = app.store.all_user_ids().await?;
+    if let Some(user) = &filter.user_id {
+        users.retain(|known| known == user);
+    }
+    let since = filter.since.unwrap_or(0);
+    let session = filter.session_id.as_deref();
+    let mut views = Vec::new();
+    let mut accounts = 0;
+    for user in users {
+        let store = app.store.for_user(&user).await?;
+        if let Some(sid) = session {
+            if store.get(&format!("session:{sid}")).await?.is_none() {
+                continue;
+            }
+        }
+        let found = store.issue_views(session, since).await?;
+        if !found.is_empty() {
+            accounts += 1;
+        }
+        views.extend(found);
+        if views.len() >= MAX_ISSUE_VIEWS {
+            views.truncate(MAX_ISSUE_VIEWS);
+            break;
+        }
+    }
+    let mut view = webagent_engine::runtime::health::aggregate(&views);
+    view["totals"]["accounts"] = json!(accounts);
+    Ok(Json(view))
+}
 async fn no_store(mut response: axum::response::Response) -> axum::response::Response {
     response.headers_mut().insert(
         "cache-control",
@@ -136,6 +183,7 @@ pub(crate) fn router() -> Router<crate::App> {
     Router::new()
         .route("/admin/diagnostics", get(read))
         .route("/admin/diagnostics/status", get(status))
+        .route("/admin/diagnostics/issues", get(issues))
         .layer(axum::middleware::map_response(no_store))
 }
 pub(crate) fn background_router() -> Router<crate::App> {

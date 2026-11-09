@@ -5139,6 +5139,67 @@ async fn current_mode_contribution_changes_per_call_without_entering_history() {
 }
 
 #[tokio::test]
+async fn issues_route_aggregates_the_conversation_tree() {
+    let (_root, app) = fixture().await;
+    let root = conversation(&app).await;
+    let child = conversation(&app).await;
+    let unrelated = conversation(&app).await;
+    app.store
+        .put(
+            &format!("core_spawn_origin:{child}"),
+            &json!({"parent_session_id":root,"root_session_id":root,"depth":1}),
+        )
+        .await
+        .unwrap();
+    let sentinel = "secret argument 4471";
+    for sid in [&root, &child, &unrelated] {
+        let id = queued(&app, sid).await;
+        let mut run = app.run(&id).await.unwrap();
+        run["pending"] = json!({"name":"browser_read","arguments":{"selector":sentinel}});
+        webagent_engine::runtime::health::record_result(
+            &mut run,
+            &json!({"status":"error","error_kind":"timeout","message":format!("Timed out: {sentinel}")}),
+        );
+        app.save(&mut run).await.unwrap();
+    }
+    let cookie = ability_auth(&app).await;
+    let read = |sid: String| {
+        let app = app.clone();
+        let cookie = cookie.clone();
+        async move {
+            let request = Request::builder()
+                .uri(format!("/api/v3/sessions/{sid}/issues"))
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .unwrap();
+            let response = router(app).oneshot(request).await.unwrap();
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), 65536)
+                .await
+                .unwrap();
+            (status, String::from_utf8_lossy(&bytes).into_owned())
+        }
+    };
+    for sid in [root.clone(), child.clone()] {
+        let (status, body) = read(sid).await;
+        assert_eq!(status, StatusCode::OK);
+        let view: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(view["totals"]["runs"], 2, "{body}");
+        assert_eq!(view["totals"]["sessions"], 2);
+        assert_eq!(view["groups"][0]["tool"], "browser_read");
+        assert_eq!(view["groups"][0]["count"], 2);
+        assert!(!body.contains("4471"));
+    }
+    let (_, body) = read(unrelated).await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap()["totals"]["runs"],
+        1
+    );
+    let (status, _) = read(crate::uuid()).await;
+    assert_ne!(status, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn diagnostics_route_is_authenticated_session_bound_and_redacted() {
     let (_root, app) = fixture().await;
     let sid = conversation(&app).await;

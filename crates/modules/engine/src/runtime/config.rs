@@ -165,26 +165,6 @@ pub struct Workflow {
     pub max_attempts: u64,
     pub max_publication_bytes: usize,
     pub modules: BTreeMap<String, Vec<String>>,
-    /// When a run suggests a self-review to the agent.
-    #[serde(default)]
-    pub self_review: SelfReview,
-}
-/// Run-health thresholds for the call-scoped self-review note; 0 turns a trigger off.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SelfReview {
-    /// Failed tool calls in one run.
-    pub min_failed_calls: u64,
-    /// Calls that repeated an earlier identical call in one run.
-    pub min_repeated_calls: u64,
-}
-impl Default for SelfReview {
-    fn default() -> Self {
-        Self {
-            min_failed_calls: 5,
-            min_repeated_calls: 3,
-        }
-    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -229,7 +209,6 @@ impl<C: SchemaCatalog> Default for Config<C> {
                 max_attempts: 3,
                 max_publication_bytes: 262144,
                 modules: BTreeMap::new(),
-                self_review: SelfReview::default(),
             },
         }
     }
@@ -247,7 +226,6 @@ impl<C: SchemaCatalog> Config<C> {
             max_attempts: p.max_attempts,
             max_publication_bytes: p.max_publication_bytes,
             modules: p.modules.clone(),
-            self_review: self.workflow.self_review,
         };
     }
     pub fn validate(&self) -> Result<()> {
@@ -267,11 +245,6 @@ impl<C: SchemaCatalog> Config<C> {
             {
                 bail!("Invalid model budget profile");
             }
-        }
-        if self.workflow.self_review.min_failed_calls > 1000
-            || self.workflow.self_review.min_repeated_calls > 1000
-        {
-            bail!("Self-review thresholds must be at most 1000");
         }
         // BATCH-CONFIG-VALIDATION: unknown names and modes fail closed at startup.
         if !(1..=4).contains(&self.tools.max_parallel_calls)

@@ -2031,16 +2031,6 @@ impl<
                     turn: run["turns"].as_u64().unwrap_or(0),
                     call: call_number,
                 }];
-                let limits = config::Config::<C>::read(&app.runtime_path)?
-                    .workflow
-                    .self_review;
-                let turn = run["turns"].as_u64().unwrap_or(0);
-                contributions.extend(super::health::contribution(
-                    &mut run,
-                    &limits,
-                    turn,
-                    call_number,
-                ));
                 if run["module_binding"].is_object() {
                     // Only runtime identifiers enter this call-scoped contribution.
                     // Trigger payloads and remembered values remain untrusted history evidence.

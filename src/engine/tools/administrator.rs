@@ -364,6 +364,9 @@ impl AdministrationHost for Host<'_> {
     fn progress(&self, run: &Value) -> Value {
         task_progress::project(run)
     }
+    fn issues<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Value>> {
+        Box::pin(self.0.store.issues(Some(sid), 0))
+    }
     fn abilities_version(&self) -> String {
         self.0.abilities.live_version()
     }

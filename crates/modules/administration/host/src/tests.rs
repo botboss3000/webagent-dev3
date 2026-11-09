@@ -189,6 +189,9 @@ impl AdministrationHost for Fake {
     fn progress(&self, run: &Value) -> Value {
         json!({"run":run["id"]})
     }
+    fn issues<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Value>> {
+        Box::pin(async move { Ok(json!({"tree_of":sid})) })
+    }
     fn abilities_version(&self) -> String {
         "abilities".into()
     }
@@ -304,6 +307,10 @@ async fn diagnostics_stay_in_the_session() {
         .await
         .unwrap();
     assert_eq!(bad["error_kind"], "diagnostics_unavailable");
+    let issues = call(&host, "read_diagnostics", json!({"issues":true}))
+        .await
+        .unwrap();
+    assert_eq!(issues["output"], json!({"tree_of":SID}));
 }
 
 #[tokio::test]

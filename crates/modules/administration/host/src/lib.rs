@@ -130,6 +130,8 @@ pub trait AdministrationHost: Sync {
     fn optimization_generation(&self) -> Option<String>;
     /// The content-free progress view of a run.
     fn progress(&self, run: &Value) -> Value;
+    /// Grouped run-health issues of the session's conversation tree (content-free).
+    fn issues<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Value>>;
     /// The live ability bundle version.
     fn abilities_version(&self) -> String;
     /// The promotion broker socket.

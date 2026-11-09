@@ -86,7 +86,8 @@ impl<
             // a run contributes only its delta, so retries and recovery cannot double-count.
             let new_usage = crate::send_future(self.usage.stage_run_usage_in(tx, run)).await?;
             let view = serde_json::json!({"usage":new_usage,"model":crate::output::public_run_model(run),"attachments":run["attachments"],"run_revision":run["run_revision"],"context_assembly_report":run["context_assembly_report"],"context_controls":run["context_controls"],"compactions":run["compactions"],"dispatch_mode":run["dispatch_mode"],"chat_model_revision":run["chat_model_revision"],"id":run["id"],"session_id":run["session_id"],"status":run["status"],"error":run["error"],
-            "pending":run["pending"],"uncertain":run["uncertain"],"turns":run["turns"],"phase":run["phase"],"updated_at":run["updated_at"]});
+            "pending":run["pending"],"uncertain":run["uncertain"],"turns":run["turns"],"phase":run["phase"],"updated_at":run["updated_at"],
+            "run_health":run["run_health"]});
             crate::send_future(sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
             .bind(format!("run_view:{}",run["id"].as_str().unwrap())).bind(self.records.encode_user_record(&view)?).execute(&mut **tx)).await?;
             Ok(())
@@ -147,6 +148,64 @@ impl<
         rows.iter()
             .map(|r| self.records.unseal(&r.get::<Vec<u8>, _>("value")))
             .collect()
+    }
+
+    /// Stored run views with a run-health record, newest first and at most `limit`, updated
+    /// at or after `since` (Unix seconds). With `session`, only that session's conversation
+    /// tree: its spawn root and every session spawned under that root.
+    pub async fn health_views(
+        &self,
+        session: Option<&str>,
+        since: i64,
+        limit: i64,
+    ) -> Result<Vec<Value>> {
+        let rows = match session {
+            Some(sid) => {
+                let tree = self.session_tree(sid).await?;
+                let tree = serde_json::to_string(&tree)?;
+                sqlx::query("SELECT d.value FROM run_index r JOIN docs d ON d.key='run_view:'||r.id WHERE r.session_id IN (SELECT value FROM json_each(?)) AND r.updated_at>=? ORDER BY r.updated_at DESC LIMIT ?")
+                    .bind(tree).bind(since).bind(limit).fetch_all(self.pool).await?
+            }
+            None => sqlx::query("SELECT d.value FROM run_index r JOIN docs d ON d.key='run_view:'||r.id WHERE r.updated_at>=? ORDER BY r.updated_at DESC LIMIT ?")
+                .bind(since).bind(limit).fetch_all(self.pool).await?,
+        };
+        rows.iter()
+            .map(|r| self.records.unseal(&r.get::<Vec<u8>, _>("value")))
+            .filter(|view| !matches!(view, Ok(v) if !v["run_health"].is_object()))
+            .collect()
+    }
+
+    /// `sid`'s conversation tree from the spawn records (`core_spawn_origin:{sid}`): the root
+    /// and every session whose recorded root it is.
+    async fn session_tree(&self, sid: &str) -> Result<Vec<String>> {
+        let mut tx = self.pool.begin().await?;
+        let rows: Vec<(String, Vec<u8>)> = sqlx::query_as(
+            "SELECT key,value FROM docs WHERE key>='core_spawn_origin:' AND key<'core_spawn_origin;'",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut origins = Vec::with_capacity(rows.len());
+        for (key, raw) in rows {
+            let origin = self.records.decode_document(&mut tx, &raw).await?;
+            let child = key.trim_start_matches("core_spawn_origin:").to_owned();
+            origins.push((child, origin["root_session_id"].as_str().map(str::to_owned)));
+        }
+        tx.commit().await?;
+        let root = origins
+            .iter()
+            .find(|(child, _)| child == sid)
+            .and_then(|(_, root)| root.clone())
+            .unwrap_or_else(|| sid.to_owned());
+        let mut tree = vec![root.clone()];
+        tree.extend(
+            origins
+                .into_iter()
+                .filter(|(child, origin)| {
+                    origin.as_deref() == Some(root.as_str()) && *child != root
+                })
+                .map(|(child, _)| child),
+        );
+        Ok(tree)
     }
 
     pub async fn save_run(&self, run: &mut Value, kind: &str, payload: &Value) -> Result<()> {
