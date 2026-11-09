@@ -67,7 +67,7 @@ migration does not deploy or activate new functionality.
 ### Core
 
 - `agent_management`: ability; pending. Adapt independently in a later functional wave.
-- `agent_orchestration`: ability; pending. Adapt independently in a later functional wave.
+- `agent_orchestration`: removed 2026-11-08; sub agents and sessions live in `agent_management`.
 - `app_control`: ability; pending. Adapt independently in a later functional wave.
 - `automation`: ability; pending. Adapt independently in a later functional wave.
 - `base`: virtual_core; pending. Adapt independently in a later functional wave.
