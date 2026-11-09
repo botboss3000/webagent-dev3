@@ -230,7 +230,8 @@ impl Store {
         if known > 0 {
             return Ok(());
         }
-        let reply = if notice.status == "completed" {
+        // A run that ends early still reports any partial reply it wrote.
+        let reply = if notice.status != "waiting_approval" {
             let raw:Option<Vec<u8>>=sqlx::query_scalar("SELECT content FROM chat WHERE session_id=? AND run_id=? AND role='assistant' ORDER BY seq DESC LIMIT 1").bind(sid).bind(&notice.run_id).fetch_optional(&mut **tx).await?;
             raw.map(|v| self.unseal(&v))
                 .transpose()?
@@ -242,7 +243,7 @@ impl Store {
         };
         let record = json!({"key":marker,"event_key":notice.event_key,"session_id":parent,"child_session_id":sid,"child_title":session["title"],
    "child_agent_id":session["agent_id"],"spawn":session["parent_session_id"]==parent,"status":notice.status,"run_id":notice.run_id,
-   "reply":reply,"tool":if notice.status=="waiting_approval"{run["pending"]["name"].clone()}else{Value::Null},"created_at":crate::now()});
+   "reply":reply,"tool":if notice.status=="waiting_approval"{run["pending"]["name"].clone()}else{Value::Null},"reason":end_reason(run),"created_at":crate::now()});
         self.write_document(tx, &marker, &record).await
     }
     /// Capacity is checked under the same SQLite writer as child creation, including competing loop processes.
@@ -408,6 +409,15 @@ impl Store {
         tx.commit().await?;
         self.cache.lock().unwrap().invalidate(&[key, receipt]);
         Ok(r)
+    }
+}
+
+/// The run's own end reason, bounded, for a run that did not complete. Run errors are
+/// already user-visible status text, never tool arguments or credentials.
+fn end_reason(run: &Value) -> Value {
+    match (run["status"].as_str(), run["error"].as_str()) {
+        (Some("completed" | "waiting_approval"), _) | (_, None) => Value::Null,
+        (_, Some(error)) => Value::from(error.chars().take(300).collect::<String>()),
     }
 }
 

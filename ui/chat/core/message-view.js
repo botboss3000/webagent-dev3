@@ -51,6 +51,7 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
       const summary=document.createElement('summary');const icon=document.createElement('i');icon.dataset.lucide='git-branch';icon.setAttribute('aria-hidden','true');
       const state=notice.status==='completed'?'finished':notice.status==='waiting_approval'?'waiting for approval':notice.status==='failed'||notice.status==='cancelled'?'failed':String(notice.status||'ended');
       summary.append(icon,document.createTextNode(' '+(notice.title||'Sub-agent')+' · '+state));entry.append(summary);
+      if(typeof notice.reason==='string'&&notice.reason){const reason=document.createElement('p');reason.className='v3-subagent-reason';reason.textContent='Reason: '+notice.reason;entry.append(reason);}
       const report=document.createElement('div');report.className='v3-subagent-report';
       markdown(report,typeof notice.reply==='string'&&notice.reply?notice.reply:'(no reply text)');entry.append(report);
       if(typeof notice.session_id==='string'&&/^[-A-Za-z0-9_]{1,128}$/.test(notice.session_id)){const link=document.createElement('a');link.href='/app?session_id='+encodeURIComponent(notice.session_id);link.textContent='Open sub-agent session';link.className='v3-subagent-link';entry.append(link);}

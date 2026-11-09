@@ -243,16 +243,12 @@ pub(crate) async fn guard_operation<T>(
     loop {
         tokio::select! {
             result=&mut operation=>{
-                let available=store.get(&key("session",sid)).await
-                    .map_or(true,|session|session.is_some_and(|s|s["status"]=="active"
-                        && s["execution_epoch"].as_u64().unwrap_or(0)==epoch));
+                let available=still_available(store.get(&key("session",sid)).await,epoch);
                 if !available {cancel.cancel();return Err(crate::store::session::ArchivedSession.into());}
                 return result;
             },
             _=poll.tick()=>{
-                let available=store.get(&key("session",sid)).await
-                    .map_or(true,|session|session.is_some_and(|s|s["status"]=="active"
-                        && s["execution_epoch"].as_u64().unwrap_or(0)==epoch));
+                let available=still_available(store.get(&key("session",sid)).await,epoch);
                 if !available {
                     cancel.cancel();
                     // Poll cancellation cleanup before dropping a worker socket.
@@ -261,6 +257,33 @@ pub(crate) async fn guard_operation<T>(
                 }
             }
         }
+    }
+}
+
+// A failed read (for example a busy pool) proves nothing about the session.
+fn still_available(read: Result<Option<Value>>, epoch: u64) -> bool {
+    read.map_or(true, |session| {
+        session.is_some_and(|s| {
+            s["status"] == "active" && s["execution_epoch"].as_u64().unwrap_or(0) == epoch
+        })
+    })
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::still_available;
+    use serde_json::json;
+
+    #[test]
+    fn only_a_read_showing_the_session_gone_stops_an_operation() {
+        assert!(still_available(Err(anyhow::anyhow!("pool timed out")), 0));
+        assert!(still_available(Ok(Some(json!({"status":"active"}))), 0));
+        assert!(!still_available(Ok(None), 0));
+        assert!(!still_available(Ok(Some(json!({"status":"archived"}))), 0));
+        assert!(!still_available(
+            Ok(Some(json!({"status":"active","execution_epoch":1}))),
+            0
+        ));
     }
 }
 
