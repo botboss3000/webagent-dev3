@@ -184,11 +184,8 @@ impl Store {
         };
         let document = self.unseal(&raw)?;
         let card = &document["artifact"];
-        if document["session_id"] != sid
-            || card["authority"] != "user_reply"
-            || card["type"] != "choice"
-        {
-            return Err(anyhow!("Only choice cards can be dismissed"));
+        if document["session_id"] != sid || card["authority"] != "user_reply" {
+            return Err(anyhow!("Only choice and form panels can be dismissed"));
         }
         sqlx::query("DELETE FROM docs WHERE key=?")
             .bind(&key)

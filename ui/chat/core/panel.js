@@ -270,7 +270,10 @@ function components(items){
   for(const row of items.slice(0,64)){
     const spec=row?.component;
     const reply=spec?.authority==='user_reply'&&spec.type==='choice';
-    if(!spec||(spec.authority!=='display_only'&&!reply)||!['status','todo_list','choice','approval','form','visual'].includes(spec.type))continue;
+    const replyForm=spec?.authority==='user_reply'&&spec.type==='form';
+    // A panel the agent closed is not shown.
+    if(spec?.lifecycle?.dismissed===true){for(const node of [...$('chat-messages-inner').children])if(node.dataset.componentId===spec.id)node.remove();continue;}
+    if(!spec||(spec.authority!=='display_only'&&!reply&&!replyForm)||!['status','todo_list','choice','approval','form','visual'].includes(spec.type))continue;
     const id=spec.id;if(typeof id!=='string'||!/^[-A-Za-z0-9_]{1,64}$/.test(id))continue;
     const existing=[...$('chat-messages-inner').children].find(node=>node.dataset.componentId===id);
     if(existing?.dataset.componentRevision===String(row.revision))continue;
@@ -293,6 +296,29 @@ function components(items){
       dismiss.onclick=async()=>{dismiss.disabled=true;try{await client.dismissComponent(session,id);card.remove();}catch(error){dismiss.disabled=false;note(error.message);}};
       row.append(dismiss);
       body.append(row);card.append(body);if(existing)existing.replaceWith(card);else $('chat-messages-inner').append(card);continue;
+    }
+    if(replyForm){
+      // A submitted form is sent as one user message, exactly as if typed: prompt, then "Label: value" lines.
+      if(typeof data.prompt==='string'&&data.prompt)heading.textContent=data.prompt;
+      const form=document.createElement('form');form.className='v3-reply-form';
+      const inputs=[];
+      for(const field of Array.isArray(data.fields)?data.fields.slice(0,20):[]){
+        if(typeof field?.name!=='string')continue;
+        const label=document.createElement('label');label.textContent=field.label||field.name;
+        let input;
+        if(field.type==='select'){input=document.createElement('select');for(const value of Array.isArray(field.options)?field.options:[])input.append(new Option(value,value));}
+        else{input=document.createElement('input');input.type=['email','number'].includes(field.type)?field.type:'text';}
+        input.required=field.required===true;label.append(input);form.append(label);inputs.push([field.label||field.name,input]);
+      }
+      const actions=document.createElement('div');actions.className='v3-reply-choices';
+      const send=document.createElement('button');send.type='submit';send.textContent='Send';
+      const dismiss=document.createElement('button');dismiss.type='button';dismiss.className='v3-reply-dismiss';dismiss.textContent='Dismiss';
+      dismiss.onclick=async()=>{dismiss.disabled=true;try{await client.dismissComponent(session,id);card.remove();}catch(error){dismiss.disabled=false;note(error.message);}};
+      actions.append(send,dismiss);form.append(actions);
+      form.onsubmit=async event=>{event.preventDefault();send.disabled=true;
+        const text=[data.prompt||'',...inputs.map(([name,input])=>name+': '+input.value)].filter(Boolean).join('\n');
+        try{await submit(text);card.remove();void client.dismissComponent(session,id).catch(()=>{});}catch(error){note(error.message);send.disabled=false;}};
+      body.append(form);card.append(body);if(existing)existing.replaceWith(card);else $('chat-messages-inner').append(card);continue;
     }
     if(spec.type==='visual'){const frame=mountVisualFrame(spec);if(!frame)continue;body.append(frame);card.append(body);if(existing)existing.replaceWith(card);else $('chat-messages-inner').append(card);continue;}
     const lines=spec.type==='status'?data.sections?.map(item=>[item.label,item.value].filter(Boolean).join(': ')):

@@ -360,6 +360,9 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 .v3-reply-choices button{font:inherit;color:var(--fg-1);background:var(--bg-elev);border:1px solid var(--border);border-radius:999px;padding:6px 12px;min-height:34px;cursor:pointer;-webkit-tap-highlight-color:transparent}
 .v3-reply-choices button:hover:not(:disabled){border-color:color-mix(in oklab,var(--fg-1) 35%,transparent)}
 .v3-reply-choices button.v3-reply-dismiss{background:transparent;color:var(--fg-2,var(--fg-1));border-style:dashed}
+.v3-reply-form{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.v3-reply-form label{display:flex;flex-direction:column;gap:4px;font-size:14px;color:var(--fg-2,var(--fg-1))}
+.v3-reply-form input,.v3-reply-form select{font:inherit;color:var(--fg-1);background:var(--bg-elev);border:1px solid var(--border);border-radius:var(--r-sm,8px);padding:8px 10px;min-height:38px;box-sizing:border-box;width:100%}
 .v3-reply-choices button:disabled{opacity:.55;cursor:default}
 /* Admission review blocked this message: the agent never saw it. */
 .message-admission-status.is-blocked{display:block;margin:8px 0 0;padding:8px 10px;border-radius:8px;border:1px solid rgba(var(--warning-rgb),.55);background:var(--warning-soft);color:var(--fg-1);font-size:13px;font-weight:600;line-height:1.35;opacity:1}

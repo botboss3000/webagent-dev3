@@ -44,11 +44,11 @@ pub fn schemas() -> Vec<Value> {
                 "goal":{"type":"string","maxLength":1200},"criteria":{"type":"string","maxLength":1200},
                 "notes":{"type":"string","maxLength":1200},"title":{"type":"string","maxLength":80},
                 "checklist":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object"}}}), vec!["expected_revision","checklist"]),
-        ("present_chat_component", "Persist a bounded declarative status, checklist, choice, approval display or form; this does not authorize actions",
-            json!({"type":{"type":"string","enum":["todo_list","status","choice","approval","form"]},
+        ("present_chat_component", "Show the user a panel in the chat, after your message. choice: clickable options (data {prompt, options:[{label}]}, 1-8 one-line labels); a click sends that label as the user's message. form: fields the user fills and submits as one message (data {prompt, fields:[{name,label,type:text|email|number|select,required,options}]}). status and todo_list are display only. Reuse component_id with the latest revision to update a panel; dismiss:true closes it. Panels never authorize actions",
+            json!({"type":{"type":"string","enum":["todo_list","status","choice","form"]},
                 "title":{"type":"string","maxLength":80},"placement":{"type":"string","enum":["inline","hover","sticky"]},
                 "data":{"type":"object"},"component_id":{"type":"string","maxLength":64},
-                "expected_revision":{"type":"integer","minimum":0}}), vec!["type","expected_revision"]),
+                "expected_revision":{"type":"integer","minimum":0},"dismiss":{"type":"boolean"}}), vec!["type","expected_revision"]),
     ].into_iter().map(|(name,description,properties,required)|json!({
         "type":"function","name":name,"description":description,
         "parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}
@@ -102,6 +102,9 @@ struct ComponentArgs {
     #[serde(default)]
     component_id: Option<String>,
     expected_revision: u64,
+    /// Closes the panel the user no longer needs to answer.
+    #[serde(default)]
+    dismiss: bool,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -197,10 +200,11 @@ fn checkpoint(update: Update) -> Result<Value> {
 }
 fn component(args: ComponentArgs, fallback_id: &str) -> Result<(String, Value, u64)> {
     let kind = args.kind.as_str();
-    if !matches!(
-        kind,
-        "todo_list" | "status" | "choice" | "approval" | "form"
-    ) {
+    if kind == "approval" {
+        // A model-drawn approval could be mistaken for a real permission control.
+        bail!("Approvals come only from the runtime; ask with a choice panel instead");
+    }
+    if !matches!(kind, "todo_list" | "status" | "choice" | "form") {
         bail!("Unsupported chat component type");
     }
     let id = args.component_id.unwrap_or_else(|| fallback_id.to_owned());
@@ -224,6 +228,11 @@ fn component(args: ComponentArgs, fallback_id: &str) -> Result<(String, Value, u
         _ => "Form",
     };
     let title = short_title(&args.title, fallback)?;
+    if args.dismiss {
+        let spec = json!({"id":id,"type":kind,"title":title,"placement":placement,
+            "data":{},"lifecycle":{"dismissed":true},"authority":"display_only"});
+        return Ok((id, spec, args.expected_revision));
+    }
     let data = args
         .data
         .as_object()
@@ -266,23 +275,30 @@ fn component(args: ComponentArgs, fallback_id: &str) -> Result<(String, Value, u
                 .get("options")
                 .and_then(Value::as_array)
                 .ok_or_else(|| anyhow!("Choice options required"))?;
-            if options.is_empty() || options.len() > 20 {
-                bail!("Expected 1..20 choice options");
+            if options.is_empty() || options.len() > 8 {
+                bail!("Expected 1..8 choice options");
             }
             let mut clean = Vec::new();
             for (n, option) in options.iter().enumerate() {
+                // A clicked label is sent as the user's message, so it must read as one.
                 let label = text(
                     option["label"]
                         .as_str()
+                        .or_else(|| option.as_str())
                         .ok_or_else(|| anyhow!("Choice label required"))?,
-                    240,
+                    80,
                 )?;
-                if label.is_empty() {
-                    bail!("Choice label required");
+                if label.is_empty() || label.contains('\n') {
+                    bail!("Choice labels must be one non-empty line");
                 }
                 clean.push(json!({"id":format!("option-{}",n+1),"label":label}));
             }
-            json!({"options":clean})
+            let prompt = data
+                .get("prompt")
+                .or_else(|| data.get("question"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            json!({"prompt":text(prompt,200)?,"options":clean})
         }
         "form" => {
             let fields = data
@@ -307,21 +323,46 @@ fn component(args: ComponentArgs, fallback_id: &str) -> Result<(String, Value, u
                 if !matches!(field_type, "text" | "email" | "number" | "select") {
                     bail!("Unsupported field type");
                 }
+                let mut choices = Vec::new();
+                if field_type == "select" {
+                    for option in field["options"]
+                        .as_array()
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[])
+                        .iter()
+                        .take(20)
+                    {
+                        choices.push(text(
+                            option
+                                .as_str()
+                                .ok_or_else(|| anyhow!("Select options must be text"))?,
+                            80,
+                        )?);
+                    }
+                    if choices.is_empty() {
+                        bail!("Select fields need options");
+                    }
+                }
                 clean.push(
                     json!({"name":name,"label":text(field["label"].as_str().unwrap_or(name),120)?,
-                    "type":field_type,"required":field["required"].as_bool().unwrap_or(false)}),
+                    "type":field_type,"required":field["required"].as_bool().unwrap_or(false),
+                    "options":choices}),
                 );
             }
-            json!({"fields":clean})
-        }
-        "approval" => {
-            json!({"message":text(data.get("message").and_then(Value::as_str).unwrap_or(""),1200)?,
-            "display_only":true})
+            json!({"prompt":text(data.get("prompt").and_then(Value::as_str).unwrap_or(""),200)?,
+                "fields":clean})
         }
         _ => unreachable!(),
     };
+    // Choices and forms answer as the user's own message through normal admission; the panel
+    // itself carries no authority.
+    let authority = if matches!(kind, "choice" | "form") {
+        "user_reply"
+    } else {
+        "display_only"
+    };
     let spec = json!({"id":id,"type":kind,"title":title,"placement":placement,
-        "data":cleaned,"lifecycle":{},"authority":"display_only"});
+        "data":cleaned,"lifecycle":{},"authority":authority});
     if serde_json::to_vec(&spec)?.len() > 24 * 1024 {
         bail!("Component exceeds 24 KiB");
     }
@@ -548,14 +589,29 @@ mod tests {
         );
         assert!(serde_json::from_value::<ComponentArgs>(json!({"type":"status","expected_revision":0,
             "data":{"sections":[{"label":"Progress","value":"Ready"}]},"lifecycle":{"script":"alert(1)"}})).is_err());
-        let (_, spec, _) = component(
+        assert!(component(
             serde_json::from_value(json!({"type":"approval","expected_revision":0,
             "data":{"message":"Please approve","status":"approved"}}))
             .unwrap(),
             "c",
         )
+        .is_err());
+        let (_, choice, _) = component(
+            serde_json::from_value(json!({"type":"choice","expected_revision":0,
+            "data":{"question":"Which?","options":[{"label":"A"},"B"]}}))
+            .unwrap(),
+            "c",
+        )
         .unwrap();
-        assert_eq!(spec["authority"], "display_only");
-        assert_eq!(spec["data"]["display_only"], true);
+        assert_eq!(choice["authority"], "user_reply");
+        assert_eq!(choice["data"]["prompt"], "Which?");
+        assert_eq!(choice["data"]["options"][1]["label"], "B");
+        let (_, closed, _) = component(
+            serde_json::from_value(json!({"type":"choice","expected_revision":1,"dismiss":true}))
+                .unwrap(),
+            "c",
+        )
+        .unwrap();
+        assert_eq!(closed["lifecycle"]["dismissed"], true);
     }
 }
