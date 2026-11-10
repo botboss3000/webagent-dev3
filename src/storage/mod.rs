@@ -1071,6 +1071,7 @@ impl Store {
         let mut view =
             webagent_engine::runtime::health::aggregate(&self.issue_views(session, since).await?);
         view["notes"] = json!(self.review_notes(session, None).await.unwrap_or_default());
+        view["agent_issues"] = json!(self.agent_issues(session, None).await.unwrap_or_default());
         Ok(view)
     }
     /// Append an encoded event to the application or user plane selected by session identity.

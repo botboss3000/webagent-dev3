@@ -139,6 +139,13 @@ pub trait AdministrationHost: Sync {
         run_id: &'a str,
         args: &'a Value,
     ) -> Pending<'a, Result<Value>>;
+    /// Open an issue the agent observed without a failed call behind it.
+    fn open_issue<'a>(
+        &'a self,
+        sid: &'a str,
+        run_id: &'a str,
+        args: &'a Value,
+    ) -> Pending<'a, Result<Value>>;
     /// The live ability bundle version.
     fn abilities_version(&self) -> String;
     /// The promotion broker socket.

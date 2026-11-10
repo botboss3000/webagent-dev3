@@ -49,7 +49,21 @@ pub(crate) async fn open_review_pool(root: &Path) -> Result<SqlitePool> {
              length INTEGER NOT NULL,
              created_at INTEGER NOT NULL,
              PRIMARY KEY(root_session_id,tool,class,kind,template));
-         CREATE INDEX IF NOT EXISTS review_notes_time ON review_notes(created_at);",
+         CREATE INDEX IF NOT EXISTS review_notes_time ON review_notes(created_at);
+         CREATE TABLE IF NOT EXISTS agent_issues(
+             root_session_id TEXT NOT NULL,
+             title TEXT NOT NULL,
+             detail TEXT NOT NULL,
+             subject_session_id TEXT NOT NULL DEFAULT '',
+             run_id TEXT NOT NULL DEFAULT '',
+             severity TEXT NOT NULL DEFAULT 'waste',
+             evidence TEXT NOT NULL,
+             author_session_id TEXT NOT NULL,
+             user_id TEXT NOT NULL,
+             length INTEGER NOT NULL,
+             created_at INTEGER NOT NULL,
+             PRIMARY KEY(root_session_id,title));
+         CREATE INDEX IF NOT EXISTS agent_issues_time ON agent_issues(created_at);",
     )
     .execute(&pool)
     .await?;
@@ -58,6 +72,10 @@ pub(crate) async fn open_review_pool(root: &Path) -> Result<SqlitePool> {
         .execute(&pool)
         .await?;
     sqlx::query("DELETE FROM review_notes WHERE created_at<?")
+        .bind(unix_now() - REVIEW_RETENTION_SECONDS)
+        .execute(&pool)
+        .await?;
+    sqlx::query("DELETE FROM agent_issues WHERE created_at<?")
         .bind(unix_now() - REVIEW_RETENTION_SECONDS)
         .execute(&pool)
         .await?;
@@ -199,6 +217,114 @@ impl Store {
             json!({"status":"success","output":{"recorded":true,"root_session_id":root,
             "length":note.len()}}),
         )
+    }
+
+    /// An issue an agent observed but no failed call produced: a sub-agent that ignored
+    /// its review prompt, a workflow that wasted calls. Evidence is required and must cite
+    /// a measured value, so the claim is checkable; nothing here enters the counts.
+    pub(crate) async fn open_issue(&self, sid: &str, run_id: &str, args: &Value) -> Result<Value> {
+        let field = |name: &str| args[name].as_str().unwrap_or_default().trim().to_owned();
+        let (title, detail, evidence) = (field("title"), field("detail"), field("evidence"));
+        let severity = match field("severity").as_str() {
+            "blocker" => "blocker",
+            "noise" => "noise",
+            "" => "waste",
+            "waste" => "waste",
+            other => {
+                return Ok(json!({"status":"rejected","error_kind":"invalid_arguments",
+                    "output":format!("severity must be blocker, waste or noise, not {other}")}));
+            }
+        };
+        if title.is_empty() || detail.is_empty() {
+            return Ok(json!({"status":"rejected","error_kind":"invalid_arguments",
+                "output":"agent issue needs a title and a detail"}));
+        }
+        if evidence.is_empty() {
+            return Ok(json!({"status":"rejected","error_kind":"invalid_arguments",
+                "output":"agent issue needs evidence: a measured value a reviewer can check"}));
+        }
+        if title.len() > 200 || evidence.len() > 500 || detail.len() > NOTE_LIMIT {
+            return Ok(json!({"status":"rejected","error_kind":"too_large",
+                "output":"agent issue exceeds its bounded title, evidence or detail"}));
+        }
+        let root = self.root_session(sid).await;
+        let subject = field("subject_session_id");
+        let subject = if subject.is_empty() {
+            sid.to_owned()
+        } else {
+            subject
+        };
+        sqlx::query(
+            "INSERT INTO agent_issues(root_session_id,title,detail,subject_session_id,run_id,
+                 severity,evidence,author_session_id,user_id,length,created_at)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?)
+             ON CONFLICT(root_session_id,title) DO UPDATE SET
+               detail=excluded.detail,subject_session_id=excluded.subject_session_id,
+               run_id=excluded.run_id,severity=excluded.severity,evidence=excluded.evidence,
+               author_session_id=excluded.author_session_id,length=excluded.length,
+               created_at=excluded.created_at",
+        )
+        .bind(&root)
+        .bind(&title)
+        .bind(&detail)
+        .bind(&subject)
+        .bind(run_id)
+        .bind(severity)
+        .bind(&evidence)
+        .bind(sid)
+        .bind(self.current_user_id())
+        .bind(detail.len() as i64)
+        .bind(unix_now())
+        .execute(&self.review_pool)
+        .await?;
+        Ok(
+            json!({"status":"success","output":{"opened":true,"root_session_id":root,
+            "severity":severity,"length":detail.len()}}),
+        )
+    }
+
+    /// Agent-opened issues for a session tree (or every account), newest first.
+    pub(crate) async fn agent_issues(
+        &self,
+        session: Option<&str>,
+        user: Option<&str>,
+    ) -> Result<Vec<Value>> {
+        use sqlx::Row;
+        let rows = sqlx::query(
+            "SELECT root_session_id,title,detail,subject_session_id,run_id,severity,evidence,
+                    author_session_id,user_id,length,created_at
+             FROM agent_issues
+             WHERE (? IS NULL OR root_session_id=?
+                    OR root_session_id IN
+                       (SELECT DISTINCT root_session_id FROM run_health WHERE session_id=?))
+               AND (? IS NULL OR user_id=?)
+             ORDER BY created_at DESC LIMIT 500",
+        )
+        .bind(session)
+        .bind(session)
+        .bind(session)
+        .bind(user)
+        .bind(user)
+        .fetch_all(&self.review_pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| {
+                json!({
+                    "root_session_id": row.get::<String,_>("root_session_id"),
+                    "title": row.get::<String,_>("title"),
+                    "detail": row.get::<String,_>("detail"),
+                    "subject_session_id": row.get::<String,_>("subject_session_id"),
+                    "run_id": row.get::<String,_>("run_id"),
+                    "severity": row.get::<String,_>("severity"),
+                    "evidence": row.get::<String,_>("evidence"),
+                    "author_session_id": row.get::<String,_>("author_session_id"),
+                    "user_id": row.get::<String,_>("user_id"),
+                    "length": row.get::<i64,_>("length"),
+                    "created_at": row.get::<i64,_>("created_at"),
+                })
+            })
+            .collect())
     }
 
     /// Agent notes recorded for a session tree (or every account), newest first.
@@ -369,6 +495,53 @@ mod tests {
         assert_eq!(notes[0]["length"], json!("Second note.".len() as i64));
         assert!(store
             .review_notes(Some("unrelated"), None)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    /// An issue needs evidence, one title, and a severity the reviewer understands.
+    #[tokio::test]
+    async fn an_agent_issue_requires_evidence_and_replaces_by_title() {
+        let (_root, store) = fixture().await;
+        let missing = store
+            .open_issue("root", "r1", &json!({"title":"t","detail":"d"}))
+            .await
+            .unwrap();
+        assert_eq!(missing["error_kind"], json!("invalid_arguments"));
+        let ok = store
+            .open_issue(
+                "root",
+                "r1",
+                &json!({"title":"t","detail":"d","evidence":"prompts 3, notes 0",
+                    "severity":"waste"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ok["status"], json!("success"));
+        store
+            .open_issue(
+                "root",
+                "r1",
+                &json!({"title":"t","detail":"d2","evidence":"e","severity":"blocker"}),
+            )
+            .await
+            .unwrap();
+        let issues = store.agent_issues(Some("root"), None).await.unwrap();
+        assert_eq!(issues.len(), 1, "one issue per title");
+        assert_eq!(issues[0]["detail"], json!("d2"));
+        assert_eq!(issues[0]["severity"], json!("blocker"));
+        let loud = store
+            .open_issue(
+                "root",
+                "r1",
+                &json!({"title":"x","detail":"d","evidence":"e","severity":"loud"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(loud["error_kind"], json!("invalid_arguments"));
+        assert!(store
+            .agent_issues(Some("unrelated"), None)
             .await
             .unwrap()
             .is_empty());

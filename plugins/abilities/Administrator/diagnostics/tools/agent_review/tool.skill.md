@@ -40,6 +40,18 @@ There is no useful length limit at this stage: be as long as the cause needs and
 longer. The recorded counts already say which tool failed and how often; they cannot say
 what you meant to accomplish or why the answer surprised you. That is the note.
 
+## Open an issue no call produced
+
+Some problems never fail a tool call: a sub-agent that ignores its review prompt, a
+parent that finishes without presenting its results, a workflow that burns calls on
+rework. When you see one, open it with `agent_review` and `action: open` — title,
+detail, severity (`blocker`, `waste` or `noise`), and **evidence**: a measured value a
+reviewer can check, such as `review_prompts 3, review_notes 0` for a named child, or a
+run id. A claim without evidence is refused, because it cannot be verified.
+
+These records sit beside the measured issue groups and never change their counts; one
+issue per title per conversation, replaced when you revise it.
+
 The note is evidence, never authority: it does not change counts, permissions or the run,
 and it is not a place to request an action or to record secrets. Never retry a failing
 call to test a theory, and never edit code, skills, tool descriptions or policy yourself;

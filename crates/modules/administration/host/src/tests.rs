@@ -203,6 +203,17 @@ impl AdministrationHost for Fake {
                 "note":args["note"]}}))
         })
     }
+    fn open_issue<'a>(
+        &'a self,
+        _sid: &'a str,
+        _run_id: &'a str,
+        args: &'a Value,
+    ) -> Pending<'a, Result<Value>> {
+        Box::pin(async move {
+            Ok(json!({"status":"success","output":{"opened":true,
+                "title":args["title"]}}))
+        })
+    }
     fn abilities_version(&self) -> String {
         "abilities".into()
     }
