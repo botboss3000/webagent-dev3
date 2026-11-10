@@ -2043,11 +2043,17 @@ impl<
                     call: call_number,
                 }];
                 // A newly seen issue group gets one call-scoped chance to be explained.
-                let review_entry = run["run_health_track"]["review_entry"].clone();
+                let review_entry = run["run_health"]["review_pending"].clone();
                 if let Some(entry) = review_entry.as_object() {
                     let prompted =
                         access.ability_permission("diagnostics") != access::Permission::Deny;
                     super::health::record_review_prompt(&mut run, prompted);
+                    tracing::info!(
+                        prompted,
+                        tool = entry["tool"].as_str().unwrap_or(""),
+                        kind = entry["kind"].as_str().unwrap_or(""),
+                        "review prompt for a newly seen issue group"
+                    );
                     if prompted {
                         let field = |name: &str| entry[name].as_str().unwrap_or("").to_owned();
                         contributions.push(context_input::Contribution {
@@ -2062,7 +2068,7 @@ impl<
                             call: call_number,
                         });
                     }
-                    run["run_health_track"]["review_entry"] = Value::Null;
+                    run["run_health"]["review_pending"] = Value::Null;
                 }
                 if run["module_binding"].is_object() {
                     // Only runtime identifiers enter this call-scoped contribution.

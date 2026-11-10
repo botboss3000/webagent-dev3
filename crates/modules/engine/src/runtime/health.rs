@@ -420,7 +420,9 @@ pub fn record_result(run: &mut Value, output: &Value) {
         open.retain(|entry| entry["tool"].as_str() != Some(tool.as_str()));
     }
     if let Some(entry) = fresh_entry {
-        run["run_health_track"]["review_entry"] = entry;
+        // In `run_health`, not the turn-local track: every turn reloads the run, so a
+        // marker outside the persisted health record never reaches the next model call.
+        run["run_health"]["review_pending"] = entry;
     }
     run["run_health_track"]["open_failures"] = Value::Array(open);
     run["run_health_track"]["last"] = json!({"tool":tool,"signature":signature,
@@ -657,18 +659,15 @@ mod tests {
             json!({"path":"/w"}),
             failure.clone(),
         );
+        assert_eq!(run["run_health"]["review_pending"]["tool"], "file_write");
         assert_eq!(
-            run["run_health_track"]["review_entry"]["tool"],
-            "file_write"
-        );
-        assert_eq!(
-            run["run_health_track"]["review_entry"]["kind"],
+            run["run_health"]["review_pending"]["kind"],
             "invalid_arguments"
         );
-        run["run_health_track"]["review_entry"] = Value::Null;
+        run["run_health"]["review_pending"] = Value::Null;
         call(&mut run, "file_write", json!({"path":"/w"}), failure);
         assert!(
-            run["run_health_track"]["review_entry"].is_null(),
+            run["run_health"]["review_pending"].is_null(),
             "a known group does not ask again"
         );
     }
