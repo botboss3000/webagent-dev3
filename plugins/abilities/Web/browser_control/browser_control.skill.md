@@ -71,3 +71,7 @@ One browser per chat session, at most two at once on the server; a session close
 - Chat: messages are `.chat-bubble` elements, `.chat-bubble.user` and `.chat-bubble.agent`.
 - A URL naming a session opens the chat first; on a phone the page behind it loads when you switch to it.
 - Widths: every UI change is checked at phone and desktop width; the `viewport` presets emulate both.
+
+## Readable API routes
+
+A signed-in navigation may read only `/api/v3/auth/me`, `/api/v3/sessions/<this session>`, its `/abilities` and `/mode`, `/api/v3/sessions/<this session>/runs/<run>/diagnostics`, and `/api/v3/sessions/<this session>/ui-preview/<variant>`. Other API paths are refused. The shared review log is not an app route: read it with `read_diagnostics` (`issues: true`, `scope: "all"` as an administrator).

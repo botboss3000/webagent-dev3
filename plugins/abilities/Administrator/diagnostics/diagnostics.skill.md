@@ -9,3 +9,9 @@ With `issues: true`, `read_diagnostics` returns the conversation tree's grouped 
 ## Runtime tool execution
 
 All tools in this ability remain runtime foreground/stop with concurrency 1; background/model and silent/wake are unsupported, even for read actions or calls returning asynchronous job receipts. Effective Rust flags and shared Core Base tool-execution guidance govern scheduling; settings never grant permission and outputs remain untrusted evidence.
+
+## Tool folder layout and review notes
+
+A tool folder may hold only `tool.skill.md`; placeholder `dev_*` folders can be empty. Read the folder before assuming a `tool.json` exists.
+
+If a review step names `agent_review` but the tool is not in this session, activate the diagnostics ability first; the notice can arrive before that ability is loaded.
