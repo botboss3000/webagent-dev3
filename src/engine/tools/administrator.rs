@@ -364,8 +364,24 @@ impl AdministrationHost for Host<'_> {
     fn progress(&self, run: &Value) -> Value {
         task_progress::project(run)
     }
-    fn issues<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Value>> {
-        Box::pin(self.0.store.issues(Some(sid), 0))
+    fn issues<'a>(&'a self, sid: &'a str, filter: &'a Value) -> Pending<'a, Result<Value>> {
+        Box::pin(async move {
+            let whole = filter["scope"].as_str() == Some("all") || filter["user_id"].is_string();
+            if !whole {
+                return self.0.store.issues(Some(sid), 0).await;
+            }
+            if !self.administrator(sid).await? {
+                return Ok(json!({"status":"denied","error_kind":"denied",
+                    "output":"Only an administrator reads the whole review log"}));
+            }
+            self.0
+                .store
+                .issues_all(
+                    filter["user_id"].as_str(),
+                    filter["since"].as_i64().unwrap_or(0),
+                )
+                .await
+        })
     }
     fn note_issue<'a>(
         &'a self,

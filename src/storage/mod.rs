@@ -1074,6 +1074,16 @@ impl Store {
         view["agent_issues"] = json!(self.agent_issues(session, None).await.unwrap_or_default());
         Ok(view)
     }
+    /// The whole shared review log, or one account's part of it: what an administrator
+    /// reviews. Same shape as a session's issues view, so a caller needs one reader.
+    pub async fn issues_all(&self, user: Option<&str>, since: i64) -> Result<Value> {
+        let views = self.review_issue_views(None, user, since, 2000).await?;
+        let mut view = webagent_engine::runtime::health::aggregate(&views);
+        view["notes"] = json!(self.review_notes(None, user).await.unwrap_or_default());
+        view["agent_issues"] = json!(self.agent_issues(None, user).await.unwrap_or_default());
+        Ok(view)
+    }
+
     /// Append an encoded event to the application or user plane selected by session identity.
     pub async fn event(&self, sid: &str, kind: &str, payload: &Value) -> Result<()> {
         let destination = if sid.is_empty() {

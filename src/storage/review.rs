@@ -500,6 +500,45 @@ mod tests {
             .is_empty());
     }
 
+    /// The whole-log view carries a tree's groups, notes and agent issues together.
+    #[tokio::test]
+    async fn the_whole_log_view_carries_groups_notes_and_issues() {
+        let (_root, store) = fixture().await;
+        let mut run = failed_run("r1", "root");
+        store
+            .save_run(&mut run, "run_status", &json!({}))
+            .await
+            .unwrap();
+        store
+            .note_issue(
+                "root",
+                "r1",
+                &json!({"tool":"file_read","class":"error","kind":"timeout",
+                    "template":"read timed out after <n>s","note":"It timed out."}),
+            )
+            .await
+            .unwrap();
+        store
+            .open_issue(
+                "root",
+                "r1",
+                &json!({"title":"t","detail":"d","evidence":"prompts 1","severity":"waste"}),
+            )
+            .await
+            .unwrap();
+        let view = store.issues_all(None, 0).await.unwrap();
+        assert_eq!(view["totals"]["runs"], json!(1));
+        assert_eq!(view["groups"].as_array().map(Vec::len), Some(1));
+        assert_eq!(view["notes"].as_array().map(Vec::len), Some(1));
+        assert_eq!(view["agent_issues"].as_array().map(Vec::len), Some(1));
+        assert!(
+            store.issues_all(Some("someone-else"), 0).await.unwrap()["notes"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     /// An issue needs evidence, one title, and a severity the reviewer understands.
     #[tokio::test]
     async fn an_agent_issue_requires_evidence_and_replaces_by_title() {

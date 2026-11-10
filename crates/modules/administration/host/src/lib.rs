@@ -130,8 +130,9 @@ pub trait AdministrationHost: Sync {
     fn optimization_generation(&self) -> Option<String>;
     /// The content-free progress view of a run.
     fn progress(&self, run: &Value) -> Value;
-    /// Grouped run-health issues of the session's conversation tree (content-free).
-    fn issues<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Value>>;
+    /// Grouped run-health issues of the session's conversation tree (content-free), or
+    /// with `scope: all` the whole shared log for an administrator.
+    fn issues<'a>(&'a self, sid: &'a str, filter: &'a Value) -> Pending<'a, Result<Value>>;
     /// Record the agent's own explanation of one issue group (administrator review only).
     fn note_issue<'a>(
         &'a self,

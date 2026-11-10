@@ -17,7 +17,23 @@
       },
       "issues": {
         "type": "boolean",
-        "description": "true: return this conversation's grouped tool-failure issues instead (this session, its root and sub-agents): per group tool, error kind, message template, failed calls, retries, recoveries; plus rework counts. run_id is ignored."
+        "description": "true: return grouped tool-failure issues instead \u2014 per group tool, error kind, message template, failed calls, retries, recoveries \u2014 plus the agent notes and agent-opened issues, and the artifact counts. Scope defaults to this conversation tree; an administrator may read the whole shared log."
+      },
+      "scope": {
+        "type": "string",
+        "enum": [
+          "session",
+          "all"
+        ],
+        "description": "session (default): this conversation tree. all: the whole shared review log, administrators only"
+      },
+      "user_id": {
+        "type": "string",
+        "description": "With scope all: only this account's runs; omit for every account"
+      },
+      "since": {
+        "type": "integer",
+        "description": "With scope all: Unix seconds; older runs are left out"
       }
     },
     "required": [],

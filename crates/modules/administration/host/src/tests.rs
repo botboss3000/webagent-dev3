@@ -189,8 +189,17 @@ impl AdministrationHost for Fake {
     fn progress(&self, run: &Value) -> Value {
         json!({"run":run["id"]})
     }
-    fn issues<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Value>> {
-        Box::pin(async move { Ok(json!({"tree_of":sid})) })
+    fn issues<'a>(&'a self, sid: &'a str, filter: &'a Value) -> Pending<'a, Result<Value>> {
+        Box::pin(async move {
+            if filter["scope"].as_str() == Some("all") {
+                if !self.administrator {
+                    return Ok(json!({"status":"denied","error_kind":"denied",
+                        "output":"Only an administrator reads the whole review log"}));
+                }
+                return Ok(json!({"whole_log":true}));
+            }
+            Ok(json!({"tree_of":sid}))
+        })
     }
     fn note_issue<'a>(
         &'a self,
@@ -317,6 +326,30 @@ async fn live_files_use_the_worker_with_the_run_revision() {
     .await
     .unwrap();
     assert_eq!(host.sent()[1].socket, "broker");
+}
+
+#[tokio::test]
+async fn an_administrator_can_read_the_whole_log() {
+    let dir = root();
+    let host = Fake::new(dir.path()).await;
+    let all = call(
+        &host,
+        "read_diagnostics",
+        json!({"issues":true,"scope":"all"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(all["output"]["whole_log"], json!(true));
+    let mut plain = Fake::new(dir.path()).await;
+    plain.administrator = false;
+    let refused = call(
+        &plain,
+        "read_diagnostics",
+        json!({"issues":true,"scope":"all"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(refused["status"], json!("denied"));
 }
 
 #[tokio::test]

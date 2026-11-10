@@ -84,7 +84,9 @@ pub async fn execute(
         }
         "performance_work" => performance(host, sid, run_id, args, cancel).await,
         "repository_access" => repository_access(host, sid, args, cancel).await,
-        "read_diagnostics" if args["issues"] == true => Ok(match host.issues(sid).await {
+        "read_diagnostics" if args["issues"] == true => Ok(match host.issues(sid, args).await {
+            // A refusal carries its own status; anything else is a successful view.
+            Ok(view) if view["status"].is_string() => view,
             Ok(issues) => json!({"status":"success","output":issues}),
             Err(_) => json!({"status":"error","error_kind":"diagnostics_unavailable",
                 "output":"Issue groups are unavailable for this session"}),
