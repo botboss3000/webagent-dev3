@@ -24,6 +24,8 @@ pub struct StoreCore {
     pub app_pool: SqlitePool,
     pub pool: SqlitePool,
     pub agent_pool: SqlitePool,
+    /// Shared administrator review log (`diagnostics/agent-review.db`). Evidence only.
+    pub review_pool: SqlitePool,
     pub root: PathBuf,
     pub user_id: String,
     pub agent_id: String,

@@ -40,6 +40,7 @@ mod module_records;
 #[path = "../../crates/modules/chat/host/storage/participation.rs"]
 pub(crate) mod participation;
 mod requester_quota;
+mod review;
 mod scan;
 #[path = "../../crates/modules/chat/host/storage/shared_chat.rs"]
 pub(crate) mod shared_chat;
@@ -131,11 +132,13 @@ impl Store {
         .await?;
         let mut agent_states = HashMap::new();
         agent_states.insert("shared_default".to_owned(), shared_agent_pool.clone());
+        let review_pool = review::open_review_pool(root).await?;
         let mut store = Self {
             core: StoreCore {
                 app_pool: open_pool(&root.join("db/app.db"), true, false).await?,
                 pool: admin_state.pool.clone(),
                 agent_pool: shared_agent_pool,
+                review_pool,
                 root: root.to_owned(),
                 user_id: "admin".to_owned(),
                 agent_id: "shared_default".to_owned(),
@@ -239,6 +242,7 @@ impl Store {
                 app_pool: self.app_pool.clone(),
                 pool: state.pool,
                 agent_pool: self.agent_pool.clone(),
+                review_pool: self.review_pool.clone(),
                 root: self.root.clone(),
                 user_id: user_id.to_owned(),
                 agent_id: self.agent_id.clone(),
@@ -295,6 +299,7 @@ impl Store {
                 app_pool: self.app_pool.clone(),
                 pool: self.pool.clone(),
                 agent_pool: pool,
+                review_pool: self.review_pool.clone(),
                 root: self.root.clone(),
                 user_id: self.user_id.clone(),
                 agent_id: agent_id.to_owned(),
@@ -1085,7 +1090,11 @@ impl Store {
     // loop execution, the live lease it read. The override below is reserved
     // for deliberate recovery or access shutdown and still checks revision.
     pub async fn save_run(&self, run: &mut Value, kind: &str, payload: &Value) -> Result<()> {
-        self.engine_repository().save_run(run, kind, payload).await
+        self.engine_repository()
+            .save_run(run, kind, payload)
+            .await?;
+        self.log_run_health(run).await;
+        Ok(())
     }
     /// Allow deliberate terminal shutdown without planner availability while preserving revision fences and failed staging.
     pub async fn save_run_override(
@@ -1096,7 +1105,9 @@ impl Store {
     ) -> Result<()> {
         self.engine_repository()
             .save_run_override(run, kind, payload)
-            .await
+            .await?;
+        self.log_run_health(run).await;
+        Ok(())
     }
     /// Commit run-owned effects and publication only after revision, generation, lease and participation fences pass.
 

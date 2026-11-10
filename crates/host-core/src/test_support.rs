@@ -38,6 +38,7 @@ pub async fn store_core(root: &Path, user: &str) -> StoreCore {
         app_pool,
         pool,
         agent_pool,
+        review_pool: open("review.db", false, false).await,
         root: root.to_owned(),
         user_id: user.to_owned(),
         agent_id: "shared_default".to_owned(),

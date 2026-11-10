@@ -126,7 +126,7 @@ async fn status(
         package::status(RECORDER.get()).await.map_err(api_error)?,
     ))
 }
-/// Most run views read across users for one issues view.
+/// Most stored review records read for one issues view.
 const MAX_ISSUE_VIEWS: usize = 2000;
 #[derive(serde::Deserialize)]
 struct IssueFilter {
@@ -135,39 +135,36 @@ struct IssueFilter {
     /// Unix seconds; runs updated earlier are left out.
     since: Option<i64>,
 }
-/// Administrator view of grouped run-health issues: one session tree (found in whichever
-/// account owns it), one account, or every account. Counts, kinds and templates only.
+/// Administrator view of grouped run-health issues from the shared review log
+/// (`diagnostics/agent-review.db`): one session tree, one account, or every account.
+/// Counts, kinds and templates only; no user database is opened.
 async fn issues(
     Extension(app): Extension<crate::App>,
     Extension(identity): Extension<Value>,
     Query(filter): Query<IssueFilter>,
 ) -> crate::Api {
     authorize(&app, &identity).await?;
-    let mut users = app.store.all_user_ids().await?;
-    if let Some(user) = &filter.user_id {
-        users.retain(|known| known == user);
-    }
     let since = filter.since.unwrap_or(0);
-    let session = filter.session_id.as_deref();
-    let mut views = Vec::new();
-    let mut accounts = 0;
-    for user in users {
-        let store = app.store.for_user(&user).await?;
-        if let Some(sid) = session {
-            if store.get(&format!("session:{sid}")).await?.is_none() {
-                continue;
-            }
-        }
-        let found = store.issue_views(session, since).await?;
-        if !found.is_empty() {
-            accounts += 1;
-        }
-        views.extend(found);
-        if views.len() >= MAX_ISSUE_VIEWS {
-            views.truncate(MAX_ISSUE_VIEWS);
-            break;
-        }
-    }
+    let views = app
+        .store
+        .review_issue_views(
+            filter.session_id.as_deref(),
+            filter.user_id.as_deref(),
+            since,
+            MAX_ISSUE_VIEWS as i64,
+        )
+        .await
+        .map_err(|error| {
+            crate::ApiError(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                error.to_string(),
+            )
+        })?;
+    let accounts = views
+        .iter()
+        .filter_map(|view| view["user_id"].as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
     let mut view = webagent_engine::runtime::health::aggregate(&views);
     view["totals"]["accounts"] = json!(accounts);
     Ok(Json(view))
