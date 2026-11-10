@@ -396,14 +396,16 @@ impl<
             task["completed_at"] = json!(now());
             task["completed_at_ms"] = json!(timestamp_ms());
             task["lease_until"] = json!(0);
-            if let Err(error) = crate::send_future(app.background_notify_result(task)).await {
+            if let Err(error) = crate::send_future(app.background_notify_result(task, false)).await
+            {
                 tracing::warn!(task_id=%id, "Detached result not stored: {error}");
             }
         });
     }
-    /// Store a finished detached call's result and report it to its conversation as a
-    /// background notice, which wakes the agent; nothing else delivers it.
-    pub async fn background_notify_result(&self, mut task: Value) -> Result<()> {
+    /// Store a finished background call's result and report it to its conversation as a
+    /// background notice, which wakes the agent (a quiet notice waits for the next user
+    /// message); nothing else delivers it.
+    pub async fn background_notify_result(&self, mut task: Value, quiet: bool) -> Result<()> {
         let revision = task["revision"].as_u64().unwrap_or(0);
         task["delivery_run_id"] = json!(NOTICE_DELIVERY);
         if !self.store.background_cas(&task, Some(revision)).await? {
@@ -417,7 +419,7 @@ impl<
         let reply = text_of(&task["result"]);
         self.stage_background_notice(&sid, &format!("tool:{id}"), json!({
             "source":"tool","title":task["name"],"status":task["result"]["status"].as_str().unwrap_or("completed"),
-            "task_id":id,"call_id":task["call_id"],"run_id":task["run_id"],"reply":reply}))
+            "task_id":id,"call_id":task["call_id"],"run_id":task["run_id"],"reply":reply,"quiet":quiet}))
             .await
     }
     /// Stage one background notice for a conversation. The chat delivers staged notices as
@@ -732,7 +734,7 @@ impl<
                     task["status"] = json!("completed");
                     task["completed_at"] = json!(now());
                     task["completed_at_ms"] = json!(timestamp_ms());
-                    crate::send_future(app.background_notify_result(task)).await?;
+                    crate::send_future(app.background_notify_result(task, false)).await?;
                 }
                 return Ok(());
             }

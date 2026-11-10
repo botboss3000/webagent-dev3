@@ -10079,7 +10079,6 @@ async fn background_execution_journey(behavior: &str) {
     let listener = UnixListener::bind(&app.tool_socket).unwrap();
     let (arrived_sender, arrived_receiver) = tokio::sync::oneshot::channel();
     let (release_sender, release_receiver) = tokio::sync::oneshot::channel::<()>();
-    let wake = behavior == "wake";
     let service = tokio::spawn(background_tasks::service(app.clone()));
     let loop_app = app.clone();
     let loop_rid = rid.clone();
@@ -10129,32 +10128,6 @@ async fn background_execution_journey(behavior: &str) {
         .unwrap()
         .unwrap();
         drop(reader);
-        if wake {
-            let (stream, _) = tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, listener.accept())
-                .await
-                .unwrap()
-                .unwrap();
-            let mut reader = BufReader::new(stream);
-            let mut line = String::new();
-            tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, reader.read_line(&mut line))
-                .await
-                .unwrap()
-                .unwrap();
-            let request: Value = serde_json::from_str(&line).unwrap();
-            assert_eq!(request["arguments"]["path"], "followup-read");
-            assert!(request["arguments"].get("_execution_mode").is_none());
-            let reply =
-                json!({"id":request["id"],"status":"success","output":"FOLLOWUP_READ_EVIDENCE"});
-            let reply = test_rpc_reply(&request, reply);
-            tokio::time::timeout(
-                BACKGROUND_JOURNEY_STAGE,
-                reader.get_mut().write_all(format!("{reply}\n").as_bytes()),
-            )
-            .await
-            .unwrap()
-            .unwrap();
-            return (false, 2);
-        }
         (false, 1)
     });
     reply
@@ -10273,169 +10246,63 @@ async fn background_execution_journey(behavior: &str) {
             );
             release_sender.send(()).unwrap();
             background_journey_task(&app, &sid, Some(&task_id), "status", json!("completed")).await;
-            if behavior == "silent" {
-                let task =
-                    background_journey_task(&app, &sid, Some(&task_id), "notified", json!(true))
-                        .await;
-                assert!(task["wake_run_id"].is_null());
-                assert!(task["delivery_run_id"].is_null());
-                assert!(
-                    requests.try_recv().is_err(),
-                    "silent completion must not call the provider"
-                );
-                assert_eq!(
-                    tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, worker)
-                        .await
-                        .unwrap()
-                        .unwrap(),
-                    (false, 1)
-                );
-                let next = queued(&app, &sid).await;
-                running(&app, &next, "silent-next-turn").await;
-                let next_app = app.clone();
-                let next_id = next.clone();
-                let next_run = tokio::spawn(async move {
-                    execute_fixture_journey(
-                        next_app,
-                        next_id,
-                        "silent-next-turn".into(),
-                        CancellationToken::new(),
-                    )
-                    .await;
-                });
-                let (request, reply) = background_journey_request(&mut requests).await;
-                let envelopes = background_journey_envelopes(&request);
-                assert_eq!(envelopes.len(), 1);
-                assert_eq!(envelopes[0]["background_task_id"], task_id);
-                assert_eq!(envelopes[0]["origin_run_id"], rid);
-                assert_eq!(envelopes[0]["post_run_result"], true);
-                assert_eq!(
-                    envelopes[0]["untrusted_tool_result"]["output"],
-                    "BACKGROUND_JOURNEY_EVIDENCE"
-                );
-                reply
-                    .send(background_journey_final("Silent result acknowledged."))
-                    .unwrap();
-                tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, next_run)
-                    .await
-                    .unwrap()
-                    .unwrap();
-                let mut next_finished = app.run(&next).await.unwrap();
-                assert_eq!(next_finished["status"], "completed");
-                assert!(!background_tasks::collect(&app, &mut next_finished)
-                    .await
-                    .unwrap());
-            } else {
-                let task = tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, async {
-                    loop {
-                        let task = app.store.background_get(&task_id).await.unwrap().unwrap();
-                        if task["wake_run_id"].is_string() {
-                            break task;
-                        }
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                    }
-                })
-                .await
-                .unwrap();
-                let follow_id = task["wake_run_id"].as_str().unwrap().to_owned();
-                let follow = app.run(&follow_id).await.unwrap();
-                assert_eq!(follow["post_run_followup"], true);
-                assert!(follow["pending"].is_null());
-                assert_eq!(follow["source_background_task"], task_id);
-                let evidence: Value =
-                    serde_json::from_str(follow["input"][0]["content"].as_str().unwrap()).unwrap();
-                assert_eq!(evidence["source_kind"], "untrusted_delayed_tool_result");
-                assert_eq!(evidence["result"]["output"], "BACKGROUND_JOURNEY_EVIDENCE");
-                running(&app, &follow_id, "wake-followup").await;
-                let follow_app = app.clone();
-                let follow_run_id = follow_id.clone();
-                let follow_run = tokio::spawn(async move {
-                    execute_fixture_journey(
-                        follow_app,
-                        follow_run_id,
-                        "wake-followup".into(),
-                        CancellationToken::new(),
-                    )
-                    .await;
-                });
-                let (_, reply) = background_journey_request(&mut requests).await;
-                reply.send(json!([
-                    {"type":"function_call","call_id":"forbidden-followup-write","name":"file_write",
-                        "arguments":json!({"path":"forbidden","content":"no"}).to_string()},
-                    {"type":"function_call","call_id":"foreground-followup-read","name":"file_read",
-                        "arguments":json!({"path":"followup-read","_execution_mode":"background"}).to_string()}
-                ])).unwrap();
-                let (request, reply) = background_journey_request(&mut requests).await;
-                for (call_id, expected) in [
-                    ("forbidden-followup-write", "denied"),
-                    ("foreground-followup-read", "success"),
-                ] {
-                    let output = request["input"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .find(|item| {
-                            item["type"] == "function_call_output" && item["call_id"] == call_id
-                        })
-                        .unwrap();
-                    let result: Value =
-                        serde_json::from_str(output["output"].as_str().unwrap()).unwrap();
-                    assert_eq!(result["status"], expected);
-                }
-                let source_task = app.store.background_get(&task_id).await.unwrap().unwrap();
-                assert_eq!(source_task["status"], "completed");
-                assert_eq!(source_task["delivery_run_id"], follow_id);
-                assert_eq!(source_task["wake_run_id"], follow_id);
-                let task_count: i64 = sqlx::query_scalar(
-                    "SELECT COUNT(*) FROM background_task_index WHERE session_id=?",
-                )
-                .bind(&sid)
-                .fetch_one(&app.store.pool)
-                .await
-                .unwrap();
-                assert_eq!(
-                    task_count, 1,
-                    "follow-up must not create any additional task"
-                );
-                reply
-                    .send(background_journey_final("Wake result acknowledged."))
-                    .unwrap();
-                tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, follow_run)
-                    .await
-                    .unwrap()
-                    .unwrap();
-                assert_eq!(
-                    tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, worker)
-                        .await
-                        .unwrap()
-                        .unwrap(),
-                    (false, 2)
-                );
-                assert_eq!(app.run(&follow_id).await.unwrap()["status"], "completed");
-                let task = app.store.background_get(&task_id).await.unwrap().unwrap();
-                background_followup::process(&app, &task).await.unwrap();
-                assert_eq!(
-                    app.store.background_get(&task_id).await.unwrap().unwrap()["wake_run_id"],
-                    follow_id
-                );
-            }
+            // A read that finishes after its run ended reports as a background notice:
+            // quiet for silent (it joins the next user message), waking for wake.
+            let task = background_journey_task(
+                &app,
+                &sid,
+                Some(&task_id),
+                "delivery_run_id",
+                json!("background_notice"),
+            )
+            .await;
+            assert!(task["wake_run_id"].is_null());
             assert_eq!(
-                app.store
-                    .chat_events(&sid, 0)
+                tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, worker)
                     .await
                     .unwrap()
-                    .iter()
-                    .filter(|event| event["id"] == format!("working:{rid}:background:{task_id}"))
-                    .count(),
-                1
+                    .unwrap(),
+                (false, 1)
+            );
+            // The notice is written just after the task records its delivery.
+            let (notice, receipt) = tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, async {
+                loop {
+                    let notice = app
+                        .store
+                        .get(&format!("background_notice:{sid}:tool:{task_id}"))
+                        .await
+                        .unwrap();
+                    let receipt = app
+                        .store
+                        .get(&format!("receipt:background_notice:tool:{task_id}"))
+                        .await
+                        .unwrap();
+                    if notice.is_some() || receipt.is_some() {
+                        break (notice, receipt);
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(notice.is_some() || receipt.is_some());
+            if let Some(notice) = notice {
+                assert_eq!(notice["source"], "tool");
+                assert_eq!(notice["quiet"], behavior == "silent");
+                assert!(notice["reply"]
+                    .as_str()
+                    .unwrap()
+                    .contains("BACKGROUND_JOURNEY_EVIDENCE"));
+            }
+            assert!(
+                requests.try_recv().is_err(),
+                "a background notice never starts a read-only follow-up run"
             );
         }
         assert_eq!(app.run(&rid).await.unwrap()["status"], "completed");
     }
     let expected_replies = match behavior {
         "overlap" => vec!["Overlap completed."],
-        "silent" => vec!["Origin completed.", "Silent result acknowledged."],
-        "wake" => vec!["Origin completed.", "Wake result acknowledged."],
         _ => vec!["Origin completed."],
     };
     let history = app.store.context(&sid).await.unwrap();
@@ -10473,12 +10340,12 @@ async fn background_stop_cancels_outstanding_worker_after_final_reply() {
 }
 
 #[tokio::test]
-async fn background_silent_continues_then_delivers_on_next_user_turn() {
+async fn background_silent_completion_stages_a_quiet_notice() {
     background_execution_journey("silent").await;
 }
 
 #[tokio::test]
-async fn background_wake_runs_one_restricted_followup() {
+async fn background_wake_completion_stages_a_waking_notice() {
     background_execution_journey("wake").await;
 }
 

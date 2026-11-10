@@ -959,7 +959,6 @@ impl<
 }
 
 mod background;
-mod background_followup;
 
 /// Name the failed provenance check of a compaction save, if any: the rejected payload is
 /// rolled back with its transaction, so the error is the only record of why.

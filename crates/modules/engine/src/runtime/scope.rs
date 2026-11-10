@@ -162,15 +162,4 @@ impl<
     pub async fn background_cas(&self, value: &Value, expected: Option<u64>) -> Result<bool> {
         self.repository().background_cas(value, expected).await
     }
-    pub async fn background_postrun(
-        &self,
-        observed: &Value,
-        wake: Option<&Value>,
-        max_runs: usize,
-        permitted: bool,
-    ) -> Result<()> {
-        self.repository()
-            .background_postrun(observed, wake, max_runs, permitted)
-            .await
-    }
 }
