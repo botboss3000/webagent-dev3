@@ -769,6 +769,7 @@ pub(crate) async fn deliver_notices(app: &App) -> Result<()> {
                 json!({"source":source,"spawn":source == "sub_agent",
                 "title":n["title"].as_str().or(n["child_title"].as_str()),
                 "session_id":n["child_session_id"],"status":n["status"],"reason":n["reason"],
+                "attachments":n["attachments"].as_array().map(|files| files.iter().take(4).cloned().collect::<Vec<_>>()).unwrap_or_default(),
                 "reply":n["reply"].as_str().map(|r| r.chars().take(8000).collect::<String>())})
             })
             .collect();

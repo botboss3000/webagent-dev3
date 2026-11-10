@@ -195,6 +195,28 @@ impl Store {
         self.cache.lock().unwrap().invalidate(&keys);
         Ok(())
     }
+    /// The image captures of a finished reply, bounded for a notice row.
+    fn notice_attachments(link: &Value) -> Vec<Value> {
+        link["files"]
+            .as_array()
+            .map(|files| {
+                files
+                .iter()
+                .filter(|file| file["preview"] == true)
+                .filter(|file| {
+                    file["media_type"]
+                        .as_str()
+                        .is_some_and(|kind| kind.starts_with("image/"))
+                })
+                .take(4)
+                .map(|file| {
+                    json!({"id":file["id"],"name":file["name"],"media_type":file["media_type"]})
+                })
+                .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Stage one background notice for the parent when a run of a session armed for notices ends or waits on an
     /// approval. It shares the run save transaction, so every committed outcome keeps its notice.
     pub(crate) async fn stage_session_notice(
@@ -241,11 +263,25 @@ impl Store {
         } else {
             Value::Null
         };
+        // The child's own captures travel with the notice, so the parent can show them
+        // instead of only linking to the session that holds them.
+        let attachments =
+            match sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+                .bind(format!("reply_attachments:{}", notice.run_id))
+                .fetch_optional(&mut **tx)
+                .await?
+            {
+                Some(raw) => self
+                    .unseal(&raw)
+                    .map(|link| Self::notice_attachments(&link))
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            };
         let spawn = session["parent_session_id"] == parent;
         let record = json!({"key":marker,"event_key":notice.event_key,"session_id":parent,
    "source":if spawn {"sub_agent"} else {"session"},"child_session_id":sid,"child_title":session["title"],
    "child_agent_id":session["agent_id"],"spawn":session["parent_session_id"]==parent,"status":notice.status,"run_id":notice.run_id,
-   "reply":reply,"tool":if notice.status=="waiting_approval"{run["pending"]["name"].clone()}else{Value::Null},"reason":end_reason(run),"created_at":crate::now()});
+   "reply":reply,"attachments":attachments,"tool":if notice.status=="waiting_approval"{run["pending"]["name"].clone()}else{Value::Null},"reason":end_reason(run),"created_at":crate::now()});
         self.write_document(tx, &marker, &record).await
     }
     /// Capacity is checked under the same SQLite writer as child creation, including competing loop processes.
@@ -474,5 +510,29 @@ mod core_spawn_tests {
                 .await
                 .is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::*;
+
+    /// A notice carries the reply's image captures, bounded, and nothing that is not one.
+    #[test]
+    fn a_notice_carries_bounded_image_captures() {
+        let link = json!({"files":[
+            {"id":"a","name":"desktop.png","media_type":"image/png","preview":true},
+            {"id":"b","name":"phone.png","media_type":"image/png","preview":true},
+            {"id":"c","name":"notes.txt","media_type":"text/plain","preview":true},
+            {"id":"d","name":"raw.png","media_type":"image/png","preview":false},
+            {"id":"e","name":"3.png","media_type":"image/png","preview":true},
+            {"id":"f","name":"4.png","media_type":"image/png","preview":true},
+            {"id":"g","name":"5.png","media_type":"image/png","preview":true}
+        ]});
+        let files = Store::notice_attachments(&link);
+        assert_eq!(files.len(), 4, "bounded to four captures");
+        assert_eq!(files[0]["id"], "a");
+        assert!(files.iter().all(|file| file["media_type"] == "image/png"));
+        assert!(Store::notice_attachments(&json!({"files":[]})).is_empty());
     }
 }

@@ -386,4 +386,7 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 .v3-subagent-row>summary:hover{background:var(--bg-tint);color:var(--fg-1)}
 .v3-subagent-row>summary svg,.v3-subagent-row>summary i{width:13px;height:13px;vertical-align:-2px}
 .v3-subagent-report{margin:4px 8px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--r-sm,8px);color:var(--fg-1);font-size:14px;overflow-wrap:anywhere;max-height:50vh;overflow:auto}
+.v3-subagent-files{display:flex;flex-wrap:wrap;gap:6px;margin:0 8px 6px}
+.v3-subagent-files img{width:112px;height:80px;object-fit:cover;object-position:top;border:1px solid var(--border);border-radius:var(--r-sm,8px);background:var(--bg-2,#111);cursor:zoom-in}
+@media (max-width:520px){.v3-subagent-files img{width:calc(50% - 3px);height:auto;aspect-ratio:4/3}}
 .v3-subagent-link{display:inline-block;margin:0 8px 6px;font-size:13px}

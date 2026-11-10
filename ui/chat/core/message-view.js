@@ -56,6 +56,17 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
       if(typeof notice.reason==='string'&&notice.reason){const reason=document.createElement('p');reason.className='v3-subagent-reason';reason.textContent='Reason: '+notice.reason;entry.append(reason);}
       const report=document.createElement('div');report.className='v3-subagent-report';
       markdown(report,typeof notice.reply==='string'&&notice.reply?notice.reply:'(no reply text)');entry.append(report);
+      if(Array.isArray(notice.attachments)&&notice.attachments.length&&typeof notice.session_id==='string'&&/^[-A-Za-z0-9_]{1,128}$/.test(notice.session_id)){
+        const files=document.createElement('div');files.className='v3-subagent-files';
+        for(const file of notice.attachments.slice(0,4)){
+          if(!file||typeof file.id!=='string'||!/^[-A-Za-z0-9_]{1,128}$/.test(file.id))continue;
+          const shot=document.createElement('img');shot.loading='lazy';shot.decoding='async';
+          shot.alt=typeof file.name==='string'?file.name:'capture';
+          shot.src='/api/v3/sessions/'+encodeURIComponent(notice.session_id)+'/attachments/'+encodeURIComponent(file.id)+'/content';
+          files.append(shot);
+        }
+        if(files.childElementCount)entry.append(files);
+      }
       if(typeof notice.session_id==='string'&&/^[-A-Za-z0-9_]{1,128}$/.test(notice.session_id)){const link=document.createElement('a');link.href='/app?session_id='+encodeURIComponent(notice.session_id);link.textContent=source==='session'?'Open session':'Open sub-agent session';link.className='v3-subagent-link';entry.append(link);}
       row.append(entry);
     }
