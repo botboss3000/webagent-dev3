@@ -282,10 +282,21 @@ pub async fn invoke(
     let generation = binding["generation"].clone();
     let result = exchange(runner, &verified, base, frame, &invocation).await;
     Ok(match result {
-        Ok((status, output)) => json!({"status":status,"uncertain":status == "uncertain",
-            "output":output,"plugin_revision":generation,"invocation_id":invocation}),
+        Ok((status, output, kind)) => with_kind(
+            json!({"status":status,"uncertain":status == "uncertain",
+                "output":output,"plugin_revision":generation,"invocation_id":invocation}),
+            &kind,
+        ),
         Err(_) => json!({"status":"uncertain","output":UNCERTAIN,"uncertain":true}),
     })
+}
+
+/// A plugin's own cause class travels with its result so the review log can group it.
+fn with_kind(mut result: Value, kind: &Value) -> Value {
+    if kind.is_string() {
+        result["error_kind"] = kind.clone();
+    }
+    result
 }
 
 async fn exchange(
@@ -294,7 +305,7 @@ async fn exchange(
     base: &Path,
     frame: Value,
     invocation: &Value,
-) -> io::Result<(String, Value)> {
+) -> io::Result<(String, Value, Value)> {
     let (program, leading) = runner
         .split_first()
         .ok_or_else(|| io::Error::other("plugin supervisor not configured"))?;
@@ -361,7 +372,11 @@ async fn exchange(
         {
             return Err(io::Error::other("Malformed plugin response"));
         }
-        Ok((status.to_owned(), result["output"].clone()))
+        Ok((
+            status.to_owned(),
+            result["output"].clone(),
+            result["error_kind"].clone(),
+        ))
     };
     let outcome = match tokio::time::timeout(Duration::from_secs(120), talk).await {
         Ok(outcome) => outcome,
@@ -373,4 +388,18 @@ async fn exchange(
         libc::killpg(group, libc::SIGKILL);
     }
     outcome
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_plugin_cause_class_travels_with_its_result() {
+        let base = json!({"status":"failed","output":"denied"});
+        let typed = with_kind(base.clone(), &json!("denied"));
+        assert_eq!(typed["error_kind"], "denied");
+        let untyped = with_kind(base, &Value::Null);
+        assert!(untyped.get("error_kind").is_none());
+    }
 }

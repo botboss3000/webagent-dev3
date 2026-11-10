@@ -200,6 +200,37 @@ def scrub(text, secrets=()):
     return text[-MAX_LOG:]
 
 
+REJECTION_KINDS=(
+    ("denied","denied"),("permission","denied"),("forbidden","denied"),("not allowed","denied"),
+    ("not found","not_found"),("does not exist","not_found"),("no such","not_found"),
+    ("exceeds","too_large"),("too large","too_large"),("too long","too_large"),
+    ("stale","stale"),("changed since","stale"),("drift","stale"),
+    ("timed out","timeout"),("timeout","timeout"),
+    ("busy","busy"),("locked","busy"),
+    ("required","missing_argument"),("missing","missing_argument"),
+    ("unsupported","unsupported"),("unknown","unsupported"),
+    ("must be","invalid_arguments"),("must ","invalid_arguments"),
+    ("invalid","invalid_arguments"),("malformed","invalid_arguments"),
+)
+
+
+def rejection_kind(error, text):
+    """A stable cause class for a refused request, so the review log can group it.
+
+    A raise site that knows better may set `error_kind` on the exception; otherwise the
+    message is classified. This keeps every written and future rejection labelled at one
+    boundary instead of editing each raise site."""
+    explicit = getattr(error, "error_kind", None)
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    lowered = str(text).lower()
+    for marker, kind in REJECTION_KINDS:
+        if marker in lowered:
+            return kind
+    return "broker_rejected"
+
+
+
 class CommandOutput:
     """Frame before redacting: incomplete or overlong lines never reach readers."""
     limit = 16384
@@ -6797,8 +6828,10 @@ async def serve(broker, listener, bridge_listener=None):
                                *(now - before for now, before in zip(_process_io(), (read, written))), action=action)
             response = {"id": request.get("id"), "status": "success", "output": result}
         except Exception as error:
+            details = getattr(error, "details", scrub(str(error), broker.runner.secrets))
             response = {"id": request.get("id") if isinstance(request, dict) else None,
-                        "status": "failed", "output": getattr(error,"details",scrub(str(error), broker.runner.secrets))}
+                        "status": "failed", "output": details,
+                        "error_kind": rejection_kind(error, details)}
         writer.write(canonical(response) + b"\n")
         await writer.drain()
         writer.close()
