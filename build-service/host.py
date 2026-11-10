@@ -4209,7 +4209,7 @@ class Broker:
         current = context_digest(release.snapshot(tree, TASK_CONTEXT, context_digest))[0]
         expected = args.get("expected_inputs_sha256")
         if expected is not None and expected != current:
-            raise ValueError("stale task inputs; reread the task file")
+            raise ValueError(f"stale task inputs; current expected_inputs_sha256 is {current}; reread the task and retry with that digest")
         if not created and expected is None:
             raise ValueError("existing task writes require expected_inputs_sha256 from a task read or review")
         # Providers that require every field send null for unused ones.
@@ -5183,7 +5183,7 @@ class Broker:
         receipt=state["requests"].get(receipt_key)if receipt_key else None
         creates=name in files or args.get("action")=="begin"
         if receipt:
-            if receipt["fingerprint"]!=fingerprint:raise ValueError("Broker request ID reused with changed operation")
+            if receipt["fingerprint"]!=fingerprint:raise ValueError("Broker request ID reused with changed operation; a refused or stale request ID is spent, so send the corrected call with a new request_id")
             target=receipt["broker_id"];selection=receipt["selection"]
         else:
             target=selected if selected not in (None,"new")else state["current"]
@@ -5792,8 +5792,11 @@ class Broker:
                 item = self.work.get(key)
                 if action in ("preflight", "decide"):
                     allowed = {"action", "task_id", "offset"} if action == "preflight" else {"action", "task_id", "sync_decision", "expected_sync_digest"}
-                    if set(args) - allowed or not item or item.get("mode") != "isolated":
-                        raise ValueError("Owned isolated task required")
+                    unsupported = sorted(set(args) - allowed)
+                    if unsupported:
+                        raise ValueError(f"{action} selects the task by broker_id or task_id and accepts only {', '.join(sorted(allowed))}; remove {', '.join(unsupported)}")
+                    if not item or item.get("mode") != "isolated":
+                        raise ValueError(f"Owned isolated task required: {task_id} is not an open isolated task selected by broker_id or task_id; begin it with mode isolated")
                     folder = self.work_dir / "trees" / key
                     job = self.jobs.get(item.get("job_id"))
                     if job:

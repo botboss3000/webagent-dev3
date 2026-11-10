@@ -1529,6 +1529,20 @@ class AutomaticBrokerIdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"stale task inputs"):self.call("file_write",{**args,"expected_inputs_sha256":"0"*64,"request_id":"automatic-stale-edit"})
         self.assertEqual(self.call("file_write",{**args,"request_id":"automatic-valid-edit","expected_inputs_sha256":first["workspace_inputs_sha256"]})["status"],"success")
 
+    def test_stale_digest_and_spent_request_id_name_the_remedy(self):
+        first=self.write_new();bid=first["broker_id"]
+        args={"path":"docs/first.md","content":"changed\n","broker_id":bid,"request_id":"automatic-spent-request"}
+        with self.assertRaisesRegex(ValueError,r"current expected_inputs_sha256 is [0-9a-f]{64}"):self.call("file_write",{**args,"expected_inputs_sha256":"0"*64})
+        with self.assertRaisesRegex(ValueError,"send the corrected call with a new request_id"):self.call("file_write",{**args,"expected_inputs_sha256":first["workspace_inputs_sha256"]})
+
+    def test_preflight_names_the_unsupported_field_and_accepts_either_selector(self):
+        begun=self.call("build_work",{"action":"begin","broker_id":"new","summary":"Preflight selector","request_id":"automatic-preflight-begin"})
+        bid=begun["broker_id"]
+        written=self.call("file_write",{"path":"docs/preflight.md","content":"x\n","broker_id":bid,"request_id":"automatic-preflight-write","expected_inputs_sha256":begun["workspace_inputs_sha256"]})
+        with self.assertRaisesRegex(ValueError,"remove expected_inputs_sha256"):self.call("build_work",{"action":"preflight","broker_id":bid,"expected_inputs_sha256":written["workspace_inputs_sha256"]})
+        self.assertEqual(self.call("build_work",{"action":"preflight","broker_id":bid})["task_id"],bid)
+        self.assertEqual(self.call("build_work",{"action":"preflight","task_id":bid})["task_id"],bid)
+
     def test_new_write_receipt_replays_after_closure_without_reopening(self):
         args={"path":"docs/first.md","content":"first\n","broker_id":"new","request_id":"automatic-first-write"}
         first=self.call("file_write",args);item=next(i for i in self.broker.work.values()if i["task_id"]==first["broker_id"])

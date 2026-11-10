@@ -426,7 +426,21 @@ fn tools_reach_only_this_workspace_and_checkout_source() {
         .join("5f0a3a52-6b5e-4a8f-9d2f-7e1c2b3a4d5e");
     std::fs::create_dir_all(&other).expect("other workspace");
     std::fs::write(other.join("theirs.txt"), "theirs").expect("other file");
-    let outside = "Path outside this session's workspace and the source checkout";
+    let workspace_root = fixture.workspace.to_string_lossy().into_owned();
+    let source_root = fixture.roots.live_checkout.to_string_lossy().into_owned();
+    let confined = |result: &Value, requested: &str| {
+        let output = result["output"].as_str().unwrap_or_default();
+        assert!(output.contains("outside the readable roots"), "{output}");
+        assert!(output.contains(requested), "{output} misses {requested}");
+        assert!(
+            output.contains(workspace_root.as_str()),
+            "{output} misses the workspace root"
+        );
+        assert!(
+            output.contains(source_root.as_str()),
+            "{output} misses the source root"
+        );
+    };
 
     let source = fixture.call("file_read", json!({"path":"src/a.rs"}));
     assert_eq!(source["output"], "needle source");
@@ -436,16 +450,22 @@ fn tools_reach_only_this_workspace_and_checkout_source() {
         other.join("theirs.txt"),
         PathBuf::from("/etc/hostname"),
     ] {
-        let read = fixture.call("file_read", json!({"path":path.to_string_lossy()}));
-        assert_eq!(read["output"], outside, "{}", path.display());
+        let requested = std::fs::canonicalize(&path)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned();
+        let read = fixture.call("file_read", json!({"path":requested}));
+        confined(&read, &requested);
     }
     let escape = fixture.call("file_read", json!({"path":"../checkout/data/key"}));
-    assert_eq!(escape["output"], outside);
-    let write = fixture.call(
-        "file_write",
-        json!({"path":other.join("new.txt").to_string_lossy(),"content":"x"}),
-    );
-    assert_eq!(write["output"], outside);
+    let escaped = std::fs::canonicalize(checkout.join("data/key"))
+        .expect("checkout file")
+        .to_string_lossy()
+        .into_owned();
+    confined(&escape, &escaped);
+    let requested = other.join("new.txt").to_string_lossy().into_owned();
+    let write = fixture.call("file_write", json!({"path":requested,"content":"x"}));
+    confined(&write, &requested);
     assert!(!other.join("new.txt").exists());
 
     let found = fixture.call("file_search", json!({"path":".","query":"needle"}));

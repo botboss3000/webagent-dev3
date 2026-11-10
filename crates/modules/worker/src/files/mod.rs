@@ -615,7 +615,12 @@ pub(super) fn confine(roots: &Roots, base: &Path, target: &Path, source: bool) -
     if !in_source && !target.starts_with(base) {
         return Err(rejected_kind(
             "denied_path",
-            "Path outside this session's workspace and the source checkout",
+            &format!(
+                "Path {} is outside the readable roots: this session's workspace {} and the source checkout {}",
+                target.display(),
+                base.display(),
+                roots.live_checkout.display()
+            ),
         ));
     }
     Ok(in_source && checkout.is_some_and(|rest| rest.as_os_str().is_empty()))
