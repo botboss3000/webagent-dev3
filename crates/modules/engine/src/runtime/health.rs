@@ -300,6 +300,7 @@ pub fn record_result(run: &mut Value, output: &Value) {
     }
 
     let mut group_index = None;
+    let mut fresh_entry: Option<Value> = None;
     if failed {
         bump(&mut health["failed"]);
         // Only short identifier-like kinds are kept: no tool text enters the record.
@@ -327,6 +328,7 @@ pub fn record_result(run: &mut Value, output: &Value) {
                 && g["kind"] == kind.as_str()
                 && g["template"] == template.as_str()
         });
+        let mut fresh = false;
         group_index = match found {
             Some(i) => Some(i),
             None if groups.len() < MAX_GROUPS => {
@@ -334,10 +336,16 @@ pub fn record_result(run: &mut Value, output: &Value) {
                     json!({"tool":tool,"class":class,"kind":kind,"template":template,
                     "count":0,"retries":0,"identical_retries":0,"recovered":0}),
                 );
+                fresh = true;
                 Some(groups.len() - 1)
             }
             None => None,
         };
+        fresh_entry = fresh.then(|| {
+            // One chance to explain a group the first time it appears; the run loop turns
+            // this into a single call-scoped notice and clears it.
+            json!({"tool":tool,"class":class,"kind":kind,"template":template})
+        });
         match group_index {
             Some(i) => bump(&mut groups[i]["count"]),
             None => bump(&mut health["groups_dropped"]),
@@ -395,6 +403,9 @@ pub fn record_result(run: &mut Value, output: &Value) {
             }
         }
         open.retain(|entry| entry["tool"].as_str() != Some(tool.as_str()));
+    }
+    if let Some(entry) = fresh_entry {
+        run["run_health_track"]["review_entry"] = entry;
     }
     run["run_health_track"]["open_failures"] = Value::Array(open);
     run["run_health_track"]["last"] = json!({"tool":tool,"signature":signature,
@@ -591,6 +602,32 @@ mod tests {
             json!({"status":"success","output":"x"}),
         );
         assert_eq!(run["run_health"]["calls_since_effect"], 1);
+    }
+
+    #[test]
+    fn a_new_group_asks_for_a_note_once() {
+        let mut run = json!({"session_id":"s"});
+        let failure = json!({"status":"failed","error_kind":"invalid_arguments","output":"mode"});
+        call(
+            &mut run,
+            "file_write",
+            json!({"path":"/w"}),
+            failure.clone(),
+        );
+        assert_eq!(
+            run["run_health_track"]["review_entry"]["tool"],
+            "file_write"
+        );
+        assert_eq!(
+            run["run_health_track"]["review_entry"]["kind"],
+            "invalid_arguments"
+        );
+        run["run_health_track"]["review_entry"] = Value::Null;
+        call(&mut run, "file_write", json!({"path":"/w"}), failure);
+        assert!(
+            run["run_health_track"]["review_entry"].is_null(),
+            "a known group does not ask again"
+        );
     }
 
     #[test]

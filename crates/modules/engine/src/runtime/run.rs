@@ -2042,6 +2042,25 @@ impl<
                     turn: run["turns"].as_u64().unwrap_or(0),
                     call: call_number,
                 }];
+                // A newly seen issue group gets one call-scoped chance to be explained.
+                let review_entry = run["run_health_track"]["review_entry"].clone();
+                if let Some(entry) = review_entry.as_object() {
+                    if access.ability_permission("diagnostics") != access::Permission::Deny {
+                        let field = |name: &str| entry[name].as_str().unwrap_or("").to_owned();
+                        contributions.push(context_input::Contribution {
+                            id: "review_entry".into(),
+                            source: "native_review_entry".into(),
+                            lifetime: context_input::Lifetime::Call,
+                            content: format!(
+                                "New review entry for this session: tool {}, class {}, kind {}, template \"{}\". If you can explain why it happened, call agent_review with those values exactly and a note saying what you were trying to do, what you expected, and what would have prevented it. This notice appears once.",
+                                field("tool"), field("class"), field("kind"), field("template")
+                            ),
+                            turn: run["turns"].as_u64().unwrap_or(0),
+                            call: call_number,
+                        });
+                    }
+                    run["run_health_track"]["review_entry"] = Value::Null;
+                }
                 if run["module_binding"].is_object() {
                     // Only runtime identifiers enter this call-scoped contribution.
                     // Trigger payloads and remembered values remain untrusted history evidence.

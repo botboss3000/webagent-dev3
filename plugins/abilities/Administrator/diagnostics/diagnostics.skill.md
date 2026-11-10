@@ -4,7 +4,7 @@ Rust owns live ability policy, approvals and sanitized run diagnostics. No tool 
 
 Use `read_diagnostics` for the native bounded current-session/run diagnostic view. It does not open encrypted databases or expose raw model text, tool arguments, credential records or unrestricted installation logs.
 
-With `issues: true`, `read_diagnostics` returns the conversation tree's grouped tool-failure issues (tool, error kind, message template, retries, recoveries, rework counts). Load the `issue_review` skill to rank them, find causes and propose fixes for approval.
+With `issues: true`, `read_diagnostics` returns the conversation tree's grouped tool-failure issues (tool, error kind, message template, retries, recoveries, rework and artifact counts) and the notes already recorded. The `agent_review` tool skill explains how to rank them, find causes, and record an explanation for the group you are fixing.
 
 ## Runtime tool execution
 
