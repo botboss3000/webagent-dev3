@@ -63,7 +63,16 @@ pub(crate) async fn open_review_pool(root: &Path) -> Result<SqlitePool> {
              length INTEGER NOT NULL,
              created_at INTEGER NOT NULL,
              PRIMARY KEY(root_session_id,title));
-         CREATE INDEX IF NOT EXISTS agent_issues_time ON agent_issues(created_at);",
+         CREATE INDEX IF NOT EXISTS agent_issues_time ON agent_issues(created_at);
+         CREATE TABLE IF NOT EXISTS review_resolutions(
+             root_session_id TEXT NOT NULL,
+             subject TEXT NOT NULL,
+             release_id TEXT NOT NULL,
+             note TEXT NOT NULL,
+             resolved_by TEXT NOT NULL,
+             user_id TEXT NOT NULL,
+             resolved_at INTEGER NOT NULL,
+             PRIMARY KEY(root_session_id,subject));",
     )
     .execute(&pool)
     .await?;
@@ -76,6 +85,10 @@ pub(crate) async fn open_review_pool(root: &Path) -> Result<SqlitePool> {
         .execute(&pool)
         .await?;
     sqlx::query("DELETE FROM agent_issues WHERE created_at<?")
+        .bind(unix_now() - REVIEW_RETENTION_SECONDS)
+        .execute(&pool)
+        .await?;
+    sqlx::query("DELETE FROM review_resolutions WHERE resolved_at<?")
         .bind(unix_now() - REVIEW_RETENTION_SECONDS)
         .execute(&pool)
         .await?;
@@ -281,6 +294,164 @@ impl Store {
             json!({"status":"success","output":{"opened":true,"root_session_id":root,
             "severity":severity,"length":detail.len()}}),
         )
+    }
+
+    /// Mark one measured group or agent issue as resolved by a release. The row stays: a
+    /// recurrence after `resolved_at` is reported as reopened, which a deletion could not do.
+    pub(crate) async fn resolve_issue(&self, sid: &str, args: &Value) -> Result<Value> {
+        let field = |name: &str| args[name].as_str().unwrap_or_default().trim().to_owned();
+        let release = field("release_id");
+        if release.is_empty() {
+            return Ok(json!({"status":"rejected","error_kind":"invalid_arguments",
+                "output":"resolve needs the release_id or commit that addressed the issue"}));
+        }
+        if release.len() > 120 {
+            return Ok(json!({"status":"rejected","error_kind":"too_large",
+                "output":"release_id exceeds 120 characters"}));
+        }
+        let subject = if !field("title").is_empty() {
+            format!("issue|{}", field("title"))
+        } else {
+            let (tool, class, kind, template) = (
+                field("tool"),
+                field("class"),
+                field("kind"),
+                field("template"),
+            );
+            if tool.is_empty() || kind.is_empty() || template.is_empty() {
+                return Ok(json!({"status":"rejected","error_kind":"invalid_arguments",
+                    "output":"resolve needs a title, or the group's tool, class, kind and template"}));
+            }
+            format!("group|{tool}|{class}|{kind}|{template}")
+        };
+        let note = field("note");
+        if note.len() > NOTE_LIMIT {
+            return Ok(json!({"status":"rejected","error_kind":"too_large",
+                "output":"resolution note exceeds its bound"}));
+        }
+        let root = self.root_session(sid).await;
+        sqlx::query(
+            "INSERT INTO review_resolutions(root_session_id,subject,release_id,note,
+                 resolved_by,user_id,resolved_at)
+             VALUES(?,?,?,?,?,?,?)
+             ON CONFLICT(root_session_id,subject) DO UPDATE SET
+               release_id=excluded.release_id,note=excluded.note,
+               resolved_by=excluded.resolved_by,resolved_at=excluded.resolved_at",
+        )
+        .bind(&root)
+        .bind(&subject)
+        .bind(&release)
+        .bind(&note)
+        .bind(sid)
+        .bind(self.current_user_id())
+        .bind(unix_now())
+        .execute(&self.review_pool)
+        .await?;
+        Ok(
+            json!({"status":"success","output":{"resolved":true,"subject":subject,
+            "release_id":release}}),
+        )
+    }
+
+    /// Resolutions recorded for a session tree (or every account).
+    async fn review_resolutions(
+        &self,
+        session: Option<&str>,
+        user: Option<&str>,
+    ) -> Result<Vec<Value>> {
+        use sqlx::Row;
+        let rows = sqlx::query(
+            "SELECT root_session_id,subject,release_id,note,resolved_by,user_id,resolved_at
+             FROM review_resolutions
+             WHERE (? IS NULL OR root_session_id=?
+                    OR root_session_id IN
+                       (SELECT DISTINCT root_session_id FROM run_health WHERE session_id=?))
+               AND (? IS NULL OR user_id=?)
+             ORDER BY resolved_at DESC LIMIT 1000",
+        )
+        .bind(session)
+        .bind(session)
+        .bind(session)
+        .bind(user)
+        .bind(user)
+        .fetch_all(&self.review_pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| {
+                json!({
+                    "root_session_id": row.get::<String,_>("root_session_id"),
+                    "subject": row.get::<String,_>("subject"),
+                    "release_id": row.get::<String,_>("release_id"),
+                    "note": row.get::<String,_>("note"),
+                    "resolved_by": row.get::<String,_>("resolved_by"),
+                    "user_id": row.get::<String,_>("user_id"),
+                    "resolved_at": row.get::<i64,_>("resolved_at"),
+                })
+            })
+            .collect())
+    }
+
+    /// Mark each group and agent issue with its resolution, and hide the resolved ones unless
+    /// asked. A group seen after its resolution is reopened: the fix did not hold.
+    pub(crate) async fn annotate_resolutions(
+        &self,
+        view: &mut Value,
+        session: Option<&str>,
+        user: Option<&str>,
+        include_resolved: bool,
+    ) -> Result<()> {
+        let resolutions = self.review_resolutions(session, user).await?;
+        let index: std::collections::HashMap<&str, &Value> = resolutions
+            .iter()
+            .filter_map(|r| r["subject"].as_str().map(|s| (s, r)))
+            .collect();
+        let live = |key: String, seen: i64, item: &mut Value| {
+            match index.get(key.as_str()) {
+                Some(resolution) => {
+                    let resolved_at = resolution["resolved_at"].as_i64().unwrap_or(0);
+                    item["resolved_at"] = resolution["resolved_at"].clone();
+                    item["resolved_by"] = resolution["resolved_by"].clone();
+                    item["release_id"] = resolution["release_id"].clone();
+                    item["status"] = json!(if seen > resolved_at {
+                        "reopened"
+                    } else {
+                        "resolved"
+                    });
+                }
+                None => item["status"] = json!("open"),
+            }
+            item["status"] != "resolved"
+        };
+        if let Some(groups) = view["groups"].as_array_mut() {
+            let mut kept = Vec::with_capacity(groups.len());
+            for group in groups.iter_mut() {
+                let key = format!(
+                    "group|{}|{}|{}|{}",
+                    group["tool"].as_str().unwrap_or(""),
+                    group["class"].as_str().unwrap_or(""),
+                    group["kind"].as_str().unwrap_or(""),
+                    group["template"].as_str().unwrap_or("")
+                );
+                let seen = group["last_seen"].as_i64().unwrap_or(0);
+                if live(key, seen, group) || include_resolved {
+                    kept.push(group.clone());
+                }
+            }
+            *groups = kept;
+        }
+        if let Some(issues) = view["agent_issues"].as_array_mut() {
+            let mut kept = Vec::with_capacity(issues.len());
+            for issue in issues.iter_mut() {
+                let key = format!("issue|{}", issue["title"].as_str().unwrap_or(""));
+                let seen = 0;
+                if live(key, seen, issue) || include_resolved {
+                    kept.push(issue.clone());
+                }
+            }
+            *issues = kept;
+        }
+        Ok(())
     }
 
     /// Agent-opened issues for a session tree (or every account), newest first.
@@ -500,6 +671,55 @@ mod tests {
             .is_empty());
     }
 
+    /// A resolved group leaves the list and returns as reopened when it recurs.
+    #[tokio::test]
+    async fn a_resolution_hides_a_group_and_recurrence_reopens_it() {
+        let (_root, store) = fixture().await;
+        let mut run = failed_run("r1", "root");
+        store
+            .save_run(&mut run, "run_status", &json!({}))
+            .await
+            .unwrap();
+        let resolved = store
+            .resolve_issue(
+                "root",
+                &json!({"tool":"file_read","class":"error","kind":"timeout",
+                    "template":"read timed out after <n>s","release_id":"job-1",
+                    "note":"fixed the timeout"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resolved["status"], json!("success"));
+        let open = store.issues(Some("root"), 0).await.unwrap();
+        assert!(
+            open["groups"].as_array().unwrap().is_empty(),
+            "resolved hidden"
+        );
+        let all = store.issues_scoped(Some("root"), 0, true).await.unwrap();
+        let group = &all["groups"][0];
+        assert_eq!(group["status"], json!("resolved"));
+        assert_eq!(group["release_id"], json!("job-1"));
+        // The same group recorded later is a regression, not a new discovery.
+        let mut later = failed_run("r2", "root");
+        later["updated_at"] = json!(unix_now() + 10);
+        store
+            .save_run(&mut later, "run_status", &json!({}))
+            .await
+            .unwrap();
+        let reopened = store.issues(Some("root"), 0).await.unwrap();
+        let group = &reopened["groups"][0];
+        assert_eq!(group["status"], json!("reopened"));
+        let missing = store
+            .resolve_issue(
+                "root",
+                &json!({"tool":"file_read","class":"error","kind":"timeout",
+                    "template":"read timed out after <n>s"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing["error_kind"], json!("invalid_arguments"));
+    }
+
     /// The whole-log view carries a tree's groups, notes and agent issues together.
     #[tokio::test]
     async fn the_whole_log_view_carries_groups_notes_and_issues() {
@@ -526,17 +746,18 @@ mod tests {
             )
             .await
             .unwrap();
-        let view = store.issues_all(None, 0).await.unwrap();
+        let view = store.issues_all(None, 0, false).await.unwrap();
         assert_eq!(view["totals"]["runs"], json!(1));
         assert_eq!(view["groups"].as_array().map(Vec::len), Some(1));
         assert_eq!(view["notes"].as_array().map(Vec::len), Some(1));
         assert_eq!(view["agent_issues"].as_array().map(Vec::len), Some(1));
-        assert!(
-            store.issues_all(Some("someone-else"), 0).await.unwrap()["notes"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
+        assert!(store
+            .issues_all(Some("someone-else"), 0, false)
+            .await
+            .unwrap()["notes"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     /// An issue needs evidence, one title, and a severity the reviewer understands.

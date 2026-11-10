@@ -134,6 +134,8 @@ struct IssueFilter {
     user_id: Option<String>,
     /// Unix seconds; runs updated earlier are left out.
     since: Option<i64>,
+    /// Include groups already marked resolved by a release.
+    include_resolved: Option<bool>,
 }
 /// Administrator view of grouped run-health issues from the shared review log
 /// (`diagnostics/agent-review.db`): one session tree, one account, or every account.
@@ -178,6 +180,20 @@ async fn issues(
         .agent_issues(filter.session_id.as_deref(), filter.user_id.as_deref())
         .await
         .unwrap_or_default());
+    app.store
+        .annotate_resolutions(
+            &mut view,
+            filter.session_id.as_deref(),
+            filter.user_id.as_deref(),
+            filter.include_resolved.unwrap_or(false),
+        )
+        .await
+        .map_err(|error| {
+            crate::ApiError(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                error.to_string(),
+            )
+        })?;
     Ok(Json(view))
 }
 async fn no_store(mut response: axum::response::Response) -> axum::response::Response {

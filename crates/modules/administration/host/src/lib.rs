@@ -140,6 +140,8 @@ pub trait AdministrationHost: Sync {
         run_id: &'a str,
         args: &'a Value,
     ) -> Pending<'a, Result<Value>>;
+    /// Mark a reviewed group or agent issue resolved by a release.
+    fn resolve_issue<'a>(&'a self, sid: &'a str, args: &'a Value) -> Pending<'a, Result<Value>>;
     /// Open an issue the agent observed without a failed call behind it.
     fn open_issue<'a>(
         &'a self,

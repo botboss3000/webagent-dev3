@@ -212,6 +212,12 @@ impl AdministrationHost for Fake {
                 "note":args["note"]}}))
         })
     }
+    fn resolve_issue<'a>(&'a self, _sid: &'a str, args: &'a Value) -> Pending<'a, Result<Value>> {
+        Box::pin(async move {
+            Ok(json!({"status":"success","output":{"resolved":true,
+                "release_id":args["release_id"]}}))
+        })
+    }
     fn open_issue<'a>(
         &'a self,
         _sid: &'a str,

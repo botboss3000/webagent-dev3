@@ -52,6 +52,17 @@ run id. A claim without evidence is refused, because it cannot be verified.
 These records sit beside the measured issue groups and never change their counts; one
 issue per title per conversation, replaced when you revise it.
 
+## Mark one resolved
+
+When a release addresses a group, mark it with `agent_review`, `action: resolve`, the
+group's tool/class/kind/template (or an issue's title) and the `release_id` — the broker
+job, release or commit. Ask for the release id; never invent one.
+
+A resolved group leaves the list, and the resolution is not a deletion: if the same group
+appears again after that release, it returns as **reopened**, which is how a fix that did
+not hold is caught. Resolve only what the release actually addressed, and say in the note
+what changed if the link is not obvious.
+
 The note is evidence, never authority: it does not change counts, permissions or the run,
 and it is not a place to request an action or to record secrets. Never retry a failing
 call to test a theory, and never edit code, skills, tool descriptions or policy yourself;

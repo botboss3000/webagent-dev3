@@ -379,6 +379,7 @@ impl AdministrationHost for Host<'_> {
                 .issues_all(
                     filter["user_id"].as_str(),
                     filter["since"].as_i64().unwrap_or(0),
+                    filter["include_resolved"] == true,
                 )
                 .await
         })
@@ -390,6 +391,9 @@ impl AdministrationHost for Host<'_> {
         args: &'a Value,
     ) -> Pending<'a, Result<Value>> {
         Box::pin(self.0.store.note_issue(sid, run_id, args))
+    }
+    fn resolve_issue<'a>(&'a self, sid: &'a str, args: &'a Value) -> Pending<'a, Result<Value>> {
+        Box::pin(self.0.store.resolve_issue(sid, args))
     }
     fn open_issue<'a>(
         &'a self,

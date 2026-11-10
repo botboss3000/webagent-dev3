@@ -1066,21 +1066,41 @@ impl Store {
             .await
     }
     /// Grouped run-health issues (counts, kinds, tool names and templates only), with the
-    /// agent notes recorded for the same session tree.
+    /// agent notes recorded for the same session tree. Resolved groups are hidden unless
+    /// `include_resolved` is set.
     pub async fn issues(&self, session: Option<&str>, since: i64) -> Result<Value> {
+        self.issues_scoped(session, since, false).await
+    }
+
+    /// The issues view for one session tree, with its resolutions applied.
+    pub async fn issues_scoped(
+        &self,
+        session: Option<&str>,
+        since: i64,
+        include_resolved: bool,
+    ) -> Result<Value> {
         let mut view =
             webagent_engine::runtime::health::aggregate(&self.issue_views(session, since).await?);
         view["notes"] = json!(self.review_notes(session, None).await.unwrap_or_default());
         view["agent_issues"] = json!(self.agent_issues(session, None).await.unwrap_or_default());
+        self.annotate_resolutions(&mut view, session, None, include_resolved)
+            .await?;
         Ok(view)
     }
     /// The whole shared review log, or one account's part of it: what an administrator
     /// reviews. Same shape as a session's issues view, so a caller needs one reader.
-    pub async fn issues_all(&self, user: Option<&str>, since: i64) -> Result<Value> {
+    pub async fn issues_all(
+        &self,
+        user: Option<&str>,
+        since: i64,
+        include_resolved: bool,
+    ) -> Result<Value> {
         let views = self.review_issue_views(None, user, since, 2000).await?;
         let mut view = webagent_engine::runtime::health::aggregate(&views);
         view["notes"] = json!(self.review_notes(None, user).await.unwrap_or_default());
         view["agent_issues"] = json!(self.agent_issues(None, user).await.unwrap_or_default());
+        self.annotate_resolutions(&mut view, None, user, include_resolved)
+            .await?;
         Ok(view)
     }
 

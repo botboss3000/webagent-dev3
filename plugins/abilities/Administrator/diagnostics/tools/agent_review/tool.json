@@ -1,6 +1,6 @@
 {
   "name": "agent_review",
-  "description": "Record the agent's own explanation of one grouped tool issue, or open an issue no failed call produced (a sub-agent that ignored its review prompt, a workflow that wasted calls). Administrator only. One record per group or title: a later call replaces the earlier one",
+  "description": "Explain a grouped tool issue, open an issue no failed call produced, or mark one resolved by a release. Administrator only. One record per group or title: a later call replaces the earlier one",
   "effect": "write",
   "retry_risk": "none",
   "retry_hint": "a repeated note for the same group replaces the earlier one, so a retry is harmless",
@@ -37,9 +37,10 @@
         "type": "string",
         "enum": [
           "note",
-          "open"
+          "open",
+          "resolve"
         ],
-        "description": "note (default): explain an existing issue group. open: record an issue you observed that no failed call created"
+        "description": "note (default): explain an existing group. open: record an issue no failed call created. resolve: mark a group or issue fixed by a release"
       },
       "title": {
         "type": "string",
@@ -65,6 +66,10 @@
       "subject_session_id": {
         "type": "string",
         "description": "For action open: the session the issue is about; omit for this session"
+      },
+      "release_id": {
+        "type": "string",
+        "description": "For resolve: the broker job, release or commit that addressed it"
       }
     },
     "required": [],
