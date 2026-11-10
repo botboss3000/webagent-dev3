@@ -204,14 +204,25 @@ pub(crate) async fn agent_decide(
     let (app, _) = agent_scope(&app, &identity, &agent, true).await?;
     decide_api(Extension(app), Path(id), Json(body)).await
 }
-pub(crate) async fn read_api(Extension(app): Extension<App>) -> Api {
-    let mut state = app.store.main_chat_state().await?;
-    if let Some(sid) = state["session_id"].as_str() {
-        if let Some(session) = app.store.get(&key("session", sid)).await? {
+/// Point the notes state at its Main Chat session. A session that no longer exists is
+/// dropped: keeping it would hand every page a dead link and a 404 event stream.
+async fn resolve_chat_session(state: &mut Value, store: &Store) -> Result<()> {
+    let Some(sid) = state["session_id"].as_str().map(str::to_owned) else {
+        return Ok(());
+    };
+    match store.get(&key("session", &sid)).await? {
+        Some(session) => {
             state["settings"]["chat_name"] = session["title"].clone();
             state["session_metadata_revision"] = session["metadata_revision"].clone();
         }
+        None => state["session_id"] = Value::Null,
     }
+    Ok(())
+}
+
+pub(crate) async fn read_api(Extension(app): Extension<App>) -> Api {
+    let mut state = app.store.main_chat_state().await?;
+    resolve_chat_session(&mut state, &app.store).await?;
     // Rough size of the whole notes as each session's context carries them (about 4 bytes per token).
     state["notes_context_tokens"] =
         json!(render_notes(&state).map_or(0, |text| text.len().div_ceil(4)));
@@ -445,6 +456,20 @@ mod tests {
     fn contribution() -> Contribution {
         serde_json::from_value(json!({"topic_id":"goal","title":"Goal","scope":"Track deployment blockers","entry":{"id":"next","text":"Review the blocker","state":"open","sources":["session:source"]}})).unwrap()
     }
+    #[tokio::test]
+    async fn a_missing_chat_session_is_dropped_and_a_live_one_kept() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let mut stale = json!({"session_id":"4a4cfc57-19bf-420c-8eec-be9ca546d59c",
+            "settings":{"chat_name":"x"}});
+        resolve_chat_session(&mut stale, &app.store).await.unwrap();
+        assert!(stale["session_id"].is_null(), "{stale}");
+        let live = crate::runtime_tests::conversation(&app).await;
+        let mut state = json!({"session_id":live,"settings":{}});
+        resolve_chat_session(&mut state, &app.store).await.unwrap();
+        assert_eq!(state["session_id"], json!(live));
+        assert!(state["settings"]["chat_name"].is_string());
+    }
+
     #[tokio::test]
     async fn notes_context_pins_a_snapshot_and_adds_other_sessions_updates() {
         let (_root, app) = crate::runtime_tests::fixture().await;
