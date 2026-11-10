@@ -2068,7 +2068,7 @@ impl<
                             source: "native_review_entry".into(),
                             lifetime: context_input::Lifetime::Call,
                             content: format!(
-                                "New review entry for this session: tool {}, class {}, kind {}, template \"{}\". If you can explain why it happened, call agent_review with those values exactly and a note saying what you were trying to do, what you expected, and what would have prevented it. This notice appears once.",
+                                "Review step for this turn, before you continue: this session logged a new issue group with tool {}, class {}, kind {}, template \"{}\". Call agent_review with those four values exactly and a note saying what you were trying to do, what you expected, and what would have prevented it. If you cannot tell why it happened, say so in the note. This is asked once.",
                                 field("tool"), field("class"), field("kind"), field("template")
                             ),
                             turn: run["turns"].as_u64().unwrap_or(0),

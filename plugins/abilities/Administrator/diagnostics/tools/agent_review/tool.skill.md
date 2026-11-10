@@ -27,6 +27,9 @@ do not reconstruct it from the transcript.
 
 ## Record it
 
+When a review notice appears in a run, recording the note is a step in that turn rather
+than an optional extra: a group that nobody explains cannot be fixed.
+
 Call `agent_review` with the group's `tool`, `class`, `kind` and `template` exactly as
 reported, and a note saying what you were trying to do, what you expected, and what would
 have prevented it — so someone can fix the cause without reading this conversation. Then
