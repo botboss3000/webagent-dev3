@@ -456,6 +456,15 @@ fn add(total: &mut Value, part: &Value) {
 
 type GroupKey = (String, String, String, String);
 
+/// Where a group was seen: the sessions and runs behind it, so a reviewer can open one.
+#[derive(Default)]
+struct Pointers {
+    sessions: BTreeSet<String>,
+    runs: Vec<String>,
+    first: i64,
+    last: i64,
+}
+
 /// Merge stored run views (`{session_id, run_health, ...}`) into one issues view: totals,
 /// rework counts and issue groups across runs, ranked by cost (failed calls plus retries).
 /// Each group also counts the runs and sessions it appeared in and the runs where it never
@@ -468,6 +477,7 @@ pub fn aggregate(views: &[Value]) -> Value {
     let mut rework = json!({});
     let mut sessions = BTreeSet::new();
     let mut groups: BTreeMap<GroupKey, (Value, BTreeSet<String>)> = BTreeMap::new();
+    let mut pointers: BTreeMap<GroupKey, Pointers> = BTreeMap::new();
     for view in views {
         let health = &view["run_health"];
         if !health.is_object() {
@@ -514,15 +524,36 @@ pub fn aggregate(views: &[Value]) -> Value {
                 bump(&mut entry["unrecovered_runs"]);
             }
             seen.insert(sid.clone());
+            // A group is only actionable if it can be traced to a conversation.
+            let point = pointers.entry(key.clone()).or_default();
+            point.sessions.insert(sid.clone());
+            let run = view["run_id"].as_str().unwrap_or("");
+            if !run.is_empty() && point.runs.len() < 8 && !point.runs.iter().any(|id| id == run) {
+                point.runs.push(run.to_owned());
+            }
+            let at = view["updated_at"].as_i64().unwrap_or(0);
+            if at > 0 {
+                if point.first == 0 || at < point.first {
+                    point.first = at;
+                }
+                point.last = point.last.max(at);
+            }
         }
     }
     let mut ranked: Vec<Value> = groups
-        .into_values()
-        .map(|(mut group, seen)| {
+        .into_iter()
+        .map(|(key, (mut group, seen))| {
             let calls =
                 group["count"].as_u64().unwrap_or(0) + group["retries"].as_u64().unwrap_or(0);
             group["calls"] = json!(calls);
             group["sessions"] = json!(seen.len());
+            if let Some(point) = pointers.get(&key) {
+                group["session_ids"] =
+                    json!(point.sessions.iter().take(4).cloned().collect::<Vec<_>>());
+                group["run_ids"] = json!(point.runs.iter().take(4).cloned().collect::<Vec<_>>());
+                group["first_seen"] = json!(point.first);
+                group["last_seen"] = json!(point.last);
+            }
             group
         })
         .collect();
@@ -628,6 +659,24 @@ mod tests {
             json!({"status":"success","output":"x"}),
         );
         assert_eq!(run["run_health"]["calls_since_effect"], 1);
+    }
+
+    #[test]
+    fn a_group_names_the_sessions_and_runs_behind_it() {
+        let group = |tool: &str| {
+            json!({"tool":tool,"class":"error","kind":"not_found","template":"missing <q>",
+                "count":1,"retries":0,"identical_retries":0,"recovered":0})
+        };
+        let one = json!({"session_id":"s1","run_id":"r1","updated_at":10,
+            "run_health":{"groups":[group("file_read")]}});
+        let two = json!({"session_id":"s2","run_id":"r2","updated_at":20,
+            "run_health":{"groups":[group("file_read")]}});
+        let view = aggregate(&[one, two]);
+        let hit = &view["groups"][0];
+        assert_eq!(hit["session_ids"], json!(["s1", "s2"]));
+        assert_eq!(hit["run_ids"], json!(["r1", "r2"]));
+        assert_eq!(hit["first_seen"], 10);
+        assert_eq!(hit["last_seen"], 20);
     }
 
     #[test]
