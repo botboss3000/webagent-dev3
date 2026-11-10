@@ -29,6 +29,8 @@ const MAX_GROUPS: usize = 24;
 const MAX_AGGREGATE_GROUPS: usize = 50;
 /// Most path/label fingerprints remembered per run for rework detection.
 const MAX_SEEN: usize = 64;
+/// Failures remembered as unanswered, so a later success can credit the fix.
+const MAX_OPEN_FAILURES: usize = 16;
 /// Longest normalized message template.
 const MAX_TEMPLATE: usize = 120;
 /// Tools whose successful call writes the file named by `path`.
@@ -69,13 +71,47 @@ pub fn result_status(output: &Value) -> (&'static str, Option<String>) {
     (class, kind)
 }
 
-/// The result object of the step a script stopped on, when that step carries the failure.
+/// The step a script stopped on, when that step carries the failure.
 fn nested_failure(value: &Value) -> Option<&Value> {
     let steps = value["output"]["steps"].as_array()?;
     let stopped = usize::try_from(value["output"]["stopped_at_step"].as_u64()?).ok()?;
     let step = steps.get(stopped.checked_sub(1)?)?;
     let result = &step["result"];
     (result_status(result).0 != "success").then_some(result)
+}
+
+/// How many artifacts a result produced, or `None` when it reports no artifacts at all.
+fn artifacts(output: &Value) -> Option<usize> {
+    let parsed;
+    let value = match output {
+        Value::String(text) => match serde_json::from_str::<Value>(text) {
+            Ok(value) => {
+                parsed = value;
+                &parsed
+            }
+            Err(_) => return None,
+        },
+        other => other,
+    };
+    value["artifacts"].as_array().map(Vec::len)
+}
+
+/// Count produced artifacts, and how many calls came since the last one: a run that
+/// "succeeds" without producing anything stays visible.
+fn count_effect(health: &mut Value, output: &Value) {
+    bump(&mut health["calls_since_effect"]);
+    if !health["artifacts"].is_number() {
+        health["artifacts"] = json!(0);
+    }
+    let Some(produced) = artifacts(output) else {
+        return;
+    };
+    bump(&mut health["artifact_calls"]);
+    if produced == 0 {
+        return;
+    }
+    add(&mut health["artifacts"], &json!(produced));
+    health["calls_since_effect"] = json!(0);
 }
 
 /// The failure message of a tool output: `message`, `error` or `output`, first line only.
@@ -240,10 +276,17 @@ pub fn record_result(run: &mut Value, output: &Value) {
     // Fingerprints for retry and rework detection stay in `run_health_track`, which the
     // stored run view leaves out.
     let last = run["run_health_track"]["last"].take();
+    // Failures that no later success of the same tool has answered yet, so a fix counts
+    // even when other calls came in between.
+    let mut open = run["run_health_track"]["open_failures"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     let (class, kind) = result_status(output);
     let failed = class != "success";
     let health = &mut run["run_health"];
     bump(&mut health["calls"]);
+    count_effect(health, output);
 
     // A call of the same tool right after a failure retries that failure's group.
     if last["failed"] == true && last["tool"].as_str() == Some(tool.as_str()) {
@@ -252,9 +295,6 @@ pub fn record_result(run: &mut Value, output: &Value) {
             bump(&mut group["retries"]);
             if last["signature"].as_u64() == Some(signature) {
                 bump(&mut group["identical_retries"]);
-            }
-            if !failed {
-                bump(&mut group["recovered"]);
             }
         }
     }
@@ -326,6 +366,37 @@ pub fn record_result(run: &mut Value, output: &Value) {
             bump(&mut run["run_health"]["rework"][signal]);
         }
     }
+    // A later success of the same tool answers its earlier failures, whatever came between.
+    if failed {
+        if let Some(index) = group_index {
+            open.push(json!({"tool":tool,"group":index}));
+            while open.len() > MAX_OPEN_FAILURES {
+                open.remove(0);
+            }
+        }
+    } else {
+        let mut credited = Vec::new();
+        for entry in &open {
+            if entry["tool"].as_str() == Some(tool.as_str()) {
+                if let Some(index) = entry["group"].as_u64() {
+                    if !credited.contains(&index) {
+                        credited.push(index);
+                    }
+                }
+            }
+        }
+        let mut groups = run["run_health"]["groups"].as_array_mut();
+        for index in credited {
+            let group = usize::try_from(index)
+                .ok()
+                .and_then(|i| groups.as_mut().and_then(|list| list.get_mut(i)));
+            if let Some(group) = group {
+                bump(&mut group["recovered"]);
+            }
+        }
+        open.retain(|entry| entry["tool"].as_str() != Some(tool.as_str()));
+    }
+    run["run_health_track"]["open_failures"] = Value::Array(open);
     run["run_health_track"]["last"] = json!({"tool":tool,"signature":signature,
         "failed":failed,"group":group_index});
     refresh(run);
@@ -358,8 +429,8 @@ type GroupKey = (String, String, String, String);
 /// recovered. Only counts, kinds, tool names and templates are read.
 #[must_use]
 pub fn aggregate(views: &[Value]) -> Value {
-    let mut totals =
-        json!({"runs":0,"steps":0,"calls":0,"failed":0,"repeats":0,"groups_dropped":0});
+    let mut totals = json!({"runs":0,"steps":0,"calls":0,"failed":0,"repeats":0,"groups_dropped":0,
+               "artifacts":0,"artifact_calls":0});
     let mut rework = json!({});
     let mut sessions = BTreeSet::new();
     let mut groups: BTreeMap<GroupKey, (Value, BTreeSet<String>)> = BTreeMap::new();
@@ -371,7 +442,15 @@ pub fn aggregate(views: &[Value]) -> Value {
         let sid = view["session_id"].as_str().unwrap_or("").to_owned();
         sessions.insert(sid.clone());
         bump(&mut totals["runs"]);
-        for field in ["steps", "calls", "failed", "repeats", "groups_dropped"] {
+        for field in [
+            "steps",
+            "calls",
+            "failed",
+            "repeats",
+            "groups_dropped",
+            "artifacts",
+            "artifact_calls",
+        ] {
             add(&mut totals[field], &health[field]);
         }
         if let Some(signals) = health["rework"].as_object() {
@@ -456,6 +535,76 @@ mod tests {
                 "{output}"
             );
         }
+    }
+
+    #[test]
+    fn a_later_success_answers_an_earlier_failure() {
+        let mut run = json!({"session_id":"s"});
+        call(
+            &mut run,
+            "file_write",
+            json!({"path":"/w/a"}),
+            json!({"status":"failed","error_kind":"invalid_arguments","output":"mode"}),
+        );
+        call(
+            &mut run,
+            "file_read",
+            json!({"path":"/w/a"}),
+            json!({"status":"success","output":"x"}),
+        );
+        call(
+            &mut run,
+            "file_write",
+            json!({"path":"/w/a"}),
+            json!({"status":"success","output":"written"}),
+        );
+        let groups = run["run_health"]["groups"].as_array().expect("groups");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0]["recovered"], 1);
+        assert_eq!(groups[0]["retries"], 0);
+    }
+
+    #[test]
+    fn artifacts_are_counted_and_a_capture_without_one_stays_visible() {
+        let mut run = json!({"session_id":"s"});
+        call(
+            &mut run,
+            "browser_input",
+            json!({}),
+            json!({"status":"success","artifacts":[]}),
+        );
+        assert_eq!(run["run_health"]["artifact_calls"], 1);
+        assert_eq!(run["run_health"]["artifacts"], 0);
+        assert_eq!(run["run_health"]["calls_since_effect"], 1);
+        call(
+            &mut run,
+            "script_run",
+            json!({}),
+            json!({"status":"success","artifacts":[{"step":10},{"step":18}]}),
+        );
+        assert_eq!(run["run_health"]["artifacts"], 2);
+        assert_eq!(run["run_health"]["calls_since_effect"], 0);
+        call(
+            &mut run,
+            "file_read",
+            json!({"path":"/w"}),
+            json!({"status":"success","output":"x"}),
+        );
+        assert_eq!(run["run_health"]["calls_since_effect"], 1);
+    }
+
+    #[test]
+    fn a_denied_chat_control_keeps_its_tool_name() {
+        let mut run = json!({"session_id":"s"});
+        call(
+            &mut run,
+            "publish_main_message",
+            json!({}),
+            json!({"status":"denied","output":"Invalid working message: No message precedes this call in the same reply; pass text"}),
+        );
+        let groups = run["run_health"]["groups"].as_array().expect("groups");
+        assert_eq!(groups[0]["tool"], "publish_main_message");
+        assert_eq!(groups[0]["class"], "denied");
     }
 
     #[test]

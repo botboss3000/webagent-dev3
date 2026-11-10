@@ -541,7 +541,7 @@ impl<
                 let result = json!({"status":"not_run","output":
                     "Requested but not run: the user sent a message before this call started. \
                      Read the message, then issue the call again if it still applies."});
-                run["pending"] = json!({"call_id":call["call_id"]});
+                run["pending"] = json!({"call_id":call["call_id"],"name":call["name"]});
                 Self::append_tool(&mut run, &result)?;
                 app.store
                     .save_run_observed(
@@ -628,7 +628,7 @@ impl<
                     reason: "Post-run follow-up permits vetted reads only".into(),
                 },
             )?;
-            run["pending"] = json!({"call_id":call["call_id"]});
+            run["pending"] = json!({"call_id":call["call_id"],"name":name});
             let result = json!({"status":"denied","output":"Post-run follow-up cannot change state, escalate mode, or launch tasks"});
             Self::append_tool(&mut run, &result)?;
             app.store
@@ -687,7 +687,7 @@ impl<
                 }),
                 workflow::Decision::Pass,
             )?;
-            run["pending"] = json!({"call_id":call_id});
+            run["pending"] = json!({"call_id":call_id,"name":name});
             let mut working_text = None;
             let mut echoed = Vec::new();
             let result = if !enabled {
