@@ -570,7 +570,7 @@ function _buildToolStateControl(toolMeta, opts) {
       }
       if (backgroundCapable) out.push({
         info: true,
-        label: 'Silent posts a completion note without an agent loop; leftover results reach the next user turn. Wake starts a read-only continuation.',
+        label: 'Background results that arrive after the run ends wake the agent; only the second Stop cancels them.',
       });
       if (!backgroundCapable) out.push({ info: true, label: backgroundReason });
       out.push({

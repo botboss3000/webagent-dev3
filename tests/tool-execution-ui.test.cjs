@@ -35,14 +35,15 @@ function control({ capable = true, maxConcurrency = capable ? 4 : 1, canEdit = t
   return { items: () => factory(), flashes, opened: () => !!factory };
 }
 
-test('execution and end-of-run radios share the permission/visibility menu with bounded number input', () => {
+test('execution radios share the permission/visibility menu with bounded number input', () => {
   const ui = control();
   const items = ui.items();
-  for (const heading of ['Permission', 'Visibility', 'Execution', 'When run ends']) {
+  for (const heading of ['Permission', 'Visibility', 'Execution']) {
     assert(items.some(item => item.info && item.label === heading));
   }
-  assert.equal(items.filter(item => item.radio && item.checked).length, 2);
-  assert.equal(items.filter(item => item.radio).length, 6);
+  assert(!items.some(item => item.label === 'When run ends'));
+  assert.equal(items.filter(item => item.radio && item.checked).length, 1);
+  assert.equal(items.filter(item => item.radio).length, 3);
   const field = items.find(item => item.field);
   assert.equal(field.fieldType, 'number');
   assert.deepEqual([field.min, field.max, field.step, field.value], [1, 4, 1, 4]);
@@ -52,9 +53,8 @@ test('saves complete settings and reverts failed selections', async () => {
   const saves = [];
   const ui = control({ save: async (name, settings) => { saves.push({ name, ...settings }); } });
   await ui.items().find(item => item.label === 'Background').action();
-  await ui.items().find(item => item.label === 'Wake (read-only)').action();
   await ui.items().find(item => item.field).onSave('2');
-  assert.deepEqual(saves[2], { name: 'file_read', mode: 'background', max_concurrency: 2, on_run_end: 'wake' });
+  assert.deepEqual(saves[1], { name: 'file_read', mode: 'background', max_concurrency: 2, on_run_end: 'stop' });
   assert(ui.items().find(item => item.label === 'Background').checked);
   const failed = control({ save: async () => { throw Error('revision changed'); } });
   await failed.items().find(item => item.label === 'Background').action();
@@ -64,7 +64,7 @@ test('saves complete settings and reverts failed selections', async () => {
 
 test('unsupported background choices are disabled with reasons, while foreground remains editable', () => {
   const ui = control({ capable: false });
-  for (const label of ['Background', 'Model chooses', 'Silent (notify only)', 'Wake (read-only)']) {
+  for (const label of ['Background', 'Model chooses']) {
     const item = ui.items().find(item => item.label === label);
     assert.equal(item.disabled, true);
     assert.match(item.title, /not supported/);
@@ -91,11 +91,11 @@ test('execution writes cannot overlap and pending controls are disabled', async 
   const ui = control({ save: () => { writes++; return new Promise(resolve => { finish = resolve; }); } });
   const pending = ui.items().find(item => item.label === 'Background').action();
   assert(ui.items().filter(item => item.radio || item.field).every(item => item.disabled));
-  await ui.items().find(item => item.label === 'Wake (read-only)').action();
+  await ui.items().find(item => item.label === 'Model chooses').action();
   assert.equal(writes, 1);
   finish();
   await pending;
-  assert.equal(ui.items().find(item => item.label === 'Wake (read-only)').disabled, false);
+  assert.equal(ui.items().find(item => item.label === 'Model chooses').disabled, false);
 });
 
 test('abilities adapter uses current revision, encoded route, full settings and conflict feedback', async () => {
@@ -144,12 +144,9 @@ test('foreground-only parallel tools use the server concurrency ceiling independ
   assert.equal(serial.flashes.at(-1).ok, false);
 });
 
-test('end-of-run labels describe user notification, next-turn results and read-only wake', () => {
+test('background note says late results wake the agent and only the second Stop cancels them', () => {
   const items = control().items();
-  assert(items.some(item => item.radio && item.label === 'Silent (notify only)'));
-  assert(items.some(item => item.radio && item.label === 'Wake (read-only)'));
-  assert(items.some(item => item.info && /completion note without an agent loop/.test(item.label)
-    && /next user turn/.test(item.label) && /read-only continuation/.test(item.label)));
+  assert(items.some(item => item.info && /wake the agent/.test(item.label) && /second Stop/.test(item.label)));
 });
 
 
