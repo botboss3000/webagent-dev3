@@ -114,6 +114,25 @@ pub(crate) async fn migrate_tool_policy_defaults(store: &Store) -> Result<()> {
         });
         changed = true;
     }
+    // Renamed Base background controls keep the rule their old names had.
+    for (new, old) in [
+        ("background_status", "task_status"),
+        ("background_cancel", "task_cancel"),
+    ] {
+        if policy["rules"][new].is_null() || policy["rules"].get(old).is_some() {
+            if let Some(rule) = policy["rules"][old].as_str().map(str::to_owned) {
+                policy["rules"][new] = json!(rule);
+            }
+        }
+    }
+    for old in ["task_status", "task_wait", "task_cancel"] {
+        if policy["rules"]
+            .as_object_mut()
+            .is_some_and(|rules| rules.remove(old).is_some())
+        {
+            changed = true;
+        }
+    }
     // A tool folder's `policy_ceiling` is its installation rule, set nowhere else.
     for (name, definition) in webagent_abilities::tool_definitions::definitions() {
         let rule = json!(match definition.policy_ceiling {

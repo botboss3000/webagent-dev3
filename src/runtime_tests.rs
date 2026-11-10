@@ -8104,6 +8104,29 @@ async fn web_access_api_support_auth_csrf_revision_and_persistence() {
 }
 
 #[tokio::test]
+async fn renamed_background_controls_keep_their_old_rules() {
+    let (_root, app) = fixture().await;
+    let mut p = policy_default();
+    p["rules"]["task_cancel"] = json!("allow");
+    p["rules"]["task_status"] = json!("require_approval");
+    p["rules"]["task_wait"] = json!("allow");
+    p["rules"]["background_cancel"] = json!("deny");
+    p["rules"]
+        .as_object_mut()
+        .unwrap()
+        .remove("background_status");
+    app.store.put("policy", &p).await.unwrap();
+    migrate_tool_policy_defaults(&app.store).await.unwrap();
+    migrate_tool_policy_defaults(&app.store).await.unwrap();
+    let migrated = app.store.get("policy").await.unwrap().unwrap();
+    assert_eq!(migrated["rules"]["background_cancel"], "allow");
+    assert_eq!(migrated["rules"]["background_status"], "require_approval");
+    for old in ["task_cancel", "task_status", "task_wait"] {
+        assert!(migrated["rules"].get(old).is_none(), "{old}");
+    }
+}
+
+#[tokio::test]
 async fn tool_policy_ceilings_replace_saved_rules() {
     let (_root, app) = fixture().await;
     let mut p = policy_default();
