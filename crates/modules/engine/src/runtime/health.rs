@@ -484,6 +484,9 @@ pub fn aggregate(views: &[Value]) -> Value {
             "groups_dropped",
             "artifacts",
             "artifact_calls",
+            "review_prompts",
+            "review_skipped",
+            "review_notes",
         ] {
             add(&mut totals[field], &health[field]);
         }
@@ -625,6 +628,16 @@ mod tests {
             json!({"status":"success","output":"x"}),
         );
         assert_eq!(run["run_health"]["calls_since_effect"], 1);
+    }
+
+    #[test]
+    fn totals_sum_the_review_counters() {
+        let view = json!({"session_id":"s","run_health":{"groups":[],
+            "review_prompts":2,"review_skipped":1,"review_notes":3}});
+        let totals = &aggregate(&[view])["totals"];
+        assert_eq!(totals["review_prompts"], 2);
+        assert_eq!(totals["review_skipped"], 1);
+        assert_eq!(totals["review_notes"], 3);
     }
 
     #[test]
