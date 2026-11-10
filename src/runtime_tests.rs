@@ -3490,7 +3490,11 @@ async fn agent_discovers_ability_then_inspects_only_its_current_session() {
             .collect::<Vec<_>>()
     };
     for request in &requests[..2] {
-        assert_eq!(names(request), vec!["list_abilities", "load_ability"]);
+        // Discovery tools and the always-on background_cancel, before any ability loads.
+        assert_eq!(
+            names(request),
+            vec!["list_abilities", "load_ability", "background_cancel"]
+        );
     }
     assert!(names(&requests[2]).contains(&"state_inspect".to_owned()));
     let result_for = |request: &Value, call_id: &str| -> Value {

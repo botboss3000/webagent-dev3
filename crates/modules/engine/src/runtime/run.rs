@@ -26,6 +26,11 @@ use webagent_access as access;
 
 /// Number of the run's latest model turn. Unlike `turns`, the turn budget that a resume
 /// resets, it never repeats, so it keys the run's durable model steps.
+/// Tools offered and authorized in every session without loading their ability; tool
+/// policy still applies. `background_cancel` stops work the user sent a message about.
+fn always_on(name: &str) -> bool {
+    name == "background_cancel"
+}
 pub fn model_turn(run: &Value) -> u64 {
     run["model_turn"]
         .as_u64()
@@ -776,7 +781,7 @@ impl<
             mode.clone()
         };
         let read_only = authorization_mode["mode"] == "read_only";
-        let mut effective = if B::is_discovery(&name) {
+        let mut effective = if B::is_discovery(&name) || always_on(&name) {
             let installation = access::Permission::from_policy(policy_decision(&policy, &name))
                 .unwrap_or(access::Permission::Deny);
             access.tool_decision(&name, installation, true, true, read_only, true)
@@ -1831,14 +1836,20 @@ impl<
                         .map(|binding| (name.to_owned(), binding))))
                     .collect::<std::collections::BTreeMap<_, _>>());
                 let assembled_asset_key = prepared_asset_key;
-                let schemas = app
-                    .abilities
-                    .schemas_with(
-                        &policy,
-                        &run["loaded_abilities"],
-                        &visibility,
-                        &ability_state,
-                    )
+                let mut schemas = app.abilities.schemas_with(
+                    &policy,
+                    &run["loaded_abilities"],
+                    &visibility,
+                    &ability_state,
+                );
+                // Always-on controls are offered without loading their ability.
+                for schema in app.abilities.all_schemas() {
+                    let name = schema["name"].as_str().unwrap_or("");
+                    if always_on(name) && !schemas.iter().any(|s| s["name"] == name) {
+                        schemas.push(schema);
+                    }
+                }
+                let schemas = schemas
                     .into_iter()
                     .map(|mut schema| {
                         // Without delegation, start_session only forks: the agent never
@@ -1864,7 +1875,7 @@ impl<
                         {
                             return false;
                         }
-                        if B::is_discovery(name) {
+                        if B::is_discovery(name) || always_on(name) {
                             let installation =
                                 access::Permission::from_policy(policy_decision(&policy, name))
                                     .unwrap_or(access::Permission::Deny);
