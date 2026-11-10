@@ -702,6 +702,9 @@ impl<
             ) {
                 crate::send_future(self.admission.reconcile_requester_slots()).await?;
             }
+            // Evidence after authority: the review log is copied from the committed run
+            // and can never fail or stall the save.
+            crate::send_future(self.records.review_log(run)).await;
             Ok(())
         }
     }

@@ -1090,11 +1090,7 @@ impl Store {
     // loop execution, the live lease it read. The override below is reserved
     // for deliberate recovery or access shutdown and still checks revision.
     pub async fn save_run(&self, run: &mut Value, kind: &str, payload: &Value) -> Result<()> {
-        self.engine_repository()
-            .save_run(run, kind, payload)
-            .await?;
-        self.log_run_health(run).await;
-        Ok(())
+        self.engine_repository().save_run(run, kind, payload).await
     }
     /// Allow deliberate terminal shutdown without planner availability while preserving revision fences and failed staging.
     pub async fn save_run_override(
@@ -1105,9 +1101,7 @@ impl Store {
     ) -> Result<()> {
         self.engine_repository()
             .save_run_override(run, kind, payload)
-            .await?;
-        self.log_run_health(run).await;
-        Ok(())
+            .await
     }
     /// Commit run-owned effects and publication only after revision, generation, lease and participation fences pass.
 

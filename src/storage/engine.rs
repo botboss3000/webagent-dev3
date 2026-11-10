@@ -59,6 +59,12 @@ impl Records for Store {
     {
         StoreCore::write_document(self, tx, key, value)
     }
+    fn review_log<'a>(
+        &'a self,
+        run: &'a Value,
+    ) -> impl std::future::Future<Output = ()> + Send + 'a {
+        self.log_run_health(run)
+    }
 }
 impl AgentMetadata for Store {
     type Agent = Store;
