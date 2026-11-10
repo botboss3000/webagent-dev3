@@ -453,7 +453,6 @@ function _buildToolStateControl(toolMeta, opts) {
       return false;
     }
     if (key === 'mode' && next !== 'foreground' && !backgroundCapable) return false;
-    if (!backgroundCapable && key === 'on_run_end' && next !== 'stop') return false;
     if (execution[key] === next) return true;
     const before = execution;
     execution = { ...execution, [key]: next };
@@ -557,7 +556,6 @@ function _buildToolStateControl(toolMeta, opts) {
       out.push({ separator: true });
       for (const [key, heading, choices] of [
         ['mode', 'Execution', [['foreground', 'Foreground'], ['background', 'Background'], ['model', 'Model chooses']]],
-        ['on_run_end', 'When run ends', [['stop', 'Stop'], ['silent', 'Silent (notify only)'], ['wake', 'Wake (read-only)']]],
       ]) {
         out.push({ info: true, className: 'ac-tool-state-head', label: heading });
         for (const [value, label] of choices) {

@@ -1,4 +1,4 @@
-//! A background read that finished after its run ended reports as a background notice.
+//! A background read that finished after its run ended reports as a waking background notice.
 use super::{config, models::ModelRecords, ports::*, Runtime};
 use crate::context::abilities::Catalog;
 use crate::ports::*;
@@ -25,15 +25,10 @@ impl<
             + super::native::NativeDispatch<S, C, B, H::Binding>,
     > Runtime<S, C, B, A, H, M, X>
 {
-    /// Report a read that finished after its run ended: `wake` sends a background notice
-    /// that wakes the agent with its normal permissions; `silent` sends a quiet notice
-    /// that joins the conversation with the user's next message. `stop` work was
-    /// cancelled when the run ended.
+    /// Report a read that finished after its run ended as a background notice, which wakes
+    /// the agent with its normal permissions. Only the session stop cancels such work.
     pub async fn background_followup(&self, task: &Value) -> Result<()> {
-        if task["status"] != "completed"
-            || task["delivery_run_id"].is_string()
-            || !matches!(task["on_run_end"].as_str(), Some("silent" | "wake"))
-        {
+        if task["status"] != "completed" || task["delivery_run_id"].is_string() {
             return Ok(());
         }
         let rid = task["run_id"]
@@ -47,7 +42,6 @@ impl<
             task["result"] = serde_json::json!({"status":"denied",
                 "output":"Background result withheld: current authority unavailable"});
         }
-        let quiet = task["on_run_end"] == "silent";
-        self.background_notify_result(task, quiet).await
+        self.background_notify_result(task).await
     }
 }

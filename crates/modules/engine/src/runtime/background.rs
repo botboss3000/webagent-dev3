@@ -233,8 +233,9 @@ impl<
             return Ok(Some(false));
         }
         let origin = app.run(rid).await?;
+        // Ending a run never stops its background work; only the session stop does.
         let allowed = if ended(&origin) {
-            task["on_run_end"] != "stop"
+            true
         } else {
             matches!(
                 status(&origin),
@@ -396,16 +397,14 @@ impl<
             task["completed_at"] = json!(now());
             task["completed_at_ms"] = json!(timestamp_ms());
             task["lease_until"] = json!(0);
-            if let Err(error) = crate::send_future(app.background_notify_result(task, false)).await
-            {
+            if let Err(error) = crate::send_future(app.background_notify_result(task)).await {
                 tracing::warn!(task_id=%id, "Detached result not stored: {error}");
             }
         });
     }
     /// Store a finished background call's result and report it to its conversation as a
-    /// background notice, which wakes the agent (a quiet notice waits for the next user
-    /// message); nothing else delivers it.
-    pub async fn background_notify_result(&self, mut task: Value, quiet: bool) -> Result<()> {
+    /// background notice, which wakes the agent; nothing else delivers it.
+    pub async fn background_notify_result(&self, mut task: Value) -> Result<()> {
         let revision = task["revision"].as_u64().unwrap_or(0);
         task["delivery_run_id"] = json!(NOTICE_DELIVERY);
         if !self.store.background_cas(&task, Some(revision)).await? {
@@ -419,7 +418,7 @@ impl<
         let reply = text_of(&task["result"]);
         self.stage_background_notice(&sid, &format!("tool:{id}"), json!({
             "source":"tool","title":task["name"],"status":task["result"]["status"].as_str().unwrap_or("completed"),
-            "task_id":id,"call_id":task["call_id"],"run_id":task["run_id"],"reply":reply,"quiet":quiet}))
+            "task_id":id,"call_id":task["call_id"],"run_id":task["run_id"],"reply":reply}))
             .await
     }
     /// Stage one background notice for a conversation. The chat delivers staged notices as
@@ -734,7 +733,7 @@ impl<
                     task["status"] = json!("completed");
                     task["completed_at"] = json!(now());
                     task["completed_at_ms"] = json!(timestamp_ms());
-                    crate::send_future(app.background_notify_result(task, false)).await?;
+                    crate::send_future(app.background_notify_result(task)).await?;
                 }
                 return Ok(());
             }
@@ -769,7 +768,6 @@ impl<
                     status(&origin),
                     "running" | "queued" | "waiting_approval" | "waiting_external"
                 ) || ended(&origin))
-                || (ended(&origin) && task["on_run_end"] == "stop")
             {
                 task["status"] = json!("cancelled");
                 crate::send_future(app.store.background_cas(&task, Some(revision))).await?;

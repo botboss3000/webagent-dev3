@@ -727,19 +727,7 @@ pub(crate) async fn deliver_notices(app: &App) -> Result<()> {
             parents.entry(parent.to_owned()).or_default().push(notice);
         }
     }
-    let active = app.store.active_runs().await?;
-    for (parent, mut notices) in parents {
-        // A quiet notice (a silent background read) waits until the conversation has a run
-        // to join, normally the one the user's next message starts; it never wakes it.
-        if !active
-            .iter()
-            .any(|run| run["session_id"] == parent.as_str())
-        {
-            notices.retain(|n| n["quiet"] != true);
-            if notices.is_empty() {
-                continue;
-            }
-        }
+    for (parent, notices) in parents {
         let keys: Vec<&str> = notices.iter().filter_map(|n| n["key"].as_str()).collect();
         let session = app.store.get(&key("session", &parent)).await?;
         let Some(session) = session.filter(|s| s["status"] == "active") else {

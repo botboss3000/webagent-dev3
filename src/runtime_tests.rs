@@ -9785,7 +9785,8 @@ async fn background_approved_reads_pin_authority_and_claim_identity() {
             )
             .await
             .unwrap(),
-            Some(false)
+            // A finished run no longer stops its background reads; the session stop does.
+            Some(true)
         );
         recovered["status"] = json!("running");
         app.store.put(&key("run", &rid), &recovered).await.unwrap();
@@ -10222,24 +10223,7 @@ async fn background_execution_journey(behavior: &str) {
             .unwrap()
             .unwrap();
         assert_eq!(app.run(&rid).await.unwrap()["status"], "completed");
-        if behavior == "stop" {
-            background_journey_task(&app, &sid, Some(&task_id), "status", json!("cancelled")).await;
-            assert_eq!(
-                tokio::time::timeout(BACKGROUND_JOURNEY_STAGE, worker)
-                    .await
-                    .unwrap()
-                    .unwrap(),
-                (true, 1)
-            );
-            drop(release_sender);
-            let task = app.store.background_get(&task_id).await.unwrap().unwrap();
-            assert!(task["wake_run_id"].is_null());
-            assert!(task["delivery_run_id"].is_null());
-            let mut finished = app.run(&rid).await.unwrap();
-            assert!(!background_tasks::collect(&app, &mut finished)
-                .await
-                .unwrap());
-        } else {
+        {
             assert_eq!(
                 app.store.background_get(&task_id).await.unwrap().unwrap()["status"],
                 "running"
@@ -10288,7 +10272,6 @@ async fn background_execution_journey(behavior: &str) {
             assert!(notice.is_some() || receipt.is_some());
             if let Some(notice) = notice {
                 assert_eq!(notice["source"], "tool");
-                assert_eq!(notice["quiet"], behavior == "silent");
                 assert!(notice["reply"]
                     .as_str()
                     .unwrap()
@@ -10335,17 +10318,7 @@ async fn background_read_overlaps_model_and_delivers_at_next_boundary() {
 }
 
 #[tokio::test]
-async fn background_stop_cancels_outstanding_worker_after_final_reply() {
-    background_execution_journey("stop").await;
-}
-
-#[tokio::test]
-async fn background_silent_completion_stages_a_quiet_notice() {
-    background_execution_journey("silent").await;
-}
-
-#[tokio::test]
-async fn background_wake_completion_stages_a_waking_notice() {
+async fn background_read_outliving_its_run_reports_as_a_waking_notice() {
     background_execution_journey("wake").await;
 }
 
