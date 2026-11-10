@@ -11,6 +11,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Longest kept review history, in seconds (one year).
 const REVIEW_RETENTION_SECONDS: i64 = 365 * 24 * 60 * 60;
 
+/// Longest accepted agent note. Deliberately far above what a useful explanation needs:
+/// a note refused for length would cost the agent a recovery round turn, so the bound
+/// only stops a runaway. Real note lengths are recorded so the limit can be tightened
+/// from data.
+const NOTE_LIMIT: usize = 32 * 1024;
+
 /// Create the review tables once per process start and drop rows past retention.
 pub(crate) async fn open_review_pool(root: &Path) -> Result<SqlitePool> {
     let directory = root.join("diagnostics");
@@ -28,11 +34,30 @@ pub(crate) async fn open_review_pool(root: &Path) -> Result<SqlitePool> {
              record BLOB NOT NULL);
          CREATE INDEX IF NOT EXISTS run_health_updated ON run_health(updated_at);
          CREATE INDEX IF NOT EXISTS run_health_root ON run_health(root_session_id,updated_at);
-         CREATE INDEX IF NOT EXISTS run_health_user ON run_health(user_id,updated_at);",
+         CREATE INDEX IF NOT EXISTS run_health_user ON run_health(user_id,updated_at);
+         CREATE TABLE IF NOT EXISTS review_notes(
+             root_session_id TEXT NOT NULL,
+             tool TEXT NOT NULL,
+             class TEXT NOT NULL,
+             kind TEXT NOT NULL,
+             template TEXT NOT NULL,
+             run_id TEXT NOT NULL,
+             session_id TEXT NOT NULL,
+             user_id TEXT NOT NULL,
+             author_session_id TEXT NOT NULL,
+             note TEXT NOT NULL,
+             length INTEGER NOT NULL,
+             created_at INTEGER NOT NULL,
+             PRIMARY KEY(root_session_id,tool,class,kind,template));
+         CREATE INDEX IF NOT EXISTS review_notes_time ON review_notes(created_at);",
     )
     .execute(&pool)
     .await?;
     sqlx::query("DELETE FROM run_health WHERE updated_at<?")
+        .bind(unix_now() - REVIEW_RETENTION_SECONDS)
+        .execute(&pool)
+        .await?;
+    sqlx::query("DELETE FROM review_notes WHERE created_at<?")
         .bind(unix_now() - REVIEW_RETENTION_SECONDS)
         .execute(&pool)
         .await?;
@@ -126,6 +151,93 @@ impl Store {
             .filter(|view| view["run_health"].is_object())
             .collect())
     }
+
+    /// Record an agent's own explanation of one issue group: one note per group per
+    /// session tree, so a repeated request replaces it instead of multiplying rows.
+    pub(crate) async fn note_issue(&self, sid: &str, run_id: &str, args: &Value) -> Result<Value> {
+        let field = |name: &str| args[name].as_str().unwrap_or_default().to_owned();
+        let (tool, class, kind, template) = (
+            field("tool"),
+            field("class"),
+            field("kind"),
+            field("template"),
+        );
+        let note = field("note");
+        if tool.is_empty() || kind.is_empty() || note.trim().is_empty() {
+            return Ok(json!({"status":"rejected","error_kind":"invalid_arguments",
+                "output":"agent_review needs tool, kind and a nonempty note"}));
+        }
+        if note.len() > NOTE_LIMIT {
+            return Ok(json!({"status":"rejected","error_kind":"too_large",
+                "output":format!("note exceeds {NOTE_LIMIT} bytes")}));
+        }
+        let root = self.root_session(sid).await;
+        sqlx::query(
+            "INSERT INTO review_notes(root_session_id,tool,class,kind,template,run_id,session_id,
+                 user_id,author_session_id,note,length,created_at)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+             ON CONFLICT(root_session_id,tool,class,kind,template) DO UPDATE SET
+               run_id=excluded.run_id,session_id=excluded.session_id,user_id=excluded.user_id,
+               author_session_id=excluded.author_session_id,note=excluded.note,
+               length=excluded.length,created_at=excluded.created_at",
+        )
+        .bind(&root)
+        .bind(&tool)
+        .bind(&class)
+        .bind(&kind)
+        .bind(&template)
+        .bind(run_id)
+        .bind(sid)
+        .bind(self.current_user_id())
+        .bind(sid)
+        .bind(&note)
+        .bind(note.len() as i64)
+        .bind(unix_now())
+        .execute(&self.review_pool)
+        .await?;
+        Ok(
+            json!({"status":"success","output":{"recorded":true,"root_session_id":root,
+            "length":note.len()}}),
+        )
+    }
+
+    /// Agent notes recorded for a session tree (or every account), newest first.
+    pub(crate) async fn review_notes(&self, session: Option<&str>) -> Result<Vec<Value>> {
+        use sqlx::Row;
+        let rows = sqlx::query(
+            "SELECT root_session_id,tool,class,kind,template,run_id,session_id,user_id,
+                    author_session_id,note,length,created_at
+             FROM review_notes
+             WHERE (? IS NULL OR root_session_id=?
+                    OR root_session_id IN
+                       (SELECT DISTINCT root_session_id FROM run_health WHERE session_id=?))
+             ORDER BY created_at DESC LIMIT 500",
+        )
+        .bind(session)
+        .bind(session)
+        .bind(session)
+        .fetch_all(&self.review_pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| {
+                json!({
+                    "root_session_id": row.get::<String,_>("root_session_id"),
+                    "tool": row.get::<String,_>("tool"),
+                    "class": row.get::<String,_>("class"),
+                    "kind": row.get::<String,_>("kind"),
+                    "template": row.get::<String,_>("template"),
+                    "run_id": row.get::<String,_>("run_id"),
+                    "session_id": row.get::<String,_>("session_id"),
+                    "user_id": row.get::<String,_>("user_id"),
+                    "author_session_id": row.get::<String,_>("author_session_id"),
+                    "note": row.get::<String,_>("note"),
+                    "length": row.get::<i64,_>("length"),
+                    "created_at": row.get::<i64,_>("created_at"),
+                })
+            })
+            .collect())
+    }
 }
 
 fn unix_now() -> i64 {
@@ -213,5 +325,70 @@ mod tests {
             .await
             .unwrap();
         assert!(other.is_empty());
+    }
+
+    /// A note belongs to its group in the tree, and a later note replaces it.
+    #[tokio::test]
+    async fn an_agent_note_sticks_to_its_group_and_replaces() {
+        let (_root, store) = fixture().await;
+        store
+            .put(
+                "core_spawn_origin:child",
+                &json!({"parent_session_id":"root","root_session_id":"root","depth":1}),
+            )
+            .await
+            .unwrap();
+        let key = json!({"tool":"file_write","class":"error","kind":"invalid_arguments",
+            "template":"mode <q>","note":"I passed mode=create; the fix is to omit it."});
+        let first = store.note_issue("child", "r2", &key).await.unwrap();
+        assert_eq!(first["status"], json!("success"));
+        assert_eq!(first["output"]["root_session_id"], json!("root"));
+        let notes = store.review_notes(Some("root")).await.unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0]["author_session_id"], json!("child"));
+        assert_eq!(notes.len(), 1);
+        store
+            .note_issue(
+                "child",
+                "r2",
+                &json!({"tool":"file_write","class":"error","kind":"invalid_arguments",
+                    "template":"mode <q>","note":"Second note."}),
+            )
+            .await
+            .unwrap();
+        let notes = store.review_notes(Some("root")).await.unwrap();
+        assert_eq!(notes.len(), 1, "one note per group");
+        assert_eq!(notes[0]["note"], json!("Second note."));
+        assert_eq!(notes[0]["length"], json!("Second note.".len() as i64));
+        assert!(store
+            .review_notes(Some("unrelated"))
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    /// A note is refused for a cause the reviewer can group, never with a bare failure.
+    #[tokio::test]
+    async fn an_empty_or_oversized_note_is_refused_by_kind() {
+        let (_root, store) = fixture().await;
+        let empty = store
+            .note_issue(
+                "root",
+                "r1",
+                &json!({"tool":"t","class":"error","kind":"k","note":"  "}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(empty["error_kind"], json!("invalid_arguments"));
+        let huge = "x".repeat(NOTE_LIMIT + 1);
+        let big = store
+            .note_issue(
+                "root",
+                "r1",
+                &json!({"tool":"t","class":"error","kind":"k","note":huge}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(big["error_kind"], json!("too_large"));
     }
 }

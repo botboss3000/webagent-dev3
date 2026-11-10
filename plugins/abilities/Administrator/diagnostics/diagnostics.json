@@ -9,7 +9,8 @@
   "order": 2,
   "placeholder": false,
   "tools": [
-    "read_diagnostics"
+    "read_diagnostics",
+    "agent_review"
   ],
   "readiness": "ready",
   "config": {}

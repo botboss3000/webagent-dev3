@@ -367,6 +367,14 @@ impl AdministrationHost for Host<'_> {
     fn issues<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Value>> {
         Box::pin(self.0.store.issues(Some(sid), 0))
     }
+    fn note_issue<'a>(
+        &'a self,
+        sid: &'a str,
+        run_id: &'a str,
+        args: &'a Value,
+    ) -> Pending<'a, Result<Value>> {
+        Box::pin(self.0.store.note_issue(sid, run_id, args))
+    }
     fn abilities_version(&self) -> String {
         self.0.abilities.live_version()
     }

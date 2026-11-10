@@ -1065,11 +1065,13 @@ impl Store {
             .health_views(session, since, 500)
             .await
     }
-    /// Grouped run-health issues (counts, kinds, tool names and templates only).
+    /// Grouped run-health issues (counts, kinds, tool names and templates only), with the
+    /// agent notes recorded for the same session tree.
     pub async fn issues(&self, session: Option<&str>, since: i64) -> Result<Value> {
-        Ok(webagent_engine::runtime::health::aggregate(
-            &self.issue_views(session, since).await?,
-        ))
+        let mut view =
+            webagent_engine::runtime::health::aggregate(&self.issue_views(session, since).await?);
+        view["notes"] = json!(self.review_notes(session).await.unwrap_or_default());
+        Ok(view)
     }
     /// Append an encoded event to the application or user plane selected by session identity.
     pub async fn event(&self, sid: &str, kind: &str, payload: &Value) -> Result<()> {

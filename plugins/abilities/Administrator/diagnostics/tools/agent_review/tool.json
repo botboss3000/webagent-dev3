@@ -1,0 +1,44 @@
+{
+  "name": "agent_review",
+  "description": "Record the agent's own explanation of one grouped tool issue in the shared review log. Administrator only. One note per issue group: a later note for the same group replaces the earlier one",
+  "effect": "write",
+  "retry_risk": "none",
+  "retry_hint": "a repeated note for the same group replaces the earlier one, so a retry is harmless",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "tool": {
+        "type": "string",
+        "description": "The issue group's tool name, exactly as reported"
+      },
+      "class": {
+        "type": "string",
+        "description": "The issue group's class: error, denied, uncertain or warning"
+      },
+      "kind": {
+        "type": "string",
+        "description": "The issue group's error kind, exactly as reported"
+      },
+      "template": {
+        "type": "string",
+        "description": "The issue group's message template, exactly as reported"
+      },
+      "note": {
+        "type": "string",
+        "description": "What you were trying to do, what you expected, and what would have prevented the issue, written so someone can fix the cause without reading this conversation"
+      }
+    },
+    "required": [
+      "tool",
+      "kind",
+      "note"
+    ],
+    "additionalProperties": false
+  }
+}

@@ -192,6 +192,17 @@ impl AdministrationHost for Fake {
     fn issues<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Value>> {
         Box::pin(async move { Ok(json!({"tree_of":sid})) })
     }
+    fn note_issue<'a>(
+        &'a self,
+        _sid: &'a str,
+        _run_id: &'a str,
+        args: &'a Value,
+    ) -> Pending<'a, Result<Value>> {
+        Box::pin(async move {
+            Ok(json!({"status":"success","output":{"recorded":true,
+                "note":args["note"]}}))
+        })
+    }
     fn abilities_version(&self) -> String {
         "abilities".into()
     }

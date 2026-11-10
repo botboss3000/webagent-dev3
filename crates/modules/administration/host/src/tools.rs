@@ -89,6 +89,16 @@ pub async fn execute(
             Err(_) => json!({"status":"error","error_kind":"diagnostics_unavailable",
                 "output":"Issue groups are unavailable for this session"}),
         }),
+        "agent_review" => Ok(if host.administrator(sid).await.unwrap_or(false) {
+            match host.note_issue(sid, run_id, args).await {
+                Ok(value) => value,
+                Err(_) => json!({"status":"error","error_kind":"diagnostics_unavailable",
+                    "output":"The review note could not be recorded"}),
+            }
+        } else {
+            json!({"status":"denied","error_kind":"denied",
+                "output":"agent_review is administrator-only"})
+        }),
         "read_diagnostics" => Ok(match arguments::diagnostics_target(args, run_id) {
             Some(target) if target == run_id => diagnostics(host, Some(run), sid),
             Some(target) => {

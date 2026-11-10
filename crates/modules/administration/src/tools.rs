@@ -4,7 +4,7 @@
 //! Tools no ability owns a folder for live under `Administrator/native_tools/`.
 
 /// Every Administrator native tool.
-pub const TOOLS: [&str; 28] = [
+pub const TOOLS: [&str; 29] = [
     "git_tool",
     "resolve_conflict",
     "commit_and_push",
@@ -29,6 +29,7 @@ pub const TOOLS: [&str; 28] = [
     "v3_source_apply",
     "v3_worker_submit",
     "read_diagnostics",
+    "agent_review",
     "start_tunnel",
     "get_tunnel_url",
     "build_work",
