@@ -2045,7 +2045,10 @@ impl<
                 // A newly seen issue group gets one call-scoped chance to be explained.
                 let review_entry = run["run_health_track"]["review_entry"].clone();
                 if let Some(entry) = review_entry.as_object() {
-                    if access.ability_permission("diagnostics") != access::Permission::Deny {
+                    let prompted =
+                        access.ability_permission("diagnostics") != access::Permission::Deny;
+                    super::health::record_review_prompt(&mut run, prompted);
+                    if prompted {
                         let field = |name: &str| entry[name].as_str().unwrap_or("").to_owned();
                         contributions.push(context_input::Contribution {
                             id: "review_entry".into(),

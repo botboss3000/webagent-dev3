@@ -258,6 +258,18 @@ pub fn record_step(run: &mut Value) {
     bump(&mut run["run_health"]["steps"]);
 }
 
+/// Count one review prompt: whether the call-scoped notice was added or suppressed.
+pub fn record_review_prompt(run: &mut Value, prompted: bool) {
+    let health = &mut run["run_health"];
+    bump(
+        &mut health[if prompted {
+            "review_prompts"
+        } else {
+            "review_skipped"
+        }],
+    );
+}
+
 /// Count one tool result for the pending call; a failure is also counted by
 /// `class/error_kind` and in its issue group, and retries and rework are tracked.
 pub fn record_result(run: &mut Value, output: &Value) {
@@ -286,6 +298,9 @@ pub fn record_result(run: &mut Value, output: &Value) {
     let failed = class != "success";
     let health = &mut run["run_health"];
     bump(&mut health["calls"]);
+    if tool == "agent_review" && !failed {
+        bump(&mut health["review_notes"]);
+    }
     count_effect(health, output);
 
     // A call of the same tool right after a failure retries that failure's group.
@@ -441,7 +456,8 @@ type GroupKey = (String, String, String, String);
 #[must_use]
 pub fn aggregate(views: &[Value]) -> Value {
     let mut totals = json!({"runs":0,"steps":0,"calls":0,"failed":0,"repeats":0,"groups_dropped":0,
-               "artifacts":0,"artifact_calls":0});
+               "artifacts":0,"artifact_calls":0,
+               "review_prompts":0,"review_skipped":0,"review_notes":0});
     let mut rework = json!({});
     let mut sessions = BTreeSet::new();
     let mut groups: BTreeMap<GroupKey, (Value, BTreeSet<String>)> = BTreeMap::new();
@@ -602,6 +618,33 @@ mod tests {
             json!({"status":"success","output":"x"}),
         );
         assert_eq!(run["run_health"]["calls_since_effect"], 1);
+    }
+
+    #[test]
+    fn review_prompts_skips_and_notes_are_counted() {
+        let mut run = json!({"session_id":"s"});
+        record_review_prompt(&mut run, true);
+        record_review_prompt(&mut run, true);
+        record_review_prompt(&mut run, false);
+        assert_eq!(run["run_health"]["review_prompts"], 2);
+        assert_eq!(run["run_health"]["review_skipped"], 1);
+        call(
+            &mut run,
+            "agent_review",
+            json!({"tool":"file_write","kind":"invalid_arguments","note":"x"}),
+            json!({"status":"success","output":{"recorded":true}}),
+        );
+        assert_eq!(run["run_health"]["review_notes"], 1);
+        call(
+            &mut run,
+            "agent_review",
+            json!({"tool":"file_write","kind":"invalid_arguments","note":""}),
+            json!({"status":"rejected","error_kind":"invalid_arguments","output":"empty"}),
+        );
+        assert_eq!(
+            run["run_health"]["review_notes"], 1,
+            "only a written note counts"
+        );
     }
 
     #[test]
