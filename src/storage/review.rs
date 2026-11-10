@@ -202,7 +202,11 @@ impl Store {
     }
 
     /// Agent notes recorded for a session tree (or every account), newest first.
-    pub(crate) async fn review_notes(&self, session: Option<&str>) -> Result<Vec<Value>> {
+    pub(crate) async fn review_notes(
+        &self,
+        session: Option<&str>,
+        user: Option<&str>,
+    ) -> Result<Vec<Value>> {
         use sqlx::Row;
         let rows = sqlx::query(
             "SELECT root_session_id,tool,class,kind,template,run_id,session_id,user_id,
@@ -211,11 +215,14 @@ impl Store {
              WHERE (? IS NULL OR root_session_id=?
                     OR root_session_id IN
                        (SELECT DISTINCT root_session_id FROM run_health WHERE session_id=?))
+               AND (? IS NULL OR user_id=?)
              ORDER BY created_at DESC LIMIT 500",
         )
         .bind(session)
         .bind(session)
         .bind(session)
+        .bind(user)
+        .bind(user)
         .fetch_all(&self.review_pool)
         .await?;
         Ok(rows
@@ -343,7 +350,7 @@ mod tests {
         let first = store.note_issue("child", "r2", &key).await.unwrap();
         assert_eq!(first["status"], json!("success"));
         assert_eq!(first["output"]["root_session_id"], json!("root"));
-        let notes = store.review_notes(Some("root")).await.unwrap();
+        let notes = store.review_notes(Some("root"), None).await.unwrap();
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0]["author_session_id"], json!("child"));
         assert_eq!(notes.len(), 1);
@@ -356,12 +363,12 @@ mod tests {
             )
             .await
             .unwrap();
-        let notes = store.review_notes(Some("root")).await.unwrap();
+        let notes = store.review_notes(Some("root"), None).await.unwrap();
         assert_eq!(notes.len(), 1, "one note per group");
         assert_eq!(notes[0]["note"], json!("Second note."));
         assert_eq!(notes[0]["length"], json!("Second note.".len() as i64));
         assert!(store
-            .review_notes(Some("unrelated"))
+            .review_notes(Some("unrelated"), None)
             .await
             .unwrap()
             .is_empty());

@@ -228,6 +228,52 @@ async fn queue_capacity_and_byte_budget_are_bounded() {
     drop(permit);
     assert_eq!(budget.available_permits(), 1024);
 }
+/// The administrator issues view returns the agent notes recorded for the same filter.
+#[tokio::test]
+async fn the_issues_route_returns_agent_notes() {
+    use axum::{
+        body::Body,
+        http::{Request as HttpRequest, StatusCode},
+    };
+    use tower::ServiceExt;
+    let (_root, app) = crate::runtime_tests::fixture().await;
+    app.store
+        .note_issue(
+            "note-session",
+            "note-run",
+            &json!({"tool":"file_write","class":"error","kind":"invalid_arguments",
+                "template":"mode <q>","note":"I passed mode; the fix is to omit it."}),
+        )
+        .await
+        .unwrap();
+    let token = crate::uuid();
+    app.store
+        .put(
+            &format!("auth:{}", crate::digest(&json!(token))),
+            &json!({"user_id":"admin","expires":crate::now()+3600,
+                "generation":"fixture-generation","csrf":"fixture"}),
+        )
+        .await
+        .unwrap();
+    let req = HttpRequest::builder()
+        .uri("/api/v3/admin/diagnostics/issues")
+        .header("cookie", format!("v3_session={token}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = crate::api::router(app).oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let notes = body["notes"].as_array().expect("notes");
+    assert_eq!(notes.len(), 1);
+    assert_eq!(
+        notes[0]["note"],
+        json!("I passed mode; the fix is to omit it.")
+    );
+}
+
 #[tokio::test]
 async fn read_routes_reject_public_and_other_admin_accounts() {
     use axum::{

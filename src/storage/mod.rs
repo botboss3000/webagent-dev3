@@ -1070,7 +1070,7 @@ impl Store {
     pub async fn issues(&self, session: Option<&str>, since: i64) -> Result<Value> {
         let mut view =
             webagent_engine::runtime::health::aggregate(&self.issue_views(session, since).await?);
-        view["notes"] = json!(self.review_notes(session).await.unwrap_or_default());
+        view["notes"] = json!(self.review_notes(session, None).await.unwrap_or_default());
         Ok(view)
     }
     /// Append an encoded event to the application or user plane selected by session identity.

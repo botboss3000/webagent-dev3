@@ -633,6 +633,17 @@ pub fn validate_path(path: &Value, session_id: &str, agent_id: &str) -> Result<S
             "The browser opens app pages (/app?...) only; read source files such as CSS or JS with file_read",
         ));
     }
+    // Name the mismatch: a URL for another session is the most common cause of this refusal,
+    // and an agent that can see both ids can fix it in one step instead of retrying blindly.
+    if let Some(rest) = parsed.path.strip_prefix("/api/v3/sessions/") {
+        if let Some((other, _)) = rest.split_once('/') {
+            if other != session_id && canonical_id(other) {
+                return Err(Fault::rejected(format!(
+                    "This browser reads only its own session: the URL names {other} but the current session is {session_id}; use {session_id}",
+                )));
+            }
+        }
+    }
     Err(Fault::rejected("Unsupported current-session read route"))
 }
 
@@ -998,5 +1009,21 @@ mod preview_route_tests {
         assert!(format!("{fault:?}").contains("file_read"));
         let api = validate_path(&Value::from("/api/v3/other"), sid, "shared_default").unwrap_err();
         assert!(format!("{api:?}").contains("Unsupported current-session read route"));
+    }
+
+    /// A URL for another session names both ids, so the caller can fix it in one step.
+    #[test]
+    fn a_foreign_session_route_names_the_mismatch() {
+        let sid = "083cd9bb-7c27-4022-a9de-09e7110a9e92";
+        let other = "94eca013-8f08-49ef-8a95-d44274439666";
+        let fault = validate_path(
+            &Value::from(format!("/api/v3/sessions/{other}/ui-preview/step-rail")),
+            sid,
+            "shared_default",
+        )
+        .unwrap_err();
+        let text = format!("{fault:?}");
+        assert!(text.contains(other), "{text}");
+        assert!(text.contains(sid), "{text}");
     }
 }

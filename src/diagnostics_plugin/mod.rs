@@ -167,6 +167,12 @@ async fn issues(
         .len();
     let mut view = webagent_engine::runtime::health::aggregate(&views);
     view["totals"]["accounts"] = json!(accounts);
+    // The agent notes recorded for the same filter travel beside the groups.
+    view["notes"] = json!(app
+        .store
+        .review_notes(filter.session_id.as_deref(), filter.user_id.as_deref())
+        .await
+        .unwrap_or_default());
     Ok(Json(view))
 }
 async fn no_store(mut response: axum::response::Response) -> axum::response::Response {
