@@ -422,6 +422,11 @@ pub fn record_result(run: &mut Value, output: &Value) {
     if let Some(entry) = fresh_entry {
         // In `run_health`, not the turn-local track: every turn reloads the run, so a
         // marker outside the persisted health record never reaches the next model call.
+        tracing::warn!(
+            tool = entry["tool"].as_str().unwrap_or(""),
+            kind = entry["kind"].as_str().unwrap_or(""),
+            "review marker set for a newly seen issue group"
+        );
         run["run_health"]["review_pending"] = entry;
     }
     run["run_health_track"]["open_failures"] = Value::Array(open);

@@ -2044,11 +2044,18 @@ impl<
                 }];
                 // A newly seen issue group gets one call-scoped chance to be explained.
                 let review_entry = run["run_health"]["review_pending"].clone();
+                if review_entry.is_null() {
+                    tracing::warn!(
+                        calls = run["run_health"]["calls"].as_u64().unwrap_or(0),
+                        failed = run["run_health"]["failed"].as_u64().unwrap_or(0),
+                        "review marker absent at turn start"
+                    );
+                }
                 if let Some(entry) = review_entry.as_object() {
                     let prompted =
                         access.ability_permission("diagnostics") != access::Permission::Deny;
                     super::health::record_review_prompt(&mut run, prompted);
-                    tracing::info!(
+                    tracing::warn!(
                         prompted,
                         tool = entry["tool"].as_str().unwrap_or(""),
                         kind = entry["kind"].as_str().unwrap_or(""),
