@@ -335,6 +335,45 @@ pub(crate) async fn lookup(app: &App, sid: &str, aid: &str) -> Result<Value, Api
         .filter(|v| v["session_id"] == sid)
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Attachment not found".into()))
 }
+/// The conversation-tree root of a session: itself when it has no spawn record.
+async fn tree_root(app: &App, sid: &str) -> String {
+    app.store
+        .get(&format!("core_spawn_origin:{sid}"))
+        .await
+        .ok()
+        .flatten()
+        .and_then(|origin| origin["root_session_id"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| sid.to_owned())
+}
+
+/// The upload record `id` in session `sid`, or one belonging to another session of the same
+/// conversation tree. A parent may inspect what its sub-agents produced; anything outside
+/// the tree is reported as not found, exactly as an unknown id would be.
+pub(crate) async fn lookup_in_tree(app: &App, sid: &str, aid: &str) -> Result<Value, ApiError> {
+    if !files::upload_id_ok(aid) {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            "Attachment not found".into(),
+        ));
+    }
+    let record = app
+        .store
+        .get(&attachment_key(aid))
+        .await?
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Attachment not found".into()))?;
+    if record["session_id"] == sid {
+        return Ok(record);
+    }
+    let owner = record["session_id"].as_str().unwrap_or("");
+    if owner.is_empty() || tree_root(app, owner).await != tree_root(app, sid).await {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            "Attachment not found".into(),
+        ));
+    }
+    Ok(record)
+}
+
 /// A text upload's record with its file text filled in, in memory only.
 async fn with_file_text(app: &App, mut record: Value) -> Result<Value, ApiError> {
     if record["schema_version"] == 3
@@ -533,6 +572,44 @@ pub(crate) async fn upload_describe(
 mod shared_upload_tests {
     use super::*;
     use base64::{engine::general_purpose::STANDARD, Engine};
+    #[tokio::test]
+    async fn a_capture_is_readable_across_one_conversation_tree_only() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        for sid in ["parent", "child", "stranger"] {
+            app.store
+                .put(
+                    &key("session", sid),
+                    &json!({"id":sid,"agent_id":"shared_default","status":"active"}),
+                )
+                .await
+                .unwrap();
+        }
+        app.store
+            .put(
+                "core_spawn_origin:child",
+                &json!({"parent_session_id":"parent","root_session_id":"parent","depth":1}),
+            )
+            .await
+            .unwrap();
+        let aid = crate::uuid();
+        app.store
+            .put(
+                &attachment_key(&aid),
+                &json!({"id":aid,"session_id":"child","media_type":"image/png","preview":true}),
+            )
+            .await
+            .unwrap();
+        assert!(
+            lookup_in_tree(&app, "parent", &aid).await.is_ok(),
+            "a parent inspects what its child captured"
+        );
+        assert!(lookup_in_tree(&app, "child", &aid).await.is_ok());
+        assert!(
+            lookup_in_tree(&app, "stranger", &aid).await.is_err(),
+            "another conversation tree cannot"
+        );
+    }
+
     #[tokio::test]
     async fn unsent_uploads_are_private_to_uploader_then_shared_when_sent() {
         let (_root, app) = crate::runtime_tests::fixture().await;

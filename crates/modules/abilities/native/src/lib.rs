@@ -112,6 +112,9 @@ pub trait NativeHost: Sync {
     fn upload<'a>(&'a self, sid: &'a str, body: Value) -> Pending<'a, Result<Value>>;
     /// The upload record `id` in session `sid`; "Attachment not found" otherwise.
     fn attachment<'a>(&'a self, sid: &'a str, id: &'a str) -> Pending<'a, Result<Value>>;
+    /// The upload record `id` in session `sid` or another session of the same conversation
+    /// tree; "Attachment not found" otherwise.
+    fn attachment_in_tree<'a>(&'a self, sid: &'a str, id: &'a str) -> Pending<'a, Result<Value>>;
     /// A media lane pinned to `role` for session `sid`.
     fn media_lane<'a>(&'a self, sid: &'a str, role: ModelRole) -> Pending<'a, Result<Value>>;
     /// The bounded private answer of one call on `lane`.

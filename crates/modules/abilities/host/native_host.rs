@@ -127,6 +127,14 @@ impl NativeHost for Host<'_> {
             self.0.store.attachment_with_data(record).await
         })
     }
+    fn attachment_in_tree<'a>(&'a self, sid: &'a str, id: &'a str) -> Pending<'a, Result<Value>> {
+        Box::pin(async move {
+            let record = api::uploads::lookup_in_tree(self.0, sid, id)
+                .await
+                .map_err(|e| anyhow!(e.1))?;
+            self.0.store.attachment_with_data(record).await
+        })
+    }
     fn media_lane<'a>(&'a self, sid: &'a str, role: ModelRole) -> Pending<'a, Result<Value>> {
         Box::pin(async move {
             api::media_lane::lane_run(self.0, sid, role)

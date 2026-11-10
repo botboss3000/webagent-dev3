@@ -36,7 +36,8 @@ pub async fn execute(
     if q.question.trim().is_empty() || q.question.len() > 8192 {
         return Err(anyhow!("Image question must contain 1..8192 bytes"));
     }
-    let record = host.attachment(call.sid, &q.attachment_id).await?;
+    // A parent legitimately inspects what a sub-agent captured; the tree bounds the read.
+    let record = host.attachment_in_tree(call.sid, &q.attachment_id).await?;
     let uploader = record["uploader_id"]
         .as_str()
         .unwrap_or(host.store().current_user_id());
