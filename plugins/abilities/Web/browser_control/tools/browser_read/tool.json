@@ -151,7 +151,7 @@
         "items": {
           "type": "object"
         },
-        "description": "script only: up to 20 read steps run in order in one call, each an object with this tool's fields (action, selector, url, preset, condition, ...). Add \"screenshot\": true to a step to get an image after it; no other step returns one. A failed step stops the script and returns a screenshot of that moment."
+        "description": "script only: up to 20 read steps run in order in one call, each an object with this tool's fields (action, selector, url, preset, condition, ...). Add \"screenshot\": true to a step to get an image after it; no other step returns one. A failed step stops the script and returns a screenshot of that moment. Click, type and press steps are refused here; send input steps in a `browser_input` script."
       },
       "label": {
         "type": "string",

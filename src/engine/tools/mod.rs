@@ -1,4 +1,3 @@
-use anyhow::{bail, Result};
 pub(crate) use webagent_engine::tools::outcome;
 // Single and parallel turns share the same Rust dispatch for native and worker tools.
 pub(crate) mod administrator;
@@ -40,12 +39,6 @@ pub(crate) use dispatch::call_raw;
 pub(crate) use dispatch::{call, call_foreground};
 use serde_json::{json, Value};
 use std::sync::OnceLock;
-use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    net::UnixStream,
-};
-use tokio_util::sync::CancellationToken;
-
 /// A tool's repeat policy: reads are never repeat-guarded; a write uses its `tool.json`
 /// retry fields. Without them, workspace-confined coding tools (shell, python) are low
 /// risk, since their effects can be inspected and reverted, and every other write is high.
@@ -275,7 +268,7 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         ("file_list", "List a directory by absolute container path or relative live-checkout path", json!({"path":{"type":"string"}}), vec![]),
         ("file_read", "Read a bounded page of file lines from a container or live-checkout path", json!({"path":{"type":"string"},"offset":{"type":"integer","minimum":1,"maximum":10000000},"limit":{"type":"integer","minimum":1,"maximum":200}}), vec!["path"]),
         ("file_search", "Search container or live-checkout files by literal or regex query; outline comments in one file", json!({"path":{"type":"string"},"query":{"type":"string"},"regex":{"type":"boolean"},"file_glob":{"type":"string"},"comments_only":{"type":"boolean"}}), vec![]),
-        ("file_write", "Write a container or live-checkout file, or delete a broker task file with delete true and no content; policy-gated", json!({"path":{"type":"string"},"content":{"type":"string"},"delete":{"type":"boolean","description":"true removes the broker task file at path; broker task files only"},"mode":{"type":"string","enum":["create","replace","append"],"description":"Whole-file disposition. append adds to existing content; create refuses an existing path; replace confirms a deliberate full replace (a replace that removes most of the file is refused without it)."}}), vec!["path"]),
+        ("file_write", "Write a container or live-checkout file, or delete a broker task file with delete true and no content; policy-gated", json!({"path":{"type":"string"},"content":{"type":"string"},"delete":{"type":"boolean","description":"true removes the broker task file at path; broker task files only"},"mode":{"type":"string","enum":["create","replace","append"],"description":"Broker task files only; workspace and container writes must omit it. append adds to existing content; create refuses an existing path; replace confirms a deliberate full replace (a replace that removes most of the file is refused without it)."}}), vec!["path"]),
         ("file_edit", "Replace exactly one matching span in an existing container or live-checkout file; policy-gated", json!({"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"},"expected_sha256":{"type":"string"}}), vec!["path","old_text","new_text"]),
         ("checkout_edit", "Write (content) or edit (old_text/new_text) one live-checkout source file directly, without a broker task; not built or deployed; policy-gated", json!({"path":{"type":"string"},"content":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"},"expected_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}}), vec!["path"]),
         ("workspace_seed", "Copy the audited WebAgent v3 source snapshot into this session workspace and create a Git baseline; policy-gated", json!({}), vec![]),
@@ -310,7 +303,7 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
                     .as_str()
                     .expect("native schemas declare a description")
                     .to_owned();
-                schema["description"] = json!(format!("{description}. Source writes use isolated broker work automatically. Reads without a selector inspect published/container files; pass a returned broker_id for private-source reads. Optional broker_id selects current, new or returned work. Explicit runtime/workspace paths retain their owning tools. Never deploys."));
+                schema["description"] = json!(format!("{description}. Source writes use isolated broker work automatically. Files are read from the source checkout (/code) and this session's workspace; other container paths, including runtime data, are refused. Reads without a selector inspect published/container files; pass a returned broker_id for private-source reads. Optional broker_id selects current, new or returned work. Explicit runtime/workspace paths retain their owning tools. Never deploys."));
             }
         }
         schemas.extend(crate::background_tasks::schemas());
