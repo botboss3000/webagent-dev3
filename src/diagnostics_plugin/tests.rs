@@ -230,7 +230,7 @@ async fn queue_capacity_and_byte_budget_are_bounded() {
 }
 /// The administrator issues view returns the agent notes recorded for the same filter.
 #[tokio::test]
-async fn the_issues_route_returns_agent_notes() {
+async fn the_issues_route_returns_agent_notes_and_issues() {
     use axum::{
         body::Body,
         http::{Request as HttpRequest, StatusCode},
@@ -243,6 +243,15 @@ async fn the_issues_route_returns_agent_notes() {
             "note-run",
             &json!({"tool":"file_write","class":"error","kind":"invalid_arguments",
                 "template":"mode <q>","note":"I passed mode; the fix is to omit it."}),
+        )
+        .await
+        .unwrap();
+    app.store
+        .open_issue(
+            "note-session",
+            "note-run",
+            &json!({"title":"Children ignore the review prompt","detail":"d",
+                "evidence":"review_prompts 3, review_notes 0","severity":"waste"}),
         )
         .await
         .unwrap();
@@ -271,6 +280,10 @@ async fn the_issues_route_returns_agent_notes() {
     assert_eq!(
         notes[0]["note"],
         json!("I passed mode; the fix is to omit it.")
+    );
+    assert!(
+        body["agent_issues"].is_array(),
+        "the route returns agent-opened issues beside the notes"
     );
 }
 

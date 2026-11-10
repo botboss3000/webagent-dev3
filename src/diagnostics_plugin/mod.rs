@@ -173,6 +173,11 @@ async fn issues(
         .review_notes(filter.session_id.as_deref(), filter.user_id.as_deref())
         .await
         .unwrap_or_default());
+    view["agent_issues"] = json!(app
+        .store
+        .agent_issues(filter.session_id.as_deref(), filter.user_id.as_deref())
+        .await
+        .unwrap_or_default());
     Ok(Json(view))
 }
 async fn no_store(mut response: axum::response::Response) -> axum::response::Response {
