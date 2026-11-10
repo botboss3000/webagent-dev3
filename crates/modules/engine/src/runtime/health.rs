@@ -49,7 +49,13 @@ pub fn result_status(output: &Value) -> (&'static str, Option<String>) {
         },
         other => other,
     };
-    let kind = value["error_kind"].as_str().map(str::to_owned);
+    let kind = match value["error_kind"].as_str() {
+        Some(kind) => Some(kind.to_owned()),
+        // A script reports its own failure as a step result inside `output`.
+        None => nested_failure(value)
+            .and_then(|step| step["error_kind"].as_str())
+            .map(str::to_owned),
+    };
     let status = value["status"].as_str().unwrap_or("");
     let class = if value["uncertain"] == true || matches!(status, "uncertain" | "interrupted") {
         "uncertain"
@@ -61,6 +67,15 @@ pub fn result_status(output: &Value) -> (&'static str, Option<String>) {
         return ("success", None);
     };
     (class, kind)
+}
+
+/// The result object of the step a script stopped on, when that step carries the failure.
+fn nested_failure(value: &Value) -> Option<&Value> {
+    let steps = value["output"]["steps"].as_array()?;
+    let stopped = usize::try_from(value["output"]["stopped_at_step"].as_u64()?).ok()?;
+    let step = steps.get(stopped.checked_sub(1)?)?;
+    let result = &step["result"];
+    (result_status(result).0 != "success").then_some(result)
 }
 
 /// The failure message of a tool output: `message`, `error` or `output`, first line only.
@@ -76,14 +91,18 @@ fn message(output: &Value) -> String {
         },
         other => other,
     };
-    ["message", "error", "output"]
-        .iter()
-        .find_map(|field| value[*field].as_str())
-        .and_then(|text| text.lines().next())
-        .unwrap_or("")
-        .chars()
-        .take(400)
-        .collect()
+    let pick = |value: &Value| {
+        ["message", "error", "output"]
+            .iter()
+            .find_map(|field| value[*field].as_str())
+            .map(str::to_owned)
+    };
+    // A script's own result object holds the reason its step failed.
+    let text = pick(value)
+        .or_else(|| nested_failure(value).and_then(pick))
+        .unwrap_or_default();
+    let text = text.lines().next().unwrap_or_default();
+    text.chars().take(400).collect()
 }
 
 /// Normalize a failure message to a template: quoted text, paths and URLs, selectors,
@@ -437,6 +456,32 @@ mod tests {
                 "{output}"
             );
         }
+    }
+
+    #[test]
+    fn a_script_failure_is_read_from_its_step_result() {
+        let run = json!({"status":"error","artifacts":[],"output":{
+            "script":"capture","steps_run":1,"steps_total":18,"stopped_at_step":1,
+            "steps":[{"tool":"browser_read","result":{
+                "status":"error","error_kind":"browser_invalid_request",
+                "output":"Private browser request rejected: Unsupported current-session read route"
+            }}]
+        }});
+        assert_eq!(
+            result_status(&run),
+            ("error", Some("browser_invalid_request".to_owned()))
+        );
+        assert_eq!(
+            message(&run),
+            "Private browser request rejected: Unsupported current-session read route"
+        );
+        // A successful script still classifies as success and keeps no message.
+        let ok = json!({"status":"success","artifacts":[],"output":{
+            "steps_run":18,"steps_total":18,"stopped_at_step":18,
+            "steps":[{"tool":"browser_read","result":{"status":"success","output":"ok"}}]
+        }});
+        assert_eq!(result_status(&ok), ("success", None));
+        assert_eq!(message(&ok), "");
     }
 
     #[test]

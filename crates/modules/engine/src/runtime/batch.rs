@@ -37,6 +37,21 @@ fn denied(message: &str) -> Value {
     json!({"status":"denied","output":message})
 }
 
+/// The result text for a read whose invocation failed: the cause, on one bounded line.
+fn interrupted_text(error: &impl std::fmt::Display) -> String {
+    let text = error.to_string();
+    let line = text.lines().next().unwrap_or_default();
+    let cut = line
+        .char_indices()
+        .nth(300)
+        .map_or(line.len(), |(at, _)| at);
+    if line.is_empty() {
+        "Tool interrupted".to_owned()
+    } else {
+        format!("Tool interrupted: {}", &line[..cut])
+    }
+}
+
 /// Base and catalog discovery tools; a batch containing one runs serially.
 pub(crate) fn serial_discovery<B: Catalog>(name: &str) -> bool {
     B::is_discovery(name)
@@ -650,11 +665,14 @@ impl<
                                 serde_json::to_value(&value.metadata)?;
                             value.content
                         }
-                        Err(_) => match refused.as_ref() {
+                        Err(error) => match refused.as_ref() {
                             Some(failure) => tools::failure::refused_result(failure),
-                            None if A::is_read(&name) => {
-                                json!({"status":"error","output":"Tool interrupted"})
-                            }
+                            // The cause is the only evidence of why a read was cut off.
+                            None if A::is_read(&name) => json!({
+                                "status":"error",
+                                "error_kind":"interrupted",
+                                "output":interrupted_text(&error)
+                            }),
                             None => tools::retry_guard::outcome_unknown(&retry),
                         },
                     };
@@ -838,6 +856,20 @@ mod progress_tests {
 #[cfg(test)]
 mod denial_tests {
     use super::*;
+
+    #[test]
+    fn an_interrupted_read_keeps_its_cause() {
+        assert_eq!(
+            interrupted_text(&"provider session ended".to_string()),
+            "Tool interrupted: provider session ended"
+        );
+        assert_eq!(interrupted_text(&String::new()), "Tool interrupted");
+        let long = "x".repeat(400);
+        assert_eq!(
+            interrupted_text(&long).chars().count(),
+            "Tool interrupted: ".len() + 300
+        );
+    }
 
     #[test]
     fn denial_message_names_the_refusing_layer() {

@@ -117,17 +117,18 @@ impl Roots {
     }
 }
 
-/// Why a call failed; its text is the tool's output.
+/// Why a call failed: a stable `error_kind` the review log groups on, and the text the
+/// tool returns as its output.
 #[derive(Debug)]
 pub(crate) enum Failure {
-    Rejected(String),
+    Rejected(&'static str, String),
     Io(io::Error),
 }
 
 impl fmt::Display for Failure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Rejected(message) => formatter.write_str(message),
+            Self::Rejected(_, message) => formatter.write_str(message),
             Self::Io(error) => error.fmt(formatter),
         }
     }
@@ -147,12 +148,27 @@ impl From<Errno> for Failure {
 
 impl From<serde_json::Error> for Failure {
     fn from(error: serde_json::Error) -> Self {
-        Self::Rejected(error.to_string())
+        Self::Rejected("invalid_arguments", error.to_string())
     }
 }
 
 fn rejected(message: &str) -> Failure {
-    Failure::Rejected(message.to_owned())
+    Failure::Rejected("invalid_arguments", message.to_owned())
+}
+
+/// A rejection whose cause is not an argument mistake; the kind is what review groups on.
+fn rejected_kind(kind: &'static str, message: &str) -> Failure {
+    Failure::Rejected(kind, message.to_owned())
+}
+
+/// The kind for an OS-level failure, so a missing path is not filed as bad arguments.
+fn io_kind(error: &io::Error) -> &'static str {
+    match error.kind() {
+        io::ErrorKind::NotFound => "not_found",
+        io::ErrorKind::PermissionDenied => "denied",
+        io::ErrorKind::AlreadyExists => "already_exists",
+        _ => "io_error",
+    }
 }
 
 type Outcome<T> = Result<T, Failure>;
@@ -194,7 +210,11 @@ pub(crate) fn failed(failure: &Failure) -> Value {
         .char_indices()
         .nth(4096)
         .map_or(text.len(), |(at, _)| at);
-    json!({"status":"failed","output":&text[..cut]})
+    let kind = match failure {
+        Failure::Rejected(kind, _) => *kind,
+        Failure::Io(error) => io_kind(error),
+    };
+    json!({"status":"failed","error_kind":kind,"output":&text[..cut]})
 }
 
 /// Holds the dispatch lock while checking the shutoff switch and the workspace, as the
@@ -303,7 +323,8 @@ fn route(roots: &Roots, name: &str, args: &Value) -> Outcome<Map<String, Value>>
                 .any(|part| matches!(part, "" | "." | ".."))
             || CHECKOUT_PRIVATE.contains(&first)
         {
-            return Err(rejected(
+            return Err(rejected_kind(
+                "denied_path",
                 "Path must be a live-checkout source path outside runtime state",
             ));
         }
@@ -329,7 +350,8 @@ fn route(roots: &Roots, name: &str, args: &Value) -> Outcome<Map<String, Value>>
                     .any(|part| matches!(part, "" | "." | ".."))
                     || SOURCE_EXCLUDED.contains(&first)
                 {
-                    return Err(rejected(
+                    return Err(rejected_kind(
+                        "denied_path",
                         "Source path excluded; use the owning runtime/workspace API",
                     ));
                 }
@@ -340,7 +362,8 @@ fn route(roots: &Roots, name: &str, args: &Value) -> Outcome<Map<String, Value>>
     let mut live = present;
     live.remove("task_id");
     if live.contains_key("request_id") || live.contains_key("expected_inputs_sha256") {
-        return Err(rejected(
+        return Err(rejected_kind(
+            "denied_path",
             "Task write arguments require task_id; live fallback denied",
         ));
     }
@@ -401,13 +424,17 @@ const DIRECTORY: OFlags = OFlags::RDONLY
 /// same text as before.
 fn os_error(error: Errno, name: &OsStr) -> Failure {
     let error = io::Error::from(error);
+    let kind = io_kind(&error);
     let text = error.to_string();
     let description = text.split(" (os error").next().unwrap_or_default();
-    Failure::Rejected(format!(
-        "[Errno {}] {description}: '{}'",
-        error.raw_os_error().unwrap_or_default(),
-        name.to_string_lossy()
-    ))
+    Failure::Rejected(
+        kind,
+        format!(
+            "[Errno {}] {description}: '{}'",
+            error.raw_os_error().unwrap_or_default(),
+            name.to_string_lossy()
+        ),
+    )
 }
 
 /// `openat` relative to `directory`, with Python's error wording.
@@ -586,7 +613,8 @@ pub(super) fn confine(roots: &Roots, base: &Path, target: &Path, source: bool) -
         })
     });
     if !in_source && !target.starts_with(base) {
-        return Err(rejected(
+        return Err(rejected_kind(
+            "denied_path",
             "Path outside this session's workspace and the source checkout",
         ));
     }
@@ -627,30 +655,42 @@ fn edit(directory: &OwnedFd, leaf: &OsStr, args: &Map<String, Value>) -> Outcome
     )?);
     let original_stat = fstat(&source)?;
     if !regular(&original_stat) {
-        return Err(rejected("only regular files are supported"));
+        return Err(rejected_kind(
+            "unsupported",
+            "only regular files are supported",
+        ));
     }
     let original = read_up_to(&mut source, LIMIT + 1)?;
     drop(source);
     if original.len() > LIMIT {
-        return Err(rejected("file content exceeds limit"));
+        return Err(rejected_kind("too_large", "file content exceeds limit"));
     }
     let digest = hex::encode(Sha256::digest(&original));
     if expected.is_some_and(|hash| hash != digest) {
-        return Err(rejected("file changed since inspection"));
+        return Err(rejected_kind(
+            "changed_since_read",
+            "file changed since inspection",
+        ));
     }
     let before = old_text.as_bytes();
     let Some(at) = find(&original, before) else {
-        return Err(rejected("old_text must match exactly once"));
+        return Err(rejected_kind(
+            "ambiguous_match",
+            "old_text must match exactly once",
+        ));
     };
     if find(&original[at + before.len()..], before).is_some() {
-        return Err(rejected("old_text must match exactly once"));
+        return Err(rejected_kind(
+            "ambiguous_match",
+            "old_text must match exactly once",
+        ));
     }
     let mut updated = Vec::with_capacity(original.len() + new_text.len());
     updated.extend_from_slice(&original[..at]);
     updated.extend_from_slice(new_text.as_bytes());
     updated.extend_from_slice(&original[at + before.len()..]);
     if updated.len() > LIMIT {
-        return Err(rejected("file content exceeds limit"));
+        return Err(rejected_kind("too_large", "file content exceeds limit"));
     }
     let mode = permission_bits(&original_stat);
     let temporary = Temporary {
@@ -669,7 +709,10 @@ fn edit(directory: &OwnedFd, leaf: &OsStr, args: &Map<String, Value>) -> Outcome
     fchmod(&file, Mode::from_raw_mode(mode))?;
     let current = statat(directory, leaf, AtFlags::SYMLINK_NOFOLLOW)?;
     if !regular(&current) || identity(&current) != identity(&original_stat) {
-        return Err(rejected("file changed since inspection"));
+        return Err(rejected_kind(
+            "changed_since_read",
+            "file changed since inspection",
+        ));
     }
     renameat(directory, temporary.name.as_str(), directory, leaf)?;
     fsync(directory)?;
@@ -694,7 +737,7 @@ fn write(
 ) -> Outcome<Written> {
     if is_given(args, "mode") {
         return Err(rejected(
-            "mode applies only to broker task files; use file_edit for in-place changes",
+            "mode applies only to broker task files; omit it to create or replace a workspace file, or use file_edit for a small in-place change",
         ));
     }
     if leaf == "." {
@@ -709,7 +752,7 @@ fn write(
         }
     };
     if content.len() > LIMIT {
-        return Err(rejected("file content exceeds limit"));
+        return Err(rejected_kind("too_large", "file content exceeds limit"));
     }
     let previous = match statat(directory, leaf, AtFlags::SYMLINK_NOFOLLOW) {
         Ok(stat) => Some(stat),
@@ -717,7 +760,10 @@ fn write(
         Err(error) => return Err(os_error(error, leaf)),
     };
     if previous.as_ref().is_some_and(|stat| !regular(stat)) {
-        return Err(rejected("only regular files are supported"));
+        return Err(rejected_kind(
+            "unsupported",
+            "only regular files are supported",
+        ));
     }
     let mode = previous
         .as_ref()
@@ -748,7 +794,10 @@ fn write(
         Some(previous) => {
             let current = statat(directory, leaf, AtFlags::SYMLINK_NOFOLLOW)?;
             if !regular(&current) || identity(&current) != identity(previous) {
-                return Err(rejected("file changed during write"));
+                return Err(rejected_kind(
+                    "changed_since_read",
+                    "file changed during write",
+                ));
             }
             renameat(directory, temporary.name.as_str(), directory, leaf)?;
         }
@@ -773,7 +822,10 @@ fn read(directory: &OwnedFd, leaf: &OsStr, args: &Map<String, Value>) -> Outcome
     )?);
     let stat = fstat(&file)?;
     if !regular(&stat) {
-        return Err(rejected("only regular files are supported"));
+        return Err(rejected_kind(
+            "unsupported",
+            "only regular files are supported",
+        ));
     }
     if stat.st_size > (32 * LIMIT) as i64 {
         return Err(rejected("file exceeds inspection limit"));

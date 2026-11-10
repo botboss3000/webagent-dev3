@@ -128,11 +128,34 @@ fn an_edit_must_match_exactly_once_and_respects_the_expected_hash() {
         json!({"path":path,"old_text":"x","new_text":"y"}),
     );
     assert_eq!(twice["output"], "old_text must match exactly once");
+    assert_eq!(twice["error_kind"], "ambiguous_match");
     let stale = fixture.call(
         "file_edit",
         json!({"path":path,"old_text":"x x","new_text":"y","expected_sha256":"0".repeat(64)}),
     );
     assert_eq!(stale["output"], "file changed since inspection");
+    assert_eq!(stale["error_kind"], "changed_since_read");
+}
+
+#[test]
+fn a_rejection_names_its_kind() {
+    let fixture = fixture();
+    let mode = fixture.call(
+        "file_write",
+        json!({"path":fixture.path("a.txt"),"content":"x","mode":"create"}),
+    );
+    assert_eq!(mode["status"], "failed");
+    assert_eq!(mode["error_kind"], "invalid_arguments");
+    assert!(
+        mode["output"]
+            .as_str()
+            .is_some_and(|text| text.contains("omit it to create")),
+        "{mode}"
+    );
+    let missing = fixture.call("file_read", json!({"path":fixture.path("absent.txt")}));
+    assert_eq!(missing["error_kind"], "not_found");
+    let outside = fixture.call("file_read", json!({"path":"/etc/passwd"}));
+    assert_eq!(outside["error_kind"], "denied_path");
 }
 
 #[test]
@@ -442,7 +465,11 @@ fn tools_reach_only_this_workspace_and_checkout_source() {
 #[test]
 fn search_treats_a_pipe_as_alternation() {
     // Regex search runs rg, which the deployed worker image has and some test images lack.
-    if std::process::Command::new("rg").arg("--version").output().is_err() {
+    if std::process::Command::new("rg")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
         eprintln!("skipped: rg is absent");
         return;
     }
