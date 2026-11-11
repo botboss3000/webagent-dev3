@@ -478,6 +478,28 @@ class Ownership:
             value=self.get(task,db)
             if value["owner"]==owner and value["epoch"]==epoch and value["state"]in {"owned","validating"}:
                 db.execute("UPDATE tasks SET heartbeat=? WHERE id=?",(self.clock(),task))
+    def idle(self,db=None):
+        """Each task's last change: its newest audit event, else its creation."""
+        if db is None:
+            with self.connect()as connection:return self.idle(connection)
+        last=dict(db.execute("SELECT task,max(at) FROM events GROUP BY task").fetchall())
+        return {r["id"]:last.get(r["id"],r["created"])for r in db.execute("SELECT id,created FROM tasks")}
+    def prune(self,tasks):
+        """Delete finished records with their audit events; live or claiming tasks stay.
+        Transition receipts are kept: they hold no task index, and a text search of them
+        took seconds per task, past the broker's 10-second startup readiness limit."""
+        removed=[]
+        with self.transaction()as db:
+            for task in tasks:
+                row=db.execute("SELECT * FROM tasks WHERE id=?",(task,)).fetchone()
+                if row is None:continue
+                value=self.decode(row)
+                if value["state"]in {"owned","validating"}or value["scopes"]or value["requested"]:continue
+                removed.append(task)
+            if removed:
+                marks=",".join("?"*len(removed))
+                db.execute("DELETE FROM tasks WHERE id IN ("+marks+")",removed);db.execute("DELETE FROM events WHERE task IN ("+marks+")",removed)
+        return removed
     def orphan(self,after=300,scoped_after=None):
         """Lost heartbeats retain reservations and fence writes until explicit owner recovery; scoped_after bounds scope holders."""
         with self.transaction()as db:

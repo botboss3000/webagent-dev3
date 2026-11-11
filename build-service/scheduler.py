@@ -10,6 +10,8 @@ def sibling(name):
     spec=importlib.util.spec_from_file_location("build_scheduler_"+name,Path(__file__).with_name(name+".py"))
     value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 ownership=sibling("ownership")
+# Kept for recovery (host.py PINNED_JOB); its task record is never trimmed.
+PINNED_JOB="4f605f3b-4444-4447-a511-3a9d4b9677df"
 class Conflict(ValueError):
     """Preserve machine-readable blockers through the broker transport."""
     def __init__(self,details):
@@ -26,6 +28,10 @@ class Scheduler:
         self.mode=policy.get("mode","observe")
         self.orphan_after=policy.get("orphan_after_seconds",300)
         self.failure_grace=policy.get("failure_grace_seconds",1800)
+        self.registry_retention=policy.get("registry_retention_seconds",604800)
+        self.registry_keep=policy.get("registry_keep_finished",200)
+        self.registry_high_water=policy.get("registry_high_water",800)
+        self.last_trim=0.
         self.store=ownership.Ownership(broker.work_dir/"ownership.sqlite")
     @staticmethod
     def owner(trusted,workspace):
@@ -66,6 +72,35 @@ class Scheduler:
                 job=self.broker.jobs[item["job_id"]]
                 if value["state"]=="orphaned"or self.store.clock()-job.get("finished_at",job.get("created_at",0))>self.failure_grace:
                     self.store.retire(item["key"],"Failed release "+job["job_id"][:8]+" was not reopened within the grace window")
+    def trim_registry(self):
+        """Hourly, or at once above the high-water mark: forget finished tasks that nothing on disk still uses.
+        Both registries refuse new tasks at 1,000 rows. A task goes only when its record holds no claim, its
+        work item is closed or abandoned with every job settled, and its source tree and job artifacts are
+        already pruned. The newest finished tasks stay for history; above the high-water mark age is ignored."""
+        rows={r["id"]:r for r in self.store.list()}
+        full=max(len(rows),len(self.broker.work))>=self.registry_high_water
+        now=self.store.clock()
+        if not full and now-self.last_trim<3600:return []
+        self.last_trim=now;idle=self.store.idle();state=self.broker.state
+        finished=[]
+        for key,value in rows.items():
+            if value["state"]in {"owned","validating"}or value["scopes"]or value["requested"]:continue
+            item=self.broker.work.get(key)
+            if item is None:
+                # Records of an unknown task are leftovers unless they finished normally.
+                if value["state"]not in {"complete","abandoned","waiting","orphaned"}:continue
+            else:
+                if value["state"]not in {"complete","abandoned"}or item.get("status")not in {"closed","abandoned"}or not self.settled(item):continue
+                if item.get("job_id")==PINNED_JOB or(self.broker.work_dir/"trees"/key).exists():continue
+                if any((state/j["job_id"]).exists()for j in self.task_jobs(item)if j.get("job_id")):continue
+            finished.append(key)
+        finished.sort(key=lambda k:idle.get(k,0),reverse=True)
+        chosen=[k for k in finished[self.registry_keep:]if full or now-idle.get(k,now)>=self.registry_retention][:200]
+        if not chosen:return []
+        removed=self.store.prune(chosen)
+        dropped=[k for k in removed if self.broker.work.pop(k,None)is not None]
+        if dropped:self.broker._save_work()
+        return removed
     def session(self,key):
         """The owning session's name from the task summary provenance (session=<name>), if it gave one."""
         match=re.search(r"session=([^;\]]{1,80})",(self.broker.work.get(key)or{}).get("summary","")[:200])
@@ -397,7 +432,7 @@ class Scheduler:
                 self.store.touch(job["ownership_id"],self.owner({"user_id":job["user_id"]},job["workspace"]),job["ownership_epoch"])
         # Scope holders get a 30-minute floor: local checks and commit close-out make no broker call.
         self.store.orphan(self.orphan_after,max(self.orphan_after,1800))
-        self.settle()
+        self.settle();self.trim_registry()
     def touch_task(self,args,trusted,workspace):
         """Treat any authenticated call naming the caller's own task as liveness; never revives orphaned or foreign ownership."""
         if self.mode!="enforce":return

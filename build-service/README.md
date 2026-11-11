@@ -670,6 +670,20 @@ heartbeat lapses and the task orphans, housekeeping drops every claim and queued
 request (the task returns to `waiting`; a later reopen reacquires on apply).
 A closed task never keeps queued requests, so it cannot block other writers.
 
+## Task registry trimming
+
+The ownership registry (`coordination/ownership.sqlite`) and the work registry
+(`coordination/items.json`) each refuse new tasks at 1,000 entries. Housekeeping
+trims them hourly, or immediately once either holds `scheduler.registry_high_water`
+entries (default 800). A task is forgotten, with its audit events, only when it holds no claim or queued request, its work item
+is closed or abandoned with every job settled, and its source tree and job
+artifact folders are already pruned; the recovery-pinned job's task always stays.
+Ownership rows with no work item that never claimed anything go the same way.
+The newest `scheduler.registry_keep_finished` finished tasks (default 200) stay
+for history, and below the high-water mark a task must also be idle for
+`scheduler.registry_retention_seconds` (default 604800, 7 days). Job receipts
+in `build-jobs/*.json` are never removed by this trim.
+
 `abandon` accepts an open task or such a failed closed task and, in the same
 call, drops every claim and queued request (ownership `abandoned`). It reports
 `released_scopes` and `cleared_requests`. A task with a live job is refused or,

@@ -32,6 +32,41 @@ class SchedulerBrokerTests(unittest.TestCase):
         request={"task_id":label,"action":action,"request_id":"broker-fixture-"+str(self.counter),
             "expected_revision":value["revision"],"expected_epoch":value["epoch"],**args}
         return self.call("build_work",request),request
+    def finished(self,label,state="complete"):
+        """Close a fixture task as if released and pruned: no claims, settled, source tree removed."""
+        import shutil
+        item=self.begin(label);item["status"]="closed"if state=="complete"else"abandoned"
+        shutil.rmtree(Path(item["workspace_path"]).parent,ignore_errors=True)
+        with self.broker.scheduler.store.transaction()as db:db.execute("UPDATE tasks SET state=? WHERE id=?",(state,item["key"]))
+        return item["key"]
+    def test_registry_trim_forgets_only_finished_pruned_tasks(self):
+        """Old finished tasks leave both registries; open, tree-holding and newest-kept tasks stay."""
+        scheduler=self.broker.scheduler;scheduler.registry_keep=1
+        old=[self.finished("trim-old-"+str(n),"complete"if n else"abandoned")for n in range(3)]
+        open_task=self.begin("trim-open")["key"]
+        kept_tree=self.begin("trim-tree");kept_tree["status"]="closed"
+        with scheduler.store.transaction()as db:db.execute("UPDATE tasks SET state='complete' WHERE id=?",(kept_tree["key"],))
+        with patch.object(scheduler.store,"clock",return_value=time.time()+scheduler.registry_retention+60):
+            removed=scheduler.trim_registry()
+        self.assertEqual(len(removed),2);self.assertTrue(set(removed)<=set(old))
+        for key in removed:
+            self.assertNotIn(key,self.broker.work)
+            with self.assertRaises(ValueError):scheduler.store.get(key)
+            with scheduler.store.connect()as db:
+                self.assertEqual(db.execute("SELECT count(*) FROM events WHERE task=?",(key,)).fetchone()[0],0)
+        for key in (open_task,kept_tree["key"],*(set(old)-set(removed))):
+            self.assertIn(key,self.broker.work);scheduler.store.get(key)
+        # A later begin succeeds and nothing further is eligible.
+        self.begin("trim-after")
+        with patch.object(scheduler.store,"clock",return_value=time.time()+scheduler.registry_retention+7200):
+            self.assertEqual(scheduler.trim_registry(),[])
+    def test_registry_trim_waits_for_age_until_high_water(self):
+        """Recent finished tasks stay below the high-water mark and go once the registry fills."""
+        scheduler=self.broker.scheduler;scheduler.registry_keep=0
+        key=self.finished("trim-recent")
+        self.assertEqual(scheduler.trim_registry(),[]);self.assertIn(key,self.broker.work)
+        scheduler.registry_high_water=1
+        self.assertEqual(scheduler.trim_registry(),[key]);self.assertNotIn(key,self.broker.work)
     def write(self,item,path,text):
         """Apply a checked patch with the exact current task digest."""
         tree=Path(item["workspace_path"]).parent
