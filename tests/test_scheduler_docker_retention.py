@@ -30,6 +30,7 @@ class CleanupTests(unittest.TestCase):
             value=self.containers.get(args[1])or next((v for v in self.containers.values()if v["Name"].lstrip("/")==args[1]),None)
             if value is None:raise FileNotFoundError()
             return json.dumps([value])
+        if args==("ps","-aq","--no-trunc"):return "\n".join(self.containers)
         if args[0]=="ps":return "reference"if args[-1].split("=",1)[-1]in self.refs else""
         if args[:2]==("image","rm"):self.images.pop(args[2]);return""
         if args[0]=="rm":self.containers.pop(args[1]);return""
@@ -100,8 +101,8 @@ class CleanupTests(unittest.TestCase):
                 future=pool.submit(self.guard.pin,self.image,self.job);time.sleep(.03);self.assertFalse(future.done())
             self.assertTrue(future.result(timeout=2)["retained"])
         finally:pool.shutdown()
-    def container(self,status="exited"):
-        identity="b"*64;name="webagent-build-development-"+uuid.UUID(self.job).hex+"-compile_test-12345678"
+    def container(self,status="exited",identity="b"*64):
+        name="webagent-build-development-"+uuid.UUID(self.job).hex+"-compile_test-12345678"
         value={"Id":identity,"Name":"/"+name,"Image":self.image,"Config":{"Labels":{"webagent.scheduler.instance":"development","webagent.scheduler.job":uuid.UUID(self.job).hex,"webagent.scheduler.phase":"compile_test"}},"State":{"Status":status}}
         self.containers[identity]=value;self.guard.pin(self.image,self.job,value);return identity
     def test_protected_candidates_read_job_history_once(self):
@@ -117,6 +118,9 @@ class CleanupTests(unittest.TestCase):
     def test_running_phase_container_survives(self):
         identity=self.container("running");self.now+=7201;self.refs.add(self.image)
         self.assertEqual(self.guard.cleanup(True)["removed"],[]);self.assertIn(identity,self.containers)
+    def test_absent_container_rows_dropped_on_next_registration(self):
+        gone=self.container(identity="c"*64);self.containers.pop(gone);kept=self.container()
+        rows=self.guard.load()["containers"];self.assertNotIn(gone,rows);self.assertIn(kept,rows)
     def test_changed_container_labels_survive(self):
         identity=self.container();self.now+=7201;self.containers[identity]["Config"]["Labels"]["webagent.scheduler.instance"]="production";self.refs.add(self.image)
         self.assertEqual(self.guard.cleanup(True)["removed"],[])

@@ -114,6 +114,11 @@ class Retention:
             if job_id is None:row["permanent"]=True
             if len(row["jobs"])>8192:raise ValueError("Image dependency bound exceeded")
             if container:
+                # Phase containers are removed when their phase ends; drop their rows here, or
+                # the registry grows past its size bound while disk stays below the cleanup threshold.
+                try:present=set(self.docker("ps","-aq","--no-trunc").split())
+                except (RuntimeError,ValueError,OSError,subprocess.SubprocessError):present=None
+                if present is not None:d["containers"]={i:r for i,r in d["containers"].items()if i in present}
                 name=container.get("Name","").lstrip("/");labels=container.get("Config",{}).get("Labels",{})
                 m=re.fullmatch(r"webagent-build-development-([a-f0-9]{32})-([a-z_]+)-([a-f0-9]{8})",name)
                 if not m or labels.get("webagent.scheduler.instance")!="development"or labels.get("webagent.scheduler.job")!=m[1]or labels.get("webagent.scheduler.phase")!=m[2]or not re.fullmatch(r"[a-f0-9]{64}",container.get("Id",""))or str(uuid.UUID(m[1]))!=job_id:raise PermissionError("Container retention identity invalid")
