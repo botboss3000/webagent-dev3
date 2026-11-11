@@ -7,6 +7,7 @@ use super::url::urlsplit;
 use super::{Fault, PAGE_TIMEOUT_MS, SCRIPT_TIMEOUT_MS};
 use serde_json::{json, Value};
 use std::future::Future;
+use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -405,12 +406,24 @@ pub fn capabilities(profile: &Path, origin: Option<&str>, launch: Launch) -> Val
         "goog:loggingPrefs":{"browser":"ALL"}}}})
 }
 
+/// The session's temporary folder, `/tmp/chromium-<session>`: Chromium puts Unix sockets
+/// there, and a path under the profile would exceed their 108-byte limit.
+fn temporary(profile: &Path) -> PathBuf {
+    let session = profile
+        .parent()
+        .and_then(Path::file_name)
+        .unwrap_or_default();
+    Path::new("/tmp").join(format!("chromium-{}", session.to_string_lossy()))
+}
+
 /// A chromedriver process and its one session.
 pub struct Chrome {
     port: u16,
     session: String,
     child: Mutex<Option<Child>>,
     pid: i32,
+    /// Chromium's temporary files, removed by [`Driver::quit`].
+    temporary: PathBuf,
 }
 
 impl Chrome {
@@ -428,10 +441,16 @@ impl Chrome {
             .and_then(|listener| listener.local_addr())
             .map_err(|_| Fault::Startup)?
             .port();
-        // The driver and every Chromium process it starts may touch only this profile.
-        let temporary = profile.join("tmp");
-        std::fs::create_dir_all(&temporary).map_err(|_| Fault::Startup)?;
-        let sandbox = crate::sandbox::prepare_browser(&profile).map_err(|_| Fault::Startup)?;
+        // The driver and every Chromium process it starts may touch only this profile and
+        // its own temporary folder, made fresh for each start.
+        let temporary = temporary(&profile);
+        let _ = std::fs::remove_dir_all(&temporary);
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&temporary)
+            .map_err(|_| Fault::Startup)?;
+        let sandbox =
+            crate::sandbox::prepare_browser(&profile, &temporary).map_err(|_| Fault::Startup)?;
         let mut command = Command::new(CHROMEDRIVER);
         command
             .arg(format!("--port={port}"))
@@ -457,6 +476,7 @@ impl Chrome {
             session: String::new(),
             child: Mutex::new(Some(child)),
             pid,
+            temporary,
         };
         match chrome.open(&profile, origin.as_deref(), launch).await {
             Ok(()) => Ok(Arc::new(chrome)),
@@ -562,6 +582,8 @@ impl Driver for Chrome {
             if let Some(mut process) = child.take() {
                 let _ = process.try_wait();
             }
+            drop(child);
+            let _ = std::fs::remove_dir_all(&self.temporary);
         })
     }
 }
@@ -569,6 +591,16 @@ impl Driver for Chrome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn temporary_folder_keeps_socket_paths_short() {
+        let sid = "11111111-1111-4111-8111-111111111111";
+        let folder = temporary(Path::new(&format!("/runtime/worker/browser/{sid}/chrome")));
+        assert_eq!(folder, PathBuf::from(format!("/tmp/chromium-{sid}")));
+        // Chromium's singleton socket, `.org.chromium.Chromium.XXXXXX/SingletonSocket`.
+        let socket = folder.join(".org.chromium.Chromium.XXXXXX/SingletonSocket");
+        assert!(socket.as_os_str().len() < 108);
+    }
 
     #[test]
     fn responses_complete_by_length_chunks_or_end() {
