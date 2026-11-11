@@ -191,6 +191,29 @@ class RuntimeRecipeTests(unittest.TestCase):
         self.assertNotEqual(recipe["key"], self.runtime.dependency_recipe(changed, "voice")["key"])
         self.assertNotEqual(recipe["key"], self.runtime.dependency_recipe(self.dockerfile, "voice", 2)["key"])
 
+    def test_pinned_dependency_survives_the_weekly_refresh(self):
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / "apt_prefetch.py").write_bytes(b"helper")
+            cache = object.__new__(self.runtime.PackagingCache)
+            cache.config = {"service_dir": folder, "scheduler": {"package_cache_max_age_seconds": 3600}}
+            cache.entries = lambda blob, validate: {"v3/Dockerfile": (0o644, self.dockerfile.encode())}
+            cache.validate = None
+            cache.folder = Path(folder)
+            first, refreshed = cache.recipes(b"", 1), cache.recipes(b"", 2)
+            self.assertEqual(first["voice"]["key"], refreshed["voice"]["key"])
+            self.assertNotEqual(first["api"]["key"], refreshed["api"]["key"])
+            layout = {"manifest_digest": "m", "config_digest": "c", "diff_ids": [], "bytes": 1}
+            with mock.patch.object(self.runtime, "verify_layout", return_value=layout):
+                for role in ("voice", "api"):
+                    row = {"key": first[role]["key"], "role": role, "created_at": 0, **layout}
+                    if role == "voice":
+                        self.assertEqual(cache.check(row, first[role]), row)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "refresh required"):
+                            cache.check(row, first[role])
+
     def test_dependency_stage_is_optional_and_cannot_read_the_context(self):
         plain = self.without_voice()
         self.assertNotIn("AS voice", plain)

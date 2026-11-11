@@ -292,16 +292,19 @@ class PackagingCache:
         helper = self.helper()
         workers = self.config.get("scheduler", {}).get("package_cache_download_workers", 4)
         result = {role: runtime_recipe(dockerfile, role, helper, generation, workers) for role in ROLES}
+        # Dependency stages download only checksum-pinned files, so the weekly APT refresh
+        # (a new generation) does not rebuild them: their key follows their own recipe only.
         for name in DEPENDENCIES:
             if name in stages(dockerfile):
-                result[name] = dependency_recipe(dockerfile, name, generation)
+                result[name] = dependency_recipe(dockerfile, name)
         return result
 
     def check(self, row, recipe, sync=False):
         """Rehash immutable OCI inputs and reject expired or mismatched preparations."""
         if row.get("key") != recipe["key"] or row.get("role") != recipe["role"]:
             raise ValueError("Runtime cache recipe changed")
-        if time.time() - row["created_at"] > self.config.get("scheduler", {}).get("package_cache_max_age_seconds", 604800):
+        # Only APT runtime bases age out; pinned dependency stages stay until their recipe changes.
+        if recipe["role"] in ROLES and time.time() - row["created_at"] > self.config.get("scheduler", {}).get("package_cache_max_age_seconds", 604800):
             raise ValueError("Runtime dependency refresh required")
         root = self.folder / "bases" / recipe["key"]
         actual = verify_layout(root, recipe["role"], recipe["key"], sync)
