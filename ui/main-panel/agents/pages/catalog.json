@@ -51,6 +51,15 @@
       "type": "agent_configuration"
     },
     {
+      "id": "artifacts",
+      "title": "Artifacts",
+      "description": "Your Main Notes and saved scripts for this agent.",
+      "order": 27,
+      "panelId": "artifacts-page",
+      "icon": "archive",
+      "type": "agent_configuration"
+    },
+    {
       "id": "sessions",
       "title": "Sessions",
       "description": "Browse your conversations across agents.",

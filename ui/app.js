@@ -26,6 +26,7 @@ import { showLeftOverlay } from './chat/controls/login-hook.js';
 // v2 dom-utils imports v1 auth and uploads; v3 uses text nodes and its own transport.
 import { renderIdentity } from './main-panel/agents/pages/identity/page.js';
 import {renderMembers} from './main-panel/agents/pages/members/page.js';
+import {renderArtifacts} from './main-panel/agents/pages/artifacts/page.js';
 import {offerAccessRequest,showAccessNotices} from './main-panel/agents/request-access.js';
 import {renderCreateAgent} from './main-panel/agents/pages/create/page.js';
 import {createAgentArchive} from './main-panel/agents/agent-archive.js';
@@ -75,7 +76,7 @@ async function mountAgents(){
       <div class="ac-ability-row ac-model-cfg-row ac-row-static"><span class="ac-ability-label"><span class="ac-ability-name">Connection</span></span><span class="ac-model-cfg-control"><span id="connection" class="ac-hint"></span><button id="connect" type="button" class="ac-btn ac-btn-primary ac-btn-sm">Click to Issue verification code</button><button id="disconnect" type="button" class="ac-btn ac-btn-sm">Disconnect</button><span id="device" class="ac-subscription-auth"></span></span></div>
       <form id="model-form" class="ac-ability-row ac-model-cfg-row"><label for="model" class="ac-ability-label"><span class="ac-ability-name">Model</span><span class="ac-ability-desc">Model ID used for new chat turns.</span></label><span class="ac-model-cfg-control"><input id="model" class="ac-input ac-input-sm" placeholder="gpt-6-luna" required pattern="[A-Za-z0-9._-]+"><button class="ac-btn ac-btn-primary ac-btn-sm">Save model</button></span></form>
     </div>
-    </div><div id="identity-page" class="agent-detail-body" hidden></div><div id="abilities-page" hidden></div><div id="members-page" class="agent-detail-body" hidden></div><div id="config-page" class="agent-detail-body" hidden></div></div></div>`;
+    </div><div id="identity-page" class="agent-detail-body" hidden></div><div id="abilities-page" hidden></div><div id="members-page" class="agent-detail-body" hidden></div><div id="artifacts-page" class="agent-detail-body" hidden></div><div id="config-page" class="agent-detail-body" hidden></div></div></div>`;
   const pages=await loadAgentPages();
   configPage=pages.find(page=>page.type==='directory');
   sessionsDescriptor=pages.find(page=>page.type==='sessions');
@@ -429,7 +430,7 @@ async function showAgentView(view,routeMode='push'){
   disposeSessionsPage();$('sessions-region').hidden=true;$('create-region').hidden=true;
   const pages=[configPage,...agentPages];
   const canManage=agentRoster.find(agent=>agent.id===agentId)?.can_manage===true;
-  const selected=!canManage&&!['model','abilities'].includes(view)?'abilities':pages.some(page=>page.id===view)?view:'config';
+  const selected=!canManage&&!['model','abilities','artifacts'].includes(view)?'abilities':pages.some(page=>page.id===view)?view:'config';
   for(const page of pages){
     $(page.panelId).hidden=page.id!==selected;
     const tab=$('agent-tab-'+page.id);
@@ -445,6 +446,7 @@ async function showAgentView(view,routeMode='push'){
   if(selected==='identity')await renderIdentity($('identity-page'),api,{agentId,onSaved:agent=>{const saved=agentRoster.find(item=>item.id===agentId);if(saved)saved.name=agent.name;renderAgentCards();}});
   if(selected==='abilities')await renderAbilities($('abilities-page'),api,{agentId});
   if(selected==='members')await renderMembers($('members-page'),api,{agentId});
+  if(selected==='artifacts')await renderArtifacts($('artifacts-page'),api,{agentId});
 }
 async function selectAgent(id){
   if(!sessionsScope&&!createScope&&id===agentId){$('agents-detail-region').scrollIntoView({block:'start',behavior:'smooth'});return;}

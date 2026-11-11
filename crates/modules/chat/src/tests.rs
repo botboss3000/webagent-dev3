@@ -755,6 +755,21 @@ mod main_chat {
     }
 
     #[test]
+    fn deleting_a_topic_waits_for_its_timed_entries() {
+        let mut state = empty();
+        let mut c = contribution();
+        c.entry.timing = Some(json!({"kind":"once","at_ms":1}));
+        contribute(&mut state, &c, "a", "p1", true).unwrap();
+        assert!(delete_topic(&mut state, "goal").is_err());
+        c.entry.state = "cancelled".into();
+        contribute(&mut state, &c, "a", "p2", true).unwrap();
+        delete_topic(&mut state, "goal").unwrap();
+        assert!(state["topics"].get("goal").is_none());
+        assert!(render_notes(&state).is_none());
+        assert!(delete_topic(&mut state, "goal").is_err());
+    }
+
+    #[test]
     fn notes_render_whole_and_as_updates_from_other_sessions() {
         let mut state = empty();
         assert!(render_notes(&state).is_none());

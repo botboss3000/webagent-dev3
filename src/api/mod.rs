@@ -399,6 +399,18 @@ pub(super) fn router(app: App) -> Router {
             axum::routing::delete(embed::revoke),
         )
         .route(
+            "/agents/{id}/saved-scripts",
+            get(tools::core_scripts::page_read),
+        )
+        .route(
+            "/agents/{id}/saved-scripts/proposals/{proposal}",
+            post(tools::core_scripts::page_decide),
+        )
+        .route(
+            "/agents/{id}/saved-scripts/scripts/{name}",
+            axum::routing::delete(tools::core_scripts::page_delete),
+        )
+        .route(
             "/core/vault/{sid}/{name}",
             post(tools::core_vault::save)
                 .layer(DefaultBodyLimit::max(16384))

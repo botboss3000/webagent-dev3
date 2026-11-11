@@ -21,6 +21,7 @@
     "max_parallel_calls": 4,
     "scripts": {
       "max_per_tree": 100,
+      "max_saved": 50,
       "max_steps": 20
     },
     "parallel_modes": {

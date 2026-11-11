@@ -128,12 +128,15 @@ pub struct Scripts {
     pub max_steps: usize,
     /// Most scripts one conversation tree keeps.
     pub max_per_tree: usize,
+    /// Most saved scripts one user keeps per agent.
+    pub max_saved: usize,
 }
 impl Default for Scripts {
     fn default() -> Self {
         Self {
             max_steps: 20,
             max_per_tree: 100,
+            max_saved: 50,
         }
     }
 }
@@ -251,6 +254,7 @@ impl<C: SchemaCatalog> Config<C> {
             || self.tools.parallel_modes.len() > 64
             || !(1..=50).contains(&self.tools.scripts.max_steps)
             || !(1..=1000).contains(&self.tools.scripts.max_per_tree)
+            || !(1..=1000).contains(&self.tools.scripts.max_saved)
         {
             bail!("Invalid parallel tool configuration");
         }

@@ -8,11 +8,30 @@ the same set of browser screenshots for several design options.
 - `script_save {name, description, steps:[{tool, arguments}], params:[{name, description}]}` stores it
   for the tree; saving the same name again replaces it. Up to 20 steps and 100 scripts per
   tree (live limits in `loop-runtime.json`).
-- `script_list {}` shows the tree's scripts: name, description and params (long descriptions
-  are cut to one line).
+- `script_list {}` shows the tree's session scripts and this agent's saved scripts, each with
+  its `scope`, name, description and params (long descriptions are cut to one line), and
+  names saved-script proposals still awaiting approval.
 - `script_run {name, args:{param: "text"}}` runs the steps in order and returns each
   step's result. It stops at the first step that fails; screenshots from steps attach as
-  they do for direct calls.
+  they do for direct calls. A session script runs before a saved one of the same name;
+  pass `scope` to choose.
+
+## Saved scripts
+
+A saved script lasts across conversations: this user and this agent only, never other
+users or agents. You decide the scope:
+
+- Specific to the current work (this page, this design round, this conversation's IDs):
+  keep it a session script.
+- Reusable in later conversations with this agent: `script_save` with `"scope":"saved"`.
+  This only proposes it. Nothing is saved until the user approves it on the agent's
+  Artifacts page (the result's `review` route); tell them it is waiting. A new proposal
+  with the same name replaces your earlier pending one, and approving it replaces the
+  saved script. Up to 50 saved scripts per agent (live limit in `loop-runtime.json`).
+
+Until it is approved, save the same steps as a session script if you need them now. Write
+saved scripts with no conversation-specific values: everything that varies is a param.
+The user can delete a saved script at any time.
 
 `{{param}}` placeholders inside argument strings are replaced with the run's `args` text.
 Arguments only fill text: they cannot add steps or choose tools.
@@ -39,5 +58,5 @@ Writing a script:
 
 Sub-agents: the parent saves the script before starting them and names it in each
 brief, with the args to pass. A sub-agent runs it with `script_run`; it does not need to
-save its own copy. Scripts are private to this user and agent and to this tree; other
-conversations never see them, and they go away with the top-level conversation.
+save its own copy. Session scripts are private to this user and agent and to this tree;
+other conversations never see them, and they go away with the top-level conversation.

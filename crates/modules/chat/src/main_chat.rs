@@ -306,6 +306,31 @@ pub fn contribute(
     apply(state, c, origin, human, now)
 }
 
+/// Deletes a topic and its entries. A topic with an unfinished timed entry is kept: its
+/// scheduled action would outlive the note, so the entry must be done or cancelled first.
+/// A pending proposal for the topic then recreates it if approved, or fails as stale.
+pub fn delete_topic(state: &mut Value, id: &str) -> Result<Value> {
+    let Some(topic) = state["topics"].get(id) else {
+        return Err(anyhow!("Topic not found"));
+    };
+    let scheduled = topic["entries"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .any(|(_, e)| {
+            !e["timing"].is_null() && !matches!(e["state"].as_str(), Some("done" | "cancelled"))
+        });
+    if scheduled {
+        return Err(anyhow!(
+            "Mark this topic's timed entries done or cancelled before deleting it"
+        ));
+    }
+    if let Some(topics) = state["topics"].as_object_mut() {
+        topics.remove(id);
+    }
+    Ok(json!({"status":"deleted","topic_id":id}))
+}
+
 /// Scheduling identity is host-derived; terminal or retimed intents cannot admit another occurrence.
 pub fn action_intent(topic: &Value, entry: &Value) -> String {
     digest(&json!([

@@ -11,9 +11,17 @@
 //! nested pending call (`run.script_steps`) and dispatched through the ordinary foreground
 //! path, which rechecks live policy, ability gates, session mode and approval and takes the
 //! step's own permit. Steps are never human-approved, so a step that would ask is denied.
+//!
+//! Saved scripts last across conversations: one sealed document per user and agent
+//! (`saved_scripts:{agent}`, in the acting user's own store). `script_save` with scope
+//! `saved` only records a proposal; the user approves, rejects or deletes saved scripts
+//! on the agent's Artifacts page through the routes at the end of this file. A saved
+//! script runs exactly like a session script, so its steps meet current policy every run.
 use crate::*;
 use anyhow::bail;
+use axum::Extension;
 use webagent_abilities::scripts::{self, Script, Step};
+use webagent_abilities_host::AbilitiesStore;
 
 pub fn owns(name: &str) -> bool {
     scripts::TOOLS.contains(&name)
@@ -25,8 +33,9 @@ pub fn schemas() -> Vec<Value> {
         "arguments":{"type":"object","description":"The tool's arguments, under 16 KiB as JSON; {{param}} inside a string is replaced at run time"}},
         "required":["tool","arguments"],"additionalProperties":false});
     [
-        ("script_save", "Save a named sequence of read-only or Browser Control tool calls for this conversation and its sub-agents; the same name replaces it. No approval needed; a step that would need approval is refused", json!({
+        ("script_save", "Save a named sequence of read-only or Browser Control tool calls. Scope session (default): for this conversation and its sub-agents, saved at once; the same name replaces it. Scope saved: propose a reusable script for later conversations with this agent; it is saved only after the user approves it on the Artifacts page. A step that would need approval is refused", json!({
             "name":{"type":"string","pattern":"^[A-Za-z0-9_-]{1,64}$"},
+            "scope":{"type":"string","enum":["session","saved"],"description":"session (default) for this work only; saved for a script worth reusing in other conversations"},
             "description":{"type":"string","minLength":1,"maxLength":1000,"description":"One short sentence, about 150 characters: what the script does. Describe each param in its own description"},
             "steps":{"type":"array","minItems":1,"items":step,"description":"1 to the configured step limit (20 by default)"},
             "params":{"type":"array","maxItems":10,"items":{"anyOf":[
@@ -37,9 +46,10 @@ pub fn schemas() -> Vec<Value> {
                 {"type":"string","pattern":"^[A-Za-z0-9_]{1,32}$"}]},
                 "description":"Up to 10 distinct params usable as {{name}} in step argument strings"}}),
             vec!["name","description","steps"]),
-        ("script_list", "List the session scripts saved for this conversation tree: name, description and params", json!({}), vec![]),
-        ("script_run", "Run a saved session script's steps in order as ordinary tool calls; stops at the first failed step and returns every step's result", json!({
+        ("script_list", "List this conversation tree's session scripts and this agent's approved saved scripts: scope, name, description and params, plus saved-script proposals awaiting the user's approval", json!({}), vec![]),
+        ("script_run", "Run a session or saved script's steps in order as ordinary tool calls; stops at the first failed step and returns every step's result. Without scope, a session script of that name runs before a saved one", json!({
             "name":{"type":"string","pattern":"^[A-Za-z0-9_-]{1,64}$"},
+            "scope":{"type":"string","enum":["session","saved"]},
             "args":{"type":"object","additionalProperties":{"type":"string","maxLength":2000},"description":"Text for each declared param, up to 2000 characters each"}}),
             vec!["name"]),
     ]
@@ -72,6 +82,25 @@ async fn load(app: &App, sid: &str) -> Result<(String, Value)> {
     }
     let doc = app.store.get(&doc_key).await?.unwrap_or(empty);
     Ok((doc_key, doc))
+}
+
+/// The acting user's store: saved scripts belong to the person, not the session owner.
+async fn user_store(app: &App) -> Result<Store> {
+    app.store.for_user(shared_chat::actor(app)).await
+}
+
+fn saved_key(agent: &str) -> String {
+    format!("saved_scripts:{agent}")
+}
+
+/// This user's saved scripts for the session's agent.
+async fn load_saved(app: &App, sid: &str) -> Result<Value> {
+    let agent = session_agent_id(app, sid).await?;
+    Ok(user_store(app)
+        .await?
+        .get(&saved_key(&agent))
+        .await?
+        .unwrap_or_else(scripts::saved_empty))
 }
 
 /// Whether `tool` would run now without approval for this session and run.
@@ -118,7 +147,15 @@ async fn refusal(app: &App, sid: &str, run: &Value, step: &Step) -> Result<Optio
 }
 
 async fn save(app: &App, sid: &str, run: &Value, args: &Value) -> Result<Value> {
-    let script: Script = match serde_json::from_value(args.clone()) {
+    let scope = args["scope"].as_str().unwrap_or("session");
+    if !matches!(scope, "session" | "saved") {
+        return Ok(json!({"status":"error","output":"scope must be session or saved"}));
+    }
+    let mut fields = args.clone();
+    if let Some(object) = fields.as_object_mut() {
+        object.remove("scope");
+    }
+    let script: Script = match serde_json::from_value(fields) {
         Ok(script) => script,
         Err(error) => {
             return Ok(json!({"status":"error","output":format!("Invalid script: {error}")}))
@@ -132,6 +169,9 @@ async fn save(app: &App, sid: &str, run: &Value, args: &Value) -> Result<Value> 
         if let Some(reason) = refusal(app, sid, run, step).await? {
             return Ok(json!({"status":"denied","output":format!("Step {}: {reason}", index + 1)}));
         }
+    }
+    if scope == "saved" {
+        return propose_saved(app, sid, &script, limits.max_saved).await;
     }
     let _guard = app.gate.lock().await;
     let (doc_key, mut doc) = load(app, sid).await?;
@@ -149,27 +189,63 @@ async fn save(app: &App, sid: &str, run: &Value, args: &Value) -> Result<Value> 
     Ok(json!({"status":"success","output":{"saved":name,"steps":script.steps.len()}}))
 }
 
+/// Records `script` as a saved-script proposal for the user to decide on the Artifacts page.
+async fn propose_saved(app: &App, sid: &str, script: &Script, max_saved: usize) -> Result<Value> {
+    let agent = session_agent_id(app, sid).await?;
+    let id = uuid();
+    let now = now();
+    let mut change = |doc: &mut Value| {
+        if doc.is_null() {
+            *doc = scripts::saved_empty();
+        }
+        scripts::propose(doc, script, &id, sid, now, max_saved).map(|()| Value::Null)
+    };
+    if let Err(error) = user_store(app)
+        .await?
+        .saved_scripts_change(&agent, None, &mut change)
+        .await
+    {
+        return Ok(json!({"status":"denied","output":error.to_string()}));
+    }
+    Ok(
+        json!({"status":"success","output":{"proposed":script.name,"proposal_id":id,
+        "saved":false,"awaiting_approval":true,
+        "review":format!("/app?tab=agents&agent={agent}&agentView=artifacts"),
+        "next":"Tell the user it awaits their approval on the agent's Artifacts page; until then use a session script"}}),
+    )
+}
+
+/// One listed script: description cut to a line, params with short descriptions.
+fn summary(scope: &str, name: &str, s: &Value) -> Value {
+    let params: Vec<Value> = s["params"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|p| match p {
+            // Scripts saved before params had descriptions store bare names.
+            Value::String(name) => json!({"name":name}),
+            p => json!({"name":p["name"],"description":brief(&p["description"])}),
+        })
+        .collect();
+    json!({"scope":scope,"name":name,"description":brief(&s["description"]),"params":params})
+}
+
 async fn list(app: &App, sid: &str) -> Result<Value> {
     let (_, doc) = load(app, sid).await?;
-    let scripts: Vec<Value> = doc["scripts"]
+    let saved = load_saved(app, sid).await?;
+    let session = doc["scripts"].as_object().into_iter().flatten();
+    let kept = saved["scripts"].as_object().into_iter().flatten();
+    let scripts: Vec<Value> = session
+        .map(|(name, s)| summary("session", name, s))
+        .chain(kept.map(|(name, s)| summary("saved", name, &s["script"])))
+        .collect();
+    let pending: Vec<&Value> = saved["proposals"]
         .as_object()
         .into_iter()
         .flatten()
-        .map(|(name, s)| {
-            let params: Vec<Value> = s["params"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|p| match p {
-                    // Scripts saved before params had descriptions store bare names.
-                    Value::String(name) => json!({"name":name}),
-                    p => json!({"name":p["name"],"description":brief(&p["description"])}),
-                })
-                .collect();
-            json!({"name":name,"description":brief(&s["description"]),"params":params})
-        })
+        .map(|(_, p)| &p["script"]["name"])
         .collect();
-    Ok(json!({"status":"success","output":{"scripts":scripts}}))
+    Ok(json!({"status":"success","output":{"scripts":scripts,"awaiting_approval":pending}}))
 }
 
 /// A listed description, cut to about one line.
@@ -206,13 +282,19 @@ async fn run_script(
     cancel: CancellationToken,
 ) -> Result<Value> {
     let name = args["name"].as_str().unwrap_or("");
-    let (_, doc) = load(app, call.sid).await?;
-    let Some(script) = doc["scripts"]
-        .get(name)
-        .and_then(|s| serde_json::from_value::<Script>(s.clone()).ok())
-    else {
+    let scope = args["scope"].as_str();
+    let session = match scope {
+        Some("saved") => Value::Null,
+        _ => load(app, call.sid).await?.1["scripts"][name].clone(),
+    };
+    let found = if session.is_null() && scope != Some("session") {
+        load_saved(app, call.sid).await?["scripts"][name]["script"].clone()
+    } else {
+        session
+    };
+    let Ok(script) = serde_json::from_value::<Script>(found) else {
         return Ok(
-            json!({"status":"error","output":format!("No script named {name}; script_list shows this conversation's scripts")}),
+            json!({"status":"error","output":format!("No script named {name}; script_list shows this conversation's and this agent's scripts")}),
         );
     };
     let empty = serde_json::Map::new();
@@ -311,6 +393,117 @@ pub async fn execute(
         "script_run" => Box::pin(run_script(app, call, &run, args, cancel)).await,
         _ => bail!("Unknown script tool"),
     }
+}
+
+/// The caller's own store, once they may use `agent` at all.
+async fn page_store(
+    app: &App,
+    identity: &Value,
+    agent: &str,
+) -> std::result::Result<Store, ApiError> {
+    let actor = identity["_user_id"]
+        .as_str()
+        .ok_or_else(|| bad("Caller required"))?;
+    let rights = app
+        .store
+        .agent_authority(actor, agent)
+        .await
+        .map_err(|_| ApiError(StatusCode::NOT_FOUND, "Agent not found".into()))?;
+    if rights["can_manage"] != true
+        && !app
+            .store
+            .live_access(actor, agent)
+            .await
+            .is_ok_and(|a| a.admitted())
+    {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Agent access unavailable".into(),
+        ));
+    }
+    Ok(app.store.for_user(actor).await?)
+}
+
+/// GET: the caller's saved scripts and pending proposals for one agent.
+pub async fn page_read(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Path(agent): Path<String>,
+) -> Api {
+    let store = page_store(&app, &identity, &agent).await?;
+    let doc = store
+        .get(&saved_key(&agent))
+        .await?
+        .unwrap_or_else(scripts::saved_empty);
+    let limits = loop_runtime::Config::read(&app.runtime_path)?.tools.scripts;
+    Ok(Json(
+        json!({"agent_id":agent,"revision":doc["revision"],"scripts":doc["scripts"],
+        "proposals":doc["proposals"],"max_saved":limits.max_saved}),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Decision {
+    expected_revision: u64,
+    approve: bool,
+}
+
+/// POST: approve (save exactly as proposed) or reject one pending proposal.
+pub async fn page_decide(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Path((agent, id)): Path<(String, String)>,
+    Json(body): Json<Decision>,
+) -> Api {
+    let store = page_store(&app, &identity, &agent).await?;
+    let limits = loop_runtime::Config::read(&app.runtime_path)?.tools.scripts;
+    let now = now();
+    let mut change = |doc: &mut Value| {
+        if doc.is_null() {
+            *doc = scripts::saved_empty();
+        }
+        scripts::decide(
+            doc,
+            &id,
+            body.approve,
+            now,
+            limits.max_saved,
+            limits.max_steps,
+        )
+    };
+    store
+        .saved_scripts_change(&agent, Some(body.expected_revision), &mut change)
+        .await
+        .map(Json)
+        .map_err(|error| conflict(&error.to_string()))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Expected {
+    expected_revision: u64,
+}
+
+/// DELETE: remove one saved script.
+pub async fn page_delete(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Path((agent, name)): Path<(String, String)>,
+    Json(body): Json<Expected>,
+) -> Api {
+    let store = page_store(&app, &identity, &agent).await?;
+    let mut change = |doc: &mut Value| {
+        if doc.is_null() {
+            *doc = scripts::saved_empty();
+        }
+        scripts::delete_saved(doc, &name).map(|()| json!({"status":"deleted"}))
+    };
+    store
+        .saved_scripts_change(&agent, Some(body.expected_revision), &mut change)
+        .await
+        .map(Json)
+        .map_err(|error| conflict(&error.to_string()))
 }
 
 #[cfg(test)]
@@ -513,6 +706,51 @@ mod tests {
             {"tool":"script_run","arguments":{"name":"n"}}]});
         assert_eq!(
             tool(&app, &sid, "script_save", nested).await["status"],
+            "denied"
+        );
+    }
+
+    #[tokio::test]
+    async fn saved_scripts_wait_for_approval_then_run_in_new_conversations() {
+        let (_root, app) = fixture().await;
+        let sid = session(&app).await;
+        let mut proposal = add();
+        proposal["scope"] = json!("saved");
+        let proposed = tool(&app, &sid, "script_save", proposal).await;
+        assert_eq!(proposed["output"]["awaiting_approval"], true, "{proposed}");
+        let later = session(&app).await;
+        let listed = tool(&app, &later, "script_list", json!({})).await;
+        assert_eq!(
+            listed["output"]["scripts"],
+            json!([]),
+            "a proposal is not saved"
+        );
+        assert_eq!(listed["output"]["awaiting_approval"], json!(["sum"]));
+        let id = proposed["output"]["proposal_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mut approve = |doc: &mut Value| scripts::decide(doc, &id, true, 1, 50, 20);
+        app.store
+            .saved_scripts_change("shared_default", Some(1), &mut approve)
+            .await
+            .unwrap();
+        let listed = tool(&app, &later, "script_list", json!({})).await;
+        assert_eq!(listed["output"]["scripts"][0]["scope"], "saved");
+        let args = json!({"name":"sum","args":{"x":"UTC"}});
+        let ran = tool(&app, &later, "script_run", args.clone()).await;
+        assert_eq!(ran["status"], "success", "{ran}");
+        let mut session_only = args;
+        session_only["scope"] = json!("session");
+        assert_eq!(
+            tool(&app, &later, "script_run", session_only).await["status"],
+            "error"
+        );
+        // Saved-scope proposals meet the same step rules as session scripts.
+        let write = json!({"name":"w","description":"Write","scope":"saved","steps":[
+            {"tool":"file_write","arguments":{"path":"x","content":"y"}}]});
+        assert_eq!(
+            tool(&app, &sid, "script_save", write).await["status"],
             "denied"
         );
     }

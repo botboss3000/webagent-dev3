@@ -31,7 +31,11 @@ async fn core_vault_submission_is_nonce_revision_and_user_bound() {
     assert_eq!(output["revision"], 1);
     assert!(output.get("value").is_none());
     // The spent form is cleared so its card disappears everywhere; the replayed receipt still answers retries.
-    let ui = store.get("module_state:core_ui:source").await.unwrap().unwrap();
+    let ui = store
+        .get("module_state:core_ui:source")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(ui["state"], json!({}));
     assert_eq!(ui["revision"], 2);
     assert_eq!(
@@ -45,11 +49,10 @@ async fn core_vault_submission_is_nonce_revision_and_user_bound() {
         .core_save_credential("source", "example", &request, 0, "different")
         .await
         .is_err());
-    let raw: Vec<u8> =
-        sqlx::query_scalar("SELECT value FROM docs WHERE key='core_vault:example'")
-            .fetch_one(&store.pool)
-            .await
-            .unwrap();
+    let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key='core_vault:example'")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
     assert!(!raw
         .windows(value.len())
         .any(|part| part == value.as_bytes()));
@@ -119,4 +122,43 @@ async fn core_webhook_replay_revocation_and_bounded_retention() {
         .core_webhook_ingest(&id, 1, "fixture-fingerprint", "four", &body)
         .await
         .is_err());
+}
+
+#[tokio::test]
+async fn saved_scripts_change_is_revision_checked() {
+    let root = tempfile::tempdir().unwrap();
+    let store = store_core(root.path(), "admin").await;
+    let mut seen = Value::Null;
+    let mut first = |doc: &mut Value| {
+        seen = doc.clone();
+        *doc = json!({"revision":1,"scripts":{"a":{}},"proposals":{}});
+        Ok(json!("ok"))
+    };
+    store
+        .saved_scripts_change("shared_default", None, &mut first)
+        .await
+        .unwrap();
+    assert!(
+        seen.is_null(),
+        "a missing document reaches the change as null"
+    );
+    let mut noop = |_: &mut Value| Ok(Value::Null);
+    assert!(store
+        .saved_scripts_change("shared_default", Some(0), &mut noop)
+        .await
+        .is_err());
+    let mut failing = |doc: &mut Value| {
+        doc["revision"] = json!(9);
+        anyhow::bail!("refused")
+    };
+    assert!(store
+        .saved_scripts_change("shared_default", Some(1), &mut failing)
+        .await
+        .is_err());
+    let doc = store
+        .get("saved_scripts:shared_default")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(doc["revision"], 1, "a failed change writes nothing");
 }

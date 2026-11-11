@@ -204,6 +204,29 @@ pub(crate) async fn agent_decide(
     let (app, _) = agent_scope(&app, &identity, &agent, true).await?;
     decide_api(Extension(app), Path(id), Json(body)).await
 }
+/// Deletes one Main Notes topic; managers only, revision- and request-checked like writes.
+pub(crate) async fn agent_delete_topic(
+    Extension(app): Extension<App>,
+    Extension(identity): Extension<Value>,
+    Path((agent, id)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> Api {
+    let (app, _) = agent_scope(&app, &identity, &agent, true).await?;
+    let (expected, request) = request_fields(&body).map_err(error)?;
+    let result = app
+        .store
+        .main_chat_change(
+            expected,
+            &request,
+            &digest(&json!(["delete_topic", id])),
+            vec![],
+            |state| webagent_chat::main_chat::delete_topic(state, &id),
+        )
+        .await
+        .map_err(error)?;
+    wake::notify(&app).await;
+    Ok(Json(result))
+}
 /// Point the notes state at its Main Chat session. A session that no longer exists is
 /// dropped: keeping it would hand every page a dead link and a 404 event stream.
 async fn resolve_chat_session(state: &mut Value, store: &Store) -> Result<()> {

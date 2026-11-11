@@ -790,6 +790,10 @@ pub(crate) fn router() -> Router<App> {
             "/models/agents/{agent}/main-notes/proposals/{id}",
             post(crate::main_chat::agent_decide),
         )
+        .route(
+            "/models/agents/{agent}/main-notes/topics/{id}/delete",
+            post(crate::main_chat::agent_delete_topic),
+        )
         .route("/user/status", get(user_status))
         .route("/sessions", get(sessions).post(create_session))
         .route("/storage", get(storage))

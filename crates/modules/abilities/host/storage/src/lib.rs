@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::future::Future;
 use webagent_host_core::StoreCore;
 
+mod saved_scripts;
 mod vault;
 mod webhooks;
 
@@ -36,6 +37,16 @@ pub trait AbilitiesStore {
         event_id: &'a str,
         payload: &'a Value,
     ) -> impl Future<Output = Result<Value>> + Send + 'a;
+    /// Changes this user's saved scripts for `agent` under the writer lock. A missing
+    /// document reaches `change` as null. With `expected`, a different document revision
+    /// fails without changing anything. The document is written even when `change` only
+    /// normalizes it; an error from `change` writes nothing.
+    fn saved_scripts_change<'a>(
+        &'a self,
+        agent: &'a str,
+        expected: Option<u64>,
+        change: &'a mut (dyn FnMut(&mut Value) -> Result<Value> + Send),
+    ) -> impl Future<Output = Result<Value>> + Send + 'a;
 }
 
 impl AbilitiesStore for StoreCore {
@@ -58,6 +69,14 @@ impl AbilitiesStore for StoreCore {
         payload: &'a Value,
     ) -> impl Future<Output = Result<Value>> + Send + 'a {
         webhooks::ingest(self, id, revision, token_digest, event_id, payload)
+    }
+    fn saved_scripts_change<'a>(
+        &'a self,
+        agent: &'a str,
+        expected: Option<u64>,
+        change: &'a mut (dyn FnMut(&mut Value) -> Result<Value> + Send),
+    ) -> impl Future<Output = Result<Value>> + Send + 'a {
+        saved_scripts::change(self, agent, expected, change)
     }
 }
 

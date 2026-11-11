@@ -24,7 +24,10 @@ Write modes are `every_write` (agent contributions become proposals), `new_topic
 (new topics and changed approved scope need approval), and `automatic`. Human
 contributions commit directly and approve their supplied topic scope. Proposed
 changes are approved/rejected through the dedicated Notes UI, with topic revision
-checks preventing approval of stale content. Temporary plans and minor changes
+checks preventing approval of stale content. The Notes UI also appears on the agent's
+Artifacts page, where managers can delete a topic (POST
+`/models/agents/{agent}/main-notes/topics/{id}/delete`); a topic with a timed entry that is
+not done or cancelled is kept, so no scheduled action outlives its note. Temporary plans and minor changes
 remain session-local; contribute ongoing goals, decisions, blockers and actions.
 
 ## Durable data and API contracts
