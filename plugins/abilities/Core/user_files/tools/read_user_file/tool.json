@@ -29,5 +29,14 @@
       "name"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "read one of my saved files",
+      "open my saved document"
+    ],
+    "keywords": [
+      "read saved file"
+    ]
   }
 }

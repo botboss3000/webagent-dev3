@@ -39,5 +39,14 @@
       "query"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "search the wiki",
+      "find wiki articles about billing"
+    ],
+    "keywords": [
+      "wiki search"
+    ]
   }
 }

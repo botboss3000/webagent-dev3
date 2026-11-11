@@ -44,5 +44,15 @@
       "expected_production_sha"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "publish the site to production",
+      "make the preview live"
+    ],
+    "keywords": [
+      "publish",
+      "production"
+    ]
   }
 }

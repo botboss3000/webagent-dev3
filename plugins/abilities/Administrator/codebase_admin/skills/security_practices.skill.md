@@ -3,6 +3,8 @@ id: security_practices
 title: Security practices
 when_to_use: Use when adding or changing HTTP routes, storage lookups, shared or cross-user features, tool execution, UI rendering, or anything that handles request input.
 default_mode: discoverable
+examples: add a new HTTP route; check this endpoint for authorization; handle user input safely
+keywords: security, authorization, input validation
 minimum_access: registered
 ---
 

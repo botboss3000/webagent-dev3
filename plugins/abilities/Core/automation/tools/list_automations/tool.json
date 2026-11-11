@@ -23,5 +23,15 @@
     },
     "required": [],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "list my automations",
+      "which scheduled tasks exist"
+    ],
+    "keywords": [
+      "automations",
+      "schedules"
+    ]
   }
 }

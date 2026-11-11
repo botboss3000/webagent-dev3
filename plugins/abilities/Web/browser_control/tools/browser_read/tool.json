@@ -163,5 +163,19 @@
       "action"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "open a web page",
+      "take a screenshot of the page",
+      "check how the page looks on mobile",
+      "read text on a website"
+    ],
+    "keywords": [
+      "browser",
+      "screenshot",
+      "web page",
+      "navigate"
+    ]
   }
 }

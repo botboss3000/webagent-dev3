@@ -3,6 +3,8 @@ id: subagents
 title: Work faster with sub agents
 when_to_use: Use whenever a task splits into independent parts (variants, separate files or pages, separate questions to research), or when a long piece of work would crowd this conversation.
 default_mode: discoverable
+examples: split this into parallel tasks; research three questions at once; delegate parts to helpers
+keywords: parallel, sub agent, split task
 ---
 
 # Work faster with sub agents

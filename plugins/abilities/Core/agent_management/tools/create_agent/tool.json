@@ -19,5 +19,15 @@
       "request"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "create a new agent",
+      "make an assistant for customer support"
+    ],
+    "keywords": [
+      "new agent",
+      "create agent"
+    ]
   }
 }

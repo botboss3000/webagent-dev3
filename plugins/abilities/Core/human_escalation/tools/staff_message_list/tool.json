@@ -28,5 +28,13 @@
     },
     "required": [],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "list visitor messages for staff"
+    ],
+    "keywords": [
+      "staff messages"
+    ]
   }
 }

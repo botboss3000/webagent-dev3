@@ -68,5 +68,15 @@
       "delay_ms"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "remind me tomorrow at 9",
+      "set a reminder in an hour"
+    ],
+    "keywords": [
+      "remind",
+      "reminder"
+    ]
   }
 }

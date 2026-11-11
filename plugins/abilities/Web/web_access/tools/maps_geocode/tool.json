@@ -54,5 +54,16 @@
       "action"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "find the coordinates of an address",
+      "distance between two cities"
+    ],
+    "keywords": [
+      "geocode",
+      "address",
+      "distance"
+    ]
   }
 }

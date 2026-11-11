@@ -44,5 +44,15 @@
       "commit_sha"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "build a preview of my site changes",
+      "deploy a draft to Cloudflare for review"
+    ],
+    "keywords": [
+      "preview",
+      "cloudflare"
+    ]
   }
 }

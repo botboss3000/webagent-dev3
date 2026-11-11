@@ -70,6 +70,7 @@ mod shared_chat;
 mod shared_projection;
 mod source_control;
 mod tool_execution;
+mod tool_match_eval;
 mod usage_reports;
 #[path = "api/user.rs"]
 mod user_api;

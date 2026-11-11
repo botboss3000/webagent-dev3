@@ -21,5 +21,14 @@
       "entry_id"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "switch to another model",
+      "use a different model for this run"
+    ],
+    "keywords": [
+      "switch model"
+    ]
   }
 }

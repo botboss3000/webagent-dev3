@@ -23,5 +23,14 @@
     },
     "required": [],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "list wiki articles",
+      "what is in the wiki"
+    ],
+    "keywords": [
+      "wiki"
+    ]
   }
 }

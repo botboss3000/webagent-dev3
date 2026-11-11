@@ -29,5 +29,14 @@
       "request"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "change another agent's instructions",
+      "edit the support agent's prompt"
+    ],
+    "keywords": [
+      "agent prompt"
+    ]
   }
 }

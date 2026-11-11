@@ -35,5 +35,13 @@
       "arguments"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "call a tool on the MCP server"
+    ],
+    "keywords": [
+      "mcp tool"
+    ]
   }
 }

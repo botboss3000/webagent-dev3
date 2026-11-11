@@ -44,5 +44,15 @@
       "expected_deployment_id"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "roll back the website",
+      "restore the previous site version"
+    ],
+    "keywords": [
+      "rollback",
+      "restore site"
+    ]
   }
 }

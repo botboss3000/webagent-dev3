@@ -39,5 +39,13 @@
       "expected_revision"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "mark a visitor message as handled"
+    ],
+    "keywords": [
+      "message status"
+    ]
   }
 }

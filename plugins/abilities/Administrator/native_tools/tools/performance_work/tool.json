@@ -61,5 +61,17 @@
       "request_id",
       "expected_inputs_sha256"
     ]
+  },
+  "match": {
+    "examples": [
+      "benchmark this code",
+      "profile CPU and memory use",
+      "measure the speed of a change"
+    ],
+    "keywords": [
+      "benchmark",
+      "profile",
+      "performance"
+    ]
   }
 }

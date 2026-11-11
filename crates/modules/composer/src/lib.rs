@@ -14,4 +14,4 @@ pub mod service;
 pub mod tokenizer;
 pub mod values;
 
-pub use service::{evaluate, serve};
+pub use service::{evaluate, load_embedder, serve, Ranker};

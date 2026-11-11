@@ -43,5 +43,14 @@
       "revision"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "change this agent's setting",
+      "set the agent's temperature"
+    ],
+    "keywords": [
+      "agent setting"
+    ]
   }
 }

@@ -22,5 +22,14 @@
       "request_json"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "ask the decision model to choose between options"
+    ],
+    "keywords": [
+      "jev",
+      "decision model"
+    ]
   }
 }

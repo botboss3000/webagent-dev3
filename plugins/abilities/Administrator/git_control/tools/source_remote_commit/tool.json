@@ -78,5 +78,15 @@
       "changes"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "commit file edits to the draft branch on GitHub",
+      "save site changes on GitHub"
+    ],
+    "keywords": [
+      "github commit",
+      "draft branch"
+    ]
   }
 }

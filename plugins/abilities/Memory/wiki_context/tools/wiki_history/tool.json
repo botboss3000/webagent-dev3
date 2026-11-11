@@ -26,5 +26,13 @@
       "slug"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "show a wiki page's history"
+    ],
+    "keywords": [
+      "wiki history"
+    ]
   }
 }

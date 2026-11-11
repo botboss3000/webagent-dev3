@@ -29,5 +29,16 @@
       "command"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "open a terminal",
+      "start an interactive shell"
+    ],
+    "keywords": [
+      "terminal",
+      "pty",
+      "shell"
+    ]
   }
 }

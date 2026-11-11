@@ -33,5 +33,14 @@
       "expected_revision"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "add a knowledge file",
+      "update the FAQ document"
+    ],
+    "keywords": [
+      "save knowledge"
+    ]
   }
 }

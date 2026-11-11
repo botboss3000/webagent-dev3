@@ -26,5 +26,14 @@
       "query"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "search my other chats",
+      "find the session where we talked about billing"
+    ],
+    "keywords": [
+      "search sessions"
+    ]
   }
 }

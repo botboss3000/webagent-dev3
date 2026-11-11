@@ -26,5 +26,15 @@
       "url"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "read this web page",
+      "get the text of a URL"
+    ],
+    "keywords": [
+      "url",
+      "web page"
+    ]
   }
 }

@@ -36,5 +36,14 @@
       "instructions"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "turn the sub agent into a saved agent",
+      "save this child task as an agent"
+    ],
+    "keywords": [
+      "promote"
+    ]
   }
 }

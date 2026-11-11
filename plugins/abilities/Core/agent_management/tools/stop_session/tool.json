@@ -20,5 +20,15 @@
       "session_id"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "stop the running session",
+      "cancel the sub agent"
+    ],
+    "keywords": [
+      "stop",
+      "cancel session"
+    ]
   }
 }

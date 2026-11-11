@@ -13,5 +13,13 @@
     "properties": {},
     "required": [],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "go back to the default model"
+    ],
+    "keywords": [
+      "default model"
+    ]
   }
 }

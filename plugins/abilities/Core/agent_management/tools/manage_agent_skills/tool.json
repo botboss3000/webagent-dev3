@@ -46,5 +46,14 @@
       "action"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "list an agent's own skills",
+      "save a skill for another agent"
+    ],
+    "keywords": [
+      "agent skills"
+    ]
   }
 }

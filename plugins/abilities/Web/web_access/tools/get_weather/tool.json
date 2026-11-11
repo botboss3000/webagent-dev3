@@ -28,5 +28,15 @@
       "location"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "what is the weather in Berlin",
+      "will it rain tomorrow"
+    ],
+    "keywords": [
+      "weather",
+      "forecast"
+    ]
   }
 }

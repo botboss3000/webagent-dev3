@@ -33,5 +33,15 @@
       "text"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "send a message to another session",
+      "steer the running sub agent"
+    ],
+    "keywords": [
+      "message session",
+      "steer"
+    ]
   }
 }

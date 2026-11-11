@@ -140,5 +140,17 @@
       "action"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "click a button on the page",
+      "type into the search box",
+      "fill in a web form"
+    ],
+    "keywords": [
+      "click",
+      "type",
+      "form"
+    ]
   }
 }

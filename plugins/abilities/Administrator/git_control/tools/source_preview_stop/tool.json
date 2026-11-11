@@ -32,5 +32,14 @@
       "request_id"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "remove the site preview",
+      "cancel the preview build"
+    ],
+    "keywords": [
+      "stop preview"
+    ]
   }
 }

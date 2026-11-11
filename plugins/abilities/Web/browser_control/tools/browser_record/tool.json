@@ -24,5 +24,15 @@
       "action"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "record a short video of the page",
+      "capture an animation"
+    ],
+    "keywords": [
+      "record",
+      "video"
+    ]
   }
 }

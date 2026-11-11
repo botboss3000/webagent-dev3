@@ -102,5 +102,14 @@
       "expected_revision"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "change an automation's schedule",
+      "edit a scheduled task"
+    ],
+    "keywords": [
+      "update automation"
+    ]
   }
 }

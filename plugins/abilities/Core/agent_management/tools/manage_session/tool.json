@@ -33,5 +33,17 @@
       "request"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "rename this session",
+      "archive a chat",
+      "pin a session"
+    ],
+    "keywords": [
+      "rename",
+      "archive",
+      "pin"
+    ]
   }
 }

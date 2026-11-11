@@ -24,5 +24,14 @@
       "expected_revision"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "delete an automation",
+      "cancel a scheduled task"
+    ],
+    "keywords": [
+      "cancel automation"
+    ]
   }
 }

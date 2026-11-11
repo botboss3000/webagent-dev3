@@ -43,5 +43,15 @@
       "allowed_tools"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "add an MCP server",
+      "connect a new MCP connection"
+    ],
+    "keywords": [
+      "mcp",
+      "connect server"
+    ]
   }
 }

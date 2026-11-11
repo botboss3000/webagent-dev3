@@ -17,5 +17,15 @@
     },
     "required": [],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "which GitHub repository is configured",
+      "can I push to the repo"
+    ],
+    "keywords": [
+      "github",
+      "repository"
+    ]
   }
 }

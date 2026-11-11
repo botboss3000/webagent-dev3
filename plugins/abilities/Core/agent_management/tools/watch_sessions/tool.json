@@ -30,5 +30,15 @@
       "expires_ms"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "tell me when the other session finishes",
+      "watch a session for its reply"
+    ],
+    "keywords": [
+      "watch",
+      "notify when done"
+    ]
   }
 }

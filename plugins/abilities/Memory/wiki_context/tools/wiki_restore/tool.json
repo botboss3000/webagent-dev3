@@ -34,5 +34,14 @@
       "expected_revision"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "restore a deleted wiki page",
+      "revert a wiki article"
+    ],
+    "keywords": [
+      "restore wiki"
+    ]
   }
 }

@@ -20,5 +20,14 @@
       "agent_id"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "show details of an agent",
+      "read an agent's identity"
+    ],
+    "keywords": [
+      "agent details"
+    ]
   }
 }

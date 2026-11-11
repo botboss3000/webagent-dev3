@@ -782,6 +782,10 @@ async fn run_process() -> Result<()> {
         // Score the matcher against request sets (crates/modules/composer/eval/*.jsonl).
         return webagent_composer::evaluate(&std::env::args().skip(2).collect::<Vec<_>>());
     }
+    if std::env::args().nth(1).as_deref() == Some("--tool-match-eval") {
+        // Score list_tools/list_skills ranking (crates/modules/composer/eval/tool-match-eval.jsonl).
+        return crate::tool_match_eval::evaluate(&std::env::args().skip(2).collect::<Vec<_>>());
+    }
     if std::env::args().nth(1).as_deref() == Some("--tool-worker") {
         // The tool worker, started by the container launcher under the worker identity.
         #[cfg(feature = "local-worker")]

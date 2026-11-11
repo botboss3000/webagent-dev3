@@ -23,5 +23,16 @@
     },
     "required": [],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "list my sessions",
+      "show recent chats",
+      "which sub agents are running"
+    ],
+    "keywords": [
+      "sessions",
+      "chats"
+    ]
   }
 }

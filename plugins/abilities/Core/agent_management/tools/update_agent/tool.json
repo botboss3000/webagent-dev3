@@ -24,5 +24,14 @@
       "request"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "rename an agent",
+      "change an agent's description"
+    ],
+    "keywords": [
+      "update agent"
+    ]
   }
 }

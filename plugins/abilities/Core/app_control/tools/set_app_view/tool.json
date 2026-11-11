@@ -29,5 +29,15 @@
       "view"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "open the settings page for the user",
+      "show the user the models page"
+    ],
+    "keywords": [
+      "navigate",
+      "open page"
+    ]
   }
 }

@@ -1,0 +1,218 @@
+{"id": "t1", "kind": "tool", "query": "read the README file", "expect": ["file_read"]}
+{"id": "t2", "kind": "tool", "query": "open src/main.rs", "expect": ["file_read"]}
+{"id": "t3", "kind": "tool", "query": "show me what's inside config.json", "expect": ["file_read"]}
+{"id": "t4", "kind": "tool", "query": "look at the code in the activity group element", "expect": ["file_read", "file_search"]}
+{"id": "t5", "kind": "tool", "query": "list files in the ui folder", "expect": ["file_list"]}
+{"id": "t6", "kind": "tool", "query": "what files are in this directory", "expect": ["file_list"]}
+{"id": "t7", "kind": "tool", "query": "find where list_tools is defined", "expect": ["file_search"]}
+{"id": "t8", "kind": "tool", "query": "grep for TODO comments", "expect": ["file_search"]}
+{"id": "t9", "kind": "tool", "query": "search the codebase for a function name", "expect": ["file_search"]}
+{"id": "t10", "kind": "tool", "query": "which file mentions the broker card", "expect": ["file_search"]}
+{"id": "t11", "kind": "tool", "query": "change a line in style.css", "expect": ["file_edit"]}
+{"id": "t12", "kind": "tool", "query": "fix the typo in the header text", "expect": ["file_edit"]}
+{"id": "t13", "kind": "tool", "query": "replace the old constant value", "expect": ["file_edit"]}
+{"id": "t14", "kind": "tool", "query": "create a new javascript file", "expect": ["file_write"]}
+{"id": "t15", "kind": "tool", "query": "write a new test file", "expect": ["file_write"]}
+{"id": "t16", "kind": "tool", "query": "save content to a new file in the workspace", "expect": ["file_write", "save_file"]}
+{"id": "t17", "kind": "tool", "query": "edit the source directly without a task", "expect": ["checkout_edit"]}
+{"id": "t18", "kind": "tool", "query": "run npm test", "expect": ["shell", "terminal_open"]}
+{"id": "t19", "kind": "tool", "query": "execute a bash command", "expect": ["shell"]}
+{"id": "t20", "kind": "tool", "query": "run the unit tests", "expect": ["shell", "build_work"]}
+{"id": "t21", "kind": "tool", "query": "run a python snippet to parse json", "expect": ["python"]}
+{"id": "t22", "kind": "tool", "query": "compute statistics with python", "expect": ["python", "calculate"]}
+{"id": "t23", "kind": "tool", "query": "deploy my change", "expect": ["build_work"]}
+{"id": "t24", "kind": "tool", "query": "release the fix to the dev app", "expect": ["build_work"]}
+{"id": "t25", "kind": "tool", "query": "build and test the rust code", "expect": ["build_work"]}
+{"id": "t26", "kind": "tool", "query": "check the build status", "expect": ["build_work"]}
+{"id": "t27", "kind": "tool", "query": "profile the memory use of the parser", "expect": ["performance_work"]}
+{"id": "t28", "kind": "tool", "query": "benchmark the new function", "expect": ["performance_work"]}
+{"id": "t29", "kind": "tool", "query": "open an interactive terminal", "expect": ["terminal_open"]}
+{"id": "t30", "kind": "tool", "query": "type a command into the open terminal", "expect": ["terminal_send"]}
+{"id": "t31", "kind": "tool", "query": "read what the terminal printed", "expect": ["terminal_read"]}
+{"id": "t32", "kind": "tool", "query": "close the shell", "expect": ["terminal_close"]}
+{"id": "t33", "kind": "tool", "query": "wait for the server to start in the terminal", "expect": ["terminal_wait", "terminal_read"]}
+{"id": "t34", "kind": "tool", "query": "list running terminals", "expect": ["terminal_list"]}
+{"id": "t35", "kind": "tool", "query": "git status of the repo", "expect": ["git_tool"]}
+{"id": "t36", "kind": "tool", "query": "show the git diff", "expect": ["git_tool"]}
+{"id": "t37", "kind": "tool", "query": "switch to another branch", "expect": ["git_tool"]}
+{"id": "t38", "kind": "tool", "query": "commit and push my changes", "expect": ["commit_and_push"]}
+{"id": "t39", "kind": "tool", "query": "resolve the merge conflict in app.js", "expect": ["resolve_conflict"]}
+{"id": "t40", "kind": "tool", "query": "is the GitHub repo configured", "expect": ["repository_access"]}
+{"id": "t41", "kind": "tool", "query": "create a new website", "expect": ["source_site_create"]}
+{"id": "t42", "kind": "tool", "query": "preview my site changes", "expect": ["source_preview_start"]}
+{"id": "t43", "kind": "tool", "query": "publish the site to production", "expect": ["source_publish"]}
+{"id": "t44", "kind": "tool", "query": "roll back the site to the last version", "expect": ["source_rollback"]}
+{"id": "t45", "kind": "tool", "query": "status of my website build", "expect": ["source_site_status"]}
+{"id": "t46", "kind": "tool", "query": "read a file from the github repo", "expect": ["source_remote_read"]}
+{"id": "t47", "kind": "tool", "query": "commit edits to the draft branch", "expect": ["source_remote_commit"]}
+{"id": "t48", "kind": "tool", "query": "stop the site preview", "expect": ["source_preview_stop"]}
+{"id": "t49", "kind": "tool", "query": "open example.com in the browser", "expect": ["browser_read"]}
+{"id": "t50", "kind": "tool", "query": "take a screenshot of the chat page", "expect": ["browser_read"]}
+{"id": "t51", "kind": "tool", "query": "check the page at phone width", "expect": ["browser_read"]}
+{"id": "t52", "kind": "tool", "query": "click the save button", "expect": ["browser_input"]}
+{"id": "t53", "kind": "tool", "query": "type my search into the form", "expect": ["browser_input"]}
+{"id": "t54", "kind": "tool", "query": "fill in the login form", "expect": ["browser_input"]}
+{"id": "t55", "kind": "tool", "query": "record a video of the animation", "expect": ["browser_record"]}
+{"id": "t56", "kind": "tool", "query": "read the text on this website", "expect": ["browser_read", "web_read"]}
+{"id": "t57", "kind": "tool", "query": "open a tab in my own browser", "expect": ["browser_extension_action"]}
+{"id": "t58", "kind": "tool", "query": "is my browser extension online", "expect": ["browser_extension_status"]}
+{"id": "t59", "kind": "tool", "query": "search the internet for rust async tutorials", "expect": ["web_search"]}
+{"id": "t60", "kind": "tool", "query": "look up today's news", "expect": ["web_search"]}
+{"id": "t61", "kind": "tool", "query": "google the error message", "expect": ["web_search"]}
+{"id": "t62", "kind": "tool", "query": "read this URL", "expect": ["web_read"]}
+{"id": "t63", "kind": "tool", "query": "get the text of a Wikipedia article", "expect": ["web_read", "web_search"]}
+{"id": "t64", "kind": "tool", "query": "what's the weather in Paris", "expect": ["get_weather"]}
+{"id": "t65", "kind": "tool", "query": "will it rain tomorrow in London", "expect": ["get_weather"]}
+{"id": "t66", "kind": "tool", "query": "distance from Berlin to Munich", "expect": ["maps_geocode"]}
+{"id": "t67", "kind": "tool", "query": "coordinates of the Eiffel Tower", "expect": ["maps_geocode"]}
+{"id": "t68", "kind": "tool", "query": "what time is it", "expect": ["get_time"]}
+{"id": "t69", "kind": "tool", "query": "what is today's date", "expect": ["get_date"]}
+{"id": "t70", "kind": "tool", "query": "add 245 and 17", "expect": ["calculate"]}
+{"id": "t71", "kind": "tool", "query": "multiply 12 by 34", "expect": ["calculate"]}
+{"id": "t72", "kind": "tool", "query": "what is 15 percent of 80", "expect": ["calculate"]}
+{"id": "t73", "kind": "tool", "query": "read the file I attached", "expect": ["read_attachment"]}
+{"id": "t74", "kind": "tool", "query": "open the uploaded pdf", "expect": ["read_attachment"]}
+{"id": "t75", "kind": "tool", "query": "summarise old messages to free context", "expect": ["compact_context"]}
+{"id": "t76", "kind": "tool", "query": "what did we say before the summary", "expect": ["recall_compacted"]}
+{"id": "t77", "kind": "tool", "query": "find where we talked about the login bug", "expect": ["search_this_session"]}
+{"id": "t78", "kind": "tool", "query": "search this chat for 'invoice'", "expect": ["search_this_session"]}
+{"id": "t79", "kind": "tool", "query": "read my instructions", "expect": ["read_own_prompt"]}
+{"id": "t80", "kind": "tool", "query": "change my own prompt", "expect": ["edit_own_prompt"]}
+{"id": "t81", "kind": "tool", "query": "save this as a reusable skill", "expect": ["save_own_skill"]}
+{"id": "t82", "kind": "tool", "query": "delete my skill", "expect": ["remove_own_skill"]}
+{"id": "t83", "kind": "tool", "query": "switch to plan mode", "expect": ["set_execution_mode"]}
+{"id": "t84", "kind": "tool", "query": "make this session read only", "expect": ["set_execution_mode"]}
+{"id": "t85", "kind": "tool", "query": "create a webhook to receive events", "expect": ["register_webhook"]}
+{"id": "t86", "kind": "tool", "query": "show my webhooks", "expect": ["list_webhooks"]}
+{"id": "t87", "kind": "tool", "query": "delete the webhook", "expect": ["delete_webhook"]}
+{"id": "t88", "kind": "tool", "query": "what events did the webhook get", "expect": ["get_webhook_log"]}
+{"id": "t89", "kind": "tool", "query": "save task progress", "expect": ["update_task_checkpoint"]}
+{"id": "t90", "kind": "tool", "query": "where did I leave off", "expect": ["get_task_checkpoint", "main_notes_read"]}
+{"id": "t91", "kind": "tool", "query": "is the background job done", "expect": ["background_status"]}
+{"id": "t92", "kind": "tool", "query": "cancel the running background call", "expect": ["background_cancel"]}
+{"id": "t93", "kind": "tool", "query": "show the user a plan with steps", "expect": ["present_plan"]}
+{"id": "t94", "kind": "tool", "query": "give the user buttons to choose", "expect": ["present_chat_component", "offer_choices"]}
+{"id": "t95", "kind": "tool", "query": "ask the user to fill in a form", "expect": ["present_chat_component"]}
+{"id": "t96", "kind": "tool", "query": "ask the user for their API key", "expect": ["request_credential"]}
+{"id": "t97", "kind": "tool", "query": "is the API key stored", "expect": ["check_credential"]}
+{"id": "t98", "kind": "tool", "query": "list stored credentials", "expect": ["list_vault_keys"]}
+{"id": "t99", "kind": "tool", "query": "connect my ChatGPT subscription", "expect": ["request_agent_login"]}
+{"id": "t100", "kind": "tool", "query": "record a decision for future sessions", "expect": ["main_notes_write"]}
+{"id": "t101", "kind": "tool", "query": "read the shared notes", "expect": ["main_notes_read"]}
+{"id": "t102", "kind": "tool", "query": "save these browser steps as a script", "expect": ["script_save"]}
+{"id": "t103", "kind": "tool", "query": "run the saved script", "expect": ["script_run"]}
+{"id": "t104", "kind": "tool", "query": "which scripts do I have", "expect": ["script_list"]}
+{"id": "t105", "kind": "tool", "query": "rate this skill", "expect": ["rate_skill"]}
+{"id": "t106", "kind": "tool", "query": "save this agent identity as a preset", "expect": ["manage_agent_profiles"]}
+{"id": "t107", "kind": "tool", "query": "start a sub agent to research this", "expect": ["start_spawn"]}
+{"id": "t108", "kind": "tool", "query": "run three variants in parallel", "expect": ["start_spawn"]}
+{"id": "t109", "kind": "tool", "query": "start a new separate session", "expect": ["start_session"]}
+{"id": "t110", "kind": "tool", "query": "send a message to the running session", "expect": ["message_session"]}
+{"id": "t111", "kind": "tool", "query": "what did the sub agent say", "expect": ["read_session"]}
+{"id": "t112", "kind": "tool", "query": "list my sessions", "expect": ["list_sessions"]}
+{"id": "t113", "kind": "tool", "query": "stop that session", "expect": ["stop_session"]}
+{"id": "t114", "kind": "tool", "query": "rename this chat", "expect": ["manage_session"]}
+{"id": "t115", "kind": "tool", "query": "archive the old session", "expect": ["manage_session"]}
+{"id": "t116", "kind": "tool", "query": "search my previous chats for billing", "expect": ["search_sessions"]}
+{"id": "t117", "kind": "tool", "query": "notify me when the other session finishes", "expect": ["watch_sessions"]}
+{"id": "t118", "kind": "tool", "query": "create a new agent for support", "expect": ["create_agent"]}
+{"id": "t119", "kind": "tool", "query": "list my agents", "expect": ["list_my_agents"]}
+{"id": "t120", "kind": "tool", "query": "edit the support agent's prompt", "expect": ["edit_agent_prompt"]}
+{"id": "t121", "kind": "tool", "query": "hand off to the research agent", "expect": ["delegate_to_agent"]}
+{"id": "t122", "kind": "tool", "query": "which tools does the sales agent have", "expect": ["list_agent_tools"]}
+{"id": "t123", "kind": "tool", "query": "turn off web access for this agent", "expect": ["set_agent_ability"]}
+{"id": "t124", "kind": "tool", "query": "rename the agent", "expect": ["update_agent"]}
+{"id": "t125", "kind": "tool", "query": "improve this agent's prompt", "expect": ["run_optimizer"]}
+{"id": "t126", "kind": "tool", "query": "remind me tomorrow at 9am", "expect": ["remind_me"]}
+{"id": "t127", "kind": "tool", "query": "run this report every Monday", "expect": ["schedule_task"]}
+{"id": "t128", "kind": "tool", "query": "list my automations", "expect": ["list_automations"]}
+{"id": "t129", "kind": "tool", "query": "pause the daily automation", "expect": ["pause_automation"]}
+{"id": "t130", "kind": "tool", "query": "run the automation now", "expect": ["run_automation_now"]}
+{"id": "t131", "kind": "tool", "query": "cancel the scheduled task", "expect": ["cancel_automation"]}
+{"id": "t132", "kind": "tool", "query": "change my display name", "expect": ["change_user_setting", "find_setting"]}
+{"id": "t133", "kind": "tool", "query": "which setting turns on dark mode", "expect": ["find_setting"]}
+{"id": "t134", "kind": "tool", "query": "change an app setting for everyone", "expect": ["change_app_setting", "find_setting"]}
+{"id": "t135", "kind": "tool", "query": "set this agent's temperature", "expect": ["change_agent_setting", "find_setting"]}
+{"id": "t136", "kind": "tool", "query": "talk to a human", "expect": ["request_human"]}
+{"id": "t137", "kind": "tool", "query": "leave a message for staff to call me back", "expect": ["staff_message_send"]}
+{"id": "t138", "kind": "tool", "query": "generate a picture of a sunset", "expect": ["generate_image"]}
+{"id": "t139", "kind": "tool", "query": "draw a logo", "expect": ["generate_image"]}
+{"id": "t140", "kind": "tool", "query": "what's in this photo", "expect": ["process_image"]}
+{"id": "t141", "kind": "tool", "query": "describe the attached screenshot", "expect": ["process_image"]}
+{"id": "t142", "kind": "tool", "query": "add an MCP server", "expect": ["mcp_add_connection"]}
+{"id": "t143", "kind": "tool", "query": "find an MCP server for Slack", "expect": ["mcp_search_servers"]}
+{"id": "t144", "kind": "tool", "query": "call the MCP tool", "expect": ["mcp_call_tool"]}
+{"id": "t145", "kind": "tool", "query": "which models can I use", "expect": ["list_models"]}
+{"id": "t146", "kind": "tool", "query": "switch to a different model", "expect": ["set_model"]}
+{"id": "t147", "kind": "tool", "query": "think harder", "expect": ["set_effort", "use_premium_model"]}
+{"id": "t148", "kind": "tool", "query": "list my saved files", "expect": ["list_user_files"]}
+{"id": "t149", "kind": "tool", "query": "save this text to my files", "expect": ["save_file"]}
+{"id": "t150", "kind": "tool", "query": "attach my saved file", "expect": ["attach_file"]}
+{"id": "t151", "kind": "tool", "query": "search the knowledge base for opening hours", "expect": ["knowledge_file_search"]}
+{"id": "t152", "kind": "tool", "query": "list knowledge files", "expect": ["knowledge_file_list"]}
+{"id": "t153", "kind": "tool", "query": "search the wiki for deployment", "expect": ["wiki_search"]}
+{"id": "t154", "kind": "tool", "query": "create a wiki page", "expect": ["wiki_create"]}
+{"id": "t155", "kind": "tool", "query": "edit the wiki article", "expect": ["wiki_update"]}
+{"id": "t156", "kind": "tool", "query": "read the wiki page about billing", "expect": ["wiki_get", "wiki_search"]}
+{"id": "t157", "kind": "tool", "query": "why did the last run fail", "expect": ["read_diagnostics"]}
+{"id": "t158", "kind": "tool", "query": "show tool failures in this chat", "expect": ["read_diagnostics"]}
+{"id": "t159", "kind": "tool", "query": "mark the tool issue resolved", "expect": ["agent_review"]}
+{"id": "t160", "kind": "tool", "query": "share a public preview of the app", "expect": ["start_tunnel"]}
+{"id": "t161", "kind": "tool", "query": "what is the preview link", "expect": ["get_tunnel_url"]}
+{"id": "t162", "kind": "tool", "query": "open the models page for the user", "expect": ["set_app_view"]}
+{"id": "t163", "kind": "tool", "query": "read the session state", "expect": ["state_inspect"]}
+{"id": "t164", "kind": "tool", "query": "list the agent's instruction slots", "expect": ["prompt_slot_read"]}
+{"id": "t165", "kind": "tool", "query": "unload a tool I don't need", "expect": ["context_assets"]}
+{"id": "t166", "kind": "tool", "query": "file_edit", "expect": ["file_edit"]}
+{"id": "t167", "kind": "tool", "query": "use browser_read", "expect": ["browser_read"]}
+{"id": "t168", "kind": "tool", "query": "load web search", "expect": ["web_search"]}
+{"id": "s1", "kind": "skill", "query": "compare UI options with screenshots", "expect": ["ui_proposals"]}
+{"id": "s2", "kind": "skill", "query": "make three design variants", "expect": ["ui_proposals"]}
+{"id": "s3", "kind": "skill", "query": "add a button", "expect": ["ui_controls"]}
+{"id": "s4", "kind": "skill", "query": "fix the tap highlight on mobile", "expect": ["ui_controls"]}
+{"id": "s5", "kind": "skill", "query": "change the theme colours", "expect": ["ui_theming"]}
+{"id": "s6", "kind": "skill", "query": "add dark mode", "expect": ["ui_theming"]}
+{"id": "s7", "kind": "skill", "query": "build a toggle list of options", "expect": ["ui_toggle_list"]}
+{"id": "s8", "kind": "skill", "query": "add a new HTTP endpoint safely", "expect": ["security_practices"]}
+{"id": "s9", "kind": "skill", "query": "check authorization on a route", "expect": ["security_practices"]}
+{"id": "s10", "kind": "skill", "query": "write rust code", "expect": ["rust_quality"]}
+{"id": "s11", "kind": "skill", "query": "refactor this rust module", "expect": ["rust_quality"]}
+{"id": "s12", "kind": "skill", "query": "review this diff", "expect": ["code_verification"]}
+{"id": "s13", "kind": "skill", "query": "why is the test failing", "expect": ["code_verification"]}
+{"id": "s14", "kind": "skill", "query": "add a new configuration setting", "expect": ["configuration_settings"]}
+{"id": "s15", "kind": "skill", "query": "rename a config key", "expect": ["configuration_settings"]}
+{"id": "s16", "kind": "skill", "query": "publish a changed skill file", "expect": ["live_plugin_publication"]}
+{"id": "s17", "kind": "skill", "query": "release a JSON config change without rebuild", "expect": ["live_plugin_publication"]}
+{"id": "s18", "kind": "skill", "query": "test the page end to end in a browser", "expect": ["journey_testing"]}
+{"id": "s19", "kind": "skill", "query": "split this into parallel tasks", "expect": ["subagents"]}
+{"id": "s20", "kind": "skill", "query": "research three questions at once", "expect": ["subagents"]}
+{"id": "s21", "kind": "skill", "query": "edit the app source code", "expect": ["codebase_admin"]}
+{"id": "s22", "kind": "skill", "query": "debug a failed run", "expect": ["diagnostics"]}
+{"id": "s23", "kind": "skill", "query": "use git", "expect": ["git_control"]}
+{"id": "s24", "kind": "skill", "query": "control the server browser", "expect": ["browser_control"]}
+{"id": "s25", "kind": "skill", "query": "search the web", "expect": ["web_search"]}
+{"id": "s26", "kind": "skill", "query": "manage agents and sessions", "expect": ["agent_management"]}
+{"id": "s27", "kind": "skill", "query": "schedule automations", "expect": ["automation"]}
+{"id": "s28", "kind": "skill", "query": "change settings", "expect": ["config_controller"]}
+{"id": "s29", "kind": "skill", "query": "use the wiki", "expect": ["wiki_context"]}
+{"id": "s30", "kind": "skill", "query": "generate images", "expect": ["image_generation"]}
+{"id": "s31", "kind": "skill", "query": "ui proposals", "expect": ["ui_proposals"]}
+{"id": "s32", "kind": "skill", "query": "show me mockups before release", "expect": ["ui_proposals"]}
+{"id": "s33", "kind": "skill", "query": "button border states", "expect": ["ui_controls"]}
+{"id": "s34", "kind": "skill", "query": "palette and borders", "expect": ["ui_theming"]}
+{"id": "s35", "kind": "skill", "query": "security review of new route", "expect": ["security_practices", "code_verification"]}
+{"id": "s36", "kind": "skill", "query": "clippy warnings", "expect": ["rust_quality"]}
+{"id": "s37", "kind": "skill", "query": "is this ready to release", "expect": ["code_verification"]}
+{"id": "s38", "kind": "skill", "query": "setting descriptor", "expect": ["configuration_settings"]}
+{"id": "s39", "kind": "skill", "query": "hot update an ability asset", "expect": ["live_plugin_publication"]}
+{"id": "s40", "kind": "skill", "query": "acceptance test the journey", "expect": ["journey_testing"]}
+{"id": "s41", "kind": "skill", "query": "delegate parts to helpers", "expect": ["subagents"]}
+{"id": "s42", "kind": "skill", "query": "work with files in the codebase", "expect": ["codebase_admin"]}
+{"id": "s43", "kind": "skill", "query": "terminal sessions", "expect": ["terminal_control"]}
+{"id": "s44", "kind": "skill", "query": "browse websites", "expect": ["browser_control", "web_search"]}
+{"id": "s45", "kind": "skill", "query": "knowledge files", "expect": ["managed_knowledge_files"]}
+{"id": "s46", "kind": "skill", "query": "my saved files", "expect": ["user_files"]}
+{"id": "s47", "kind": "skill", "query": "MCP connections", "expect": ["mcp"]}
+{"id": "s48", "kind": "skill", "query": "model switching", "expect": ["model_switcher"]}
+{"id": "s49", "kind": "skill", "query": "escalate to a human", "expect": ["human_escalation"]}
+{"id": "s50", "kind": "skill", "query": "remote preview tunnel", "expect": ["remote_tunnel"]}

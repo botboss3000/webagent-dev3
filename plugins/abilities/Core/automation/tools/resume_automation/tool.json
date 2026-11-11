@@ -24,5 +24,13 @@
       "expected_revision"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "resume a paused automation"
+    ],
+    "keywords": [
+      "resume"
+    ]
   }
 }

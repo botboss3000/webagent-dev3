@@ -64,5 +64,15 @@
     },
     "required": ["action"],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "open a tab in the user's own browser",
+      "click in my browser"
+    ],
+    "keywords": [
+      "my browser",
+      "extension"
+    ]
   }
 }

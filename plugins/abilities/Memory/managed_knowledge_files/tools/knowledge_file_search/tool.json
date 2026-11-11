@@ -25,5 +25,15 @@
       "query"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "search the knowledge base",
+      "look up our opening hours in the docs"
+    ],
+    "keywords": [
+      "knowledge",
+      "faq"
+    ]
   }
 }

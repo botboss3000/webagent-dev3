@@ -248,6 +248,26 @@ pub fn near_word(query: &str, word: &str) -> bool {
     edits + usize::from(i < left.len() || j < right.len()) == 1
 }
 
+/// A `key: a; b` list from a skill's leading front matter, split on `sep`.
+fn front_matter_list(text: &str, key: &str, sep: char) -> Vec<String> {
+    let mut lines = text.lines();
+    if lines.next() != Some("---") {
+        return Vec::new();
+    }
+    lines
+        .take_while(|line| *line != "---")
+        .find_map(|line| line.strip_prefix(key)?.strip_prefix(':'))
+        .map(|list| {
+            list.split(sep)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .take(12)
+                .map(|item| item.chars().take(200).collect())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The model-facing list_abilities row: enough to choose and load an ability. Full config,
 /// skill text and tool policy arrive with load_ability, so discovery stays small.
 pub fn discovery_row(entry: &Value) -> Value {
@@ -1091,7 +1111,24 @@ impl<H: Host> Catalog<H> {
             .map(|(kind, name, text)| {
                 let mode = Self::asset_mode(visibility, ability, kind, name, &text);
                 let supplied = mode == "visible";
+                // Discovery hints: a tool skill uses its tool's, a core skill its ability's text.
+                let (examples, keywords) = match kind {
+                    "tool" => crate::tool_match::hints(name),
+                    "ability" => (
+                        [Some(&ability.description), ability.skill_summary.as_ref()]
+                            .into_iter()
+                            .flatten()
+                            .cloned()
+                            .collect(),
+                        Vec::new(),
+                    ),
+                    _ => (
+                        front_matter_list(&text, "examples", ';'),
+                        front_matter_list(&text, "keywords", ','),
+                    ),
+                };
                 json!({"ability_id":ability.id,"kind":kind,"skill_id":name,
+                "examples":examples,"keywords":keywords,
                 "mode":mode,"availability":if supplied {"visible"} else {"discoverable"},
                 "requires_activation":!supplied,
                 "bytes":text.len(),"sha256":hex::encode(Sha256::digest(text.as_bytes())),

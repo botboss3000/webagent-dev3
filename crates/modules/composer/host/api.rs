@@ -29,6 +29,8 @@ const IDLE: Duration = Duration::from_secs(10 * 60);
 /// Loading the model and embedding the catalog takes about a second; a request about 10 ms.
 const STARTUP: Duration = Duration::from_secs(30);
 const ANSWER: Duration = Duration::from_secs(10);
+/// A first `rank` embeds the whole tool or skill catalog (a few hundred texts); later ones reuse it.
+const RANK_ANSWER: Duration = Duration::from_secs(30);
 const LIVE_LIMIT: u64 = 4 * 1024 * 1024;
 
 struct Matcher {
@@ -63,6 +65,26 @@ fn matcher_command() -> std::io::Result<Command> {
 
 /// One matcher answer. Requests are answered one at a time, in order.
 async fn ask(request: Value) -> Result<Value, ApiError> {
+    ask_within(request, ANSWER).await
+}
+
+/// Each item's closest-text score against `query` (the matcher's `rank` operation), or `None`
+/// when the matcher is unavailable, so callers keep a fallback.
+pub(crate) async fn rank(query: &str, items: Vec<Vec<String>>) -> Option<Vec<f32>> {
+    let result = ask_within(
+        json!({"op": "rank", "query": query, "items": items}),
+        RANK_ANSWER,
+    )
+    .await
+    .ok()?;
+    result["scores"]
+        .as_array()?
+        .iter()
+        .map(|score| score.as_f64().map(|score| score as f32))
+        .collect()
+}
+
+async fn ask_within(request: Value, within: Duration) -> Result<Value, ApiError> {
     let unavailable = || {
         ApiError(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -96,7 +118,7 @@ async fn ask(request: Value) -> Result<Value, ApiError> {
             }
         }
     };
-    let reply = tokio::time::timeout(ANSWER, answer).await.ok().flatten();
+    let reply = tokio::time::timeout(within, answer).await.ok().flatten();
     matcher.used = Instant::now();
     let Some(reply) = reply else {
         // A lost or late reply leaves the stream out of step: start over next time.

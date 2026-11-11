@@ -33,5 +33,15 @@
       "text"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "start a separate session",
+      "fork this chat into a new session"
+    ],
+    "keywords": [
+      "new session",
+      "fork"
+    ]
   }
 }

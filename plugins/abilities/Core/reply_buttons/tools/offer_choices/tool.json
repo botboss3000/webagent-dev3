@@ -30,5 +30,15 @@
       "options"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "show reply buttons with time slots",
+      "give the visitor options to click"
+    ],
+    "keywords": [
+      "buttons",
+      "choices"
+    ]
   }
 }

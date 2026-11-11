@@ -23,5 +23,13 @@
     },
     "required": [],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "list my event subscriptions"
+    ],
+    "keywords": [
+      "subscriptions"
+    ]
   }
 }

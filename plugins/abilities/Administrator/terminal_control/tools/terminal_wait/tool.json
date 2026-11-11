@@ -28,5 +28,14 @@
       "terminal_id"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "wait for the command to finish",
+      "wait for terminal output"
+    ],
+    "keywords": [
+      "wait"
+    ]
   }
 }

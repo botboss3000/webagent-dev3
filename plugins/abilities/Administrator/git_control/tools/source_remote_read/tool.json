@@ -52,5 +52,15 @@
       "commit_sha"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "read a file from the GitHub repository",
+      "view the site source on GitHub"
+    ],
+    "keywords": [
+      "github",
+      "remote source"
+    ]
   }
 }

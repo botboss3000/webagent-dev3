@@ -19,5 +19,14 @@
       "terminal_id"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "close the terminal",
+      "stop the shell session"
+    ],
+    "keywords": [
+      "close terminal"
+    ]
   }
 }

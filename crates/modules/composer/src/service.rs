@@ -6,8 +6,14 @@
 //! JSON lines on stdout: `{"ready": true, "settings": N}` once loaded, then `{"id": ID, "result":
 //! ANSWER}` (see [`Matcher::decide`]) or `{"id": ID, "error": REASON}`. Nothing is stored and no
 //! network is used. A changed catalog is read when the process next starts.
+//!
+//! `{"id": ID, "op": "rank", "query": TEXT, "items": [[TEXT...]...]}` scores any other catalog
+//! (tools, skills) by each item's closest text: `{"id": ID, "result": {"scores": [N...]}}`.
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
+use std::rc::Rc;
 
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Map, Value};
@@ -17,6 +23,51 @@ use crate::matcher::{Matcher, Request, Setting};
 
 /// Longer requests are refused rather than truncated.
 const MAX_TEXT_CHARS: usize = 500;
+/// Bounds on one `rank` request.
+const MAX_ITEMS: usize = 1024;
+const MAX_ITEM_TEXTS: usize = 16;
+const MAX_ITEM_TEXT_CHARS: usize = 2000;
+/// Cached text embeddings; the cache restarts when full.
+const MAX_CACHED: usize = 8192;
+
+/// Scores items by their closest text to a query, embedding each text once.
+pub struct Ranker {
+    embedder: Rc<RefCell<Embedder>>,
+    cache: HashMap<String, Vec<f32>>,
+}
+
+impl Ranker {
+    pub fn new(embedder: Embedder) -> Self {
+        Self {
+            embedder: Rc::new(RefCell::new(embedder)),
+            cache: HashMap::new(),
+        }
+    }
+
+    /// Each item's best cosine between `query` and its texts (-1 for an item with none).
+    pub fn scores(&mut self, query: &str, items: &[Vec<String>]) -> Result<Vec<f32>> {
+        let query = self
+            .embedder
+            .borrow_mut()
+            .embed(&format!("{QUERY_PREFIX}{query}"))?;
+        let mut scores = Vec::with_capacity(items.len());
+        for texts in items {
+            let mut best = -1.0f32;
+            for text in texts {
+                if !self.cache.contains_key(text) {
+                    if self.cache.len() >= MAX_CACHED {
+                        self.cache.clear();
+                    }
+                    let vector = self.embedder.borrow_mut().embed(text)?;
+                    self.cache.insert(text.clone(), vector);
+                }
+                best = best.max(cosine(&self.cache[text], &query));
+            }
+            scores.push(best);
+        }
+        Ok(scores)
+    }
+}
 
 /// The catalog's settings, from the checkout at `root`.
 pub fn settings(root: &Path) -> Result<Vec<Setting>> {
@@ -26,28 +77,41 @@ pub fn settings(root: &Path) -> Result<Vec<Setting>> {
         .collect())
 }
 
-/// A matcher over the live catalog scored by the installed model.
-fn load() -> Result<Matcher<impl FnMut(&str) -> Result<Vec<f32>>>> {
+/// The installed model, shared by the setting matcher and [`Ranker`].
+pub fn load_embedder() -> Result<Embedder> {
+    Embedder::load(Path::new(RUNTIME), Path::new(MODEL_DIR))
+}
+
+/// A matcher over the live catalog scored by the installed model, and a ranker on the same model.
+fn load() -> Result<(Matcher<impl FnMut(&str) -> Result<Vec<f32>>>, Ranker)> {
     let settings = settings(Path::new(webagent_configuration::live::CHECKOUT))?;
-    let mut embedder = Embedder::load(Path::new(RUNTIME), Path::new(MODEL_DIR))?;
+    let ranker = Ranker::new(load_embedder()?);
+    let embedder = ranker.embedder.clone();
     let vectors = settings
         .iter()
-        .map(|s| s.texts.iter().map(|t| embedder.embed(t)).collect())
+        .map(|s| {
+            s.texts
+                .iter()
+                .map(|t| embedder.borrow_mut().embed(t))
+                .collect()
+        })
         .collect::<Result<Vec<Vec<Vec<f32>>>>>()?;
     // A setting scores its closest text: the description or one of its examples.
     let score = move |text: &str| -> Result<Vec<f32>> {
-        let query = embedder.embed(&format!("{QUERY_PREFIX}{text}"))?;
+        let query = embedder
+            .borrow_mut()
+            .embed(&format!("{QUERY_PREFIX}{text}"))?;
         Ok(vectors
             .iter()
             .map(|texts| texts.iter().map(|v| cosine(v, &query)).fold(-1.0, f32::max))
             .collect())
     };
-    Ok(Matcher::new(settings, score))
+    Ok((Matcher::new(settings, score), ranker))
 }
 
 /// Answer requests from stdin until it closes.
 pub fn serve() -> Result<()> {
-    let mut matcher = load()?;
+    let (mut matcher, mut ranker) = load()?;
     let mut out = io::stdout().lock();
     writeln!(
         out,
@@ -59,7 +123,12 @@ pub fn serve() -> Result<()> {
         let Ok(request) = serde_json::from_str::<Value>(&line?) else {
             continue;
         };
-        let reply = match answer(&mut matcher, &request) {
+        let answered = if request["op"] == "rank" {
+            rank(&mut ranker, &request)
+        } else {
+            answer(&mut matcher, &request)
+        };
+        let reply = match answered {
             Ok(result) => json!({"id": request["id"], "result": result}),
             Err(error) => json!({"id": request["id"], "error": error.to_string()}),
         };
@@ -67,6 +136,26 @@ pub fn serve() -> Result<()> {
         out.flush()?;
     }
     Ok(())
+}
+
+fn rank(ranker: &mut Ranker, request: &Value) -> Result<Value> {
+    let query = request["query"].as_str().context("Rank query required")?;
+    if query.trim().is_empty() || query.chars().count() > MAX_TEXT_CHARS {
+        bail!("Rank query must be 1 to {MAX_TEXT_CHARS} characters");
+    }
+    let items: Vec<Vec<String>> =
+        serde_json::from_value(request["items"].clone()).context("Rank items required")?;
+    if items.len() > MAX_ITEMS
+        || items.iter().any(|texts| {
+            texts.len() > MAX_ITEM_TEXTS
+                || texts
+                    .iter()
+                    .any(|t| t.chars().count() > MAX_ITEM_TEXT_CHARS)
+        })
+    {
+        bail!("Rank request exceeds its bounds");
+    }
+    Ok(json!({"scores": ranker.scores(query, &items)?}))
 }
 
 fn answer<S: FnMut(&str) -> Result<Vec<f32>>>(
@@ -99,7 +188,7 @@ fn answer<S: FnMut(&str) -> Result<Vec<f32>>>(
 /// Score request sets (`eval/*.jsonl`): one line per case, then a summary line per file.
 /// `eval/context.json` gives the agents and limits the sets were written against.
 pub fn evaluate(files: &[String]) -> Result<()> {
-    let mut matcher = load()?;
+    let (mut matcher, _) = load()?;
     for file in files {
         let path = Path::new(file);
         let context: Value = serde_json::from_str(

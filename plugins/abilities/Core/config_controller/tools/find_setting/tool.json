@@ -37,5 +37,17 @@
       "layer"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "which setting controls this",
+      "find the setting for dark mode",
+      "change a configuration value"
+    ],
+    "keywords": [
+      "setting",
+      "configure",
+      "preference"
+    ]
   }
 }

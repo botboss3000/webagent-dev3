@@ -20,5 +20,13 @@
       "connection_id"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "which tools does the MCP server offer"
+    ],
+    "keywords": [
+      "mcp tools"
+    ]
   }
 }

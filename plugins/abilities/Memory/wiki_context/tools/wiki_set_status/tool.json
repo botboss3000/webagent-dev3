@@ -36,5 +36,14 @@
       "expected_revision"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "publish a wiki draft",
+      "make a wiki page internal"
+    ],
+    "keywords": [
+      "publish wiki"
+    ]
   }
 }

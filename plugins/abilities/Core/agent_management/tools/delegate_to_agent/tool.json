@@ -30,5 +30,15 @@
       "agent_id"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "hand this conversation to another agent",
+      "pass the task to the research agent"
+    ],
+    "keywords": [
+      "delegate",
+      "hand off"
+    ]
   }
 }

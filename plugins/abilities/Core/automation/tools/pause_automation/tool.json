@@ -24,5 +24,14 @@
       "expected_revision"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "pause an automation",
+      "stop the daily task for now"
+    ],
+    "keywords": [
+      "pause"
+    ]
   }
 }

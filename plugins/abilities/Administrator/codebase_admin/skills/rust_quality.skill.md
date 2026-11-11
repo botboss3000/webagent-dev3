@@ -3,6 +3,8 @@ id: rust_quality
 title: Rust quality and optimization
 when_to_use: Use when writing, reviewing, refactoring, debugging, or optimizing WebAgent v3 Rust code.
 default_mode: discoverable
+examples: write Rust code for this feature; refactor this Rust module; fix a borrow checker error
+keywords: rust, cargo, clippy
 minimum_access: registered
 ---
 

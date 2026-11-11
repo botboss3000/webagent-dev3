@@ -64,6 +64,19 @@ pub struct ToolDefinition {
     /// What the user is told when asked to approve a repeat.
     #[serde(default)]
     pub repeat_warning: Option<String>,
+    /// Example requests and exact keywords that `list_tools` ranks this tool by.
+    #[serde(default, rename = "match")]
+    pub match_data: Option<ToolMatch>,
+}
+
+/// Discovery hints: short example requests (embedded) and exact words (keyword evidence).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ToolMatch {
+    #[serde(default)]
+    pub examples: Vec<String>,
+    #[serde(default)]
+    pub keywords: Vec<String>,
 }
 
 impl ToolDefinition {
@@ -124,6 +137,21 @@ impl ToolDefinition {
             .any(|text| text.trim().is_empty() || text.len() > 1000)
         {
             bail!("Invalid retry_hint or repeat_warning: {folder}");
+        }
+        if let Some(hints) = &self.match_data {
+            if hints.examples.len() > 8
+                || hints.keywords.len() > 12
+                || hints
+                    .examples
+                    .iter()
+                    .any(|e| e.trim().is_empty() || e.len() > 200)
+                || hints
+                    .keywords
+                    .iter()
+                    .any(|k| k.trim().is_empty() || k.len() > 40)
+            {
+                bail!("Invalid match examples or keywords: {folder}");
+            }
         }
         Ok(())
     }

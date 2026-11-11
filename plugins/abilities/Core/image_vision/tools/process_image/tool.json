@@ -26,5 +26,17 @@
       "question"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "what is in this image",
+      "read the text in the attached photo",
+      "describe the screenshot"
+    ],
+    "keywords": [
+      "image",
+      "photo",
+      "vision"
+    ]
   }
 }

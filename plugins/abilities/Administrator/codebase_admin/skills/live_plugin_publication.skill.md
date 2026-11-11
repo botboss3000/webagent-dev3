@@ -3,6 +3,8 @@ id: live_plugin_publication
 title: Independent plugin publication
 when_to_use: Choosing publication for abilities, executable plugins, guidance and runtime assets.
 default_mode: discoverable
+examples: publish a changed skill file; release a JSON config change without a rebuild; update an ability's assets
+keywords: publish, plugin, live asset, hot update
 minimum_access: registered
 ---
 

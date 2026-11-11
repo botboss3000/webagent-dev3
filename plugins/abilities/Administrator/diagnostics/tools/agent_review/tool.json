@@ -74,5 +74,16 @@
     },
     "required": [],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "explain why a tool keeps failing",
+      "mark a tool issue resolved",
+      "open an issue for a problem"
+    ],
+    "keywords": [
+      "issue",
+      "tool failure"
+    ]
   }
 }

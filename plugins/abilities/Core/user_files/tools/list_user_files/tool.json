@@ -23,5 +23,14 @@
     },
     "required": [],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "list my saved files",
+      "which files have I saved"
+    ],
+    "keywords": [
+      "my files"
+    ]
   }
 }

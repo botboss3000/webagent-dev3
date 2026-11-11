@@ -34,5 +34,14 @@
       "request"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "make a tool visible for an agent",
+      "turn off a tool for an agent"
+    ],
+    "keywords": [
+      "tool visibility"
+    ]
   }
 }

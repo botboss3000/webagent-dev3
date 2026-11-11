@@ -29,5 +29,15 @@
       "request"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "turn an ability on for an agent",
+      "switch off web access for this agent"
+    ],
+    "keywords": [
+      "ability on",
+      "ability off"
+    ]
   }
 }

@@ -20,5 +20,16 @@
       "reason"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "the user wants to talk to a person",
+      "hand over to staff"
+    ],
+    "keywords": [
+      "human",
+      "staff",
+      "escalate"
+    ]
   }
 }

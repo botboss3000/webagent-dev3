@@ -38,5 +38,14 @@
       "session_id"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "read another session's messages",
+      "what did the sub agent reply"
+    ],
+    "keywords": [
+      "read session"
+    ]
   }
 }

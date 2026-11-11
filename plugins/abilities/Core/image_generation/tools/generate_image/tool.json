@@ -21,5 +21,17 @@
       "prompt"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "generate an image",
+      "draw a picture of a cat",
+      "create a logo"
+    ],
+    "keywords": [
+      "image",
+      "draw",
+      "picture"
+    ]
   }
 }

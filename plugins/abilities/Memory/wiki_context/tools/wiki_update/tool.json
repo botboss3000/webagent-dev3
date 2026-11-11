@@ -64,5 +64,14 @@
       "expected_revision"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "edit a wiki article",
+      "update the wiki page"
+    ],
+    "keywords": [
+      "edit wiki"
+    ]
   }
 }

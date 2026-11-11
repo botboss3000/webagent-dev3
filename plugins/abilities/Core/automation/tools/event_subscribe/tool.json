@@ -76,5 +76,15 @@
       "destination"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "run something when an event happens",
+      "subscribe to webhook events"
+    ],
+    "keywords": [
+      "subscribe",
+      "trigger"
+    ]
   }
 }

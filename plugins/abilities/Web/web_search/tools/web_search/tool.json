@@ -35,5 +35,17 @@
       "query"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "search the web",
+      "look up the latest news",
+      "google this"
+    ],
+    "keywords": [
+      "search",
+      "internet",
+      "web"
+    ]
   }
 }

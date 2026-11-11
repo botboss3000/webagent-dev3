@@ -26,5 +26,14 @@
       "purpose"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "improve this agent's prompt",
+      "suggest a better prompt"
+    ],
+    "keywords": [
+      "optimize prompt"
+    ]
   }
 }

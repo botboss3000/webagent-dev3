@@ -13,5 +13,14 @@
     "properties": {},
     "required": [],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "which agents can I delegate to",
+      "list agents for a handoff"
+    ],
+    "keywords": [
+      "delegate"
+    ]
   }
 }

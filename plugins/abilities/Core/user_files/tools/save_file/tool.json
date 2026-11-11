@@ -36,5 +36,14 @@
       "expected_revision"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "save this text as a file",
+      "store a file in my files"
+    ],
+    "keywords": [
+      "save file"
+    ]
   }
 }

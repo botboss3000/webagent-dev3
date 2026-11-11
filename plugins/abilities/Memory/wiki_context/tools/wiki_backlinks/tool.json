@@ -26,5 +26,13 @@
       "slug"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "which wiki pages link here"
+    ],
+    "keywords": [
+      "backlinks"
+    ]
   }
 }

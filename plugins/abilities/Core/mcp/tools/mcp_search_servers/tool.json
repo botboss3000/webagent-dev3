@@ -20,5 +20,14 @@
       "query"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "find an MCP server for GitHub",
+      "search MCP servers"
+    ],
+    "keywords": [
+      "mcp search"
+    ]
   }
 }

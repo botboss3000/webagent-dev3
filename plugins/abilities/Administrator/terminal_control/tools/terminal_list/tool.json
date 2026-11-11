@@ -13,5 +13,14 @@
     "properties": {},
     "required": [],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "which terminals are open",
+      "list my shell sessions"
+    ],
+    "keywords": [
+      "terminals"
+    ]
   }
 }

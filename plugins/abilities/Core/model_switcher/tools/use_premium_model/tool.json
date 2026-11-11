@@ -13,5 +13,13 @@
     "properties": {},
     "required": [],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "use the premium model for this hard task"
+    ],
+    "keywords": [
+      "premium model"
+    ]
   }
 }

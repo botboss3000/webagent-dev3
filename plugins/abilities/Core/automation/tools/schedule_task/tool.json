@@ -111,5 +111,17 @@
       "destination"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "run this every morning",
+      "schedule a weekly report",
+      "do this task every day at 8"
+    ],
+    "keywords": [
+      "schedule",
+      "cron",
+      "recurring"
+    ]
   }
 }

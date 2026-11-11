@@ -97,5 +97,15 @@
       "operation"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "create a new website",
+      "set up a site with GitHub and Cloudflare"
+    ],
+    "keywords": [
+      "new site",
+      "website"
+    ]
   }
 }

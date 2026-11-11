@@ -25,5 +25,13 @@
       "expected_revision"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "delete a knowledge file"
+    ],
+    "keywords": [
+      "delete knowledge"
+    ]
   }
 }

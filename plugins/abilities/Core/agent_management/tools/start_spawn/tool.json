@@ -29,5 +29,17 @@
       "text"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "start a sub agent for this task",
+      "run tasks in parallel",
+      "spawn a helper"
+    ],
+    "keywords": [
+      "sub agent",
+      "spawn",
+      "parallel"
+    ]
   }
 }

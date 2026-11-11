@@ -23,5 +23,14 @@
       "terminal_id"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "read the terminal output",
+      "what did the command print"
+    ],
+    "keywords": [
+      "terminal output"
+    ]
   }
 }

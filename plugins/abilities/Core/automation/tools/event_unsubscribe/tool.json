@@ -24,5 +24,14 @@
       "expected_revision"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "stop reacting to an event",
+      "remove an event subscription"
+    ],
+    "keywords": [
+      "unsubscribe"
+    ]
   }
 }

@@ -3,6 +3,8 @@ id: code_verification
 title: Code verification
 when_to_use: Use to review code or a diff, assess tests, diagnose failing checks without changing code, validate a fix or feature, audit quality, identify coverage gaps, or judge WebAgent v3 release readiness.
 default_mode: discoverable
+examples: review this diff; why is the test failing; check if the fix is ready to release
+keywords: review, verify, tests, audit
 minimum_access: registered
 ---
 

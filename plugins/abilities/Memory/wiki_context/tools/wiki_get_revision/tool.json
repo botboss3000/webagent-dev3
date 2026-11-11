@@ -26,5 +26,13 @@
       "revision_id"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "read an old version of a wiki page"
+    ],
+    "keywords": [
+      "wiki revision"
+    ]
   }
 }

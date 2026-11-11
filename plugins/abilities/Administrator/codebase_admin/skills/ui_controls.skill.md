@@ -3,6 +3,8 @@ id: ui_controls
 title: UI controls and presentation
 when_to_use: Use before creating or changing WebAgent UI buttons or other controls (tap highlight, touch haptics, border states), and when investigating a UI element's presentation or layout.
 default_mode: discoverable
+examples: add a button to the page; change how a toggle looks; fix the tap highlight on mobile
+keywords: button, control, tap highlight, haptics
 minimum_access: registered
 ---
 

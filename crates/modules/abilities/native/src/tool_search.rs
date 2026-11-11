@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use tokio_util::sync::CancellationToken;
-use webagent_abilities::{near_word, search_words};
+use webagent_abilities::{near_word, search_words, tool_match};
 use webagent_access::Permission;
 use webagent_host_core::{key, StoreCore};
 /// Route only fixed native discovery operations.
@@ -18,7 +18,7 @@ pub fn owns(name: &str) -> bool {
 #[must_use]
 pub fn schemas() -> Vec<Value> {
     vec![
-        json!({"type":"function","name":"list_tools","description":"List permitted tools that need loading, best matches first. query: task words (each word is matched on its own); group: one group (ability) ID from the index; include_available=true also lists tools you already have.","parameters":{"type":"object","properties":{"query":{"type":"string","maxLength":4096},"group":{"type":"string","maxLength":128},"include_available":{"type":"boolean"}},"required":[],"additionalProperties":false}}),
+        json!({"type":"function","name":"list_tools","description":"Find permitted tools. query: a few task words (for example \"edit file\"); results are ranked with a score, best_match first, never empty, and include tools you already have. Without query: the tools that need loading, optionally in one group (ability ID from the index); include_available=true adds tools you already have.","parameters":{"type":"object","properties":{"query":{"type":"string","maxLength":4096},"group":{"type":"string","maxLength":128},"include_available":{"type":"boolean"}},"required":[],"additionalProperties":false}}),
         json!({"type":"function","name":"load_tool","description":"Load one permitted tool by its exact name for this conversation; call it several times in parallel to load several. Already supplied tools return an acknowledgment. Live policy still applies.","parameters":{"type":"object","properties":{"tool_name":{"type":"string","minLength":1,"maxLength":128}},"required":["tool_name"],"additionalProperties":false}}),
     ]
 }
@@ -142,6 +142,70 @@ async fn eligible(
     }
     Ok(tools.into_values().collect())
 }
+/// Rank permitted tools for a task query: matcher scores when the matcher answers, otherwise
+/// query-word overlap. Already-available tools stay in, marked by their `availability`.
+async fn ranked(
+    host: &dyn NativeHost,
+    query: &str,
+    tools: Vec<Value>,
+) -> (Vec<Value>, &'static str) {
+    let hints: Vec<(Vec<String>, Vec<String>)> = tools
+        .iter()
+        .map(|tool| tool_match::hints(tool["name"].as_str().unwrap_or_default()))
+        .collect();
+    let items = tools
+        .iter()
+        .zip(&hints)
+        .map(|(tool, (examples, _))| {
+            tool_match::texts(
+                tool["name"].as_str().unwrap_or_default(),
+                tool["description"].as_str().unwrap_or_default(),
+                examples,
+            )
+        })
+        .collect();
+    let (scores, ranked_by) = match host.rank_scores(query, items).await {
+        Some(scores) if scores.len() == tools.len() => (scores, "matcher"),
+        _ => {
+            let mut words = search_words(query);
+            words.retain(|word| word.len() > 2); // "a", "to", "of" would match every description
+                                                 // Word hits land between the weak and best gates; all words in the name reach best.
+            let scale = |hits: usize| {
+                if hits == 0 {
+                    0.0
+                } else {
+                    let share = (hits as f32 / (3 * words.len().max(1)) as f32).min(1.0);
+                    tool_match::WEAK + (tool_match::BEST - tool_match::WEAK) * share
+                }
+            };
+            (
+                tools
+                    .iter()
+                    .map(|tool| scale(word_score(tool, &words)))
+                    .collect(),
+                "words",
+            )
+        }
+    };
+    let candidates: Vec<(&str, &[String])> = tools
+        .iter()
+        .zip(&hints)
+        .map(|(tool, (_, keywords))| (tool["name"].as_str().unwrap_or_default(), &keywords[..]))
+        .collect();
+    let rows = tool_match::rank(query, &candidates, &scores)
+        .into_iter()
+        .map(|ranked| {
+            let mut row = tools[ranked.index].clone();
+            row["score"] = json!((ranked.score * 100.0).round() / 100.0);
+            row["best_match"] = json!(ranked.best);
+            if ranked.weak {
+                row["match"] = json!("weak");
+            }
+            row
+        })
+        .collect();
+    (rows, ranked_by)
+}
 /// Count query words found in a tool's name (weighted), description or group.
 fn word_score(tool: &Value, words: &[String]) -> usize {
     let text = |field: &str| search_words(tool[field].as_str().unwrap_or_default());
@@ -197,7 +261,7 @@ async fn exact(
     } else {
         None
     };
-    let _guard = host.gate().lock().await;
+    let guard = host.gate().lock().await;
     let agent = host.session_agent_id(sid).await?;
     let run = run(host.store(), run_id).await?;
     if cancel.is_cancelled()
@@ -230,26 +294,29 @@ async fn exact(
     }
     let tools = eligible(host, sid, &agent, &run["loaded_abilities"]).await?;
     if let Some(args) = list {
-        let mut words = search_words(args.query.as_deref().unwrap_or_default());
-        words.retain(|word| word.len() > 2); // "a", "to", "of" would match every description
-        let mut ranked = tools
+        let query = args.query.as_deref().unwrap_or_default().trim().to_owned();
+        let tools = tools
             .into_iter()
-            .filter(|tool| args.include_available || tool["requires_activation"] == true)
             .filter(|tool| {
                 args.group
                     .as_ref()
                     .is_none_or(|group| tool["ability_id"] == *group)
             })
-            .filter_map(|tool| {
-                let score = word_score(&tool, &words);
-                (words.is_empty() || score > 0).then_some((score, tool))
-            })
             .collect::<Vec<_>>();
-        // shortcut: word overlap only; the composer matcher replaces it in the next phase.
-        ranked.sort_by(|(a, _), (b, _)| b.cmp(a));
-        let tools = ranked.into_iter().map(|(_, tool)| tool).collect::<Vec<_>>();
+        if query.is_empty() {
+            let tools = tools
+                .into_iter()
+                .filter(|tool| args.include_available || tool["requires_activation"] == true)
+                .collect::<Vec<_>>();
+            return Ok(
+                json!({"status":"success","output":{"tools":tools,"include_available":args.include_available,"scope":"conversation","permissions_changed":false}}),
+            );
+        }
+        // Ranking reads no authority; release the gate while the matcher answers.
+        drop(guard);
+        let (tools, ranked_by) = ranked(host, &query, tools).await;
         return Ok(
-            json!({"status":"success","output":{"tools":tools,"include_available":args.include_available,"scope":"conversation","permissions_changed":false}}),
+            json!({"status":"success","output":{"tools":tools,"query":query,"ranked_by":ranked_by,"scope":"conversation","permissions_changed":false}}),
         );
     }
     let args = load.context("Missing load arguments")?;

@@ -20,5 +20,13 @@
       "endpoint"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "inspect an MCP server before adding it"
+    ],
+    "keywords": [
+      "mcp inspect"
+    ]
   }
 }

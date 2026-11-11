@@ -34,5 +34,15 @@
       "expected_sequence"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "type a command into the terminal",
+      "press ctrl c in the shell"
+    ],
+    "keywords": [
+      "send keys",
+      "type in terminal"
+    ]
   }
 }

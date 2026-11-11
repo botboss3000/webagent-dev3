@@ -42,5 +42,15 @@
       "search_criteria"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "rank the files in a folder by relevance",
+      "which files in this directory matter"
+    ],
+    "keywords": [
+      "jev",
+      "score files"
+    ]
   }
 }

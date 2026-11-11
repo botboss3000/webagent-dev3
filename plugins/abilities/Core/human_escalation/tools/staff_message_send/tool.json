@@ -44,5 +44,15 @@
       "message"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "leave a message for staff to call back",
+      "take the visitor's contact details"
+    ],
+    "keywords": [
+      "leave message",
+      "callback"
+    ]
   }
 }

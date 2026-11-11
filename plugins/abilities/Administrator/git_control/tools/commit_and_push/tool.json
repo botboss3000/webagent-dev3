@@ -42,5 +42,16 @@
       "expected_review_sha256"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "commit these files and push",
+      "push my changes to the repository"
+    ],
+    "keywords": [
+      "commit",
+      "push",
+      "git"
+    ]
   }
 }

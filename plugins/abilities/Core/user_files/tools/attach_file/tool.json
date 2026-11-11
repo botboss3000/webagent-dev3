@@ -20,5 +20,15 @@
       "name"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "attach my saved file to the chat",
+      "share a file link"
+    ],
+    "keywords": [
+      "attach",
+      "download link"
+    ]
   }
 }

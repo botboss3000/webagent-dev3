@@ -38,5 +38,16 @@
     },
     "required": [],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "why did this run fail",
+      "show the run's diagnostics",
+      "list tool failures in this chat"
+    ],
+    "keywords": [
+      "diagnostics",
+      "debug run"
+    ]
   }
 }

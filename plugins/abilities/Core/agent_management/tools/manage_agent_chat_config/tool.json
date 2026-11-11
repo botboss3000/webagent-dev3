@@ -44,5 +44,14 @@
       "document"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "change an agent's chat settings",
+      "reset the session dropdown config"
+    ],
+    "keywords": [
+      "chat config"
+    ]
   }
 }

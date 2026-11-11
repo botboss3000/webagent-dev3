@@ -28,5 +28,15 @@
       "effort"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "think harder on this",
+      "set reasoning effort to high"
+    ],
+    "keywords": [
+      "effort",
+      "reasoning"
+    ]
   }
 }

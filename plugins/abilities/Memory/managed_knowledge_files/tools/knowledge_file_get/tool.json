@@ -20,5 +20,13 @@
       "file_id"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "read a knowledge file"
+    ],
+    "keywords": [
+      "knowledge file"
+    ]
   }
 }

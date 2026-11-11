@@ -13,5 +13,15 @@
     "properties": {},
     "required": [],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "what is the preview URL of my app",
+      "show the tunnel link"
+    ],
+    "keywords": [
+      "tunnel url",
+      "preview link"
+    ]
   }
 }

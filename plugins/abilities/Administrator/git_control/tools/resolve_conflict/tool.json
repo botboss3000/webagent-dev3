@@ -36,5 +36,15 @@
       "expected_sha256"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "resolve a merge conflict",
+      "pick a side in a conflicted file"
+    ],
+    "keywords": [
+      "merge conflict",
+      "conflict"
+    ]
   }
 }

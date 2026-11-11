@@ -26,5 +26,15 @@
       "port"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "share a preview of the app I am running",
+      "open a public link to my dev server"
+    ],
+    "keywords": [
+      "tunnel",
+      "preview"
+    ]
   }
 }

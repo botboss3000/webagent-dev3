@@ -23,5 +23,15 @@
     },
     "required": [],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "list my websites",
+      "what is the status of my site build"
+    ],
+    "keywords": [
+      "site status",
+      "build status"
+    ]
   }
 }

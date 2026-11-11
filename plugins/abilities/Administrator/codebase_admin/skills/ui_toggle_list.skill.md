@@ -3,6 +3,8 @@ id: ui_toggle_list
 title: Toggle-list / config-page pattern
 when_to_use: Use when building or changing a "category to list of options" surface — ability tables, config pages, remote access, the shared compact option-row list.
 default_mode: discoverable
+examples: build a list of options with toggles; change the abilities table layout
+keywords: toggle list, option rows
 minimum_access: registered
 ---
 

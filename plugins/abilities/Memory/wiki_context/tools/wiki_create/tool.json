@@ -54,5 +54,14 @@
       "body"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "create a wiki article",
+      "write a new wiki page"
+    ],
+    "keywords": [
+      "new wiki page"
+    ]
   }
 }

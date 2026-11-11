@@ -191,5 +191,18 @@
       "action"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "build and deploy my code change",
+      "run the checks on my source edits",
+      "release the change to the dev app"
+    ],
+    "keywords": [
+      "build",
+      "deploy",
+      "release",
+      "broker"
+    ]
   }
 }

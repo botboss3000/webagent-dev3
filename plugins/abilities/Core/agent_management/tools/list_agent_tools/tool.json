@@ -20,5 +20,14 @@
       "agent_id"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "which tools does this agent have",
+      "show an agent's abilities"
+    ],
+    "keywords": [
+      "agent tools"
+    ]
   }
 }

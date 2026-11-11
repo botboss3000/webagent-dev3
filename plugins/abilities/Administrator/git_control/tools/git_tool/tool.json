@@ -72,5 +72,19 @@
       "operation"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "show git status",
+      "check out a branch",
+      "view the git log",
+      "diff the workspace repo"
+    ],
+    "keywords": [
+      "git",
+      "branch",
+      "diff",
+      "status"
+    ]
   }
 }

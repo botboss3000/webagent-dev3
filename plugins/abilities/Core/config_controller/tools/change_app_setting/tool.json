@@ -37,5 +37,14 @@
       "revision"
     ],
     "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "change an app-wide setting",
+      "set a setting for everyone"
+    ],
+    "keywords": [
+      "app setting"
+    ]
   }
 }
