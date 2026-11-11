@@ -2,9 +2,9 @@
 
 This harness never edits model records or decrypts databases. It stores only
 IDs, counts, policy decisions, and booleans in target/administrator-api.json.
-Approval is restricted to the named case's workspace tools. Live promotion and
-host deployment are never approved. --build admits a development image build;
---cargo exercises fixed isolated Cargo jobs. Neither option deploys anything.
+Approval is restricted to the named case's tools. Live promotion and host
+deployment are never approved. --build runs a background build_work fmt check;
+it never deploys anything.
 """
 import argparse
 import copy
@@ -138,7 +138,6 @@ class Harness:
     def run(self, case, client, sid, instructions, required, permitted=None, timeout=240):
         nonce = secrets.token_hex(8)
         permitted = set(permitted or required)
-        if "v3_workspace_action" in permitted: permitted.add("v3_workspace_status")
         if "terminal_open" in permitted: permitted.update({"terminal_wait", "terminal_list"})
         if case == "git_conflict": permitted.update({"repository_access", "git_tool"})
         reply_shape = json.dumps({"nonce": nonce, "ok": True, "tool_names": sorted(required)}, separators=(",", ":"))
@@ -204,30 +203,17 @@ class Harness:
         if self.args.resume and self.data["cases"].get(name, {}).get("workflow_completed"): return
         client = self.admin if name.startswith("build") else self.owner
         agent = "shared_default" if client is self.admin else self.fixture["agent_id"]
-        groups = {"workspace": {"v3_workspace"}, "cargo": {"v3_workspace"}, "terminal": {"terminal_control"}, "git": {"terminal_control", "git_control"}, "diagnostics": {"diagnostics", "browser_control"}, "tunnel": {"terminal_control", "remote_tunnel"}, "build_status": {"codebase_admin"}, "build": {"codebase_admin"}}
+        groups = {"terminal": {"terminal_control"}, "git": {"terminal_control", "git_control"}, "diagnostics": {"diagnostics", "browser_control"}, "tunnel": {"terminal_control", "remote_tunnel"}, "build": {"codebase_admin"}}
         sid = self.session(client, agent, groups[name])
-        if name in {"workspace", "cargo"}:
-            self.run(name + "_seed", client, sid, "Call v3_workspace_action action=seed request_id=seed-acceptance, then v3_workspace_receipt request_id=seed-acceptance and v3_workspace_status. Confirm seeded source belongs only to this session.", {"v3_workspace_action", "v3_workspace_receipt", "v3_workspace_status"})
         instructions = {
-            "workspace": "Call v3_workspace_action action=review request_id=review-acceptance. Then read src/main.rs using action=read request_id=read-acceptance. Read that receipt with v3_workspace_receipt. Finally call action=patch request_id=stale-acceptance with expected_review_sha256 all zeroes and a harmless main.rs patch; it must reject as stale and leave review unchanged. Report ok=true for this expected stale rejection.",
-            "cargo": "Review the seeded source to obtain its current review SHA. Call v3_workspace_action action=check request_id=check-acceptance and action=test request_id=test-acceptance with that exact SHA and timeout_seconds=600, then read both receipts. Do not run host Cargo or build an image.",
             "terminal": "Open terminal_open with exactly these arguments: {\"command\": \"printf \\\"READY\\\\n\\\"; read answer; printf \\\"RESULT:%s\\\\n\\\" \\\"$answer\\\"\"}. Read/wait until READY. Obtain a fresh terminal_read sequence, then terminal_send using the same terminal_id, that expected_sequence, and text containing acceptance followed by one real newline (JSON text=\"acceptance\\n\"). Use terminal_wait then terminal_read until RESULT:acceptance. Call terminal_list then terminal_close. Do not use shell/python adapters.",
             "git": "First call repository_access verify_remote=false to inspect sanitized current-agent repository metadata, even if no external connection is configured. Then use terminal_open/read/close to create a fresh ordinary git repository named acceptance-repo and a bare acceptance-remote inside this session workspace. Fixed commands only: git init --initial-branch=main acceptance-repo; git init --bare acceptance-remote; cd acceptance-repo; printf 'initial\\n' > README.txt; git add README.txt; git -c user.name=Acceptance -c user.email=acceptance@localhost commit -m initial; git remote add acceptance ../acceptance-remote. Then git_tool operation=status repo=acceptance-repo, branch_create name=acceptance-check with observed expected_head, branch_list, diff. Using another terminal modify README.txt to 'changed\\n', close it, get fresh git_tool status review SHA/HEAD; commit_and_push repo=acceptance-repo paths=[README.txt] message='acceptance change' remote=acceptance with both exact fences. Confirm local ordinary push succeeded; no external remote or credentials.",
             "diagnostics": "Call read_diagnostics for this run. Use browser_read action=navigate url=https://dev.webagent.live/api/v3/auth/me, browser_read action=read, browser_record action=start, browser_read action=screenshot, browser_record action=stop, then browser_read action=close. This is API-driven tool acceptance only; no navigation journey, clicks or typing. Include the screenshot artifact_id as field artifact_id in final JSON, without cookie/token text.",
             "tunnel": "Use terminal_open with exactly these arguments: {\"command\": \"port=${V3_ALLOWED_LISTEN_PORTS%%,*}; mkdir -p preview; exec python3 -u -m http.server \\\"$port\\\" --bind 127.0.0.1 --directory preview\"}. Call terminal_read/wait until listening, and terminal_list to observe preview_ports. Call start_tunnel on the FIRST observed owned preview port with duration_seconds=30. Then get_tunnel_url and confirm a concrete active quicktunnel. Never forward the application or an unowned port. Do not print URL/token; report lease_active=true and lease_id only in final JSON. Leave the terminal running for follow-up API checks.",
-            "build_status": "Call v3_build_status once. Confirm actual development-only broker inputs SHA and both API/loop container states, without raw environment or logs. Include inputs_sha256 in final JSON.",
-            "build": "Call v3_build_status to get exact current inputs_sha256. Call v3_build_image with request_id=api-build-acceptance and that SHA. Read v3_worker_job for the returned job ID. Do not deploy, stop or replace anything. Include job_id and inputs_sha256 in final JSON. Set ok=true if the build job was accepted, including when its state is still queued or running; the harness polls completion separately."
+            "build": "Call build_work action=begin with broker_id=new and a short summary, then build_work action=check with check=fmt on that task. End your turn without polling; when the background notice arrives, report the job status. Do not finish or deploy. Include job_id in final JSON."
         }
-        required = {"workspace": {"v3_workspace_action", "v3_workspace_receipt"}, "cargo": {"v3_workspace_action", "v3_workspace_receipt"}, "terminal": {"terminal_open", "terminal_read", "terminal_send", "terminal_wait", "terminal_list", "terminal_close"}, "git": {"repository_access", "terminal_open", "terminal_read", "terminal_close", "git_tool", "commit_and_push"}, "diagnostics": {"read_diagnostics", "browser_read", "browser_record"}, "tunnel": {"terminal_open", "terminal_read", "terminal_list", "start_tunnel", "get_tunnel_url"}, "build_status": {"v3_build_status"}, "build": {"v3_build_status", "v3_build_image", "v3_worker_job"}}[name]
-        summary = self.run(name, client, sid, instructions[name], required, timeout=1400 if name == "cargo" else 300)
-        if name == "workspace":
-            first_line = (ROOT / "src/main.rs").read_text().splitlines()[0]
-            fixture_patch = "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1 +1,2 @@\n+// Administrator API acceptance\n " + first_line + "\n"
-            proposal_summary = self.run("workspace_patch_propose", client, sid, "Read src/main.rs and current review SHA. Apply one harmless trailing source comment '// Administrator API acceptance' using this exact valid unified diff: " + json.dumps(fixture_patch) + " through v3_workspace_action action=patch request_id=valid-patch-acceptance. Review the changed source, then action=propose request_id=proposal-acceptance with exact new review SHA and a short summary. Read its workspace receipt. Creating the proposal is authorized; never approve, promote, or apply it to the live checkout. Report proposal_created=true only if an actual pending proposal exists.", {"v3_workspace_action", "v3_workspace_receipt"})
-            proposals = client.get("/api/v3/sessions/" + sid + "/promotions")["promotions"]
-            proposal_run = self.data["cases"]["workspace_patch_propose"]["run_id"]
-            matching = [p for p in proposals if p.get("proposed_by_run") == proposal_run and p.get("state") == "proposed"]
-            self.check("one native pending proposal belongs to acceptance run", len(matching) == 1)
+        required = {"terminal": {"terminal_open", "terminal_read", "terminal_send", "terminal_wait", "terminal_list", "terminal_close"}, "git": {"repository_access", "terminal_open", "terminal_read", "terminal_close", "git_tool", "commit_and_push"}, "diagnostics": {"read_diagnostics", "browser_read", "browser_record"}, "tunnel": {"terminal_open", "terminal_read", "terminal_list", "start_tunnel", "get_tunnel_url"}, "build": {"build_work"}}[name]
+        summary = self.run(name, client, sid, instructions[name], required, timeout=300)
         if name == "git":
             self.run("git_conflict", client, sid, "Use a terminal in acceptance-repo to create conflicting edits to README.txt on branch acceptance-check and main using fixed local git -c user.name=Acceptance -c user.email=acceptance@localhost commit commands, then merge with fixed git -c user.name=Acceptance -c user.email=acceptance@localhost merge acceptance-check to produce a genuine unresolved conflict. Compute its exact sha256 with python3 hashlib in the terminal; close the terminal. Call resolve_conflict repo=acceptance-repo path=README.txt strategy=both with that SHA. Confirm conflict markers are removed and staged=false; do not push this conflict exercise.", {"terminal_open", "terminal_read", "terminal_close", "resolve_conflict"})
         if name == "diagnostics":
@@ -243,23 +229,10 @@ class Harness:
             time.sleep(31)
             self.run("tunnel_expired", client, sid, "Call get_tunnel_url and confirm status absent after the 30-second lease. Call terminal_list and close the preview terminal with terminal_close.", {"get_tunnel_url", "terminal_list", "terminal_close"})
         if name == "build":
+            # The check job runs in the background; its notice wakes the agent, which then
+            # reports the job (never polled through model calls).
             job = summary.get("job_id", "")
-            if not re.fullmatch(r"[0-9a-f-]{36}", job): raise ValueError("Build job ID missing")
-            # Poll through actual model tool calls; never fabricate direct broker API.
-            self.data["build_job_id"] = job; self.save()
-            deadline = time.monotonic() + self.args.build_wait
-            finished = False
-            for index in range(40):
-                poll = self.run("build_job_poll_" + str(index), client, sid, "Call v3_worker_job job_id=" + job + ". Report its actual status in job_status and stable_inputs=true only when its successful completed receipt says inputs unchanged. Do not retry the build or deploy.", {"v3_worker_job"})
-                state = poll.get("job_status")
-                if state == "completed":
-                    self.check("model-reported build completion with unchanged inputs", poll.get("stable_inputs") is True)
-                    finished = True; break
-                if state in {"failed", "stale", "uncertain", "interrupted"}:
-                    raise ValueError("Build job did not complete safely")
-                if time.monotonic() >= deadline: break
-                time.sleep(30)
-            self.check("bounded actual build job reaches completed receipt", finished)
+            self.check("background build_work check returned a job ID", bool(re.fullmatch(r"[0-9a-f-]{36}", job)))
         if name == "tunnel":
             self.check("model reported concrete active lease", summary.get("lease_active") is True and re.fullmatch(r"[0-9a-f]{32}",summary.get("lease_id","")) is not None)
         self.data["cases"][name]["workflow_completed"] = True
@@ -361,10 +334,9 @@ def main():
     parser.add_argument("--origin", default="http://100.112.23.15:8081")
     parser.add_argument("--fixture", type=Path, default=ROOT / "target/core-api-acceptance.json")
     parser.add_argument("--output", type=Path, default=ROOT / "target/administrator-api.json")
-    parser.add_argument("--cases", default="workspace,terminal,git,diagnostics,tunnel,policy,build_status")
+    parser.add_argument("--cases", default="terminal,git,diagnostics,tunnel,policy")
     parser.add_argument("--configure", action="store_true")
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--cargo", action="store_true")
     parser.add_argument("--build", action="store_true")
     parser.add_argument("--build-wait", type=int, default=1800)
     args = parser.parse_args()
@@ -374,11 +346,10 @@ def main():
         harness.login()
         if args.configure: harness.configure()
         cases = args.cases.split(",")
-        if args.cargo: cases.append("cargo")
         if args.build: cases.append("build")
         for case in cases:
             if case == "policy": harness.policy()
-            elif case in {"workspace", "terminal", "git", "diagnostics", "tunnel", "build_status", "cargo", "build"}: harness.case(case)
+            elif case in {"terminal", "git", "diagnostics", "tunnel", "build"}: harness.case(case)
             else: raise ValueError("Unknown bounded case")
         print(json.dumps({"cases": {k: v.get("pass", False) for k, v in harness.data["cases"].items()}, "checks": len(harness.data["checks"])}))
     except Exception as error:

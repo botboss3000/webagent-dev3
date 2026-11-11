@@ -39,9 +39,12 @@ the live checkout or containers by hand. All commands below run **on the server*
 
 **Two ways in.**
 - *In-app agents* use the WebAgent source tools: edits open a broker task
-  automatically, the finish tool queues the release, the chat posts stage progress
-  (from `v3_build_progress`, the same data as `buildctl progress`), and a completed
-  release closes itself (commit and claim release, see above).
+  automatically, and `build_work` finish, check and wait return at once with the job
+  running as a background task. The agent ends its turn; a background notice wakes it
+  when the job ends and when a stage runs slow or stalls. The chat's Broker chip shows the
+  stages meanwhile (the same data as `buildctl progress`), and a completed release closes
+  itself (commit and claim release, see above). The second Stop in the chat stops those
+  notices but leaves the job running.
 - *Remote operators* use `buildctl` over SSH:
   `WEBAGENT_BUILD_CONFIG=/etc/webagent/development/build-service.json python3 -B <service_dir>/buildctl.py COMMAND`,
   where `<service_dir>` is `service_dir` in that JSON file (it changes with every
@@ -214,7 +217,8 @@ buildctl.py maintenance drain --task-id TASK persists a migration gate: no new
 job starts except that exact local operator task's. Isolated task work (begin,
 edits, reservations, checks and finish) is still admitted; its checks and
 releases queue and start when maintenance resume reopens the queue, so an
-in-app agent's held finish or check simply waits. Other new work (legacy
+in-app agent's finish or check job simply waits queued (the agent stays idle and is
+woken when it ends). Other new work (legacy
 checkout builds, profiling, index maintenance, release retries) is refused.
 Reads, receipts, cancellation and lease controls remain available. Installs and
 gate maintenance need nothing running; jobs queued behind the drain may remain.
