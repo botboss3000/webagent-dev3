@@ -906,7 +906,8 @@ impl Store {
                 let view = self.unseal(&row.get::<Vec<u8>, _>("value"))?;
                 Ok(json!({
                     "id": row.get::<String, _>("id"),
-                    "status": row.get::<String, _>("status"),
+                    // A parked run's index status hides its real one from busy checks.
+                    "status": if row.get::<String, _>("status") == "parked" { view["status"].clone() } else { json!(row.get::<String, _>("status")) },
                     "error": view["error"],
                     "uncertain": view["uncertain"],
                     "turns": view["turns"],
@@ -1294,7 +1295,7 @@ impl Store {
                 .execute(&mut *tx)
                 .await?;
             self.require_active_session(&mut tx, sid).await?;
-            let existing:i64=sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE session_id=? AND id!=? AND status NOT IN ('completed','cancelled','failed')")
+            let existing:i64=sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE session_id=? AND id!=? AND status NOT IN ('completed','cancelled','failed','parked')")
                 .bind(sid).bind(payload["run_id"].as_str().unwrap_or("")).fetch_one(&mut *tx).await?;
             if existing > 0 {
                 return Err(anyhow!("Session already has an active run"));
@@ -3513,7 +3514,7 @@ impl webagent_manager::storage::RecordEffects for Store {
     {
         self.require_active_session(tx, sid).await?;
         self.require_participation(tx, &run).await?;
-        let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed')")
+        let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed','parked')")
                 .bind(sid).fetch_one(&mut **tx).await?;
         if count != 0 {
             return Err(anyhow!("Session already has unresolved work"));

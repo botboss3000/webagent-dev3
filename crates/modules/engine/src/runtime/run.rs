@@ -1516,6 +1516,9 @@ impl<
             if run["generation"] != generation || status(&run) != "running" {
                 return Ok(());
             }
+            if run["parked"] == true && run["pending"].is_null() && run["batch"].is_null() {
+                return app.finish_parked(run).await;
+            }
             // A summary call cut off by a restart or retry resumes as an ordinary model step.
             if run["phase"] == "compacting" {
                 run["phase"] = json!("model");

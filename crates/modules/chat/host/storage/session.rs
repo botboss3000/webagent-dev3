@@ -170,7 +170,7 @@ impl Store {
                 Some(raw) => crate::usage::public(&self.unseal(&raw)?),
                 None => Value::Null,
             };
-            let status: Option<String> = sqlx::query_scalar("SELECT status FROM run_index WHERE session_id=? ORDER BY updated_at DESC,id DESC LIMIT 1")
+            let status: Option<String> = sqlx::query_scalar("SELECT CASE status WHEN 'parked' THEN 'waiting_approval' ELSE status END FROM run_index WHERE session_id=? ORDER BY updated_at DESC,id DESC LIMIT 1")
                 .bind(sid).fetch_optional(&mut *tx).await?;
             summary["message_count"] = json!(count);
             summary["last_public_seq"] = json!(last_seq);

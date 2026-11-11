@@ -7613,6 +7613,93 @@ async fn existing_auto_approval_is_requeued_without_reusing_its_decision() {
     assert!(queued["pending"]["decision"].is_null());
 }
 #[tokio::test]
+async fn a_message_parks_a_waiting_approval_and_the_decided_call_reports_as_a_notice() {
+    let (_root, app) = fixture().await;
+    let sid = conversation(&app).await;
+    let id = queued(&app, &sid).await;
+    let mut run = app.run(&id).await.unwrap();
+    run["phase"] = json!("tools");
+    run["status"] = json!("waiting_approval");
+    run["calls"] = json!([{"call_id":"c1","name":"file_write","arguments":"{}"},
+        {"call_id":"c2","name":"file_read","arguments":"{}"}]);
+    run["call_index"] = json!(0);
+    run["input"] = json!([{"type":"function_call","call_id":"c1","name":"file_write","arguments":"{}"},
+        {"type":"function_call","call_id":"c2","name":"file_read","arguments":"{}"}]);
+    run["pending"] = json!({"id":"approval-1","name":"file_write","call_id":"c1",
+        "arguments":{"path":"a.txt"},"state":"waiting","decision":null});
+    app.save(&mut run).await.unwrap();
+    // Without a waiting message nothing changes.
+    requeue_auto_approval(&app, &id).await.unwrap();
+    assert!(app.run(&id).await.unwrap()["parked"].is_null());
+    let entry = json!({"id":"m1","message_id":"user:m1","session_id":sid,
+        "agent_id":"shared_default","revision":0,"choice":"steer","status":"pending",
+        "review_status":"acceptable","content":"meanwhile","context_content":"meanwhile",
+        "attachments":[]});
+    app.store
+        .followup_submit(&sid, entry, vec![], "m1", "digest", &json!({}))
+        .await
+        .unwrap();
+    requeue_auto_approval(&app, &id).await.unwrap();
+    let parked = app.run(&id).await.unwrap();
+    assert_eq!(parked["parked"], true);
+    assert_eq!(parked["status"], "waiting_approval");
+    assert_eq!(parked["pending"]["id"], "approval-1");
+    let task_id = parked["parked_tasks"][0]["task_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let task = app.store.background_get(&task_id).await.unwrap().unwrap();
+    assert_eq!(task["status"], "running");
+    assert_eq!(task["parked_approval"], true);
+    // Every call of the turn has a recorded result; the waiting one names its task.
+    let outputs: Vec<&Value> = parked["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["type"] == "function_call_output")
+        .collect();
+    assert_eq!(outputs.len(), 2);
+    assert!(outputs[0]["output"].as_str().unwrap().contains(&task_id));
+    assert!(outputs[1]["output"].as_str().unwrap().contains("not_run"));
+    // The conversation is free for its next run; the parked run takes no messages.
+    let views = app.store.active_runs().await.unwrap();
+    assert!(views
+        .iter()
+        .any(|view| view["id"] == id.as_str() && view["parked"] == true));
+    assert!(!app.engine().message_pending(&parked).await.unwrap());
+    // Cancelling the parked task declines its approval.
+    let mut cancelled = task.clone();
+    cancelled["status"] = json!("cancelled");
+    let revision = task["revision"].as_u64();
+    assert!(app
+        .store
+        .background_cas(&cancelled, revision)
+        .await
+        .unwrap());
+    requeue_auto_approval(&app, &id).await.unwrap();
+    let declined = app.run(&id).await.unwrap();
+    assert_eq!(declined["status"], "queued");
+    assert_eq!(declined["pending"]["decision"], "deny");
+    // Once the declined call has its result the run ends and reports it as a notice.
+    let mut done = declined.clone();
+    done["status"] = json!("running");
+    done["pending"] = Value::Null;
+    done["input"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"type":"function_call_output",
+        "call_id":"c1","output":json!({"status":"denied","output":"Declined"}).to_string()}));
+    app.engine().finish_parked(done).await.unwrap();
+    assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
+    let notice = app
+        .store
+        .get(&format!("background_notice:{sid}:tool:{task_id}"))
+        .await
+        .unwrap()
+        .expect("the decided call reports as a background notice");
+    assert_eq!(notice["status"], "denied");
+}
+#[tokio::test]
 async fn switching_waiting_parallel_writes_to_auto_runs_without_approval() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixListener;

@@ -60,7 +60,7 @@ fn text_of(result: &Value) -> String {
         .unwrap_or_else(|| result.to_string());
     text.chars().take(8000).collect()
 }
-fn finished(task: &Value) -> bool {
+pub(super) fn finished(task: &Value) -> bool {
     matches!(
         task["status"].as_str(),
         Some("completed" | "cancelled" | "failed")
@@ -344,7 +344,7 @@ impl<
         let id = identity(rid, call_id);
         let task = json!({"id":id,"user_id":app.store.current_user_id(),"agent_id":run["agent_id"],
         "session_id":run["session_id"],"run_id":rid,"call_id":call_id,"name":pending["name"],
-        "arguments":args,"detached":true,"external_pending":external,"on_run_end":"wake","status":"running","revision":0,
+        "arguments":args,"detached":true,"external_pending":external,"parked_approval":run["parked"] == true,"on_run_end":"wake","status":"running","revision":0,
         "created_at":now(),"created_at_ms":timestamp_ms(),"lease_until":now()+30});
         if !app.store.background_cas(&task, None).await? {
             return Ok(None);
@@ -790,7 +790,10 @@ impl<
             if finished(&task) {
                 return Ok(());
             }
-            if task["detached"] == true && !task["external_pending"].is_object() {
+            if task["detached"] == true
+                && !task["external_pending"].is_object()
+                && task["parked_approval"] != true
+            {
                 // Its call lived only in the process that started it; once that lease
                 // lapses (a restart) settle it as cut off, never run it again.
                 if task["lease_until"].as_u64().unwrap_or(0) <= now() {

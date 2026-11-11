@@ -147,7 +147,7 @@ export function mountSessionControls({root,client,guard,note,issues,ensureSessio
         // Fence older requests, reset conversation state, clear pending mode confirmation, and load controls for the newly opened session.
     async open(id){generation++;session=id;state=null;inflight=null;active=null;busy=false;close();notifications.cancelMode();paint();await load();},
         // Track the current actionable run for display and refresh controls when the session is idle.
-    updateRuns(items){active=items.find(run=>['queued','running','waiting_approval','waiting_gate'].includes(run.status));paint();if(session&&!busy)void load().catch(error=>{if(!issues)note(error.message);});},
+    updateRuns(items){active=items.find(run=>!run.parked&&['queued','running','waiting_approval','waiting_gate'].includes(run.status));paint();if(session&&!busy)void load().catch(error=>{if(!issues)note(error.message);});},
         // Invalidate pending loads and clear session, run, busy, picker, and confirmation state.
     disconnect(){generation++;session='';state=null;inflight=null;active=null;busy=false;close();notifications.cancelMode();paint();},
         // Disconnect session state, remove abort-scoped listeners, and remove the portal picker.

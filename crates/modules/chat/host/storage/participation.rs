@@ -370,7 +370,7 @@ impl Store {
             return Err(anyhow!("Participation revision changed"));
         }
         let eligible = kind != "human_message" && current["active"] == true;
-        let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed')").bind(sid).fetch_one(&mut *tx).await?;
+        let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed','parked')").bind(sid).fetch_one(&mut *tx).await?;
         let review: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM docs WHERE key=?")
             .bind(format!("manager_pending:{sid}"))
             .fetch_one(&mut *tx)
@@ -505,7 +505,7 @@ impl Store {
             if current["active"] != true {
                 continue;
             }
-            let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed')").bind(sid).fetch_one(&mut *tx).await?;
+            let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed','parked')").bind(sid).fetch_one(&mut *tx).await?;
             let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM docs WHERE key=?")
                 .bind(format!("manager_pending:{sid}"))
                 .fetch_one(&mut *tx)

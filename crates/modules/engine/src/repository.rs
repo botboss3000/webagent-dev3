@@ -10,6 +10,16 @@ use sqlx::{Row, SqlitePool};
 /// in the largest context a run can send.
 const MAX_COMPACTION_SOURCE_BYTES: usize = 4_194_304;
 
+/// A run parked on an approval is indexed as `parked` until it ends, so the
+/// one-open-run-per-conversation checks let the conversation start its next run.
+fn index_status(run: &Value) -> &str {
+    let status = run["status"].as_str().unwrap_or("failed");
+    if run["parked"] == true && !matches!(status, "completed" | "cancelled" | "failed") {
+        "parked"
+    } else {
+        status
+    }
+}
 pub struct Repository<'a, R, H, Q, N, U> {
     pub(crate) root: &'a std::path::Path,
     pub(crate) pool: &'a SqlitePool,
@@ -80,13 +90,13 @@ impl<
         async move {
             crate::send_future(sqlx::query("INSERT INTO run_index(id,session_id,status,updated_at,enqueue_seq) VALUES(?,?,?,?,(SELECT COALESCE(MAX(enqueue_seq),0)+1 FROM run_index)) ON CONFLICT(id) DO UPDATE SET status=excluded.status,updated_at=excluded.updated_at,enqueue_seq=COALESCE(run_index.enqueue_seq,excluded.enqueue_seq)")
             .bind(run["id"].as_str().ok_or_else(||anyhow!("Invalid run"))?).bind(run["session_id"].as_str().unwrap_or(""))
-            .bind(run["status"].as_str().unwrap_or("failed")).bind(run["updated_at"].as_i64().unwrap_or(0)).execute(&mut **tx)).await?;
+            .bind(index_status(run)).bind(run["updated_at"].as_i64().unwrap_or(0)).execute(&mut **tx)).await?;
             crate::send_future(self.sync_run_notice(tx, run)).await?;
             // Session totals advance in the same transaction as the run. Re-saving
             // a run contributes only its delta, so retries and recovery cannot double-count.
             let new_usage = crate::send_future(self.usage.stage_run_usage_in(tx, run)).await?;
             let view = serde_json::json!({"usage":new_usage,"model":crate::output::public_run_model(run),"attachments":run["attachments"],"run_revision":run["run_revision"],"context_assembly_report":run["context_assembly_report"],"context_controls":run["context_controls"],"compactions":run["compactions"],"dispatch_mode":run["dispatch_mode"],"chat_model_revision":run["chat_model_revision"],"id":run["id"],"session_id":run["session_id"],"status":run["status"],"error":run["error"],
-            "pending":run["pending"],"uncertain":run["uncertain"],"turns":run["turns"],"phase":run["phase"],"updated_at":run["updated_at"],
+            "pending":run["pending"],"uncertain":run["uncertain"],"turns":run["turns"],"phase":run["phase"],"updated_at":run["updated_at"],"parked":run["parked"],
             "run_health":run["run_health"]});
             crate::send_future(sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
             .bind(format!("run_view:{}",run["id"].as_str().unwrap())).bind(self.records.encode_user_record(&view)?).execute(&mut **tx)).await?;
@@ -349,7 +359,8 @@ impl<
             } else if expected != 0 {
                 return Err(anyhow!("Run revision missing"));
             }
-            if run["status"] == "completed" {
+            // A parked run ends beside the conversation's own run and its waiting messages.
+            if run["status"] == "completed" && run["parked"] != true {
                 crate::send_future(
                     self.chat.followup_publication_guard(
                         &mut tx,

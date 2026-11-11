@@ -575,7 +575,7 @@ $('chat-stop-btn').onclick=guard(()=>$('chat-stop-btn').dataset.run?cancel($('ch
     /** Starts a new Continue user turn. */
     continue:()=>submit('Continue'),
     /** Cancels the selected run by ID or the first active run; throws if none is active. */
-    async stop(id){const run=id?selectedRun(id):activityRuns.find(r=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(r.status));if(!run)throw Error('No active run');await cancel(run.id);},
+    async stop(id){const run=id?selectedRun(id):activityRuns.find(r=>!r.parked&&['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(r.status));if(!run)throw Error('No active run');await cancel(run.id);},
     /** Decides an approval only when it is pending in this conversation, then refreshes shell state. */
     async approve(id,decision){const run=activityRuns.find(r=>r.pending?.id===id&&r.status==='waiting_approval');if(!run||run.pending.can_decide===false||sharedAccess?.observer)throw Error('Approval is not available to this user');await client.decide(id,{decision,client_request_id:keyId('approval:'+id+':'+decision)});await refresh();},
     /** Resolves a selected uncertain/recovery run and refreshes shell state. */

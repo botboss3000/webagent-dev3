@@ -77,7 +77,7 @@ export function mountComposerProgress({root,getProfile,isAdmin}) {
     });
   }
   // Select this session's active run and refresh details from its latest run snapshot.
-  function update(runs){const next=runs.filter(r=>!r.session_id||r.session_id===session).find(r=>['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(r.status));
+  function update(runs){const next=runs.filter(r=>!r.session_id||r.session_id===session).find(r=>!r.parked&&['queued','running','waiting_approval','waiting_gate','waiting_external'].includes(r.status));
     // A stopped note stays until a different run starts; the stopped run's late snapshots are ignored.
     if(held&&(!next||next.id===held.run)){run=null;optimistic='';close();details();return;}
     held=null;if(next?.id!==run?.id)close();run=next||null;optimistic='';watchRun(run?.id||null);details();}

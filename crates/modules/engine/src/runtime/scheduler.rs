@@ -52,6 +52,14 @@ impl<
         if status(&run) != "waiting_approval" {
             return Ok(());
         }
+        if run["parked"] != true && app.steer_waiting(&run).await? {
+            return app.park_approval(run).await;
+        }
+        if run["parked"] == true && app.parked_call_cancelled(&run).await? {
+            run["pending"]["decision"] = json!("deny");
+            run["status"] = json!("queued");
+            return app.save(&mut run).await;
+        }
         // An approval left undecided past the configured expiry counts as declined; the
         // run continues and the agent is told not to retry.
         let expiry = config::Config::<C>::read(&app.runtime_path)?

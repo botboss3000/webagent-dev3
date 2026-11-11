@@ -60,15 +60,24 @@ impl<
     /// Whether a user message is waiting to enter this run at its next model step.
     /// Running tool calls are detached and undispatched calls skipped when it is.
     pub async fn message_pending(&self, run: &Value) -> Result<bool> {
-        Ok(self.pending_steer(run).await?.is_some())
+        Ok(self.pending_steer(run, false).await?.is_some())
+    }
+    /// Whether anything waits to enter the conversation, background notices included.
+    /// A run waiting for approval parks on it so the conversation can carry on.
+    pub async fn steer_waiting(&self, run: &Value) -> Result<bool> {
+        Ok(self.pending_steer(run, true).await?.is_some())
     }
     /// Whether the user chose "send now" for a waiting message: the current model
     /// call is replaced and a running tool call detaches without grace.
     pub async fn message_forced(&self, run: &Value) -> Result<bool> {
-        Ok(self.pending_steer(run).await? == Some(true))
+        Ok(self.pending_steer(run, false).await? == Some(true))
     }
     /// `Some(forced)` when an acceptable steer waits; forced if any entry is sent now.
-    async fn pending_steer(&self, run: &Value) -> Result<Option<bool>> {
+    async fn pending_steer(&self, run: &Value, notices: bool) -> Result<Option<bool>> {
+        // A run parked on an approval leaves new messages to the conversation's next run.
+        if run["parked"] == true {
+            return Ok(None);
+        }
         if run["requester_user_id"]
             .as_str()
             .is_some_and(|actor| actor != self.store.current_user_id())
@@ -94,12 +103,15 @@ impl<
                 e["choice"] == "steer"
                     && e["status"] == "pending"
                     && e["review_status"] == "acceptable"
-                    && e["platform_notice"].is_null()
+                    && (notices || e["platform_notice"].is_null())
             })
             .collect();
         Ok((!waiting.is_empty()).then(|| waiting.iter().any(|e| e["send_now"] == true)))
     }
     pub async fn apply_steering(&self, run: &mut Value) -> Result<bool> {
+        if run["parked"] == true {
+            return Ok(false);
+        }
         if run["requester_user_id"]
             .as_str()
             .is_some_and(|actor| actor != self.store.current_user_id())

@@ -241,7 +241,7 @@ impl Store {
             if q["revision"].as_u64().unwrap_or(0) != expected {
                 return Err(anyhow!("Queue revision changed"));
             }
-            let busy:i64=sqlx::query_scalar("SELECT count(*) FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed')").bind(s).fetch_one(&mut *t).await?;
+            let busy:i64=sqlx::query_scalar("SELECT count(*) FROM run_index WHERE session_id=? AND status NOT IN ('completed','cancelled','failed','parked')").bind(s).fetch_one(&mut *t).await?;
             if busy != 0 {
                 return Err(anyhow!("Resolve existing work before resuming queue"));
             }
@@ -462,7 +462,7 @@ impl Store {
             .as_str()
             .ok_or_else(|| anyhow!("Missing delivery run"))?
             .to_owned();
-        let busy:i64=sqlx::query_scalar("SELECT count(*) FROM run_index WHERE session_id=? AND id!=? AND status NOT IN ('completed','cancelled','failed')").bind(s).bind(&rid).fetch_one(&mut *t).await?;
+        let busy:i64=sqlx::query_scalar("SELECT count(*) FROM run_index WHERE session_id=? AND id!=? AND status NOT IN ('completed','cancelled','failed','parked')").bind(s).bind(&rid).fetch_one(&mut *t).await?;
         if choice == "next_run" && busy != 0 {
             return Ok(false);
         }

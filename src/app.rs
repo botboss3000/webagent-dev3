@@ -208,6 +208,7 @@ fn public_run(run: &Value) -> Value {
     json!({"id":run["id"],"session_id":run["session_id"],"status":run["status"],"error":run["error"],
         "component_pause":if run["status"]=="paused"&&run["component_pause"]["version"]==1&&run["component_pause"]["component"].as_str().is_some_and(crate::engine_components::working_component) {json!({"version":1,"component":run["component_pause"]["component"],"reason":"component_unavailable"})}else{Value::Null},
         "pending":run["pending"],"uncertain":run["uncertain"],"turns":run["turns"],
+        "parked":run["parked"] == true,
         "phase":crate::task_progress::known_phase(&run["phase"]),
         "uncertain_calls":uncertain_calls(run),
         "tool_failure":tools::failure::project(&run["latest_tool_failure"]),

@@ -241,7 +241,11 @@ async fn tick_session(app: &App, s: &str) -> Result<()> {
         return Ok(());
     }
     let active = app.store.active_runs().await?;
-    if let Some(r) = active.iter().find(|r| r["session_id"] == s) {
+    // A run parked on an approval leaves the conversation free for the next run.
+    if let Some(r) = active
+        .iter()
+        .find(|r| r["session_id"] == s && r["parked"] != true)
+    {
         // Delivery simply waits for live work; only an uncertain write is recorded
         // as a hold, because it needs a decision before anything runs again.
         if r["uncertain"] == true

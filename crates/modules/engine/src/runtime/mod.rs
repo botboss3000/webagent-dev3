@@ -24,6 +24,7 @@ pub mod images;
 pub mod lane;
 pub mod models;
 pub mod native;
+pub mod parked;
 pub mod policy;
 pub mod ports;
 pub mod recovery;
