@@ -332,7 +332,8 @@ export async function renderAbilities(host, request, options) {
       const toggleWrap = node('label', 'conn-toggle-wrap ac-ability-toggle-wrap');
       const toggle = node('input', 'conn-toggle');
       toggle.type = 'checkbox';
-      toggle.disabled = !canManage || !!previewUser;
+      // Base holds the loaders and core tools, so it is always on.
+      toggle.disabled = !canManage || !!previewUser || ability.id === 'base';
       toggle.checked = ability.visibility !== 'off';
       toggle.setAttribute('aria-label', ability.name + ' on or off');
       // An ability is only a group: On lets its tools and skills follow their own settings.

@@ -2717,6 +2717,14 @@ async fn agent_discovers_ability_then_inspects_only_its_current_session() {
     use axum::routing::post;
 
     let (_root, mut app) = fixture().await;
+    // Core skills default to discoverable; this journey checks Visible core guidance.
+    let mut visibility = app.store.agent_abilities().await.unwrap();
+    let revision = visibility["revision"].as_u64().unwrap();
+    visibility["skill_visibility"]["codebase_admin"] = json!("visible");
+    app.store
+        .save_agent_abilities(&visibility, revision)
+        .await
+        .unwrap();
     let sid = conversation(&app).await;
     let other = conversation(&app).await;
     let private_other_text = "only in the other session";
@@ -7883,6 +7891,7 @@ async fn removed_manifest_withdraws_cached_schemas_and_guidance_within_run() {
     let revision = visibility["revision"].as_u64().unwrap();
     visibility["visibility"]["codebase_admin"] = json!("visible");
     visibility["tool_modes"]["state_inspect"] = json!("visible");
+    visibility["skill_visibility"]["codebase_admin"] = json!("visible");
     app.store
         .save_agent_abilities(&visibility, revision)
         .await
@@ -10930,13 +10939,15 @@ async fn native_skill_catalog_marks_supplied_guidance_and_rebuilds_selected_afte
         .await
         .unwrap();
     assert!(!guidance.contains(sentinel) && guidance.contains("REPLACEMENT"));
-    let mut visibility = app.store.agent_abilities().await.unwrap();
-    let revision = visibility["revision"].as_u64().unwrap();
-    visibility["visibility"]["base"] = json!("off");
-    app.store
-        .save_agent_abilities(&visibility, revision)
+    // Base itself is always on; denying load_skill withdraws loaded guidance.
+    let mut policy = app
+        .store
+        .get("policy")
         .await
-        .unwrap();
+        .unwrap()
+        .unwrap_or_else(policy_default);
+    policy["rules"]["load_skill"] = json!("deny");
+    app.store.put("policy", &policy).await.unwrap();
     assert!(tools::core_skills::active_guidance(&app, &sid, &id)
         .await
         .unwrap()

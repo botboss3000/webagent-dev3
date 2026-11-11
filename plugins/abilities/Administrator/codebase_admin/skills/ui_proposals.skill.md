@@ -2,7 +2,7 @@
 id: ui_proposals
 title: UI proposals with screenshots
 when_to_use: Use when the user wants to compare UI options, asks for proposals or variants, or wants to approve a UI change from screenshots before it is released.
-default_mode: visible
+default_mode: discoverable
 ---
 
 # UI proposals with screenshots

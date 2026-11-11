@@ -2,7 +2,7 @@
 id: subagents
 title: Work faster with sub agents
 when_to_use: Use whenever a task splits into independent parts (variants, separate files or pages, separate questions to research), or when a long piece of work would crowd this conversation.
-default_mode: visible
+default_mode: discoverable
 ---
 
 # Work faster with sub agents

@@ -605,6 +605,9 @@ pub(crate) async fn visibility_set(
     Path((id, ability)): Path<(String, String)>,
     Json(body): Json<AbilityVisibilityBody>,
 ) -> Api {
+    if ability == webagent_abilities::base::ID && body.visibility == "off" {
+        return Err(bad("Base is always on"));
+    }
     visibility(app, identity, id, ability, None, None, body).await
 }
 pub(crate) async fn skill_set(

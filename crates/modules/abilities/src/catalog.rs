@@ -1265,11 +1265,13 @@ impl<H: Host> Catalog<H> {
         }
     }
     fn is_off(visibility: &Value, id: &str) -> bool {
-        Self::exposure(visibility, "visibility", id, "discoverable") == "off"
+        // Base holds the loaders and core tools, so it is always on; its tools keep their own settings.
+        id != crate::base::ID
+            && Self::exposure(visibility, "visibility", id, "discoverable") == "off"
     }
 
     fn skill_mode<'a>(visibility: &'a Value, id: &str) -> &'a str {
-        Self::exposure(visibility, "skill_visibility", id, "visible")
+        Self::exposure(visibility, "skill_visibility", id, "discoverable")
     }
 
     fn selectable_metadata(name: &str, text: &str) -> Option<(String, String, &'static str)> {
@@ -1277,7 +1279,7 @@ impl<H: Host> Catalog<H> {
         if lines.next()? != "---" {
             return None;
         }
-        let (mut id, mut title, mut when, mut mode) = (None, None, None, "visible");
+        let (mut id, mut title, mut when, mut mode) = (None, None, None, "discoverable");
         let mut closed = false;
         for line in lines.by_ref() {
             if line == "---" {
@@ -1379,7 +1381,7 @@ impl<H: Host> Catalog<H> {
         if Self::core_skill(ability).is_some() {
             general_skills.push(
                 json!({"skill_id":"core","title":"Skill","when_to_use":ability.skill_summary,
-                "mode":Self::skill_mode(visibility,&ability.id),"default_mode":"visible"}),
+                "mode":Self::skill_mode(visibility,&ability.id),"default_mode":"discoverable"}),
             );
         }
         for (name, cached) in &ability.selectable_skills {
@@ -2218,7 +2220,7 @@ pub mod registered_tests {
             fs::write(folder.join("tools/file_edit.skill.md"), &tool).unwrap();
             let catalog = Catalog::<H>::load(root.path()).unwrap();
             let p = policy::<H>();
-            let v = json!({"visibility":{"codebase_admin":"visible"},
+            let v = json!({"visibility":{"codebase_admin":"visible"},"skill_visibility":{"codebase_admin":"visible"},
             "tool_modes":{"file_read":"visible","file_edit":"visible"}});
             let state = json!({"active":[],"suppressed":[]});
             let guidance = catalog.visible_guidance(&p, &v, &state);
@@ -2821,6 +2823,24 @@ pub mod registered_tests {
             ));
         }
 
+        pub fn base_stays_on_and_skills_default_discoverable<H: crate::TestHost>() {
+            let (_root, catalog) = fixture::<H>();
+            let state = json!({"active":[],"suppressed":[]});
+            let off = json!({"visibility":{"base":"off","codebase_admin":"visible"}});
+            // Saving Base as Off never hides its loaders.
+            assert_eq!(
+                catalog.tool_gate("list_tools", &off, &state, &Value::Null),
+                (true, true)
+            );
+            let entries = catalog.catalog_with(&policy::<H>(), &off, &state);
+            let admin = entries
+                .iter()
+                .find(|e| e["id"] == "codebase_admin")
+                .unwrap();
+            // Ability core skills default to discoverable, so none enter guidance unasked.
+            assert_eq!(admin["skill_visibility"], "discoverable");
+        }
+
         pub fn tool_gate_distinguishes_missing_tools_from_hidden_tools<H: crate::TestHost>() {
             let (_root, catalog) = fixture::<H>();
             let state = json!({"active":[],"suppressed":[]});
@@ -2924,7 +2944,7 @@ pub mod registered_tests {
         pub fn visible_guidance_and_schema_respect_suppression<H: crate::TestHost>() {
             let (_root, catalog) = fixture::<H>();
             let policy = policy::<H>();
-            let visibility = json!({"revision":1,"visibility":{"codebase_admin":"visible"},
+            let visibility = json!({"revision":1,"visibility":{"codebase_admin":"visible"},"skill_visibility":{"codebase_admin":"visible"},
             "tool_modes":{"file_edit":"visible"}});
             let state = json!({"revision":0,"active":[],"suppressed":[]});
             let names = catalog
@@ -2963,7 +2983,7 @@ pub mod registered_tests {
         pub fn visible_guidance_filters_denied_ability_and_tool_text<H: crate::TestHost>() {
             let (_root, catalog) = fixture::<H>();
             let policy = policy::<H>();
-            let visibility = json!({"visibility":{"codebase_admin":"visible"}});
+            let visibility = json!({"visibility":{"codebase_admin":"visible"},"skill_visibility":{"codebase_admin":"visible"}});
             let state = json!({"active":[],"suppressed":[]});
             let normal = catalog.visible_guidance(&policy, &visibility, &state);
             assert!(normal.contains("Use scoped workspace tools."));
@@ -3621,7 +3641,7 @@ pub mod registered_tests {
             let path = folder.join("skills/verification.skill.md");
             fs::write(&path, skill("FIRST BODY")).unwrap();
             let catalog = Catalog::<H>::load_snapshot(root.path()).unwrap();
-            let visible = json!({"visibility":{"codebase_admin":"visible"},
+            let visible = json!({"visibility":{"codebase_admin":"visible"},"skill_visibility":{"codebase_admin":"visible"},
             "settings":{"codebase_admin":{"terminal_caution":"cautious"}}});
             let state = json!({"active":[],"suppressed":[]});
             let entries = catalog.catalog_with(&policy::<H>(), &visible, &state);

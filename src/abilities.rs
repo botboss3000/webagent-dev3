@@ -119,6 +119,12 @@ mod tests {
         webagent_abilities::catalog_testing::tests::catalog_only_v2_tool_is_listed_but_never_executable::<crate::abilities::NativeHost>();
     }
     #[test]
+    fn base_stays_on_and_skills_default_discoverable() {
+        webagent_abilities::catalog_testing::tests::base_stays_on_and_skills_default_discoverable::<
+            crate::abilities::NativeHost,
+        >();
+    }
+    #[test]
     fn tool_gate_distinguishes_missing_tools_from_hidden_tools() {
         webagent_abilities::catalog_testing::tests::tool_gate_distinguishes_missing_tools_from_hidden_tools::<crate::abilities::NativeHost>();
     }
