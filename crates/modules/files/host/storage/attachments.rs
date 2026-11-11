@@ -87,16 +87,14 @@ impl Store {
             }
         }
     }
-    /// Bytes in the workspaces and private browser folders of this user's sessions
-    /// (`/workspaces/<session id>`; browser bytes as the worker publishes them).
-    async fn workspace_used(&self) -> Result<u64> {
+    /// Bytes in the private browser folders of this user's sessions, as the worker
+    /// publishes them. `/workspaces` is not counted: only administrator app-development
+    /// tools write there, and that work is not the user's own storage.
+    async fn browser_used(&self) -> Result<u64> {
         let ids: Vec<String> =
             sqlx::query_scalar("SELECT key FROM docs WHERE key LIKE 'session:%'")
                 .fetch_all(&self.pool)
                 .await?;
-        let root = std::path::PathBuf::from(
-            std::env::var("V3_WORKSPACE_ROOT").unwrap_or_else(|_| "/workspaces".into()),
-        );
         let usage = std::env::var("V3_BROWSER_USAGE")
             .unwrap_or_else(|_| "/runtime/worker/browser-usage.json".into());
         Ok(tokio::task::spawn_blocking(move || {
@@ -107,16 +105,12 @@ impl Store {
                 .unwrap_or_default();
             ids.iter()
                 .filter_map(|key| key.strip_prefix("session:"))
-                .filter(|sid| webagent_files::uploads::upload_id_ok(sid))
-                .map(|sid| {
-                    tree_bytes(&root.join(sid))
-                        .saturating_add(browser.get(sid).copied().unwrap_or(0))
-                })
+                .filter_map(|sid| browser.get(sid).copied())
                 .fold(0u64, u64::saturating_add)
         })
         .await?)
     }
-    /// Bytes this user stores: the database and its journal, attachment files and workspaces.
+    /// Bytes this user stores: the database and its journal, attachment files and browser folders.
     pub(crate) async fn storage_used(&self) -> Result<u64> {
         let files = self
             .get(webagent_files::QUOTA_KEY)
@@ -134,7 +128,7 @@ impl Store {
         }
         Ok(files
             .saturating_add(database)
-            .saturating_add(self.workspace_used().await?))
+            .saturating_add(self.browser_used().await?))
     }
     /// Remove only an unclaimed upload owned by this session and decrement its quota atomically.
     pub(crate) async fn delete_pending_upload(&self, sid: &str, aid: &str) -> Result<()> {

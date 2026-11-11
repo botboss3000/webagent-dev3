@@ -3,7 +3,7 @@
   "settings": [
     {
       "id": "storage.tier.user_storage_mb",
-      "description": "Total storage, in megabytes, one account at this account level may use across chats, attachments and its workspace; empty means unlimited.",
+      "description": "Total storage, in megabytes, one account at this account level may use across chats, attachments and browser data; empty means unlimited.",
       "type": "integer",
       "pointer": "/tiers/{tier}/user_storage_mb",
       "layers": [
