@@ -77,10 +77,6 @@ mod tests {
         webagent_abilities::catalog_testing::tests::search_activation_preserves_visible_tools_and_respects_denials::<crate::abilities::NativeHost>();
     }
     #[test]
-    fn natural_task_search_finds_permitted_ability_and_tools() {
-        webagent_abilities::catalog_testing::tests::natural_task_search_finds_permitted_ability_and_tools::<crate::abilities::NativeHost>();
-    }
-    #[test]
     fn changed_manifest_withdraws_cached_loaded_tools_until_reload() {
         webagent_abilities::catalog_testing::tests::changed_manifest_withdraws_cached_loaded_tools_until_reload::<crate::abilities::NativeHost>();
     }

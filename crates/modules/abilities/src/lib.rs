@@ -14,7 +14,7 @@ pub mod user_files;
 pub use cache::CatalogCache;
 pub use catalog::{
     discovery_row, is_discovery, near_word, public_context, search_words, AbilityContext,
-    AbilityInclusion, Catalog, SkillInclusion,
+    AbilityInclusion, Catalog, SkillInclusion, BOOTSTRAP_TOOLS,
 };
 pub use ports::Host;
 

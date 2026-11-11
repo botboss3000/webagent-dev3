@@ -369,11 +369,6 @@ pub(crate) async fn policy_get(State(app): State<App>) -> Api {
         .iter()
         .chain(crate::mcp::all_schemas().iter())
         .filter_map(|s| s["name"].as_str().map(str::to_owned))
-        .chain(
-            ["list_abilities", "load_ability"]
-                .into_iter()
-                .map(str::to_owned),
-        )
         .collect();
     // Show unnamed tools with the template rule the runtime applies to them.
     let template = policy_default();

@@ -139,7 +139,7 @@ impl<
     /// An ability whose manifest names `config.required_model_role` stays off for an agent whose
     /// roster cannot resolve that role. Discovery applies it, so the model cannot load a tool it
     /// cannot run; the per-call path stays free of the model catalog read.
-    pub(crate) async fn hide_without_model_role(
+    pub async fn hide_without_model_role(
         &self,
         agent: &str,
         policy: &Value,
@@ -283,6 +283,12 @@ impl<
     ) -> access::ToolDecision {
         let installation = access::Permission::from_policy(policy_decision(policy, name))
             .unwrap_or(access::Permission::Deny);
+        // The loaders only list and select tools the caller may already use, so like the
+        // former ability loaders they skip ability and tier gating; each listed tool is
+        // still decided here on its own.
+        if webagent_abilities::BOOTSTRAP_TOOLS.contains(&name) {
+            return access.tool_decision(name, installation, true, true, read_only, true);
+        }
         let (available, visible) = self.abilities.tool_gate(name, visibility, state, loaded);
         let ability_ids = self
             .abilities

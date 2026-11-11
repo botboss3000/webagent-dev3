@@ -144,6 +144,13 @@ pub trait NativeHost: Sync {
         &'a self,
         sid: &'a str,
     ) -> Pending<'a, Result<(Value, u64, Value, Value)>>;
+    /// `ability_controls` for discovery: abilities whose required model role `agent` cannot
+    /// resolve are turned Off, so the model cannot load a tool it cannot run.
+    fn discovery_controls<'a>(
+        &'a self,
+        sid: &'a str,
+        agent: &'a str,
+    ) -> Pending<'a, Result<(Value, u64, Value, Value)>>;
     /// Session `sid`'s validated capability mode.
     fn session_mode<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Value>>;
     /// The engine's live permission decision for tool `name` under these controls.

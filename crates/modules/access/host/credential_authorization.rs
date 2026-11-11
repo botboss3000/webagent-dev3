@@ -83,6 +83,7 @@ mod tests {
         let mut visibility = app.store.agent_abilities().await.unwrap();
         let revision = visibility["revision"].as_u64().unwrap();
         visibility["visibility"]["base"] = json!("visible");
+        visibility["tool_modes"]["test_owner_purchase"] = json!("visible");
         visibility["revision"] = json!(revision + 1);
         app.store
             .save_agent_abilities(&visibility, revision)

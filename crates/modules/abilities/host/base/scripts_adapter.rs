@@ -383,6 +383,16 @@ mod tests {
         let mut visibility = app.store.agent_abilities().await.unwrap();
         let revision = visibility["revision"].as_u64().unwrap();
         visibility["visibility"]["base"] = json!("visible");
+        // Tools are discoverable by default; these tests run them as if already loaded.
+        for tool in [
+            "script_save",
+            "script_list",
+            "script_run",
+            "calculate",
+            "get_time",
+        ] {
+            visibility["tool_modes"][tool] = json!("visible");
+        }
         visibility["revision"] = json!(revision + 1);
         app.store
             .save_agent_abilities(&visibility, revision)

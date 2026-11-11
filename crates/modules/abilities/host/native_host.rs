@@ -246,6 +246,21 @@ impl NativeHost for Host<'_> {
     ) -> Pending<'a, Result<(Value, u64, Value, Value)>> {
         Box::pin(crate::ability_controls(self.0, sid))
     }
+    fn discovery_controls<'a>(
+        &'a self,
+        sid: &'a str,
+        agent: &'a str,
+    ) -> Pending<'a, Result<(Value, u64, Value, Value)>> {
+        Box::pin(async move {
+            let (policy, revision, mut visibility, state) =
+                crate::ability_controls(self.0, sid).await?;
+            self.0
+                .engine()
+                .hide_without_model_role(agent, &policy, &mut visibility, &state)
+                .await?;
+            Ok((policy, revision, visibility, state))
+        })
+    }
     fn session_mode<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Value>> {
         Box::pin(crate::session_mode(self.0, sid))
     }

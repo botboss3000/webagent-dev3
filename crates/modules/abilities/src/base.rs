@@ -12,11 +12,8 @@ pub const COLOR: &str = "#7dcfff";
 
 /// Tool names, in catalog order.
 pub const TOOLS: &[&str] = &[
-    "search_tools",
     "list_tools",
     "load_tool",
-    "list_abilities",
-    "load_ability",
     "list_skills",
     "load_skill",
     "context_assets",
@@ -113,10 +110,6 @@ pub const TOOL_SKILLS: &[(&str, &str)] = &[
     (
         "search_this_session",
         include_str!("../base/tools/search_this_session.skill.md"),
-    ),
-    (
-        "search_tools",
-        include_str!("../base/tools/search_tools.skill.md"),
     ),
     (
         "background_cancel",

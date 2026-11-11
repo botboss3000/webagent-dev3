@@ -376,19 +376,18 @@ async fn discoverable_tool_requires_its_own_selection() {
     .await
     .unwrap()
     .0;
-    let state = json!({"active":["codebase_admin"],"suppressed":[]});
+    let state = json!({"active":[],"suppressed":[]});
     assert!(!app
         .abilities
         .tool_available("file_read", &result, &state, &json!([])));
-    assert!(!app.abilities.tool_available(
-        "file_read",
-        &result,
-        &state,
-        &json!(["codebase_admin"])
-    ));
     assert!(app
         .abilities
         .tool_available("file_read", &result, &state, &json!(["tool:file_read"])));
+    // Explicit activation (session state, /optimize) also supplies it.
+    let active = json!({"active":["codebase_admin"],"suppressed":[]});
+    assert!(app
+        .abilities
+        .tool_available("file_read", &result, &active, &json!([])));
 }
 
 #[tokio::test]
@@ -2540,8 +2539,8 @@ async fn image_generation_stays_off_without_an_image_out_model() {
                 json!([{"type":"message","role":"assistant",
                     "content":[{"type":"output_text","text":"Done."}]}])
             } else {
-                json!([{"type":"function_call","call_id":"load","name":"load_ability",
-                    "arguments":"{\"ability_id\":\"image_generation\"}"}])
+                json!([{"type":"function_call","call_id":"load","name":"load_tool",
+                    "arguments":"{\"tool_name\":\"generate_image\"}"}])
             };
             let event = json!({"type":"response.completed",
                 "response":{"status":"completed","output":output}});
@@ -2623,7 +2622,7 @@ async fn image_generation_stays_off_without_an_image_out_model() {
         .await
         .unwrap();
     let loaded = load_result(app.clone(), "role-present").await;
-    assert_eq!(loaded["status"], "ok", "{loaded}");
+    assert_eq!(loaded["status"], "success", "{loaded}");
     server.abort();
 }
 #[tokio::test]
@@ -2653,13 +2652,13 @@ async fn batched_discovery_calls_run_serially_and_succeed() {
                 captured.push(body);
                 let output = match captured.len() {
                     1 => json!([
-                        {"type":"function_call","call_id":"list-a","name":"list_abilities",
+                        {"type":"function_call","call_id":"list-a","name":"list_tools",
                             "arguments":"{\"query\":\"state\"}"},
-                        {"type":"function_call","call_id":"list-b","name":"list_abilities",
+                        {"type":"function_call","call_id":"list-b","name":"list_tools",
                             "arguments":"{\"include_available\":true}"}]),
                     2 => json!([
-                        {"type":"function_call","call_id":"load","name":"load_ability",
-                            "arguments":"{\"ability_id\":\"codebase_admin\"}"},
+                        {"type":"function_call","call_id":"load","name":"load_tool",
+                            "arguments":"{\"tool_name\":\"state_inspect\"}"},
                         {"type":"function_call","call_id":"inspect","name":"state_inspect",
                             "arguments":"{\"resource\":\"chat\",\"limit\":1}"}]),
                     3 => json!([{"type":"message","role":"assistant",
@@ -2704,10 +2703,10 @@ async fn batched_discovery_calls_run_serially_and_succeed() {
     };
     for call_id in ["list-a", "list-b"] {
         let listed = result_for(&requests[1], call_id);
-        assert_eq!(listed["status"], "ok", "{call_id}: {listed}");
+        assert_eq!(listed["status"], "success", "{call_id}: {listed}");
     }
     let loaded = result_for(&requests[2], "load");
-    assert_eq!(loaded["status"], "ok", "{loaded}");
+    assert_eq!(loaded["status"], "success", "{loaded}");
     let inspected = result_for(&requests[2], "inspect");
     assert_eq!(inspected["status"], "success", "{inspected}");
     server.abort();
@@ -2750,10 +2749,10 @@ async fn agent_discovers_ability_then_inspects_only_its_current_session() {
                 captured.push(body);
                 let output = match captured.len() {
                     1 => json!([{"type":"function_call","call_id":"discover",
-                        "name":"list_abilities","arguments":"{}"}]),
+                        "name":"list_tools","arguments":"{\"query\":\"inspect session state\"}"}]),
                     2 => json!([{"type":"function_call","call_id":"load",
-                        "name":"load_ability",
-                        "arguments":"{\"ability_id\":\"codebase_admin\"}"}]),
+                        "name":"load_tool",
+                        "arguments":"{\"tool_name\":\"state_inspect\"}"}]),
                     3 => json!([{"type":"function_call","call_id":"inspect",
                         "name":"state_inspect",
                         "arguments":"{\"resource\":\"chat\",\"limit\":1}"}]),
@@ -2789,10 +2788,10 @@ async fn agent_discovers_ability_then_inspects_only_its_current_session() {
     .await;
 
     assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
-    assert_eq!(
-        app.run(&id).await.unwrap()["loaded_abilities"],
-        json!(["codebase_admin"])
-    );
+    assert!(app.run(&id).await.unwrap()["loaded_abilities"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("tool:state_inspect")));
     let requests = requests.lock().await;
     assert_eq!(requests.len(), 5);
     let names = |request: &Value| {
@@ -2804,11 +2803,12 @@ async fn agent_discovers_ability_then_inspects_only_its_current_session() {
             .collect::<Vec<_>>()
     };
     for request in &requests[..2] {
-        // Discovery tools and the always-on background_cancel, before any ability loads.
-        assert_eq!(
-            names(request),
-            vec!["list_abilities", "load_ability", "background_cancel"]
-        );
+        // Only the always-visible loaders before any tool loads.
+        let names = names(request);
+        assert!(names.contains(&"list_tools".to_owned()), "{names:?}");
+        assert!(names.contains(&"load_tool".to_owned()), "{names:?}");
+        assert!(!names.contains(&"state_inspect".to_owned()));
+        assert!(!names.contains(&"list_abilities".to_owned()));
     }
     assert!(names(&requests[2]).contains(&"state_inspect".to_owned()));
     let result_for = |request: &Value, call_id: &str| -> Value {
@@ -2821,16 +2821,15 @@ async fn agent_discovers_ability_then_inspects_only_its_current_session() {
         serde_json::from_str(item["output"].as_str().unwrap()).unwrap()
     };
     let discovery = result_for(&requests[1], "discover");
-    assert_eq!(discovery["status"], "ok");
-    assert!(discovery["abilities"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|ability| ability["id"] == "codebase_admin"));
+    assert_eq!(discovery["status"], "success", "{discovery}");
+    assert_eq!(
+        discovery["output"]["tools"][0]["name"], "state_inspect",
+        "{discovery}"
+    );
     let loaded = result_for(&requests[2], "load");
-    assert_eq!(loaded["status"], "ok");
-    assert_eq!(loaded["ability_id"], "codebase_admin");
-    assert_eq!(loaded["context_source"], "live_ability_catalog");
+    assert_eq!(loaded["status"], "success", "{loaded}");
+    assert_eq!(loaded["output"]["tool_name"], "state_inspect");
+    assert_eq!(loaded["output"]["ability_id"], "codebase_admin");
     for request in &requests[..2] {
         assert!(native_ability_frames(request, "codebase_admin").is_empty());
     }
@@ -3498,9 +3497,10 @@ async fn ability_management_routes_enforce_auth_revisions_and_session_boundaries
     );
 
     let (policy, _, visibility, state) = ability_controls(&app, &second).await.unwrap();
+    // Tools are discoverable by default: exposed once selected.
     assert!(app
         .abilities
-        .schemas_with(&policy, &json!([]), &visibility, &state)
+        .schemas_with(&policy, &json!(["tool:file_read"]), &visibility, &state)
         .iter()
         .any(|tool| tool["name"] == "file_read"));
     assert!(!app
@@ -3614,14 +3614,20 @@ async fn ability_management_routes_enforce_auth_revisions_and_session_boundaries
         )
         .iter()
         .any(|tool| tool["name"] == "file_read"));
-    assert!(app
+    // Other On groups may still contribute; the suppressed group never does.
+    assert!(!app
         .abilities
         .visible_guidance(&policy, &visibility, &first_state)
-        .is_empty());
+        .contains("Visible ability codebase_admin"));
     let (_, _, visibility, second_state) = ability_controls(&app, &second).await.unwrap();
     assert!(app
         .abilities
-        .schemas_with(&policy, &json!([]), &visibility, &second_state)
+        .schemas_with(
+            &policy,
+            &json!(["tool:file_read"]),
+            &visibility,
+            &second_state
+        )
         .iter()
         .any(|tool| tool["name"] == "file_read"));
 
@@ -3642,10 +3648,11 @@ async fn ability_management_routes_enforce_auth_revisions_and_session_boundaries
         .schemas_with(&policy, &json!([]), &visibility, &second_state)
         .iter()
         .any(|tool| tool["name"] == "file_read"));
+    // Discoverable now means On: the group's guidance still follows its tools.
     assert!(app
         .abilities
         .visible_guidance(&policy, &visibility, &second_state)
-        .is_empty());
+        .contains("Visible ability codebase_admin"));
     let (status, second_active) = ability_request(
         &app,
         Method::PUT,
@@ -3658,9 +3665,20 @@ async fn ability_management_routes_enforce_auth_revisions_and_session_boundaries
     assert_eq!(status, StatusCode::OK);
     assert_eq!(second_active["revision"], 1);
     let (policy, _, visibility, second_state) = ability_controls(&app, &second).await.unwrap();
+    // Session activation supplies the group's discoverable tools, as a selection does.
     assert!(app
         .abilities
         .schemas_with(&policy, &json!([]), &visibility, &second_state)
+        .iter()
+        .any(|tool| tool["name"] == "file_read"));
+    assert!(app
+        .abilities
+        .schemas_with(
+            &policy,
+            &json!(["tool:file_read"]),
+            &visibility,
+            &second_state
+        )
         .iter()
         .any(|tool| tool["name"] == "file_read"));
     assert!(!app
@@ -7664,6 +7682,8 @@ async fn tenant_ability_http_levels_effective_views_and_stale_updates() {
         .iter()
         .filter(|a| a["ready"] == true)
         .collect();
+    // Base also holds the always-available loaders, so it is not judged as a whole here.
+    let ready: Vec<_> = ready.into_iter().filter(|a| a["id"] != "base").collect();
     assert!(
         !ready.is_empty()
             && ready.iter().all(|a| a["effective"]["permission"] == "deny"
@@ -7862,6 +7882,7 @@ async fn removed_manifest_withdraws_cached_schemas_and_guidance_within_run() {
     let mut visibility = app.store.agent_abilities().await.unwrap();
     let revision = visibility["revision"].as_u64().unwrap();
     visibility["visibility"]["codebase_admin"] = json!("visible");
+    visibility["tool_modes"]["state_inspect"] = json!("visible");
     app.store
         .save_agent_abilities(&visibility, revision)
         .await
@@ -9867,6 +9888,13 @@ async fn live_context_default_stack_journey() {
     let (root, mut app) = Box::pin(fixture()).await;
     Box::pin(visibility_fixture_base_access(&app)).await;
     Box::pin(visibility_fixture_ability_access(&app, "web_access")).await;
+    let mut visibility = app.store.agent_abilities().await.unwrap();
+    let revision = visibility["revision"].as_u64().unwrap();
+    visibility["tool_modes"]["context_assets"] = json!("visible");
+    app.store
+        .save_agent_abilities(&visibility, revision)
+        .await
+        .unwrap();
     let source = root.path().join("live-source");
     let abilities = source.join("plugins/abilities");
     // Base is built in, so the live selectable skill lives in a folder ability.
@@ -10931,6 +10959,7 @@ async fn exact_native_tool_selection_obeys_visibility_mode_denial_and_suppressio
     let mut visibility = app.store.agent_abilities().await.unwrap();
     let revision = visibility["revision"].as_u64().unwrap();
     visibility["tool_modes"]["state_inspect"] = json!("discoverable");
+    visibility["tool_modes"]["file_read"] = json!("visible");
     app.store
         .save_agent_abilities(&visibility, revision)
         .await

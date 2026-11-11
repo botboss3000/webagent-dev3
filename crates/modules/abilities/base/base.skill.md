@@ -23,7 +23,7 @@ Background capability and concurrency capability are separate. In addition to th
 
 ## Live prompts and conversation selections
 
-Current main prompt sources, saved prompt overrides and agent slots are resolved every model loop. Tools and skills selected with `load_ability`, `load_tool`, `search_tools` or `load_skill` retain identity selectors for this conversation, selected agent and authenticated requester. Current source bodies, metadata and permission checks decide what is supplied; changed valid content replaces old text without reloading. Missing, invalid, Off, suppressed or revoked sources contribute no stale definition.
+Current main prompt sources, saved prompt overrides and agent slots are resolved every model loop. Tools and skills selected with `load_tool` or `load_skill` retain identity selectors for this conversation, selected agent and authenticated requester. Current source bodies, metadata and permission checks decide what is supplied; changed valid content replaces old text without reloading. Missing, invalid, Off, suppressed or revoked sources contribute no stale definition.
 
 Selectors survive messages, compaction and restart. Use `context_assets` to list or unload dynamic selections; unload changes exposure, not permissions, files or configured Visible guidance. Permanent definitions retain safe placements where the provider supports instruction insertion; newly selected definitions append after a completed exchange. Prefix-only providers rebuild their instruction prefix. Temporary menus, session mode and other native call contributions remain outside durable history and permanent selection state. Guidance bodies and hashes never become selector authority.
 

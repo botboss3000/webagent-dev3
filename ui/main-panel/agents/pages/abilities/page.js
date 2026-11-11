@@ -168,7 +168,7 @@ export async function renderAbilities(host, request, options) {
   // ability is switched on (a new ability stays off for existing agents).
   const markDefault = (row, value) => {
     if (!value) return;
-    const label = { deny: 'Off', ask: 'Ask', auto: 'Auto', visible: 'Visible', discoverable: 'Discoverable', off: 'Off' }[value] || value;
+    const label = { deny: 'Off', ask: 'Ask', auto: 'Auto', visible: 'Visible', discoverable: 'Discoverable', off: 'Off', on: 'On' }[value] || value;
     const anchor = row.querySelector('.ac-ability-desc') || row.querySelector('.ac-ability-name');
     const mark = node('div', 'ac-hint v3-default-mark', 'Default: ' + label);
     mark.style.whiteSpace = 'nowrap'; // Keep "Default: Auto" on one line on phones.
@@ -323,7 +323,8 @@ export async function renderAbilities(host, request, options) {
       label.append(name, node('div', 'ac-ability-desc', ability.description));
       const projected = projection(ability);
       // Defaults depend on the viewed level, so read them from its projection.
-      markDefault(label, projected.default ?? ability.default);
+      const declared = projected.default ?? ability.default;
+      markDefault(label, declared && (declared === 'off' ? 'off' : 'on'));
       const availability = node('span', 'ac-ability-status',
         [readinessLabel(ability), effectiveLabel(projected)].filter(Boolean).join(' · '));
       availability.title = ['Declared: ' + !!ability.declared, 'Installed: ' + !!ability.installed,
@@ -333,21 +334,16 @@ export async function renderAbilities(host, request, options) {
       toggle.type = 'checkbox';
       toggle.disabled = !canManage || !!previewUser;
       toggle.checked = ability.visibility !== 'off';
-      toggle.setAttribute('aria-label',
-        ability.name + ' availability: ' + ability.visibility + '. Choose availability.');
-      toggle.setAttribute('aria-haspopup', 'menu');
-      const menu = modeMenu(ability, 'ability', ability.visibility, null, true);
-      menu._floatingMenuOwner = toggleWrap;
-      // As in v2, the switch opens Off · Discoverable · Visible; it moves only after the save is re-read.
+      toggle.setAttribute('aria-label', ability.name + ' on or off');
+      // An ability is only a group: On lets its tools and skills follow their own settings.
+      // The switch moves only after the save is re-read.
       toggle.addEventListener('click', event => {
         event.preventDefault();
         event.stopPropagation();
-        const rect = toggle.getBoundingClientRect();
-        menu._floatingMenuAnchorPoint = { x: event.clientX || rect.right, y: event.clientY || rect.bottom };
-        menu.click();
+        save(ability, 'ability', ability.visibility !== 'off' ? 'off' : 'visible', toggleWrap).catch(() => {});
       });
       toggleWrap.append(toggle, node('span', 'conn-toggle-track'));
-      header.append(chevron, icon, label, toggleWrap, menu);
+      header.append(chevron, icon, label, toggleWrap);
       header.title = availability.title + ' · ' + availability.textContent;
       const detail = node('div', 'ac-ability-body');
       const open = () => {
