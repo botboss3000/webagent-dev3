@@ -35,9 +35,10 @@ impl<
     /// holding its place (and the repeat guard), and every call of the turn gets a
     /// recorded result so the conversation's next run sees a complete history.
     /// The pending approval itself is untouched: deciding it runs the existing path.
+    /// Callers hold the dispatch gate.
     pub async fn park_approval(&self, run: Value) -> Result<()> {
         let app = self;
-        let _gate = app.handles.gate.lock().await;
+        // The scheduler calls this while it holds the dispatch gate; taking it again deadlocks.
         let id = run["id"].as_str().ok_or_else(|| anyhow!("Missing run"))?;
         let mut run = app.run(id).await?;
         if status(&run) != WAITING || run["parked"] == true {
