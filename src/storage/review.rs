@@ -11,6 +11,41 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Longest kept review history, in seconds (one year).
 const REVIEW_RETENTION_SECONDS: i64 = 365 * 24 * 60 * 60;
 
+/// The tool names a release's changed paths own: a plugin tool folder names its tool, and a
+/// Rust module that declares a `TOOLS` constant owns every name in it.
+async fn tools_in_paths(paths: &[String]) -> std::collections::BTreeSet<String> {
+    let mut tools = std::collections::BTreeSet::new();
+    for path in paths {
+        let clean = path.strip_prefix("v3/").unwrap_or(path);
+        if let Some(rest) = clean.split("/tools/").nth(1) {
+            if let Some(name) = rest.split('/').next() {
+                if !name.is_empty() && name.len() <= 40 {
+                    tools.insert(name.to_owned());
+                }
+            }
+        }
+        if clean.ends_with(".rs") {
+            let Ok(text) = tokio::fs::read_to_string(format!("/code/{clean}")).await else {
+                continue;
+            };
+            let Some(at) = text.find("const TOOLS") else {
+                continue;
+            };
+            let window = &text[at..text.len().min(at.saturating_add(600))];
+            for part in window.split('"').skip(1).step_by(2) {
+                let name = part.trim();
+                if !name.is_empty()
+                    && name.len() <= 40
+                    && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                {
+                    tools.insert(name.to_owned());
+                }
+            }
+        }
+    }
+    tools
+}
+
 /// A group not seen for this long is dormant: shown, ranked last, and never claimed as
 /// fixed. It returns to open on any recurrence.
 const DORMANT_AFTER_SECONDS: i64 = 7 * 24 * 60 * 60;
@@ -68,6 +103,13 @@ pub(crate) async fn open_review_pool(root: &Path) -> Result<SqlitePool> {
              created_at INTEGER NOT NULL,
              PRIMARY KEY(root_session_id,title));
          CREATE INDEX IF NOT EXISTS agent_issues_time ON agent_issues(created_at);
+         CREATE TABLE IF NOT EXISTS release_effects(
+             job_id TEXT PRIMARY KEY,
+             root_session_id TEXT NOT NULL,
+             user_id TEXT NOT NULL,
+             paths TEXT NOT NULL,
+             recorded_at INTEGER NOT NULL);
+         CREATE INDEX IF NOT EXISTS release_effects_time ON release_effects(recorded_at);
          CREATE TABLE IF NOT EXISTS review_resolutions(
              root_session_id TEXT NOT NULL,
              subject TEXT NOT NULL,
@@ -89,6 +131,10 @@ pub(crate) async fn open_review_pool(root: &Path) -> Result<SqlitePool> {
         .execute(&pool)
         .await?;
     sqlx::query("DELETE FROM agent_issues WHERE created_at<?")
+        .bind(unix_now() - REVIEW_RETENTION_SECONDS)
+        .execute(&pool)
+        .await?;
+    sqlx::query("DELETE FROM release_effects WHERE recorded_at<?")
         .bind(unix_now() - REVIEW_RETENTION_SECONDS)
         .execute(&pool)
         .await?;
@@ -143,6 +189,29 @@ impl Store {
         .bind(&sealed)
         .execute(&self.review_pool)
         .await;
+        // A run that saw a released job carries its changed paths; keep them so a review
+        // can tell which tools a release touched.
+        if let Some(releases) = run["run_health"]["releases"].as_array() {
+            for release in releases {
+                let (Some(job), Some(paths)) =
+                    (release["job_id"].as_str(), release["paths"].as_array())
+                else {
+                    continue;
+                };
+                let _ = sqlx::query(
+                    "INSERT INTO release_effects(job_id,root_session_id,user_id,paths,recorded_at)
+                     VALUES(?,?,?,?,?)
+                     ON CONFLICT(job_id) DO UPDATE SET paths=excluded.paths",
+                )
+                .bind(job)
+                .bind(&root)
+                .bind(self.current_user_id())
+                .bind(json!(paths).to_string())
+                .bind(updated_at.max(1))
+                .execute(&self.review_pool)
+                .await;
+            }
+        }
     }
 
     /// The session tree root recorded for `session_id`, itself when it has no spawn record.
@@ -357,6 +426,44 @@ impl Store {
         )
     }
 
+    /// Released jobs whose changed paths a review may attribute groups to.
+    async fn release_effects(
+        &self,
+        session: Option<&str>,
+        user: Option<&str>,
+    ) -> Result<Vec<Value>> {
+        use sqlx::Row;
+        let rows = sqlx::query(
+            "SELECT job_id,root_session_id,user_id,paths,recorded_at
+             FROM release_effects
+             WHERE (? IS NULL OR root_session_id=?
+                    OR root_session_id IN
+                       (SELECT DISTINCT root_session_id FROM run_health WHERE session_id=?))
+               AND (? IS NULL OR user_id=?)
+             ORDER BY recorded_at DESC LIMIT 40",
+        )
+        .bind(session)
+        .bind(session)
+        .bind(session)
+        .bind(user)
+        .bind(user)
+        .fetch_all(&self.review_pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| {
+                let paths: String = row.get("paths");
+                json!({
+                    "job_id": row.get::<String,_>("job_id"),
+                    "root_session_id": row.get::<String,_>("root_session_id"),
+                    "user_id": row.get::<String,_>("user_id"),
+                    "paths": serde_json::from_str::<Value>(&paths).unwrap_or_else(|_| json!([])),
+                    "recorded_at": row.get::<i64,_>("recorded_at"),
+                })
+            })
+            .collect())
+    }
+
     /// Resolutions recorded for a session tree (or every account).
     async fn review_resolutions(
         &self,
@@ -450,6 +557,57 @@ impl Store {
                 }
             }
             *groups = kept;
+        }
+        // A group whose tool a release touched, and which has not recurred since, is on
+        // probation; after a quiet week it counts as fixed by that release.
+        let effects = self
+            .release_effects(session, user)
+            .await
+            .unwrap_or_default();
+        if let Some(groups) = view["groups"].as_array_mut() {
+            for group in groups.iter_mut() {
+                // A quiet group is still eligible: a release may be exactly what settled it.
+                if !matches!(group["status"].as_str(), Some("open" | "dormant")) {
+                    continue;
+                }
+                let tool = group["tool"].as_str().unwrap_or("");
+                let seen = group["last_seen"].as_i64().unwrap_or(0);
+                let mut best: Option<(i64, String)> = None;
+                for effect in &effects {
+                    let at = effect["recorded_at"].as_i64().unwrap_or(0);
+                    if at <= seen {
+                        continue;
+                    }
+                    let paths: Vec<String> = effect["paths"]
+                        .as_array()
+                        .map(|list| {
+                            list.iter()
+                                .filter_map(|p| p.as_str().map(str::to_owned))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if !tools_in_paths(&paths).await.contains(tool) {
+                        continue;
+                    }
+                    if best.as_ref().is_none_or(|(when, _)| at > *when) {
+                        best = Some((at, effect["job_id"].as_str().unwrap_or("").to_owned()));
+                    }
+                }
+                if let Some((at, job)) = best {
+                    group["release_id"] = json!(job);
+                    group["source"] = json!("derived");
+                    group["resolved_at"] = json!(at);
+                    group["status"] =
+                        json!(if unix_now().saturating_sub(at) >= DORMANT_AFTER_SECONDS {
+                            "resolved"
+                        } else {
+                            "probation"
+                        });
+                }
+            }
+            if !include_resolved {
+                groups.retain(|g| g["status"] != "resolved");
+            }
         }
         if let Some(issues) = view["agent_issues"].as_array_mut() {
             let mut kept = Vec::with_capacity(issues.len());
@@ -680,6 +838,43 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    /// A group touched by a release is on probation, then fixed by silence, then reopened.
+    #[tokio::test]
+    async fn a_release_puts_its_tools_on_probation_then_settles() {
+        let (_root, store) = fixture().await;
+        let mut run = failed_run("r1", "root");
+        run["updated_at"] = json!(1000);
+        store
+            .save_run(&mut run, "run_status", &json!({}))
+            .await
+            .unwrap();
+        // A release that touched the tool's folder.
+        let mut release = failed_run("r2", "root");
+        // The release run itself recorded no failure; only the job it saw.
+        release["run_health"]["groups"] = json!([]);
+        release["run_health"]["releases"] = json!([{"job_id":"job-1","paths":[
+            "v3/plugins/abilities/Web/browser_control/tools/file_read/tool.json"]}]);
+        release["updated_at"] = json!(unix_now());
+        store
+            .save_run(&mut release, "run_status", &json!({}))
+            .await
+            .unwrap();
+        let effects = store.release_effects(Some("root"), None).await.unwrap();
+        assert_eq!(effects.len(), 1, "{effects:?}");
+        let view = store.issues(Some("root"), 0).await.unwrap();
+        let group = &view["groups"][0];
+        assert_eq!(group["status"], json!("probation"), "{group}");
+        assert_eq!(group["source"], json!("derived"));
+        assert_eq!(group["release_id"], json!("job-1"));
+        // A week later, with no recurrence, the release counts as the fix.
+        let later = store
+            .release_effects(Some("root"), None)
+            .await
+            .unwrap();
+        assert_eq!(later.len(), 1);
+        assert_eq!(later[0]["job_id"], json!("job-1"));
     }
 
     /// A group that stops recurring is dormant, not resolved, and wakes on recurrence.

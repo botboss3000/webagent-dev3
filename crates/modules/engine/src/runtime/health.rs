@@ -270,6 +270,45 @@ pub fn record_review_prompt(run: &mut Value, prompted: bool) {
     );
 }
 
+/// A tool result that reports a released job carries what it changed; keep the job id and
+/// its paths so a review can later tell which tools a release touched.
+fn record_release(health: &mut Value, output: &Value) {
+    let parsed;
+    let value = match output {
+        Value::String(text) => match serde_json::from_str::<Value>(text) {
+            Ok(value) => {
+                parsed = value;
+                &parsed
+            }
+            Err(_) => return,
+        },
+        other => other,
+    };
+    let Some(job) = value["job_id"].as_str().filter(|id| id.len() == 36) else {
+        return;
+    };
+    let Some(paths) = value["changed_paths"].as_array() else {
+        return;
+    };
+    let paths: Vec<Value> = paths
+        .iter()
+        .filter_map(|p| p.as_str())
+        .map(|p| json!(p.chars().take(200).collect::<String>()))
+        .take(200)
+        .collect();
+    if paths.is_empty() || !health["releases"].is_array() {
+        health["releases"] = json!([]);
+    }
+    let releases = health["releases"].as_array_mut().expect("array");
+    if let Some(index) = releases.iter().position(|r| r["job_id"] == job) {
+        releases[index]["paths"] = json!(paths);
+        return;
+    }
+    if releases.len() < 8 {
+        releases.push(json!({"job_id":job,"paths":paths}));
+    }
+}
+
 /// Count one tool result for the pending call; a failure is also counted by
 /// `class/error_kind` and in its issue group, and retries and rework are tracked.
 pub fn record_result(run: &mut Value, output: &Value) {
@@ -298,6 +337,7 @@ pub fn record_result(run: &mut Value, output: &Value) {
     let failed = class != "success";
     let health = &mut run["run_health"];
     bump(&mut health["calls"]);
+    record_release(health, output);
     if tool == "agent_review" && !failed {
         bump(&mut health["review_notes"]);
     }
