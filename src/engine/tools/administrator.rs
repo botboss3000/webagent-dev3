@@ -135,6 +135,21 @@ pub(crate) async fn host_fingerprint(
     } else {
         None
     };
+    // Broker work keeps running while the turn goes on, so loading or activating an
+    // unrelated ability must not revoke it: build work tracks only whether Codebase Admin
+    // stays active, unsuppressed and loaded. Other tools track the whole ability state.
+    let (state, loaded) = if policy_name == "build_work" {
+        let has = |list: &Value| {
+            list.as_array()
+                .is_some_and(|a| a.iter().any(|id| id == "codebase_admin"))
+        };
+        (
+            json!([has(&state["active"]), has(&state["suppressed"])]),
+            json!(has(loaded)),
+        )
+    } else {
+        (state, loaded.clone())
+    };
     Ok(digest(&json!([
         actor,
         sid,
@@ -145,7 +160,7 @@ pub(crate) async fn host_fingerprint(
         visibility,
         state,
         mode,
-        run["loaded_abilities"],
+        loaded,
         bundle,
         generation
     ])))

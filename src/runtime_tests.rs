@@ -11307,6 +11307,17 @@ async fn late_single_tool_case(name: &str, action: &str, mutation: &str, success
         .unwrap();
     running(&app, &id, "late-generation").await;
     if name == "build_work" {
+        let before = tools::administrator::host_fingerprint(&app, &sid, &id, "build_work")
+            .await
+            .unwrap();
+        // Loading an unrelated ability mid-turn keeps a running build's lease.
+        let mut other = app.run(&id).await.unwrap();
+        other["loaded_abilities"] = json!(["codebase_admin", "diagnostics"]);
+        app.save(&mut other).await.unwrap();
+        let after = tools::administrator::host_fingerprint(&app, &sid, &id, "build_work")
+            .await
+            .unwrap();
+        assert_eq!(before, after);
         tools::administrator::host_fingerprint(&app, &sid, &id, "build_work_finish")
             .await
             .unwrap();
