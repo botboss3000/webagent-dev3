@@ -1108,8 +1108,11 @@ impl<
             // A call detached from an earlier run is still running: hold its repeat here too.
             let same = tools::retry_guard::key(&name, &args);
             for task in app.store.background_scan(Some(sid)).await? {
+                // A parked approval's own task is this very call, not a repeat of it.
+                let own = task["run_id"] == run["id"] && task["call_id"] == call_id.as_str();
                 if task["detached"] == true
                     && task["status"] == "running"
+                    && !own
                     && tools::retry_guard::key(&name, &task["arguments"]) == same
                 {
                     let prior = task["call_id"].as_str().unwrap_or("");
