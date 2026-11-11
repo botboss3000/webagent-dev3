@@ -4,7 +4,11 @@
 export function activityLabel(group,{error='',extra=[]}={}) {
     // Summarize nonzero category counts without changing the underlying journal rows.
     const nouns={retries:['retry','retries'],subagents:['sub-agent','sub-agents']};
-    const parts=Object.entries(group.counts).filter(([,count])=>count)
+    // Tools and sub agents lead, whatever order the summary returned them in.
+    const leading=['tools','subagents'];
+    const entries=[...leading.filter(kind=>group.counts[kind]).map(kind=>[kind,group.counts[kind]]),
+      ...Object.entries(group.counts).filter(([kind,count])=>count&&!leading.includes(kind))];
+    const parts=entries
       .map(([kind,count])=>{const noun=nouns[kind]||[kind.replace(/s$/,''),kind];
         return count+' '+noun[count===1?0:1];});
     const phase={running:'Working…',queued:'Queued…',waiting_external:'Waiting for build…',finalizing:'Checking response…',
