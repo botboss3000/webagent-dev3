@@ -284,10 +284,16 @@ fn record_release(health: &mut Value, output: &Value) {
         },
         other => other,
     };
-    let Some(job) = value["job_id"].as_str().filter(|id| id.len() == 36) else {
+    // A tool wraps its payload in `output`; read the job from either level.
+    let job = if value["job_id"].is_string() {
+        &value
+    } else {
+        &value["output"]
+    };
+    let Some(job_id) = job["job_id"].as_str().filter(|id| id.len() == 36) else {
         return;
     };
-    let Some(paths) = value["changed_paths"].as_array() else {
+    let Some(paths) = job["changed_paths"].as_array() else {
         return;
     };
     let paths: Vec<Value> = paths
@@ -300,12 +306,12 @@ fn record_release(health: &mut Value, output: &Value) {
         health["releases"] = json!([]);
     }
     let releases = health["releases"].as_array_mut().expect("array");
-    if let Some(index) = releases.iter().position(|r| r["job_id"] == job) {
+    if let Some(index) = releases.iter().position(|r| r["job_id"] == job_id) {
         releases[index]["paths"] = json!(paths);
         return;
     }
     if releases.len() < 8 {
-        releases.push(json!({"job_id":job,"paths":paths}));
+        releases.push(json!({"job_id":job_id,"paths":paths}));
     }
 }
 
@@ -727,6 +733,22 @@ mod tests {
         assert_eq!(totals["review_prompts"], 2);
         assert_eq!(totals["review_skipped"], 1);
         assert_eq!(totals["review_notes"], 3);
+    }
+
+    #[test]
+    fn a_wrapped_tool_result_still_names_its_release() {
+        let mut run = json!({"session_id":"s"});
+        call(
+            &mut run,
+            "build_work",
+            json!({"action":"status"}),
+            json!({"status":"success","output":{"job_id":"01234567-89ab-cdef-0123-456789abcdef",
+                "changed_paths":["v3/plugins/abilities/Web/browser_control/tools/browser_read/tool.json"]}}),
+        );
+        assert_eq!(
+            run["run_health"]["releases"][0]["job_id"],
+            "01234567-89ab-cdef-0123-456789abcdef"
+        );
     }
 
     #[test]
