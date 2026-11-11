@@ -11,6 +11,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Longest kept review history, in seconds (one year).
 const REVIEW_RETENTION_SECONDS: i64 = 365 * 24 * 60 * 60;
 
+/// A group not seen for this long is dormant: shown, ranked last, and never claimed as
+/// fixed. It returns to open on any recurrence.
+const DORMANT_AFTER_SECONDS: i64 = 7 * 24 * 60 * 60;
+
 /// Longest accepted agent note. Deliberately far above what a useful explanation needs:
 /// a note refused for length would cost the agent a recovery round turn, so the bound
 /// only stops a runaway. Real note lengths are recorded so the limit can be tightened
@@ -419,7 +423,14 @@ impl Store {
                         "resolved"
                     });
                 }
-                None => item["status"] = json!("open"),
+                None => {
+                    let age = unix_now().saturating_sub(seen);
+                    item["status"] = json!(if seen > 0 && age >= DORMANT_AFTER_SECONDS {
+                        "dormant"
+                    } else {
+                        "open"
+                    });
+                }
             }
             item["status"] != "resolved"
         };
@@ -669,6 +680,29 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    /// A group that stops recurring is dormant, not resolved, and wakes on recurrence.
+    #[tokio::test]
+    async fn a_group_goes_dormant_after_a_quiet_week() {
+        let (_root, store) = fixture().await;
+        let mut stale = failed_run("r1", "root");
+        stale["updated_at"] = json!(unix_now() - 8 * 24 * 60 * 60);
+        store
+            .save_run(&mut stale, "run_status", &json!({}))
+            .await
+            .unwrap();
+        let view = store.issues(Some("root"), 0).await.unwrap();
+        let group = &view["groups"][0];
+        assert_eq!(group["status"], json!("dormant"), "{group}");
+        let mut fresh = failed_run("r2", "root");
+        fresh["updated_at"] = json!(unix_now());
+        store
+            .save_run(&mut fresh, "run_status", &json!({}))
+            .await
+            .unwrap();
+        let view = store.issues(Some("root"), 0).await.unwrap();
+        assert_eq!(view["groups"][0]["status"], json!("open"));
     }
 
     /// A resolved group leaves the list and returns as reopened when it recurs.
