@@ -106,7 +106,7 @@ test('abilities adapter uses current revision, encoded route, full settings and 
   const notices = [];
   const status = { textContent: '' };
   const context = {
-    request: async (...args) => { requests.push(args); },
+    request: async (...args) => { requests.push(args); return { revision: 8 }; },
     scope: '/agents/agent-1', ability: { id: 'codebase_admin' }, tool: { name: 'file/read' },
     data: { revision: 7 }, rerender: async notice => notices.push(notice),
     status, expandedAbility: null,
@@ -118,11 +118,13 @@ test('abilities adapter uses current revision, encoded route, full settings and 
   assert.equal(requests[0][1], 'PUT');
   assert.equal(requests[0][2].expected_revision, 7);
   assert.equal(requests[0][2].settings, settings);
-  assert.equal(notices.length, 1);
+  assert.equal(context.data.revision, 8, 'the saved revision is kept for the next save');
+  assert.match(status.textContent, /saved/);
   context.request = async () => { throw Object.assign(Error('stale revision'), { status: 409 }); };
   await assert.rejects(callback('file/read', settings), /stale revision/);
   assert.match(status.textContent, /Reload before saving/);
-  assert.equal(notices.length, 1);
+  assert.equal(context.data.revision, 8);
+  assert.equal(notices.length, 0, 'saving does not re-render the page');
 });
 
 test('foreground-only parallel tools use the server concurrency ceiling independently of background support', async () => {

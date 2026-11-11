@@ -135,7 +135,13 @@ pub(crate) async fn stop_session_work(
     for mut task in app.store.background_scan(Some(sid)).await? {
         if matches!(task["status"].as_str(), Some("queued" | "running")) {
             let revision = task["revision"].as_u64().unwrap_or(0);
-            task["status"] = json!("cancelled");
+            if task["detached"] == true && task["external_pending"].is_object() {
+                // The broker job keeps running; its chip keeps updating but it no longer
+                // wakes the agent with notices.
+                task["quiet"] = json!(true);
+            } else {
+                task["status"] = json!("cancelled");
+            }
             // A lost race means the task already moved on; its executor rechecks authority.
             app.store.background_cas(&task, Some(revision)).await?;
         }

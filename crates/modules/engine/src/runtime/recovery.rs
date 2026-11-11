@@ -241,7 +241,8 @@ impl<
         Ok(true)
     }
     /// Follow background build tasks: keep the Broker chip current, report a slow or stalled
-    /// stage, and report the job's end as a background notice that wakes the agent.
+    /// stage, and report the job's end as a background notice that wakes the agent. After a
+    /// session stop the task is quiet: the chip still updates but no notice is sent.
     async fn follow_detached_builds(app: &Self) -> Result<()> {
         for mut task in app.store.background_scan(None).await? {
             if task["detached"] != true
@@ -273,7 +274,7 @@ impl<
                             (alert, job_task)
                         })
                         .await?;
-                    if let Some((reason, text)) = alert {
+                    if let Some((reason, text)) = alert.filter(|_| task["quiet"] != true) {
                         let reason = reason.as_str();
                         app.stage_background_notice(
                             &sid,
@@ -313,6 +314,9 @@ impl<
                     app.store
                         .background_delivered(&task, "background_notice")
                         .await?;
+                    if task["quiet"] == true {
+                        continue;
+                    }
                     app.stage_background_notice(&sid, &format!("build:{job_id}:ended"),
                         json!({"source":"build","title":job_title(&follow),"task":job_task,
                         "status":output["status"].as_str().unwrap_or("ended"),"job_id":job_id,

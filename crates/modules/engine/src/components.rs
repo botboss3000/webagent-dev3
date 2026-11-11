@@ -807,6 +807,7 @@ async fn background_smoke() -> Result<Vec<Value>> {
     use webagent_background_contracts::{Plan, Request, State, Task};
     #[cfg(feature = "live-context")]
     let process = Service {
+        runtime: StdMutex::new(None),
         connection: tokio::sync::Mutex::new(None),
         admission: Arc::new(tokio::sync::Semaphore::new(1)),
         executable: StdMutex::new(
@@ -906,6 +907,7 @@ async fn boot_smoke() -> Result<Vec<Value>> {
     use webagent_boot_contracts::{Action, Operation, Plan, Request, Service as Input, State};
     #[cfg(feature = "live-context")]
     let process = Service {
+        runtime: StdMutex::new(None),
         connection: tokio::sync::Mutex::new(None),
         admission: Arc::new(tokio::sync::Semaphore::new(1)),
         executable: StdMutex::new(std::env::current_exe()?.with_file_name("webagent-boot-service")),
@@ -1014,6 +1016,7 @@ fn smoke_service(package: &str) -> Result<Service> {
         anyhow::bail!("Offline service artifact missing");
     }
     Ok(Service {
+        runtime: StdMutex::new(None),
         connection: tokio::sync::Mutex::new(None),
         admission: Arc::new(tokio::sync::Semaphore::new(1)),
         executable: StdMutex::new(executable),
@@ -1372,6 +1375,7 @@ pub async fn context_smoke() -> Result<Value> {
             anyhow::bail!("Offline service artifact missing");
         }
         Service {
+            runtime: StdMutex::new(None),
             connection: tokio::sync::Mutex::new(None),
             admission: Arc::new(tokio::sync::Semaphore::new(1)),
             executable: StdMutex::new(executable),
@@ -1552,6 +1556,10 @@ struct Service {
     admission: Arc<tokio::sync::Semaphore>,
     executable: StdMutex<PathBuf>,
     limits: Limits,
+    /// Liveness of the async runtime that spawned the connection: its pipes only work there.
+    /// The process keeps one runtime, so this matters when separate runtimes share a service
+    /// (each test has its own); a connection from a runtime that has shut down is replaced.
+    runtime: StdMutex<Option<(std::sync::Weak<()>, tokio::sync::oneshot::Sender<()>)>>,
 }
 type Services = BTreeMap<String, Arc<Service>>;
 static SERVICES: OnceLock<StdMutex<Services>> = OnceLock::new();
@@ -1585,6 +1593,7 @@ fn service(c: &Catalog, d: &Descriptor) -> Result<Arc<Service>> {
         admission: Arc::new(tokio::sync::Semaphore::new(16)),
         executable: StdMutex::new(executable),
         limits: d.limits.clone(),
+        runtime: StdMutex::new(None),
     });
     map.insert(key, value.clone());
     Ok(value)
@@ -1651,6 +1660,15 @@ impl Service {
             anyhow::bail!("Engine request limit");
         }
         let mut connection = tokio::select! {_=cancel.cancelled()=>return Err(anyhow!("Engine call cancelled")),guard=tokio::time::timeout_at(deadline,self.connection.lock())=>guard.map_err(|_|anyhow!("Engine queue timeout"))?};
+        let runtime_alive = self
+            .runtime
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|(alive, _)| alive.upgrade().is_some());
+        if !runtime_alive {
+            *connection = None;
+        }
         let action = async {
             if connection.is_none() {
                 let executable = self
@@ -1680,6 +1698,16 @@ impl Service {
                     .take()
                     .ok_or_else(|| anyhow!("Engine pipe unavailable"))?;
                 *connection = Some((child, input, tokio::io::BufReader::new(output)));
+                // A task on this runtime holds the token; it ends with the runtime or when a
+                // later connection replaces this one and drops the sender.
+                let token = Arc::new(());
+                let (replaced, stopped) = tokio::sync::oneshot::channel::<()>();
+                let alive = Arc::downgrade(&token);
+                tokio::spawn(async move {
+                    let _token = token;
+                    let _ = stopped.await;
+                });
+                *self.runtime.lock().unwrap_or_else(|e| e.into_inner()) = Some((alive, replaced));
             }
             let (_, writer, reader) = connection
                 .as_mut()

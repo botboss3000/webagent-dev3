@@ -466,9 +466,22 @@ impl Store {
         if choice == "next_run" && busy != 0 {
             return Ok(false);
         }
+        // A user message that joins a running task is framed so the model answers it
+        // instead of reading it as part of the work; notices carry their own framing.
         let text = picked
             .iter()
-            .map(|e| e["context_content"].as_str().unwrap_or(""))
+            .map(|e| {
+                let content = e["context_content"].as_str().unwrap_or("");
+                if choice == "steer" && e["platform_notice"].is_null() {
+                    format!(
+                        "[The user sent this message while you were working:]\n{content}\n\
+                         [Answer or acknowledge it in your next reply, then continue the \
+                         task if it still applies.]"
+                    )
+                } else {
+                    content.to_owned()
+                }
+            })
             .collect::<Vec<_>>()
             .join("\n\n");
         let attachment_count = picked
@@ -678,7 +691,8 @@ mod tests {
         r["input"] = json!([{"role":"assistant","content":"private work"}]);
         assert!(s.followup_consume("s", "steer", &mut r).await.unwrap());
         assert_eq!(r["input"][0]["content"], "private work");
-        assert_eq!(r["input"][1]["content"], "steer");
+        let framed = r["input"][1]["content"].as_str().unwrap();
+        assert!(framed.contains("while you were working") && framed.contains("\nsteer\n"));
         assert!(!s.followup_consume("s", "steer", &mut r).await.unwrap());
     }
     #[tokio::test]
@@ -716,7 +730,8 @@ mod tests {
         live["status"] = json!("running");
         s.put("run:live", &live).await.unwrap();
         assert!(s.followup_consume("s", "steer", &mut live).await.unwrap());
-        assert_eq!(live["input"][0]["content"], "now please");
+        let framed = live["input"][0]["content"].as_str().unwrap();
+        assert!(framed.contains("while you were working") && framed.contains("\nnow please\n"));
     }
     #[tokio::test]
     async fn releasing_a_hold_needs_its_own_reason() {
