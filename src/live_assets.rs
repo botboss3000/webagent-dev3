@@ -129,7 +129,7 @@ pub(crate) mod native_schema_file_tests {
             .join("tool.json")
     }
     pub(crate) fn change_parameter(root: &std::path::Path) {
-        let path = definition(root, "v3_source_list");
+        let path = definition(root, "build_work");
         let mut tool: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_ne!(tool["parameters"]["properties"]["limit"]["maximum"], 123);
         tool["parameters"]["properties"]["limit"]["maximum"] = json!(123);
@@ -153,7 +153,7 @@ pub(crate) mod native_schema_file_tests {
         let schema = fresh
             .all_schemas()
             .into_iter()
-            .find(|s| s["name"] == "v3_source_list")
+            .find(|s| s["name"] == "build_work")
             .unwrap();
         assert_eq!(schema["parameters"]["properties"]["limit"]["maximum"], 123);
     }
@@ -161,7 +161,7 @@ pub(crate) mod native_schema_file_tests {
     fn an_invalid_folder_withdraws_only_its_tool() {
         let root = source_fixture();
         let plugins = root.path().join("plugins/abilities");
-        let path = definition(root.path(), "v3_source_list");
+        let path = definition(root.path(), "build_work");
         for bytes in [
             b"not-json".to_vec(),
             b"{}".to_vec(),
@@ -174,8 +174,8 @@ pub(crate) mod native_schema_file_tests {
                 .into_iter()
                 .map(|s| s["name"].clone())
                 .collect();
-            assert!(!names.contains(&json!("v3_source_list")));
-            assert!(names.contains(&json!("v3_source_read")));
+            assert!(!names.contains(&json!("build_work")));
+            assert!(names.contains(&json!("performance_work")));
             let loaded = webagent_administration::schemas::load(&plugins).unwrap();
             assert!(
                 !loaded.problems.is_empty(),

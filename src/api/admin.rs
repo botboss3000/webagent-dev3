@@ -101,18 +101,20 @@ pub(crate) async fn migrate_tool_policy_defaults(store: &Store) -> Result<()> {
     let defaults = policy_default();
     let mut changed = false;
     if policy["rules"]["build_work"].is_null() {
-        let old = [
-            policy_decision(&policy, "v3_build_work"),
-            policy_decision(&policy, "v3_worker_submit"),
-        ];
-        policy["rules"]["build_work"] = json!(if old.contains(&"deny") {
-            "deny"
-        } else if old.contains(&"require_approval") {
-            "require_approval"
-        } else {
-            "allow"
-        });
+        policy["rules"]["build_work"] = json!("require_approval");
         changed = true;
+    }
+    // Rules for the retired v3 build and source tools no longer gate anything.
+    for retired in [
+        "v3_build_work",
+        "v3_worker_submit",
+        "v3_source_list",
+        "v3_source_read",
+        "v3_source_apply",
+    ] {
+        if let Some(rules) = policy["rules"].as_object_mut() {
+            changed |= rules.remove(retired).is_some();
+        }
     }
     // Renamed Base background controls keep the rule their old names had.
     for (new, old) in [

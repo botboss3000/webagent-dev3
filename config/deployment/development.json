@@ -2080,7 +2080,6 @@
             "terminal_read": "ask",
             "terminal_send": "ask",
             "terminal_wait": "ask",
-            "v3_worker_submit": "ask",
             "workspace_seed": "ask"
           }
         },

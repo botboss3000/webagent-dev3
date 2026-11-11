@@ -126,7 +126,6 @@ impl<
                 status(&origin),
                 "running" | "waiting_approval" | "waiting_external" | "queued" | "completed"
             ) || task["status"] == "running" && retained_pause(&origin))
-            || origin["post_run_followup"] == true
             || !app.run_model_authorized(&origin).await
         {
             return Ok(false);
@@ -262,10 +261,7 @@ impl<
         }
         let _guard = app.handles.gate.lock().await;
         let run = app.run(rid).await?;
-        if run["generation"] != generation
-            || run["session_id"] != sid
-            || run["post_run_followup"] == true
-            || status(&run) != "running"
+        if run["generation"] != generation || run["session_id"] != sid || status(&run) != "running"
         {
             return Err(anyhow!("Stale background submission"));
         }
@@ -294,7 +290,7 @@ impl<
         "session_id":sid,"run_id":rid,"call_id":call_id,"name":name,"arguments":args,
         "loaded_abilities":run["loaded_abilities"],"policy_version":policy_version,
         "origin_generation":generation,"authorization":pending,
-        "on_run_end":settings.on_run_end,"status":"queued","revision":0,"created_at":now(),"created_at_ms":timestamp_ms(),"lease_until":0});
+        "status":"queued","revision":0,"created_at":now(),"created_at_ms":timestamp_ms(),"lease_until":0});
         if !app.background_permitted(&task).await? {
             return Err(anyhow!("Background dispatch authorization changed"));
         }
@@ -344,7 +340,7 @@ impl<
         let id = identity(rid, call_id);
         let task = json!({"id":id,"user_id":app.store.current_user_id(),"agent_id":run["agent_id"],
         "session_id":run["session_id"],"run_id":rid,"call_id":call_id,"name":pending["name"],
-        "arguments":args,"detached":true,"external_pending":external,"parked_approval":run["parked"] == true,"on_run_end":"wake","status":"running","revision":0,
+        "arguments":args,"detached":true,"external_pending":external,"parked_approval":run["parked"] == true,"status":"running","revision":0,
         "created_at":now(),"created_at_ms":timestamp_ms(),"lease_until":now()+30});
         if !app.store.background_cas(&task, None).await? {
             return Ok(None);

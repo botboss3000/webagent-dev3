@@ -133,8 +133,6 @@ pub async fn execute(
             }
             None => diagnostics(host, None, sid),
         }),
-        "v3_worker_submit" | "v3_build_work" | "v3_source_list" | "v3_source_read"
-        | "v3_source_apply" => broker_call(host, sid, run_id, name, args, cancel).await,
         "git_tool" | "resolve_conflict" | "commit_and_push" => {
             git(host, sid, name, args, cancel).await
         }
@@ -189,11 +187,7 @@ async fn broker_call(
     if renews(name, action) {
         register_renewal(host, sid, run_id, authority, &fingerprint).await?;
     }
-    let mut forwarded = if name == "v3_build_work" {
-        arguments::build_work(args)?
-    } else {
-        args.clone()
-    };
+    let mut forwarded = args.clone();
     if let Some(object) = forwarded.as_object_mut() {
         object.retain(|_, value| !value.is_null());
     }

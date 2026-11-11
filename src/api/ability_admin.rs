@@ -695,7 +695,8 @@ pub(crate) async fn execution_set(
             .settings
             .as_object()
             .ok_or_else(|| bad("Execution settings required"))?;
-        if !(3..=4).contains(&fields.len())
+        // A retired on_run_end key from an older page is accepted and dropped.
+        if !(2..=4).contains(&fields.len())
             || fields.keys().any(|key| {
                 !matches!(
                     key.as_str(),
@@ -704,7 +705,6 @@ pub(crate) async fn execution_set(
             })
             || !fields.contains_key("mode")
             || !fields.contains_key("max_concurrency")
-            || !fields.contains_key("on_run_end")
         {
             return Err(bad(
                 "Expected execution settings with optional duplicate_protection",
@@ -713,9 +713,6 @@ pub(crate) async fn execution_set(
         if !matches!(
             body.settings["mode"].as_str(),
             Some("foreground" | "background" | "model")
-        ) || !matches!(
-            body.settings["on_run_end"].as_str(),
-            Some("stop" | "silent" | "wake")
         ) || !body.settings["max_concurrency"]
             .as_u64()
             .is_some_and(|concurrency| (1..=4).contains(&concurrency))
@@ -1008,7 +1005,7 @@ mod tests {
             "codebase_admin".into(),
             "file_read".into(),
         );
-        let settings = json!({"mode":"foreground","max_concurrency":2,"on_run_end":"stop"});
+        let settings = json!({"mode":"foreground","max_concurrency":2});
         execution_set(
             State(app.clone()),
             Extension(identity.clone()),
@@ -1138,12 +1135,11 @@ mod tests {
             revision + 1
         );
         for invalid in [
-            json!({"mode":"invalid","max_concurrency":1,"on_run_end":"stop"}),
-            json!({"mode":"foreground","max_concurrency":0,"on_run_end":"stop"}),
-            json!({"mode":"foreground","max_concurrency":5,"on_run_end":"stop"}),
-            json!({"mode":"foreground","max_concurrency":1.5,"on_run_end":"stop"}),
-            json!({"mode":"foreground","max_concurrency":1,"on_run_end":"invalid"}),
-            json!({"mode":"foreground","max_concurrency":1,"on_run_end":"stop","extra":true}),
+            json!({"mode":"invalid","max_concurrency":1}),
+            json!({"mode":"foreground","max_concurrency":0}),
+            json!({"mode":"foreground","max_concurrency":5}),
+            json!({"mode":"foreground","max_concurrency":1.5}),
+            json!({"mode":"foreground","max_concurrency":1,"extra":true}),
         ] {
             let error = execution_set(
                 State(app.clone()),
@@ -1171,10 +1167,9 @@ mod tests {
         .await
         .is_err());
         for unsupported in [
-            json!({"mode":"background","max_concurrency":1,"on_run_end":"stop"}),
-            json!({"mode":"model","max_concurrency":1,"on_run_end":"stop"}),
-            json!({"mode":"foreground","max_concurrency":2,"on_run_end":"stop"}),
-            json!({"mode":"foreground","max_concurrency":1,"on_run_end":"wake"}),
+            json!({"mode":"background","max_concurrency":1}),
+            json!({"mode":"model","max_concurrency":1}),
+            json!({"mode":"foreground","max_concurrency":2}),
         ] {
             let unsupported_path = (
                 "shared_default".into(),
@@ -1261,7 +1256,7 @@ mod tests {
             Path(path.clone()),
             Json(ExecutionBody {
                 expected_revision: revision,
-                settings: json!({"mode":"background","max_concurrency":1,"on_run_end":"stop"}),
+                settings: json!({"mode":"background","max_concurrency":1}),
             }),
         )
         .await
@@ -1508,7 +1503,7 @@ mod duplicate_settings_tests {
         let revision = app.store.agent_abilities().await.unwrap()["revision"]
             .as_u64()
             .unwrap();
-        let old = json!({"mode":"foreground","max_concurrency":1,"on_run_end":"stop"});
+        let old = json!({"mode":"foreground","max_concurrency":1});
         let saved = execution_set(
             State(app.clone()),
             Extension(identity.clone()),

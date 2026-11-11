@@ -157,7 +157,7 @@ mod action_settings_tests {
     fn retired_ledger_settings_are_ignored_not_fatal() {
         // These tools now use the repeat guard; settings saved for the old ledger are dropped.
         let off = json!({"tool_execution":{"edit_own_prompt":{"mode":"foreground",
-            "max_concurrency":1,"on_run_end":"stop","duplicate_protection":"off"}}});
+            "max_concurrency":1,"duplicate_protection":"off"}}});
         assert!(resolve(&off, "edit_own_prompt")
             .unwrap()
             .duplicate_protection

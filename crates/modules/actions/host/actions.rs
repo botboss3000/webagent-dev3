@@ -221,7 +221,7 @@ mod tests {
         finish(&app, &run, &action, &Ok(json!({"status":"timeout"})))
             .await
             .unwrap();
-        let visibility = json!({"tool_execution":{"test_owner_purchase":{"mode":"foreground","max_concurrency":1,"on_run_end":"stop","duplicate_protection":"off"}}});
+        let visibility = json!({"tool_execution":{"test_owner_purchase":{"mode":"foreground","max_concurrency":1,"duplicate_protection":"off"}}});
         run["pending"] = json!({"id":"new-pending"});
         let result = preflight(
             &app,

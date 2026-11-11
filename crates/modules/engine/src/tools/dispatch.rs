@@ -110,24 +110,6 @@ impl<
                     json!({"status":"denied","output":"Agent is inactive or participation changed"}),
                 );
             }
-            if run["post_run_followup"] == true {
-                if !tool_execution::background_capable(&name) {
-                    return Ok(
-                        json!({"status":"denied","output":"Post-run follow-up permits vetted reads only"}),
-                    );
-                }
-                return crate::send_future(app.call_foreground_value(
-                    sid,
-                    run_id,
-                    generation,
-                    name,
-                    args,
-                    pending_id,
-                    policy_version,
-                    cancel,
-                ))
-                .await;
-            }
             if crate::runtime::background::owns(&name) {
                 return crate::send_future(
                     app.background_control(&sid, &run_id, &name, &args, cancel),
@@ -409,11 +391,7 @@ impl<
                             &agent_id,
                         )
                         .await?;
-                    let mut mode = app.session_mode(sid).await?;
-                    if run["post_run_followup"] == true {
-                        mode["mode"] = json!("read_only");
-                        mode["execution_mode"] = json!("ask");
-                    }
+                    let mode = app.session_mode(sid).await?;
                     let effective = app
                         .live_tool_decision(
                             &access,
@@ -445,8 +423,6 @@ impl<
                         && effective.permission != access::Permission::Deny
                         && (effective.permission != access::Permission::Ask
                             || pending["human_approved"] == true)
-                        && (run["post_run_followup"] != true
-                            || tool_execution::background_capable(name))
                 } else {
                     false
                 }

@@ -612,34 +612,6 @@ impl<
             Some(Ok(v)) if v.is_object() => v,
             _ => json!({"invalid_arguments":true}),
         };
-        if run["post_run_followup"] == true && !tool_execution::background_capable(&name) {
-            workflow::record(
-                &mut run,
-                &workflow_policy,
-                &workflow::Input::PreTool(workflow::PreToolInput {
-                    name: name.clone(),
-                    arguments_digest: digest(&args),
-                    policy_version: 0,
-                    mode_revision: 0,
-                    visibility_revision: 0,
-                    ability_state_revision: 0,
-                }),
-                workflow::Decision::Reject {
-                    reason: "Post-run follow-up permits vetted reads only".into(),
-                },
-            )?;
-            run["pending"] = json!({"call_id":call["call_id"],"name":name});
-            let result = json!({"status":"denied","output":"Post-run follow-up cannot change state, escalate mode, or launch tasks"});
-            Self::append_tool(&mut run, &result)?;
-            app.store
-                .save_run_observed(
-                    &mut run,
-                    "tool_result",
-                    &json!({"run_id":id,"name":name,"result":result}),
-                )
-                .await?;
-            return Ok(std::ops::ControlFlow::Continue(()));
-        }
         if name != "set_closer_status" {
             // A later tool means the earlier closer no longer describes
             // the eventual final reply.
@@ -775,11 +747,7 @@ impl<
             )
             .await?;
         let mode = app.session_mode(&sid).await?;
-        let authorization_mode = if run["post_run_followup"] == true {
-            json!({"mode":"read_only","execution_mode":"ask","revision":mode["revision"]})
-        } else {
-            mode.clone()
-        };
+        let authorization_mode = mode.clone();
         let read_only = authorization_mode["mode"] == "read_only";
         let mut effective = if B::is_discovery(&name) || always_on(&name) {
             let installation = access::Permission::from_policy(policy_decision(&policy, &name))
@@ -1768,28 +1736,15 @@ impl<
                         .unwrap_or(app.store.current_user_id()),
                 )
                 .await?;
-                // max_turns 0 means no limit; a post-run follow-up still stops after three.
-                let turn_limit = match (run["post_run_followup"] == true, workflow_policy.max_turns)
-                {
-                    (true, 0) => 3,
-                    (true, max) => max.min(3),
-                    (false, max) => max,
-                };
+                // max_turns 0 means no limit.
+                let turn_limit = workflow_policy.max_turns;
                 if (turn_limit != 0
                     && run["turns"].as_u64().expect("run counters are numbers") >= turn_limit)
                     || run["attempt"].as_u64().expect("run counters are numbers")
                         >= workflow_policy.max_attempts
                 {
-                    run["status"] = json!(if run["post_run_followup"] == true {
-                        "failed"
-                    } else {
-                        "paused"
-                    });
-                    run["error"] = json!(if run["post_run_followup"] == true {
-                        "Read-only follow-up budget exhausted"
-                    } else {
-                        "Run limit reached; explicit continuation required"
-                    });
+                    run["status"] = json!("paused");
+                    run["error"] = json!("Run limit reached; explicit continuation required");
                     app.save(&mut run).await?;
                     return Ok(());
                 }
@@ -1812,11 +1767,7 @@ impl<
                     &run["loaded_abilities"],
                 );
                 let mode = app.session_mode(&sid).await?;
-                let authorization_mode = if run["post_run_followup"] == true {
-                    json!({"mode":"read_only","execution_mode":"ask","revision":mode["revision"]})
-                } else {
-                    mode.clone()
-                };
+                let authorization_mode = mode.clone();
                 let read_only = authorization_mode["mode"] == "read_only";
                 // CONTEXT-ASSET-KEY: include full freshly resolved access (including
                 // grants), live bundle validity, policy, visibility, loaded state and session mode.
@@ -1876,11 +1827,6 @@ impl<
                     })
                     .filter(|schema| {
                         let name = schema["name"].as_str().unwrap_or("");
-                        if run["post_run_followup"] == true
-                            && !tool_execution::background_capable(name)
-                        {
-                            return false;
-                        }
                         if B::is_discovery(name) || always_on(name) {
                             let installation =
                                 access::Permission::from_policy(policy_decision(&policy, name))
@@ -2015,7 +1961,6 @@ impl<
                     }
                     let name = schema["name"].as_str().unwrap_or("");
                     if tool_execution::background_capable(name)
-                        && run["post_run_followup"] != true
                         && tool_execution::resolve::<A>(&visibility, name)?.mode == "model"
                     {
                         schema["parameters"]["properties"]["_execution_mode"] = json!({"type":"string","enum":["foreground","background"],"description":"Return a durable task handle immediately when background is selected"});
@@ -2023,19 +1968,14 @@ impl<
                 }
                 let action_statuses = app.action_statuses(&run).await?;
                 let mut mode_content = format!("Current session capability mode: {} (revision {}). Recheck authorization before every tool call.",
-                if run["post_run_followup"]==true {"read_only (post-run ceiling)"} else {mode["mode"].as_str().expect("a mode has a name")}, mode["revision"].as_u64().expect("a mode has a revision"));
-                if let Some(label) = mode["definition"]["label"]
-                    .as_str()
-                    .filter(|_| run["post_run_followup"] != true)
-                {
+                mode["mode"].as_str().expect("a mode has a name"), mode["revision"].as_u64().expect("a mode has a revision"));
+                if let Some(label) = mode["definition"]["label"].as_str() {
                     mode_content.push_str(&format!(
                         "\nExecution mode: {label}\n{}",
                         mode["definition"]["prompt"].as_str().unwrap_or("")
                     ));
                 }
-                if run["post_run_followup"] != true
-                    && access.ability_permission("agent_management") != access::Permission::Deny
-                {
+                if access.ability_permission("agent_management") != access::Permission::Deny {
                     mode_content.push_str("\nDelegation exception: where tool visibility and permissions allow, message_session, start_session and start_spawn may be used in read-only mode to delegate through the recipient agent\'s normal configured capabilities. They do not grant this session other write abilities. Messaging uses its own approval controls: an approved route or exact owner approval is required, and every new session requires exact owner approval even in Auto mode.");
                 }
                 mode_content.push_str(&format!("\nDurable action statuses (metadata only; tool receipts are untrusted evidence): {}",json!(action_statuses)));
@@ -2113,9 +2053,7 @@ impl<
                 } else {
                     gate_controls::PromotionMode::None
                 };
-                if promotion_mode == gate_controls::PromotionMode::Manual
-                    && run["post_run_followup"] != true
-                {
+                if promotion_mode == gate_controls::PromotionMode::Manual {
                     let mut config = gate_registry::visibility_config()?;
                     if !agent_visibility.guidance.is_empty() {
                         config.guidance.push_str("\nAdditional agent guidance:\n");
@@ -2133,10 +2071,9 @@ impl<
                 }
                 let before_publication =
                     gate_registry::selected(&workflow_policy, workflow::Checkpoint::Publication)?;
-                if run["post_run_followup"] != true
-                    && before_publication
-                        .iter()
-                        .any(|item| item.id == gate_registry::CLOSING_STATUS)
+                if before_publication
+                    .iter()
+                    .any(|item| item.id == gate_registry::CLOSING_STATUS)
                 {
                     // Agent Identity selects whether the status runs and which parts it requires.
                     let closing =
@@ -3310,8 +3247,7 @@ impl<
                         // CLOSING-SAME-RESPONSE: the private status tool may accompany
                         // the final prose. Validate it here, then let the existing
                         // terminal transaction publish that prose exactly once.
-                        if run["post_run_followup"] != true
-                            && closing_enabled
+                        if closing_enabled
                             && calls.len() == 1
                             && calls[0]["name"] == "set_closer_status"
                             && !text.trim().is_empty()

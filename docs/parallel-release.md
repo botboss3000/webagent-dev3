@@ -10,7 +10,8 @@ Apply reviewed text patches with a stable request ID and the task's current
 `workspace_inputs_sha256`. The broker checks allowed paths, regular files,
 source digest, and `git apply --check` before changing that task snapshot. A
 V2 Workspace proposal is an artifact; its seed may lag a newer release, so use
-`v3_source_read` to inspect and rebase against the broker task workspace.
+`file_read` with the task's `broker_id` to inspect and rebase against the broker task
+workspace.
 
 After focused checks, finish with the settled task digest. Finish freezes a
 copy of the task source and assigns a durable job ID immediately. One job at a

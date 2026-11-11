@@ -6967,7 +6967,7 @@ async fn phase3_http_tier_tools_and_agent_disable_reject_stale_approval() {
     let response=router(app.clone()).oneshot(request(&admin_token,"admin-csrf","PUT",
         "/api/v3/admin/access/tiers/basic",
         json!({"expected_revision":1,"tier":{"id":"basic","revision":1,
-            "allowed_models":[granted_model],"tools":{"file_read":"auto","file_write":"ask","v3_build_work":"auto"},
+            "allowed_models":[granted_model],"tools":{"file_read":"auto","file_write":"ask","build_work":"auto"},
             "ability_permissions":{"codebase_admin":"auto"},"max_sessions":10,"max_active_runs":2}}))).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let access = app
@@ -7018,7 +7018,7 @@ async fn phase3_http_tier_tools_and_agent_disable_reject_stale_approval() {
         access::Permission::Deny
     );
     let host = access.tool_decision(
-        "v3_source_read",
+        "build_work",
         access::Permission::Auto,
         true,
         true,
@@ -7027,16 +7027,6 @@ async fn phase3_http_tier_tools_and_agent_disable_reject_stale_approval() {
     );
     assert_eq!(host.permission, access::Permission::Deny);
     assert_eq!(host.reason, access::Reason::CallerDenied);
-    let restart = access.tool_decision(
-        "v3_worker_submit",
-        access::Permission::Auto,
-        true,
-        true,
-        false,
-        false,
-    );
-    assert_eq!(restart.permission, access::Permission::Deny);
-    assert_eq!(restart.reason, access::Reason::CallerDenied);
     let user_generation =
         app.store.account_by_id(&user_id).await.unwrap().unwrap()["generation"].clone();
     app.store
@@ -7261,7 +7251,7 @@ async fn parallel_batch_overlaps_reads_denies_write_by_policy_and_preserves_resu
     let mut visibility = app.store.agent_abilities().await.unwrap();
     let revision = visibility["revision"].as_u64().unwrap();
     visibility["tool_execution"] = json!({"file_list":{
-        "mode":"foreground","max_concurrency":2,"on_run_end":"stop"}});
+        "mode":"foreground","max_concurrency":2}});
     visibility["revision"] = json!(revision + 1);
     app.store
         .save_agent_abilities(&visibility, revision)
@@ -7850,7 +7840,7 @@ async fn parallel_batch_overflow_queues_reads_despite_legacy_reject() {
     let mut visibility = app.store.agent_abilities().await.unwrap();
     let revision = visibility["revision"].as_u64().unwrap();
     visibility["tool_execution"] = json!({"file_list":{
-        "mode":"foreground","max_concurrency":1,"on_run_end":"stop"}});
+        "mode":"foreground","max_concurrency":1}});
     visibility["revision"] = json!(revision + 1);
     app.store
         .save_agent_abilities(&visibility, revision)
@@ -9522,74 +9512,6 @@ async fn run_logs_route_is_admin_authenticated_and_run_scoped() {
 }
 
 #[tokio::test]
-async fn wake_reads_require_fresh_approval_in_auto_serial_and_batch() {
-    for count in [1, 2] {
-        let (_root, app) = fixture().await;
-        let sid = conversation(&app).await;
-        app.store
-            .put(
-                &key("session_mode", &sid),
-                &json!({
-                    "mode":"write","execution_mode":"auto","revision":1
-                }),
-            )
-            .await
-            .unwrap();
-        activate_codebase(&app, &sid).await;
-        let mut policy = policy_default();
-        policy["rules"]["file_read"] = json!("require_approval");
-        app.store.put("policy", &policy).await.unwrap();
-        let id = queued(&app, &sid).await;
-        let mut run = app.run(&id).await.unwrap();
-        run["post_run_followup"] = json!(true);
-        run["phase"] = json!("tools");
-        run["loaded_abilities"] = json!(["codebase_admin"]);
-        let calls = (0..count)
-            .map(|index| {
-                json!({
-                    "type":"function_call","call_id":format!("wake-read-{index}"),
-                    "name":"file_read","arguments":json!({"path":"fixture"}).to_string()
-                })
-            })
-            .collect::<Vec<_>>();
-        for call in &calls {
-            run["input"].as_array_mut().unwrap().push(call.clone());
-        }
-        run["calls"] = json!(calls);
-        app.save(&mut run).await.unwrap();
-        running(&app, &id, "wake-ask").await;
-        tokio::time::timeout(
-            TEST_TIMEOUT,
-            execute_run(
-                app.clone(),
-                id.clone(),
-                "wake-ask".into(),
-                CancellationToken::new(),
-            ),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        let waiting = app.run(&id).await.unwrap();
-        assert_eq!(waiting["status"], "waiting_approval");
-        assert_eq!(waiting["pending"]["call_id"], "wake-read-0");
-        assert_ne!(waiting["pending"]["human_approved"], true);
-        assert_eq!(waiting["post_run_followup"], true);
-        assert_eq!(
-            session_mode(&app, &sid).await.unwrap()["execution_mode"],
-            "auto"
-        );
-        if count == 2 {
-            assert!(waiting["batch"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|item| item["state"] == "waiting"));
-        }
-    }
-}
-
-#[tokio::test]
 async fn auto_batch_keeps_an_approved_repeat_confirmation() {
     let (_root, app) = fixture().await;
     let sid = conversation(&app).await;
@@ -9891,7 +9813,7 @@ async fn foreground_queue_revocation_denies_before_worker_dispatch() {
     let mut visibility = app.store.agent_abilities().await.unwrap();
     let revision = visibility["revision"].as_u64().unwrap();
     visibility["tool_execution"] = json!({"file_list":{
-        "mode":"foreground","max_concurrency":1,"on_run_end":"stop"
+        "mode":"foreground","max_concurrency":1
     }});
     visibility["revision"] = json!(revision + 1);
     app.store
@@ -10123,15 +10045,10 @@ async fn background_execution_journey(behavior: &str) {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixListener;
     let (_root, mut app) = fixture().await;
-    let on_run_end = if behavior == "overlap" {
-        "stop"
-    } else {
-        behavior
-    };
     let mut visibility = app.store.agent_abilities().await.unwrap();
     let revision = visibility["revision"].as_u64().unwrap();
     visibility["tool_execution"] = json!({"file_read":{
-        "mode":"background","max_concurrency":2,"on_run_end":on_run_end}});
+        "mode":"background","max_concurrency":2}});
     visibility["revision"] = json!(revision + 1);
     app.store
         .save_agent_abilities(&visibility, revision)
@@ -10465,7 +10382,7 @@ async fn background_reclaimed_submission_preserves_original_task_and_receipt() {
         let revision = visibility["revision"].as_u64().unwrap();
         visibility["revision"] = json!(revision + 1);
         visibility["tool_execution"]["file_read"] = json!({
-            "mode":"model","max_concurrency":1,"on_run_end":"wake"
+            "mode":"model","max_concurrency":1
         });
         app.store
             .save_agent_abilities(&visibility, revision)
@@ -11367,7 +11284,7 @@ fn consolidated_codebase_schema_and_guidance_contract() {
             .tool_gate("build_work", &visibility, &state, &json!([]))
             .1
     );
-    for name in ["v3_source_apply", "workspace_seed", "source_patch"] {
+    for name in ["workspace_seed", "source_patch"] {
         assert!(!catalog.tool_gate(name, &visibility, &state, &json!([])).0);
     }
     assert!(provider::DEFAULT_INSTRUCTIONS.contains("without task_id"));
@@ -11980,11 +11897,8 @@ async fn late_single_tool_case(name: &str, action: &str, mutation: &str, success
     activate_codebase(&app, &sid).await;
     if name == "build_work" {
         let mut policy = policy_default();
-        for tool in ["build_work", "v3_build_work", "v3_worker_submit"] {
-            policy["rules"][tool] = json!("allow");
-        }
+        policy["rules"]["build_work"] = json!("allow");
         app.store.put("policy", &policy).await.unwrap();
-        // The protected host checks the older build-name ceilings under Codebase Admin.
         let mut tier = app
             .store
             .entitlement_tier("operator")

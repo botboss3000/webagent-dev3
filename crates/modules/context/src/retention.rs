@@ -243,8 +243,6 @@ pub fn eligible_tools() -> &'static [&'static str] {
         "terminal_read",
         "terminal_wait",
         "terminal_list",
-        "v3_source_list",
-        "v3_source_read",
         "get_tunnel_url",
     ]
 }
@@ -931,8 +929,6 @@ pub const DEDUP_DEFAULT_TOOLS: &[&str] = &[
     "file_read",
     "file_list",
     "file_search",
-    "v3_source_read",
-    "v3_source_list",
 ];
 
 pub fn dedup_included(settings: &Value, name: &str) -> bool {

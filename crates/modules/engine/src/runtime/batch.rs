@@ -354,11 +354,6 @@ impl<
             )
             .await?;
         let execution_mode = app.session_mode(&sid).await?;
-        let execution_mode = if run["post_run_followup"] == true {
-            json!({"mode":"read_only","execution_mode":"ask","revision":execution_mode["revision"]})
-        } else {
-            execution_mode
-        };
         let read_only = execution_mode["mode"] == "read_only";
         let saved_index = run["call_index"].as_u64().unwrap_or(0);
         // Calls admitted earlier in this turn: an identical later call is held, not run twice.
@@ -406,19 +401,16 @@ impl<
                     read_only,
                 )
                 .for_execution_mode(&execution_mode);
-            let mut result =
-                if run["post_run_followup"] == true && !tool_execution::background_capable(&name) {
-                    Some(denied("Tool is unavailable during a background follow-up"))
-                } else if args.get("invalid_arguments").is_some()
-                    || effective.permission == access::Permission::Deny
-                {
-                    Some(denied(&denial_message(
-                        effective.reason,
-                        args.get("invalid_arguments").is_some(),
-                    )))
-                } else {
-                    None
-                };
+            let mut result = if args.get("invalid_arguments").is_some()
+                || effective.permission == access::Permission::Deny
+            {
+                Some(denied(&denial_message(
+                    effective.reason,
+                    args.get("invalid_arguments").is_some(),
+                )))
+            } else {
+                None
+            };
             if result.is_none() {
                 let mut view = run.clone();
                 view["pending"] = pending.clone();
@@ -577,7 +569,6 @@ impl<
                 && pending["ability_state_revision"] == ability_state["revision"];
             tool_execution::resolve::<A>(&visibility, &name)?;
             if !fresh
-                || (run["post_run_followup"] == true && !tool_execution::background_capable(&name))
                 || effective.permission == access::Permission::Deny
                 || (effective.permission == access::Permission::Ask
                     && pending["decision"] != "approve")

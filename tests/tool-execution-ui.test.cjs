@@ -29,7 +29,7 @@ function control({ capable = true, maxConcurrency = capable ? 4 : 1, canEdit = t
     advanced_policies: policies, duplicate_protection_capable: duplicateCapable,
     name: 'file_read', permMode: 'auto', mode: 'visible', background_capable: capable,
     max_supported_concurrency: maxConcurrency,
-    execution: execution || { mode: 'foreground', max_concurrency: capable ? 4 : 1, on_run_end: 'stop' },
+    execution: execution || { mode: 'foreground', max_concurrency: capable ? 4 : 1 },
   }, { canEdit, onExecutionChange: save });
   handlers.click({ stopPropagation() {} });
   return { items: () => factory(), flashes, opened: () => !!factory };
@@ -54,7 +54,7 @@ test('saves complete settings and reverts failed selections', async () => {
   const ui = control({ save: async (name, settings) => { saves.push({ name, ...settings }); } });
   await ui.items().find(item => item.label === 'Background').action();
   await ui.items().find(item => item.field).onSave('2');
-  assert.deepEqual(saves[1], { name: 'file_read', mode: 'background', max_concurrency: 2, on_run_end: 'stop' });
+  assert.deepEqual(saves[1], { name: 'file_read', mode: 'background', max_concurrency: 2 });
   assert(ui.items().find(item => item.label === 'Background').checked);
   const failed = control({ save: async () => { throw Error('revision changed'); } });
   await failed.items().find(item => item.label === 'Background').action();
@@ -112,7 +112,7 @@ test('abilities adapter uses current revision, encoded route, full settings and 
     status, expandedAbility: null,
   };
   const callback = vm.runInNewContext('({' + page.slice(start, end) + '}).onExecutionChange', context);
-  const settings = { mode: 'model', max_concurrency: 2, on_run_end: 'silent' };
+  const settings = { mode: 'model', max_concurrency: 2 };
   await callback('file/read', settings);
   assert.equal(requests[0][0], '/agents/agent-1/abilities/codebase_admin/tools/file%2Fread/execution');
   assert.equal(requests[0][1], 'PUT');
@@ -133,7 +133,7 @@ test('foreground-only parallel tools use the server concurrency ceiling independ
   assert.equal(field.max, 4);
   assert.equal(field.value, 1);
   await field.onSave('4');
-  assert.deepEqual(writes[0], { name: 'file_read', mode: 'foreground', max_concurrency: 4, on_run_end: 'stop' });
+  assert.deepEqual(writes[0], { name: 'file_read', mode: 'foreground', max_concurrency: 4 });
   assert.equal(ui.items().find(item => item.label === 'Background').disabled, true);
   assert.equal(ui.items().find(item => item.label === 'Model chooses').disabled, true);
   await ui.items().find(item => item.field).onSave('5');
@@ -236,15 +236,15 @@ test('floating panel closes on outside scroll and swallows the dismissing press'
 test('duplicate protection is independently configurable and retains the complete execution settings', async () => {
   const saves = [];
   const ui = control({ capable: false, duplicateCapable: true,
-    execution: { mode: 'foreground', max_concurrency: 1, on_run_end: 'stop', duplicate_protection: 'on' },
+    execution: { mode: 'foreground', max_concurrency: 1, duplicate_protection: 'on' },
     save: async (_, settings) => saves.push(settings) });
   assert(ui.items().some(item => item.info && item.label === 'Duplicate-action protection'));
   await ui.items().find(item => item.label === 'Off for new actions').action();
-  assert.deepEqual({ ...saves[0] }, { mode: 'foreground', max_concurrency: 1, on_run_end: 'stop', duplicate_protection: 'off' });
+  assert.deepEqual({ ...saves[0] }, { mode: 'foreground', max_concurrency: 1, duplicate_protection: 'off' });
   assert(ui.items().find(item => item.label === 'Off for new actions').checked);
   assert(ui.items().some(item => /Saved and uncertain actions remain protected/.test(item.label)));
   const failed = control({ capable: false, duplicateCapable: true,
-    execution: { mode: 'foreground', max_concurrency: 1, on_run_end: 'stop', duplicate_protection: 'on' },
+    execution: { mode: 'foreground', max_concurrency: 1, duplicate_protection: 'on' },
     save: async () => { throw Error('stale revision'); } });
   await failed.items().find(item => item.label === 'Off for new actions').action();
   assert(failed.items().find(item => item.label === 'On').checked);

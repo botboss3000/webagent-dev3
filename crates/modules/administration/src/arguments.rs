@@ -30,41 +30,6 @@ fn pick(object: &Map<String, Value>, keys: &[&str]) -> Map<String, Value> {
     picked
 }
 
-/// `v3_build_work` arguments for the broker: only the keys its action uses.
-pub fn build_work(args: &Value) -> Result<Value> {
-    let object = args
-        .as_object()
-        .ok_or_else(|| anyhow!("Build work arguments must be an object"))?;
-    const KNOWN: &[&str] = &[
-        "action",
-        "task_id",
-        "summary",
-        "mode",
-        "expected_inputs_sha256",
-        "sync_decision",
-        "expected_sync_digest",
-        "offset",
-    ];
-    if object.keys().any(|key| !KNOWN.contains(&key.as_str())) {
-        bail!("Unknown build work argument");
-    }
-    let relevant: &[&str] = match args["action"].as_str().unwrap_or("") {
-        "status" | "abandon" => &["action", "task_id"],
-        "begin" => &["action", "task_id", "summary", "mode"],
-        "finish" => &[
-            "action",
-            "task_id",
-            "expected_inputs_sha256",
-            "sync_decision",
-            "expected_sync_digest",
-        ],
-        "preflight" => &["action", "task_id", "offset"],
-        "decide" => &["action", "task_id", "sync_decision", "expected_sync_digest"],
-        _ => bail!("Unknown build work action"),
-    };
-    Ok(Value::Object(pick(object, relevant)))
-}
-
 /// The source-relative path of a `file_edit`/`file_write` that enters an owned broker
 /// draft, or `None` when the write targets an explicit runtime or workspace path.
 /// The source-relative part of a checkout path. `/live-checkout/` is the image's
@@ -297,36 +262,6 @@ mod tests {
         let live = live_file(&json!({"path":"a","task_id":null,"broker_id":null,"limit":null}));
         assert_eq!(live.ok(), Some(json!({"path":"a"})));
         assert!(live_file(&json!({"path":"a","request_id":"r"})).is_err());
-    }
-
-    #[test]
-    fn work_arguments_drop_irrelevant_optional_fields() {
-        let zero = "0".repeat(64);
-        let begin = json!({"action":"begin","task_id":"v3-rust-parallel-1005a",
-            "summary":"Rust test","mode":"isolated","expected_inputs_sha256":zero});
-        assert_eq!(
-            build_work(&begin).ok(),
-            Some(json!({"action":"begin",
-            "task_id":"v3-rust-parallel-1005a","summary":"Rust test","mode":"isolated"}))
-        );
-        let status = json!({"action":"status","task_id":"ignored","expected_inputs_sha256":zero});
-        assert_eq!(
-            build_work(&status).ok(),
-            Some(json!({"action":"status","task_id":"ignored"}))
-        );
-        let finish = json!({"action":"finish","task_id":"v3-rust-parallel-1005a",
-            "expected_inputs_sha256":zero,"summary":"ignored"});
-        assert_eq!(
-            build_work(&finish).ok(),
-            Some(json!({"action":"finish",
-            "task_id":"v3-rust-parallel-1005a","expected_inputs_sha256":zero}))
-        );
-        assert!(build_work(&json!({"action":"begin","unknown":true})).is_err());
-        let decision = json!({"action":"decide","task_id":"sync-task",
-            "sync_decision":"proceed","expected_sync_digest":zero});
-        assert_eq!(build_work(&decision).ok(), Some(decision));
-        let preflight = json!({"action":"preflight","task_id":"sync-task","offset":40});
-        assert_eq!(build_work(&preflight).ok(), Some(preflight));
     }
 
     #[test]

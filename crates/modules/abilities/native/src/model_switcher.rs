@@ -40,7 +40,7 @@ fn state_id(rid: &str) -> String {
     format!("core_model:{rid}")
 }
 fn permission_to_switch(run: &Value) -> Result<()> {
-    if run["post_run_followup"] == true || run["optimization"].is_object() {
+    if run["optimization"].is_object() {
         return Err(anyhow!("This restricted run cannot change its model"));
     }
     Ok(())

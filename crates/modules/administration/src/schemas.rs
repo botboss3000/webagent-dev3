@@ -128,7 +128,7 @@ mod tests {
         write_tool(root.path(), "a", "read_diagnostics", "Read run diagnostics");
         write_tool(root.path(), "b", "read_diagnostics", "Second copy");
         write_tool(root.path(), "a", "not_administrator", "Ignored");
-        write_tool(root.path(), "b", "v3_source_read", "");
+        write_tool(root.path(), "b", "performance_work", "");
         let loaded = load(root.path()).expect("loaded");
         let names: Vec<_> = loaded
             .schemas
@@ -140,7 +140,7 @@ mod tests {
             .problems
             .iter()
             .any(|p| p.contains("Duplicate Administrator tool folder")));
-        assert!(loaded.problems.iter().any(|p| p.contains("v3_source_read")));
+        assert!(loaded.problems.iter().any(|p| p.contains("performance_work")));
         assert!(loaded
             .problems
             .iter()

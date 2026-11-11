@@ -356,8 +356,7 @@ pub(crate) fn allows_tool(run: &Value, name: &str, args: &Value) -> bool {
             Some("begin" | "status" | "preflight")
         ),
         "prompt_slot_write" | "edit_own_prompt" | "save_own_skill" | "remove_own_skill" => false,
-        "v3_worker_submit" | "v3_build_work" | "promotion_propose" | "source_patch" | "shell"
-        | "python" => false,
+        "promotion_propose" | "source_patch" | "shell" | "python" => false,
         _ => crate::tools::is_read(name),
     }
 }

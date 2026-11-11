@@ -79,7 +79,7 @@ pub(crate) async fn host_fingerprint(
         return Err(refused(Code::AuthorityStopped));
     }
     let read_only = mode["mode"] == "read_only";
-    let work_finish = matches!(name, "v3_build_work_finish" | "build_work_finish");
+    let work_finish = name == "build_work_finish";
     let policy_name = if work_finish { "build_work" } else { name };
     let loaded = &run["loaded_abilities"];
     let work_permission = live_tool_decision(
@@ -100,38 +100,25 @@ pub(crate) async fn host_fingerprint(
     {
         return Err(refused(Code::AuthorizationRejected));
     }
-    // A ceiling under an older public name; moving names never removes it.
-    let ceiling = |name: &str, read: bool| {
-        let installation = access::Permission::from_policy(policy_decision(&policy, name))
-            .unwrap_or(access::Permission::Deny);
-        access
-            .tool_decision_for_abilities(
-                name,
-                &["codebase_admin".into()],
-                installation,
-                true,
-                true,
-                read_only,
-                read,
-            )
-            .for_execution_mode(&mode)
-            .permission
-    };
-    let exceeds = |ceiling: access::Permission| {
-        ceiling == access::Permission::Deny
-            || (ceiling == access::Permission::Ask && work_permission != access::Permission::Ask)
-    };
-    let legacy = match name {
-        "file_list" => Some("v3_source_list"),
-        "file_read" | "file_search" => Some("v3_source_read"),
-        "file_edit" | "file_write" => Some("v3_source_apply"),
-        "build_work" | "build_work_finish" | "v3_build_work_finish" => Some("v3_build_work"),
-        _ => None,
-    };
-    if legacy.is_some_and(|legacy| exceeds(ceiling(legacy, tools::is_read(legacy)))) {
-        return Err(refused(Code::LegacyAuthorizationRejected));
-    }
-    if work_finish && exceeds(ceiling("v3_worker_submit", false)) {
+    // A deploy (finish or decide) asks first unless the session runs in Auto mode, even
+    // when build_work itself is allowed: this gate is fixed, not a policy rule.
+    let deploy_gate = access
+        .tool_decision_for_abilities(
+            "build_work",
+            &["codebase_admin".into()],
+            access::Permission::Ask,
+            true,
+            true,
+            read_only,
+            false,
+        )
+        .for_execution_mode(&mode)
+        .permission;
+    if work_finish
+        && (deploy_gate == access::Permission::Deny
+            || (deploy_gate == access::Permission::Ask
+                && work_permission != access::Permission::Ask))
+    {
         return Err(refused(Code::DeploymentAuthorizationRejected));
     }
     // An Ask finish reaches this host only after explicit approval. Its queued job keeps

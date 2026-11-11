@@ -263,9 +263,13 @@ fn root() -> tempfile::TempDir {
 async fn broker_calls_carry_authority_and_register_renewal_only_for_long_work() {
     let dir = root();
     let host = Fake::new(dir.path()).await;
-    call(&host, "v3_source_list", json!({"task_id":"t"}))
-        .await
-        .unwrap();
+    call(
+        &host,
+        "build_work",
+        json!({"action":"status","task_id":"t"}),
+    )
+    .await
+    .unwrap();
     assert!(host
         .store
         .get(&format!("administrator_host:{SID}"))
@@ -308,7 +312,13 @@ async fn refused_authority_never_reaches_the_broker() {
     let dir = root();
     let mut host = Fake::new(dir.path()).await;
     host.refuse = Some("Authorization rejected");
-    let error = call(&host, "v3_source_apply", json!({})).await.unwrap_err();
+    let error = call(
+        &host,
+        "build_work",
+        json!({"action":"finish","task_id":"t"}),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(error.to_string(), "Authorization rejected");
     assert!(host.sent().is_empty());
 }

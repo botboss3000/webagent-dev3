@@ -303,16 +303,7 @@ impl LiveAccess {
         read_only: bool,
         is_read: bool,
     ) -> ToolDecision {
-        if matches!(
-            name,
-            "build_work"
-                | "v3_worker_submit"
-                | "v3_build_work"
-                | "v3_source_list"
-                | "v3_source_read"
-                | "v3_source_apply"
-        ) && !self.principal.administrator()
-        {
+        if name == "build_work" && !self.principal.administrator() {
             return ToolDecision {
                 permission: Permission::Deny,
                 reason: access::Reason::CallerDenied,

@@ -39,9 +39,6 @@ pub trait ActionCatalog: Send + Sync + 'static {
 pub struct Settings<C: ActionCatalog> {
     pub mode: String,
     pub max_concurrency: usize,
-    /// Retired: background work always reports when it ends and only the session stop
-    /// cancels it. Kept so saved settings still load; its value has no effect.
-    pub on_run_end: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duplicate_protection: Option<C::Protection>,
 }
@@ -115,7 +112,6 @@ pub fn max_supported_concurrency(name: &str) -> usize {
 impl<C: ActionCatalog> Settings<C> {
     pub fn validate(&self, name: &str) -> Result<()> {
         if !matches!(self.mode.as_str(), "foreground" | "background" | "model")
-            || !matches!(self.on_run_end.as_str(), "stop" | "silent" | "wake")
             || !(1..=4).contains(&self.max_concurrency)
         {
             bail!("Invalid tool execution settings");
@@ -123,7 +119,7 @@ impl<C: ActionCatalog> Settings<C> {
         if self.duplicate_protection.is_some() && !C::supported(name) {
             bail!("Tool does not support duplicate protection");
         }
-        if !background_capable(name) && (self.mode != "foreground" || self.on_run_end != "stop") {
+        if !background_capable(name) && self.mode != "foreground" {
             bail!("Tool does not support background execution");
         }
         if self.max_concurrency > max_supported_concurrency(name) {
@@ -137,7 +133,6 @@ pub fn resolve<C: ActionCatalog>(agent_abilities: &Value, name: &str) -> Result<
     let defaults = Settings {
         mode: "foreground".into(),
         max_concurrency: if background_capable(name) { 4 } else { 1 },
-        on_run_end: "stop".into(),
         duplicate_protection: C::default_protection(name),
     };
     let Some(config) = agent_abilities.get("tool_execution") else {
@@ -155,8 +150,13 @@ pub fn resolve<C: ActionCatalog>(agent_abilities: &Value, name: &str) -> Result<
     if value.is_null() {
         return Ok(defaults);
     }
+    // Settings saved before the retired "When run ends" choice was removed still carry it.
+    let mut value = value.clone();
+    if let Some(object) = value.as_object_mut() {
+        object.remove("on_run_end");
+    }
     let mut settings: Settings<C> =
-        serde_json::from_value(value.clone()).context("Invalid tool execution settings")?;
+        serde_json::from_value(value).context("Invalid tool execution settings")?;
     if settings.duplicate_protection.is_none() || !C::supported(name) {
         // A setting saved while a tool was ledger-protected must not disable it later.
         settings.duplicate_protection = defaults.duplicate_protection;
@@ -399,17 +399,13 @@ mod tests {
             let settings = resolve(&json!({}), name).unwrap();
             assert_eq!(settings.max_concurrency, 4);
             assert_eq!(settings.mode, "foreground");
-            assert_eq!(settings.on_run_end, "stop");
             for mode in ["foreground", "background", "model"] {
-                for end in ["stop", "silent", "wake"] {
-                    Settings {
-                        mode: mode.into(),
-                        on_run_end: end.into(),
-                        ..settings.clone()
-                    }
-                    .validate(name)
-                    .unwrap();
+                Settings {
+                    mode: mode.into(),
+                    ..settings.clone()
                 }
+                .validate(name)
+                .unwrap();
             }
         }
         for name in [
@@ -429,12 +425,6 @@ mod tests {
             .validate(name)
             .is_err());
             assert!(Settings {
-                on_run_end: "silent".into(),
-                ..settings.clone()
-            }
-            .validate(name)
-            .is_err());
-            assert!(Settings {
                 max_concurrency: 2,
                 ..settings
             }
@@ -443,16 +433,15 @@ mod tests {
         }
         for value in [
             json!({}),
-            json!({"mode":"foreground","max_concurrency":4,"on_run_end":"stop","extra":true}),
-            json!({"mode":"bad","max_concurrency":4,"on_run_end":"stop"}),
-            json!({"mode":"foreground","max_concurrency":0,"on_run_end":"stop"}),
-            json!({"mode":"foreground","max_concurrency":5,"on_run_end":"stop"}),
-            json!({"mode":"foreground","max_concurrency":4,"on_run_end":"bad"}),
+            json!({"mode":"foreground","max_concurrency":4,"extra":true}),
+            json!({"mode":"bad","max_concurrency":4}),
+            json!({"mode":"foreground","max_concurrency":0}),
+            json!({"mode":"foreground","max_concurrency":5}),
         ] {
             assert!(resolve(&json!({"tool_execution":{"file_read":value}}), "file_read").is_err());
         }
         assert!(resolve(&json!({"tool_execution":[]}), "file_read").is_err());
-        let value = json!({"tool_execution":{"file_read":{"mode":"model","max_concurrency":2,"on_run_end":"wake"}}});
+        let value = json!({"tool_execution":{"file_read":{"mode":"model","max_concurrency":2}}});
         let settings = resolve(&value, "file_read").unwrap();
         assert_eq!(
             serde_json::from_value::<Settings>(serde_json::to_value(&settings).unwrap()).unwrap(),
@@ -504,12 +493,6 @@ mod tests {
             assert!(Settings {
                 mode: "background".into(),
                 ..settings.clone()
-            }
-            .validate(name)
-            .is_err());
-            assert!(Settings {
-                on_run_end: "wake".into(),
-                ..settings
             }
             .validate(name)
             .is_err());

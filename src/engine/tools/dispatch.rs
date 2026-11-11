@@ -116,8 +116,8 @@ mod native_schema_dispatch_tests {
             &sid,
             "missing-native-fixture",
             "unused",
-            "v3_source_list",
-            &json!({"task_id":"unused"}),
+            "build_work",
+            &json!({"action":"status","task_id":"unused"}),
             "unused",
         )
         .await
@@ -132,8 +132,8 @@ mod native_schema_dispatch_tests {
             &sid,
             "missing-native-fixture",
             "unused",
-            "v3_source_list",
-            &json!({"task_id":"unused"}),
+            "build_work",
+            &json!({"action":"status","task_id":"unused"}),
             "unused"
         )
         .await

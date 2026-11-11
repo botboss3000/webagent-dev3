@@ -90,7 +90,7 @@ async fn view(host: &dyn NativeHost, sid: &str, run_id: &str) -> Result<View> {
                 &visibility,
                 &state,
                 &run["loaded_abilities"],
-                mode["mode"] == "read_only" || run["post_run_followup"] == true,
+                mode["mode"] == "read_only",
             )
             .permission
             == Permission::Deny

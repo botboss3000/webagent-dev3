@@ -4,7 +4,7 @@
 //! Tools no ability owns a folder for live under `Administrator/native_tools/`.
 
 /// Every Administrator native tool.
-pub const TOOLS: [&str; 29] = [
+pub const TOOLS: [&str; 24] = [
     "git_tool",
     "resolve_conflict",
     "commit_and_push",
@@ -23,11 +23,6 @@ pub const TOOLS: [&str; 29] = [
     "terminal_wait",
     "terminal_list",
     "terminal_close",
-    "v3_build_work",
-    "v3_source_list",
-    "v3_source_read",
-    "v3_source_apply",
-    "v3_worker_submit",
     "read_diagnostics",
     "agent_review",
     "start_tunnel",
@@ -50,9 +45,7 @@ pub const CHECKOUT_TOOLS: [&str; 6] = [
 /// the job's lease while it runs.
 #[must_use]
 pub fn renews(name: &str, action: Option<&str>) -> bool {
-    name == "v3_worker_submit"
-        || (matches!(name, "v3_build_work" | "build_work")
-            && matches!(action, Some("finish" | "decide" | "check")))
+    name == "build_work" && matches!(action, Some("finish" | "decide" | "check"))
 }
 
 /// The authority a broker request is fingerprinted under: finishing or deciding work
@@ -61,7 +54,6 @@ pub fn renews(name: &str, action: Option<&str>) -> bool {
 pub fn authority_name<'a>(name: &'a str, action: Option<&str>) -> &'a str {
     match (name, action) {
         ("build_work", Some("finish" | "decide")) => "build_work_finish",
-        ("v3_build_work", Some("finish" | "decide")) => "v3_build_work_finish",
         _ => name,
     }
 }
@@ -99,7 +91,7 @@ mod tests {
             CHECKOUT_TOOLS.iter().all(|name| !supported(name)),
             "checkout tools are package tools, not native schemas"
         );
-        assert!(owns("checkout_edit") && owns("v3_build_work") && !owns("web_search"));
+        assert!(owns("checkout_edit") && owns("build_work") && !owns("web_search"));
     }
 
     #[test]
@@ -109,11 +101,11 @@ mod tests {
             "build_work_finish"
         );
         assert_eq!(
-            authority_name("v3_build_work", Some("decide")),
-            "v3_build_work_finish"
+            authority_name("build_work", Some("decide")),
+            "build_work_finish"
         );
         assert_eq!(authority_name("build_work", Some("check")), "build_work");
-        assert!(renews("build_work", Some("check")) && renews("v3_worker_submit", None));
-        assert!(!renews("build_work", Some("status")) && !renews("v3_source_read", None));
+        assert!(renews("build_work", Some("check")) && renews("build_work", Some("finish")));
+        assert!(!renews("build_work", Some("status")) && !renews("file_read", None));
     }
 }
