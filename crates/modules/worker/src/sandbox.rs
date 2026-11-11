@@ -112,59 +112,8 @@ pub fn prepare(
     deny_unix: bool,
 ) -> io::Result<Prepared> {
     let base = std::fs::canonicalize(base)?;
-    if abi()? < 6 {
-        return Err(unavailable(
-            "workspace sandbox requires Landlock ABI 6 or newer",
-        ));
-    }
-    // Handle every filesystem right supported through ABI 8, deny unlisted paths, and
-    // isolate signals and abstract Unix sockets from other domains.
-    let attr = RulesetAttr {
-        handled_access_fs: (1 << 16) - 1,
-        handled_access_net: if deny_unix { 1 | 2 } else { 1 },
-        scoped: 3,
-    };
-    // SAFETY: `attr` outlives the call and its size is passed with it.
-    let fd = checked(unsafe {
-        libc::syscall(
-            CREATE_RULESET,
-            &attr as *const RulesetAttr,
-            std::mem::size_of::<RulesetAttr>(),
-            0_u32,
-        )
-    })?;
-    let fd = i32::try_from(fd).map_err(|_| unavailable("invalid ruleset descriptor"))?;
-    // SAFETY: the kernel just returned this descriptor and nothing else owns it.
-    let ruleset = unsafe { OwnedFd::from_raw_fd(fd) };
-    let allow = |path: &Path, rights: u64| -> io::Result<()> {
-        if !path.exists() {
-            return Ok(());
-        }
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_PATH | libc::O_CLOEXEC)
-            .open(path)?;
-        let rights = if path.is_dir() {
-            rights
-        } else {
-            rights & FILE_RIGHTS
-        };
-        let rule = PathBeneath {
-            allowed_access: rights,
-            parent_fd: file.as_raw_fd(),
-        };
-        // SAFETY: `rule` and the descriptor it names outlive the call.
-        checked(unsafe {
-            libc::syscall(
-                ADD_RULE,
-                ruleset.as_raw_fd(),
-                1_u32,
-                &rule as *const PathBeneath,
-                0_u32,
-            )
-        })?;
-        Ok(())
-    };
+    let ruleset = ruleset(if deny_unix { 1 | 2 } else { 1 })?;
+    let allow = |path: &Path, rights: u64| allow(&ruleset, path, rights);
     for path in ["/usr", "/bin", "/lib", "/lib64", "/opt/rust"] {
         allow(Path::new(path), READ)?;
     }
@@ -242,6 +191,114 @@ pub fn prepare(
         } else {
             None
         },
+    })
+}
+
+/// A new ruleset handling every filesystem right through ABI 8 and `net` rights, with
+/// signals and abstract Unix sockets scoped to its domain.
+fn ruleset(net: u64) -> io::Result<OwnedFd> {
+    if abi()? < 6 {
+        return Err(unavailable(
+            "workspace sandbox requires Landlock ABI 6 or newer",
+        ));
+    }
+    let attr = RulesetAttr {
+        handled_access_fs: (1 << 16) - 1,
+        handled_access_net: net,
+        scoped: 3,
+    };
+    // SAFETY: `attr` outlives the call and its size is passed with it.
+    let fd = checked(unsafe {
+        libc::syscall(
+            CREATE_RULESET,
+            &attr as *const RulesetAttr,
+            std::mem::size_of::<RulesetAttr>(),
+            0_u32,
+        )
+    })?;
+    let fd = i32::try_from(fd).map_err(|_| unavailable("invalid ruleset descriptor"))?;
+    // SAFETY: the kernel just returned this descriptor and nothing else owns it.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+/// Grants `rights` beneath `path` (file rights only for a file); a missing path is skipped.
+fn allow(ruleset: &OwnedFd, path: &Path, rights: u64) -> io::Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_PATH | libc::O_CLOEXEC)
+        .open(path)?;
+    let rights = if path.is_dir() {
+        rights
+    } else {
+        rights & FILE_RIGHTS
+    };
+    let rule = PathBeneath {
+        allowed_access: rights,
+        parent_fd: file.as_raw_fd(),
+    };
+    // SAFETY: `rule` and the descriptor it names outlive the call.
+    checked(unsafe {
+        libc::syscall(
+            ADD_RULE,
+            ruleset.as_raw_fd(),
+            1_u32,
+            &rule as *const PathBeneath,
+            0_u32,
+        )
+    })?;
+    Ok(())
+}
+
+/// Builds the boundary for one session's chromedriver and Chromium: read the system and
+/// font files, read and write `profile` (its home and temporary files too) and nothing
+/// else, so a compromised browser cannot read another session's cookies or the app's
+/// files. `/proc` stays readable for Chromium itself; Landlock still refuses ptrace and
+/// `/proc/<pid>/root` into other domains. Network is left to the egress proxy.
+///
+/// # Errors
+/// When Landlock ABI 6 is unavailable or a rule cannot be added; the browser then never
+/// starts unconfined.
+pub fn prepare_browser(profile: &Path) -> io::Result<Prepared> {
+    let profile = std::fs::canonicalize(profile)?;
+    let ruleset = ruleset(0)?;
+    for path in [
+        "/usr",
+        "/bin",
+        "/lib",
+        "/lib64",
+        "/proc",
+        "/sys",
+        "/var/cache/fontconfig",
+        "/etc/fonts",
+        "/etc/chromium",
+        "/etc/chromium.d",
+        "/etc/ssl",
+        "/etc/ca-certificates",
+        "/etc/ld.so.cache",
+        "/etc/localtime",
+        "/etc/passwd",
+        "/etc/group",
+        "/etc/nsswitch.conf",
+        "/etc/hosts",
+        "/etc/resolv.conf",
+        "/etc/host.conf",
+        "/etc/gai.conf",
+        "/etc/machine-id",
+        "/etc/mime.types",
+        "/etc/xdg",
+        "/dev/random",
+        "/dev/urandom",
+    ] {
+        allow(&ruleset, Path::new(path), READ)?;
+    }
+    allow(&ruleset, Path::new("/dev/null"), (1 << 1) | (1 << 2))?;
+    allow(&ruleset, &profile, READ | WRITE)?;
+    Ok(Prepared {
+        ruleset,
+        filter: None,
     })
 }
 

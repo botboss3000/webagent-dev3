@@ -213,7 +213,9 @@ impl Browsers {
     }
 
     /// Deletes every folder whose session is not in `keep` (the chat sessions that still
-    /// exist), then recounts the rest. Called once the API has listed every user's sessions.
+    /// exist), and the Chromium profile a crashed browser left in a kept folder (a restart
+    /// never restores it), then recounts the rest. Called once the API has listed every
+    /// user's sessions.
     pub async fn sweep(&self, keep: &[String]) -> usize {
         let root = self.settings.root.clone();
         let keep = keep.to_vec();
@@ -229,7 +231,13 @@ impl Browsers {
                     continue;
                 };
                 let path = entry.path();
-                if keep.contains(&sid) || running.contains(&sid) {
+                if running.contains(&sid) {
+                    usage.insert(sid, folder_bytes(&path));
+                } else if keep.contains(&sid) {
+                    let profile = path.join("chrome");
+                    if !is_link(&path) && profile.is_dir() && !is_link(&profile) {
+                        let _ = std::fs::remove_dir_all(&profile);
+                    }
                     usage.insert(sid, folder_bytes(&path));
                 } else if !is_link(&path) && std::fs::remove_dir_all(&path).is_ok() {
                     removed += 1;
@@ -690,6 +698,30 @@ mod queue_tests {
         });
         inner.forget_stale_waiters();
         assert!(inner.queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sweep_deletes_gone_sessions_and_crash_left_profiles() {
+        let top = tempfile::tempdir().unwrap();
+        let root = top.path().join("browser");
+        let (kept, gone) = (
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+        );
+        for sid in [kept, gone] {
+            std::fs::create_dir_all(root.join(sid).join("chrome/Default")).unwrap();
+            std::fs::write(root.join(sid).join("chrome/Default/Cookies"), b"c").unwrap();
+            std::fs::write(root.join(sid).join("owner.json"), b"{}").unwrap();
+        }
+        let browsers = Browsers::new(Settings {
+            root: root.clone(),
+            origin: "https://example.test".into(),
+        });
+        assert_eq!(browsers.sweep(&[kept.to_owned()]).await, 1);
+        assert!(!root.join(gone).exists());
+        // The kept session keeps its folder but not the signed-in profile.
+        assert!(root.join(kept).join("owner.json").exists());
+        assert!(!root.join(kept).join("chrome").exists());
     }
 
     #[test]

@@ -7,6 +7,7 @@ use super::url::urlsplit;
 use super::{Fault, PAGE_TIMEOUT_MS, SCRIPT_TIMEOUT_MS};
 use serde_json::{json, Value};
 use std::future::Future;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::{Child, Command, Stdio};
@@ -427,21 +428,29 @@ impl Chrome {
             .and_then(|listener| listener.local_addr())
             .map_err(|_| Fault::Startup)?
             .port();
-        let child = Command::new(CHROMEDRIVER)
+        // The driver and every Chromium process it starts may touch only this profile.
+        let temporary = profile.join("tmp");
+        std::fs::create_dir_all(&temporary).map_err(|_| Fault::Startup)?;
+        let sandbox = crate::sandbox::prepare_browser(&profile).map_err(|_| Fault::Startup)?;
+        let mut command = Command::new(CHROMEDRIVER);
+        command
             .arg(format!("--port={port}"))
             .arg("--log-path=/dev/null")
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
             .env("HOME", &profile)
-            .env("TMPDIR", "/tmp")
+            .env("TMPDIR", &temporary)
             .env("XDG_CONFIG_HOME", profile.join("config"))
             .env("XDG_CACHE_HOME", profile.join("cache"))
             .env("LANG", "C.UTF-8")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|_| Fault::Startup)?;
+            .stderr(Stdio::null());
+        // SAFETY: `apply` makes only raw system calls on memory prepared before the fork.
+        unsafe {
+            command.pre_exec(move || sandbox.apply());
+        }
+        let child = command.spawn().map_err(|_| Fault::Startup)?;
         let pid = i32::try_from(child.id()).unwrap_or(0);
         let mut chrome = Self {
             port,
