@@ -11,7 +11,10 @@
   padding: 0 8px;
   border-radius: var(--r-sm);
   overflow-wrap: anywhere;
+  /* No disclosure triangle; the whole summary remains the click target. */
+  list-style: none;
 }
+.v2-activity-group > summary::-webkit-details-marker { display: none; }
 .v2-activity-group > summary:hover { background: var(--bg-tint); color: var(--fg-1); }
 .v2-activity-group summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* Mirror the composer progress control's active state on the newest group only. */

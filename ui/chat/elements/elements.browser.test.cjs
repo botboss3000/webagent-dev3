@@ -38,6 +38,7 @@ for(const opts of [{},{mobile:true,dark:true,reduced:true}])test('chat element l
  const p=await fixture(t,opts);
  const group=p.locator('.v2-activity-group'),dots=p.locator('.chat-typing-ellipsis');
  await group.waitFor();assert.match(await group.locator('summary').first().textContent(),/^1 update · Working/);
+ assert.equal(await group.locator('summary').first().evaluate(n=>getComputedStyle(n).listStyleType),'none','no disclosure triangle');
  assert.equal(await group.locator('.v2-mini-row').count(),0,'transcript stays lazy');assert.equal(await dots.isVisible(),true);
  await p.locator('#chat-element-style-typing-ellipsis').evaluate(link=>link.sheet?true:new Promise(r=>link.onload=r));
  assert.equal(await dots.locator('span').first().evaluate(n=>getComputedStyle(n).animationName),opts.reduced?'none':'chat-typing-dot');
