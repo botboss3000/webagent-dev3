@@ -735,6 +735,27 @@ mod tests {
         assert_eq!(totals["review_notes"], 3);
     }
 
+    /// Some callers hand the job over bare; the fallback keeps that working.
+    #[test]
+    fn a_bare_job_result_still_names_its_release() {
+        let mut run = json!({"session_id":"s"});
+        call(
+            &mut run,
+            "build_work",
+            json!({"action":"status"}),
+            json!({"job_id":"89abcdef-0123-4567-89ab-cdef01234567",
+                "changed_paths":["v3/src/engine/tools/mod.rs"]}),
+        );
+        assert_eq!(
+            run["run_health"]["releases"][0]["job_id"],
+            "89abcdef-0123-4567-89ab-cdef01234567"
+        );
+        assert_eq!(
+            run["run_health"]["releases"][0]["paths"][0],
+            "v3/src/engine/tools/mod.rs"
+        );
+    }
+
     #[test]
     fn a_wrapped_tool_result_still_names_its_release() {
         let mut run = json!({"session_id":"s"});
