@@ -121,7 +121,7 @@ async fn ranked_skills(query: &str, skills: Vec<Value>) -> (Vec<Value>, &'static
         .zip(&keywords)
         .map(|(skill, keywords)| (skill["skill_id"].as_str().unwrap_or(""), &keywords[..]))
         .collect();
-    let rows = tool_match::rank(query, &candidates, &scores)
+    let rows = tool_match::rank(query, &candidates, &scores, tool_match::SKILL_BEST)
         .into_iter()
         .map(|ranked| {
             let mut row = skills[ranked.index].clone();

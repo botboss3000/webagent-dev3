@@ -196,13 +196,17 @@
     "examples": [
       "build and deploy my code change",
       "run the checks on my source edits",
-      "release the change to the dev app"
+      "release the change to the dev app",
+      "check the build status",
+      "is my build done"
     ],
     "keywords": [
       "build",
       "deploy",
       "release",
-      "broker"
+      "broker",
+      "build status",
+      "check the build"
     ]
   }
 }

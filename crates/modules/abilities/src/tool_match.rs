@@ -4,8 +4,11 @@
 use crate::catalog::search_words;
 
 // shortcut: starting values from the setting matcher's gates; tune on eval/tool-match-eval.jsonl.
-/// At or above: a confident match, flagged `best_match`.
+/// At or above: a confident tool match, flagged `best_match` (tuned: wrong best 10% → 4% for
+/// skills at 0.82, tools unchanged at 0.78).
 pub const BEST: f32 = 0.78;
+/// The best-match gate for skills, whose short texts score higher against loose queries.
+pub const SKILL_BEST: f32 = 0.82;
 /// Below: no real match; shown only when nothing clears it, flagged weak.
 pub const WEAK: f32 = 0.65;
 /// Added once per keyword found in the query, at most [`MAX_KEYWORD_HITS`] times.
@@ -36,12 +39,22 @@ pub fn texts(name: &str, description: &str, examples: &[String]) -> Vec<String> 
     texts
 }
 
-/// Whether the query names the candidate: its exact ID, or every word of it.
+/// Whether the query names the candidate: its literal ID (`terminal_open`) or its words in order
+/// and next to each other ("terminal open"). A one-word name counts only as the whole query, since
+/// words like "shell" or "read" also appear in ordinary requests.
 pub fn names(query: &str, name: &str) -> bool {
     let query_words = search_words(query);
     let name_words = search_words(name);
-    query.to_lowercase().contains(&name.to_lowercase())
-        || (!name_words.is_empty() && name_words.iter().all(|w| query_words.contains(w)))
+    if name_words.len() < 2 {
+        return query_words == name_words;
+    }
+    query_words
+        .windows(name_words.len())
+        .any(|window| window == name_words.as_slice())
+        || query
+            .to_lowercase()
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .any(|word| word == name.to_lowercase())
 }
 
 fn keyword_hits(query: &str, keywords: &[String]) -> usize {
@@ -60,7 +73,12 @@ fn keyword_hits(query: &str, keywords: &[String]) -> usize {
 /// Rank candidates `(name, keywords)` by `scores` (one per candidate). A named candidate always
 /// comes first as a best match. Returns up to [`LIMIT`] rows at or above [`WEAK`], or else the
 /// nearest [`WEAK_ROWS`] flagged weak, so a non-empty candidate list never yields no rows.
-pub fn rank(query: &str, candidates: &[(&str, &[String])], scores: &[f32]) -> Vec<Ranked> {
+pub fn rank(
+    query: &str,
+    candidates: &[(&str, &[String])],
+    scores: &[f32],
+    best: f32,
+) -> Vec<Ranked> {
     let mut ranked: Vec<Ranked> = candidates
         .iter()
         .zip(scores)
@@ -75,7 +93,7 @@ pub fn rank(query: &str, candidates: &[(&str, &[String])], scores: &[f32]) -> Ve
             Ranked {
                 index,
                 score,
-                best: named || score >= BEST,
+                best: named || score >= best,
                 weak: false,
             }
         })
@@ -146,8 +164,9 @@ const COMPILED: &[(&str, &[&str], &[&str])] = &[
             "show this session's details",
             "list my recent runs",
             "inspect the current chat state",
+            "read the session state",
         ],
-        &["session", "runs", "state"],
+        &["session", "runs", "state", "session state"],
     ),
     (
         "prompt_slot_read",
@@ -229,7 +248,13 @@ const COMPILED: &[(&str, &[&str], &[&str])] = &[
             "change to auto mode",
             "make this session read only",
         ],
-        &["mode", "plan mode", "auto mode"],
+        &[
+            "mode",
+            "plan mode",
+            "auto mode",
+            "read only mode",
+            "read only",
+        ],
     ),
     (
         "get_time",
@@ -256,7 +281,7 @@ const COMPILED: &[(&str, &[&str], &[&str])] = &[
             "read the file the user attached",
             "open the uploaded document",
         ],
-        &["attachment", "uploaded file"],
+        &["attachment", "uploaded file", "attached file", "attached"],
     ),
     (
         "compact_context",
@@ -498,11 +523,18 @@ mod tests {
     fn named_tool_ranks_first_even_with_a_low_score() {
         let none = kw(&[]);
         let candidates = [("file_read", &none[..]), ("file_edit", &none[..])];
-        let ranked = rank("use file_edit on main.rs", &candidates, &[0.9, 0.1]);
+        let ranked = rank("use file_edit on main.rs", &candidates, &[0.9, 0.1], BEST);
         assert_eq!(ranked[0].index, 1);
         assert!(ranked[0].best && ranked[0].score == 1.0);
-        let ranked = rank("file edit the header", &candidates, &[0.9, 0.1]);
+        let ranked = rank("file edit the header", &candidates, &[0.9, 0.1], BEST);
         assert_eq!(ranked[0].index, 1);
+        // Name words elsewhere in the query, out of order, are not a name.
+        let ranked = rank("edit the file header", &candidates, &[0.9, 0.1], BEST);
+        assert_eq!(ranked[0].index, 0);
+        assert!(!names("type into the open terminal", "terminal_open"));
+        assert!(names("terminal open now", "terminal_open"));
+        assert!(!names("close the shell", "shell"));
+        assert!(names("shell", "shell"));
     }
 
     #[test]
@@ -512,7 +544,7 @@ mod tests {
             .iter()
             .map(|n| (*n, &none[..]))
             .collect();
-        let ranked = rank("bake bread", &candidates, &[0.2, 0.5, 0.4, 0.1]);
+        let ranked = rank("bake bread", &candidates, &[0.2, 0.5, 0.4, 0.1], BEST);
         assert_eq!(ranked.len(), WEAK_ROWS);
         assert!(ranked.iter().all(|r| r.weak && !r.best));
         assert_eq!(ranked[0].index, 1);
@@ -527,7 +559,7 @@ mod tests {
         let mut scores = vec![0.7; 12];
         scores[3] = 0.9;
         scores[11] = 0.3;
-        let ranked = rank("query", &candidates, &scores);
+        let ranked = rank("query", &candidates, &scores, BEST);
         assert_eq!(ranked.len(), LIMIT);
         assert_eq!(ranked[0].index, 3);
         assert!(ranked[0].best && !ranked[1].best && !ranked[0].weak);
@@ -538,7 +570,7 @@ mod tests {
         let shot = kw(&["screenshot"]);
         let none = kw(&[]);
         let candidates = [("page_text", &none[..]), ("capture", &shot[..])];
-        let ranked = rank("take a screenshot", &candidates, &[0.70, 0.68]);
+        let ranked = rank("take a screenshot", &candidates, &[0.70, 0.68], BEST);
         assert_eq!(ranked[0].index, 1);
     }
 }

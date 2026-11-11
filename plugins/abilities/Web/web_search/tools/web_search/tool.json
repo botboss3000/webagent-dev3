@@ -40,12 +40,14 @@
     "examples": [
       "search the web",
       "look up the latest news",
-      "google this"
+      "google this",
+      "google the error message"
     ],
     "keywords": [
       "search",
       "internet",
-      "web"
+      "web",
+      "google"
     ]
   }
 }

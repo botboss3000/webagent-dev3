@@ -3,7 +3,7 @@ id: ui_proposals
 title: UI proposals with screenshots
 when_to_use: Use when the user wants to compare UI options, asks for proposals or variants, or wants to approve a UI change from screenshots before it is released.
 default_mode: discoverable
-examples: show me design options for this page; make three variants with screenshots; let me pick a layout
+examples: show me design options for this page; make three variants with screenshots; let me pick a layout; show me mockups before release
 keywords: proposals, variants, mockup, screenshots
 ---
 

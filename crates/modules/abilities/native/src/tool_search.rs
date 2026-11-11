@@ -19,7 +19,7 @@ pub fn owns(name: &str) -> bool {
 pub fn schemas() -> Vec<Value> {
     vec![
         json!({"type":"function","name":"list_tools","description":"Find permitted tools. query: a few task words (for example \"edit file\"); results are ranked with a score, best_match first, never empty, and include tools you already have. Without query: the tools that need loading, optionally in one group (ability ID from the index); include_available=true adds tools you already have.","parameters":{"type":"object","properties":{"query":{"type":"string","maxLength":4096},"group":{"type":"string","maxLength":128},"include_available":{"type":"boolean"}},"required":[],"additionalProperties":false}}),
-        json!({"type":"function","name":"load_tool","description":"Load one permitted tool by its exact name for this conversation; call it several times in parallel to load several. Already supplied tools return an acknowledgment. Live policy still applies.","parameters":{"type":"object","properties":{"tool_name":{"type":"string","minLength":1,"maxLength":128}},"required":["tool_name"],"additionalProperties":false}}),
+        json!({"type":"function","name":"load_tool","description":"Load permitted tools by exact name for this conversation: pass every tool the task needs in tool_names (up to 8) in one call. Each loaded tool's own skill comes with it. Already supplied tools are acknowledged; refused names are listed. Live policy still applies.","parameters":{"type":"object","properties":{"tool_names":{"type":"array","items":{"type":"string","minLength":1,"maxLength":128},"minItems":1,"maxItems":8},"tool_name":{"type":"string","minLength":1,"maxLength":128}},"required":[],"additionalProperties":false}}),
     ]
 }
 #[derive(Deserialize)]
@@ -35,7 +35,10 @@ struct ListArgs {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LoadArgs {
-    tool_name: String,
+    #[serde(default)]
+    tool_name: Option<String>,
+    #[serde(default)]
+    tool_names: Vec<String>,
 }
 /// Validate exact-catalog query text without accepting extra scope fields.
 fn list_args(value: &Value) -> Result<ListArgs> {
@@ -48,18 +51,24 @@ fn list_args(value: &Value) -> Result<ListArgs> {
     Ok(args)
 }
 /// Accept one bounded exact native or plugin tool name.
-fn load_args(value: &Value) -> Result<LoadArgs> {
+/// Accept `tool_names` (1–8) or the single `tool_name`, each a bounded exact name.
+fn load_args(value: &Value) -> Result<Vec<String>> {
     let args: LoadArgs = serde_json::from_value(value.clone())?;
-    if args.tool_name.is_empty()
-        || args.tool_name.len() > 128
-        || !args
-            .tool_name
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || c == b'_')
+    let mut names = args.tool_names;
+    names.extend(args.tool_name);
+    let mut seen = std::collections::BTreeSet::new();
+    names.retain(|name| seen.insert(name.clone()));
+    if names.is_empty()
+        || names.len() > 8
+        || names.iter().any(|name| {
+            name.is_empty()
+                || name.len() > 128
+                || !name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+        })
     {
-        bail!("Invalid tool_name");
+        bail!("Invalid tool_names");
     }
-    Ok(args)
+    Ok(names)
 }
 pub use webagent_abilities::selection::{apply_selection, marker};
 /// The stored run `id`.
@@ -192,7 +201,7 @@ async fn ranked(
         .zip(&hints)
         .map(|(tool, (_, keywords))| (tool["name"].as_str().unwrap_or_default(), &keywords[..]))
         .collect();
-    let rows = tool_match::rank(query, &candidates, &scores)
+    let rows = tool_match::rank(query, &candidates, &scores, tool_match::BEST)
         .into_iter()
         .map(|ranked| {
             let mut row = tools[ranked.index].clone();
@@ -319,18 +328,26 @@ async fn exact(
             json!({"status":"success","output":{"tools":tools,"query":query,"ranked_by":ranked_by,"scope":"conversation","permissions_changed":false}}),
         );
     }
-    let args = load.context("Missing load arguments")?;
-    let tool = tools
-        .into_iter()
-        .find(|tool| tool["name"] == args.tool_name)
-        .context("Tool unavailable")?;
-    if tool["requires_activation"] != true {
-        return Ok(
-            json!({"status":"already_available","output":{"tool_name":args.tool_name,"ability_id":tool["ability_id"],"availability":tool["availability"],"activated":false,"selected_tools":[],"scope":"conversation","permissions_changed":false,"message":"This tool is already supplied to the current model context."}}),
-        );
+    let names = load.context("Missing load arguments")?;
+    let (mut selected, mut available, mut refused) = (Vec::new(), Vec::new(), Vec::new());
+    for name in &names {
+        match tools.iter().find(|tool| tool["name"] == *name) {
+            None => refused.push(name.clone()),
+            Some(tool) if tool["requires_activation"] != true => available.push(name.clone()),
+            Some(_) => selected.push(name.clone()),
+        }
     }
+    if selected.is_empty() && available.is_empty() {
+        bail!("Tool unavailable");
+    }
+    let status = if selected.is_empty() {
+        "already_available"
+    } else {
+        "success"
+    };
+    let first = tools.iter().find(|tool| tool["name"] == names[0]);
     Ok(
-        json!({"status":"success","output":{"tool_name":args.tool_name,"ability_id":tool["ability_id"],"availability":"activated","activated":true,"selected_tools":[args.tool_name],"scope":"conversation","permissions_changed":false,"message":"Tool selected for this conversation. Its current definition is supplied in each model context."}}),
+        json!({"status":status,"output":{"tool_name":names[0],"ability_id":first.map(|tool| tool["ability_id"].clone()),"activated":!selected.is_empty(),"selected_tools":selected,"already_available":available,"refused":refused,"scope":"conversation","permissions_changed":false,"message":"Selected tools and their own skills are supplied in each model context from now on."}}),
     )
 }
 #[cfg(test)]
@@ -378,7 +395,14 @@ mod tests {
             assert!(list_args(&value).is_err());
         }
         assert!(load_args(&json!({"tool_name":"file_read"})).is_ok());
+        assert_eq!(
+            load_args(&json!({"tool_names":["file_read","file_edit","file_read"]})).unwrap(),
+            vec!["file_read", "file_edit"]
+        );
         for value in [
+            json!({"tool_names":[]}),
+            json!({"tool_names":["a","b","c","d","e","f","g","h","i"]}),
+            json!({"tool_names":["file read"]}),
             json!({}),
             json!({"tool_name":""}),
             json!({"tool_name":"file read"}),

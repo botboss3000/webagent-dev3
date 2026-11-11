@@ -32,6 +32,7 @@ fn candidates() -> Result<(Vec<Candidate>, Vec<Candidate>)> {
     let tools = catalog
         .all_schemas()
         .iter()
+        .chain(crate::mcp::all_schemas().iter())
         .filter_map(|schema| {
             let name = schema["name"].as_str()?;
             let (examples, keywords) = tool_match::hints(name);
@@ -86,7 +87,12 @@ pub fn evaluate(files: &[String]) -> Result<()> {
                 .iter()
                 .map(|c| (c.id.as_str(), &c.keywords[..]))
                 .collect();
-            let ranked = tool_match::rank(query, &pairs, &scores);
+            let best = if kind == "skill" {
+                tool_match::SKILL_BEST
+            } else {
+                tool_match::BEST
+            };
+            let ranked = tool_match::rank(query, &pairs, &scores, best);
             let top: Vec<&str> = ranked
                 .iter()
                 .take(3)

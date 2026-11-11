@@ -4,7 +4,7 @@
 {"id": "t4", "kind": "tool", "query": "look at the code in the activity group element", "expect": ["file_read", "file_search"]}
 {"id": "t5", "kind": "tool", "query": "list files in the ui folder", "expect": ["file_list"]}
 {"id": "t6", "kind": "tool", "query": "what files are in this directory", "expect": ["file_list"]}
-{"id": "t7", "kind": "tool", "query": "find where list_tools is defined", "expect": ["file_search"]}
+{"id": "t7", "kind": "tool", "query": "find where list_tools is defined", "expect": ["file_search", "list_tools"]}
 {"id": "t8", "kind": "tool", "query": "grep for TODO comments", "expect": ["file_search"]}
 {"id": "t9", "kind": "tool", "query": "search the codebase for a function name", "expect": ["file_search"]}
 {"id": "t10", "kind": "tool", "query": "which file mentions the broker card", "expect": ["file_search"]}

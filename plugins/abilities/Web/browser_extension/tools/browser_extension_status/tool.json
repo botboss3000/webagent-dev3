@@ -16,10 +16,12 @@
   },
   "match": {
     "examples": [
-      "is my browser extension connected"
+      "is my browser extension connected",
+      "is my browser extension online"
     ],
     "keywords": [
-      "extension status"
+      "extension status",
+      "online"
     ]
   }
 }

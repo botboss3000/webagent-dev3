@@ -1601,6 +1601,9 @@ impl<H: Host> Catalog<H> {
         state: &Value,
         loaded: &Value,
     ) -> (bool, bool) {
+        // Only explicit activation (session state, /optimize) supplies a group's discoverable
+        // tools; loaded tools add their owner to the projection below, which must not count.
+        let explicit = state;
         // Conversation selections and context use the same call-local activation.
         // This projection preserves Off, suppression and per-tool discovery gates.
         let state = self.selected_state(visibility, state, loaded);
@@ -1618,7 +1621,7 @@ impl<H: Host> Catalog<H> {
                     "off" => false,
                     // An explicitly activated ability (session state, /optimize) supplies
                     // its discoverable tools; the model itself loads tools one by one.
-                    "discoverable" => selected || Self::active(&state, &ability.id),
+                    "discoverable" => selected || Self::active(explicit, &ability.id),
                     _ => true,
                 }
                 && (Self::available(ability, visibility, &state)
@@ -2135,7 +2138,7 @@ impl<H: Host> Catalog<H> {
         if !groups.is_empty() {
             add(&mut out, "");
             add(&mut out, "## Load on demand");
-            add(&mut out, "These groups hold more tools (count in brackets). Find them with list_tools (task words, or group=<id>) and load each one you need with load_tool; several load_tool calls can share one step.");
+            add(&mut out, "These groups hold more tools (count in brackets). Find what a task needs with list_tools and a few task words (for example 'edit file' or 'screenshot page'); results are ranked, best match first. Use group=<id> only when a query finds nothing useful. Load everything you need with one load_tool call, passing several names in tool_names; each tool brings its own skill.");
             for row in groups {
                 add(&mut out, &row);
             }
@@ -2876,6 +2879,20 @@ pub mod registered_tests {
                 .unwrap();
             // Ability core skills default to discoverable, so none enter guidance unasked.
             assert_eq!(admin["skill_visibility"], "discoverable");
+        }
+
+        pub fn loaded_tool_and_skill_owners_expose_no_other_tools<H: crate::TestHost>() {
+            let (_root, catalog) = fixture::<H>();
+            let state = json!({"active":[],"suppressed":[]});
+            let visibility = json!({"visibility":{"codebase_admin":"visible"}});
+            // Loading file_read (or one of its group's skills) also records the owning group,
+            // as context-asset hydration does; that must not expose the group's other tools.
+            let loaded = json!([crate::selection::marker("file_read"), "codebase_admin"]);
+            assert!(catalog.tool_available("file_read", &visibility, &state, &loaded));
+            assert!(!catalog.tool_available("file_edit", &visibility, &state, &loaded));
+            // Explicit session activation still supplies the group's discoverable tools.
+            let active = json!({"active":["codebase_admin"],"suppressed":[]});
+            assert!(catalog.tool_available("file_edit", &visibility, &active, &loaded));
         }
 
         pub fn tool_gate_distinguishes_missing_tools_from_hidden_tools<H: crate::TestHost>() {
