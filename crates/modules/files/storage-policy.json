@@ -23,7 +23,7 @@
       "user_storage_mb": 10
     },
     "basic": {
-      "agent_storage_mb": 256,
+      "agent_storage_mb": 50,
       "max_published_agents": 5,
       "user_storage_mb": 100
     },
