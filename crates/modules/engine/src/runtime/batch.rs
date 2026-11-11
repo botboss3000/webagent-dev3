@@ -17,6 +17,14 @@ use webagent_access as access;
 
 use tokio::task::JoinSet;
 
+/// The calls of one parallel batch, each tagged with its index, tool and pending ID.
+pub(crate) type BatchCalls = JoinSet<(
+    usize,
+    String,
+    String,
+    Result<crate::tools::outcome::Outcome>,
+)>;
+
 // A result commit takes the same gate as tool authorization. Tool futures must
 // keep being polled while that commit waits, including the future holding the
 // gate. A parent-polled FuturesUnordered can deadlock at this boundary.
@@ -238,6 +246,62 @@ impl<
             + super::native::NativeDispatch<S, C, B, H::Binding>,
     > Runtime<S, C, B, A, H, M, X>
 {
+    /// A user message arrived during a batch: every call still running gets the "still
+    /// running as background task" stand-in and keeps running; finished calls keep their
+    /// results. The batch then completes and the model reads the message.
+    async fn detach_batch(
+        app: &Self,
+        id: &str,
+        generation: &str,
+        identities: std::collections::HashMap<
+            tokio::task::Id,
+            (usize, String, String, std::time::Instant),
+        >,
+        mut tokens: std::collections::HashMap<tokio::task::Id, CancellationToken>,
+        futures: BatchCalls,
+    ) -> Result<()> {
+        let _guard = app.handles.gate.lock().await;
+        let mut current = app.run(id).await?;
+        if current["generation"] != generation || current["status"] != "running" {
+            return Ok(());
+        }
+        let mut detached = std::collections::HashMap::new();
+        for (handle, (idx, name, pending_id, _)) in identities {
+            let pending = current["batch"][idx]["pending"].clone();
+            if pending["id"] != pending_id.as_str() {
+                continue;
+            }
+            let mut probe = current.clone();
+            probe["pending"] = pending.clone();
+            let Some(task_id) = app
+                .background_detach_record(&probe, &pending["arguments"], Value::Null)
+                .await?
+            else {
+                continue;
+            };
+            let call_id = pending["call_id"].as_str().unwrap_or("").to_owned();
+            tools::retry_guard::mark_running(
+                &mut current,
+                &name,
+                &pending["arguments"],
+                &call_id,
+                &task_id,
+                &A::retry(&name),
+            );
+            current["batch"][idx]["result"] = json!({"status":"running","task_id":task_id,"output":format!(
+                "Still running as background task {task_id}: the user sent a message, so this \
+                 call continues in the background while you answer it. Its result is delivered \
+                 to you automatically when it finishes. Do not repeat this call; if the user \
+                 asks to stop it, cancel it with background_cancel.")});
+            current["batch"][idx]["state"] = json!("done");
+            if let Some(token) = tokens.remove(&handle) {
+                detached.insert(handle, (task_id, token));
+            }
+        }
+        app.save(&mut current).await?;
+        app.background_follow_batch(detached, futures);
+        Ok(())
+    }
     pub async fn execute_parallel_batch(
         app: &Self,
         id: &str,
@@ -560,12 +624,16 @@ impl<
         if !dispatch.is_empty() {
             drop(guard);
             let mut identities = std::collections::HashMap::new();
+            // Each call has its own token: a call detached for a user message outlives
+            // this step, while a run cancel still reaches every attached call.
+            let mut tokens = std::collections::HashMap::new();
             let mut futures = JoinSet::new();
             for (idx, name, args, pending_id, policy_version) in dispatch {
                 let task_app = app.clone();
                 let task_sid = sid.clone();
                 let task_run = id.to_owned();
-                let task_cancel = cancel.clone();
+                let token = app.stop.child_token();
+                let task_cancel = token.clone();
                 let task_generation = generation.to_owned();
                 let identity = (
                     idx,
@@ -588,9 +656,49 @@ impl<
                         .await;
                     (idx, name, pending_id, result)
                 });
+                tokens.insert(handle.id(), token);
                 identities.insert(handle.id(), identity);
             }
-            while let Some(completed) = futures.join_next_with_id().await {
+            let grace = std::time::Duration::from_millis(
+                app.runtime.read().await.scheduler.message_detach_grace_ms,
+            );
+            let mut message_since: Option<std::time::Instant> = None;
+            let mut forwarded = false;
+            let mut detach = false;
+            loop {
+                let completed = tokio::select! {
+                    completed = futures.join_next_with_id() => match completed {
+                        Some(completed) => completed,
+                        None => break,
+                    },
+                    _ = cancel.cancelled(), if !forwarded => {
+                        forwarded = true;
+                        for token in tokens.values() {
+                            token.cancel();
+                        }
+                        continue;
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(250)), if !forwarded => {
+                        if app.message_pending(&run).await.unwrap_or(false) {
+                            let since = *message_since.get_or_insert_with(std::time::Instant::now);
+                            // shortcut: detach only with room for every running call under
+                            // the 256-task cap; otherwise keep waiting as before.
+                            let room = app.store.background_scan(None).await
+                                .map(|tasks| tasks.len() + identities.len() <= 256)
+                                .unwrap_or(false);
+                            if room
+                                && (since.elapsed() >= grace
+                                    || app.message_forced(&run).await.unwrap_or(false))
+                            {
+                                detach = true;
+                                break;
+                            }
+                        } else {
+                            message_since = None;
+                        }
+                        continue;
+                    }
+                };
                 // Dropping the JoinSet aborts outstanding tasks. Durable executing
                 // checkpoints remain authoritative for safe-read/uncertain-write recovery.
                 let (idx, name, pending_id, result) = match completed {
@@ -698,6 +806,9 @@ impl<
                 // STORAGE-RESULT-COMMIT: a completed write is durable before the
                 // next future is awaited, so recovery only reviews unresolved calls.
                 app.save(&mut current).await?;
+            }
+            if detach && !identities.is_empty() {
+                Self::detach_batch(app, id, generation, identities, tokens, futures).await?;
             }
             let _approval_guard = app.handles.gate.lock().await;
             let mut current = app.run(id).await?;

@@ -402,6 +402,72 @@ impl<
             }
         });
     }
+    /// Own a parallel batch's detached calls until each ends: renew their leases, cancel a
+    /// call when its task is cancelled (background_cancel or the second Stop), and report
+    /// each result as a background notice.
+    pub fn background_follow_batch(
+        &self,
+        mut detached: std::collections::HashMap<tokio::task::Id, (String, CancellationToken)>,
+        mut calls: super::batch::BatchCalls,
+    ) {
+        let app = self.clone();
+        tokio::spawn(async move {
+            let mut renewed = now();
+            while !detached.is_empty() {
+                tokio::select! {
+                    joined = calls.join_next_with_id() => {
+                        let (handle, outcome) = match joined {
+                            Some(Ok((handle, (_, _, _, outcome)))) => (handle, outcome.ok()),
+                            Some(Err(error)) => (error.id(), None),
+                            None => break,
+                        };
+                        let Some((id, token)) = detached.remove(&handle) else {
+                            continue;
+                        };
+                        token.cancel();
+                        let Ok(Some(mut task)) = crate::send_future(app.store.background_get(&id)).await else {
+                            continue;
+                        };
+                        if task["status"] != "running" {
+                            continue;
+                        }
+                        let name = task["name"].as_str().unwrap_or("").to_owned();
+                        task["result"] = match outcome {
+                            Some(outcome) => outcome.content,
+                            None => detached_failure::<A>(&name),
+                        };
+                        task["status"] = json!("completed");
+                        task["completed_at"] = json!(now());
+                        task["completed_at_ms"] = json!(timestamp_ms());
+                        task["lease_until"] = json!(0);
+                        if let Err(error) = crate::send_future(app.background_notify_result(task)).await {
+                            tracing::warn!(task_id=%id, "Detached result not stored: {error}");
+                        }
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                        let renew = now().saturating_sub(renewed) >= 10;
+                        for (id, token) in detached.values() {
+                            let Ok(Some(mut task)) = crate::send_future(app.store.background_get(id)).await else {
+                                continue;
+                            };
+                            if task["status"] != "running" {
+                                token.cancel();
+                            } else if renew {
+                                let revision = task["revision"].as_u64().unwrap_or(0);
+                                task["lease_until"] = json!(now() + 30);
+                                let _ = crate::send_future(app.store.background_cas(&task, Some(revision))).await;
+                            }
+                        }
+                        if renew {
+                            renewed = now();
+                        }
+                    }
+                }
+            }
+            // Calls left in the set were never detached (their pending changed); stop them.
+            calls.abort_all();
+        });
+    }
     /// Store a finished background call's result and report it to its conversation as a
     /// background notice, which wakes the agent; nothing else delivers it.
     pub async fn background_notify_result(&self, mut task: Value) -> Result<()> {
