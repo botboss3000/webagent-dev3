@@ -10,7 +10,6 @@ use crate::{
 };
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
-use std::path::Path;
 use tokio_util::sync::CancellationToken;
 use webagent_administration_host::{AdministrationHost, Pending, SessionAccess};
 use webagent_configuration::digest;
@@ -392,9 +391,6 @@ impl AdministrationHost for Host<'_> {
     }
     fn abilities_version(&self) -> String {
         self.0.abilities.live_version()
-    }
-    fn promotion_socket(&self) -> &Path {
-        &self.0.promotion_socket
     }
     fn stopping(&self) -> CancellationToken {
         self.0.stop.child_token()

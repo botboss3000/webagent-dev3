@@ -92,7 +92,7 @@ pub struct Roots {
     pub workspaces: PathBuf,
     /// The live source checkout; relative paths resolve here when it exists.
     pub live_checkout: PathBuf,
-    /// `dispatch.lock` and `shutoff`, shared with the promotion broker.
+    /// `dispatch.lock` and `shutoff`, the global control files.
     pub control: PathBuf,
     /// The live context configuration holding the search output limits.
     pub context_config: PathBuf,
@@ -549,7 +549,7 @@ fn operation(roots: &Roots, base: &Path, args: &Map<String, Value>, name: &str) 
                             &directory,
                             *part,
                             // Group-writable and setgid: new checkout files stay in
-                            // `webagent-source` for the owner and promotion.
+                            // `webagent-source` for the owner and the broker.
                             Mode::from_raw_mode(0o2775),
                             AtFlags::empty(),
                         )?;

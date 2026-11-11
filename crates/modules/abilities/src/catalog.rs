@@ -2342,7 +2342,7 @@ pub mod registered_tests {
             fs::write(ability.join("codebase_admin.json"), r#"{
             "display_name":"Codebase Admin","kind":"ability",
             "description":"Inspect and edit an isolated workspace",
-            "tools":["file_list","file_read","file_search","state_inspect","prompt_slot_read","prompt_slot_write","file_write","file_edit","workspace_seed","source_review","source_patch","promotion_propose","shell","python"]
+            "tools":["file_list","file_read","file_search","state_inspect","prompt_slot_read","prompt_slot_write","file_write","file_edit","workspace_seed","source_review","source_patch","shell","python"]
         }"#).unwrap();
             fs::write(
                 ability.join("codebase_admin.skill.md"),
@@ -2570,7 +2570,7 @@ pub mod registered_tests {
             let denied = json!({"rules":{"file_list":"deny","file_read":"deny",
             "file_search":"deny","source_review":"deny","state_inspect":"deny",
             "prompt_slot_read":"deny","file_write":"deny","file_edit":"deny",
-            "workspace_seed":"deny","source_patch":"deny","promotion_propose":"deny",
+            "workspace_seed":"deny","source_patch":"deny",
             "shell":"deny","python":"deny"}});
             assert!(catalog.discover_with(
                 "list_abilities",
@@ -2858,7 +2858,7 @@ pub mod registered_tests {
         /// Keep focused sibling tests on the same installed-tool policy fixture.
         pub fn policy<H: crate::TestHost>() -> Value {
             json!({"rules":{"file_list":"allow","file_read":"allow","file_search":"allow",
-            "state_inspect":"allow","prompt_slot_read":"allow","prompt_slot_write":"require_approval","file_write":"require_approval","file_edit":"require_approval","workspace_seed":"require_approval","source_review":"allow","source_patch":"require_approval","promotion_propose":"allow",
+            "state_inspect":"allow","prompt_slot_read":"allow","prompt_slot_write":"require_approval","file_write":"require_approval","file_edit":"require_approval","workspace_seed":"require_approval","source_review":"allow","source_patch":"require_approval",
             "shell":"require_approval","python":"deny"}})
         }
 

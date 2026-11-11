@@ -23,7 +23,6 @@ struct App {
     control_dir: PathBuf,
     tool_socket: PathBuf,
     build_socket: PathBuf,
-    promotion_socket: PathBuf,
     secure: bool,
     chat_ui_config_path: PathBuf,
     message_api_token_hash: Option<[u8; 32]>,
@@ -985,10 +984,6 @@ async fn run_process() -> Result<()> {
         build_socket: PathBuf::from(
             std::env::var("V3_BUILD_SOCKET").unwrap_or_else(|_| "/runtime/build/build.sock".into()),
         ),
-        promotion_socket: PathBuf::from(
-            std::env::var("V3_PROMOTE_SOCKET")
-                .unwrap_or_else(|_| "/runtime/promote/promote.sock".into()),
-        ),
         secure: std::env::var("V3_SECURE_COOKIE").unwrap_or_else(|_| "true".into()) != "false",
         // Checkout-relative: read live (`live-files.json`) on every use.
         chat_ui_config_path: PathBuf::from(webagent_chat::configuration::LIVE_CHAT),
@@ -1066,7 +1061,6 @@ async fn run_process() -> Result<()> {
         drop(lock);
         return Ok(());
     }
-    recover_promotions(&app).await?;
     restore_worker_control(&app).await?;
     app.ready.store(true, Ordering::Release);
     let listener = tokio::net::TcpListener::bind(
@@ -1130,7 +1124,6 @@ impl App {
 #[derive(Clone)]
 struct EngineHostState {
     pub(crate) login_attempts: webagent_accounts::LoginAttempts,
-    pub(crate) promotion_socket: PathBuf,
     pub(crate) secure: bool,
     pub(crate) chat_ui_config_path: PathBuf,
     pub(crate) message_api_token_hash: Option<[u8; 32]>,
@@ -1140,7 +1133,6 @@ impl EngineHostState {
     pub(crate) fn new(app: &App) -> Self {
         Self {
             login_attempts: app.login_attempts.clone(),
-            promotion_socket: app.promotion_socket.clone(),
             secure: app.secure,
             chat_ui_config_path: app.chat_ui_config_path.clone(),
             message_api_token_hash: app.message_api_token_hash,
@@ -1179,7 +1171,6 @@ impl EngineHostState {
             tool_socket: view.tool_socket.to_owned(),
             build_socket: view.build_socket.to_owned(),
             login_attempts: self.login_attempts.clone(),
-            promotion_socket: self.promotion_socket.clone(),
             secure: self.secure,
             chat_ui_config_path: self.chat_ui_config_path.clone(),
             message_api_token_hash: self.message_api_token_hash,

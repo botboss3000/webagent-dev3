@@ -67,7 +67,7 @@ BRIDGE_WORKSPACE = "94c353d5-70bd-44b2-9af0-757c4a979fc9"
 CONTEXT = (
     "v3/Dockerfile", "v3/Cargo.toml", "v3/Cargo.lock", "v3/build.rs", "v3/.gitignore",
     "v3/src", "v3/crates", "v3/services/system-monitoring", "v3/ui", "v3/plugins/engine", "v3/plugins/abilities", "v3/plugins/gates",
-    "v3/sandbox.py", "v3/promote.py", "v3/ui-baseline.json", "v3/live-files.json", "v3/rustfmt.toml", "v3/tests",
+    "v3/sandbox.py", "v3/ui-baseline.json", "v3/live-files.json", "v3/rustfmt.toml", "v3/tests",
     "v3/README.md", "v3/docs", "v3/deploy.sh", "v3/config", "v3/build-service",
     "ui/shared/css/app1.css", "ui/shared/css/app2.css", "ui/shared/css/app3.css",
     "ui/shared/css/design-system.css", "ui/shared/css/index.css",
@@ -737,7 +737,7 @@ def inspect_source_patch_corrected(root, patch):
     paths = []
     allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
                      ".gitignore", "README.md", "deploy.sh",
-                     "sandbox.py", "promote.py", "ui-baseline.json", "live-files.json", "rustfmt.toml"}
+                     "sandbox.py", "ui-baseline.json", "live-files.json", "rustfmt.toml"}
     allowed_dirs = {"crates", "src", "plugins", "tests", "ui", "docs", "config", "build-service"}
     for record in records:
         fields = record.split(b"\t", 2)
@@ -996,7 +996,7 @@ for directory,dirs,files in os.walk(root,followlinks=False,onerror=failed):
 # The mounted frozen source can be readable while the baked worker is not.
 # Check exact image bytes as the worker identity before any runtime is stopped.
 import hashlib
-runtime_files=("sandbox.py","promote.py")
+runtime_files=("sandbox.py",)
 for name in runtime_files:
  path=pathlib.Path("/opt/v3")/name
  if path.is_symlink()or not path.is_file():raise RuntimeError("Baked runtime Python source identity")
@@ -1019,7 +1019,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         images=job.get("images") if publication_id is None else {role:previous[role]["Image"]for role in ("api","loop")}
         if not images or set(images)!={"api","loop"}:raise ValueError("Runtime preflight requires both candidate images")
         results=[];plans=[]
-        allowed={"/live-v3","/opt/v3/config","/opt/v3/ui","/opt/v3/plugins/abilities","/opt/v3/assets",
+        allowed={"/opt/v3/config","/opt/v3/ui","/opt/v3/plugins/abilities","/opt/v3/assets",
             "/opt/v3/shared-ui/shared/css","/opt/v3/shared-ui/main-panel/agents","/opt/v3/shared-ui/vendor/fonts","/opt/v3/shared-ui/vendor/leaflet","/opt/v3/shared-ui/vendor/lucide","/opt/v3/shared-ui/favicon.svg"}
         for role in ("api","loop"):
             proposed=release.release_mounts(previous[role]["HostConfig"],root,ASSET_ROOT);mounts=[]
@@ -1047,7 +1047,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 finally:subprocess.run(["docker","rm","-f",name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15)
                 value=json.loads(output)
                 if identity in {"application","worker_catalog"}and not isinstance(value.get("catalog_version"),str):raise ValueError("Candidate runtime catalog validator unavailable")
-                if identity=="worker"and(not value.get("files")or value.get("runtime_files")!=2):raise ValueError("Worker runtime source unreadable or incomplete")
+                if identity=="worker"and(not value.get("files")or value.get("runtime_files")!=1):raise ValueError("Worker runtime source unreadable or incomplete")
                 results.append({"role":role,"identity":identity,"uid":uid,"gid":gid,"status":"passed"})
         release.verify_publication(root,selected,manifest["candidate_sha256"])
         if publication_id and self.current_asset_id()!=publication_id:raise ValueError("Published source changed during runtime preflight")
@@ -5567,7 +5567,7 @@ class Broker:
                 allowed_dirs = {"crates", "src", "plugins", "tests", "ui", "docs", "config", "build-service"}
                 allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
                                  ".gitignore", "README.md", "deploy.sh",
-                                 "sandbox.py", "promote.py", "ui-baseline.json", "live-files.json", "rustfmt.toml"}
+                                 "sandbox.py", "ui-baseline.json", "live-files.json", "rustfmt.toml"}
                 if (name_path and (not re.fullmatch(r"[A-Za-z0-9_./-]+", name_path)
                         or any(part in ("", ".", "..") for part in parts)
                         or (parts[0] not in allowed_dirs and name_path not in {"services","services/system-monitoring"}

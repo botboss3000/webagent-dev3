@@ -1265,7 +1265,7 @@ class RuntimeReadabilityTests(unittest.TestCase):
         self.calls=[]
         def command(argv,timeout):
             self.calls.append(argv)
-            return json.dumps({"files":10,"runtime_files":2}if "python3"in argv else{"catalog_version":"fixture"})
+            return json.dumps({"files":10,"runtime_files":1}if "python3"in argv else{"catalog_version":"fixture"})
         self.runner=types.SimpleNamespace(command=command,inspect=lambda name:self.previous["api"if name==fixtures.host.TARGETS[0]else"loop"],current_asset_id=lambda:self.identity)
     def run_preflight(self,publication_id=None):
         with patch.object(fixtures.host,"CONFIG",self.config),patch.object(fixtures.host,"ASSET_ROOT",self.assets),                patch.object(fixtures.host.release,"verify_publication",return_value={"candidate_sha256":"a"*64}),                patch.object(fixtures.host.subprocess,"run"):
@@ -1281,18 +1281,18 @@ class RuntimeReadabilityTests(unittest.TestCase):
                 if arg=="--mount":self.assertTrue(argv[i+1].endswith(",readonly"))
         self.assertEqual(self.calls[0][self.calls[0].index("--user")+1],str(self.config["app_uid"])+":"+str(self.config["app_gid"]))
         self.assertEqual(self.calls[1][self.calls[1].index("--user")+1],str(self.config["worker_uid"])+":"+str(self.config["worker_gid"]))
-    def test_worker_probe_checks_baked_bytes_and_compiles_both_scripts(self):
+    def test_worker_probe_checks_baked_bytes_and_compiles_the_script(self):
         import subprocess
         self.run_preflight();argv=next(c for c in self.calls if "python3"in c);program=argv[argv.index("-c")+1]
         self.assertIn("/opt/v3",program);self.assertIn("Baked runtime Python source differs",program)
         self.assertIn("compile(body",program);self.assertIn("runtime_files",program)
         self.assertEqual(argv[argv.index("--user")+1],str(self.config["worker_uid"])+":"+str(self.config["worker_gid"]))
         baked=self.root/"baked";baked.mkdir()
-        for name in ("sandbox.py","promote.py"):
+        for name in ("sandbox.py",):
             (baked/name).write_text("pass\n");(self.publication/"v3"/name).write_text("pass\n")
         program=program.replace('pathlib.Path("/opt/v3")','pathlib.Path('+repr(str(baked))+')')
         result=subprocess.run(["python3","-I","-B","-c",program,str(self.publication)],capture_output=True,text=True)
-        self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(json.loads(result.stdout)["runtime_files"],2)
+        self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(json.loads(result.stdout)["runtime_files"],1)
         (baked/"sandbox.py").write_text("changed=True\n")
         result=subprocess.run(["python3","-I","-B","-c",program,str(self.publication)],capture_output=True,text=True)
         self.assertNotEqual(result.returncode,0);self.assertIn("differs from frozen",result.stderr)
@@ -1324,7 +1324,7 @@ class RuntimeReadabilityTests(unittest.TestCase):
         self.run_preflight();argv=next(c for c in self.calls if "python3"in c);program=argv[argv.index("-c")+1]
         source=self.root/"worker-fixture";(source/"v3/config").mkdir(parents=True);(source/"v3/config/example.json").write_text("{}")
         baked=self.root/"configuration-runtime";baked.mkdir()
-        for name in ("sandbox.py","promote.py"):
+        for name in ("sandbox.py",):
             (baked/name).write_text("pass\n");(source/"v3"/name).write_text("pass\n")
         program=program.replace('pathlib.Path("/opt/v3")','pathlib.Path('+repr(str(baked))+')')
         passed=subprocess.run([sys.executable,"-c",program,str(source)],capture_output=True,timeout=5)

@@ -137,7 +137,7 @@ COPY --from=tested_builder /out/webagent-diagnostics /usr/local/bin/webagent-dia
 COPY --from=tested_builder /out/webagent-optimization /usr/local/bin/webagent-optimization
 COPY --from=tested_builder /out/optimization-cargo /opt/optimization-cargo
 COPY --from=tested_builder /usr/local/rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu /opt/rust
-COPY v3/sandbox.py v3/promote.py /opt/v3/
+COPY v3/sandbox.py /opt/v3/
 COPY v3/build-service /opt/v3/build-service
 COPY v3/plugins/abilities /opt/v3/plugins/abilities
 COPY v3/plugins/engine /opt/v3/plugins/engine

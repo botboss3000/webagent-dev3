@@ -115,20 +115,16 @@ macro_rules! path_arg {
                 "background_task_metadata_api"
                     | "state_inspect_api"
                     | "source_review"
-                    | "promotions"
-                    | "promotion_review"
-                    | "promotion_receipt"
                     | "memory_list"
                     | "memory_delete"
                     | "upload_delete"
                     | "upload_describe"
-                    | "promotion_reject"
             );
             if let Err(error) = guard_access(
                 &app,
                 matches!(
                     stringify!($inner),
-                    "memory_delete" | "upload_delete" | "upload_describe" | "promotion_reject"
+                    "memory_delete" | "upload_delete" | "upload_describe"
                 ),
                 private,
             ) {
@@ -155,7 +151,6 @@ macro_rules! path_json {
                     | "unarchive_session_api"
                     | "patch_session_api"
                     | "memory_save"
-                    | "promotion_reject"
                     | "voice_audio"
                     | "voice_reply"
                     | "undo_session_api"
@@ -493,10 +488,6 @@ path_arg!(memory_list => memory_list, String);
 path_json!(memory_save => memory_save, String, Value);
 path_arg!(memory_delete => memory_delete, (String, String));
 path_arg!(source_review => source_review, String);
-path_arg!(promotions => promotions, String);
-path_arg!(promotion_review => promotion_review, (String, String));
-path_arg!(promotion_receipt => promotion_receipt, (String, String));
-path_arg!(promotion_reject => promotion_reject, (String, String));
 
 async fn state_inspect(
     Extension(app): Extension<App>,
@@ -657,26 +648,6 @@ async fn events(
     )
     .await
     .into_response()
-}
-async fn promote(
-    Extension(app): Extension<App>,
-    Extension(identity): Extension<Value>,
-    Path(id): Path<String>,
-    Json(body): Json<Value>,
-) -> Response {
-    if let Err(error) = crate::phase3_api::administrator(&app, &identity).await {
-        return error.into_response();
-    }
-    let app = match session_app(app, &id).await {
-        Ok(app) => app,
-        Err(error) => return error.into_response(),
-    };
-    if let Err(error) = guard_access(&app, true, true) {
-        return error.into_response();
-    }
-    crate::promote(State(app), Path(id), Json(body))
-        .await
-        .into_response()
 }
 // Resolve caller-owned session and live agent access before queue mutation.
 async fn followup_delivery(
@@ -880,19 +851,6 @@ pub(crate) fn router() -> Router<App> {
         )
         .route("/sessions/{id}/state-inspect", get(state_inspect))
         .route("/sessions/{id}/source-review", get(source_review))
-        .route("/sessions/{id}/promotions", get(promotions).post(promote))
-        .route(
-            "/sessions/{id}/promotions/{request_id}/review",
-            get(promotion_review),
-        )
-        .route(
-            "/sessions/{id}/promotions/{request_id}",
-            get(promotion_receipt),
-        )
-        .route(
-            "/sessions/{id}/promotions/{request_id}/reject",
-            post(promotion_reject),
-        )
         .route(
             "/messages",
             post(direct_message).layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024)),
@@ -1214,8 +1172,6 @@ mod shared_observer_mutation_tests {
             ("DELETE", "memories/missing"),
             ("DELETE", "attachments/missing"),
             ("POST", "attachments/missing/describe"),
-            ("POST", "promotions/missing/reject"),
-            ("POST", "promotions"),
         ] {
             let request = axum::http::Request::builder()
                 .method(method)

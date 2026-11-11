@@ -336,35 +336,9 @@ Git baseline. It
 rejects path escapes, Git internals, symlinks, binary patches, and unsupported modes. A
 failed precheck leaves the workspace unchanged; an interrupted apply enters outcome review.
 
-After inspecting a complete `source_review`, the agent can call
-`promotion_propose` with the exact review digest and a verification summary. The
-proposal freezes the patch and emits a session event; it cannot change live
-source. The signed-in administrator can list proposals with
-`GET /api/v3/sessions/{id}/promotions` and inspect the frozen diff with
-`GET /api/v3/sessions/{id}/promotions/{request_id}/review`. The ordinary
-`GET /api/v3/sessions/{id}/promotions/{request_id}` returns receipt metadata
-without the patch.
-
-To approve that proposal, the administrator sends
-`POST /api/v3/sessions/{id}/promotions` with the proposal's UUID
-`client_request_id`, its `expected_review_sha256`, and the usual CSRF header.
-The server rechecks the current workspace review against the frozen proposal
-before dispatching it to the separate broker. To dismiss a proposal, the
-administrator sends `POST /api/v3/sessions/{id}/promotions/{request_id}/reject`
-with the CSRF header; rejection is idempotent and cannot change live source.
-An administrator may also use the promotion POST endpoint directly after a
-complete review. Retrying the same request ID
-returns its stored result; a dispatch interrupted by a restart becomes
-`uncertain` and is never replayed. Inspect an uncertain promotion against the
-live checkout before making a new request. An applied source change needs a
-deliberate image rebuild and container recreation before the running application
-uses it.
-
-The container mounts only the v3 source directory at `/live-v3` for promotion.
-The Rust app and tool worker cannot write that mount. The broker runs as the
-checkout owner, accepts only the app's private socket, obeys global shutoff, and
-limits changes to v3 source, plugins, tests, UI, docs, configuration and selected v3 root files. Runtime data and workspaces remain excluded.
-UI files and runtime data are excluded from promotion.
+Workspace changes reach the server checkout only through an isolated broker task
+(`file_write`/`file_edit` with a task, then the broker's release and checked source
+promotion); there is no separate in-app promotion path.
 
 The tool worker owns actual filesystem operations and approved shell/Python processes.
 Its `file_edit` operation replaces one exact span in an existing workspace file, supports

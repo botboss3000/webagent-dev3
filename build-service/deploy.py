@@ -50,11 +50,11 @@ def main():
  argv=["docker","run","-d","--name",name,"--restart","unless-stopped","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges:true","--pids-limit",str(c["api_pids_limit"]),"--memory","2g","--cpus","2"]
  if role=="api":
   argv+=["--cap-add","CHOWN","--cap-add","FOWNER","--cap-add","SETUID","--cap-add","SETGID","--cap-add","KILL","--publish",c["bind_address"]+":"+str(c["port"])+":8080"]
-  mounts += [(root,"/code",False),(root,"/live-v3",True),(root/"ui","/opt/v3/ui",True)]
+  mounts += [(root,"/code",False),(root/"ui","/opt/v3/ui",True)]
   for rel in ("shared/css","main-panel/agents","vendor/fonts","vendor/lucide","favicon.svg"):mounts.append((root/"build-service/shared-ui/ui"/rel,"/opt/v3/shared-ui/"+rel,True))
  else:
   gate=Path(live["/runtime/gate"]);gate.mkdir(exist_ok=True);mounts += [(gate,"/runtime/gate",False),(root/"plugins","/code/plugins",True)]
  for source,target,ro in mounts:argv+=["--mount","type=bind,src="+str(source)+",dst="+target+(",readonly" if ro else "")]
- for key,value in {"V3_PROCESS_ROLE":role,"V3_ABILITIES_ROOT":"/opt/v3/plugins/abilities","V3_PUBLIC_ORIGIN":c["public_origin"],"V3_SOURCE_OWNER_UID":str(c["source_uid"]),"V3_BUILD_SOCKET":"/runtime/"+Path(c["runtime_root"]).name+"/build.sock"}.items():argv+=["--env",key+"="+value]
+ for key,value in {"V3_PROCESS_ROLE":role,"V3_ABILITIES_ROOT":"/opt/v3/plugins/abilities","V3_PUBLIC_ORIGIN":c["public_origin"],"V3_BUILD_SOCKET":"/runtime/"+Path(c["runtime_root"]).name+"/build.sock"}.items():argv+=["--env",key+"="+value]
  argv+=["--tmpfs","/run:rw,nosuid,nodev,size=16m","--tmpfs","/tmp:rw,nosuid,nodev,size=32m","--stop-timeout","30",name+":local"];run(argv)
 if __name__=="__main__":main()

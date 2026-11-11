@@ -245,17 +245,6 @@ impl
                     cancel,
                 )
                 .await
-            } else if name == "promotion_propose" {
-                propose_promotion(
-                    &app,
-                    &sid,
-                    &pending_id,
-                    &run_id,
-                    &args,
-                    policy_version,
-                    cancel,
-                )
-                .await
             } else if matches!(name.as_str(), "prompt_slot_read" | "prompt_slot_write") {
                 crate::api::sessions::execute_prompt_slot_receipted(
                     &app,

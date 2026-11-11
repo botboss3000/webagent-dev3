@@ -1,6 +1,6 @@
 //! Administration over the shared host core.
 //!
-//! The Administrator tool handlers, session notices and artifacts, source promotion,
+//! The Administrator tool handlers, session notices and artifacts,
 //! build dashboard broker calls, the renewal and repository watchers and the
 //! installation service setting live here. What belongs to other modules (run
 //! authority, live tool decisions, sessions, policy and the worker and broker sockets)
@@ -9,7 +9,6 @@
 use anyhow::Result;
 use serde_json::Value;
 use std::future::Future;
-use std::path::Path;
 use std::pin::Pin;
 use tokio_util::sync::CancellationToken;
 use webagent_access::Permission;
@@ -18,7 +17,6 @@ use webagent_host_core::StoreCore;
 pub mod artifacts;
 pub mod dashboard;
 pub mod notices;
-pub mod promotion;
 pub mod services;
 pub mod tools;
 pub mod watch;
@@ -54,7 +52,7 @@ pub trait AdministrationHost: Sync {
     fn store(&self) -> &StoreCore;
     /// The user a session acts for: the caller, or a shared chat's owner.
     fn actor(&self) -> &str;
-    /// The application's write gate; receipts and promotions are claimed under it.
+    /// The application's write gate; receipts are claimed under it.
     fn gate(&self) -> &tokio::sync::Mutex<()>;
     /// The agent a session belongs to.
     fn session_agent<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<String>>;
@@ -151,8 +149,6 @@ pub trait AdministrationHost: Sync {
     ) -> Pending<'a, Result<Value>>;
     /// The live ability bundle version.
     fn abilities_version(&self) -> String;
-    /// The promotion broker socket.
-    fn promotion_socket(&self) -> &Path;
     /// A token cancelled when the application stops.
     fn stopping(&self) -> CancellationToken;
 }

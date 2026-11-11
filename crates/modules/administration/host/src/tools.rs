@@ -1,6 +1,6 @@
 //! The Administrator tool handlers. The root has already checked that the run belongs to
 //! the session and routed Source Control adapter calls elsewhere.
-use crate::{promotion, trusted, workspace_host, AdministrationHost};
+use crate::{trusted, workspace_host, AdministrationHost};
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use std::time::Duration;

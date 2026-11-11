@@ -47,7 +47,6 @@ mod model_catalog;
 mod model_usage;
 #[path = "../../crates/modules/notifications/host/api.rs"]
 pub(crate) mod notifications;
-mod promotions;
 pub(crate) mod repository;
 mod service_admin;
 #[cfg(test)]
@@ -68,7 +67,6 @@ pub(crate) use auth::*;
 pub(crate) use chat::*;
 pub(crate) use chat_controls::*;
 pub(crate) use chat_sessions::*;
-pub(crate) use promotions::*;
 pub(crate) use sessions::*;
 pub(crate) use uploads::{attachment_get, upload, upload_content, upload_delete, upload_describe};
 pub(crate) use voice::*;

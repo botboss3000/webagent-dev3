@@ -2,7 +2,7 @@
 #![allow(clippy::unwrap_used)]
 
 use crate::tools::{execute, Call};
-use crate::{dashboard, notices, promotion, watch, AdministrationHost, Pending, SessionAccess};
+use crate::{dashboard, notices, watch, AdministrationHost, Pending, SessionAccess};
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -231,9 +231,6 @@ impl AdministrationHost for Fake {
     }
     fn abilities_version(&self) -> String {
         "abilities".into()
-    }
-    fn promotion_socket(&self) -> &Path {
-        Path::new("/nonexistent/promote.sock")
     }
     fn stopping(&self) -> CancellationToken {
         CancellationToken::new()
@@ -508,51 +505,5 @@ async fn dashboard_requests_are_checked_before_the_broker() {
     assert_eq!(
         sent.last().unwrap().trusted.as_ref().unwrap()["session_id"],
         "00000000-0000-0000-0000-000000000000"
-    );
-}
-
-#[tokio::test]
-async fn promotions_refuse_unknown_sessions_and_recover_dispatching_records() {
-    let dir = root();
-    let host = Fake::new(dir.path()).await;
-    let body = json!({"client_request_id":"55555555-5555-4555-8555-555555555555",
-        "expected_review_sha256":"a".repeat(64)});
-    assert_eq!(
-        promotion::promote(&host, SID, &body)
-            .await
-            .unwrap_err()
-            .0
-            .as_u16(),
-        404
-    );
-    let missing = json!({"expected_review_sha256":"a".repeat(64)});
-    assert_eq!(
-        promotion::promote(&host, SID, &missing)
-            .await
-            .unwrap_err()
-            .0
-            .as_u16(),
-        400
-    );
-    let record = json!({"session_id":SID,"client_request_id":"r1","state":"dispatching"});
-    host.store
-        .put(&format!("promotion:{SID}:r1"), &record)
-        .await
-        .unwrap();
-    promotion::recover(&host).await.unwrap();
-    let recovered = host
-        .store
-        .get(&format!("promotion:{SID}:r1"))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(recovered["state"], "uncertain");
-    let events = host.events.lock().unwrap().clone();
-    assert_eq!(
-        events,
-        vec![(
-            "promotion_recovered".to_owned(),
-            format!("promotion:{SID}:r1")
-        )]
     );
 }

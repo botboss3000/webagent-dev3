@@ -21,7 +21,8 @@ MAX_INSPECTION_FILE = 256 * 1024 * 1024
 # Removed inputs that open tasks' stored baselines may still hold; startup re-reads them.
 RETIRED_CONTEXT = ("v3/data/config/gates/message_visibility_v1.json",
                    "v3/data/config/gates/closing_status_v1.json",
-                   "v3/launch.py", "v3/ability_plugin_worker.py", "v3/worker.py")
+                   "v3/launch.py", "v3/ability_plugin_worker.py", "v3/worker.py",
+                   "v3/promote.py")
 
 
 def inspection_path(name):
@@ -386,7 +387,6 @@ def release_mounts(previous, root, asset_root=None, layout=None):
     instead of the previous container, so a folder move needs only a config change.
     """
     mapping = {
-        "/live-v3": "v3",
         "/opt/v3/config": "v3/config",
         "/opt/v3/ui": "v3/ui",
         "/opt/v3/plugins/abilities": "v3/plugins/abilities",
@@ -414,6 +414,9 @@ def release_mounts(previous, root, asset_root=None, layout=None):
     for mount in host.get("Mounts") or []:
         mount = dict(mount)
         target = mount.get("Target")
+        if target == "/live-v3":
+            # The retired in-app promotion broker's frozen-source mount; nothing reads it.
+            continue
         if api and asset_root is not None and target in legacy_assets:
             continue
         if target == "/code/plugins" and whole_checkout:
@@ -443,7 +446,7 @@ def release_mounts(previous, root, asset_root=None, layout=None):
         mounts.append({"Type": "bind", "Source": str(asset_root),
                        "Target": "/opt/v3/assets", "ReadOnly": True})
         seen.add("/opt/v3/assets")
-    required = ({"/live-v3", "/opt/v3/assets" if asset_root is not None else "/opt/v3/ui"} if api
+    required = ({"/opt/v3/assets" if asset_root is not None else "/opt/v3/ui"} if api
                 else {"/opt/v3/plugins/abilities"} | ({"/opt/v3/assets"} if asset_root is not None else set()))
     if not required <= seen:
         raise ValueError("required release mounts absent")

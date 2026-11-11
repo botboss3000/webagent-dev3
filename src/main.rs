@@ -252,7 +252,6 @@ mod tests {
         }
         assert_eq!(policy_decision(&p, "file_read"), "allow");
         assert_eq!(policy_decision(&p, "prompt_slot_read"), "allow");
-        assert_eq!(policy_decision(&p, "promotion_propose"), "allow");
     }
     #[tokio::test]
     async fn existing_policy_keeps_new_tools_denied_and_existing_decisions() {

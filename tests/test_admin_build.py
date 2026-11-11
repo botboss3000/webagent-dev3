@@ -863,8 +863,8 @@ class BuildTests(unittest.TestCase):
             {"Type": "bind", "Source": "/state", "Target": "/state"}]}
         mounted = host.release.release_mounts(api, root)["Mounts"]
         by_target = {item["Target"]: item for item in mounted}
-        self.assertEqual(str(root / "v3"), by_target["/live-v3"]["Source"])
-        self.assertTrue(by_target["/live-v3"]["ReadOnly"])
+        # The retired promotion mount is dropped from the next container.
+        self.assertNotIn("/live-v3", by_target)
         self.assertEqual("/checkout", by_target["/code"]["Source"])
         self.assertEqual("/state", by_target["/state"]["Source"])
         loop = {"Mounts": [{"Type": "bind", "Source": "/old/abilities",

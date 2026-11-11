@@ -16,9 +16,8 @@ class BootstrapTests(unittest.TestCase):
    with patch.object(deploy.cfg,"load",return_value=value),patch.object(deploy.subprocess,"run",side_effect=run),patch.object(deploy,"initialize_state") as initialize,patch("sys.argv",["deploy","start"]):deploy.main()
    initialize.assert_called_once_with(root,value)
    launch=calls[-1]
-   self.assertIn("type=bind,src="+str(root)+",dst=/live-v3,readonly",launch)
+   self.assertFalse(any("dst=/live-v3" in arg for arg in launch))
    self.assertIn("type=bind,src="+str(root)+",dst=/code",launch)
-   self.assertIn("V3_SOURCE_OWNER_UID=2402",launch)
    self.assertIn("isolated-api",launch)
 
  def test_state_folders_are_created_without_seeding_and_reject_directory_symlink(self):
