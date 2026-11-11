@@ -384,7 +384,9 @@ function paintBackgroundStop(){const button=$('chat-stop-btn');if(button.dataset
 /** First Stop: ends the conversation's run only and reports background work left running. */
 async function cancel(id){if(sharedAccess?.can_control===false)throw Error('This conversation is read only');stoppedRun=id;progress.hold(STOPPED,id);try{await client.cancel(id,{client_request_id:keyId('cancel:'+id)});const count=await checkBackground();if(count)progress.hold('Stopped, '+count+' background process'+(count===1?'':'es')+' still active. Click Stop again for total stop',id);}finally{await refresh();}}
 /** Second Stop: ends all background work; the agent asks before restarting any of it. */
-async function stopAll(){const id=session;progress.hold(STOPPED,stoppedRun);const requestKey='session-stop:'+id+':'+Date.now();try{await client.stopSession(id,{client_request_id:keyId(requestKey)});forgetKey(requestKey);if(id===session){backgroundCount=0;$('chat-stop-btn').dataset.background='false';}}finally{await refresh();}}
+async function stopAll(){const id=session;progress.hold(STOPPED,stoppedRun);const requestKey='session-stop:'+id+':'+Date.now();try{const result=await client.stopSession(id,{client_request_id:keyId(requestKey)});forgetKey(requestKey);if(id===session){backgroundCount=0;$('chat-stop-btn').dataset.background='false';progress.hold(totalStopNotice(result?.still_building),stoppedRun);}}finally{await refresh();}}
+/** Second-stop notice: background work stopped; a running broker task keeps building. */
+function totalStopNotice(building){const lines=['Background processes stopped'];for(const task of Array.isArray(building)?building:[])lines.push('Broker task '+(task.name||task.task_id)+' is still building');return lines.join('\n');}
 // Shows a transient card while a run retries. Failed and error-stopped runs arrive as stored
 // notice rows in transcript order; a notice whose run has moved on (retry, resume) is removed.
 function failedRunMessages(items){

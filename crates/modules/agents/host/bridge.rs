@@ -137,8 +137,13 @@ impl webagent_agents::service::Effects for Bridge<'_> {
                     continue;
                 }
                 // Stop its runs, sub agents, background work and automations first.
-                let _ =
-                    crate::api::session_stop::stop_session_work(&caller, sid, "agent-delete").await;
+                let _ = crate::api::session_stop::stop_session_work(
+                    &caller,
+                    sid,
+                    "agent-delete",
+                    false,
+                )
+                .await;
                 crate::api::drop_dictation(&caller, sid).await;
                 caller.store.delete_agent_session(sid).await?;
                 crate::phase3_api::purge_browser_folder(&caller, sid).await;

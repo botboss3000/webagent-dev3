@@ -113,6 +113,17 @@ fn summary(task: &Value) -> Value {
         "abandoned":task["abandoned"]==true,"jobs":jobs(task).len()})
 }
 
+/// Broker tasks whose newest job is still active, as `{task_id,name}`: a user's session
+/// stop leaves them building.
+pub(crate) async fn building(app: &App, sid: &str) -> Result<Vec<Value>> {
+    let record = record(app, sid).await?;
+    Ok(newest_first(&record)
+        .into_iter()
+        .filter(|task| jobs(task).last().is_some_and(active))
+        .map(|task| json!({"task_id":task["task_id"],"name":task["name"]}))
+        .collect())
+}
+
 fn newest_first(record: &Value) -> Vec<&Value> {
     let mut tasks: Vec<&Value> = record["tasks"]
         .as_array()

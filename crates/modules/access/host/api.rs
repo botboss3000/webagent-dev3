@@ -158,6 +158,17 @@ pub(crate) async fn stop_user_runs(
 
 /// Close the caller-owned session's persistent resources after a durable restriction.
 pub(crate) async fn stop_session_runs(app: &App, sid: &str) -> Result<(), ApiError> {
+    stop_session_resources(app, sid, false).await
+}
+
+/// As `stop_session_runs`; with `keep_builds` (the user's session stop) an admitted broker
+/// job keeps its build authority and runs to its end. The lease watcher still revokes it
+/// if access, policy or mode change, and new build requests need fresh authority.
+pub(crate) async fn stop_session_resources(
+    app: &App,
+    sid: &str,
+    keep_builds: bool,
+) -> Result<(), ApiError> {
     if uuid::Uuid::parse_str(sid).is_err() {
         return Err(invalid("Invalid session identifier"));
     }
@@ -170,7 +181,7 @@ pub(crate) async fn stop_session_runs(app: &App, sid: &str) -> Result<(), ApiErr
         .get(&format!("administrator_browser:{sid}"))
         .await?;
     let mut failed = false;
-    if let Some(job) = host.as_ref() {
+    if let Some(job) = host.as_ref().filter(|_| !keep_builds) {
         let trusted = json!({"user_id":app.store.current_user_id(),"session_id":sid,
             "lease_until":crate::now()+30,"access_fingerprint":job["access_fingerprint"]});
         let result = tokio::time::timeout(
@@ -906,6 +917,53 @@ mod tests {
             .await
             .unwrap()
             .is_some());
+    }
+    #[tokio::test]
+    async fn user_session_stop_keeps_a_running_build_authority() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let (_root, app) = fixture().await;
+        let sid = crate::uuid();
+        app.store
+            .put(
+                &crate::key("session", &sid),
+                &json!({"id":sid,"agent_id":"shared_default"}),
+            )
+            .await
+            .unwrap();
+        let record = json!({"session_id":sid,"run_id":"r","tool_name":"build_work",
+            "access_fingerprint":"authority:build_work"});
+        app.store
+            .put(&format!("administrator_host:{sid}"), &record)
+            .await
+            .unwrap();
+        let listener = tokio::net::UnixListener::bind(&app.tool_socket).unwrap();
+        let worker = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["name"], "run_stop");
+            let response = format!(
+                "{}\n",
+                json!({"version":2,"id":request["id"],"result":{"status":"success"}})
+            );
+            reader
+                .get_mut()
+                .write_all(response.as_bytes())
+                .await
+                .unwrap();
+        });
+        stop_session_resources(&app, &sid, true).await.unwrap();
+        worker.await.unwrap();
+        assert_eq!(
+            app.store
+                .get(&format!("administrator_host:{sid}"))
+                .await
+                .unwrap(),
+            Some(record),
+            "the broker job keeps its lease until it ends"
+        );
     }
     #[tokio::test]
     async fn failed_shutdown_keeps_restriction_durable_and_withdraws_authentication() {

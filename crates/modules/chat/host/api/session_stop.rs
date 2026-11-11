@@ -110,8 +110,9 @@ pub(crate) async fn stop_session_work(
     app: &App,
     sid: &str,
     request: &str,
-) -> Result<Vec<Value>, ApiError> {
-    let processes = background_processes(app, sid).await?;
+    keep_builds: bool,
+) -> Result<(Vec<Value>, Vec<Value>), ApiError> {
+    let mut processes = background_processes(app, sid).await?;
     let mut runs: Vec<Value> = app
         .store
         .active_runs()
@@ -132,10 +133,12 @@ pub(crate) async fn stop_session_work(
         )
         .await;
     }
+    let mut quiet = Vec::new();
     for mut task in app.store.background_scan(Some(sid)).await? {
         if matches!(task["status"].as_str(), Some("queued" | "running")) {
             let revision = task["revision"].as_u64().unwrap_or(0);
-            if task["detached"] == true && task["external_pending"].is_object() {
+            if keep_builds && task["detached"] == true && task["external_pending"].is_object() {
+                quiet.push(task["id"].clone());
                 // The broker job keeps running; its chip keeps updating but it no longer
                 // wakes the agent with notices.
                 task["quiet"] = json!(true);
@@ -147,10 +150,23 @@ pub(crate) async fn stop_session_work(
         }
     }
     crate::modules::pause_session_automations(app, sid).await?;
-    crate::phase3_api::stop_session_runs(app, sid).await?;
+    // The user's stop ends the conversation's work but not a broker job already running;
+    // archiving or deleting the agent stops builds too.
+    crate::phase3_api::stop_session_resources(app, sid, keep_builds).await?;
+    // Running broker jobs were not stopped: report them as still building instead.
+    let still_building = if keep_builds {
+        crate::api::build_tasks::building(app, sid)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    if keep_builds {
+        processes.retain(|process| process["kind"] != "build" && !quiet.contains(&process["id"]));
+    }
     // `session_id` lets permanent deletion remove this record with the conversation.
-    let record =
-        json!({"session_id":sid,"processes":processes,"stopped_at":now(),"delivered":false});
+    let record = json!({"session_id":sid,"processes":processes,"still_building":still_building,
+            "stopped_at":now(),"delivered":false});
     app.store
         .put(&format!("session_stopped:{sid}"), &record)
         .await?;
@@ -158,7 +174,7 @@ pub(crate) async fn stop_session_work(
         .event(sid, "session_stopped", &json!({"count":processes.len()}))
         .await?;
     crate::wake::notify(app).await;
-    Ok(processes)
+    Ok((processes, still_building))
 }
 
 /// One-time model note for the first message after a total stop.
@@ -174,10 +190,24 @@ pub(crate) fn stopped_note(record: &Value) -> String {
     } else {
         labels.join("; ")
     };
+    let building: Vec<&str> = record["still_building"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|task| task["name"].as_str().or(task["task_id"].as_str()))
+        .collect();
+    let building = if building.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " Broker tasks still building (not stopped, no further updates to you): {}.",
+            building.join("; ")
+        )
+    };
     format!(
         "[Host note: the user fully stopped this conversation and its background work. \
-         Stopped: {stopped}. Do not restart any of it on your own. If the request needs \
-         any of it, list what was stopped and ask the user which to restart.]"
+         Stopped: {stopped}.{building} Do not restart any of it on your own. If the request \
+         needs any of it, list what was stopped and ask the user which to restart.]"
     )
 }
 
@@ -195,8 +225,10 @@ pub(crate) async fn stop(
     Json(body): Json<Value>,
 ) -> Api {
     let request = required(&body, "client_request_id", 128)?;
-    let stopped = stop_session_work(&app, &sid, request).await?;
-    Ok(Json(json!({"stopped":stopped,"count":0})))
+    let (stopped, still_building) = stop_session_work(&app, &sid, request, true).await?;
+    Ok(Json(
+        json!({"stopped":stopped,"still_building":still_building,"count":0}),
+    ))
 }
 
 #[cfg(test)]

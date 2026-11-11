@@ -763,7 +763,7 @@ async fn lifecycle_session_api(
                 crate::api::voice::drop_dictation(&app, &id).await;
                 // Run cancels take the gate; archive then stops sub-agents, automations and resources.
                 drop(guard);
-                crate::api::session_stop::stop_session_work(&app, &id, "archive").await?;
+                crate::api::session_stop::stop_session_work(&app, &id, "archive", false).await?;
                 archive_children(&app, &id, &body.client_request_id).await?;
             }
             Ok(Json(value))

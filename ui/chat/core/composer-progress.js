@@ -33,6 +33,8 @@ export function mountComposerProgress({root,getProfile,isAdmin}) {
     const seconds=started?Math.floor((performance.now()-started)/1000):0;
     // A stopped note is final state, not progress, so it shows no elapsed time.
     text.textContent=label+(label&&!held&&seconds>=1?' · '+seconds+'s':'');
+    // A held stop notice may carry extra lines (broker tasks still building).
+    text.classList.toggle('multiline',!!held&&label.includes('\n'));
     root.querySelector('#chat-input-row').classList.toggle('thinking',!!run);
   }
   // Reset the elapsed-time origin only when the visible label changes.

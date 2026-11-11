@@ -74,6 +74,7 @@
     font-size: 12px; font-weight: 500; color: var(--fg-4);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0.01em;
   }
+.chat-activity-text.multiline { white-space: pre-line; overflow-wrap: anywhere; }
 .chat-activity-chevron {
     flex: 0 0 auto; font-size: 12px; line-height: 1; color: var(--fg-3);
     transition: transform 0.18s ease; display: none;
