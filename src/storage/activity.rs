@@ -8,6 +8,8 @@ fn boundary(row: &SqliteRow) -> String {
 }
 /// The private control that publishes working bubbles; its calls stay out of activity groups.
 const PUBLISH_CONTROL: &str = "publish_main_message";
+/// The tool that starts a sub agent; its calls count as sub agents, not tools.
+const SUBAGENT_START: &str = "start_spawn";
 /// Interaction steps a working bubble repeats word for word, read from its chat ID:
 /// `working:<run>:auto:<turn>:<ordinal>` (automatic promotion) or
 /// `working:<run>:<turn>:<call>:echo:<o1>-<o2>` (`publish_main_message` without text).
@@ -306,6 +308,8 @@ impl Store {
                 .bind(sid).bind(&run).bind(first).bind(last).bind(&recorded).fetch_all(&self.pool).await?;
             // Same categories as the page's activityRows: one tool per call id, one update per message.
             let (mut tools, mut updates, mut compactions, mut retries) = (HashSet::new(), 0, 0, 0);
+            // A sub agent start is one sub agent, not another tool in the group's tool count.
+            let mut subagents = HashSet::new();
             // Whether the group's latest row is a scheduled retry, so its label can say so before
             // its events are loaded: "retry" while reconnecting, "recovering" for an automatic resume.
             let mut retrying = Value::Null;
@@ -318,6 +322,10 @@ impl Store {
                         controls.insert(call_id);
                     }
                     "function_call_output" if controls.contains(&call_id) => {}
+                    "function_call" if item["name"] == SUBAGENT_START => {
+                        subagents.insert(call_id);
+                    }
+                    "function_call" | "function_call_output" if subagents.contains(&call_id) => {}
                     "function_call" | "function_call_output" => {
                         tools.insert(call_id);
                     }
@@ -338,7 +346,7 @@ impl Store {
                 "closed":latest.as_deref()!=Some(anchor.as_str()),"latest":index+1==groups.len(),"last_of_run":last_of_run.get(&run)==Some(&index),
                 "boundary_quality":if recorded.is_some(){"recorded"}else{"legacy_unverified"},
                 "retrying":retrying,
-                "counts":{"tools":tools.len(),"updates":updates,"responses":0,"modes":0,"compactions":compactions,"retries":retries}}));
+                "counts":{"tools":tools.len(),"subagents":subagents.len(),"updates":updates,"responses":0,"modes":0,"compactions":compactions,"retries":retries}}));
         }
         Ok(json!({"segments":segments,"cursor":cursor}))
     }
@@ -480,6 +488,50 @@ mod tests {
             vec![("r".to_owned(), "model:3:1".to_owned())]
         );
         assert!(echoed_steps("working:r:2:0").is_empty());
+    }
+    /// A sub agent start is counted as a sub agent, leaving the group's tool count to real tools.
+    #[tokio::test]
+    async fn sub_agent_spawn_calls_count_apart_from_tools() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store
+            .put(
+                "session:s",
+                &json!({"id":"s","agent_id":"shared_default","status":"active"}),
+            )
+            .await
+            .unwrap();
+        let mut tx = store.pool.begin().await.unwrap();
+        for (step, item) in [
+            (
+                "tool:s1",
+                json!({"type":"function_call","call_id":"s1","name":"start_spawn","arguments":"{}"}),
+            ),
+            (
+                "tool:s1:out",
+                json!({"type":"function_call_output","call_id":"s1","output":"{}"}),
+            ),
+            (
+                "tool:t1",
+                json!({"type":"function_call","call_id":"t1","name":"file_read","arguments":"{}"}),
+            ),
+            (
+                "tool:t1:out",
+                json!({"type":"function_call_output","call_id":"t1","output":"{}"}),
+            ),
+        ] {
+            store
+                .insert_interaction(&mut tx, "s", "r", step, &item)
+                .await
+                .unwrap();
+        }
+        tx.commit().await.unwrap();
+        let summary = store.private_activity_summary("s", 0, None).await.unwrap();
+        let counts = &summary["segments"][0]["counts"];
+        assert_eq!(
+            (counts["tools"].as_u64(), counts["subagents"].as_u64()),
+            (Some(1), Some(1))
+        );
     }
     #[tokio::test]
     async fn compaction_rows_show_in_activity_but_not_in_context() {

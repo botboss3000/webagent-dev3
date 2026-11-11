@@ -168,6 +168,9 @@ function cluster(shown,active) {
       if(!node.dataset.noticeKinds&&node.dataset.subagentNotices)parsed={'sub-agent':Number(node.dataset.subagentNotices)};
       for(const [kind,count] of Object.entries(parsed))kinds[kind]=(kinds[kind]||0)+count;
     }
+    // Spawn calls already count their sub agents; notice rows report the same ones.
+    const reported=kinds['sub-agent']||0;delete kinds['sub-agent'];
+    counts.subagents=counts.subagents||reported;
     element.firstElementChild.textContent=activityLabel({...(groups.at(-1)||{state:'completed'}),counts},
       {error,extra:Object.entries(kinds).map(([kind,count])=>count+' '+kind+(count===1?'':'s'))});
     element.setAttribute('aria-label','Activity group');

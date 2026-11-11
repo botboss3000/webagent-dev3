@@ -5,7 +5,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const ROOT=process.env.SOURCE_ROOT||path.resolve(__dirname,'../../..');
 const CSP="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
 /** Serve the actual modules with a bounded synthetic journal, never application state. */
-async function fixture(t,{mobile=false,dark=false,reduced=false}={}) {
+async function fixture(t,{mobile=false,dark=false,reduced=false,counts={}}={}) {
  const inputs=[];
  // Capture the complete local UI dependency tree so test results reject concurrent changes.
  function collect(dir){for(const item of fs.readdirSync(dir,{withFileTypes:true})){const p=path.join(dir,item.name);if(item.isDirectory())collect(p);else if(/\.(js|css|json|cjs)$/.test(p))inputs.push(p);}}
@@ -23,7 +23,7 @@ async function fixture(t,{mobile=false,dark=false,reduced=false}={}) {
  const context=await browser.newContext({viewport:mobile?{width:390,height:844}:{width:1100,height:800},isMobile:mobile,hasTouch:mobile,reducedMotion:reduced?'reduce':'no-preference'});
  const page=await context.newPage();const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.error('pageerror: '+e.message);});
  // Summaries carry counts only; a group's events come from its run log when it is expanded.
- await page.route('**/api/v3/sessions/*/activity?*',route=>route.fulfill({json:{segments:[{id:'g',run_id:'r',boundary_item_id:'q',first_seq:1,last_seq:1,closed:false,latest:true,last_of_run:true,counts:{tools:0,updates:1,responses:0,modes:0,compactions:0}}],cursor:1}}));
+ await page.route('**/api/v3/sessions/*/activity?*',route=>route.fulfill({json:{segments:[{id:'g',run_id:'r',boundary_item_id:'q',first_seq:1,last_seq:1,closed:false,latest:true,last_of_run:true,counts:{tools:0,updates:1,responses:0,modes:0,compactions:0,...counts}}],cursor:1}}));
  await page.route('**/api/v3/sessions/*/runs/*/logs?*',route=>route.fulfill({json:{events:[{session_id:'s',run_id:'r',event_id:'e',seq:1,kind:'agent_step_end',payload:{asst_id:'a',content:'A private update'}}],cursor:1,has_more:false}}));
  t.after(async()=>{await browser.close();await new Promise(r=>server.close(r));assert.deepEqual(hashes(),before);assert.deepEqual(errors,[]);});
  await page.goto('http://127.0.0.1:'+server.address().port+'/');
@@ -50,6 +50,18 @@ for(const opts of [{},{mobile:true,dark:true,reduced:true}])test('chat element l
  await p.evaluate(()=>{admin=false;flags.chat_elements={};render();});assert.equal(await group.count(),0);assert.equal(await dots.isVisible(),true);
  await p.evaluate(()=>render('running','next'));assert.equal(await p.locator('.v2-mini-row').count(),0);assert.equal(await dots.count(),1);
  await p.evaluate(()=>view.disconnect());assert.equal(await dots.count(),0);
+});
+test('sub agent spawns read as sub agents apart from the tool count, once with notices',async t=>{
+ const p=await fixture(t,{counts:{tools:18,updates:0,subagents:3}});
+ const group=p.locator('.v2-activity-group');
+ await group.waitFor();
+ assert.equal(await group.locator('summary').first().textContent(),'18 tools · 3 sub-agents · Working…');
+ // The same three sub agents report back; their notice row must not add a second count.
+ await p.evaluate(()=>{
+  const row=document.createElement('article');row.dataset.publicId='notice';row.dataset.subagentNotices='3';row.dataset.noticeKinds=JSON.stringify({'sub-agent':3});
+  document.querySelector('#messages').append(row);render();
+ });
+ assert.equal(await p.locator('.v3-activity-cluster > summary').textContent(),'18 tools · 3 sub-agents · Working…');
 });
 test('mini transcript can be opened by an alternate ellipsis trigger',async t=>{
  const p=await fixture(t);await p.evaluate(async()=>{

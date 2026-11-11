@@ -3,8 +3,10 @@
 /** Compact group label: nonzero counts, any extra parts (such as sub-agent notices), then status. */
 export function activityLabel(group,{error='',extra=[]}={}) {
     // Summarize nonzero category counts without changing the underlying journal rows.
+    const nouns={retries:['retry','retries'],subagents:['sub-agent','sub-agents']};
     const parts=Object.entries(group.counts).filter(([,count])=>count)
-      .map(([kind,count])=>count+' '+(count===1?({retries:'retry'}[kind]||kind.replace(/s$/,'')):kind));
+      .map(([kind,count])=>{const noun=nouns[kind]||[kind.replace(/s$/,''),kind];
+        return count+' '+noun[count===1?0:1];});
     const phase={running:'Working…',queued:'Queued…',waiting_external:'Waiting for build…',finalizing:'Checking response…',
       stopping:'Stopping…',completed:'Completed',failed:'Failed',cancelled:'Stopped',
       finished:'Finished'}[group.state] || group.state;
