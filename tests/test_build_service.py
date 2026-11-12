@@ -2248,6 +2248,15 @@ class FailureFieldTests(unittest.TestCase):
   self.assertEqual(self.fields("Compilation changed application inputs")["failure_kind"],"input-drift")
   self.assertEqual(fixtures.host.failure_fields(PermissionError("Installed host source changed after admission"))["failure_kind"],"authority")
   self.assertEqual(self.fields("Sealed engine descriptor changed")["failure_kind"],"contract")
+ def test_job_view_leads_with_failing_tests(self):
+  broker=fixtures.host.Broker.__new__(fixtures.host.Broker)
+  broker.runner=type("R",(),{"secrets":()})();broker.jobs={}
+  broker._queue_preflight=lambda *a:None
+  job={"job_id":"j1","status":"failed","phase":"finished","reason":"warning: x\n"+"test a ... ok\n"*400,
+       "failure_kind":"test","failing_tests":["m::t1","m::t2"],"failure_line":"thread 'm::t1' panicked at src/x.rs:1:1:"}
+  view=broker._view(job)
+  self.assertEqual(view["failing_tests"],["m::t1","m::t2"])
+  self.assertTrue(view["reason"].startswith("failing tests: m::t1, m::t2. thread 'm::t1' panicked at src/x.rs:1:1:"))
  def test_fields_stay_bounded(self):
   self.assertLessEqual(len(self.fields("panicked at 'x'\n"+"A"*600)["failure_line"]),500)
   fields=self.fields("failures:\n"+"".join("    name-%d\n"%i for i in range(7)))

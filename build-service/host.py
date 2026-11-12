@@ -3671,9 +3671,17 @@ class Broker:
         for key in ("publication_wait","resource_waiting"):
             if view.get(key,{}).get("state","waiting")=="waiting"and view.get(key,{}).get("since"):
                 view[key]={**view[key],"elapsed_seconds":round(max(0,time.time()-view[key]["since"]),3)}
+        for key in ("failure_kind", "failing_tests", "failure_line"):
+            if job.get(key):
+                view[key] = scrub(job[key], self.runner.secrets) if isinstance(job[key], str) else [scrub(name, self.runner.secrets) for name in job[key]]
         if "reason" in job:
             # Compiler failures are at the end of a bounded build transcript.
-            view["reason"] = scrub(job["reason"], self.runner.secrets).encode("utf-8")[-4096:].decode("utf-8", "ignore")
+            reason = scrub(job["reason"], self.runner.secrets).encode("utf-8")[-4096:].decode("utf-8", "ignore")
+            # Test failures are named early in the transcript and cut from its tail, so lead
+            # with them: chat notices quote only the first few hundred characters.
+            if view.get("failing_tests"):
+                reason = "failing tests: " + ", ".join(view["failing_tests"]) + (". " + view["failure_line"] if view.get("failure_line") else "") + "\n" + reason
+            view["reason"] = reason
         preflight = self._queue_preflight(job, administrator) if log_cursor is None else None
         if preflight is not None:
             view["queue_preflight"] = preflight
