@@ -60,6 +60,7 @@
   .v2-activity-group-glimmer > summary::after { animation: none; }
   .session-row-agent-icon.activity-running::after { animation: none; }
 }
-/* A cluster of groups and sub-agent notices shows its members, indented, only while open. */
+/* A cluster renders its members' rows and notice lines inside its own transcript; members stay
+   in place only as count anchors, so they never show a second disclosure or scroller. */
 .v3-cluster-hidden { display: none !important; }
-.v3-cluster-member { padding-left: 12px; box-sizing: border-box; }
+.v3-cluster-member { box-sizing: border-box; }

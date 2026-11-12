@@ -32,6 +32,8 @@
 .v2-activity-body .v2-mini-time { font-size: 10px; color: var(--fg-3); margin-right: auto; }
 .v2-activity-body summary { cursor: pointer; padding: 6px 0; overflow-wrap: anywhere; }
 .v2-activity-body .v2-mini-tool { padding: 4px 14px; background: var(--bg-tint); }
+/* A build or background notice joins a cluster's transcript as a compact row. */
+.v2-activity-body .v2-mini-notice { padding: 2px 6px; }
 .v2-activity-body .v2-mini-tool-disclosure > summary { font-family: var(--font-mono); }
 .v2-activity-body .v2-mini-tool[data-status="error"] > details > summary { color: var(--danger); }
 .v2-activity-body .v2-mini-tool[data-status="held"] > details > summary { color: var(--warning); }

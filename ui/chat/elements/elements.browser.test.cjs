@@ -52,17 +52,29 @@ for(const opts of [{},{mobile:true,dark:true,reduced:true}])test('chat element l
  await p.evaluate(()=>render('running','next'));assert.equal(await p.locator('.v2-mini-row').count(),0);assert.equal(await dots.count(),1);
  await p.evaluate(()=>view.disconnect());assert.equal(await dots.count(),0);
 });
-test('sub agent spawns read as sub agents apart from the tool count, once with notices',async t=>{
- const p=await fixture(t,{counts:{subagents:3,tools:18,updates:0}});
+for(const opts of [{},{mobile:true,dark:true}])test('sub agent spawns read as sub agents apart from the tool count, once with notices '+JSON.stringify(opts),async t=>{
+ const p=await fixture(t,{...opts,counts:{subagents:3,tools:18,updates:0}});
  const group=p.locator('.v2-activity-group');
  await group.waitFor();
  assert.equal(await group.locator('summary').first().textContent(),'18 tools · 3 sub-agents · Working…');
  // The same three sub agents report back; their notice row must not add a second count.
  await p.evaluate(()=>{
   const row=document.createElement('article');row.dataset.publicId='notice';row.dataset.subagentNotices='3';row.dataset.noticeKinds=JSON.stringify({'sub-agent':3});
+  for(const title of ['Sub-agent · running slow','Sub-agent · finished']){const entry=document.createElement('details');entry.className='v3-subagent-row';const summary=document.createElement('summary');summary.textContent=title;entry.append(summary);row.append(entry);}
   document.querySelector('#messages').append(row);render();
  });
  assert.equal(await p.locator('.v3-activity-cluster > summary').textContent(),'18 tools · 3 sub-agents · Working…');
+ // One panel: expanding the cluster loads its members and shows their rows and notices together.
+ await p.locator('.v3-activity-cluster > summary').click();
+ const body=p.locator('.v3-activity-cluster > .v2-activity-body');
+ await body.waitFor({state:'visible'});
+ // Member rows load from the run log when the cluster opens; wait for that page, not a paint.
+ await p.waitForFunction(()=>document.querySelector('.v3-activity-cluster > .v2-activity-body')?.textContent.includes('A private update'));
+ assert.match(await body.textContent(),/A private update/);
+ assert.match(await body.textContent(),/Sub-agent · running slow/);
+ assert.equal(await p.locator('.v3-activity-cluster .v2-activity-body').count(),1,'one transcript, no nested panel');
+ assert.equal(await body.locator('.v2-activity-group').count(),0,'no nested activity group');
+ assert.equal(await p.locator('#messages > .v2-activity-group:not(.v3-activity-cluster)').isVisible(),false,'member stays hidden');
 });
 test('mini transcript can be opened by an alternate ellipsis trigger',async t=>{
  const p=await fixture(t);await p.evaluate(async()=>{

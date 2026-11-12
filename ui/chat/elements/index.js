@@ -157,7 +157,14 @@ function cluster(shown,active) {
   const build=members=>{
     const key=members[0].dataset.publicId||members[0].dataset.activityGroupId;used.add(key);
     let element=clusters.get(key);
-    if(!element){element=document.createElement('details');element.className='v2-activity-group v3-activity-cluster';element.append(document.createElement('summary'));element.addEventListener('toggle',paint);clusters.set(key,element);}
+    if(!element){
+      const transcript=createMiniTranscript();
+      // One disclosure and one scroller: members render inside this transcript, never beside it.
+      element=createActivityGroup({transcript:{...transcript,
+        open(){transcript.open();for(const id of element._memberIds||[])if(!summaries.get(id)?.events)void loadEvents(id);}}}).element;
+      element.classList.add('v3-activity-cluster');element._transcript=transcript;
+      element.addEventListener('toggle',paint);clusters.set(key,element);
+    }
     if(members[0].previousSibling!==element)container.insertBefore(element,members[0]);
     const groups=members.filter(node=>shown.has(node)).map(node=>shown.get(node)),counts={};
     for(const group of groups)for(const [kind,count] of Object.entries(group.counts||{}))counts[kind]=(counts[kind]||0)+count;
@@ -175,7 +182,21 @@ function cluster(shown,active) {
       {error,extra:Object.entries(kinds).map(([kind,count])=>count+' '+kind+(count===1?'':'s'))});
     element.setAttribute('aria-label','Activity group');
     element.classList.toggle('v2-activity-group-glimmer',active && members.some(node=>node.classList.contains('v2-activity-group-glimmer')));
-    for(const node of members){node.classList.add('v3-cluster-member');node.classList.toggle('v3-cluster-hidden',!element.open);}
+    // Merge every member's rows, or its build and background notice lines, in document order.
+    const entries=[],events=[];
+    for(const node of members){
+      const group=shown.get(node);
+      if(group){
+        for(const row of group.rows)entries.push({id:(node.dataset.activityGroupId||'')+':'+row.id,row});
+        events.push(...group.events);
+      } else {
+        [...node.children].forEach((child,index)=>entries.push({id:node.dataset.publicId+':'+index,node:child,signature:child.textContent}));
+      }
+    }
+    element._memberIds=members.filter(node=>shown.has(node)).map(node=>node.dataset.activityGroupId);
+    element._transcript.render(entries,events);
+    // Members stay in place as anchors and counts; this transcript is their only visible surface.
+    for(const node of members)node.classList.add('v3-cluster-member','v3-cluster-hidden');
   };
   const flush=()=>{
     const groups=span.filter(node=>shown.has(node)).length;
@@ -188,14 +209,14 @@ function cluster(shown,active) {
     if(shown.has(node) || node.dataset.subagentNotices)span.push(node);else flush();
   }
   flush();
-  for(const [key,element] of clusters) if(!used.has(key)){element.remove();clusters.delete(key);}
+  for(const [key,element] of clusters) if(!used.has(key)){element._transcript?.dispose();element.remove();clusters.delete(key);}
 }
 // Stop polling and drop every private summary and group, for a policy change or a new session.
 function stopActivity() {
   ++generation;enabled=false;busy=false;clearTimeout(timer);
   summaries=new Map();requested=new Set();cursor=null;sampleShown=false;
   for(const entry of nodes.values())entry.dispose();nodes.clear();
-  for(const element of clusters.values())element.remove();clusters.clear();
+  for(const element of clusters.values()){element._transcript?.dispose();element.remove();}clusters.clear();
   for(const node of container?.querySelectorAll('.v3-cluster-member')||[])node.classList.remove('v3-cluster-member','v3-cluster-hidden');
   document.querySelector('#session-dropdown-icon')?.classList.remove('activity-running');
 }
