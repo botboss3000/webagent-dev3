@@ -22,6 +22,8 @@ const STARTUP: Duration = Duration::from_secs(30);
 const ANSWER: Duration = Duration::from_secs(10);
 /// A first `rank` embeds the whole tool or skill catalog (a few hundred texts); later ones reuse it.
 const RANK_ANSWER: Duration = Duration::from_secs(30);
+/// The start-up warm-up loads the model and embeds the whole catalog from cold.
+const WARM_ANSWER: Duration = Duration::from_secs(120);
 
 struct Matcher {
     child: Child,
@@ -84,6 +86,21 @@ pub(crate) async fn rank(query: &str, items: Vec<Vec<String>>) -> Option<Vec<f32
         .iter()
         .map(|score| score.as_f64().map(|score| score as f32))
         .collect()
+}
+
+/// Embed `items` once so later [`rank`] calls find the model loaded and the texts cached;
+/// `false` when the service did not answer.
+pub(crate) async fn warm(items: Vec<Vec<String>>) -> bool {
+    #[cfg(test)]
+    if let Some(stub) = RANK_STUB.with(std::cell::Cell::get) {
+        return stub("warm-up", &items).is_some();
+    }
+    ask_within(
+        json!({"op": "rank", "query": "warm-up", "items": items}),
+        WARM_ANSWER,
+    )
+    .await
+    .is_ok()
 }
 
 async fn ask_within(request: Value, within: Duration) -> Result<Value, ApiError> {

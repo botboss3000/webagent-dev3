@@ -83,20 +83,7 @@ async fn ranked_skills(query: &str, skills: Vec<Value>) -> (Vec<Value>, &'static
             .collect::<Vec<_>>()
     };
     let keywords: Vec<Vec<String>> = skills.iter().map(|skill| list(skill, "keywords")).collect();
-    let items = skills
-        .iter()
-        .map(|skill| {
-            tool_match::texts(
-                skill["skill_id"].as_str().unwrap_or(""),
-                &format!(
-                    "{} {}",
-                    skill["summary"].as_str().unwrap_or(""),
-                    skill["description"].as_str().unwrap_or("")
-                ),
-                &list(skill, "examples"),
-            )
-        })
-        .collect();
+    let items = skills.iter().map(skill_texts).collect();
     let (scores, by) = match crate::api::inference::rank(query, items).await {
         Some(scores) if scores.len() == skills.len() => (scores, "matcher"),
         _ => {
@@ -449,6 +436,64 @@ pub(crate) async fn preload(app: &App, sid: &str, run: &mut Value) {
         "suggested":suggest.iter().map(row).collect::<Vec<_>>(),"selectors":selectors});
 }
 
+/// The texts `rank` embeds for a tool; `eligible` caps descriptions at 1024 characters, so the
+/// warm-up does too and its embeddings are the ones later ranks reuse.
+fn tool_texts(name: &str, description: &str) -> Vec<String> {
+    let (examples, _) = webagent_abilities::tool_match::hints(name);
+    let description: String = description.chars().take(1024).collect();
+    webagent_abilities::tool_match::texts(name, &description, &examples)
+}
+
+/// The texts `rank` embeds for an ability or selectable skill row.
+fn skill_texts(skill: &Value) -> Vec<String> {
+    let examples: Vec<String> = skill["examples"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.as_str().map(str::to_owned))
+        .collect();
+    webagent_abilities::tool_match::texts(
+        skill["skill_id"].as_str().unwrap_or_default(),
+        &format!(
+            "{} {}",
+            skill["summary"].as_str().unwrap_or(""),
+            skill["description"].as_str().unwrap_or("")
+        ),
+        &examples,
+    )
+}
+
+/// Embed every tool and skill text once, so the first preload or `list_tools` after a restart
+/// finds the model loaded and the catalog cached. Permissions are not applied: nothing is
+/// returned to anyone. `Some(item count)` when the service answered.
+pub(crate) async fn warm_inference(app: &App) -> Option<usize> {
+    let mut items: Vec<Vec<String>> = app
+        .abilities
+        .all_schemas()
+        .iter()
+        .map(|schema| {
+            tool_texts(
+                schema["name"].as_str().unwrap_or_default(),
+                schema["description"].as_str().unwrap_or_default(),
+            )
+        })
+        .collect();
+    for id in app.abilities.ids() {
+        let skills = app
+            .abilities
+            .bundled_skill_list(&id, &Value::Null, &Value::Null, |_| true, |_| true)
+            .unwrap_or_default();
+        items.extend(
+            skills
+                .iter()
+                .filter(|skill| skill["kind"] != "tool")
+                .map(skill_texts),
+        );
+    }
+    let count = items.len();
+    crate::api::inference::warm(items).await.then_some(count)
+}
+
 /// Skill candidates are keyed `ability:kind:skill_id`.
 fn split_skill_key(key: &str) -> (&str, &str, &str) {
     let mut parts = key.splitn(3, ':');
@@ -531,12 +576,8 @@ async fn preload_candidates(
     let mut items = Vec::new();
     for tool in &tools {
         let name = tool["name"].as_str().unwrap_or_default();
-        let (examples, keywords) = tool_match::hints(name);
-        let texts = tool_match::texts(
-            name,
-            tool["description"].as_str().unwrap_or_default(),
-            &examples,
-        );
+        let (_, keywords) = tool_match::hints(name);
+        let texts = tool_texts(name, tool["description"].as_str().unwrap_or_default());
         let loadable = tool["requires_activation"] == true;
         items.push((
             "tool",
@@ -554,15 +595,7 @@ async fn preload_candidates(
             skill["ability_id"].as_str().unwrap_or_default(),
             skill["kind"].as_str().unwrap_or_default()
         );
-        let texts = tool_match::texts(
-            id,
-            &format!(
-                "{} {}",
-                skill["summary"].as_str().unwrap_or(""),
-                skill["description"].as_str().unwrap_or("")
-            ),
-            &list(skill, "examples"),
-        );
+        let texts = skill_texts(skill);
         let loadable = skill["requires_activation"] == true;
         items.push((
             "skill",

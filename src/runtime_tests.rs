@@ -2712,6 +2712,28 @@ async fn batched_discovery_calls_run_serially_and_succeed() {
     server.abort();
 }
 /// Preload journey: the stub scores `file read` high and `file search` as a suggestion.
+static WARM_ITEMS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+fn warm_stub(_query: &str, items: &[Vec<String>]) -> Option<Vec<f32>> {
+    WARM_ITEMS.store(items.len(), std::sync::atomic::Ordering::SeqCst);
+    Some(vec![0.0; items.len()])
+}
+fn warm_failure(_query: &str, _items: &[Vec<String>]) -> Option<Vec<f32>> {
+    None
+}
+
+#[tokio::test]
+async fn inference_warm_up_embeds_the_catalog_once_and_tolerates_failure() {
+    let (_root, app) = fixture().await;
+    crate::api::inference::RANK_STUB.with(|cell| cell.set(Some(warm_stub)));
+    let warmed = tools::core_skills::warm_inference(&app).await;
+    let sent = WARM_ITEMS.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(sent > 0, "warm-up sent no texts");
+    assert_eq!(warmed, Some(sent));
+    crate::api::inference::RANK_STUB.with(|cell| cell.set(Some(warm_failure)));
+    assert_eq!(tools::core_skills::warm_inference(&app).await, None);
+    crate::api::inference::RANK_STUB.with(|cell| cell.set(None));
+}
+
 async fn preload_journey(stub: Option<crate::api::inference::RankStub>) -> Vec<Value> {
     use axum::routing::post;
 

@@ -998,6 +998,20 @@ async fn run_process() -> Result<()> {
         restore_worker_control(&app).await?;
         recover(&app, true).await?;
         app.ready.store(true, Ordering::Release);
+        // Load the local inference model and embed the tool catalog before the first message;
+        // best effort, so a failure only costs that message its preload.
+        let warm = app.clone();
+        tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            match crate::tools::core_skills::warm_inference(&warm).await {
+                Some(items) => tracing::info!(
+                    items,
+                    seconds = started.elapsed().as_secs_f32(),
+                    "Local inference warmed"
+                ),
+                None => tracing::warn!("Local inference warm-up failed"),
+            }
+        });
         let mut scheduler = tokio::spawn(futures_util::FutureExt::boxed(scheduler_with_progress(
             app.clone(),
             progress.clone(),
