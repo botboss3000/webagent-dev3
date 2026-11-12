@@ -3626,8 +3626,15 @@ async fn ability_auth(app: &App) -> String {
 #[tokio::test]
 async fn session_metadata_routes_enforce_auth_csrf_ownership_and_retries() {
     use axum::http::Method;
+    use webagent_engine::ports::ChatEffects;
     let (_root, app) = fixture().await;
     let sid = conversation(&app).await;
+    let mut tx = app.store.pool.begin().await.unwrap();
+    app.store
+        .insert_chat(&mut tx, &sid, "fixture", "user", &json!("hello"))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
     let uri = format!("/api/v3/sessions/{sid}");
     let cookie = ability_auth(&app).await;
     let body = json!({"client_request_id":"rename-pin","expected_revision":0,

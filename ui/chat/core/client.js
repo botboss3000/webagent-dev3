@@ -189,7 +189,7 @@ export function createChatClient({request, note, issues, clearNoticeFrom = () =>
     /** Acknowledges messages through a durable sequence cursor. */
     read: (id, through_seq) => request('/sessions/' + encodeURIComponent(id) + '/read', 'PUT', {through_seq}),
     /** Creates a session from the supplied agent and request identity. */
-    create: body => request('/sessions', 'POST', body),
+    create: body => request('/sessions', 'POST', {...body, reuse_draft: true}),
     /** Submits one user message and its attachment IDs to a session. */
     send: (id, body) => request('/sessions/' + id + '/messages', 'POST', body),
     /** Requests cancellation of a run. */

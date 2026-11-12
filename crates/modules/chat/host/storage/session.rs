@@ -142,6 +142,68 @@ impl Store {
         webagent_chat::session::ordered_sessions_status(&self.pool, self, archived).await
     }
 
+    /// Project the sessions a person should see: Main Chat, every archived session and
+    /// each active conversation with a public message. An untouched new conversation is
+    /// a draft, not an active list row.
+    pub async fn ordered_visible_sessions_status(&self, archived: bool) -> Result<Vec<Value>> {
+        let mut visible = Vec::new();
+        for summary in self.ordered_sessions_status(archived).await? {
+            let Some(sid) = summary["id"].as_str() else {
+                continue;
+            };
+            if archived || summary["main_chat"] == true || self.session_has_content(sid).await? {
+                visible.push(summary);
+            }
+        }
+        Ok(visible)
+    }
+
+    /// Whether a session holds a public user or assistant message.
+    pub(crate) async fn session_has_content(&self, sid: &str) -> Result<bool> {
+        let exists: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM chat WHERE session_id=? AND role IN ('user','assistant'))",
+        )
+        .bind(sid)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(exists == 1)
+    }
+
+    /// Newest active anonymous conversation for one agent that no message has used yet.
+    /// New reuses this draft instead of leaving another blank session behind.
+    pub async fn reusable_draft_session(&self, agent_id: &str) -> Result<Option<Value>> {
+        let mut draft: Option<Value> = None;
+        let mut newest = i64::MIN;
+        for session in self.list("session:").await? {
+            if session["status"] != "active"
+                || session["agent_id"].as_str().unwrap_or("shared_default") != agent_id
+                || session["main_chat"] == true
+                || session["module_silent"] == true
+                || session["parent_session_id"].is_string()
+                || session["auto_naming"]["stage"] != "awaiting_message"
+            {
+                continue;
+            }
+            let Some(sid) = session["id"].as_str() else {
+                continue;
+            };
+            let created = session["created_at"].as_i64().unwrap_or(0);
+            if created <= newest {
+                continue;
+            }
+            if self.session_has_content(sid).await? {
+                continue;
+            }
+            newest = created;
+            draft = Some(json!({
+                "id": sid,
+                "agent_id": agent_id,
+                "title": session["title"].as_str().unwrap_or("New chat")
+            }));
+        }
+        Ok(draft)
+    }
+
     /// Table-only statistics from this user's public chat and recorded usage.
     /// Pagination bounds payloads; authority is rechecked by the browser handler.
     pub async fn session_statistics_page(
@@ -150,7 +212,7 @@ impl Store {
         offset: usize,
         limit: usize,
     ) -> Result<(Vec<Value>, Option<usize>)> {
-        let summaries = self.ordered_sessions_status(archived).await?;
+        let summaries = self.ordered_visible_sessions_status(archived).await?;
         let end = offset.saturating_add(limit).min(summaries.len());
         let next = (end < summaries.len()).then_some(end);
         let mut tx = self.pool.begin().await?;
@@ -1016,6 +1078,10 @@ mod tests {
             .insert_chat(&mut tx, "a", "r", "assistant", &json!("secret content"))
             .await
             .unwrap();
+        store
+            .insert_chat(&mut tx, "b", "r2", "user", &json!("other content"))
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
         let (first, next) = store.session_statistics_page(false, 0, 1).await.unwrap();
         assert_eq!(first.len(), 1);
@@ -1030,13 +1096,49 @@ mod tests {
         let (second, next) = store.session_statistics_page(false, 1, 1).await.unwrap();
         assert_eq!(next, None);
         assert!(second[0]["usage"].is_null());
-        assert_eq!(second[0]["message_count"], 0);
+        assert_eq!(second[0]["message_count"], 1);
         assert!(store
             .session_statistics_page(true, 0, 100)
             .await
             .unwrap()
             .0
             .is_empty());
+    }
+
+    /// Verify untouched conversations stay out of the visible list while Main Chat remains.
+    #[tokio::test]
+    async fn visible_listing_omits_untouched_conversations() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        for (id, main) in [("empty", false), ("used", false), ("main", true)] {
+            store
+                .put(
+                    &format!("session:{id}"),
+                    &json!({"id":id,"agent_id":"a","main_chat":main,"main_chat_agent_id":"a"}),
+                )
+                .await
+                .unwrap();
+        }
+        let mut tx = store.pool.begin().await.unwrap();
+        store
+            .insert_chat(&mut tx, "used", "r", "user", &json!("hello"))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        store
+            .put(
+                "session:archived-empty",
+                &json!({"id":"archived-empty","status":"archived","agent_id":"a"}),
+            )
+            .await
+            .unwrap();
+        let listed = store.ordered_visible_sessions_status(false).await.unwrap();
+        let ids: Vec<_> = listed.iter().map(|s| s["id"].as_str().unwrap()).collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"used"));
+        assert!(ids.contains(&"main"));
+        let archived = store.ordered_visible_sessions_status(true).await.unwrap();
+        assert!(archived.iter().any(|s| s["id"] == "archived-empty"));
     }
 
     /// Verify archive/unarchive preserves history and metadata and old receipts cannot repeat an effect after restart.

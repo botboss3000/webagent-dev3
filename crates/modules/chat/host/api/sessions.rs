@@ -74,7 +74,7 @@ pub(crate) async fn sessions(State(app): State<App>, Query(args): Query<SessionL
         "archived" => true,
         _ => return Err(bad("Invalid session status")),
     };
-    let mut list = app.store.ordered_sessions_status(archived).await?;
+    let mut list = app.store.ordered_visible_sessions_status(archived).await?;
     let actor = crate::shared_chat::actor(&app);
     let mut allowed = Vec::new();
     for row in list {
@@ -109,6 +109,9 @@ pub(crate) async fn sessions(State(app): State<App>, Query(args): Query<SessionL
         }
         let mut summary = scoped.store.shared_read_summary(sid, actor).await?;
         if (summary["status"] == "archived") != archived {
+            continue;
+        }
+        if summary["main_chat"] != true && !scoped.store.session_has_content(sid).await? {
             continue;
         }
         summary["shared"] = json!(true);
@@ -163,6 +166,32 @@ pub(crate) async fn create_session(State(app): State<App>, Json(body): Json<Valu
         }
         finish_session_creation(&app.store, &receipt["result"]).await?;
         return Ok(Json(receipt["result"].clone()));
+    }
+    let unnamed = body.get("title").is_none_or(|title| {
+        title.is_null() || title.as_str().is_some_and(|text| text.trim().is_empty())
+    });
+    // The New control keeps an untouched conversation instead of leaving another blank one.
+    let draft_reuse = body["reuse_draft"] == true
+        && unnamed
+        && body.get("expected_conversation_privacy").is_none();
+    if draft_reuse {
+        let agent_id = body
+            .get("agent_id")
+            .and_then(Value::as_str)
+            .unwrap_or("shared_default");
+        let admitted = app
+            .store
+            .live_access(app.store.current_user_id(), agent_id)
+            .await
+            .is_ok_and(|access| access.admitted());
+        let draft = if admitted {
+            app.store.reusable_draft_session(agent_id).await?
+        } else {
+            None
+        };
+        if let Some(existing) = draft {
+            return Ok(Json(existing));
+        }
     }
     let prepared = prepare_session(&app, &body).await?;
     let mut docs = prepared.docs;
@@ -784,6 +813,7 @@ mod silent_session_tests {
         let (_root, app) = crate::runtime_tests::fixture().await;
         let visible = crate::runtime_tests::conversation(&app).await;
         let silent = crate::runtime_tests::conversation(&app).await;
+        crate::runtime_tests::queued(&app, &visible).await;
         let mut doc = app
             .store
             .get(&key("session", &silent))
@@ -932,6 +962,72 @@ mod session_creation_recovery_tests {
                 .unwrap()["result"],
             created
         );
+    }
+
+    #[tokio::test]
+    async fn anonymous_creation_reuses_the_untouched_conversation() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        app.store.shared_schema().await.unwrap();
+        let first = create_session(
+            State(app.clone()),
+            Json(json!({"client_request_id":"draft-one","reuse_draft":true})),
+        )
+        .await
+        .unwrap()
+        .0;
+        let sid = first["id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            create_session(
+                State(app.clone()),
+                Json(json!({"client_request_id":"draft-two","reuse_draft":true})),
+            )
+            .await
+            .unwrap()
+            .0["id"],
+            json!(sid)
+        );
+        // An untouched conversation stays out of the session list.
+        let listed = sessions(State(app.clone()), Query(SessionListArgs { status: None }))
+            .await
+            .unwrap()
+            .0;
+        assert!(!listed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"].as_str() == Some(sid.as_str())));
+        // A titled creation is a distinct conversation, not the anonymous draft.
+        assert_ne!(
+            create_session(
+                State(app.clone()),
+                Json(json!({"client_request_id":"draft-named","title":"Named"})),
+            )
+            .await
+            .unwrap()
+            .0["id"],
+            json!(sid)
+        );
+        // The first message gives the draft content, so later creation starts a new one.
+        crate::runtime_tests::queued(&app, &sid).await;
+        assert_ne!(
+            create_session(
+                State(app.clone()),
+                Json(json!({"client_request_id":"draft-three","reuse_draft":true})),
+            )
+            .await
+            .unwrap()
+            .0["id"],
+            json!(sid)
+        );
+        let listed = sessions(State(app.clone()), Query(SessionListArgs { status: None }))
+            .await
+            .unwrap()
+            .0;
+        assert!(listed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"].as_str() == Some(sid.as_str())));
     }
 }
 

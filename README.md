@@ -980,6 +980,12 @@ whitespace normalization. Attachment-only input uses `New: Attachments`;
 empty text is accepted only with attachments. Explicit creation names and manual
 renames suppress automatic naming, including a manual save of the current name.
 
+The New control reuses the caller's newest untouched conversation for that agent
+instead of adding another blank session. An untouched conversation stays out of
+the active session list and the statistics list until its first public user or
+assistant message; Main Chat stays listed, and archived conversations stay
+listed so they can be restored or deleted.
+
 After the first successful assistant turn, the Rust loop makes a separate,
 tool-free title call using only the first user input (up to 600 characters),
 or attachment text and names for an attachment-only message. It uses the first

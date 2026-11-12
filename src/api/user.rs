@@ -1054,6 +1054,7 @@ mod session_statistics_tests {
     use super::*;
     use axum::{body::Body, extract::Request, http::StatusCode};
     use tower::ServiceExt;
+    use webagent_engine::ports::ChatEffects;
     #[tokio::test]
     async fn statistics_require_browser_auth_and_validate_bounds() {
         let (_root, app) = crate::runtime_tests::fixture().await;
@@ -1102,6 +1103,17 @@ mod session_statistics_tests {
         )
         .await
         .unwrap();
+        let mut tx = user.pool.begin().await.unwrap();
+        user.insert_chat(
+            &mut tx,
+            "mine",
+            "fixture",
+            "user",
+            &serde_json::json!("hello"),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
         user.put(
             "session:revoked",
             &serde_json::json!({"id":"revoked","title":"Hidden","agent_id":"unavailable-agent"}),
@@ -1119,7 +1131,7 @@ mod session_statistics_tests {
         let result: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(result["sessions"].as_array().unwrap().len(), 1);
         assert_eq!(result["sessions"][0]["id"], "mine");
-        assert_eq!(result["sessions"][0]["message_count"], 0);
+        assert_eq!(result["sessions"][0]["message_count"], 1);
         assert!(result["sessions"][0]["usage"].is_null());
     }
 }
