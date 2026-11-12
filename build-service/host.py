@@ -2656,18 +2656,33 @@ def job_progress(job, baselines, now):
         # late: the high end of the normal range (p95), where a monitor starts checking in.
         return {"stage": name, "id": ids[name], **value, "normal": normal(name), "samples": stats.get(name, {}).get("n", 0),
                 "late": stats.get(name, {}).get("p95") or (stats.get(name) and round(stats[name]["p90"] * 1.1))}
+    def waited(start):
+        # Time queued for a shared resource (a lease another job holds) is not this stage's
+        # work, so it neither counts toward the slow check nor reads as a regression.
+        seconds = 0.0
+        current = job.get("resource_waiting") or {}
+        if current.get("state") == "waiting" and current.get("since"):
+            seconds += max(0.0, now - max(current["since"], start))
+        last = job.get("last_resource_wait") or {}
+        if last.get("since") and last["since"] >= start:
+            seconds += last.get("elapsed_seconds") or 0
+        return seconds
     finished, running, upcoming = [], [], []
     for name in order:
         if name not in spans:
             upcoming.append(row(name))
         elif spans[name][1] is None:
-            running.append(row(name, seconds=round(now - spans[name][0])))
+            wait = waited(spans[name][0])
+            running.append(row(name, seconds=round(max(0.0, now - spans[name][0] - wait)),
+                               **({"waited_seconds": round(wait)} if wait else {})))
         else:
             finished.append(row(name, seconds=round(spans[name][1] - spans[name][0])))
     current = running[-1] if running else None
     elapsed = current["seconds"] if current else 0
     stat = stats.get(current["stage"]) if current else None
-    verdict = ("no baseline" if stat is None else "on track" if elapsed <= stat["p50"]
+    lease = job.get("resource_waiting") or {}
+    verdict = (f"waiting for {lease.get('resource') or 'a shared resource'}" if lease.get("state") == "waiting"
+               else "no baseline" if stat is None else "on track" if elapsed <= stat["p50"]
                else "on track, slower than median" if elapsed <= stat["p90"] else "slow, past p90")
     low = sum(max(0, (stats.get(r["stage"]) or {}).get("p50", 0) - r["seconds"]) for r in running) + sum((stats.get(u["stage"]) or {}).get("p50", 0) for u in upcoming)
     high = sum(max(0, (stats.get(r["stage"]) or {}).get("p90", 0) - r["seconds"]) for r in running) + sum((stats.get(u["stage"]) or {}).get("p90", 0) for u in upcoming)

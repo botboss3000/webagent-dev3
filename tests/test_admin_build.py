@@ -614,6 +614,19 @@ class BuildTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.call("v3_build_progress", {"job_id": "live", "extra": 1})
 
+    def test_progress_leaves_shared_resource_waits_out_of_stage_time(self):
+        now = 10000.0
+        job = {"job_id": "lease", "status": "running", "operation": "host_service_deploy", "started_at": now - 300,
+               "phase_history": [{"phase": "frontend_tests", "at": now - 300}],
+               "resource_waiting": {"state": "waiting", "resource": "ui-browser", "since": now - 200}}
+        value = host.job_progress(job, {}, now)
+        stage = value["running_stages"][-1]
+        self.assertEqual((stage["seconds"], stage["waited_seconds"]), (100, 200))
+        self.assertEqual(value["verdict"], "waiting for ui-browser")
+        admitted = {**job, "resource_waiting": None,
+                    "last_resource_wait": {"state": "admitted", "since": now - 250, "elapsed_seconds": 150}}
+        self.assertEqual(host.job_progress(admitted, {}, now)["running_stages"][-1]["seconds"], 150)
+
     def test_progress_shows_overlapping_phases_and_files_late_steps_under_their_phase(self):
         now = 10000.0
         job = {"job_id": "overlap", "status": "running", "operation": "build_deploy", "started_at": now - 600,
