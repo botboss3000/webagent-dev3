@@ -5,6 +5,16 @@ Config: protected build-service.json -> scheduler.mode and orphan_after_seconds.
 """
 import hashlib,importlib.util,json,os,re,stat,subprocess,time
 from pathlib import Path
+
+# Every caller on the broker's local socket (Claude Code, Codex, OpenCode on the T480) shares this
+# identity; it keys tasks and authorizes operator actions, so it stays fixed. Never display it.
+LOCAL_OPERATOR="codex-local"
+HARNESSES={"claude-code","codex","opencode"}
+def operator_origin(user_id,summary):
+    """Display origin: t480[/harness] for the local operator (harness from the summary's origin=), v2 or v3."""
+    if user_id!=LOCAL_OPERATOR:return"v2"if user_id=="python-v2-admin"else"v3"
+    found=re.search(r"\borigin=([a-z-]{1,20})",str(summary or"")[:260])
+    return"t480/"+found.group(1)if found and found.group(1)in HARNESSES else"t480"
 def sibling(name):
     """Load the exact paired installed implementation, never a model-selected path."""
     spec=importlib.util.spec_from_file_location("build_scheduler_"+name,Path(__file__).with_name(name+".py"))
@@ -101,6 +111,10 @@ class Scheduler:
         dropped=[k for k in removed if self.broker.work.pop(k,None)is not None]
         if dropped:self.broker._save_work()
         return removed
+    def origin(self,key):
+        """Display origin of a task's owner; see operator_origin."""
+        item=self.broker.work.get(key)or{}
+        return operator_origin(item.get("user_id"),item.get("summary"))
     def session(self,key):
         """The owning session's name from the task summary provenance (session=<name>), if it gave one."""
         match=re.search(r"session=([^;\]]{1,80})",(self.broker.work.get(key)or{}).get("summary","")[:200])
@@ -279,7 +293,7 @@ class Scheduler:
         revision=value["revision"]if expected is None else expected
         token=request or"reserve-"+hashlib.sha256(ownership.canonical([value["id"],revision,scopes]).encode()).hexdigest()[:48]
         result=self.store.acquire(value["id"],value["owner"],revision,item["ownership_epoch"],scopes,token)
-        if not result["acquired"]:raise Conflict({**result,"blockers":[{**b,"session":self.session(b["task_id"])}for b in result["blockers"]]})
+        if not result["acquired"]:raise Conflict({**result,"blockers":[{**b,"session":self.session(b["task_id"]),"origin":self.origin(b["task_id"])}for b in result["blockers"]]})
         self.mark_waiter_refresh(item,value,result["task"])
         return result["task"]
     def guard(self,item,trusted,workspace,paths,request,patch=None):
@@ -324,7 +338,7 @@ class Scheduler:
         result=[]
         for r in rows:
             if r["state"]in {"complete","abandoned"}:continue
-            result.append({k:r[k]for k in ["id","label","state","revision","epoch","generation","heartbeat","created","scopes","requested"]}|{"session":self.session(r["id"]),"owned_by_caller":r["owner"]==self.owner(trusted,workspace)})
+            result.append({k:r[k]for k in ["id","label","state","revision","epoch","generation","heartbeat","created","scopes","requested"]}|{"session":self.session(r["id"]),"origin":self.origin(r["id"]),"owned_by_caller":r["owner"]==self.owner(trusted,workspace)})
         if task_id is not None:result=[r for r in result if r["label"]==task_id]
         legacy=[{"task_id":i["task_id"],"state":"legacy_review_required"}for i in self.broker.work.values()if i.get("mode")=="isolated"and i.get("status")!="abandoned"and not any(r["id"]==i["key"]for r in rows)]
         total=len(result);paged=result[offset:offset+limit]
@@ -736,7 +750,7 @@ class Scheduler:
         else:value=self.ensure(item,trusted,workspace)
         owner=self.owner(trusted,workspace)
         if action=="takeover_preview":
-            return {"task":{k:value[k]for k in ["id","label","state","epoch","revision","scopes"]}|{"session":self.session(value["id"])},"jobs":[{"job_id":j["job_id"],"status":j["status"],"effects_started":bool(j.get("effects_started"))}for j in self.broker.jobs.values()if j.get("task_id")==item["task_id"]and j.get("user_id")==item["user_id"]and j.get("workspace")==item["workspace"]]}
+            return {"task":{k:value[k]for k in ["id","label","state","epoch","revision","scopes"]}|{"session":self.session(value["id"]),"origin":self.origin(value["id"])},"jobs":[{"job_id":j["job_id"],"status":j["status"],"effects_started":bool(j.get("effects_started"))}for j in self.broker.jobs.values()if j.get("task_id")==item["task_id"]and j.get("user_id")==item["user_id"]and j.get("workspace")==item["workspace"]]}
         revision=args.get("expected_revision");epoch=args.get("expected_epoch")
         request="action-"+hashlib.sha256(ownership.canonical([owner,value["id"],args.get("request_id")]).encode()).hexdigest()
         if type(revision)is not int or type(epoch)is not int:raise ValueError("Expected ownership revision and epoch required")

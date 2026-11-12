@@ -14,10 +14,10 @@ export function provenance(summary) {
   const session = fields.session || (fields.session_id ? fields.session_id.slice(0, 8) : '');
   return {text: match ? text.slice(0, match.index) : text, origin: fields.origin || '', session};
 }
-const owner = (origin, session) => origin === 'claude-code'
-  ? 'Claude session ' + (session ? '“' + session + '”' : '(name not recorded)')
-  // The broker reports every local operator (Codex or Claude) as "codex".
-  : origin === 'codex' ? 'Local operator' : origin || '—';
+// The broker reports local operators as "t480" or "t480/<harness>" (claude-code, codex, opencode).
+const owner = (origin, session) => String(origin || '').startsWith('t480')
+  ? origin + (session ? ' session “' + session + '”' : '')
+  : origin || '—';
 const phaseLabel = value => String(value || 'waiting').replaceAll('_', ' ');
 const when = value => Number.isFinite(value) ? new Date(value * 1000).toLocaleString() : '—';
 const duration = (start, end) => Number.isFinite(start)
@@ -307,7 +307,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
       card.append(top);
       const about = document.createElement('p');
       about.className = 'build-card-about';
-      about.textContent = [owner(origin.origin || job.origin, origin.session), origin.text].filter(Boolean).join(' · ');
+      about.textContent = [owner(job.origin || origin.origin, origin.session), origin.text].filter(Boolean).join(' · ');
       card.append(about);
       if (job.task_id) {
         // The task's Broker card page: its build and checks with live stage times.
@@ -411,7 +411,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
       fact(facts, 'Elapsed', duration(job.created_at, job.finished_at));
       fact(facts, 'Job ID', job.job_id);
       fact(facts, 'Task ID', job.task_id || '—');
-      fact(facts, 'Owner', owner(origin.origin || job.origin, origin.session));
+      fact(facts, 'Owner', owner(job.origin || origin.origin, origin.session));
       fact(facts, 'Input digest', job.inputs_sha256 || '—');
       for (const role of ['api', 'loop']) {
         const container = snapshot.containers?.[role] || {};

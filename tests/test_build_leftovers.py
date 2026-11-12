@@ -94,7 +94,11 @@ class LeftoverTests(unittest.TestCase):
         self.broker.work_activity[self.task_key] = self.broker._work_content(self.item)
         self.broker._reconcile_leftover_state()
         row = self.broker._leftover_views(administrator=True)[0]
-        self.assertEqual(row["origin"],"codex")
+        self.assertEqual(row["origin"],"t480")
+        origin = fixtures.host.scheduler_module.operator_origin
+        self.assertEqual(origin("codex-local","Fix [origin=claude-code; session=L]"),"t480/claude-code")
+        self.assertEqual(origin("codex-local","Fix [origin=gpt; session=L]"),"t480")
+        self.assertEqual(origin("admin","Fix [origin=codex; session=L]"),"v3")
         self.assertIsNone(row["session_id"])
         (self.broker.work_dir/"trees"/self.task_key).mkdir(parents=True)
         with patch.object(self.runner,"command",create=True,return_value="1234\tfixture\n") as du:

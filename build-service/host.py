@@ -2969,8 +2969,7 @@ class Broker:
                 continue
             row = dict(notice)
             row["summary"] = item.get("summary", "")[:200]
-            row["origin"] = ("codex" if item["user_id"] == "codex-local" else
-                "v2" if item["user_id"] == "python-v2-admin" else "v3")
+            row["origin"] = scheduler_module.operator_origin(item["user_id"], item.get("summary"))
             if administrator:
                 row["user_id"] = item["user_id"]
                 row["session_id"] = item["workspace"] if row["origin"] == "v3" else None
@@ -5402,8 +5401,7 @@ class Broker:
                     elif job.get("batch_parent") or job.get("batch_members"):
                         summary = "Shared build · " + (summary or job["job_id"])
                     view["summary"] = summary
-                    view["origin"] = ("v2" if job["user_id"] == "python-v2-admin" else
-                                      "codex" if job["user_id"] == "codex-local" else "v3")
+                    view["origin"] = scheduler_module.operator_origin(job["user_id"], summary)
                     view["started_at"] = job.get("started_at")
                     view["finished_at"] = job.get("finished_at")
                     view["phase_history"] = job.get("phase_history", [])[-32:]
