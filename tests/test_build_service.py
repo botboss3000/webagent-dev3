@@ -1366,6 +1366,48 @@ class RuntimePrestopGateTests(unittest.TestCase):
         gate=next(i for i,c in enumerate(self.runner.calls)if c[0]=="runtime_mount_preflight")
         self.assertTrue(all(gate<i for i,c in enumerate(self.runner.calls)if c[0]=="stop"))
 
+class BrowserSyncTests(unittest.TestCase):
+ """The browser container follows the API image and never fails the release."""
+ def broker(self,containers,healthy=True):
+  host=fixtures.host;broker=object.__new__(host.Broker);broker._save=lambda job:None
+  calls=[]
+  class Runner:
+   secrets=[]
+   def inspect_recovery(self,name):return containers.get(name)
+   def inspect(self,name):return containers[name]
+   def create(self,name,image,previous,release_root=None,as_name=None):
+    calls.append(("create",as_name,image));containers[as_name]={"Image":image}
+   def stop(self,name):calls.append(("stop",name))
+   def rename(self,name,target):calls.append(("rename",name,target));containers[target]=containers.pop(name)
+   def start(self,name):calls.append(("start",name))
+   def healthy(self,name,image):return healthy
+  broker.runner=Runner();return broker,calls
+ def test_follows_the_api_image_with_a_rollback_copy(self):
+  host=fixtures.host;job={"job_id":str(uuid.uuid4())}
+  containers={host.TARGETS[0]:{"Image":"sha256:new"},host.BROWSER:{"Image":"sha256:old"}}
+  broker,calls=self.broker(containers);broker._sync_browser(job)
+  self.assertEqual(job["browser_sync"]["status"],"completed")
+  self.assertEqual(containers[host.BROWSER]["Image"],"sha256:new")
+  self.assertEqual(containers[host.BROWSER+"-pre-build-"+job["job_id"]]["Image"],"sha256:old")
+ def test_absent_or_current_browser_is_left_alone(self):
+  host=fixtures.host;job={"job_id":str(uuid.uuid4())}
+  broker,calls=self.broker({host.TARGETS[0]:{"Image":"sha256:new"}});broker._sync_browser(job)
+  self.assertEqual(calls,[]);self.assertNotIn("browser_sync",job)
+  broker,calls=self.broker({host.TARGETS[0]:{"Image":"sha256:a"},host.BROWSER:{"Image":"sha256:a"}});broker._sync_browser(job)
+  self.assertEqual(calls,[]);self.assertEqual(job["browser_sync"]["status"],"current")
+ def test_unhealthy_browser_restores_its_predecessor(self):
+  host=fixtures.host;job={"job_id":str(uuid.uuid4())}
+  containers={host.TARGETS[0]:{"Image":"sha256:new"},host.BROWSER:{"Image":"sha256:old"}}
+  broker,calls=self.broker(containers,healthy=False);broker._sync_browser(job)
+  self.assertEqual(job["browser_sync"]["status"],"failed");self.assertTrue(job["browser_sync"]["restored"])
+  self.assertEqual(containers[host.BROWSER]["Image"],"sha256:old")
+  self.assertEqual(containers[host.BROWSER+"-failed-build-"+job["job_id"]]["Image"],"sha256:new")
+ def test_browser_names_pass_the_recovery_boundary(self):
+  from unittest.mock import Mock
+  runner=fixtures.host.Runner();runner.command=Mock(return_value="")
+  self.assertIsNone(runner.inspect_recovery(fixtures.host.BROWSER))
+  self.assertIsNone(runner.inspect_recovery(fixtures.host.BROWSER+"-pre-build-"+str(uuid.uuid4())))
+
 class RecoveryDockerBoundaryTests(unittest.TestCase):
  def test_discovery_distinguishes_absence_errors_and_identity_races(self):
   from unittest.mock import Mock

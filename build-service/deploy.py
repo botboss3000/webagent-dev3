@@ -21,8 +21,10 @@ def initialize_state(root,c):
   os.close(parent)
 
 def main():
- parser=argparse.ArgumentParser();parser.add_argument("action",choices=("build","build-loop","build-gate","start","start-loop","start-gate"),default="build",nargs="?")
- args=parser.parse_args();c=cfg.load();root=Path(c["checkout_root"]);role="gate" if args.action.endswith("gate") else "loop" if args.action.endswith("loop") else "api";name=c[role+"_container"];live=cfg.layout(c)
+ parser=argparse.ArgumentParser();parser.add_argument("action",choices=("build","build-loop","build-gate","start","start-loop","start-gate","start-browser"),default="build",nargs="?")
+ args=parser.parse_args();c=cfg.load();root=Path(c["checkout_root"])
+ if args.action=="start-browser":return start_browser(c)
+ role="gate" if args.action.endswith("gate") else "loop" if args.action.endswith("loop") else "api";name=c[role+"_container"];live=cfg.layout(c)
  def run(argv,**kw):return subprocess.run(argv,check=True,**kw)
  if role=="gate":
   gate=Path(live["/runtime/gate"]);gate.mkdir(exist_ok=True)
@@ -57,4 +59,30 @@ def main():
  for source,target,ro in mounts:argv+=["--mount","type=bind,src="+str(source)+",dst="+target+(",readonly" if ro else "")]
  for key,value in {"V3_PROCESS_ROLE":role,"V3_ABILITIES_ROOT":"/opt/v3/plugins/abilities","V3_PUBLIC_ORIGIN":c["public_origin"],"V3_BUILD_SOCKET":"/runtime/"+Path(c["runtime_root"]).name+"/build.sock"}.items():argv+=["--env",key+"="+value]
  argv+=["--tmpfs","/run:rw,nosuid,nodev,size=16m","--tmpfs","/tmp:rw,nosuid,nodev,size=32m","--stop-timeout","30",name+":local"];run(argv)
+BROWSER_SECURITY="/etc/webagent/development/browser/seccomp-browser.json"
+def start_browser(c):
+ """Create the browser container once, from the image the API runs: every chat's Chromium
+ with its own sandbox, reaching only the browser folders and its socket. The broker then
+ keeps it on the API image. Host setup (account 1104, AppArmor profile webagent-browser,
+ the seccomp file, network webagent-browser and its firewall) must exist first."""
+ def run(argv,**kw):return subprocess.run(argv,check=True,**kw)
+ name=c["api_container"]+"-browser";live=cfg.layout(c);runtime=Path(live["/runtime"])
+ if subprocess.run(["docker","inspect",name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0:raise RuntimeError("Browser container already exists")
+ image=subprocess.run(["docker","inspect","-f","{{.Image}}",c["api_container"]],check=True,capture_output=True,text=True).stdout.strip()
+ for required in (BROWSER_SECURITY,"/etc/apparmor.d/webagent-browser"):
+  if not Path(required).is_file():raise RuntimeError("Browser host setup missing: "+required)
+ run(["docker","network","inspect","webagent-browser"],stdout=subprocess.DEVNULL)
+ # The browser folders move to the browser identity; the socket folder lets the worker's
+ # group in (setgid, so the socket keeps that group).
+ run(["docker","run","--rm","--user","0:0","--network","none","--mount","type=bind,src="+str(runtime)+",dst=/r","--entrypoint","/bin/sh",image,"-c",
+  "mkdir -p /r/worker/browser /r/browser && chown -R 1104:1104 /r/worker/browser && chmod 0700 /r/worker/browser && chown 1104:1100 /r/browser && chmod 2750 /r/browser"])
+ run(["docker","run","-d","--name",name,"--restart","unless-stopped","--read-only","--user","1104:1104","--group-add","1100",
+  "--cap-drop","ALL","--security-opt","no-new-privileges:true","--security-opt","seccomp="+BROWSER_SECURITY,"--security-opt","apparmor=webagent-browser",
+  "--network","webagent-browser","--pids-limit","1024","--memory","3g","--cpus","2",
+  "--tmpfs","/tmp:rw,nosuid,nodev,size=512m",
+  "--mount","type=bind,src="+str(runtime/"worker"/"browser")+",dst=/runtime/worker/browser",
+  "--mount","type=bind,src="+str(runtime/"browser")+",dst=/runtime/browser",
+  "--env","V3_BROWSER_SANDBOX=1","--env","V3_BROWSER_CLIENT_UID=1103","--env","V3_PUBLIC_ORIGIN="+c["public_origin"],
+  "--health-cmd","/usr/local/bin/webagent-v3 --browser-host ping","--health-interval","30s","--health-timeout","10s","--health-start-period","10s","--health-retries","3",
+  "--stop-timeout","15",image,"/usr/local/bin/webagent-v3","--browser-host"])
 if __name__=="__main__":main()

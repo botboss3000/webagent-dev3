@@ -149,6 +149,10 @@ def hot_source_path(path):return path.startswith(UI_SOURCE_PREFIX)or ability_ass
 RUST_UI_FIXTURES = {"v3/ui/chat/chat_ui.json"}
 ASSET_ROOT = STATE / "ui-assets"
 TARGETS = (CONFIG["api_container"], CONFIG["loop_container"])
+# The browser container runs the API image as another service (`--browser-host`). It is
+# created once by `deploy.py start-browser` and only follows the API image; it is never a
+# release role, so a failure to follow never rolls back the API or loop.
+BROWSER = CONFIG["api_container"] + "-browser"
 # On SIGTERM the loop drains runs for up to its own `drain_timeout_seconds`
 # (loop-runtime.json, default 180) before shutting down; this is the backstop.
 LOOP_DRAIN_STOP_SECONDS = 240
@@ -1972,7 +1976,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 connection.close()
 
     def inspect(self, name):
-        if name not in TARGETS and not any(re.fullmatch(re.escape(target)+r"-(?:pre|failed|candidate)-build-[0-9a-f-]{36}",name) for target in TARGETS):
+        if name not in (*TARGETS, BROWSER) and not any(re.fullmatch(re.escape(target)+r"-(?:pre|failed|candidate)-build-[0-9a-f-]{36}",name) for target in (*TARGETS, BROWSER)):
             raise ValueError("container outside development target")
         value = json.loads(self.command(["docker", "inspect", name], timeout=30, private_raw=True))[0]
         self.secrets.extend(item.partition("=")[2] for item in value.get("Config", {}).get("Env", []) if "=" in item)
@@ -1980,7 +1984,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
 
     def inspect_recovery(self,name):
         """Discover only fixed release names; a Docker error never means absent."""
-        if name not in TARGETS and not any(re.fullmatch(re.escape(target)+r"-(?:pre|failed|candidate)-build-[0-9a-f-]{36}",name)for target in TARGETS):
+        if name not in (*TARGETS, BROWSER) and not any(re.fullmatch(re.escape(target)+r"-(?:pre|failed|candidate)-build-[0-9a-f-]{36}",name)for target in (*TARGETS, BROWSER)):
             raise ValueError("Recovery container outside development target")
         identities=self.command(["docker","ps","--all","--no-trunc","--filter","name=^/"+name+"$","--format","{{.ID}}"],timeout=30).splitlines()
         if not identities:return None
@@ -3635,7 +3639,7 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "changed_paths", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "compiler_recipe", "compiler_runtime", "linker_proof", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight", "verification_cache", "focused_verification", "test_reuse", "phase_timings", "active_verification", "publication_wait", "publication_wait_history", "last_resource_wait", "broker_install", "ui_test_failure", "ui_test_override", "early_work", "finished_at", "rebuild_closeout") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "changed_paths", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "compiler_recipe", "compiler_runtime", "linker_proof", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight", "verification_cache", "focused_verification", "test_reuse", "phase_timings", "active_verification", "publication_wait", "publication_wait_history", "last_resource_wait", "broker_install", "browser_sync", "ui_test_failure", "ui_test_override", "early_work", "finished_at", "rebuild_closeout") if key in job}
         for key in ("publication_wait","resource_waiting"):
             if view.get(key,{}).get("state","waiting")=="waiting"and view.get(key,{}).get("since"):
                 view[key]={**view[key],"elapsed_seconds":round(max(0,time.time()-view[key]["since"]),3)}
@@ -6638,6 +6642,7 @@ class Broker:
                     with host_phase(job,"checking_"+role):
                         if not self.runner.healthy(name, job["images"][role]):
                             raise RuntimeError("replacement V3 " + role + " not healthy; rollback material retained")
+                self._sync_browser(job)
                 if self.runner.ui_hot_swappable():
                     self.runner.promote_live_ui(self._current_release_blob(), blob, job.get("changed_paths", ()), self._task_base(job))
                     self._phase(job, "checking_ui")
@@ -6716,6 +6721,54 @@ class Broker:
                 if job["status"] not in ("uncertain", "interrupted"):
                     self._start_next()
 
+    def _sync_browser(self, job):
+        """Move the browser container onto the image the API now runs, keeping its own
+        configuration; restore it on failure. Never raises: the outcome is recorded in
+        `job["browser_sync"]` and a stale or stopped browser only affects browser tools."""
+        runner = self.runner
+        if not hasattr(runner, "inspect_recovery"):
+            return
+        job_id = job["job_id"]
+        backup, candidate = BROWSER + "-pre-build-" + job_id, BROWSER + "-candidate-build-" + job_id
+        moved = started = False
+        try:
+            previous = runner.inspect_recovery(BROWSER)
+            if previous is None:
+                return
+            image = runner.inspect(TARGETS[0])["Image"]
+            if previous["Image"] == image:
+                job["browser_sync"] = {"status": "current", "image": image}
+                return
+            with host_phase(job, "syncing_browser"):
+                runner.create(BROWSER, image, previous, None, as_name=candidate)
+                runner.stop(BROWSER)
+                runner.rename(BROWSER, backup)
+                moved = True
+                runner.rename(candidate, BROWSER)
+                started = True
+                runner.start(BROWSER)
+                if not runner.healthy(BROWSER, image):
+                    raise RuntimeError("browser container not healthy on the new image")
+            job["browser_sync"] = {"status": "completed", "image": image, "rollback": backup}
+        except Exception as error:
+            reason = scrub(str(error), runner.secrets)[:300]
+            restored = False
+            try:
+                if started:
+                    runner.stop(BROWSER)
+                    runner.rename(BROWSER, BROWSER + "-failed-build-" + job_id)
+                elif runner.inspect_recovery(candidate) is not None:
+                    runner.rename(candidate, BROWSER + "-failed-build-" + job_id)
+                if moved:
+                    runner.rename(backup, BROWSER)
+                    runner.start(BROWSER)
+                    restored = True
+            except Exception as restore_error:
+                reason += "; restore failed: " + scrub(str(restore_error), runner.secrets)[:200]
+            job["browser_sync"] = {"status": "failed", "reason": reason, "restored": restored}
+        finally:
+            self._save(job)
+
     def _auto_restore(self, job):
         """Bring the exact captured predecessor back after a failed replacement; record either outcome."""
         failure = job["reason"]
@@ -6725,6 +6778,7 @@ class Broker:
             try:
                 result = self.ui_publication.auto_restore_backend(job)
                 outcome = {"status": "restored", "restored_release_id": result.get("restored_release_id")}
+                self._sync_browser(job)
                 note = "; the captured predecessor containers were restored automatically and the candidates quarantined"
             except Exception as restore_error:
                 outcome = {"status": "failed", "reason": scrub(str(restore_error), self.runner.secrets)[:300]}
