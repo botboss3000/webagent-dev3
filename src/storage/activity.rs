@@ -10,10 +10,17 @@ fn boundary(row: &SqliteRow) -> String {
 const PUBLISH_CONTROL: &str = "publish_main_message";
 /// The tool that starts a sub agent; its calls count as sub agents, not tools.
 const SUBAGENT_START: &str = "start_spawn";
-/// Interaction steps a working bubble repeats word for word, read from its chat ID:
+/// Interaction steps a working bubble or live row repeats word for word, read from its chat ID:
 /// `working:<run>:auto:<turn>:<ordinal>` (automatic promotion) or
 /// `working:<run>:<turn>:<call>:echo:<o1>-<o2>` (`publish_main_message` without text).
 fn echoed_steps(id: &str) -> Vec<(String, String)> {
+    // A live row shows one model step: `live:<run>:<turn>:<ordinal>`.
+    if let Some(rest) = id.strip_prefix("live:") {
+        return match rest.split(':').collect::<Vec<_>>().as_slice() {
+            [run, turn, ordinal] => vec![(run.to_string(), format!("model:{turn}:{ordinal}"))],
+            _ => Vec::new(),
+        };
+    }
     let parts = id
         .strip_prefix("working:")
         .map(|rest| rest.split(':').collect::<Vec<_>>())
@@ -35,7 +42,7 @@ async fn in_chat_steps<'e, E: sqlx::SqliteExecutor<'e>>(
     sid: &str,
 ) -> Result<HashSet<(String, String)>> {
     let rows = sqlx::query(
-        "SELECT id AS a,NULL AS b FROM chat WHERE session_id=? AND id LIKE 'working:%' \
+        "SELECT id AS a,NULL AS b FROM chat WHERE session_id=? AND (id LIKE 'working:%' OR id LIKE 'live:%') \
          UNION ALL SELECT i.run_id,i.step FROM interactions i JOIN chat c ON c.terminal_run_id=i.run_id \
          WHERE c.session_id=? AND i.session_id=? AND i.step LIKE 'model:%'",
     )

@@ -441,6 +441,10 @@ impl<
                 let text = payload["text"]
                     .as_str()
                     .ok_or_else(|| anyhow!("Working message has no text"))?;
+                if payload["replaces_live"] == true {
+                    // An agent-chosen publication takes the open live message's place.
+                    crate::send_future(self.chat.drop_live_message(&mut tx, sid, rid)).await?;
+                }
                 crate::send_future(
                     self.chat
                         .insert_working_message(&mut tx, sid, rid, message_id, text),
@@ -462,6 +466,36 @@ impl<
                         item,
                     ))
                     .await?;
+                    let text = item["content"]
+                        .as_array()
+                        .map(|parts| {
+                            parts
+                                .iter()
+                                .filter_map(|part| part["text"].as_str())
+                                .collect::<Vec<_>>()
+                                .join("")
+                        })
+                        .unwrap_or_default();
+                    if run["module_silent"] != true
+                        && payload["auto_promote"] != true
+                        && run["promotion_mode"] != "auto"
+                        && run["status"] == "running"
+                        && item["type"] == "message"
+                        && !text.trim().is_empty()
+                        && text.len() <= 16384
+                    {
+                        // LIVE-SLOT: the run's newest unpublished message replaces its open live
+                        // message, so a run always shows its latest word. A published message,
+                        // a terminal reply or a later user message closes the slot.
+                        crate::send_future(self.chat.replace_live_message(
+                            &mut tx,
+                            sid,
+                            rid,
+                            &format!("live:{rid}:{turn}:{ordinal}"),
+                            &text,
+                        ))
+                        .await?;
+                    }
                     if run["module_silent"] != true
                         && payload["auto_promote"] == true
                         && item["type"] == "message"
@@ -469,16 +503,6 @@ impl<
                         if run["status"] == "completed" {
                             return Err(anyhow!("Final reply cannot be auto promoted"));
                         }
-                        let text = item["content"]
-                            .as_array()
-                            .map(|parts| {
-                                parts
-                                    .iter()
-                                    .filter_map(|part| part["text"].as_str())
-                                    .collect::<Vec<_>>()
-                                    .join("")
-                            })
-                            .unwrap_or_default();
                         if !text.trim().is_empty() {
                             let message_id = format!("working:{rid}:auto:{turn}:{ordinal}");
                             // The interaction and its public bubble share this transaction.
@@ -503,6 +527,7 @@ impl<
                         return Err(anyhow!("Terminal reply is empty"));
                     }
                     if run["module_silent"] != true {
+                        crate::send_future(self.chat.drop_live_message(&mut tx, sid, rid)).await?;
                         crate::send_future(self.chat.insert_chat(
                             &mut tx,
                             sid,

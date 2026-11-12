@@ -1038,6 +1038,93 @@ impl Store {
         }
         Ok(())
     }
+    /// Delete a run's open live message: its `live:<run>:` row while it is still the newest
+    /// non-notice chat row. A later user or published message closes the slot, so the row
+    /// it froze stays in the transcript.
+    async fn drop_live_message(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        sid: &str,
+        rid: &str,
+    ) -> Result<()> {
+        let newest = sqlx::query_scalar::<_, String>(
+            "SELECT id FROM chat WHERE session_id=? AND role!='notice' ORDER BY seq DESC LIMIT 1",
+        )
+        .bind(sid)
+        .fetch_optional(&mut **tx)
+        .await?;
+        if let Some(id) = newest.filter(|id| id.starts_with(&format!("live:{rid}:"))) {
+            // Activity anchored to the replaced row moves to the row before it, so its group
+            // still shows above the replacement. With no earlier row it falls back to the run.
+            let previous = sqlx::query_scalar::<_, String>(
+                "SELECT id FROM chat WHERE session_id=? AND seq<(SELECT seq FROM chat WHERE id=?) ORDER BY seq DESC LIMIT 1",
+            )
+            .bind(sid)
+            .bind(&id)
+            .fetch_optional(&mut **tx)
+            .await?;
+            match previous {
+                Some(previous) => {
+                    sqlx::query(
+                        "UPDATE activity_boundaries SET boundary_item_id=? WHERE boundary_item_id=?",
+                    )
+                    .bind(previous)
+                    .bind(&id)
+                    .execute(&mut **tx)
+                    .await?;
+                }
+                None => {
+                    sqlx::query("DELETE FROM activity_boundaries WHERE boundary_item_id=?")
+                        .bind(&id)
+                        .execute(&mut **tx)
+                        .await?;
+                }
+            }
+            sqlx::query("DELETE FROM chat_context_boundaries WHERE message_id=?")
+                .bind(&id)
+                .execute(&mut **tx)
+                .await?;
+            sqlx::query("DELETE FROM chat WHERE id=?")
+                .bind(&id)
+                .execute(&mut **tx)
+                .await?;
+        }
+        Ok(())
+    }
+    /// Show a run's latest unpublished message as a new row that replaces its open live
+    /// message. A new sequence number lets streaming clients see the replacement.
+    async fn replace_live_message(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        sid: &str,
+        rid: &str,
+        message_id: &str,
+        text: &str,
+    ) -> Result<()> {
+        if !message_id.starts_with(&format!("live:{rid}:"))
+            || message_id.len() > 256
+            || text.trim().is_empty()
+            || text.len() > 16384
+        {
+            return Err(anyhow!("Invalid live message"));
+        }
+        // A replayed model step finds its row already present (or already replaced).
+        let seen = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM chat WHERE id=?")
+            .bind(message_id)
+            .fetch_one(&mut **tx)
+            .await?;
+        if seen > 0 {
+            return Ok(());
+        }
+        self.drop_live_message(tx, sid, rid).await?;
+        sqlx::query("INSERT INTO chat(id,session_id,run_id,role,content,created_at,terminal_run_id) VALUES(?,?,?,'assistant',?,strftime('%s','now'),NULL)")
+            .bind(message_id).bind(sid).bind(rid)
+            .bind(self.encode_user_record(&json!(text))?).execute(&mut **tx).await?;
+        sqlx::query("INSERT INTO chat_context_boundaries(message_id,through_seq) SELECT ?,COALESCE(MAX(seq),0) FROM interactions WHERE session_id=?")
+            .bind(message_id).bind(sid).execute(&mut **tx).await?;
+        self.touch_session_activity(tx, sid).await?;
+        Ok(())
+    }
     /// Write a document; run documents also update the run index in the same
     /// transaction. Every other key goes through `StoreCore::put`.
     pub async fn put(&self, key: &str, value: &Value) -> Result<()> {
@@ -2539,6 +2626,95 @@ mod tests {
             .save_run(&mut run, "working_message", &conflict)
             .await
             .is_err());
+    }
+    /// Verify a run's live row follows its newest unpublished message, survives a user message
+    /// and run end, and gives way to an agent publication or terminal reply.
+    #[tokio::test]
+    async fn live_message_holds_one_slot_per_publication() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store
+            .put(
+                "session:live-session",
+                &json!({"id":"live-session","created_at":1}),
+            )
+            .await
+            .unwrap();
+        let mut run = json!({"id":"live-run","session_id":"live-session","status":"running",
+            "generation":"generation","lease_epoch":0,"input":[],"model_turn":1});
+        let say = |text: &str| {
+            json!({"output":[{"type":"message","role":"assistant",
+                "content":[{"type":"output_text","text":text}]}]})
+        };
+        let ids = |chat: Vec<Value>| {
+            chat.iter()
+                .map(|m| m["id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        store
+            .save_run(&mut run, "model_output", &say("One"))
+            .await
+            .unwrap();
+        run["model_turn"] = json!(2);
+        store
+            .save_run(&mut run, "model_output", &say("Two"))
+            .await
+            .unwrap();
+        // A replayed step does not duplicate the row it already wrote.
+        store
+            .save_run(&mut run, "model_output", &say("Two"))
+            .await
+            .unwrap();
+        let (chat, _) = store.chat_snapshot("live-session").await.unwrap();
+        assert_eq!(ids(chat.clone()), ["live:live-run:2:0"]);
+        assert_eq!(chat[0]["content"], "Two");
+        // A user message closes the slot; the next update opens a new one below it.
+        sqlx::query("INSERT INTO chat(id,session_id,run_id,role,content,created_at) VALUES('user:next','live-session','next','user',?,1)")
+            .bind(store.encode_user_record(&json!("?")).unwrap())
+            .execute(&store.pool).await.unwrap();
+        run["model_turn"] = json!(3);
+        store
+            .save_run(&mut run, "model_output", &say("Three"))
+            .await
+            .unwrap();
+        let payload = json!({"id":"working:live-run:3:0","text":"Published","replaces_live":true});
+        store
+            .save_run(&mut run, "working_message", &payload)
+            .await
+            .unwrap();
+        run["model_turn"] = json!(4);
+        store
+            .save_run(&mut run, "model_output", &say("Four"))
+            .await
+            .unwrap();
+        let (chat, _) = store.chat_snapshot("live-session").await.unwrap();
+        assert_eq!(
+            ids(chat),
+            [
+                "live:live-run:2:0",
+                "user:next",
+                "working:live-run:3:0",
+                "live:live-run:4:0"
+            ]
+        );
+        run["model_turn"] = json!(5);
+        run["status"] = json!("completed");
+        let mut terminal = say("Done");
+        terminal["terminal_text"] = json!("Done");
+        store
+            .save_run(&mut run, "model_output", &terminal)
+            .await
+            .unwrap();
+        let (chat, _) = store.chat_snapshot("live-session").await.unwrap();
+        assert_eq!(
+            ids(chat),
+            [
+                "live:live-run:2:0",
+                "user:next",
+                "working:live-run:3:0",
+                "assistant:live-run"
+            ]
+        );
     }
     /// Verify automatic working bubbles retain model order and reject oversized publication without partial changes.
     #[tokio::test]

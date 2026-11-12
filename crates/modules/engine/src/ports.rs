@@ -75,6 +75,26 @@ pub trait ChatEffects: Sync {
     ) -> impl Future<Output = Result<()>> + Send + 'a
     where
         'c: 'a;
+    /// Show a run's latest unpublished message in place of its open live message.
+    fn replace_live_message<'a, 'c>(
+        &'a self,
+        tx: &'a mut Transaction<'c, Sqlite>,
+        sid: &'a str,
+        rid: &'a str,
+        message_id: &'a str,
+        text: &'a str,
+    ) -> impl Future<Output = Result<()>> + Send + 'a
+    where
+        'c: 'a;
+    /// Remove a run's open live message before a published message takes its place.
+    fn drop_live_message<'a, 'c>(
+        &'a self,
+        tx: &'a mut Transaction<'c, Sqlite>,
+        sid: &'a str,
+        rid: &'a str,
+    ) -> impl Future<Output = Result<()>> + Send + 'a
+    where
+        'c: 'a;
     fn insert_chat<'a, 'c>(
         &'a self,
         tx: &'a mut Transaction<'c, Sqlite>,

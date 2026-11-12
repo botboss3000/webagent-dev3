@@ -776,7 +776,7 @@ impl<
                     .save_run_observed(
                         &mut run,
                         "working_message",
-                        &json!({"id":message_id,"text":text}),
+                        &json!({"id":message_id,"text":text,"replaces_live":true}),
                     )
                     .await?;
             } else {

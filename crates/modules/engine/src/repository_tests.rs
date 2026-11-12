@@ -260,6 +260,30 @@ impl ChatEffects for Fixture {
     {
         self.effect(tx, "working", &json!(text)).await
     }
+    async fn replace_live_message<'a, 'c>(
+        &'a self,
+        tx: &'a mut Transaction<'c, Sqlite>,
+        _: &'a str,
+        _: &'a str,
+        _: &'a str,
+        text: &'a str,
+    ) -> Result<()>
+    where
+        'c: 'a,
+    {
+        self.effect(tx, "live", &json!(text)).await
+    }
+    async fn drop_live_message<'a, 'c>(
+        &'a self,
+        tx: &'a mut Transaction<'c, Sqlite>,
+        _: &'a str,
+        _: &'a str,
+    ) -> Result<()>
+    where
+        'c: 'a,
+    {
+        self.effect(tx, "drop_live", &Value::Null).await
+    }
     async fn insert_chat<'a, 'c>(
         &'a self,
         tx: &'a mut Transaction<'c, Sqlite>,
