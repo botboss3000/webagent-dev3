@@ -1,4 +1,5 @@
 //! Installation-owned startup service configuration, separate from agent ability grants.
+//! Core recovery reads it, so it lives with the engine host, not in the Administrator pack.
 //! Reads go to the encrypted application plane every time; a caller's store or cache
 //! cannot route this policy.
 use anyhow::{anyhow, bail, Result};

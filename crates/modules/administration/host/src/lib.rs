@@ -17,7 +17,6 @@ use webagent_host_core::StoreCore;
 pub mod artifacts;
 pub mod dashboard;
 pub mod notices;
-pub mod services;
 pub mod tools;
 pub mod watch;
 mod workspace;

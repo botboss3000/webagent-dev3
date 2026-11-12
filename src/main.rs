@@ -15,14 +15,25 @@ mod ability_plugins;
 mod access_policy;
 #[path = "../crates/modules/access/host/repository.rs"]
 mod access_store;
+#[cfg(test)]
+#[path = "api/accounts/acceptance_tests.rs"]
+mod account_acceptance_tests;
+#[path = "api/accounts/authentication.rs"]
+mod account_authentication;
+#[path = "api/accounts/management.rs"]
+mod account_management;
+mod accounts;
 #[path = "../crates/modules/actions/host/actions.rs"]
 mod actions;
+mod administrator_services;
 #[path = "../crates/modules/agents/host/storage.rs"]
 mod agent_storage;
 #[path = "../crates/modules/agents/host/api.rs"]
 mod agents_api;
 mod background_followup;
 mod background_tasks;
+#[path = "api/browser_login.rs"]
+mod browser_login;
 #[path = "../crates/modules/access/host/capabilities.rs"]
 mod capabilities;
 #[path = "../crates/modules/chat/host/agent_config.rs"]
@@ -50,11 +61,15 @@ mod live_assets;
 mod live_files;
 #[path = "runtime_config.rs"]
 mod loop_runtime;
+#[path = "../crates/modules/chat/host/main_chat.rs"]
+mod main_chat;
 #[path = "../crates/modules/extensions/host/mcp/mod.rs"]
 mod mcp;
 mod model_discovery;
 #[cfg(feature = "live-context")]
 mod module_services;
+#[path = "../crates/modules/extensions/host/modules.rs"]
+mod modules;
 mod optimization;
 mod optimization_prompt;
 mod optimization_settings;
@@ -62,8 +77,16 @@ mod optimization_settings;
 mod parallel_batch;
 #[path = "../crates/modules/access/host/api.rs"]
 mod phase3_api;
+#[path = "api/accounts/registration.rs"]
+mod registration;
+#[path = "api/accounts/request_limits.rs"]
+mod request_limits;
+#[path = "../crates/modules/engine/host/services.rs"]
+mod services;
 #[path = "../crates/modules/chat/host/session_messaging.rs"]
 mod session_messaging;
+#[path = "../crates/modules/chat/host/session_naming/mod.rs"]
+mod session_naming;
 #[path = "../crates/modules/chat/host/shared_chat.rs"]
 mod shared_chat;
 #[path = "../crates/modules/chat/host/shared_projection.rs"]
@@ -74,28 +97,6 @@ mod tool_match_eval;
 mod usage_reports;
 #[path = "api/user.rs"]
 mod user_api;
-use webagent_administration_host::services;
-#[cfg(test)]
-#[path = "api/accounts/acceptance_tests.rs"]
-mod account_acceptance_tests;
-#[path = "api/accounts/authentication.rs"]
-mod account_authentication;
-#[path = "api/accounts/management.rs"]
-mod account_management;
-mod accounts;
-mod administrator_services;
-#[path = "api/browser_login.rs"]
-mod browser_login;
-#[path = "../crates/modules/chat/host/main_chat.rs"]
-mod main_chat;
-#[path = "../crates/modules/extensions/host/modules.rs"]
-mod modules;
-#[path = "api/accounts/registration.rs"]
-mod registration;
-#[path = "api/accounts/request_limits.rs"]
-mod request_limits;
-#[path = "../crates/modules/chat/host/session_naming/mod.rs"]
-mod session_naming;
 mod wake;
 // Accounts storage methods on `Store` (through `Deref` to `StoreCore`).
 use webagent_accounts_host::AccountsStore;

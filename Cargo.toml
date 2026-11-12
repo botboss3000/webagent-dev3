@@ -113,6 +113,7 @@ webagent-abilities = { path = "crates/modules/abilities", features=["test-suppor
 webagent-diagnostics = { path = "src/plugin_packages/diagnostics", features = ["test-support"] }
 webagent-engine = { path="crates/modules/engine", default-features=false, features=["test-support"] }
 webagent-models = { path = "crates/modules/models", features = ["test-support"] }
+webagent-host-core = { path = "crates/host-core", features = ["test-support"] }
 webagent-context-assets={path="crates/context-assets"}
 webagent-capability-context={path="crates/capability-context"}
 webagent-provider-projection={path="crates/provider-projection"}
