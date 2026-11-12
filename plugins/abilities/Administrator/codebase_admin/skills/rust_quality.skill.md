@@ -87,39 +87,13 @@ speedup. Explain benchmark corrections and apply them equally to both versions.
 Distinguish cold and warm caches; reset independent cases and measure intentional
 cache reuse separately.
 
-## Broker-scoped verification and acceptance
+## Verification
 
-Use one isolated broker task and its current digest for source changes, following
-the standard Codebase Admin file tools. Do not experiment in the live checkout,
-frozen releases, or inspection databases.
-
-Bind evidence to exact task inputs and environment. Capture relevant inputs,
-including untracked files, and confirm they remain unchanged after checks.
-Results that raced edits are stale. Preserve baseline evidence across candidates.
-
-build_work check/test provide locked Cargo check and test in the pinned image;
-they do not provide arbitrary benchmarks, rustfmt, Clippy, or profiling.
-Confirm a permitted execution path against exact isolated inputs before additional
-verification. Shell and Python are not automatically task-scoped. If unavailable,
-report the gap; do not substitute live-checkout measurements or claim success.
-
-Check coherent changes, then verify settled inputs. Add regression tests for
-changed behavior and benchmark evidence for performance claims. Test outcomes
-and invariants rather than mirroring implementation. Do not weaken assertions
-or suppress valid diagnostics to obtain a pass.
-
-Revert unsuccessful experiments only within the task using fresh digests.
-Never reset shared source or overwrite another writer.
-
-Accept repeatable gains only when they justify complexity, dependencies, and
-maintenance cost. Stop at the agreed budget or when remaining gains are noise
-or disproportionate to complexity. Report changes, checks, measurements,
-tradeoffs, unsuccessful approaches, and limitations. An infeasible target is
-a valid finding; never weaken correctness to meet it.
-
-Testing does not authorize deployment. Follow standard review, preflight,
-synchronization, and authorized finish. Inspect receipts and the existing task/job
-after uncertain effects; never duplicate an uncertain write or deployment.
+Bind evidence to exact task inputs; results that raced edits are stale. Add
+regression tests for changed behaviour and benchmark evidence for performance
+claims; test outcomes, not implementation. Never weaken assertions or suppress
+valid diagnostics to pass. Accept a gain only when it justifies its complexity;
+an infeasible target is a valid finding. Load `code_verification` for review.
 
 ## Code standard
 

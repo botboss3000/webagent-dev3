@@ -1,3 +1,5 @@
 # file_search
 
-Queries are literal substrings unless regex is true or the query contains `|`, which always means alternation; do not wrap them in quotes. Combine related terms into one regex call (`regex: true`, `query: "first_seq|latest_segment|run_logs"`) instead of one call per term. path may be a folder or one existing file. A search without a narrow path can stop at its time or size budget; the result then says so, so narrow the path (ui/, src/, one crate) rather than treating it as no match.
+Task file_search is a literal query across source, without regex, path or glob filters; a bounded result does not prove absence.
+
+Paths are source-relative (src/example.rs). Writes without task_id create or reuse an isolated task and return its ID; reuse it. Writes need a stable request_id and the latest expected_inputs_sha256; reread after a stale-input error. No task write may modify data/. Live files (listed in /code/live-files.json) are edited with checkout_edit instead. Pass the task ID to read or search the private draft; reads without it see published source.

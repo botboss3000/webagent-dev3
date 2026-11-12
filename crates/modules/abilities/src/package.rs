@@ -141,7 +141,7 @@ pub const AUTOMATION_TOOLS: &[&str] = &[
 /// Automation's runtime assets besides its tool definitions.
 const AUTOMATION_ASSETS: [&str; 6] = [
     "automation.json",
-    "automation.skill.md",
+    "skills/automation.skill.md",
     "service/package.json",
     "service/page.json",
     "service/page.js",
@@ -729,7 +729,12 @@ pub mod registered_tests {
             let path = root.join("Custom/fixture_ability");
             std::fs::create_dir_all(path.join("skills")).unwrap();
             std::fs::write(path.join("fixture_ability.json"),serde_json::to_vec(&json!({"display_name":"Fixture","kind":"ability","description":"New drop-in ability","readiness":"ready","tools":["fixture_echo"]})).unwrap()).unwrap();
-            std::fs::write(path.join("fixture_ability.skill.md"), "First guidance").unwrap();
+            std::fs::create_dir_all(path.join("skills")).unwrap();
+            std::fs::write(
+                path.join("skills/fixture_ability.skill.md"),
+                "First guidance",
+            )
+            .unwrap();
             std::fs::write(path.join("runner.py"), "print('fixture')").unwrap();
             std::fs::write(path.join("plugin.json"),serde_json::to_vec(&json!({"id":"fixture_ability","dispatch":"isolated","protocol":1,"interface":1,"runtime":"python3","entrypoint":"runner.py","schemas":"schemas.json","effect":"write","tools":["fixture_echo"]})).unwrap()).unwrap();
             std::fs::write(path.join("schemas.json"),serde_json::to_vec(&json!([{"type":"function","name":"fixture_echo","description":"Echo supplied text","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}}])).unwrap()).unwrap();
@@ -749,7 +754,12 @@ pub mod registered_tests {
                 "First guidance"
             );
             let old_version = catalog.version().to_owned();
-            std::fs::write(path.join("fixture_ability.skill.md"), "Updated guidance").unwrap();
+            std::fs::create_dir_all(path.join("skills")).unwrap();
+            std::fs::write(
+                path.join("skills/fixture_ability.skill.md"),
+                "Updated guidance",
+            )
+            .unwrap();
             let next = Catalog::<H>::load_snapshot(dir.path()).unwrap();
             assert_ne!(old_version, next.version());
             assert_eq!(
@@ -773,8 +783,7 @@ pub mod registered_tests {
             let path = package::<H>(dir.path());
             let p = path.join("plugin.json");
             let mut manifest: Value = serde_json::from_slice(&std::fs::read(&p).unwrap()).unwrap();
-            manifest["build"] =
-                json!({"inputs":["runner.py","helper.py"],"assets":["fixture_ability.skill.md"]});
+            manifest["build"] = json!({"inputs":["runner.py","helper.py"],"assets":["skills/fixture_ability.skill.md"]});
             std::fs::write(path.join("helper.py"), "VALUE = 1").unwrap();
             std::fs::write(&p, serde_json::to_vec(&manifest).unwrap()).unwrap();
             let before = Package::load::<H>(&path, "fixture_ability", &["fixture_echo".into()])
@@ -790,7 +799,12 @@ pub mod registered_tests {
                 .unwrap();
             assert_ne!(before.generation, next.generation);
             assert_eq!(before.legacy_generation, next.legacy_generation);
-            std::fs::write(path.join("fixture_ability.skill.md"), "Changed asset").unwrap();
+            std::fs::create_dir_all(path.join("skills")).unwrap();
+            std::fs::write(
+                path.join("skills/fixture_ability.skill.md"),
+                "Changed asset",
+            )
+            .unwrap();
             let asset = Package::load::<H>(&path, "fixture_ability", &["fixture_echo".into()])
                 .unwrap()
                 .unwrap();

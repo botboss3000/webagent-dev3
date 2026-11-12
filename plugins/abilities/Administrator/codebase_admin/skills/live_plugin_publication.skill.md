@@ -87,8 +87,6 @@ Declare each configuration setting's adoption point: immediately, next request/m
 
 Verify relevant additions, updates, removals, invalid candidates, compatibility rejection, rollback, active runs, recovery and permission revocation. Check actual API and loop consumers; metadata or a host-file hash alone does not establish new model context. For a no-compile release, verify the broker lane and unchanged application images/container identities as appropriate.
 
-If admission refuses a `plugin_deploy` with "General ability runtime contract unavailable", nothing was built or published: the broker could not get the worker's plugin protocol reply over `/runtime/worker/tools.sock`. Check the worker socket before changing the release; do not retry the identical finish.
-
 Report separately what was edited, published, adopted, compiled/restarted and behaviorally verified. Use the checkout AGENTS.md and Codebase Admin task workflow; this skill adds no per-release approval requirement and never expands the requested scope.
 
 ## Engine component extraction ledger

@@ -16,6 +16,12 @@ configuration change therefore ships its descriptor change in the same patch. Th
 in `crates/modules/configuration/src/catalog.rs` fail when a live file or one of its values is
 neither described nor excluded with a reason.
 
+## Standing rules
+
+Keep one live config file next to the code that reads it, with no seeded copies.
+Move hard-coded tunables into JSON config rather than adding constants. Ship the
+setting descriptor in the same patch as the value.
+
 ## Where things live
 
 - One live file per owner, next to its code, listed in `live-files.json`. No seeded copies.

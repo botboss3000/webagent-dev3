@@ -311,6 +311,11 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
         .with_context(|| format!("Invalid ability manifest: {}", path.display()))
 }
 
+/// An ability's own guidance: `skills/<ability>.skill.md`.
+pub(crate) fn primary_skill_path(ability: &Path, id: &str) -> PathBuf {
+    ability.join("skills").join(format!("{id}.skill.md"))
+}
+
 pub(crate) fn optional_skill(path: &Path) -> Result<Option<String>> {
     match fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -496,6 +501,10 @@ impl<H: Host> Catalog<H> {
                 if !valid_id(&id) || !ids.insert(id.clone()) {
                     bail!("Invalid or duplicate ability identifier: {id}");
                 }
+                // Core/base holds only Base guidance files; Base itself is built in below.
+                if group_id == "Core" && id == crate::base::ID {
+                    continue;
+                }
                 if matches!(id.as_str(), "optimization" | crate::base::ID) {
                     bail!("Ability ID is reserved for its executable plugin");
                 }
@@ -663,6 +672,10 @@ impl<H: Host> Catalog<H> {
                         let Some(key) = filename.strip_suffix(".skill.md") else {
                             bail!("Invalid selectable skill asset: {id}");
                         };
+                        // `skills/<ability>.skill.md` is the ability's own guidance.
+                        if key == id {
+                            continue;
+                        }
                         if !valid_id(key) || selectable_skills.len() >= 32 {
                             bail!("Invalid selectable skill identifier: {id}");
                         }
@@ -674,7 +687,7 @@ impl<H: Host> Catalog<H> {
                 if !manifest.config.is_null() && !manifest.config.is_object() {
                     bail!("Invalid configuration metadata: {id}");
                 }
-                let skill = optional_skill(&ability_path.join(format!("{id}.skill.md")))?;
+                let skill = optional_skill(&primary_skill_path(&ability_path, &id))?;
                 abilities.push(Ability {
                     id,
                     path: ability_path,
@@ -748,10 +761,24 @@ impl<H: Host> Catalog<H> {
             .map_or(("Core".to_string(), 1), |core| {
                 (core.group_name.clone(), core.group_order)
             });
+        let base_path = root.join("Core").join(crate::base::ID);
+        let base_skill = optional_skill(&primary_skill_path(&base_path, crate::base::ID))?;
+        let mut base_tool_skills = BTreeMap::new();
+        for (tool, file) in crate::base::TOOL_SKILLS {
+            if let Some(text) =
+                optional_skill(&base_path.join("tools").join(format!("{file}.skill.md")))?
+            {
+                base_tool_skills.insert(tool.to_string(), text);
+            }
+        }
+        let base_digest = hex::encode(Sha256::digest(serde_json::to_vec(&json!([
+            base_skill,
+            base_tool_skills
+        ]))?));
         abilities.push(Ability {
             id: crate::base::ID.into(),
-            path: PathBuf::new(),
-            manifest_digest: hex::encode(Sha256::digest(crate::base::SKILL.as_bytes())),
+            path: base_path,
+            manifest_digest: base_digest,
             manifest_bytes_digest: String::new(),
             tool_folders: None,
             plugin: None,
@@ -774,11 +801,8 @@ impl<H: Host> Catalog<H> {
                 .iter()
                 .map(|tool| tool.to_string())
                 .collect(),
-            skill: Some(crate::base::SKILL.into()),
-            tool_skills: crate::base::TOOL_SKILLS
-                .iter()
-                .map(|(tool, text)| (tool.to_string(), text.to_string()))
-                .collect(),
+            skill: base_skill,
+            tool_skills: base_tool_skills,
             selectable_skills: BTreeMap::new(),
         });
         abilities.sort_by(|a, b| {
@@ -913,9 +937,7 @@ impl<H: Host> Catalog<H> {
             .parent()?
             .join(format!("plugins/abilities/Administrator/{}", ability.id));
         match kind {
-            "ability" if name == ability.id => {
-                Some(folder.join(format!("{}.skill.md", ability.id)))
-            }
+            "ability" if name == ability.id => Some(primary_skill_path(&folder, &ability.id)),
             "tool" if ability.tools.iter().any(|tool| tool == name) => {
                 Some(crate::tool_definitions::skill_path(&folder, name))
             }
@@ -938,7 +960,7 @@ impl<H: Host> Catalog<H> {
         name: &str,
         cached: &'a str,
     ) -> Option<Cow<'a, str>> {
-        // Base guidance is compiled in, so the cached text is always current.
+        // Base guidance is read with each catalog load, so the cached text is current.
         if ability.id == crate::base::ID {
             let declared = match kind {
                 "ability" => name == ability.id,
@@ -973,7 +995,7 @@ impl<H: Host> Catalog<H> {
         let path = live
             .or_else(|| Self::published_skill(ability, kind, name))
             .unwrap_or_else(|| match kind {
-                "ability" => ability.path.join(format!("{name}.skill.md")),
+                "ability" => primary_skill_path(&ability.path, name),
                 "tool" => crate::tool_definitions::skill_path(&ability.path, name),
                 _ => ability.path.join("skills").join(format!("{name}.skill.md")),
             });
@@ -2209,7 +2231,7 @@ pub mod registered_tests {
             let (root, catalog) = fixture::<H>();
             let mut ability = catalog.abilities[0].clone();
             let ui = root.path().join("assets/current/v3/ui");
-            assert_eq!(Catalog::<H>::published_skill_path(&ability, "ability", "codebase_admin", Some(&ui)).unwrap(),root.path().join("assets/current/v3/plugins/abilities/Administrator/codebase_admin/codebase_admin.skill.md"));
+            assert_eq!(Catalog::<H>::published_skill_path(&ability, "ability", "codebase_admin", Some(&ui)).unwrap(),root.path().join("assets/current/v3/plugins/abilities/Administrator/codebase_admin/skills/codebase_admin.skill.md"));
             ability.tools = vec!["file_read".into()];
             assert!(
                 Catalog::<H>::published_skill_path(&ability, "tool", "../secret", Some(&ui))
@@ -2260,8 +2282,9 @@ pub mod registered_tests {
             "description":"Inspect and edit an isolated workspace",
             "tools":["file_list","file_read","file_search","state_inspect","prompt_slot_read","prompt_slot_write","file_write","file_edit","workspace_seed","source_review","source_patch","shell","python"]
         }"#).unwrap();
+            fs::create_dir_all(ability.join("skills")).unwrap();
             fs::write(
-                ability.join("codebase_admin.skill.md"),
+                ability.join("skills/codebase_admin.skill.md"),
                 "Use scoped workspace tools.",
             )
             .unwrap();
@@ -2281,7 +2304,8 @@ pub mod registered_tests {
             let folder = root.path().join("Administrator/codebase_admin");
             let core = format!("CORE-BEGIN{}CORE-END", "c".repeat(30000));
             let tool = format!("TOOL-BEGIN{}TOOL-END", "t".repeat(30000));
-            fs::write(folder.join("codebase_admin.skill.md"), &core).unwrap();
+            fs::create_dir_all(folder.join("skills")).unwrap();
+            fs::write(folder.join("skills/codebase_admin.skill.md"), &core).unwrap();
             fs::write(folder.join("tools/file_edit.skill.md"), &tool).unwrap();
             let catalog = Catalog::<H>::load(root.path()).unwrap();
             let p = policy::<H>();
@@ -2478,7 +2502,6 @@ pub mod registered_tests {
         >() {
             let (root, _) = fixture::<H>();
             let folder = root.path().join("Administrator/codebase_admin");
-            fs::create_dir(folder.join("skills")).unwrap();
             let theme = "---\nid: ui_theming\ntitle: UI theming\nwhen_to_use: Use for theme changes\ndefault_mode: visible\n---\nScoped theme guidance";
             fs::write(folder.join("skills/ui_theming.skill.md"), theme).unwrap();
             fs::write(folder.join("skills/ui_toggle_list.skill.md"),
@@ -2615,7 +2638,7 @@ pub mod registered_tests {
                 .unwrap()
                 .iter()
                 .any(|s| s["skill_id"] == "ui_theming"));
-            fs::remove_file(folder.join("codebase_admin.skill.md")).unwrap();
+            fs::remove_file(folder.join("skills/codebase_admin.skill.md")).unwrap();
             fs::remove_file(folder.join("tools/file_edit.skill.md")).unwrap();
             let guidance = catalog.visible_guidance(&policy::<H>(), &visible, &active);
             assert!(!guidance.contains("Use scoped workspace tools."));
@@ -2628,7 +2651,7 @@ pub mod registered_tests {
             use std::os::unix::fs::symlink;
             let (root, catalog) = fixture::<H>();
             let folder = root.path().join("Administrator/codebase_admin");
-            let path = folder.join("codebase_admin.skill.md");
+            let path = folder.join("skills/codebase_admin.skill.md");
             let original = fs::read(&path).unwrap();
             let alternate = root.path().join("replacement.skill.md");
             fs::write(&alternate, original).unwrap();
@@ -2733,7 +2756,7 @@ pub mod registered_tests {
             assert_eq!(catalog.configuration_skill("missing"), None);
             fs::write(
                 root.path()
-                    .join("Administrator/codebase_admin/codebase_admin.skill.md"),
+                    .join("Administrator/codebase_admin/skills/codebase_admin.skill.md"),
                 "changed",
             )
             .unwrap();
@@ -2846,8 +2869,9 @@ pub mod registered_tests {
                 "description":"Unsupported Computer Control","tools":["computer_screenshot"]}"#,
             )
             .unwrap();
+            fs::create_dir_all(path.join("skills")).unwrap();
             fs::write(
-                path.join("computer_control.skill.md"),
+                path.join("skills/computer_control.skill.md"),
                 "Control the excluded attached computer.",
             )
             .unwrap();
@@ -2973,7 +2997,7 @@ pub mod registered_tests {
             let (root, catalog) = fixture::<H>();
             fs::write(
                 root.path()
-                    .join("Administrator/codebase_admin/codebase_admin.skill.md"),
+                    .join("Administrator/codebase_admin/skills/codebase_admin.skill.md"),
                 "New skill guidance",
             )
             .unwrap();
@@ -3226,8 +3250,9 @@ pub mod registered_tests {
                     .unwrap(),
                 )
                 .unwrap();
+                fs::create_dir_all(path.join("skills")).unwrap();
                 fs::write(
-                    path.join(format!("{id}.skill.md")),
+                    path.join(format!("skills/{id}.skill.md")),
                     "Unsafe v2 instructions",
                 )
                 .unwrap();

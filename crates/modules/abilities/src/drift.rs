@@ -394,7 +394,7 @@ fn declared_tools(key: &str, files: &BTreeMap<String, Vec<u8>>) -> BTreeSet<Stri
 
 /// The guidance a path holds, as (kind, name).
 fn guidance_file(id: &str, path: &str) -> Option<(&'static str, String)> {
-    if path == format!("{id}.skill.md") {
+    if path == format!("skills/{id}.skill.md") {
         return Some(("ability", id.to_owned()));
     }
     if let Some(tool) = in_tool_folder(path) {
@@ -436,7 +436,7 @@ mod tests {
         let (old, new) = (temp.path().join("old"), temp.path().join("new"));
         for root in [&old, &new] {
             write(root, "Core/files/files.json", r#"{"name":"Files"}"#);
-            write(root, "Core/files/files.skill.md", "Files guidance");
+            write(root, "Core/files/skills/files.skill.md", "Files guidance");
             write(root, "Core/files/adapter.rs", "fn main() {}");
             write(
                 root,
@@ -487,7 +487,11 @@ mod tests {
             "Core/files/tools/read_file/tool.skill.md",
             "New read guidance",
         );
-        write(&new, "Core/files/files.skill.md", "New files guidance");
+        write(
+            &new,
+            "Core/files/skills/files.skill.md",
+            "New files guidance",
+        );
         let drift = compare(&old, &new).unwrap();
         assert!(drift.notices.is_empty(), "{:?}", drift.notices);
         assert_eq!(
@@ -500,7 +504,7 @@ mod tests {
         );
         assert_eq!(
             drift.guidance("files", "ability", "files").unwrap(),
-            new.join("Core/files/files.skill.md")
+            new.join("Core/files/skills/files.skill.md")
         );
         assert!(!drift.disabled("read_file"));
     }

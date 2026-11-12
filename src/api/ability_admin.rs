@@ -1298,7 +1298,7 @@ mod tests {
         let path = (
             "shared_default".into(),
             "codebase_admin".into(),
-            "ui_theming".into(),
+            "ui_design".into(),
         );
         skill_named_set(
             State(app.clone()),
@@ -1312,10 +1312,7 @@ mod tests {
         .await
         .unwrap();
         let saved = app.store.agent_abilities().await.unwrap();
-        assert_eq!(
-            saved["skill_visibility"]["codebase_admin:ui_theming"],
-            "off"
-        );
+        assert_eq!(saved["skill_visibility"]["codebase_admin:ui_design"], "off");
         assert_eq!(
             saved["skill_visibility"]["codebase_admin"],
             before["skill_visibility"]["codebase_admin"]

@@ -84,7 +84,7 @@
     "flags": [],
     "assets": [
       "web_search.json",
-      "web_search.skill.md",
+      "skills/web_search.skill.md",
       "tools/web_search/tool.json",
       "tools/web_search/tool.skill.md",
       "tools/web_read/tool.json",

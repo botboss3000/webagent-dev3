@@ -77,8 +77,8 @@ fn synthetic_codebase_admin(root: &std::path::Path) {
         .unwrap();
     }
     std::fs::write(
-        ability.join("skills/ui_theming.skill.md"),
-        "---\nid: ui_theming\ntitle: UI theming\nwhen_to_use: Use when changing UI colours.\n---\nUse theme tokens.",
+        ability.join("skills/ui_design.skill.md"),
+        "---\nid: ui_design\ntitle: UI design\nwhen_to_use: Use when changing UI colours.\n---\nUse theme tokens.",
     )
     .unwrap();
     std::fs::write(
@@ -102,8 +102,9 @@ fn synthetic_codebase_admin(root: &std::path::Path) {
         serde_json::to_vec(&manifest).unwrap(),
     )
     .unwrap();
+    std::fs::create_dir_all(ability.join("skills")).unwrap();
     std::fs::write(
-        ability.join("codebase_admin.skill.md"),
+        ability.join("skills/codebase_admin.skill.md"),
         "# Codebase Admin\n\nUse scoped workspace tools.",
     )
     .unwrap();
@@ -8333,8 +8334,9 @@ async fn removed_manifest_withdraws_cached_schemas_and_guidance_within_run() {
         .unwrap(),
     )
     .unwrap();
+    std::fs::create_dir_all(directory.join("skills")).unwrap();
     std::fs::write(
-        directory.join("codebase_admin.skill.md"),
+        directory.join("skills/codebase_admin.skill.md"),
         "CACHE_WITHDRAWAL_GUIDANCE_SENTINEL",
     )
     .unwrap();
@@ -8440,8 +8442,9 @@ async fn bundle_withdrawal_during_credentials_rebuilds_before_provider_dispatch(
             .unwrap(),
         )
         .unwrap();
+        std::fs::create_dir_all(directory.join("skills")).unwrap();
         std::fs::write(
-            directory.join("codebase_admin.skill.md"),
+            directory.join("skills/codebase_admin.skill.md"),
             "DISPATCH_RACE_GUIDANCE",
         )
         .unwrap();

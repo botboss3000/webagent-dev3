@@ -36,7 +36,7 @@
     "flags": [],
     "assets": [
       "automation.json",
-      "automation.skill.md",
+      "skills/automation.skill.md",
       "service/package.json",
       "service/page.json",
       "service/page.js",

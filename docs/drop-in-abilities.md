@@ -117,7 +117,7 @@ and skills/ selectable guidance. Add plugin.json and schemas.json:
         "inputs": ["runner.py"],
         "dependencies": [],
         "flags": [],
-        "assets": ["example.json", "example.skill.md", "schemas.json"]
+        "assets": ["example.json", "skills/example.skill.md", "schemas.json"]
       }
     }
 

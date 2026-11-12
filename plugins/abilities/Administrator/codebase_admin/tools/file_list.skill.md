@@ -1,3 +1,5 @@
 # file_list
 
-List a folder in the live checkout (/code/...), this session's workspace, or a broker draft (with broker_id). Pages use offset and limit.
+file_list pages use offset from 0 and limit at most 100.
+
+Paths are source-relative (src/example.rs). Writes without task_id create or reuse an isolated task and return its ID; reuse it. Writes need a stable request_id and the latest expected_inputs_sha256; reread after a stale-input error. No task write may modify data/. Live files (listed in /code/live-files.json) are edited with checkout_edit instead. Pass the task ID to read or search the private draft; reads without it see published source.

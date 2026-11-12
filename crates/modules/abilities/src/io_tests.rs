@@ -96,7 +96,7 @@ fn package(root: &Path) -> PathBuf {
         ),
         (
             "plugin.json",
-            json!({"id":"fixture_echo","dispatch":"isolated","protocol":1,"interface":1,"runtime":"python3","entrypoint":"runner.py","schemas":"schemas.json","effect":"write","tools":["fixture_echo"],"build":{"inputs":["runner.py","helper.py"],"assets":["fixture_echo.skill.md"]}}),
+            json!({"id":"fixture_echo","dispatch":"isolated","protocol":1,"interface":1,"runtime":"python3","entrypoint":"runner.py","schemas":"schemas.json","effect":"write","tools":["fixture_echo"],"build":{"inputs":["runner.py","helper.py"],"assets":["skills/fixture_echo.skill.md"]}}),
         ),
         (
             "schemas.json",
@@ -105,7 +105,12 @@ fn package(root: &Path) -> PathBuf {
     ] {
         std::fs::write(path.join(name), serde_json::to_vec(&body).unwrap()).unwrap();
     }
-    std::fs::write(path.join("fixture_echo.skill.md"), "Original guidance").unwrap();
+    std::fs::create_dir_all(path.join("skills")).unwrap();
+    std::fs::write(
+        path.join("skills/fixture_echo.skill.md"),
+        "Original guidance",
+    )
+    .unwrap();
     std::fs::write(path.join("runner.py"), "print('fixture')").unwrap();
     std::fs::write(path.join("helper.py"), "VALUE=1").unwrap();
     path

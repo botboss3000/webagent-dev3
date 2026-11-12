@@ -14,10 +14,6 @@ Determine what the evidence actually establishes. Keep verification independent
 from implementation assumptions, distinguish requirements from general quality,
 and do not repair findings under a review-only request.
 
-Supplement the standard Codebase Admin skill. Repository instructions, current
-tool schemas, and live runtime policy remain authoritative. This skill grants
-neither tool access nor deployment authorization. Work on v3 only; v2 is
-read-only reference material and production requires a separate explicit request.
 
 ## Preserve verification independence
 
@@ -86,130 +82,24 @@ Prefer evidence in this order when applicable:
 Lower-ranked evidence may be appropriate when execution is unsafe or unavailable.
 State the limitation rather than overstating certainty.
 
-## Use the available v3 tools
+## Evidence identity and boundaries
 
-Check the current catalog, tool schemas, activation and effective policy first.
-Manifest presence and historical tool guidance do not establish callability.
-Use exact available ability/tool IDs; natural-language discovery can miss tools.
-Tool settings never grant permission. Honor approvals, revocation, cancellation,
-session mode, installation policy, account tier and membership.
-
-### Source and diff inspection
-
-Use file_list, file_read and file_search. For an existing isolated change, reuse
-its exact task_id and read its source rather than a similarly named live file.
-A task-scoped read can seed a missing task; this creates a snapshot, not authority
-to edit or deploy. Do not create a replacement task just to inspect an existing
-one. Live file reads identify live checkout evidence, not candidate evidence.
-
-Task paths are source-relative, such as src/example.rs. file_list uses offset
-from zero and limit at most 100; file_read uses one-based offset and limit at
-most 200. Continue pagination until affected functions and context are complete.
-Task file_search is literal across source, without regex/path/glob/comment
-filters. Narrow searches and inspect matches; do not infer absence from a bounded
-or truncated result.
-
-Use build_work(action="review", task_id=...) for the task diff and current digest,
-and status for lifecycle/job state. Review baseline, tracked changes and new
-files; a truncated diff is incomplete evidence. Obtain repository Git status and
-baseline evidence through the permitted inspection path or authorized bounded
-shell; file listings alone do not prove Git state.
-
-### Existing checks and evidence identity
-
-Use build_work(action="check", task_id=..., expected_inputs_sha256=...,
-check="check", "test" or "ui_test", timeout_seconds=...) against exact isolated inputs.
-The digest must come from a fresh task read/list/review; timeout is 1-600 seconds.
-
-- check="check" runs cargo check --locked in the pinned Rust image.
-- check="test" runs cargo test --locked -- --test-threads=1 there.
-- check="ui_test" runs the browser fixtures the task's changed paths select, as a
-  release's UI stage does, and never deploys. Run it before finish for UI changes:
-  a failure's log_excerpt carries the fixture output, including each uncaught page
-  error (printed as "pageerror: ..."), which a failed release's receipt may cut off.
-- Task source is read-only during these checks and Cargo output is separate.
-- This interface does not offer arbitrary commands, targeted test filters,
-  formatting, Clippy, standalone doctest selection, benchmarks or profiling.
-  Do not invent actions or unsupported parameters.
-
-Record task_id, baseline, input digest, command/check type, environment/toolchain,
-completion status, exit status when exposed, and material results. Include
-relevant untracked inputs. Confirm source/build inputs remain unchanged after
-checks; a run racing edits is stale even when green. Inspection database snapshots
-are separate inputs requiring their own attestation, not application build inputs.
-
-A returned job/task handle or pending receipt is not completed verification.
-Inspect the existing status/job and completion evidence. After uncertainty,
-inspect receipts and effects rather than blindly repeating the operation.
-
-### Shell, Python and additional checks
-
-shell and python start from /code, subject to current policy and OS
-mount permissions. They are not automatically scoped to a broker task and are
-not isolated from sibling v3 workspaces. Inspect proposed effects and coordinate
-shared outputs before running them; never use them to bypass task editing,
-approval or broker restrictions.
-
-Discover check commands from repository documentation, manifests, CI and nearby
-conventions. Confirm toolchain availability and a permitted execution path bound
-to exact isolated inputs before running additional checks. Do not install tools
-merely for a review or substitute live-checkout results for task verification.
-Report unavailable formatting, linting, targeted tests, worker suites, profiling,
-coverage or other required layers as gaps.
-
-### Independent packages and release identity
-
-Load live_plugin_publication before evaluating ability/plugin guidance, JSON,
-UI, Python or other non-Rust changes. Select verification and publication by
-actual consumers and dependencies, not filename extensions. Protocol-compatible
-Codebase Admin package updates can use plugin_deploy without replacing core
-containers; new tool/schema interfaces or selectable catalog IDs require
-coordinated installation under the current loader.
-
-Live file results identify implementation_version, implementation_sha256 and
-plugin_revision. Compare the executable hash to establish which code executed.
-A changed immutable package revision may contain only guidance changes and does
-not prove a new executable. API and loop adopt existing published guidance at
-model-call boundaries; each worker invocation pins its package revision.
-
-Bind evidence separately to task source, executable implementation, guidance/
-catalog revision and deployed release. Verify the actual API and loop consumers,
-not only the host file or content endpoint. For an authorized no-compile
-publication, confirm the broker lane and retained image/container identities.
-Do not force a lane with incidental edits, bypass the broker, or implement a
-loader migration during an unrelated verification request.
-
-### Runtime and browser acceptance
-
-Runtime evidence validates the deployed release, not an undeployed task candidate.
-Record the release identity and reconcile it with the reviewed inputs before
-claiming runtime acceptance of a change. Verification alone does not authorize
-build_work finish/decide, restart, deployment or synchronization writes. When the
-larger request authorizes release, follow standard review, unchanged-input checks,
-preflight, synchronization and healthy-release verification. Inspect the same
-durable job after interruptions; never duplicate an uncertain finish.
-
-Use Diagnostics read_diagnostics for bounded sanitized current-session/run
-checkpoints. It is not evidence of raw model text, tool arguments/results or
-private receipt reasons. state_inspect supplies bounded current-session metadata,
-not arbitrary sessions or unrestricted databases. Never bypass these boundaries
-or print credentials. Read-only broker inspection snapshots may be used only
-through their supported bounded text exports; never patch them.
-
-For browser validation, load Browser Control and applicable journey guidance and
-resolve the registered v3 route first. Navigating Browser Control to the app signs
-it in as the current caller and returns once the app has booted; browser_read,
-browser_input and browser_record then work on accepted routes at the fixed
-development origin under current authority. Do not assume arbitrary API,
-other-session or JavaScript access. Read before each click/type and after
-observation invalidation. After uncertain input, inspect current state before
-another action. Screenshots are bounded masked PNG evidence attached to the reply;
-browser_record produces bounded PNG frames, not a video. Close the browser and stop
-recording after use.
-
-Honor API-only validation when requested. Use an available authorized API path;
-the private browser's bounded API routes are not a general API client. Report
-inaccessible coverage rather than forcing a browser journey.
+- Check the live catalog, activation and effective policy before relying on a
+  tool; manifest presence and old guidance do not prove callability. Each
+  tool's own skill gives its actions and limits.
+- Read an existing isolated change from its own work item, not a similarly
+  named live file. Live reads are live evidence, not candidate evidence.
+- Record the work item, baseline, input digest, check, environment and result.
+  Confirm inputs stay unchanged; a run racing edits is stale even when green. A
+  pending job is not completed verification.
+- Bind evidence separately to task source, executable, guidance/catalog revision
+  and deployed release. Runtime evidence validates the deployed release, not an
+  undeployed candidate. For non-Rust changes load `live_plugin_publication`.
+- Verification never authorises finish, restart, deployment or synchronization.
+  Never duplicate an uncertain finish. Honour API-only validation when asked;
+  report inaccessible coverage instead of forcing a browser journey.
+- Never bypass bounded inspection tools, read application databases or print
+  credentials.
 
 ## Review in evidence-producing passes
 
@@ -303,34 +193,14 @@ Investigate failures sufficiently to classify them:
 Do not call failure pre-existing without baseline evidence, flaky merely because
 a retry passed, or silently retry until green. Do not automatically fix the cause.
 
-## Use adaptive parallelism
+## Parallel checks
 
-Parallel execution is optional and grants no new tools or authority. Discover
-available task-execution support, workers, CPU/memory and isolation; retain a
-sequential fallback. Do not invent reviewer agents or delegation tools.
-
-When supported and within scope, start with two to four independent workers and
-adapt to contention/project guidance. Assign orthogonal read-only questions and
-raw target context; do not supply another reviewer's conclusion as the expected
-answer. Use only effective Rust execution flags and consume actual completion
-evidence. Diagnostics remains foreground/stop with concurrency one.
-
-Parallelize only if every answer is yes:
-
-1. No ordering dependency?
-2. No shared mutable state, or proven isolation?
-3. No races on outputs, caches, fixtures, snapshots or generated files?
-4. Each result attributable to a command and environment?
-5. Coordinator responsible for aggregation and contradictions?
-
-Serialize shared database, port, service, filesystem fixture, rate-limited API,
-device, account and live-environment checks unless isolation is proven.
-Broker scheduling remains authoritative; separate output directories alone do
-not establish concurrency safety.
-
-Aggregate centrally, deduplicate findings, resolve contradictions against primary
-evidence, and run required integrated checks on the final state. Parallel agreement
-is not proof; one direct reproducible result outweighs unsupported summaries.
+Parallelism is optional and grants no new tools. Run checks in parallel only
+when they have no ordering dependency, no shared mutable state or output races,
+and each result stays attributable; serialize shared databases, ports, services,
+accounts and live-environment checks. Aggregate centrally, resolve
+contradictions against primary evidence, and run required integrated checks on
+the final state. Agreement between workers is not proof.
 
 ## Grade evidence and findings
 

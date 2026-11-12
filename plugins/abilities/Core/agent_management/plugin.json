@@ -57,7 +57,7 @@
     "flags": [],
     "assets": [
       "agent_management.json",
-      "agent_management.skill.md",
+      "skills/agent_management.skill.md",
       "tools/create_agent/tool.json",
       "tools/delegate_to_agent/tool.json",
       "tools/edit_agent_prompt/tool.json",

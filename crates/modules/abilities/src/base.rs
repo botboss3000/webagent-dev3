@@ -1,5 +1,5 @@
 //! Base: the built-in core tools every agent has. Their handlers, schemas and role
-//! defaults are compiled in; no `plugins/abilities` folder controls them. Capability
+//! defaults are compiled in; `plugins/abilities/Core/base` holds only their guidance. Capability
 //! levels, saved tool permissions, account tiers and installation policy still apply.
 use webagent_access::Permission;
 
@@ -55,70 +55,27 @@ pub const TOOLS: &[&str] = &[
     "test_owner_purchase",
 ];
 
-pub const SKILL: &str = include_str!("../base/base.skill.md");
-
+/// Tool skill files under `plugins/abilities/Core/base/tools/`, as (tool, file stem).
 /// One skill covers the three session-script tools.
-const SCRIPTS_SKILL: &str = include_str!("../base/tools/session_scripts.skill.md");
-
-/// Usage guidance per tool, served like a tool folder's `tool.skill.md`.
 pub const TOOL_SKILLS: &[(&str, &str)] = &[
-    (
-        "calculate",
-        include_str!("../base/tools/calculate.skill.md"),
-    ),
-    (
-        "context_assets",
-        include_str!("../base/tools/context_assets.skill.md"),
-    ),
-    ("get_date", include_str!("../base/tools/get_date.skill.md")),
-    ("get_time", include_str!("../base/tools/get_time.skill.md")),
-    (
-        "list_skills",
-        include_str!("../base/tools/list_skills.skill.md"),
-    ),
-    (
-        "list_tools",
-        include_str!("../base/tools/list_tools.skill.md"),
-    ),
-    (
-        "load_skill",
-        include_str!("../base/tools/load_skill.skill.md"),
-    ),
-    (
-        "load_tool",
-        include_str!("../base/tools/load_tool.skill.md"),
-    ),
-    (
-        "main_notes_read",
-        include_str!("../base/tools/main_notes_read.skill.md"),
-    ),
-    (
-        "main_notes_write",
-        include_str!("../base/tools/main_notes_write.skill.md"),
-    ),
-    ("script_save", SCRIPTS_SKILL),
-    ("script_list", SCRIPTS_SKILL),
-    ("script_run", SCRIPTS_SKILL),
-    (
-        "read_attachment",
-        include_str!("../base/tools/read_attachment.skill.md"),
-    ),
-    (
-        "read_own_prompt",
-        include_str!("../base/tools/read_own_prompt.skill.md"),
-    ),
-    (
-        "search_this_session",
-        include_str!("../base/tools/search_this_session.skill.md"),
-    ),
-    (
-        "background_cancel",
-        include_str!("../base/tools/background_cancel.skill.md"),
-    ),
-    (
-        "background_status",
-        include_str!("../base/tools/background_status.skill.md"),
-    ),
+    ("calculate", "calculate"),
+    ("context_assets", "context_assets"),
+    ("get_date", "get_date"),
+    ("get_time", "get_time"),
+    ("list_skills", "list_skills"),
+    ("list_tools", "list_tools"),
+    ("load_skill", "load_skill"),
+    ("load_tool", "load_tool"),
+    ("main_notes_read", "main_notes_read"),
+    ("main_notes_write", "main_notes_write"),
+    ("script_save", "session_scripts"),
+    ("script_list", "session_scripts"),
+    ("script_run", "session_scripts"),
+    ("read_attachment", "read_attachment"),
+    ("read_own_prompt", "read_own_prompt"),
+    ("search_this_session", "search_this_session"),
+    ("background_cancel", "background_cancel"),
+    ("background_status", "background_status"),
 ];
 
 pub fn owns(name: &str) -> bool {

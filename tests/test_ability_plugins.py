@@ -4,7 +4,7 @@ import test_admin_build as fixtures
 ROOT=Path(__file__).resolve().parents[1]
 class PublicationTests(unittest.TestCase):
     def test_general_assets_and_core_inputs_use_different_lanes(self):
-        for path in ("plugins/abilities/Core/base/base.skill.md","plugins/abilities/Custom/new/new.json","plugins/abilities/Custom/new/skills/extra.skill.md","config/prompts.json"):
+        for path in ("plugins/abilities/Core/base/skills/base.skill.md","plugins/abilities/Custom/new/new.json","plugins/abilities/Custom/new/skills/extra.skill.md","config/prompts.json"):
             self.assertTrue(fixtures.host.hot_source_path("v3/"+path),path)
         for path in ("src/abilities.rs","sandbox.py","plugins/abilities/Core/base/adapter.rs","plugins/abilities/Custom/new/runner.py"):
             self.assertFalse(fixtures.host.hot_source_path("v3/"+path),path)
