@@ -31,6 +31,43 @@ use webagent_access as access;
 fn always_on(name: &str) -> bool {
     name == "background_cancel"
 }
+/// The first model call's suggestion line: likely items from the user's message that were not
+/// preloaded or loaded since. Call-scoped; it never enters durable history.
+pub fn preload_suggestions(run: &Value) -> String {
+    if model_turn(run) != 0 {
+        return String::new();
+    }
+    let loaded = |name: &str| {
+        run["selected_tools"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item == name))
+    };
+    let rows: Vec<String> = run["preload"]["suggested"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let name = item["name"].as_str()?;
+            if item["kind"] == "tool" {
+                (!loaded(name)).then(|| format!("- tool {name}"))
+            } else {
+                let mut parts = name.splitn(3, ':');
+                let (ability, kind, skill) = (parts.next()?, parts.next()?, parts.next()?);
+                Some(format!(
+                    "- skill {skill} (load_skill ability_id={ability}, kind={kind})"
+                ))
+            }
+        })
+        .collect();
+    if rows.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n## Suggested for this request\nLikely useful but not loaded; load with load_tool or load_skill if needed:\n{}\n",
+        rows.join("\n")
+    )
+}
+
 pub fn model_turn(run: &Value) -> u64 {
     run["model_turn"]
         .as_u64()
@@ -1646,12 +1683,17 @@ impl<
                 app.native
                     .optimization_prepare(app.native_view(), &sid, &mut run)
                     .await?;
+                let preload_before = run["preload_checked"].clone();
+                app.native
+                    .preload_prepare(app.native_view(), &sid, &mut run)
+                    .await;
                 if optimization_before
                     != digest(&json!([
                         run["optimization_checked"],
                         run["optimization_request"],
                         run["loaded_abilities"]
                     ]))
+                    || preload_before != run["preload_checked"]
                 {
                     app.save(&mut run).await?;
                 }
@@ -1713,6 +1755,47 @@ impl<
                     Self::pause_context_preparation(&app, &mut run, &cancel, "history", &error)
                         .await?;
                     return Ok(());
+                }
+                if run["preload"]["selectors"]
+                    .as_array()
+                    .is_some_and(|items| !items.is_empty())
+                    && run["preload_staged"] != true
+                {
+                    run["preload_staged"] = json!(true);
+                    let mut event = run["preload"].clone();
+                    if let Some(object) = event.as_object_mut() {
+                        object.remove("selectors");
+                    }
+                    if let Ok(state) = app.hydrate_context(&mut run).await {
+                        if let Ok(selectors) =
+                            serde_json::from_value(run["preload"]["selectors"].clone())
+                        {
+                            run["_context_assets_operation"] =
+                                json!(webagent_assets_contracts::Operation::Activate {
+                                    selectors,
+                                    expected_revision: state.revision,
+                                    request_id: format!("preload:{}", digest(&json!([run["id"]]))),
+                                });
+                        }
+                    }
+                    if app
+                        .store
+                        .save_run_observed(&mut run, "preload", &event)
+                        .await
+                        .is_err()
+                    {
+                        // A raced ledger revision only loses the preload, never the run.
+                        if let Some(object) = run.as_object_mut() {
+                            object.remove("_context_assets_operation");
+                            object.remove("_context_assets_write");
+                        }
+                        app.save(&mut run).await?;
+                    }
+                    if let Err(error) = app.hydrate_context(&mut run).await {
+                        Self::pause_context_preparation(&app, &mut run, &cancel, "history", &error)
+                            .await?;
+                        return Ok(());
+                    }
                 }
                 let prepared_source_fence = match app.source_fence() {
                     Ok(value) => value,
@@ -1905,10 +1988,11 @@ impl<
                     .filter_map(|schema| schema["name"].as_str().map(str::to_owned))
                     .collect::<Vec<_>>();
                 let menu = format!(
-                    "{}\n{}\n{}",
+                    "{}\n{}\n{}{}",
                     B::model_index(&entries, &schemas),
                     tool_execution::guidance::<A>(&visibility, &names)?,
-                    X::optimization_guidance(&run)
+                    X::optimization_guidance(&run),
+                    preload_suggestions(&run)
                 );
                 let profile_request = webagent_provider_contracts::RequestV1::Profile {
                     version: 1,

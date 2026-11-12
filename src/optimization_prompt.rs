@@ -3,7 +3,7 @@ use crate::{ability_controls, live_tool_decision, session_agent_id, session_mode
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 
-fn user_text(run: &Value) -> String {
+pub(crate) fn user_text(run: &Value) -> String {
     run["input"]
         .as_array()
         .into_iter()

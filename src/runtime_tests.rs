@@ -2711,6 +2711,131 @@ async fn batched_discovery_calls_run_serially_and_succeed() {
     assert_eq!(inspected["status"], "success", "{inspected}");
     server.abort();
 }
+/// Preload journey: the stub scores `file read` high and `file search` as a suggestion.
+async fn preload_journey(stub: Option<crate::api::composer::RankStub>) -> Vec<Value> {
+    use axum::routing::post;
+
+    crate::api::composer::RANK_STUB.with(|cell| cell.set(stub));
+    let (_root, mut app) = fixture().await;
+    let sid = conversation(&app).await;
+    let sent = send(
+        State(app.clone()),
+        Path(sid.clone()),
+        Json(json!({"client_message_id":uuid(),"text":"Please read the main source file."})),
+    )
+    .await
+    .unwrap();
+    let id = sent.1 .0["run_id"].as_str().unwrap().to_owned();
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured = requests.clone();
+    let mock = Router::new().route(
+        "/responses",
+        post(move |Json(body): Json<Value>| {
+            let captured = captured.clone();
+            async move {
+                let mut captured = captured.lock().await;
+                captured.push(body);
+                let output = match captured.len() {
+                    1 => json!([{"type":"function_call","call_id":"list",
+                        "name":"list_tools","arguments":"{}"}]),
+                    2 => json!([{"type":"message","role":"assistant",
+                        "content":[{"type":"output_text","text":"Done."}]}]),
+                    _ => panic!("Unexpected provider turn"),
+                };
+                let event = json!({"type":"response.completed",
+                    "response":{"status":"completed","output":output}});
+                (
+                    [("content-type", "text/event-stream")],
+                    format!("data: {event}\n\n"),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, mock).await.unwrap();
+    });
+    app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+    // Hydrate as the scheduler would, so the run carries the user's message.
+    let mut run = app.run(&id).await.unwrap();
+    run["input"] = json!(app.store.context(&sid).await.unwrap());
+    run["context_hydration_pending"] = json!(false);
+    app.store.put(&key("run", &id), &run).await.unwrap();
+    running(&app, &id, "preload").await;
+    execute_fixture_journey(
+        app.clone(),
+        id.clone(),
+        "preload".into(),
+        CancellationToken::new(),
+    )
+    .await;
+    crate::api::composer::RANK_STUB.with(|cell| cell.set(None));
+    let done = app.run(&id).await.unwrap();
+    assert!(
+        stub.is_none() || done["preload"]["preloaded"].is_array(),
+        "preload: {}",
+        done["preload"]
+    );
+    assert_eq!(done["status"], "completed");
+    server.abort();
+    let requests = requests.lock().await.clone();
+    assert_eq!(requests.len(), 2);
+    requests
+}
+
+fn preload_stub(_query: &str, items: &[Vec<String>]) -> Option<Vec<f32>> {
+    Some(
+        items
+            .iter()
+            .map(|texts| match texts.first().map(String::as_str) {
+                Some("file read") => 0.95,
+                Some("file search") => 0.70,
+                _ => 0.0,
+            })
+            .collect(),
+    )
+}
+
+fn request_tools(request: &Value) -> Vec<String> {
+    request["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+        .collect()
+}
+
+#[tokio::test]
+/// A strong match from the user's message is loaded before the first model call; the next best
+/// is suggested in that call only.
+async fn user_message_preloads_and_suggests_before_the_first_call() {
+    let requests = preload_journey(Some(preload_stub)).await;
+    let first = request_tools(&requests[0]);
+    assert!(first.contains(&"file_read".to_owned()), "{first:?}");
+    assert!(!first.contains(&"file_search".to_owned()), "{first:?}");
+    let first_text = requests[0].to_string();
+    assert!(
+        first_text.contains("Suggested for this request"),
+        "suggestion missing"
+    );
+    assert!(first_text.contains("tool file_search"));
+    assert!(!requests[1]
+        .to_string()
+        .contains("Suggested for this request"));
+    assert!(request_tools(&requests[1]).contains(&"file_read".to_owned()));
+}
+
+#[tokio::test]
+/// Without matcher scores nothing is preloaded and the run still completes.
+async fn matcher_failure_preloads_nothing_and_the_run_works() {
+    let requests = preload_journey(None).await;
+    assert!(!request_tools(&requests[0]).contains(&"file_read".to_owned()));
+    assert!(!requests[0]
+        .to_string()
+        .contains("Suggested for this request"));
+}
+
 #[tokio::test]
 /// A loaded tool adds only itself to the next model request, never its group's other tools.
 async fn loaded_tool_exposes_only_itself_in_the_next_request() {

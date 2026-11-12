@@ -88,7 +88,10 @@ async fn shutoff(store: &StoreCore) -> Result<bool> {
         .unwrap_or(true))
 }
 /// Rebuild permitted availability from current authority and call-local identities.
-async fn eligible(
+///
+/// # Errors
+/// When the agent is not admitted or the catalog cannot be read.
+pub async fn eligible(
     host: &dyn NativeHost,
     sid: &str,
     agent: &str,

@@ -68,6 +68,13 @@ pub trait NativeDispatch<S: Sync, C: SchemaCatalog, B: Sync, H: SessionBinding>:
         run: &'a mut Value,
     ) -> impl Future<Output = Result<()>> + Send + 'a;
     fn optimization_guidance(run: &Value) -> &str;
+    /// Preload and suggest tools and skills from the run's user message (best effort).
+    fn preload_prepare<'a>(
+        &'a self,
+        view: View<'a, S, C, B, H>,
+        sid: &'a str,
+        run: &'a mut Value,
+    ) -> impl Future<Output = ()> + Send + 'a;
     fn chat_model_preference<'a>(
         &'a self,
         view: View<'a, S, C, B, H>,

@@ -52,6 +52,14 @@ fn matcher_command() -> std::io::Result<Command> {
     command.arg("--composer-service");
     Ok(command)
 }
+/// Test scorer for `rank` on this thread (tokio tests run on one thread); `None` uses the stub
+/// service, which never returns scores.
+#[cfg(test)]
+pub(crate) type RankStub = fn(&str, &[Vec<String>]) -> Option<Vec<f32>>;
+#[cfg(test)]
+thread_local! {
+    pub(crate) static RANK_STUB: std::cell::Cell<Option<RankStub>> = const { std::cell::Cell::new(None) };
+}
 /// Stands in for the service: answers every request with no match.
 #[cfg(test)]
 fn matcher_command() -> std::io::Result<Command> {
@@ -71,6 +79,10 @@ async fn ask(request: Value) -> Result<Value, ApiError> {
 /// Each item's closest-text score against `query` (the matcher's `rank` operation), or `None`
 /// when the matcher is unavailable, so callers keep a fallback.
 pub(crate) async fn rank(query: &str, items: Vec<Vec<String>>) -> Option<Vec<f32>> {
+    #[cfg(test)]
+    if let Some(stub) = RANK_STUB.with(std::cell::Cell::get) {
+        return stub(query, &items);
+    }
     let result = ask_within(
         json!({"op": "rank", "query": query, "items": items}),
         RANK_ANSWER,

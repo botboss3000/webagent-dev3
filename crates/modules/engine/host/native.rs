@@ -522,6 +522,20 @@ impl
     fn optimization_guidance(run: &Value) -> &str {
         crate::optimization_prompt::guidance(run)
     }
+    fn preload_prepare<'a>(
+        &'a self,
+        view: View<
+            'a,
+            Store,
+            loop_runtime::NativeSchemas,
+            abilities::Catalog,
+            shared_chat::SessionAccess,
+        >,
+        sid: &'a str,
+        run: &'a mut Value,
+    ) -> impl std::future::Future<Output = ()> + Send + 'a {
+        async move { crate::tools::core_skills::preload(&self.host.app(view), sid, run).await }
+    }
     fn chat_model_preference<'a>(
         &'a self,
         view: View<

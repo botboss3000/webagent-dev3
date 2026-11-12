@@ -400,6 +400,208 @@ pub(crate) fn apply_selection(run: &mut Value, result: &Value) {
     );
     run["loaded_skills"] = json!(selections);
 }
+/// Preload the tools and skills a new user message clearly needs and keep the next few as
+/// call-scoped suggestions. Best effort: any failure preloads nothing and never stops the run.
+/// The engine stages `preload.selectors` as ordinary activation selectors, so preloads persist
+/// like `load_tool` and `load_skill`; live policy, approval and read-only checks still decide.
+pub(crate) async fn preload(app: &App, sid: &str, run: &mut Value) {
+    if run["preload_checked"] == true {
+        return;
+    }
+    run["preload_checked"] = json!(true);
+    let text = crate::optimization_prompt::user_text(run);
+    if text.trim().is_empty() || text.trim_start().starts_with('/') {
+        run["preload"] = json!({"skipped":"no_request_text"});
+        return;
+    }
+    let picked = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        preload_candidates(app, sid, run, &text),
+    )
+    .await;
+    let (preload, suggest) = match picked {
+        Ok(Ok(Some(picked))) => picked,
+        other => {
+            let reason = match other {
+                Err(_) => "timeout",
+                Ok(Err(_)) => "catalog_unavailable",
+                _ => "matcher_unavailable",
+            };
+            tracing::warn!(reason, "Preload skipped");
+            run["preload"] = json!({"skipped":reason});
+            return;
+        }
+    };
+    let mut selectors = Vec::new();
+    for item in &preload {
+        let selector = if item.kind == "tool" {
+            json!({"type":"tool","tool_name":item.name})
+        } else {
+            let (ability, kind, skill) = split_skill_key(&item.name);
+            json!({"type":"skill","ability_id":ability,"kind":kind,"skill_id":skill})
+        };
+        if webagent_assets_contracts::validate_selector(&selector).is_ok() {
+            selectors.push(selector);
+        }
+    }
+    let row = |c: &webagent_abilities::tool_match::Candidate| json!({"kind":c.kind,"name":c.name,"score":(c.score * 100.0).round() / 100.0});
+    run["preload"] = json!({"preloaded":preload.iter().map(row).collect::<Vec<_>>(),
+        "suggested":suggest.iter().map(row).collect::<Vec<_>>(),"selectors":selectors});
+}
+
+/// Skill candidates are keyed `ability:kind:skill_id`.
+fn split_skill_key(key: &str) -> (&str, &str, &str) {
+    let mut parts = key.splitn(3, ':');
+    (
+        parts.next().unwrap_or(""),
+        parts.next().unwrap_or(""),
+        parts.next().unwrap_or(""),
+    )
+}
+
+/// Score every permitted tool and ability or selectable skill against each part of the message,
+/// keeping each one's best score. `None` when the matcher does not answer.
+async fn preload_candidates(
+    app: &App,
+    sid: &str,
+    run: &Value,
+    text: &str,
+) -> Result<
+    Option<(
+        Vec<webagent_abilities::tool_match::Candidate>,
+        Vec<webagent_abilities::tool_match::Candidate>,
+    )>,
+> {
+    use webagent_abilities::tool_match::{self, Candidate};
+    let agent = session_agent_id(app, sid).await?;
+    let host = crate::tools::native_host::Host(app);
+    let tools =
+        crate::tools::native::tool_search::eligible(&host, sid, &agent, &run["loaded_abilities"])
+            .await?;
+    let mut skills = Vec::new();
+    if let Ok(current) = view(
+        app,
+        sid,
+        run["id"].as_str().unwrap_or_default(),
+        "list_skills",
+    )
+    .await
+    {
+        let allow_ability =
+            |id: &str| current.access.ability_permission(id) != crate::access::Permission::Deny;
+        let allow_tool = |tool: &str| skill_tool_allowed(&current, tool);
+        for entry in
+            current
+                .app
+                .abilities
+                .catalog_with(&current.policy, &current.visibility, &current.state)
+        {
+            let Some(id) = entry["id"].as_str() else {
+                continue;
+            };
+            // Tool skills arrive with their tool, so only ability and selectable skills count.
+            for mut skill in current
+                .app
+                .abilities
+                .bundled_skill_list(
+                    id,
+                    &current.visibility,
+                    &current.state,
+                    allow_ability,
+                    allow_tool,
+                )
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|skill| skill["kind"] != "tool")
+            {
+                mark_availability(&mut skill, &current.loaded_skills, &current.loaded);
+                skills.push(skill);
+            }
+        }
+    }
+    let list = |value: &Value, key: &str| {
+        value[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item.as_str().map(str::to_owned))
+            .collect::<Vec<_>>()
+    };
+    // (kind, key, name for exact matching, keywords, loadable, texts)
+    let mut items = Vec::new();
+    for tool in &tools {
+        let name = tool["name"].as_str().unwrap_or_default();
+        let (examples, keywords) = tool_match::hints(name);
+        let texts = tool_match::texts(
+            name,
+            tool["description"].as_str().unwrap_or_default(),
+            &examples,
+        );
+        let loadable = tool["requires_activation"] == true;
+        items.push((
+            "tool",
+            name.to_owned(),
+            name.to_owned(),
+            keywords,
+            loadable,
+            texts,
+        ));
+    }
+    for skill in &skills {
+        let id = skill["skill_id"].as_str().unwrap_or_default();
+        let key = format!(
+            "{}:{}:{id}",
+            skill["ability_id"].as_str().unwrap_or_default(),
+            skill["kind"].as_str().unwrap_or_default()
+        );
+        let texts = tool_match::texts(
+            id,
+            &format!(
+                "{} {}",
+                skill["summary"].as_str().unwrap_or(""),
+                skill["description"].as_str().unwrap_or("")
+            ),
+            &list(skill, "examples"),
+        );
+        let loadable = skill["requires_activation"] == true;
+        items.push((
+            "skill",
+            key,
+            id.to_owned(),
+            list(skill, "keywords"),
+            loadable,
+            texts,
+        ));
+    }
+    if items.is_empty() {
+        return Ok(None);
+    }
+    let texts: Vec<Vec<String>> = items.iter().map(|item| item.5.clone()).collect();
+    let mut best = vec![0.0_f32; items.len()];
+    for clause in tool_match::clauses(text) {
+        let Some(scores) = crate::api::composer::rank(&clause, texts.clone()).await else {
+            return Ok(None);
+        };
+        if scores.len() != items.len() {
+            return Ok(None);
+        }
+        for (index, score) in scores.into_iter().enumerate() {
+            let item = &items[index];
+            best[index] = best[index].max(tool_match::adjusted(&clause, &item.2, &item.3, score));
+        }
+    }
+    let candidates = items
+        .into_iter()
+        .zip(best)
+        .map(|((kind, key, _, _, loadable, _), score)| Candidate {
+            kind,
+            name: key,
+            score,
+            loadable,
+        })
+        .collect();
+    Ok(Some(tool_match::choose(candidates)))
+}
 /// Validate a lowercase digest receipt without granting future source authority.
 fn valid_hash(hash: &str) -> bool {
     hash.len() == 64
