@@ -122,6 +122,11 @@ class OwnershipTests(unittest.TestCase):
         (folder/"plugin.json").write_text(json.dumps({"dispatch":"isolated"}));p="plugins/abilities/Developer/test/src/main.rs"
         expected=["module:ability:Developer/test","path:"+p]
         self.assertEqual(m.Components(root).scopes([p]),expected);self.assertEqual(m.Components(root,[p]).scopes([p]),expected)
+    def test_root_abilities_folder_reserves_the_same_ability_scope(self):
+        root=Path(self.root.name);folder=root/"abilities/Developer/test";folder.mkdir(parents=True)
+        (folder/"plugin.json").write_text(json.dumps({"dispatch":"isolated"}))
+        for p in ["abilities/Developer/test/src/main.rs","abilities/Developer/test/skills/test.skill.md"]:
+            self.assertEqual(m.Components(root).scopes([p]),["module:ability:Developer/test","path:"+p])
     def test_deleted_isolated_manifest_retains_plugin_scope_without_hiding_core_inputs(self):
         """Ability files reserve their ability whether native, isolated, deleted or compiler-attested."""
         import io,tarfile

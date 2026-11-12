@@ -66,7 +66,7 @@ BRIDGE_SOCKET = Path(CONFIG["runtime_root"])/"python.sock"
 BRIDGE_WORKSPACE = "94c353d5-70bd-44b2-9af0-757c4a979fc9"
 CONTEXT = (
     "v3/Dockerfile", "v3/Cargo.toml", "v3/Cargo.lock", "v3/build.rs", "v3/.gitignore",
-    "v3/src", "v3/crates", "v3/services/system-monitoring", "v3/ui", "v3/plugins/engine", "v3/plugins/abilities", "v3/plugins/gates",
+    "v3/src", "v3/crates", "v3/services/system-monitoring", "v3/ui", "v3/plugins/engine", "v3/abilities", "v3/plugins/abilities", "v3/plugins/gates",
     "v3/sandbox.py", "v3/ui-baseline.json", "v3/live-files.json", "v3/rustfmt.toml", "v3/tests",
     "v3/README.md", "v3/docs", "v3/deploy.sh", "v3/config", "v3/build-service",
     "ui/shared/css/app1.css", "ui/shared/css/app2.css", "ui/shared/css/app3.css",
@@ -94,9 +94,18 @@ def checked_git_modes(patch):
         out.append(line);i+=1
     return "".join(out)
 
-ABILITY_ROOT="v3/plugins/abilities/"
+# Abilities moved from plugins/abilities to the checkout root; a tree has one of the two.
+ABILITY_ROOTS=("v3/abilities/","v3/plugins/abilities/")
+OPTIONAL_CONTEXT={"v3/abilities","v3/plugins/abilities"}
+def ability_rest(path):
+    """The ability root a path is under and the path below it, or (None, None)."""
+    root=next((r for r in ABILITY_ROOTS if path.startswith(r)),None)
+    return (root,path[len(root):]) if root else (None,None)
+def ability_tree(root):
+    """The abilities folder of a release or checkout root that holds a v3/ tree."""
+    return next((root/r for r in ABILITY_ROOTS if (root/r).is_dir()),root/ABILITY_ROOTS[0])
 def ability_asset_path(path):
-    if not path.startswith(ABILITY_ROOT):return False
+    if not path.startswith(ABILITY_ROOTS):return False
     # Rust adapters and legacy Python helpers still have core/image consumers.
     return path.endswith((".json",".md"))
 def engine_component_source_path(path):
@@ -118,20 +127,22 @@ def generic_package_path(path,blob,entries=None):
     if monitoring_component.package_path(path):return True
     if entries is None:entries=release.entries(blob,context_digest)
     if engine_components.package_path(path,entries):return True
-    if not path.startswith(ABILITY_ROOT):return False
-    parts=path[len(ABILITY_ROOT):].split("/")
+    base,rest=ability_rest(path)
+    if base is None:return False
+    parts=rest.split("/")
     if len(parts)<3:return False
-    prefix=ABILITY_ROOT+"/".join(parts[:2])+"/"
+    prefix=base+"/".join(parts[:2])+"/"
     raw=entries.get(prefix+"plugin.json")
     if raw is None:return False
     manifest=json.loads(raw[1])
     if manifest.get("dispatch")!="isolated":return False
     return "/".join(parts[2:]) in manifest.get("build",{}).get("inputs",[])+manifest.get("build",{}).get("assets",[])+["plugin.json"]
 def native_package_migration(path,baseline):
-    if not path.startswith(ABILITY_ROOT):return False
-    parts=path[len(ABILITY_ROOT):].split("/")
+    base,rest=ability_rest(path)
+    if base is None:return False
+    parts=rest.split("/")
     if len(parts)<3:return False
-    prefix=ABILITY_ROOT+"/".join(parts[:2])+"/"
+    prefix=base+"/".join(parts[:2])+"/"
     entries=release.entries(baseline,context_digest)
     raw=entries.get(prefix+parts[1]+".json")
     if raw is None:return False
@@ -1039,7 +1050,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         images=job.get("images") if publication_id is None else {role:previous[role]["Image"]for role in ("api","loop")}
         if not images or set(images)!={"api","loop"}:raise ValueError("Runtime preflight requires both candidate images")
         results=[];plans=[]
-        allowed={"/opt/v3/config","/opt/v3/ui","/opt/v3/plugins/abilities","/opt/v3/assets",
+        allowed={"/opt/v3/config","/opt/v3/ui","/opt/v3/abilities","/opt/v3/plugins/abilities","/opt/v3/assets",
             "/opt/v3/shared-ui/shared/css","/opt/v3/shared-ui/main-panel/agents","/opt/v3/shared-ui/vendor/fonts","/opt/v3/shared-ui/vendor/leaflet","/opt/v3/shared-ui/vendor/lucide","/opt/v3/shared-ui/favicon.svg"}
         for role in ("api","loop"):
             proposed=release.release_mounts(previous[role]["HostConfig"],root,ASSET_ROOT);mounts=[]
@@ -1336,7 +1347,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 raise ValueError("snapshot helper must be protected root-owned code")
             argv = ["sudo", "-n", str(helper)]
         else:
-            argv = ["sudo", "-n", "tar", "--exclude=__pycache__", "--exclude=*.pyc", "--exclude=*.pyo", *("--exclude=" + p for p in release.INSTALLED_PACKAGES), "-cf", "-", *CONTEXT]
+            argv = ["sudo", "-n", "tar", "--exclude=__pycache__", "--exclude=*.pyc", "--exclude=*.pyo", *("--exclude=" + p for p in release.INSTALLED_PACKAGES), "-cf", "-", *[n for n in CONTEXT if n not in OPTIONAL_CONTEXT or os.path.lexists(n)]]
         class BoundedContext(io.BytesIO):
             def write(self, data):
                 if self.tell() + len(data) > MAX_CONTEXT:
@@ -1496,7 +1507,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             if not active or active["job_id"]!=job_id or root!=Path(active["release_root"])or root.resolve()!=root:
                 raise ValueError("Owned frozen compiler source required")
         outputs=[]
-        for declaration in sorted((root/ABILITY_ROOT).glob("*/*/plugin.json")):
+        for declaration in sorted(ability_tree(root).glob("*/*/plugin.json")):
             manifest=json.loads(declaration.read_bytes())
             if manifest.get("dispatch")!="isolated"or manifest.get("build",{}).get("toolchain")!="rust-1.99":continue
             package=declaration.parent;build=manifest["build"];entry=manifest.get("entrypoint")
@@ -1736,7 +1747,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         manifest=root/release.LIVE_MANIFEST
         live=release.live_patterns({release.LIVE_MANIFEST:(0o644,manifest.read_bytes())})if manifest.is_file()else()
         # Live files take the app's own configuration validators, as a full release does.
-        if any(name.startswith(ABILITY_ROOT) or engine_component_source_path(name) or name.startswith("v3/config/") or release.is_live(name,live) or name=="v3/src/engine/tools/administrator-schemas.json" for name in changed):
+        if any(name.startswith(ABILITY_ROOTS) or engine_component_source_path(name) or name.startswith("v3/config/") or release.is_live(name,live) or name=="v3/src/engine/tools/administrator-schemas.json" for name in changed):
             # A foundation release introduces the validator itself. Validate with
             # its already-tested candidate API image; hot updates use the retained consumer.
             image=(active["images"]["api"] if active is not None
@@ -1750,7 +1761,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 "--mount","type=bind,src="+str(ASSET_ROOT/"artifacts")+",dst=/opt/v3/assets/artifacts,readonly",
                 "--entrypoint","/usr/local/bin/webagent-v3",image,"--validate-assets=/candidate/v3"],timeout=30)
             receipt=json.loads(result)
-            program=("import json,pathlib; root=pathlib.Path('/candidate/v3/plugins/abilities'); "
+            program=("import json,pathlib; root=next(p for p in map(pathlib.Path,('/candidate/v3/abilities','/candidate/v3/plugins/abilities')) if p.is_dir()); "
                 "packages=[p for p in root.glob('*/*/plugin.json') if json.loads(p.read_bytes()).get('dispatch')=='isolated']; "
                 "[(compile(source.read_bytes(),str(source),'exec')) for p in packages "
                 "if json.loads(p.read_bytes()).get('runtime')=='python3' for source in p.parent.rglob('*.py')]; print('syntax valid')")
@@ -2271,9 +2282,11 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 env = [value for value in config.get("Env", [])
                        if not value.startswith(("V3_UI_ROOT=", "V3_SHARED_UI_ROOT=",
                                                 "V3_ABILITIES_ROOT="))]
+                abilities = next((m["Target"] for m in host.get("Mounts") or []
+                                  if m.get("Target") in release.ABILITY_TARGETS), "/opt/v3/plugins/abilities")
                 env.extend(("V3_UI_ROOT=/opt/v3/assets/current/v3/ui",
                             "V3_SHARED_UI_ROOT=/opt/v3/assets/current/ui",
-                            "V3_ABILITIES_ROOT=/opt/v3/plugins/abilities"))
+                            "V3_ABILITIES_ROOT=" + abilities))
                 config["Env"] = env
                 job=getattr(self.job_context,"job",None)or{}
                 if not re.fullmatch(r"[a-f0-9-]{36}",job.get("job_id","")):raise ValueError("Attributable release container required")
@@ -4669,7 +4682,7 @@ class Broker:
         if CONFIG.get("scheduler",{}).get("concurrent_ui_preparation",False)and any(path.startswith("v3/ui/")for path in changed)and not docs_attested:ui_only=False
         engine_changed=any(engine_component_source_path(path)for path in changed)
         if engine_changed and not self.runner.engine_hot_swappable():ui_only=False
-        plugin_only=ui_only and not monitoring_component.only_paths(changed) and any(path.startswith(ABILITY_ROOT) or generic_package_path(path,candidate) or generic_package_path(path,base_blob) or path.startswith("v3/config/") or path in live_changed or path=="v3/src/engine/tools/administrator-schemas.json" for path in changed)
+        plugin_only=ui_only and not monitoring_component.only_paths(changed) and any(path.startswith(ABILITY_ROOTS) or generic_package_path(path,candidate) or generic_package_path(path,base_blob) or path.startswith("v3/config/") or path in live_changed or path=="v3/src/engine/tools/administrator-schemas.json" for path in changed)
         host_only = self.host_source_only(current_changed,candidate,trusted)
         operation="host_service_deploy" if host_only else "plugin_deploy" if plugin_only else "ui_deploy" if ui_only else "build_deploy"
         broker_paths=[p for p in current_changed if p.startswith("v3/build-service/")and not p.startswith("v3/build-service/shared-ui/")]

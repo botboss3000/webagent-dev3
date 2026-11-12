@@ -380,7 +380,7 @@ class Performance:
             return (name in {"v3/src/runtime_tests.rs", "v3/src/plugin_packages/optimization/measure.py", "v3/src/plugin_packages/optimization/workload.py"} or name.startswith("v3/tests/")
                     or name.endswith(".skill.md") or name.startswith("v3/config/")
                     or name.startswith("v3/data/config/")
-                    or name.startswith("v3/plugins/abilities/") and name.endswith(".json")
+                    or name.startswith(("v3/abilities/", "v3/plugins/abilities/")) and name.endswith(".json")
                     or Path(name).name in {"Cargo.toml", "Cargo.lock"} and not config["allow_dependencies"])
         def members(stream):
             values = {}

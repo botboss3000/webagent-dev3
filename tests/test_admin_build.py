@@ -876,6 +876,21 @@ class BuildTests(unittest.TestCase):
         target = host.release.release_mounts(loop, root)["Mounts"][0]
         self.assertEqual(str(root / "v3/plugins/abilities"), target["Source"])
 
+    def test_release_mounts_follow_the_release_ability_layout(self):
+        """A moved tree mounts /opt/v3/abilities; rolling back to an older tree restores the old target."""
+        with tempfile.TemporaryDirectory() as folder:
+            moved, older = Path(folder) / "moved", Path(folder) / "older"
+            (moved / "v3/abilities").mkdir(parents=True)
+            (older / "v3/plugins/abilities").mkdir(parents=True)
+            loop = {"Mounts": [{"Type": "bind", "Source": "/old/abilities",
+                                "Target": "/opt/v3/plugins/abilities", "ReadOnly": True}]}
+            mounted = host.release.release_mounts(loop, moved)["Mounts"]
+            self.assertEqual([("/opt/v3/abilities", str(moved / "v3/abilities"))],
+                             [(m["Target"], m["Source"]) for m in mounted])
+            back = host.release.release_mounts({"Mounts": mounted}, older)["Mounts"]
+            self.assertEqual([("/opt/v3/plugins/abilities", str(older / "v3/plugins/abilities"))],
+                             [(m["Target"], m["Source"]) for m in back])
+
     def test_staging_failure_blocks_full_and_ui_effects(self):
         for ui_only in (False, True):
             with self.subTest(ui_only=ui_only):

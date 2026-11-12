@@ -243,7 +243,7 @@ def ui_baseline_mismatch(blob):
     return wrong
 
 # Root-installed executable plugin folders inside the source tree; never source inputs.
-INSTALLED_PACKAGES = ("plugins/abilities/Core/mcp/package",)
+INSTALLED_PACKAGES = ("abilities/Core/mcp/package", "plugins/abilities/Core/mcp/package")
 
 
 def installed_package(name):
@@ -375,6 +375,7 @@ def compensating_candidate(before_blob,after_blob,live_blob,owned_paths,validate
     return candidate(archive(after,validate),archive(reverse,validate),live_blob,validate)
 
 
+ABILITY_TARGETS = ("/opt/v3/abilities", "/opt/v3/plugins/abilities")
 LEGACY_TARGETS = {"/live-checkout": "/code", "/live-checkout/plugins": "/code/plugins",
                   "/run/v3": "/runtime", "/run/v3/gate": "/runtime/gate"}
 
@@ -386,10 +387,14 @@ def release_mounts(previous, root, asset_root=None, layout=None):
     /runtime. With `layout` (config.layout), live folders follow the installation config
     instead of the previous container, so a folder move needs only a config change.
     """
+    # Abilities moved from plugins/abilities to the checkout root (and /opt/v3/abilities);
+    # the release tree decides, so a rollback to an older release keeps its old layout.
+    moved = (root / "v3/abilities").is_dir()
+    abilities = "/opt/v3/abilities" if moved else "/opt/v3/plugins/abilities"
     mapping = {
         "/opt/v3/config": "v3/config",
         "/opt/v3/ui": "v3/ui",
-        "/opt/v3/plugins/abilities": "v3/plugins/abilities",
+        abilities: "v3/abilities" if moved else "v3/plugins/abilities",
         "/opt/v3/shared-ui/shared/css": "ui/shared/css",
         "/opt/v3/shared-ui/main-panel/agents": "ui/main-panel/agents",
         "/opt/v3/shared-ui/vendor/fonts": "ui/vendor/fonts",
@@ -414,6 +419,8 @@ def release_mounts(previous, root, asset_root=None, layout=None):
     for mount in host.get("Mounts") or []:
         mount = dict(mount)
         target = mount.get("Target")
+        if target in ABILITY_TARGETS and target != abilities:
+            mount["Target"] = target = abilities
         if target == "/live-v3":
             # The retired in-app promotion broker's frozen-source mount. Older API containers
             # read their abilities from it; they read the release snapshot below instead.
@@ -447,17 +454,17 @@ def release_mounts(previous, root, asset_root=None, layout=None):
         mounts.append({"Type": "bind", "Source": str(asset_root),
                        "Target": "/opt/v3/assets", "ReadOnly": True})
         seen.add("/opt/v3/assets")
-    if api and "/opt/v3/plugins/abilities" not in seen:
+    if api and abilities not in seen:
         # The API decides tool authority (build lease renewal, policy pages) from the same
         # read-only ability snapshot the loop runs.
-        source = root / mapping["/opt/v3/plugins/abilities"]
+        source = root / mapping[abilities]
         if not source.is_dir() or source.is_symlink():
-            raise ValueError("release mount input unavailable: /opt/v3/plugins/abilities")
+            raise ValueError("release mount input unavailable: " + abilities)
         mounts.append({"Type": "bind", "Source": str(source),
-                       "Target": "/opt/v3/plugins/abilities", "ReadOnly": True})
-        seen.add("/opt/v3/plugins/abilities")
+                       "Target": abilities, "ReadOnly": True})
+        seen.add(abilities)
     required = ({"/opt/v3/assets" if asset_root is not None else "/opt/v3/ui"} if api
-                else {"/opt/v3/plugins/abilities"} | ({"/opt/v3/assets"} if asset_root is not None else set()))
+                else {abilities} | ({"/opt/v3/assets"} if asset_root is not None else set()))
     if not required <= seen:
         raise ValueError("required release mounts absent")
     host["Mounts"] = mounts
