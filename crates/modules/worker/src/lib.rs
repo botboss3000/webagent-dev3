@@ -699,6 +699,8 @@ mod tests {
             browser: browser::Settings {
                 root: dir.path().join("browser"),
                 origin: "http://127.0.0.1:9".into(),
+                host: None,
+                sandbox: false,
             },
             socket: socket.clone(),
             // The test process owns the directory it just created.

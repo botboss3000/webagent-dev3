@@ -172,6 +172,8 @@ impl Recording {
 pub struct Service {
     origin: String,
     root: PathBuf,
+    /// Chromium's own sandbox for every launch ([`Settings::sandbox`]).
+    sandbox: bool,
     factory: Factory,
     limits: Limits,
     egress: OnceCell<Arc<Guard>>,
@@ -490,6 +492,7 @@ impl Service {
         Arc::new(Self {
             origin: settings.origin.trim_end_matches('/').to_owned(),
             root: settings.root.clone(),
+            sandbox: settings.sandbox,
             factory,
             limits,
             egress: OnceCell::new(),
@@ -647,7 +650,10 @@ impl Service {
                 (self.factory)(
                     profile.clone(),
                     Some(self.origin.clone()),
-                    Launch::default(),
+                    Launch {
+                        sandbox: self.sandbox,
+                        ..Launch::default()
+                    },
                 )
                 .await
             }
@@ -656,6 +662,7 @@ impl Service {
                     let launch = Launch {
                         offline: false,
                         proxy: Some(guard.port()),
+                        sandbox: self.sandbox,
                     };
                     (self.factory)(profile.clone(), None, launch).await
                 }

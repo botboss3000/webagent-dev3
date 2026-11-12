@@ -173,15 +173,23 @@ fn launch() -> io::Result<i32> {
             return Err(io::Error::last_os_error());
         }
     }
-    let mut tools = worker(
-        &[APP_BINARY, "--tool-worker"],
-        &[
-            ("PATH", "/usr/bin:/bin"),
-            ("LANG", "C.UTF-8"),
-            ("V3_TOOL_SOCKET", "/runtime/worker/tools.sock"),
-            ("V3_TOOL_CLIENT_UID", "1100"),
-        ],
-    )?;
+    let mut env = vec![
+        ("PATH", "/usr/bin:/bin"),
+        ("LANG", "C.UTF-8"),
+        ("V3_TOOL_SOCKET", "/runtime/worker/tools.sock"),
+        ("V3_TOOL_CLIENT_UID", "1100"),
+    ];
+    // Browsers run in the browser container once its socket folder exists (the operator
+    // creates it with that container); the worker then never starts a browser itself.
+    let host = std::env::var("V3_BROWSER_HOST").ok().or_else(|| {
+        Path::new("/runtime/browser")
+            .is_dir()
+            .then(|| crate::browser::host::DEFAULT_SOCKET.to_owned())
+    });
+    if let Some(host) = &host {
+        env.push(("V3_BROWSER_HOST", host));
+    }
+    let mut tools = worker(&[APP_BINARY, "--tool-worker"], &env)?;
     wait_for("/runtime/worker/tools.sock", &mut tools, "tool worker")?;
     // The API keeps the container environment, as before.
     let mut app = Command::new(APP_BINARY);

@@ -8,6 +8,7 @@
 //! the authority and approvals, and the browser enforces it again here.
 mod base64;
 pub mod egress;
+pub mod host;
 pub mod png;
 mod pool;
 pub mod rules;
@@ -120,6 +121,12 @@ pub struct Settings {
     pub root: PathBuf,
     /// The fixed app origin, without a trailing slash.
     pub origin: String,
+    /// The browser container's socket (`V3_BROWSER_HOST`): each chat's browser then runs
+    /// there, and the private folders are reached only through it.
+    pub host: Option<PathBuf>,
+    /// Chromium's own sandbox (`V3_BROWSER_SANDBOX=1`), set only where the container
+    /// allows the user namespaces it needs.
+    pub sandbox: bool,
 }
 
 impl Settings {
@@ -133,6 +140,8 @@ impl Settings {
                 .unwrap_or_else(|_| "https://dev.webagent.live".into())
                 .trim_end_matches('/')
                 .to_owned(),
+            host: std::env::var_os("V3_BROWSER_HOST").map(PathBuf::from),
+            sandbox: std::env::var_os("V3_BROWSER_SANDBOX").is_some_and(|value| value == "1"),
         }
     }
 

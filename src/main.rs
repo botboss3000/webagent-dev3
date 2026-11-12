@@ -204,6 +204,8 @@ fn local_worker_mode(mode: Option<&str>) -> Option<i32> {
         "--terminal-supervisor" => terminal::supervise(&spec()),
         // One chat session's private browser; it builds its own single-threaded runtime.
         "--browser-session" => browser::session::run(),
+        // The browser container's service, which runs those sessions for the worker.
+        "--browser-host" => browser::host::run(&spec()),
         // The per-command and per-plugin supervisors.
         "--tool-runner" => runner::supervise(&spec()),
         "--plugin-runner" => runner::supervise_plugin(&spec()),

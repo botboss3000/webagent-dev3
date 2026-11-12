@@ -255,8 +255,9 @@ fn allow(ruleset: &OwnedFd, path: &Path, rights: u64) -> io::Result<()> {
 /// Builds the boundary for one session's chromedriver and Chromium: read the system and
 /// font files, read and write `profile` (also its home) and `temporary`, and nothing else,
 /// so a compromised browser cannot read another session's cookies or the app's files.
-/// `/proc` stays readable for Chromium itself; Landlock still refuses ptrace and
-/// `/proc/<pid>/root` into other domains. Network is left to the egress proxy.
+/// `/proc` stays readable, and writable for Chromium's own sandbox (its user namespace
+/// `uid_map`/`gid_map`); Landlock still refuses ptrace, `/proc/<pid>/root` and other
+/// processes' files outside this domain. Network is left to the egress proxy.
 ///
 /// # Errors
 /// When Landlock ABI 6 is unavailable or a rule cannot be added; the browser then never
@@ -265,12 +266,12 @@ pub fn prepare_browser(profile: &Path, temporary: &Path) -> io::Result<Prepared>
     let profile = std::fs::canonicalize(profile)?;
     let temporary = std::fs::canonicalize(temporary)?;
     let ruleset = ruleset(0)?;
+    allow(&ruleset, Path::new("/proc"), READ | (1 << 1))?;
     for path in [
         "/usr",
         "/bin",
         "/lib",
         "/lib64",
-        "/proc",
         "/sys",
         "/var/cache/fontconfig",
         "/etc/fonts",

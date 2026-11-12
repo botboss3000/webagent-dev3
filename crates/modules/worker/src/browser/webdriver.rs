@@ -39,11 +39,12 @@ pub trait Driver: Send + Sync {
 }
 
 /// How a browser is launched: signed out through the egress guard on `proxy`, or with no
-/// network beyond loopback when `offline`.
+/// network beyond loopback when `offline`; with Chromium's own sandbox when `sandbox`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Launch {
     pub offline: bool,
     pub proxy: Option<u16>,
+    pub sandbox: bool,
 }
 
 /// Starts a driver: the profile folder, the signed-in origin (`None` signed out) and how.
@@ -348,7 +349,6 @@ async fn http(port: u16, method: &str, path: &str, body: &Value) -> Result<Value
 pub fn capabilities(profile: &Path, origin: Option<&str>, launch: Launch) -> Value {
     let mut args: Vec<String> = [
         "--headless=new",
-        "--no-sandbox",
         "--disable-dev-shm-usage",
         "--disable-background-networking",
         "--disable-extensions",
@@ -365,6 +365,9 @@ pub fn capabilities(profile: &Path, origin: Option<&str>, launch: Launch) -> Val
     .iter()
     .map(|arg| (*arg).to_owned())
     .collect();
+    if !launch.sandbox {
+        args.insert(1, "--no-sandbox".into());
+    }
     args.push(format!("--user-data-dir={}", profile.display()));
     // Unrelated origins cannot receive browser network traffic. Only the fixed origin
     // bypasses an intentionally unavailable local proxy.
@@ -654,7 +657,7 @@ mod tests {
             .iter()
             .filter_map(Value::as_str)
             .collect();
-        assert_eq!(args[0], "--headless=new");
+        assert_eq!(args[..2], ["--headless=new", "--no-sandbox"]);
         assert!(args.contains(&"--user-data-dir=/runtime/worker/browser/s/chrome"));
         assert_eq!(
             &args[args.len() - 2..],
@@ -675,6 +678,7 @@ mod tests {
             Launch {
                 offline: false,
                 proxy: Some(4321),
+                sandbox: true,
             },
         );
         let args = signed_out["capabilities"]["alwaysMatch"]["goog:chromeOptions"]["args"]
@@ -683,12 +687,14 @@ mod tests {
             .clone();
         assert!(args.contains(&json!("--proxy-server=http://127.0.0.1:4321")));
         assert!(args.contains(&json!("--dns-prefetch-disable")));
+        assert!(!args.contains(&json!("--no-sandbox")));
         let offline = capabilities(
             profile,
             Some("http://127.0.0.1:8081"),
             Launch {
                 offline: true,
                 proxy: None,
+                sandbox: false,
             },
         );
         let args = offline["capabilities"]["alwaysMatch"]["goog:chromeOptions"]["args"]

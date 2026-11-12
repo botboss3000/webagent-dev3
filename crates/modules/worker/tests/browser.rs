@@ -41,6 +41,8 @@ async fn worker(origin: &str) -> Worker {
         browser: Settings {
             root: dir.path().join("browser"),
             origin: origin.to_owned(),
+            host: None,
+            sandbox: false,
         },
     };
     tokio::spawn(serve(config));

@@ -293,6 +293,8 @@ fn fixture_with(limits: Limits) -> Fixture {
     let settings = Settings {
         root: root.join("private"),
         origin: ORIGIN.into(),
+        host: None,
+        sandbox: false,
     };
     Fixture {
         service: Service::new(&settings, scripted(&drivers, &launches, &start), limits),

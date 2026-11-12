@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::process::Child;
 use tokio::sync::Mutex;
 use webagent_browser::limits::Limits as Running;
 
@@ -28,6 +28,12 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(25);
 /// Signing in again to a saved site replays its steps, which takes longer than one action.
 const SITE_CALL_TIMEOUT: Duration = Duration::from_secs(65);
 
+/// A session process's frame stream: its stdin and stdout, or a browser host connection.
+type Io = (
+    Box<dyn AsyncWrite + Unpin + Send>,
+    BufReader<Box<dyn AsyncRead + Unpin + Send>>,
+);
+
 /// The authority a session process is pinned to, as the worker received it.
 type Authority = [Value; 5];
 
@@ -36,20 +42,25 @@ fn authority(trusted: &Value) -> Authority {
         .map(|key| trusted.get(key).cloned().unwrap_or(Value::Null))
 }
 
-/// One running session process.
+/// One running session process: a child of this worker, or one in the browser container
+/// reached through its own connection (`process` is then `None`).
 struct Item {
     pid: i32,
-    process: Mutex<Child>,
+    process: Mutex<Option<Child>>,
     /// The per-session lock: one exchange at a time.
-    io: Mutex<(ChildStdin, BufReader<ChildStdout>)>,
+    io: Mutex<Io>,
     authority: Authority,
     user: String,
     lease: StdMutex<(f64, Instant)>,
 }
 
 impl Item {
+    /// A host connection reads as running; a broken one fails its next exchange.
     async fn exited(&self) -> bool {
-        !matches!(self.process.lock().await.try_wait(), Ok(None))
+        match self.process.lock().await.as_mut() {
+            Some(process) => !matches!(process.try_wait(), Ok(None)),
+            None => false,
+        }
     }
 
     fn stale(&self, idle: Duration) -> bool {
@@ -59,8 +70,13 @@ impl Item {
 
     /// SIGTERM to the process group, SIGKILL after five seconds, then SIGKILL to whatever
     /// of the group is left.
+    /// A host connection is closed instead; the browser host then ends that browser.
     async fn terminate(&self) {
         let mut process = self.process.lock().await;
+        let Some(process) = process.as_mut() else {
+            let _ = self.io.lock().await.0.shutdown().await;
+            return;
+        };
         if matches!(process.try_wait(), Ok(None)) {
             // SAFETY: killpg takes plain integers; the leader is unreaped, so the group id
             // is still this session's.
@@ -202,7 +218,9 @@ impl Browsers {
     /// deleted.
     pub async fn purge(&self, sid: &str) {
         self.close(sid).await;
-        if let Some(folder) = self.folder(sid) {
+        if let Some(socket) = &self.settings.host {
+            let _ = ask(socket, &json!({"op":"purge","sid":sid})).await;
+        } else if let Some(folder) = self.folder(sid) {
             let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(folder)).await;
         }
         self.usage
@@ -220,33 +238,24 @@ impl Browsers {
         let root = self.settings.root.clone();
         let keep = keep.to_vec();
         let running: Vec<String> = self.inner.lock().await.sessions.keys().cloned().collect();
-        let swept = tokio::task::spawn_blocking(move || {
-            let Ok(entries) = std::fs::read_dir(&root) else {
-                return (0, BTreeMap::new());
-            };
-            let mut removed = 0;
-            let mut usage = BTreeMap::new();
-            for entry in entries.flatten() {
-                let Some(sid) = entry.file_name().to_str().and_then(session_name) else {
-                    continue;
-                };
-                let path = entry.path();
-                if running.contains(&sid) {
-                    usage.insert(sid, folder_bytes(&path));
-                } else if keep.contains(&sid) {
-                    let profile = path.join("chrome");
-                    if !is_link(&path) && profile.is_dir() && !is_link(&profile) {
-                        let _ = std::fs::remove_dir_all(&profile);
-                    }
-                    usage.insert(sid, folder_bytes(&path));
-                } else if !is_link(&path) && std::fs::remove_dir_all(&path).is_ok() {
-                    removed += 1;
-                }
+        let swept = match &self.settings.host {
+            Some(socket) => {
+                let reply = ask(socket, &json!({"op":"sweep","keep":keep,"running":running})).await;
+                reply.and_then(|reply| {
+                    Some((
+                        usize::try_from(reply["removed"].as_u64()?).ok()?,
+                        serde_json::from_value(reply["usage"].clone()).ok()?,
+                    ))
+                })
             }
-            (removed, usage)
-        })
-        .await
-        .unwrap_or_default();
+            None => tokio::task::spawn_blocking(move || sweep_folders(&root, &keep, &running))
+                .await
+                .ok(),
+        };
+        // An unanswered browser host keeps the last counts rather than zeroing them.
+        let Some(swept) = swept else {
+            return 0;
+        };
         *self.usage.lock().unwrap_or_else(PoisonError::into_inner) = swept.1;
         self.publish_usage().await;
         swept.0
@@ -254,19 +263,25 @@ impl Browsers {
 
     /// The session's folder when `sid` is a canonical UUID and the folder is a real one.
     fn folder(&self, sid: &str) -> Option<PathBuf> {
-        let sid = session_name(sid)?;
-        let folder = self.settings.root.join(sid);
-        (folder.is_dir() && !is_link(&folder)).then_some(folder)
+        folder_of(&self.settings.root, sid)
     }
 
     /// Recounts one session's folder after a call that may have stored a screenshot.
     async fn recount(&self, sid: &str) {
-        let Some(folder) = self.folder(sid) else {
-            return;
+        let bytes = if let Some(socket) = &self.settings.host {
+            let reply = ask(socket, &json!({"op":"usage","sid":sid})).await;
+            match reply.and_then(|reply| reply["bytes"].as_u64()) {
+                Some(bytes) => bytes,
+                None => return,
+            }
+        } else {
+            let Some(folder) = self.folder(sid) else {
+                return;
+            };
+            tokio::task::spawn_blocking(move || folder_bytes(&folder))
+                .await
+                .unwrap_or(0)
         };
-        let bytes = tokio::task::spawn_blocking(move || folder_bytes(&folder))
-            .await
-            .unwrap_or(0);
         let changed = self
             .usage
             .lock()
@@ -336,8 +351,32 @@ impl Browsers {
         }
     }
 
-    /// Starts a session process without passing credentials through argv or environment.
-    fn start(&self, supervisor: &str, trusted: &Value) -> std::io::Result<Arc<Item>> {
+    /// Starts a session process without passing credentials through argv or environment:
+    /// through the browser host when one is configured, otherwise as this worker's child.
+    async fn start(&self, supervisor: &str, trusted: &Value) -> std::io::Result<Arc<Item>> {
+        let item = |pid, process, io| {
+            Arc::new(Item {
+                pid,
+                process: Mutex::new(process),
+                io: Mutex::new(io),
+                authority: authority(trusted),
+                user: trusted["user_id"].as_str().unwrap_or_default().to_owned(),
+                lease: StdMutex::new((
+                    trusted["expires_at"].as_f64().unwrap_or(0.0),
+                    Instant::now(),
+                )),
+            })
+        };
+        if let Some(socket) = &self.settings.host {
+            let mut stream = tokio::net::UnixStream::connect(socket).await?;
+            stream.write_all(b"{\"op\":\"session\"}\n").await?;
+            let (read, write) = stream.into_split();
+            return Ok(item(
+                0,
+                None,
+                (Box::new(write), BufReader::new(Box::new(read))),
+            ));
+        }
         let mut command = tokio::process::Command::new(supervisor);
         command
             .arg("--browser-session")
@@ -368,17 +407,11 @@ impl Browsers {
         let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
             return Err(std::io::Error::other("browser process pipes"));
         };
-        Ok(Arc::new(Item {
+        Ok(item(
             pid,
-            process: Mutex::new(child),
-            io: Mutex::new((stdin, BufReader::new(stdout))),
-            authority: authority(trusted),
-            user: trusted["user_id"].as_str().unwrap_or_default().to_owned(),
-            lease: StdMutex::new((
-                trusted["expires_at"].as_f64().unwrap_or(0.0),
-                Instant::now(),
-            )),
-        }))
+            Some(child),
+            (Box::new(stdin), BufReader::new(Box::new(stdout))),
+        ))
     }
 
     /// Runs one browser call for the admitted workspace `base`: artifact reads here, every
@@ -432,7 +465,7 @@ impl Browsers {
                 if let Err(position) = inner.admit(&sid, user, &limits) {
                     return queued(position, limits.queued_idle_seconds);
                 }
-                match self.start(supervisor, trusted) {
+                match self.start(supervisor, trusted).await {
                     Ok(item) => {
                         inner.sessions.insert(sid.clone(), Arc::clone(&item));
                         if !inner.reaping {
@@ -482,6 +515,18 @@ impl Browsers {
     /// Serves a private screenshot after checking its owner and bytes; any failure reads as
     /// a broken (non-mutating) transport, as the Python package process reported it.
     async fn artifact(&self, args: &Value, base: &Path, trusted: &Value) -> Value {
+        if let Some(socket) = &self.settings.host {
+            let request = json!({"op":"artifact","base":base.to_string_lossy(),
+                "trusted":trusted,"artifact_id":args.get("artifact_id")});
+            return match ask(socket, &request).await {
+                Some(reply) if reply["png_base64"].is_string() => {
+                    let mut result = json!({"status":"success","png_base64":reply["png_base64"]});
+                    stamp(&mut result);
+                    result
+                }
+                _ => transport_failed("administrator_artifact_get", args),
+            };
+        }
         let root = self.settings.root.clone();
         let limits = self.limits.clone();
         let base = base.to_owned();
@@ -522,8 +567,68 @@ fn is_link(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
 }
 
+/// The session's folder under `root` when `sid` is a canonical UUID and the folder is a
+/// real one.
+pub(super) fn folder_of(root: &Path, sid: &str) -> Option<PathBuf> {
+    let folder = root.join(session_name(sid)?);
+    (folder.is_dir() && !is_link(&folder)).then_some(folder)
+}
+
+/// Deletes every folder under `root` whose session is not in `keep` or `running`, and the
+/// profile a crashed browser left in a kept one; returns how many were deleted and the
+/// remaining folders' bytes.
+pub(super) fn sweep_folders(
+    root: &Path,
+    keep: &[String],
+    running: &[String],
+) -> (usize, BTreeMap<String, u64>) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return (0, BTreeMap::new());
+    };
+    let mut removed = 0;
+    let mut usage = BTreeMap::new();
+    for entry in entries.flatten() {
+        let Some(sid) = entry.file_name().to_str().and_then(session_name) else {
+            continue;
+        };
+        let path = entry.path();
+        if running.contains(&sid) {
+            usage.insert(sid, folder_bytes(&path));
+        } else if keep.contains(&sid) {
+            let profile = path.join(PROFILE);
+            if !is_link(&path) && profile.is_dir() && !is_link(&profile) {
+                let _ = std::fs::remove_dir_all(&profile);
+            }
+            usage.insert(sid, folder_bytes(&path));
+        } else if !is_link(&path) && std::fs::remove_dir_all(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    (removed, usage)
+}
+
+/// One request to the browser host on its own connection, and its one-line reply.
+async fn ask(socket: &Path, request: &Value) -> Option<Value> {
+    let stream = tokio::net::UnixStream::connect(socket).await.ok()?;
+    let (read, mut write) = stream.into_split();
+    let mut line = request.to_string().into_bytes();
+    line.push(b'\n');
+    let reply = async {
+        write.write_all(&line).await.ok()?;
+        let mut raw = Vec::new();
+        BufReader::new(read)
+            .take(super::host::MAX_REPLY as u64 + 1)
+            .read_until(b'\n', &mut raw)
+            .await
+            .ok()?;
+        raw.ends_with(b"\n").then_some(())?;
+        serde_json::from_slice::<Value>(&raw).ok()
+    };
+    tokio::time::timeout(CALL_TIMEOUT, reply).await.ok()?
+}
+
 /// Bytes stored under a session folder, skipping links and the running profile.
-fn folder_bytes(folder: &Path) -> u64 {
+pub(super) fn folder_bytes(folder: &Path) -> u64 {
     fn walk(path: &Path, top: bool) -> u64 {
         let Ok(entries) = std::fs::read_dir(path) else {
             return 0;
@@ -569,7 +674,7 @@ fn transport_failed(name: &str, args: &Value) -> Value {
 
 /// Sends one frame and reads its reply; `None` when the transport or reply is broken.
 async fn exchange(
-    io: &mut (ChildStdin, BufReader<ChildStdout>),
+    io: &mut Io,
     name: &str,
     args: &Value,
     base: &Path,
@@ -638,12 +743,13 @@ mod queue_tests {
             .unwrap();
         let mut child = child;
         let (stdin, stdout) = (child.stdin.take().unwrap(), child.stdout.take().unwrap());
+        let io: Io = (Box::new(stdin), BufReader::new(Box::new(stdout)));
         inner.sessions.insert(
             sid.into(),
             Arc::new(Item {
                 pid: 0,
-                process: Mutex::new(child),
-                io: Mutex::new((stdin, BufReader::new(stdout))),
+                process: Mutex::new(Some(child)),
+                io: Mutex::new(io),
                 authority: Default::default(),
                 user: user.into(),
                 lease: StdMutex::new((0.0, Instant::now())),
@@ -716,6 +822,8 @@ mod queue_tests {
         let browsers = Browsers::new(Settings {
             root: root.clone(),
             origin: "https://example.test".into(),
+            host: None,
+            sandbox: false,
         });
         assert_eq!(browsers.sweep(&[kept.to_owned()]).await, 1);
         assert!(!root.join(gone).exists());
