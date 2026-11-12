@@ -597,25 +597,36 @@ pub fn validate_external_plan(
     history_budget: usize,
 ) -> Result<()> {
     config.validate()?;
-    if plan.max_bytes != history_budget
-        || plan.reserve_bytes != config.summary_reserve_bytes
+    // Each check names itself, so a refused plan shows which rule failed.
+    let stale = |check: &str| anyhow!("Stale or invalid context compaction plan ({check})");
+    if plan.max_bytes != history_budget {
+        return Err(stale("history budget"));
+    }
+    if plan.reserve_bytes != config.summary_reserve_bytes
         || plan.system_input_budget != config.system_input_budget
         || plan.summary_instructions != config.summary_instructions
-        || serde_json::to_value(&plan.config)? != serde_json::to_value(config)?
-        || plan.drop_until == 0
+    {
+        return Err(stale("summary limits"));
+    }
+    if serde_json::to_value(&plan.config)? != serde_json::to_value(config)? {
+        return Err(stale("policy config"));
+    }
+    if plan.drop_until == 0
         || plan.drop_until > input.len()
         || input[..plan.drop_until] != plan.source
         || digest(&input[..plan.drop_until])? != plan.source_digest
-        || config.summary_source(&plan.source)?.len() > config.max_source_bytes
     {
-        bail!("Stale or invalid context compaction plan");
+        return Err(stale("source prefix"));
+    }
+    if config.summary_source(&plan.source)?.len() > config.max_source_bytes {
+        return Err(stale("source size"));
     }
     if config.system_input_budget.is_some_and(|budget| {
         config
             .summary_envelope_bytes(&plan.source)
             .map_or(true, |size| size > budget)
     }) {
-        bail!("Stale or invalid context compaction plan");
+        return Err(stale("summary model budget"));
     }
     let valid_boundary = match plan.boundary {
         Boundary::PriorTurn => input.get(plan.drop_until).is_some_and(is_user),
@@ -624,7 +635,7 @@ pub fn validate_external_plan(
         }
     };
     if !valid_boundary {
-        bail!("Stale or invalid context compaction plan");
+        return Err(stale("boundary"));
     }
     let mut seen = HashSet::new();
     let mut pending = HashSet::new();
@@ -634,17 +645,17 @@ pub fn validate_external_plan(
                 Some(id) if seen.insert(id) => {
                     pending.insert(id);
                 }
-                _ => bail!("Stale or invalid context compaction plan"),
+                _ => return Err(stale("call pairs")),
             },
             Some("function_call_output") => match call_id(item) {
                 Some(id) if pending.remove(id) => {}
-                _ => bail!("Stale or invalid context compaction plan"),
+                _ => return Err(stale("call pairs")),
             },
             _ => {}
         }
     }
     if !pending.is_empty() {
-        bail!("Stale or invalid context compaction plan");
+        return Err(stale("call pairs"));
     }
     Ok(())
 }
