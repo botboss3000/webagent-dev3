@@ -24,6 +24,16 @@ on the same unchanged input digest (from a fresh review, list or read):
 5. check=ui_test for UI changes: it runs the browser fixtures the changed paths
    select and its log excerpt carries page errors a failed release may cut off.
 
+When a change alters what a route or query returns, lists or counts (for example
+hiding empty sessions), search the whole test suite for tests that assert the old
+result (the route path, the field, `[0]` row checks) and run check=test on each
+match before finish. The release runs every test; a missed fixture costs a full cycle.
+
+When a release fails, read `failing_tests` and `failure_line` in the finish, wait
+or status result (a failure notice leads with them too), fix those named tests,
+and rerun each with check=test before the next finish. Never guess the failing
+test from the log tail: it holds the tests that ran after the failure.
+
 timeout_seconds is 1–600. Use a distinct stable request_id per check; reuse it
 to reconcile a lost response instead of starting another. One check runs beside
 a running build; a second queues. Guidance, JSON, UI and other non-Rust changes
