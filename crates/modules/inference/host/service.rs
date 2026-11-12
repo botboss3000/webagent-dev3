@@ -1,10 +1,10 @@
 //! The local inference service's client. `webagent-v3 --inference-service` runs the embedding
-//! model (crates/modules/inference/src/service.rs); it is started on first use and stopped after
-//! ten idle minutes so the model's memory is returned. The configuration composer asks it for
+//! model (crates/modules/inference/src/service.rs); the loop warms it at start-up and it stays running
+//! (about 130 MB) so ranking is always fast; a crashed child restarts on the next request. The configuration composer asks it for
 //! setting matches ([`ask`]) and the abilities catalog for tool and skill scores ([`rank`]).
 use std::process::Stdio;
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
@@ -15,8 +15,6 @@ use axum::http::StatusCode;
 
 use crate::{bad, ApiError};
 
-/// The matcher is stopped after this long without a request.
-const IDLE: Duration = Duration::from_secs(10 * 60);
 /// Loading the model and embedding the catalog takes about a second; a request about 10 ms.
 const STARTUP: Duration = Duration::from_secs(30);
 const ANSWER: Duration = Duration::from_secs(10);
@@ -29,7 +27,6 @@ struct Matcher {
     child: Child,
     stdin: ChildStdin,
     replies: Lines<BufReader<ChildStdout>>,
-    used: Instant,
     next: u64,
 }
 
@@ -116,7 +113,6 @@ async fn ask_within(request: Value, within: Duration) -> Result<Value, ApiError>
         .is_some_and(|m| matches!(m.child.try_wait(), Ok(None)))
     {
         *slot = Some(start().await.map_err(|_| unavailable())?);
-        start_reaper();
     }
     let matcher = slot.as_mut().ok_or_else(unavailable)?;
     matcher.next += 1;
@@ -138,7 +134,6 @@ async fn ask_within(request: Value, within: Duration) -> Result<Value, ApiError>
         }
     };
     let reply = tokio::time::timeout(within, answer).await.ok().flatten();
-    matcher.used = Instant::now();
     let Some(reply) = reply else {
         // A lost or late reply leaves the stream out of step: start over next time.
         *slot = None;
@@ -175,25 +170,8 @@ async fn start() -> std::io::Result<Matcher> {
         child,
         stdin,
         replies,
-        used: Instant::now(),
         next: 0,
     })
-}
-
-/// Once, start the task that stops the matcher after [`IDLE`].
-fn start_reaper() {
-    static STARTED: OnceLock<()> = OnceLock::new();
-    STARTED.get_or_init(|| {
-        tokio::spawn(async {
-            loop {
-                tokio::time::sleep(Duration::from_secs(60)).await;
-                let mut slot = matcher_slot().lock().await;
-                if slot.as_ref().is_some_and(|m| m.used.elapsed() > IDLE) {
-                    *slot = None;
-                }
-            }
-        });
-    });
 }
 
 #[cfg(test)]
