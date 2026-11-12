@@ -25,6 +25,13 @@ let expandedAbility = null;
 
 // The selected tenant and server authority govern every read and save on this page.
 export async function renderAbilities(host, request, options) {
+  // LIVE-CONTEXT-CHART: this page owns one poll and one visibility listener; a
+  // re-render away from it releases both before starting the next.
+  if (host._abilityPoll) { clearInterval(host._abilityPoll); host._abilityPoll = null; }
+  if (host._abilityVisibilityHandler) {
+    document.removeEventListener('visibilitychange', host._abilityVisibilityHandler);
+    host._abilityVisibilityHandler = null;
+  }
   const { agentId, levelId = 'operator', previewUser = '' } = options;
   const scope = '/agents/' + encodeURIComponent(agentId);
   const generation = (host._abilityGeneration || 0) + 1;
@@ -69,6 +76,40 @@ export async function renderAbilities(host, request, options) {
   const page = node('div', 'conn-tab-content v3-abilities-page');
   const overview = buildAbilitiesOverview();
   overview.update(compositionResult, abilities, slots);
+  // LIVE-CONTEXT-CHART: the composition read is a server-side estimate over the
+  // persisted configuration, so a toggle changes it without changing this page's
+  // rows. Re-read only that estimate and repaint only the chart — never re-render
+  // the abilities page or reload the browser page for it.
+  let compositionRequest = 0;
+  let compositionRetry = null;
+  const refreshComposition = (attempt = 0) => {
+    if (host._abilityGeneration !== generation || !overview.isConnected) return;
+    const serial = ++compositionRequest;
+    request(scope + '/context-composition').then(composition => {
+      if (serial !== compositionRequest || host._abilityGeneration !== generation || !overview.isConnected) return;
+      // 'busy' means the pointer or keyboard is inspecting the chart; retry a
+      // couple of times, then leave it to the poll.
+      if (overview.update(composition, abilities, slots, { live: true }) === 'busy' && attempt < 2) {
+        clearTimeout(compositionRetry);
+        compositionRetry = setTimeout(() => refreshComposition(attempt + 1), 900);
+      }
+    }).catch(() => {});
+  };
+  // Keep the legend's inventory counts in step with a save before the chart
+  // refreshes: the estimate carries token totals, while the counts come from this
+  // page's ability model.
+  const applySavedMode = (ability, kind, mode, name = null) => {
+    if (kind === 'ability') { ability.visibility = mode; return; }
+    if (kind === 'tool') {
+      const tool = (ability.tools || []).find(item => item.name === name);
+      if (tool) tool.mode = mode;
+      return;
+    }
+    if (!name || name === 'core') ability.skill_visibility = mode;
+    const skill = [...(ability.general_skills || []), ...(ability.selectable_skills || [])]
+      .find(item => (item.skill_id || 'core') === (name || 'core'));
+    if (skill) skill.mode = mode;
+  };
   const status = node('p', 'v3-ability-status');
   status.setAttribute('role', 'status');
   status.textContent = options.administratorNotice || '';
@@ -112,7 +153,9 @@ export async function renderAbilities(host, request, options) {
         const saved = await request(path, 'PUT', { visibility: mode, expected_revision: data.revision });
         data.revision = saved.revision;
       }
-      if (kind === 'ability') ability.visibility = mode;
+      applySavedMode(ability, kind, mode, toolName);
+      // The save changed the persisted configuration this estimate is computed from.
+      refreshComposition();
       if (input.type === 'checkbox') {
         input.checked = mode !== 'off';
         input.setAttribute('aria-label', input.getAttribute('aria-label').replace(/: \w+\./, ': ' + mode + '.'));
@@ -227,6 +270,7 @@ export async function renderAbilities(host, request, options) {
             data.permissions = { ...data.permissions, ...saved };
           }
           status.textContent = 'Tool permission saved.';
+          refreshComposition();
         } catch (error) {
           status.textContent = error.status === 409 ? 'Settings changed. Reload before saving: ' + error.message : error.message;
           throw error;
@@ -256,6 +300,7 @@ export async function renderAbilities(host, request, options) {
               { expected_revision: data.revision, settings });
             data.revision = saved.revision;
             status.textContent = 'Tool execution settings saved.';
+            refreshComposition();
           } catch (error) {
             status.textContent = error.status === 409
               ? 'Settings changed. Reload before saving: ' + error.message : error.message;
@@ -269,6 +314,7 @@ export async function renderAbilities(host, request, options) {
               { expected_revision: data.revision, included });
             data.revision = saved.revision;
             status.textContent = 'Duplicate-result setting saved.';
+            refreshComposition();
           } catch (error) {
             status.textContent = error.status === 409
               ? 'Settings changed. Reload before saving: ' + error.message : error.message;
@@ -406,4 +452,20 @@ export async function renderAbilities(host, request, options) {
   host.replaceChildren(page);
   window.lucide?.createIcons({ nodes: [...page.querySelectorAll('[data-lucide]:not(.lucide)')] });
   filter();
+  // LIVE-CONTEXT-CHART: a slow poll catches configuration saved in another tab or
+  // chat, and returning to the tab re-reads at once. It skips hidden tabs and pages
+  // that are no longer mounted; the chart itself refuses to repaint under a pointer.
+  host._abilityPoll = setInterval(() => {
+    if (host._abilityGeneration !== generation || !overview.isConnected ||
+        document.visibilityState !== 'visible' || !overview.getClientRects().length) return;
+    refreshComposition();
+  }, 15000);
+  host._abilityVisibilityHandler = () => {
+    if (host._abilityGeneration !== generation || !overview.isConnected) {
+      document.removeEventListener('visibilitychange', host._abilityVisibilityHandler);
+      return;
+    }
+    if (document.visibilityState === 'visible' && overview.getClientRects().length) refreshComposition();
+  };
+  document.addEventListener('visibilitychange', host._abilityVisibilityHandler);
 }

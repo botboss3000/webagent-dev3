@@ -39,6 +39,9 @@ export function buildAbilitiesOverview() {
   const compositionTip = overview.querySelector('[data-context-composition-tip]');
   let compositionEntries = [];
   let compositionSources = [];
+  // LIVE-CONTEXT-CHART: the signature of the composition currently drawn, so a
+  // refresh that returns the same saved configuration does not replace the bars.
+  let compositionSignature = null;
   // RADIAL-RAIL-DYNAMIC: the rail the ball rides is rebuilt for every focus from the
   // category's *current* bar tips, rather than baked once at render time. A knot that
   // belongs to the popped category is offset by that group's own live translate, so the
@@ -613,9 +616,17 @@ export function buildAbilitiesOverview() {
     }).join('');
   };
 
+  // True while a pointer or the keyboard is working inside the chart. A live repaint
+  // must wait: replacing the bars under the pointer would close the tooltip and drop
+  // the lifted section mid-read.
+  const compositionInspecting = () => Boolean(compositionFocusState || compositionPoppedKey ||
+    document.activeElement === compositionChart || compositionHitRegion?.matches?.(':hover'));
   // The chart markup and radial interactions above are copied from v2's
   // _buildAbilitiesOverview. This adapter supplies v3's agent data.
-  overview.update = (composition, abilities, slots) => {
+  // LIVE-CONTEXT-CHART: options.live marks a re-read of the saved configuration rather
+  // than the page's first paint. It repaints only this chart, and returns 'busy' when
+  // the chart is being inspected so the caller can retry later.
+  overview.update = (composition, abilities, slots, options = {}) => {
     const active = abilities.filter(ability => ability.visibility !== 'off');
     const skills = active.filter(ability => ability.has_skill);
     const tools = active.flatMap(ability => ability.tools || [])
@@ -628,9 +639,17 @@ export function buildAbilitiesOverview() {
       skills: `${skills.length}-${count(skills, 'visible')}-${count(skills, 'discoverable')}`,
       tools: `${tools.length}-${count(tools, 'visible')}-${count(tools, 'discoverable')}`,
     };
+    // One signature covers everything this repaint depends on: the server estimate
+    // (totals, breakdown and source list) and the inventory counts from this page's
+    // own ability model. An unchanged read leaves the pointer state alone.
+    const signature = JSON.stringify([composition, counts]);
+    if (options.live === true && compositionInspecting()) return 'busy';
+    if (signature === compositionSignature) return false;
     setComposition(composition.breakdown, composition.tokens, composition.sources, counts);
+    compositionSignature = signature;
     const heading = compositionTotal.querySelector('b');
     if (heading) heading.textContent = 'Estimated';
+    return true;
   };
   return overview;
 }
