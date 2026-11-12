@@ -1,193 +1,24 @@
-//! The configuration composer's API. `POST /config/propose` asks the matcher service
-//! (`webagent-v3 --composer-service`, started on first use and stopped after ten idle minutes so
-//! the model's memory is returned) which setting a request means on the page it was made on,
+//! The configuration composer's API. `POST /config/propose` asks the local inference service
+//! (`super::inference`) which setting a request means on the page it was made on,
 //! and answers with a card or a pick list, each setting with its description and current value.
 //! `POST /config/apply` writes one value the user confirmed, through the owner's existing save:
 //! live configuration files through the administrator configuration save (validator, digest
 //! fence, broker write), agent settings through the agent identity update (its revision and
 //! management check), and the display name through the profile update. Nothing else writes.
 use std::path::Path as FilePath;
-use std::process::Stdio;
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
 
 use axum::extract::{Extension, Path};
 use axum::http::StatusCode;
 use axum::Json;
 use serde_json::{json, Map, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::Mutex;
-use webagent_composer::matcher::Setting;
-use webagent_composer::values;
 use webagent_configuration::catalog;
+use webagent_inference::matcher::Setting;
+use webagent_inference::values;
 
+use super::inference::ask;
 use crate::{bad, conflict, Api, ApiError, App, State};
 
-/// The matcher is stopped after this long without a request.
-const IDLE: Duration = Duration::from_secs(10 * 60);
-/// Loading the model and embedding the catalog takes about a second; a request about 10 ms.
-const STARTUP: Duration = Duration::from_secs(30);
-const ANSWER: Duration = Duration::from_secs(10);
-/// A first `rank` embeds the whole tool or skill catalog (a few hundred texts); later ones reuse it.
-const RANK_ANSWER: Duration = Duration::from_secs(30);
 const LIVE_LIMIT: u64 = 4 * 1024 * 1024;
-
-struct Matcher {
-    child: Child,
-    stdin: ChildStdin,
-    replies: Lines<BufReader<ChildStdout>>,
-    used: Instant,
-    next: u64,
-}
-
-fn matcher_slot() -> &'static Mutex<Option<Matcher>> {
-    static SLOT: OnceLock<Mutex<Option<Matcher>>> = OnceLock::new();
-    SLOT.get_or_init(|| Mutex::new(None))
-}
-
-#[cfg(not(test))]
-fn matcher_command() -> std::io::Result<Command> {
-    let mut command = Command::new(std::env::current_exe()?);
-    command.arg("--composer-service");
-    Ok(command)
-}
-/// Test scorer for `rank` on this thread (tokio tests run on one thread); `None` uses the stub
-/// service, which never returns scores.
-#[cfg(test)]
-pub(crate) type RankStub = fn(&str, &[Vec<String>]) -> Option<Vec<f32>>;
-#[cfg(test)]
-thread_local! {
-    pub(crate) static RANK_STUB: std::cell::Cell<Option<RankStub>> = const { std::cell::Cell::new(None) };
-}
-/// Stands in for the service: answers every request with no match.
-#[cfg(test)]
-fn matcher_command() -> std::io::Result<Command> {
-    let mut command = Command::new("/bin/sh");
-    command.args([
-        "-c",
-        r#"echo '{"ready":true}'; while read -r line; do id=${line#*'"id":'}; echo "{\"id\":${id%%[,\}]*},\"result\":{\"outcome\":\"no_match\"}}"; done"#,
-    ]);
-    Ok(command)
-}
-
-/// One matcher answer. Requests are answered one at a time, in order.
-async fn ask(request: Value) -> Result<Value, ApiError> {
-    ask_within(request, ANSWER).await
-}
-
-/// Each item's closest-text score against `query` (the matcher's `rank` operation), or `None`
-/// when the matcher is unavailable, so callers keep a fallback.
-pub(crate) async fn rank(query: &str, items: Vec<Vec<String>>) -> Option<Vec<f32>> {
-    #[cfg(test)]
-    if let Some(stub) = RANK_STUB.with(std::cell::Cell::get) {
-        return stub(query, &items);
-    }
-    let result = ask_within(
-        json!({"op": "rank", "query": query, "items": items}),
-        RANK_ANSWER,
-    )
-    .await
-    .ok()?;
-    result["scores"]
-        .as_array()?
-        .iter()
-        .map(|score| score.as_f64().map(|score| score as f32))
-        .collect()
-}
-
-async fn ask_within(request: Value, within: Duration) -> Result<Value, ApiError> {
-    let unavailable = || {
-        ApiError(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Setting matcher unavailable".into(),
-        )
-    };
-    let mut slot = matcher_slot().lock().await;
-    if !slot
-        .as_mut()
-        .is_some_and(|m| matches!(m.child.try_wait(), Ok(None)))
-    {
-        *slot = Some(start().await.map_err(|_| unavailable())?);
-        start_reaper();
-    }
-    let matcher = slot.as_mut().ok_or_else(unavailable)?;
-    matcher.next += 1;
-    let id = matcher.next;
-    let mut request = request;
-    request["id"] = json!(id);
-    let answer = async {
-        matcher
-            .stdin
-            .write_all(format!("{request}\n").as_bytes())
-            .await
-            .ok()?;
-        loop {
-            let reply: Value =
-                serde_json::from_str(&matcher.replies.next_line().await.ok()??).ok()?;
-            if reply["id"] == id {
-                return Some(reply);
-            }
-        }
-    };
-    let reply = tokio::time::timeout(within, answer).await.ok().flatten();
-    matcher.used = Instant::now();
-    let Some(reply) = reply else {
-        // A lost or late reply leaves the stream out of step: start over next time.
-        *slot = None;
-        return Err(unavailable());
-    };
-    match reply.get("result") {
-        Some(result) => Ok(result.clone()),
-        None => Err(bad(reply["error"]
-            .as_str()
-            .unwrap_or("Request not understood"))),
-    }
-}
-
-async fn start() -> std::io::Result<Matcher> {
-    let mut child = matcher_command()?
-        .env_clear()
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()?;
-    let missing = || std::io::Error::other("matcher pipes unavailable");
-    let stdin = child.stdin.take().ok_or_else(missing)?;
-    let mut replies = BufReader::new(child.stdout.take().ok_or_else(missing)?).lines();
-    let ready = tokio::time::timeout(STARTUP, replies.next_line()).await;
-    let ready: Value = match ready {
-        Ok(Ok(Some(line))) => serde_json::from_str(&line).unwrap_or_default(),
-        _ => Value::Null,
-    };
-    if ready["ready"] != true {
-        return Err(std::io::Error::other("matcher did not start"));
-    }
-    Ok(Matcher {
-        child,
-        stdin,
-        replies,
-        used: Instant::now(),
-        next: 0,
-    })
-}
-
-/// Once, start the task that stops the matcher after [`IDLE`].
-fn start_reaper() {
-    static STARTED: OnceLock<()> = OnceLock::new();
-    STARTED.get_or_init(|| {
-        tokio::spawn(async {
-            loop {
-                tokio::time::sleep(Duration::from_secs(60)).await;
-                let mut slot = matcher_slot().lock().await;
-                if slot.as_ref().is_some_and(|m| m.used.elapsed() > IDLE) {
-                    *slot = None;
-                }
-            }
-        });
-    });
-}
 
 /// The catalog's descriptors with the owner file each came from.
 fn descriptors() -> Result<Vec<(Setting, Value, String)>, ApiError> {
@@ -566,13 +397,5 @@ mod tests {
             ),
             json!({"enabled": true, "voice": "a"})
         );
-    }
-
-    #[tokio::test]
-    async fn matcher_answers_through_the_service() {
-        let answer = ask(json!({"text": "x", "page": "app"}))
-            .await
-            .map_err(|e| e.1);
-        assert_eq!(answer, Ok(json!({"outcome": "no_match"})));
     }
 }

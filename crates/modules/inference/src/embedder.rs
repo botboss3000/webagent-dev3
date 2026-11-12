@@ -1,5 +1,5 @@
 //! Sentence embeddings from bge-small-en-v1.5 on the CPU: the normalized `[CLS]` vector of the
-//! model's last hidden state. ONNX Runtime is the `voice` stage's library, loaded at run time.
+//! model's last hidden state. ONNX Runtime (/opt/inference/lib) is loaded at run time.
 use std::fmt::Display;
 use std::path::Path;
 
@@ -10,10 +10,10 @@ use ort::value::Tensor;
 
 use crate::tokenizer::Tokenizer;
 
-/// ONNX Runtime, installed by the `voice` stage of the Dockerfile.
-pub const RUNTIME: &str = "/opt/voice/lib/libonnxruntime.so";
+/// ONNX Runtime, installed under /opt/inference by the Dockerfile's dependency stage.
+pub const RUNTIME: &str = "/opt/inference/lib/libonnxruntime.so";
 /// The model and its vocabulary, installed by the same stage (pinned and hash-checked there).
-pub const MODEL_DIR: &str = "/opt/voice/composer/bge-small-en-v1.5";
+pub const MODEL_DIR: &str = "/opt/inference/models/bge-small-en-v1.5";
 /// bge's instruction for short queries matched against longer passages.
 pub const QUERY_PREFIX: &str = "Represent this sentence for searching relevant passages: ";
 /// The matcher answers one request at a time; two threads keep it light on a shared host.

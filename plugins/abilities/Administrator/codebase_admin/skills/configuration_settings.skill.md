@@ -71,7 +71,7 @@ neither described nor excluded with a reason.
 - Descriptors hold no default or current values; those are always read live.
 
 If a setting has wording its type does not give ("close registration" = `restricted`, "by
-accident" = smaller), add it to `crates/modules/composer/value-words.json` under the id.
+accident" = smaller), add it to `crates/modules/inference/value-words.json` under the id.
 
 ## Checklist for a configuration change
 
@@ -81,5 +81,5 @@ accident" = smaller), add it to `crates/modules/composer/value-words.json` under
 3. New live file: add its id, live path and validator to the configuration host API.
 4. Run the configuration crate tests (`cargo test -p webagent-configuration`): they validate
    every descriptor against the live file and fail on undescribed values.
-5. Optionally check the match: `webagent-v3 --composer-eval` in the deployed container scores the
-   request sets in `crates/modules/composer/eval/`; add a request there for a new setting.
+5. Optionally check the match: `webagent-v3 --config-match-eval` in the deployed container scores the
+   request sets in `crates/modules/inference/eval/`; add a request there for a new setting.

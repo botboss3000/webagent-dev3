@@ -182,7 +182,7 @@ class RuntimeRecipeTests(unittest.TestCase):
         self.assertEqual(recipe["stage"], "webagent_dependency_voice")
         output = self.runtime.package_dockerfile(self.dockerfile, "api")
         self.assertIn("FROM webagent_dependency_voice AS voice", output)
-        self.assertIn("COPY --from=voice /opt/voice /opt/voice", output)
+        self.assertIn("COPY --from=voice /opt/inference /opt/inference", output)
         self.assertNotIn("pip install", output)
         self.assertNotIn("FROM debian", output)
         api = self.runtime.runtime_recipe(self.dockerfile, "api", b"helper")["key"]
@@ -221,7 +221,7 @@ class RuntimeRecipeTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             self.runtime.dependency_recipe(plain, "voice")
         for text in (
-            self.dockerfile.replace("    && chmod -R a+rX /opt/voice\n", "    && chmod -R a+rX /opt/voice\nCOPY v3/src /opt/voice/src\n", 1),
+            self.dockerfile.replace("    && chmod -R a+rX /opt/inference\n", "    && chmod -R a+rX /opt/inference\nCOPY v3/src /opt/inference/src\n", 1),
             self.dockerfile.replace("python3-venv ca-certificates curl", "python3-venv ca-certificates curl --mount=type=bind,target=/x", 1),
             self.dockerfile.replace("AS voice", "AS speech", 1),
         ):

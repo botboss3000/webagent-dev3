@@ -774,16 +774,16 @@ async fn run_process() -> Result<()> {
         let arg = |n| std::env::args().nth(n).unwrap_or_default();
         return webagent_media::voice_service(&arg(2), &arg(3)).map_err(anyhow::Error::msg);
     }
-    if std::env::args().nth(1).as_deref() == Some("--composer-service") {
-        // The configuration composer's matcher, started by the API as a child process.
-        return webagent_composer::serve();
+    if std::env::args().nth(1).as_deref() == Some("--inference-service") {
+        // The local inference service (embeddings), started by the API as a child process.
+        return webagent_inference::serve();
     }
-    if std::env::args().nth(1).as_deref() == Some("--composer-eval") {
-        // Score the matcher against request sets (crates/modules/composer/eval/*.jsonl).
-        return webagent_composer::evaluate(&std::env::args().skip(2).collect::<Vec<_>>());
+    if std::env::args().nth(1).as_deref() == Some("--config-match-eval") {
+        // Score the matcher against request sets (crates/modules/inference/eval/*-set.jsonl).
+        return webagent_inference::evaluate(&std::env::args().skip(2).collect::<Vec<_>>());
     }
     if std::env::args().nth(1).as_deref() == Some("--tool-match-eval") {
-        // Score list_tools/list_skills ranking (crates/modules/composer/eval/tool-match-eval.jsonl).
+        // Score list_tools/list_skills ranking (crates/modules/inference/eval/tool-match-eval.jsonl).
         return crate::tool_match_eval::evaluate(&std::env::args().skip(2).collect::<Vec<_>>());
     }
     if std::env::args().nth(1).as_deref() == Some("--tool-worker") {

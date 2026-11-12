@@ -17,7 +17,7 @@ pub mod speech;
 pub fn voice_service(role: &str, settings: &str) -> Result<(), String> {
     let settings: settings::VoiceSettings =
         serde_json::from_str(settings).map_err(|error| error.to_string())?;
-    let root = std::path::Path::new(recognizer::VOICE_ROOT);
+    let root = std::path::Path::new(recognizer::INFERENCE_ROOT);
     match role {
         "dictation" => recognizer::run(root, &settings.dictation),
         "speech" => speaker::run(root, &settings.speech),

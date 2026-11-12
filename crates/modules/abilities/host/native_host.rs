@@ -267,7 +267,7 @@ impl NativeHost for Host<'_> {
         items: Vec<Vec<String>>,
     ) -> Pending<'a, Option<Vec<f32>>> {
         Box::pin(async move {
-            let scores = crate::api::composer::rank(query, items).await;
+            let scores = crate::api::inference::rank(query, items).await;
             if scores.is_none() {
                 tracing::warn!("Matcher unavailable; discovery falls back to word ranking");
             }

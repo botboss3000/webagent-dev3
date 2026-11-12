@@ -2712,10 +2712,10 @@ async fn batched_discovery_calls_run_serially_and_succeed() {
     server.abort();
 }
 /// Preload journey: the stub scores `file read` high and `file search` as a suggestion.
-async fn preload_journey(stub: Option<crate::api::composer::RankStub>) -> Vec<Value> {
+async fn preload_journey(stub: Option<crate::api::inference::RankStub>) -> Vec<Value> {
     use axum::routing::post;
 
-    crate::api::composer::RANK_STUB.with(|cell| cell.set(stub));
+    crate::api::inference::RANK_STUB.with(|cell| cell.set(stub));
     let (_root, mut app) = fixture().await;
     let sid = conversation(&app).await;
     let sent = send(
@@ -2770,7 +2770,7 @@ async fn preload_journey(stub: Option<crate::api::composer::RankStub>) -> Vec<Va
         CancellationToken::new(),
     )
     .await;
-    crate::api::composer::RANK_STUB.with(|cell| cell.set(None));
+    crate::api::inference::RANK_STUB.with(|cell| cell.set(None));
     let done = app.run(&id).await.unwrap();
     assert!(
         stub.is_none() || done["preload"]["preloaded"].is_array(),

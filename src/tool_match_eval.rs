@@ -1,5 +1,5 @@
 //! `webagent-v3 --tool-match-eval FILE...` scores `list_tools`/`list_skills` ranking against
-//! request sets (`crates/modules/composer/eval/tool-match-eval.jsonl`): one line per case
+//! request sets (`crates/modules/inference/eval/tool-match-eval.jsonl`): one line per case
 //! `{"id", "kind": "tool"|"skill", "query", "expect": [ID...]}`, then a summary per kind. It uses
 //! the installed model and the same rules as the live tools, over the whole catalog (no access
 //! filtering), so it runs where the model is installed: inside the built image.
@@ -66,7 +66,7 @@ fn candidates() -> Result<(Vec<Candidate>, Vec<Candidate>)> {
 
 pub fn evaluate(files: &[String]) -> Result<()> {
     let (tools, skills) = candidates()?;
-    let mut ranker = webagent_composer::Ranker::new(webagent_composer::load_embedder()?);
+    let mut ranker = webagent_inference::Ranker::new(webagent_inference::load_embedder()?);
     let items = |list: &[Candidate]| list.iter().map(|c| c.texts.clone()).collect::<Vec<_>>();
     let (tool_items, skill_items) = (items(&tools), items(&skills));
     for file in files {

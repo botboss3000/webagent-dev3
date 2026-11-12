@@ -28,7 +28,7 @@ pub(crate) mod build_tasks;
 pub(crate) mod chat;
 #[path = "../../crates/modules/chat/host/api/chat_controls.rs"]
 mod chat_controls;
-#[path = "../../crates/modules/composer/host/api.rs"]
+#[path = "../../crates/modules/inference/host/composer.rs"]
 pub(crate) mod composer;
 #[cfg(test)]
 mod composer_tests;
@@ -38,6 +38,8 @@ mod engine_components;
 mod file_manager;
 #[path = "../../crates/modules/chat/host/api/followup_queue.rs"]
 pub(crate) mod followup_queue;
+#[path = "../../crates/modules/inference/host/service.rs"]
+pub(crate) mod inference;
 #[path = "../../crates/modules/configuration/host/api.rs"]
 pub(crate) mod live_configuration;
 mod loop_settings;

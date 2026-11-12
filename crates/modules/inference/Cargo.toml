@@ -1,11 +1,11 @@
 [package]
-name = "webagent-composer"
+name = "webagent-inference"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 anyhow = "1"
-# ONNX Runtime is loaded at run time from the `voice` stage of the Dockerfile, so the workspace
+# ONNX Runtime is loaded at run time from the Dockerfile's dependency stage (/opt/inference), so the workspace
 # builds and tests without it; no API feature, so any runtime from 1.17 on serves it.
 ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic"] }
 regex = "1"

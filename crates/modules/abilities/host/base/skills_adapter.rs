@@ -97,7 +97,7 @@ async fn ranked_skills(query: &str, skills: Vec<Value>) -> (Vec<Value>, &'static
             )
         })
         .collect();
-    let (scores, by) = match crate::api::composer::rank(query, items).await {
+    let (scores, by) = match crate::api::inference::rank(query, items).await {
         Some(scores) if scores.len() == skills.len() => (scores, "matcher"),
         _ => {
             tracing::warn!("Matcher unavailable; list_skills falls back to word matching");
@@ -579,7 +579,7 @@ async fn preload_candidates(
     let texts: Vec<Vec<String>> = items.iter().map(|item| item.5.clone()).collect();
     let mut best = vec![0.0_f32; items.len()];
     for clause in tool_match::clauses(text) {
-        let Some(scores) = crate::api::composer::rank(&clause, texts.clone()).await else {
+        let Some(scores) = crate::api::inference::rank(&clause, texts.clone()).await else {
             return Ok(None);
         };
         if scores.len() != items.len() {

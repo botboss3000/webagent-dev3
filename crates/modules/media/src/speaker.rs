@@ -606,11 +606,11 @@ mod tests {
         assert_eq!(&file[44..], &[0, 0, 0xff, 0x7f, 0x01, 0x80]);
     }
 
-    /// Loads the real libraries and model when `WEBAGENT_VOICE_ROOT` names a `voice` stage copy;
+    /// Loads the real libraries and model when `WEBAGENT_INFERENCE_ROOT` names a copy of /opt/inference;
     /// the broker's test run has none, so it is skipped there.
     #[test]
     fn kokoro_reads_numbers_and_unusual_words_when_installed() {
-        let Ok(root) = std::env::var("WEBAGENT_VOICE_ROOT") else {
+        let Ok(root) = std::env::var("WEBAGENT_INFERENCE_ROOT") else {
             return;
         };
         let defaults = crate::settings::VoiceSettings::default();

@@ -2584,17 +2584,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "webagent-composer"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "ort",
- "regex",
- "serde_json",
- "webagent-configuration",
-]
-
-[[package]]
 name = "webagent-configuration"
 version = "0.1.0"
 dependencies = [
@@ -2798,6 +2787,17 @@ dependencies = [
  "webagent-models",
  "webagent-notifications",
  "webagent-storage",
+]
+
+[[package]]
+name = "webagent-inference"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ort",
+ "regex",
+ "serde_json",
+ "webagent-configuration",
 ]
 
 [[package]]
@@ -3107,7 +3107,6 @@ dependencies = [
  "webagent-capability-context",
  "webagent-capability-contracts",
  "webagent-chat",
- "webagent-composer",
  "webagent-configuration",
  "webagent-context-assembly",
  "webagent-context-assets",
@@ -3117,6 +3116,7 @@ dependencies = [
  "webagent-extensions",
  "webagent-files",
  "webagent-host-core",
+ "webagent-inference",
  "webagent-manager",
  "webagent-media",
  "webagent-model-discovery",

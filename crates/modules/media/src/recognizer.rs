@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use crate::settings;
 
 /// Where the `voice` stage installs `lib/` and `models/`.
-pub const VOICE_ROOT: &str = "/opt/voice";
+pub const INFERENCE_ROOT: &str = "/opt/inference";
 /// The only sherpa-onnx release whose C layouts [`ffi`] mirrors.
 const LIBRARY_VERSION: &str = "2.0.1";
 const SAMPLE_RATE: i32 = 16000;
@@ -655,7 +655,7 @@ mod tests {
     /// real model.
     #[test]
     fn a_soft_first_word_is_kept_when_installed() {
-        let Ok(root) = std::env::var("WEBAGENT_VOICE_ROOT") else {
+        let Ok(root) = std::env::var("WEBAGENT_INFERENCE_ROOT") else {
             return;
         };
         let wav = std::fs::read(Path::new(&root).join("models/parakeet/test_wavs/en.wav")).unwrap();
@@ -724,13 +724,13 @@ mod tests {
         );
     }
 
-    /// Loads the real library and models when `WEBAGENT_VOICE_ROOT` names a `voice` stage copy
+    /// Loads the real library and models when `WEBAGENT_INFERENCE_ROOT` names a copy of /opt/inference
     /// with the model's sample recordings; the broker's test run has none, so it is skipped there.
     /// Audio goes in one-second batches, as a browser backlog sends it, and the opening words
     /// must survive.
     #[test]
     fn parakeet_transcribes_recordings_when_installed() {
-        let Ok(root) = std::env::var("WEBAGENT_VOICE_ROOT") else {
+        let Ok(root) = std::env::var("WEBAGENT_INFERENCE_ROOT") else {
             return;
         };
         let defaults = crate::settings::VoiceSettings::default();
