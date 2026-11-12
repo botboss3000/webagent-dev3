@@ -88,7 +88,8 @@ async function mountChat(){
   if(headerDropdown&&!currentChatProfile())headerDropdown.hidden=true;
 }
 await mountChat();
-const mainNotes=enableMainNotes?createMainNotes({request}):null;if(mainNotes){mainNotes.element.dataset.headerExtension='main_notes';$('chat-header').append(mainNotes.element);}
+// Main Notes mounts itself as a chip in the session-tabs row; the live profile gates its visibility.
+const mainNotes=enableMainNotes?createMainNotes({request,enabled:()=>currentChatProfile()?.chat_header?.controls?.main_notes?.enabled!==false}):null;
 // Display activity uses authoritative selected-session run states and live publications.
 const screenAwake=mountScreenAwake(root,{getProfile:currentChatProfile});
 const chatActions=mountChatActionPanel({root,guard,request,note});

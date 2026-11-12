@@ -271,7 +271,7 @@
       "controls": {
         "main_notes": {
           "_instructions": "enabled: Enable this feature or control; false disables it where supported.",
-          "description": "Main Notes panel below the header rows (Main Chat only). false hides it live without discarding unsaved edits.",
+          "description": "Main Notes chip in the session-tabs row beside Spawns and Broker (Main Chat only); its card opens under the chip. false hides it live without discarding unsaved edits.",
           "enabled": true
         },
         "session_dropdown": {

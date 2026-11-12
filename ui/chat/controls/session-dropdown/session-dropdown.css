@@ -9,6 +9,6 @@
 #session-dropdown-menu .session-row { -webkit-touch-callout:none; user-select:none; }
 #session-dropdown-menu input { user-select:text; }
 #session-dropdown [hidden], #session-dropdown-menu [hidden] { display:none!important; }
-/* The session-tab row collapses until the open session has a family (list.js renderTabs)
-   or Broker tasks (broker-chip.js sets data-broker). */
-#chat-header .chat-header-row:has(#chat-sub-header[data-empty]:not([data-broker])) { display:none; }
+/* The session-tab row collapses until the open session has a family (list.js renderTabs),
+   Broker tasks (broker-chip.js sets data-broker) or Main Notes (main-notes/index.js sets data-notes). */
+#chat-header .chat-header-row:has(#chat-sub-header[data-empty]:not([data-broker]):not([data-notes])) { display:none; }

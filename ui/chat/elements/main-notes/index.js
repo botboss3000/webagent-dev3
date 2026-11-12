@@ -2,13 +2,36 @@
 const states=['open','waiting','blocked','scheduled','in_progress','done','cancelled'];
 /** Build text-only DOM content so note text cannot become executable markup. */
 const node=(tag,text,cls='')=>{const n=document.createElement(tag);n.className=cls;if(text!==undefined)n.textContent=text;return n;};
-/** Own the private Notes widget, authenticated refresh stream and teardown boundary. */
-export function createMainNotes({request,agentId=null,EventSourceClass=EventSource}) {
+/** Own the private Notes chip, body-mounted card, authenticated refresh stream and teardown boundary. */
+export function createMainNotes({request,agentId=null,EventSourceClass=EventSource,enabled=()=>true}) {
   const styleId='chat-element-style-main-notes';if(!document.getElementById(styleId)){const link=node('link');link.id=styleId;link.rel='stylesheet';link.href=new URL('./style.css',import.meta.url).href;document.head.append(link);}
-  const element=node('details',undefined,'main-notes');element.hidden=true;const summary=node('summary','Main Notes');const body=node('div',undefined,'main-notes-body');const notice=node('p','','main-notes-notice');notice.setAttribute('role','status');element.append(summary,notice,body);
-  let state=null,disposed=false,epoch=0,loading=false,again=false,editing=false,writing=false,source=null,sourceId=null;
+  // The chip joins the session-tabs row beside Spawns and Broker; its panel is a body-mounted
+  // card that reuses the shared chip-menu/broker-card skins instead of a header disclosure row.
+  const element=node('button',undefined,'sub-chip chip-notes');element.type='button';element.id='chat-main-notes-chip';element.hidden=true;
+  element.setAttribute('aria-haspopup','dialog');element.setAttribute('aria-expanded','false');element.setAttribute('aria-controls','main-notes-card');
+  const glyph=node('span',undefined,'chip-status');glyph.innerHTML='<i data-lucide="book-open"></i>';
+  const label=node('span','Main Notes','main-notes-chip-label'),meta=node('span','','main-notes-chip-meta'),badge=node('span','','main-notes-chip-badge');badge.hidden=true;
+  element.append(glyph,label,meta,badge);
+  const card=node('div',undefined,'sub-chip-menu broker-card main-notes-card');card.id='main-notes-card';card.tabIndex=-1;card.setAttribute('role','dialog');card.setAttribute('aria-label','Main Notes');
+  const body=node('div',undefined,'main-notes-body');const notice=node('p','','main-notes-notice');notice.setAttribute('role','status');card.append(notice,body);
+  let state=null,disposed=false,epoch=0,loading=false,again=false,editing=false,writing=false,shown=false,opened=false,source=null,sourceId=null;
   const endpoint=()=>'/models/agents/'+encodeURIComponent(agentId)+'/main-notes';
   const receipts=new Map(),abort=new AbortController();
+  /** The session-tabs row shared with Spawns and Broker; the chip lives in its scroller. */
+  const tabs=()=>document.getElementById('chat-sub-header');
+  /** Closes on any press outside the card and its chip. */
+  function outside(event){if(card.contains(event.target)||element.contains(event.target))return;close();}
+  /** Dismisses the card without discarding unsaved panel content. */
+  function close(){if(!opened)return;opened=false;document.removeEventListener('pointerdown',outside,true);const inside=card.contains(document.activeElement);card.remove();element.setAttribute('aria-expanded','false');if(inside)element.focus({preventScroll:true});}
+  /** Opens the card under the chip; phone widths get the full-width chip-menu panel. */
+  function open(){if(opened||element.hidden)return;opened=true;document.body.append(card);element.setAttribute('aria-expanded','true');
+    const box=element.getBoundingClientRect();card.style.top=(box.bottom+4)+'px';
+    if(!matchMedia('(max-width: 600px)').matches)card.style.left=Math.max(4,Math.min(box.left,innerWidth-card.offsetWidth-8))+'px';
+    document.addEventListener('pointerdown',outside,true);card.focus({preventScroll:true});window.lucide?.createIcons();}
+  /** Applies agent, access and configured visibility; keeps the tab row visible with the chip. */
+  function sync(){const show=shown&&!!agentId&&enabled()!==false;element.hidden=!show;tabs()?.toggleAttribute('data-notes',show);
+    if(!show)return close();
+    const scroll=tabs()?.querySelector('#chat-sub-scroll-wrap');if(scroll&&element.parentNode!==scroll)scroll.append(element);window.lucide?.createIcons();}
   /** Bind a non-submitting action using the shared chat control style. */
   function button(text,fn){const b=node('button',text,'ac-btn ac-btn-ghost');b.type='button';b.addEventListener('click',fn);return b;}
   /** Release the private event stream and its bound session ID. */
@@ -16,7 +39,9 @@ export function createMainNotes({request,agentId=null,EventSourceClass=EventSour
   /** Subscribe once to Main Chat revisions; identity epochs reject stale callbacks. */
   function watch(){const id=state?.session_id;if(!id||!state.settings.enabled){closeStream();return;}if(sourceId===id)return;closeStream();sourceId=id;const generation=epoch;source=new EventSourceClass('/api/v3/sessions/'+encodeURIComponent(id)+'/events');source.addEventListener('open',()=>{if(!disposed&&generation===epoch)void refresh();});source.addEventListener('session_updated',event=>{if(disposed||generation!==epoch)return;try{const data=JSON.parse(event.data);if(data.main_notes_revision!==undefined&&data.main_notes_revision!==state?.revision)void refresh();}catch{void refresh();}});source.addEventListener('error',()=>{if(!disposed&&generation===epoch){notice.textContent='Checking access after a live update interruption…';void refresh();}});}
   /** Coalesce reads, preserve dirty edits and clear private content on access failure. */
-  async function refresh(){if(disposed||!agentId)return;if(loading){again=true;return;}loading=true;const generation=epoch;try{const data=await request(endpoint());if(disposed||generation!==epoch)return;if(data.agent_id!==agentId)throw Error('Notes agent mismatch');const changed=state&&state.revision!==data.revision;state=data;element.hidden=false;summary.textContent=data.settings.notes_name+' · '+Object.values(data.topics).length+' topics'+(Object.values(data.proposals).filter(p=>p.status==='pending').length?' · '+Object.values(data.proposals).filter(p=>p.status==='pending').length+' awaiting approval':'');watch();if(!editing&&!writing)paint();else if(changed&&editing)notice.textContent='Notes changed. Your edit keeps its original revision; reload if saving reports a conflict.';}catch(error){if(!disposed&&generation===epoch){closeStream();state=null;editing=false;summary.textContent='Main Notes';body.replaceChildren();element.hidden=false;notice.textContent='Main Notes unavailable: '+error.message;body.append(button('Retry loading',()=>void refresh()));}}finally{if(generation===epoch){loading=false;if(again){again=false;void refresh();}}}}
+  async function refresh(){if(disposed||!agentId)return;if(loading){again=true;return;}loading=true;const generation=epoch;try{const data=await request(endpoint());if(disposed||generation!==epoch)return;if(data.agent_id!==agentId)throw Error('Notes agent mismatch');const changed=state&&state.revision!==data.revision;state=data;shown=true;const topics=Object.values(data.topics).length,pending=Object.values(data.proposals).filter(p=>p.status==='pending').length;
+      label.textContent=data.settings.notes_name;meta.textContent=topics?topics+' topic'+(topics===1?'':'s'):'';badge.hidden=!pending;badge.textContent=pending?String(pending):'';
+      const description=data.settings.notes_name+(topics?' · '+topics+' topic'+(topics===1?'':'s'):'')+(pending?' · '+pending+' awaiting approval':'');element.title=description;element.setAttribute('aria-label',description);sync();watch();if(!editing&&!writing)paint();else if(changed&&editing)notice.textContent='Notes changed. Your edit keeps its original revision; reload if saving reports a conflict.';}catch(error){if(!disposed&&generation===epoch){closeStream();state=null;editing=false;shown=true;label.textContent='Main Notes';meta.textContent='';badge.hidden=true;element.title='Main Notes unavailable';element.setAttribute('aria-label','Main Notes unavailable');body.replaceChildren();notice.textContent='Main Notes unavailable: '+error.message;body.append(button('Retry loading',()=>void refresh()));sync();}}finally{if(generation===epoch){loading=false;if(again){again=false;void refresh();}}}}
   /** Retry the exact original body; saving notes never invokes an action or scheduler. */
   async function commit(path,payload){if(writing||disposed||!agentId||!state?.can_manage)return false;const generation=epoch,signature=JSON.stringify([path,payload]);let bodyValue=receipts.get(signature);if(!bodyValue){bodyValue={...payload,request_id:crypto.randomUUID()};receipts.set(signature,bodyValue);}writing=true;body.querySelectorAll('button').forEach(b=>b.disabled=true);notice.textContent='Saving notes…';try{await request(path,'POST',bodyValue);if(disposed||generation!==epoch)return false;receipts.delete(signature);editing=false;notice.textContent='Notes saved. Action execution still follows its own permissions.';await refresh();return true;}catch(error){if(!disposed&&generation===epoch)notice.textContent='Save not confirmed: '+error.message+'. Retry the same change, or reload to reconcile.';return false;}finally{if(generation===epoch)writing=false;if(!disposed&&generation===epoch){body.querySelectorAll('button').forEach(b=>b.disabled=false);if(!editing&&state)paint();}}}
   /** Display an optional labelled value as text rather than HTML. */
@@ -46,9 +71,14 @@ export function createMainNotes({request,agentId=null,EventSourceClass=EventSour
     });
   }
   document.addEventListener('v3:main-chat-changed',()=>void refresh(),{signal:abort.signal});
-  function setAgent(id){epoch++;loading=false;again=false;agentId=id||null;closeStream();state=null;editing=false;writing=false;receipts.clear();summary.textContent='Main Notes';notice.textContent='';body.replaceChildren();element.hidden=true;if(agentId)void refresh();}
+  // A live chat configuration change re-evaluates configured visibility and the tab row.
+  document.addEventListener('v3:chat-config-applied',()=>sync(),{signal:abort.signal});
+  element.addEventListener('click',()=>{opened?close():open();});
+  // Escape dismisses the card; focus returns to the chip through close().
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&opened){event.preventDefault();close();}},{signal:abort.signal});
+  function setAgent(id){epoch++;loading=false;again=false;agentId=id||null;closeStream();state=null;editing=false;writing=false;receipts.clear();shown=false;label.textContent='Main Notes';meta.textContent='';badge.hidden=true;element.title='Main Notes';element.setAttribute('aria-label','Main Notes');notice.textContent='';body.replaceChildren();close();sync();if(agentId)void refresh();}
   window.addEventListener('v3-identity-changed',()=>setAgent(null),{signal:abort.signal});
   void refresh();
   // destroy aborts listeners, invalidates asynchronous callbacks and removes private content.
-  return {element,refresh,setAgent,destroy(){disposed=true;epoch++;abort.abort();closeStream();receipts.clear();body.replaceChildren();element.remove();}};
+  return {element,refresh,setAgent,destroy(){disposed=true;epoch++;abort.abort();closeStream();receipts.clear();close();body.replaceChildren();element.remove();card.remove();tabs()?.removeAttribute('data-notes');}};
 }
