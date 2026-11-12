@@ -10,9 +10,10 @@
 export function mountFollowupQueue({root,client,getSession,guard,note,keyId,forgetKey,onSnapshot,canWrite=()=>true}) {
   let generation=0,revision=-1,entries=[],held=false,reason=null;
   const busy=new Set();
-  // "Delivered" shows for 2s after a queued message is seen joining the run, then hides;
-  // a message already delivered when this panel first saw it shows nothing.
-  const waiting=new Set(),hidden=new Set(),fading=new Set();
+  // "Delivered" shows for 2s after a queued message joins the run, then hides; entries in
+  // the first snapshot after a load or session switch are history and show nothing.
+  let primed=false;
+  const hidden=new Set(),fading=new Set();
   const terminal=new Set(['delivered','cancelled','rejected']);
   // Translate durable queue states into short status text for transcript controls.
   // Every message joins the conversation at the agent's next step; Send now forces that step.
@@ -26,9 +27,8 @@ export function mountFollowupQueue({root,client,getSession,guard,note,keyId,forg
       if(row.parentElement?.closest('[data-public-id]'))continue;
       const entry=entries.find(item=>item.message_id===row.dataset.publicId);
       let box=row.querySelector('.followup-delivery');
-      if(entry&&entry.status!=='delivered')waiting.add(entry.id);
       if(entry?.status==='delivered'&&!fading.has(entry.id)&&!hidden.has(entry.id)){
-        if(waiting.has(entry.id)){fading.add(entry.id);const epoch=generation;setTimeout(()=>{if(epoch!==generation)return;hidden.add(entry.id);paint();},2000);}
+        if(primed){fading.add(entry.id);const epoch=generation;setTimeout(()=>{if(epoch!==generation)return;hidden.add(entry.id);paint();},2000);}
         else hidden.add(entry.id);
       }
       if(!entry||hidden.has(entry.id)){box?.remove();continue;}
@@ -75,10 +75,10 @@ export function mountFollowupQueue({root,client,getSession,guard,note,keyId,forg
   function update(data){
     const state=data.queue_state||{},next=Number(state.revision)||0;
     if(next<revision)return;revision=next;entries=Array.isArray(data.queue)?data.queue:[];held=!!state.held;reason=state.reason||null;
-    paint();
+    paint();primed=true;
   }
   // Invalidate outstanding work and clear this session queue presentation.
-  function reset(){++generation;revision=-1;entries=[];held=false;reason=null;busy.clear();waiting.clear();hidden.clear();fading.clear();paint();}
+  function reset(){++generation;revision=-1;entries=[];held=false;reason=null;busy.clear();primed=false;hidden.clear();fading.clear();paint();}
   // Dispose the mount after clearing state so no old queue UI remains in the panel.
   return {update,reset,paint,/* True while any queued entry is not in a terminal state. */get pending(){return entries.some(e=>!terminal.has(e.status));},/* Reset state and remove this mount from the panel host. */destroy(){reset();}};
 }
