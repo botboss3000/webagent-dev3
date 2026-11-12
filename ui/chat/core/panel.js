@@ -492,7 +492,8 @@ async function sendWithRetry(send){
 }
 /** Submits text plus staged attachments/page context, preserving draft and session identity across awaits. */
 async function submit(text,clearInput=false,{componentId=''}={}){
-  if(!text&&!media.count)throw Error('Enter a message');
+  // An empty draft with no attachments is ignored: no notice, no request, draft left in place.
+  if(!text&&!media.count)return;
   if(historyBusy||submitting||getState().shutoff||$('chat-send').disabled)throw Error('Chat is busy or execution is disabled');
   const origin=session,epoch=sessionGeneration,draft=$('chat-input').value;
   progress.note('Sending…');submitting=true;$('chat-send').disabled=true;$('chat-continue-btn').disabled=true;
@@ -521,10 +522,9 @@ async function submit(text,clearInput=false,{componentId=''}={}){
     throw error;
   }finally{submitting=false;await refresh();void loadAllowance();}
 }
-// Sends the current composer draft on form submission; an empty draft with no attachments is ignored without a notice.
+// Sends the current composer draft on form submission; submit ignores an empty draft.
 // A host that supports sign-in handles "/login" itself; it is never sent to the agent.
-const sendComposer=guard(()=>{const text=$('chat-input').value.trim();if(onLogin&&text.toLowerCase()==='/login'){$('chat-input').value='';saveDraft(session,'');return onLogin();}return submit(text,true);});
-$('composer').onsubmit=event=>{const text=$('chat-input').value.trim();if(!text&&!media.count){event?.preventDefault();return;}return sendComposer(event);};
+$('composer').onsubmit=guard(()=>{const text=$('chat-input').value.trim();if(onLogin&&text.toLowerCase()==='/login'){$('chat-input').value='';saveDraft(session,'');return onLogin();}return submit(text,true);});
 // Continue is a new user turn, not an automatic retry of an exhausted run.
 $('chat-continue-btn').onclick=guard(()=>submit('Continue'));
 // Enter behavior follows chat_common.composer.enter_behavior; touch devices are detected once per adoption.
