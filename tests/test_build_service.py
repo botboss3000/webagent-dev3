@@ -484,7 +484,12 @@ class CodebasePublicationMetadataTests(unittest.TestCase):
    self.assertIn("type=bind,src="+str(root/"releases"/job/"v3")+",dst=/code,readonly",args)
 
 
+# The Administrator pack is optional; the core app builds and tests without it.
+ADMINISTRATOR_PACK=(Path(__file__).resolve().parents[1]/"plugins/abilities/Administrator").is_dir()
+
+
 class CodebaseRegisteredGuidanceTests(unittest.TestCase):
+ @unittest.skipUnless(ADMINISTRATOR_PACK,"needs the Administrator pack")
  def test_every_installed_selectable_skill_has_an_independent_lane(self):
   folder=Path(__file__).resolve().parents[1]/"plugins/abilities/Administrator/codebase_admin/skills"
   paths=list(folder.glob("*.skill.md"))
@@ -2525,6 +2530,7 @@ class CommandReturnBoundaryTests(unittest.TestCase):
   self.assertNotIn('namespace::fixture',json.dumps(job))
 
 class SourceControlContractTests(unittest.TestCase):
+ @unittest.skipUnless(ADMINISTRATOR_PACK,"needs the Administrator pack")
  def test_source_control_is_a_native_ability_with_its_closed_tool_list(self):
   native=["source_remote_read","source_remote_commit","source_site_create","source_site_status",
           "source_preview_start","source_preview_stop","source_publish","source_rollback"]

@@ -106,19 +106,21 @@ fn excerpt(folder: &OwnedFd, relative: &str) -> Outcome<(String, bool)> {
 }
 
 /// Runs one `decision_candidates` call in `base`.
-pub(super) fn candidates(roots: &Roots, base: &Path, args: &Map<String, Value>) -> Outcome<Value> {
+pub(super) fn candidates(
+    roots: &Roots,
+    base: &Path,
+    args: &Map<String, Value>,
+    granted: bool,
+) -> Outcome<Value> {
     let raw = match args.get("path") {
         None => ".",
         Some(Value::String(raw)) => raw.as_str(),
         Some(_) => return Err(rejected("path must be text")),
     };
-    let default_root = if roots.live_checkout.is_dir() {
-        &roots.live_checkout
-    } else {
-        base
-    };
+    let live = granted && roots.live_checkout.is_dir();
+    let default_root = if live { &roots.live_checkout } else { base };
     let target = resolve(&default_root.join(raw));
-    let checkout_top = confine(roots, base, &target, true)?;
+    let checkout_top = confine(roots, base, &target, live, granted)?;
     let parts: Vec<&OsStr> = target
         .components()
         .filter_map(|part| match part {

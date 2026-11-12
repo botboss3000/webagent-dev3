@@ -35,6 +35,21 @@ pub fn schemas() -> Vec<Value> {
     tools::normalize_native_schemas(definitions)
 }
 
+/// The tool worker's live-checkout grant for `name`: `trusted` with `"checkout": true` added
+/// when the Administrator pack is installed and the loaded Codebase Admin ability declares
+/// the tool, else `trusted` unchanged. The engine has already authorized the call itself;
+/// without this grant the worker confines file tools and commands to the session workspace.
+pub(crate) fn checkout_grant(app: &App, name: &str, trusted: Option<Value>) -> Option<Value> {
+    if !webagent_administration::tools::installed()
+        || !app.abilities.has_tool("codebase_admin", name)
+    {
+        return trusted;
+    }
+    let mut trusted = trusted.unwrap_or_else(|| json!({}));
+    trusted["checkout"] = json!(true);
+    Some(trusted)
+}
+
 pub fn build_socket(app: &App) -> std::path::PathBuf {
     app.build_socket.clone()
 }
@@ -288,7 +303,7 @@ impl AdministrationHost for Host<'_> {
             args,
             sid,
             &self.0.tool_socket,
-            trusted,
+            checkout_grant(self.0, name, trusted),
             cancel,
         ))
     }
@@ -472,6 +487,29 @@ mod tests {
                 supported_schema_name(name),
                 "{name} needs an Administrator tool folder"
             );
+        }
+    }
+
+    /// The worker sees the live checkout only for tools of the installed Codebase Admin pack.
+    #[tokio::test]
+    async fn checkout_grant_needs_the_installed_codebase_admin_tool() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let revision = json!({"codebase_revision":"r"});
+        assert_eq!(
+            checkout_grant(&app, "web_search", Some(revision.clone())),
+            Some(revision.clone())
+        );
+        assert_eq!(checkout_grant(&app, "read_attachment", None), None);
+        let granted = checkout_grant(&app, "file_read", Some(revision));
+        if cfg!(administrator_pack) {
+            assert_eq!(
+                granted,
+                Some(json!({"codebase_revision":"r","checkout":true}))
+            );
+        } else {
+            // Without the pack the fixture's test-only codebase_admin grants nothing.
+            assert!(!webagent_administration::tools::installed());
+            assert_eq!(granted, Some(json!({"codebase_revision":"r"})));
         }
     }
 

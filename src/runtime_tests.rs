@@ -12,42 +12,126 @@ pub(crate) fn native_catalog() -> abilities::Catalog {
     static ROOT: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
     let root = ROOT.get_or_init(|| {
         let target = tempfile::tempdir().expect("native catalog fixture");
-        /// Copy native declarations and their confined inputs; validate fixed host contracts through Catalog::load.
-        fn copy_native(source: &std::path::Path, target: &std::path::Path) {
-            let declaration = source.join("plugin.json");
-            if declaration.is_file() {
-                let manifest: Value =
-                    serde_json::from_slice(&std::fs::read(declaration).unwrap()).unwrap();
-                // Host-interface plugins are dispatched by the app itself, so they load natively.
-                let native_automation =
-                    manifest["id"] == "automation" && manifest["host_interface"] == "automation_v1";
-                let host_requests = manifest["host_interface"] == "requests_v1";
-                if manifest["dispatch"] == "isolated" && !native_automation && !host_requests {
-                    return;
-                }
-            }
-            std::fs::create_dir_all(target).unwrap();
-            for entry in std::fs::read_dir(source).unwrap() {
-                let entry = entry.unwrap();
-                assert!(
-                    !entry.file_type().unwrap().is_symlink(),
-                    "native fixture source symlink"
-                );
-                let output = target.join(entry.file_name());
-                if entry.file_type().unwrap().is_dir() {
-                    copy_native(&entry.path(), &output);
-                } else {
-                    std::fs::copy(entry.path(), output).unwrap();
-                }
-            }
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities");
+        copy_native(&source, target.path(), &[]);
+        if !source.join("Administrator/codebase_admin").is_dir() {
+            synthetic_codebase_admin(target.path());
         }
-        copy_native(
-            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities"),
-            target.path(),
-        );
         target
     });
     abilities::Catalog::load(root.path()).expect("validated native fixture catalog")
+}
+
+/// Copy native declarations and their confined inputs; validate fixed host contracts through Catalog::load.
+fn copy_native(source: &std::path::Path, target: &std::path::Path, skip: &[&str]) {
+    let declaration = source.join("plugin.json");
+    if declaration.is_file() {
+        let manifest: Value = serde_json::from_slice(&std::fs::read(declaration).unwrap()).unwrap();
+        // Host-interface plugins are dispatched by the app itself, so they load natively.
+        let native_automation =
+            manifest["id"] == "automation" && manifest["host_interface"] == "automation_v1";
+        let host_requests = manifest["host_interface"] == "requests_v1";
+        if manifest["dispatch"] == "isolated" && !native_automation && !host_requests {
+            return;
+        }
+    }
+    std::fs::create_dir_all(target).unwrap();
+    for entry in std::fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        assert!(
+            !entry.file_type().unwrap().is_symlink(),
+            "native fixture source symlink"
+        );
+        if skip.iter().any(|name| entry.file_name() == *name) {
+            continue;
+        }
+        let output = target.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_native(&entry.path(), &output, &[]);
+        } else {
+            std::fs::copy(entry.path(), output).unwrap();
+        }
+    }
+}
+
+/// Without the optional Administrator pack, give engine tests a test-only ability under the
+/// same ID that declares the core-schema file, prompt-slot and command tools they drive.
+/// It exists only in this temporary catalog; pack tools such as `build_work` stay absent.
+fn synthetic_codebase_admin(root: &std::path::Path) {
+    let group = root.join("Administrator");
+    let ability = group.join("codebase_admin");
+    std::fs::create_dir_all(ability.join("skills")).unwrap();
+    std::fs::create_dir_all(ability.join("tools")).unwrap();
+    for tool in ["file_read", "file_edit"] {
+        std::fs::write(
+            ability.join(format!("tools/{tool}.skill.md")),
+            "Match one exact span.",
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        ability.join("skills/ui_theming.skill.md"),
+        "---\nid: ui_theming\ntitle: UI theming\nwhen_to_use: Use when changing UI colours.\n---\nUse theme tokens.",
+    )
+    .unwrap();
+    std::fs::write(
+        group.join("_group.json"),
+        r#"{"name":"Administrator","order":1}"#,
+    )
+    .unwrap();
+    let manifest = json!({
+        "display_name": "Codebase Admin (test fixture)",
+        "kind": "ability",
+        "description": "Test-only workspace tools for engine coverage without the Administrator pack",
+        "tools": ["file_list", "file_read", "file_search", "file_edit", "file_write",
+            "state_inspect", "prompt_slot_read", "prompt_slot_write", "shell", "python",
+            "checkout_edit"],
+        "readiness": "ready",
+        "config": {"bias": {"key": "destructive_caution", "label": "Caution", "default": "balanced",
+            "levels": {"cautious": "Ask first.", "balanced": "Ask when unsure.", "trusted": "Act."}}}
+    });
+    std::fs::write(
+        ability.join("codebase_admin.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        ability.join("codebase_admin.skill.md"),
+        "# Codebase Admin\n\nUse scoped workspace tools.",
+    )
+    .unwrap();
+}
+
+/// The core catalog without the optional Administrator pack, as a non-coding installation
+/// loads it: it validates, and no core ability offers checkout or Administrator tools.
+#[test]
+fn core_catalog_loads_without_the_administrator_pack() {
+    let target = tempfile::tempdir().unwrap();
+    copy_native(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities"),
+        target.path(),
+        &["Administrator"],
+    );
+    let catalog = abilities::Catalog::load(target.path()).expect("core catalog without the pack");
+    for id in [
+        "codebase_admin",
+        "diagnostics",
+        "git_control",
+        "terminal_control",
+    ] {
+        assert!(!catalog.known(id), "{id} needs the Administrator pack");
+    }
+    let pack_tools = webagent_administration::tools::TOOLS
+        .iter()
+        .chain(&webagent_administration::tools::CHECKOUT_TOOLS);
+    for name in pack_tools {
+        for id in catalog.ids() {
+            assert!(
+                !catalog.has_tool(&id, name),
+                "core ability {id} offers Administrator tool {name}"
+            );
+        }
+    }
 }
 
 pub(crate) async fn fixture_uninitialized() -> (TempDir, App) {
@@ -10841,6 +10925,7 @@ async fn provider_recovery_retries_stream_failure_and_publishes_one_final_reply(
 }
 
 #[test]
+#[cfg_attr(not(administrator_pack), ignore = "needs the Administrator pack")]
 fn consolidated_codebase_schema_and_guidance_contract() {
     let catalog = native_catalog();
     let schema = tools::schemas();
@@ -11725,6 +11810,7 @@ async fn late_single_tool_rejects_stale_attempts_and_keeps_known_write_result() 
 }
 
 #[tokio::test]
+#[cfg_attr(not(administrator_pack), ignore = "needs the Administrator pack")]
 async fn late_single_tool_broker_finish_keeps_receipt_reconciliation() {
     late_single_tool_case("build_work", "cancel", "none", false).await;
 }

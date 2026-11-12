@@ -2082,8 +2082,15 @@ impl<
                     );
                 }
                 if let Some(entry) = review_entry.as_object() {
-                    let prompted =
-                        access.ability_permission("diagnostics") != access::Permission::Deny;
+                    // Diagnostics ships with the optional Administrator pack; without it
+                    // there is no agent_review tool to ask for.
+                    let installed = app
+                        .abilities
+                        .tool_abilities("agent_review", &Value::Null, &Value::Null, &Value::Null)
+                        .iter()
+                        .any(|id| id == "diagnostics");
+                    let prompted = installed
+                        && access.ability_permission("diagnostics") != access::Permission::Deny;
                     super::health::record_review_prompt(&mut run, prompted);
                     tracing::warn!(
                         prompted,

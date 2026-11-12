@@ -179,6 +179,14 @@ pub fn handles(name: &str) -> bool {
     TOOLS.contains(&name)
 }
 
+/// Whether the app granted this call live-checkout access. It sends `trusted.checkout`
+/// only for tools of an installed, loaded Codebase Admin ability; without it, file tools
+/// and commands reach only the session workspace. The File Manager does not use this path.
+#[must_use]
+pub fn checkout_granted(request: &Value) -> bool {
+    request["trusted"]["checkout"] == true
+}
+
 /// Runs one worker request for a file tool and returns its result object.
 #[must_use]
 pub fn call(roots: &Roots, request: &Value) -> Value {
@@ -186,19 +194,27 @@ pub fn call(roots: &Roots, request: &Value) -> Value {
         Ok(admitted) => admitted,
         Err(failure) => return failed(&failure),
     };
+    let granted = checkout_granted(request);
     if name == "decision_candidates" {
         // A worker tool of its own, not a Codebase Admin one: no routing or runner fields.
         return match args {
-            Value::Object(args) => decision::candidates(roots, &base, args),
+            Value::Object(args) => decision::candidates(roots, &base, args, granted),
             _ => Err(rejected("Unsupported decision arguments")),
         }
         .unwrap_or_else(|failure| failed(&failure));
     }
-    let mut result =
-        match route(roots, name, args).and_then(|args| operation(roots, &base, &args, name)) {
-            Ok(result) => result,
-            Err(failure) => failed(&failure),
-        };
+    if name == "checkout_edit" && !granted {
+        return failed(&rejected_kind(
+            "denied_path",
+            "Live-checkout edits need the Codebase Admin ability",
+        ));
+    }
+    let mut result = match route(roots, name, args)
+        .and_then(|args| operation(roots, &base, &args, name, granted))
+    {
+        Ok(result) => result,
+        Err(failure) => failed(&failure),
+    };
     result["implementation_version"] = json!(IMPLEMENTATION_VERSION);
     result["plugin_revision"] = Value::Null;
     result
@@ -492,7 +508,13 @@ fn temporary_name(kind: &str) -> String {
     format!(".v3-{kind}-{}", uuid::Uuid::new_v4().simple())
 }
 
-fn operation(roots: &Roots, base: &Path, args: &Map<String, Value>, name: &str) -> Outcome<Value> {
+fn operation(
+    roots: &Roots,
+    base: &Path,
+    args: &Map<String, Value>,
+    name: &str,
+    granted: bool,
+) -> Outcome<Value> {
     // checkout_edit is the one direct live-checkout writer; policy can deny it alone.
     let checkout = name == "checkout_edit";
     let name = match (checkout, args.contains_key("content")) {
@@ -505,7 +527,7 @@ fn operation(roots: &Roots, base: &Path, args: &Map<String, Value>, name: &str) 
         Some(Value::String(raw)) => raw.as_str(),
         Some(_) => return Err(rejected("path must be text")),
     };
-    let live = roots.live_checkout.is_dir();
+    let live = granted && roots.live_checkout.is_dir();
     let default_root = if live { &roots.live_checkout } else { base };
     let target = resolve(&default_root.join(raw));
     let writes = matches!(name, "file_write" | "file_edit");
@@ -523,7 +545,7 @@ fn operation(roots: &Roots, base: &Path, args: &Map<String, Value>, name: &str) 
             ));
         }
     }
-    let checkout_top = confine(roots, base, &target, checkout || !writes)?;
+    let checkout_top = confine(roots, base, &target, live && (checkout || !writes), granted)?;
     let parts: Vec<&OsStr> = target
         .components()
         .filter_map(|part| match part {
@@ -598,7 +620,15 @@ fn operation(roots: &Roots, base: &Path, args: &Map<String, Value>, name: &str) 
 /// runtime state, other sessions' workspaces and the rest of the container stay out.
 /// `source` allows the checkout (reads and checkout_edit). Returns whether `target` is the
 /// checkout root, whose runtime folders a walk skips.
-pub(super) fn confine(roots: &Roots, base: &Path, target: &Path, source: bool) -> Outcome<bool> {
+/// Rejects `target` unless it is in `base` or, when `source`, in the checkout's source
+/// files. `granted` says whether the call may see the checkout at all, for the message.
+pub(super) fn confine(
+    roots: &Roots,
+    base: &Path,
+    target: &Path,
+    source: bool,
+    granted: bool,
+) -> Outcome<bool> {
     let checkout = if source && roots.live_checkout.is_dir() {
         let root = std::fs::canonicalize(&roots.live_checkout)?;
         target.strip_prefix(&root).ok().map(Path::to_path_buf)
@@ -612,6 +642,16 @@ pub(super) fn confine(roots: &Roots, base: &Path, target: &Path, source: bool) -
                 .any(|name| first.as_os_str() == *name)
         })
     });
+    if !in_source && !target.starts_with(base) && !granted {
+        return Err(rejected_kind(
+            "denied_path",
+            &format!(
+                "Path {} is outside the readable root: this session's workspace {}",
+                target.display(),
+                base.display()
+            ),
+        ));
+    }
     if !in_source && !target.starts_with(base) {
         return Err(rejected_kind(
             "denied_path",

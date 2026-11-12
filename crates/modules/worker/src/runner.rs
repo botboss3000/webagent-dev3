@@ -37,7 +37,7 @@ fn invalid(error: impl std::fmt::Display) -> io::Error {
 pub fn supervise(argv_json: &str) -> i32 {
     let spec = serde_json::from_str(argv_json).map(|argv| Spec {
         argv,
-        read_paths: command_read_paths(),
+        read_paths: command_read_paths(std::env::var("V3_CHECKOUT_READ").is_ok_and(|v| v == "1")),
         command: true,
     });
     finish(spec.map_err(invalid).and_then(run), true)
@@ -63,11 +63,15 @@ pub fn supervise_plugin(spec_json: &str) -> i32 {
     finish(spec.and_then(run), false)
 }
 
-/// Commands read the container's system folders and the checkout's source files, and
-/// write only this workspace. Runtime state, other sessions' workspaces, control sockets
-/// and the checkout's runtime folders stay out. Checkout writes go through checkout_edit
-/// or broker tasks.
-pub(crate) fn command_read_paths() -> Vec<PathBuf> {
+/// Commands read the container's system folders and, with `checkout`, the checkout's source
+/// files, and write only this workspace. Runtime state, other sessions' workspaces, control
+/// sockets and the checkout's runtime folders stay out. Checkout writes go through
+/// checkout_edit or broker tasks.
+pub(crate) fn command_read_paths(checkout: bool) -> Vec<PathBuf> {
+    read_paths(Path::new("/"), Path::new("/code"), checkout)
+}
+
+fn read_paths(root: &Path, code: &Path, checkout: bool) -> Vec<PathBuf> {
     // `live-checkout` is the image's compatibility link to `/code`: granting it would grant all
     // of `/code`, hidden folders included.
     const HIDDEN: [&str; 6] = [
@@ -78,7 +82,7 @@ pub(crate) fn command_read_paths() -> Vec<PathBuf> {
         "runtime",
         "run",
     ];
-    let entries = |folder: &str, skip: &[&str]| -> Vec<PathBuf> {
+    let entries = |folder: &Path, skip: &[&str]| -> Vec<PathBuf> {
         std::fs::read_dir(folder)
             .into_iter()
             .flatten()
@@ -87,8 +91,10 @@ pub(crate) fn command_read_paths() -> Vec<PathBuf> {
             .map(|entry| entry.path())
             .collect()
     };
-    let mut paths = entries("/", &HIDDEN);
-    paths.extend(entries("/code", &crate::files::CHECKOUT_HIDDEN));
+    let mut paths = entries(root, &HIDDEN);
+    if checkout {
+        paths.extend(entries(code, &crate::files::CHECKOUT_HIDDEN));
+    }
     paths
 }
 
@@ -248,5 +254,28 @@ fn clean_descendants(graceful: bool) {
         if Instant::now() > deadline + Duration::from_secs(1) {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checkout_source_is_readable_only_with_the_grant() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let code = dir.path().join("code");
+        for folder in ["src", "data", "build-jobs"] {
+            std::fs::create_dir_all(code.join(folder)).expect("checkout");
+        }
+        std::fs::create_dir_all(dir.path().join("usr")).expect("system folder");
+        let granted = read_paths(dir.path(), &code, true);
+        assert!(granted.contains(&code.join("src")));
+        assert!(granted.contains(&dir.path().join("usr")));
+        assert!(!granted
+            .iter()
+            .any(|path| path == &code || path.ends_with("data") || path.ends_with("build-jobs")));
+        let ungranted = read_paths(dir.path(), &code, false);
+        assert_eq!(ungranted, [dir.path().join("usr")]);
     }
 }

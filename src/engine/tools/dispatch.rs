@@ -90,6 +90,7 @@ async fn foreground_authorized(
 mod native_schema_dispatch_tests {
     use super::*;
     #[tokio::test]
+    #[cfg_attr(not(administrator_pack), ignore = "needs the Administrator pack")]
     async fn stale_native_parameters_reject_at_real_foreground_fence_before_missing_run_lookup() {
         let (_state, mut app) = crate::runtime_tests::fixture_uninitialized().await;
         let source = crate::live_assets::native_schema_file_tests::source_fixture();

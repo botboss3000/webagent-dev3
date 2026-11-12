@@ -108,7 +108,11 @@ pub(crate) mod native_schema_file_tests {
         let target = root
             .path()
             .join("plugins/abilities/Administrator/native_tools/tools");
-        for ability in std::fs::read_dir(&checkout).unwrap().flatten() {
+        // Without the optional Administrator pack there are no tool folders to copy.
+        let Ok(abilities) = std::fs::read_dir(&checkout) else {
+            return root;
+        };
+        for ability in abilities.flatten() {
             let Ok(tools) = std::fs::read_dir(ability.path().join("tools")) else {
                 continue;
             };
@@ -136,6 +140,7 @@ pub(crate) mod native_schema_file_tests {
         std::fs::write(&path, serde_json::to_vec(&tool).unwrap()).unwrap();
     }
     #[test]
+    #[cfg_attr(not(administrator_pack), ignore = "needs the Administrator pack")]
     fn parameter_change_versions_the_catalog_and_rejects_the_stale_snapshot() {
         let root = source_fixture();
         let plugins = root.path().join("plugins/abilities");
@@ -158,6 +163,7 @@ pub(crate) mod native_schema_file_tests {
         assert_eq!(schema["parameters"]["properties"]["limit"]["maximum"], 123);
     }
     #[test]
+    #[cfg_attr(not(administrator_pack), ignore = "needs the Administrator pack")]
     fn an_invalid_folder_withdraws_only_its_tool() {
         let root = source_fixture();
         let plugins = root.path().join("plugins/abilities");
@@ -184,6 +190,7 @@ pub(crate) mod native_schema_file_tests {
         }
     }
     #[test]
+    #[cfg_attr(not(administrator_pack), ignore = "needs the Administrator pack")]
     fn actual_native_catalog_retains_owner_action_and_nullable_normalization() {
         let root = source_fixture();
         let raw: Value =

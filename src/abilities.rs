@@ -203,6 +203,7 @@ mod tests {
         webagent_abilities::catalog_testing::tests::selected_tool_markers_preserve_off_and_suppressed_controls::<crate::abilities::NativeHost>();
     }
     #[test]
+    #[cfg_attr(not(administrator_pack), ignore = "needs the Administrator pack")]
     fn production_seed_manifest_loads() {
         webagent_abilities::catalog_testing::tests::production_seed_manifest_loads::<
             crate::abilities::NativeHost,

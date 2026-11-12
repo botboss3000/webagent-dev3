@@ -77,7 +77,10 @@ impl NativeHost for Host<'_> {
             args,
             sid,
             &self.0.tool_socket,
-            None,
+            // Directory decisions read the live checkout only under Codebase Admin's file_list.
+            (name == "decision_candidates")
+                .then(|| tools::administrator::checkout_grant(self.0, "file_list", None))
+                .flatten(),
             cancel,
         ))
     }

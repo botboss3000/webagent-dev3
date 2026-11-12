@@ -594,7 +594,8 @@ fn supervised(spec: &str) -> std::io::Result<i32> {
         .filter(|port| !port.is_empty())
         .map(|port| port.parse().map_err(|_| invalid("listen ports")))
         .collect::<std::io::Result<_>>()?;
-    let read_paths = crate::runner::command_read_paths();
+    // Terminals ship with the Administrator pack and keep the checkout's source files.
+    let read_paths = crate::runner::command_read_paths(true);
     let read_paths: Vec<&Path> = read_paths.iter().map(PathBuf::as_path).collect();
     let sandbox = crate::sandbox::prepare(Path::new(base), &read_paths, &ports, true)?;
     let bash = CString::new("/bin/bash")?;

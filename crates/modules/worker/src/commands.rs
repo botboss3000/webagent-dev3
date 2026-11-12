@@ -71,7 +71,8 @@ pub async fn call(roots: &Roots, runner: &[String], request: &Value) -> Value {
         Ok(Err(error)) => return json!({"status":"failed","output":error.to_string()}),
         Err(_) => return json!({"status":"failed","output":"Port claim failed"}),
     };
-    match run(runner, &argv, &base, &ports, timeout as u64).await {
+    let checkout = files::checkout_granted(request);
+    match run(runner, &argv, &base, &ports, timeout as u64, checkout).await {
         Ok(result) => result,
         Err(error) => json!({"status":"failed","output":error.to_string()}),
     }
@@ -232,6 +233,7 @@ async fn run(
     base: &Path,
     ports: &[u16],
     timeout: u64,
+    checkout: bool,
 ) -> io::Result<Value> {
     let (reader, writer) = std::io::pipe()?;
     let ports: Vec<String> = ports.iter().map(u16::to_string).collect();
@@ -253,6 +255,8 @@ async fn run(
         .env("CARGO_INCREMENTAL", "0")
         .env("RUSTFLAGS", "-C debuginfo=0")
         .env("V3_ALLOWED_LISTEN_PORTS", ports.join(","))
+        // Only a Codebase Admin call may read the checkout's source files.
+        .env("V3_CHECKOUT_READ", if checkout { "1" } else { "0" })
         .stdin(Stdio::null())
         .stdout(Stdio::from(writer.try_clone()?))
         .stderr(Stdio::from(writer));

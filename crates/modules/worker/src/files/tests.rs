@@ -34,7 +34,17 @@ fn fixture() -> Fixture {
 }
 
 impl Fixture {
+    /// A call the app granted live-checkout access, as for a Codebase Admin tool.
     fn call(&self, name: &str, arguments: Value) -> Value {
+        call(
+            &self.roots,
+            &json!({"version":2,"id":"t","name":name,"workspace":SESSION,"arguments":arguments,
+                "trusted":{"checkout":true}}),
+        )
+    }
+
+    /// A call without the grant: no Codebase Admin ability owns it.
+    fn call_ungranted(&self, name: &str, arguments: Value) -> Value {
         call(
             &self.roots,
             &json!({"version":2,"id":"t","name":name,"workspace":SESSION,"arguments":arguments}),
@@ -480,6 +490,56 @@ fn tools_reach_only_this_workspace_and_checkout_source() {
         json!({"path":fixture.path("mine.txt"),"content":"ok"}),
     );
     assert_eq!(mine["status"], "success");
+}
+
+#[test]
+fn without_the_checkout_grant_tools_reach_only_this_workspace() {
+    let mut fixture = fixture();
+    let checkout = fixture._dir.path().join("checkout");
+    std::fs::create_dir_all(checkout.join("src")).expect("checkout");
+    std::fs::write(checkout.join("src/a.rs"), "needle source").expect("source");
+    fixture.roots.live_checkout = checkout.clone();
+    let source = std::fs::canonicalize(checkout.join("src/a.rs"))
+        .expect("source file")
+        .to_string_lossy()
+        .into_owned();
+    let granted = fixture.call("file_read", json!({"path":source}));
+    assert_eq!(granted["output"], "needle source");
+
+    let denied = fixture.call_ungranted("file_read", json!({"path":source}));
+    assert_eq!(denied["error_kind"], "denied_path", "{denied}");
+    let output = denied["output"].as_str().unwrap_or_default();
+    assert!(output.contains("outside the readable root"), "{output}");
+    assert!(!output.contains("source checkout"), "{output}");
+    // Relative paths resolve in the workspace, not the checkout.
+    let relative = fixture.call_ungranted("file_read", json!({"path":"src/a.rs"}));
+    assert_eq!(relative["error_kind"], "not_found", "{relative}");
+    let found = fixture.call_ungranted("file_search", json!({"path":".","query":"needle"}));
+    assert!(
+        !found["output"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("a.rs"),
+        "{found}"
+    );
+    let listed = fixture.call_ungranted("decision_candidates", json!({"path":source}));
+    assert_eq!(listed["error_kind"], "denied_path", "{listed}");
+    let edit = fixture.call_ungranted(
+        "checkout_edit",
+        json!({"path":"src/a.rs","content":"changed"}),
+    );
+    assert_eq!(edit["error_kind"], "denied_path", "{edit}");
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("src/a.rs")).expect("source"),
+        "needle source"
+    );
+    let mine = fixture.call_ungranted(
+        "file_write",
+        json!({"path":fixture.path("mine.txt"),"content":"ok"}),
+    );
+    assert_eq!(mine["status"], "success", "{mine}");
+    let read = fixture.call_ungranted("file_read", json!({"path":"mine.txt"}));
+    assert_eq!(read["output"], "ok", "{read}");
 }
 
 #[test]
