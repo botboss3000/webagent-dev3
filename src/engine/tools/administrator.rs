@@ -150,7 +150,7 @@ pub(crate) async fn host_fingerprint(
     } else {
         (state, loaded.clone())
     };
-    let parts = json!([
+    Ok(digest(&json!([
         actor,
         sid,
         agent,
@@ -163,19 +163,7 @@ pub(crate) async fn host_fingerprint(
         loaded,
         bundle,
         generation
-    ]);
-    // TEMPORARY lease diagnostic: per-part digests, to find which part differs between
-    // the admitting and renewing processes. Remove with the fix.
-    if policy_name == "build_work" {
-        let short: Vec<String> = parts
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|part| digest(part)[..8].to_string())
-            .collect();
-        eprintln!("lease-parts {name} {sid} {}", short.join(","));
-    }
-    Ok(digest(&parts))
+    ])))
 }
 
 impl AdministrationHost for Host<'_> {

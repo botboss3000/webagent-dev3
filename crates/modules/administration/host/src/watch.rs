@@ -28,10 +28,6 @@ pub async fn renew_jobs(host: &dyn AdministrationHost) -> Result<()> {
             continue;
         };
         let fresh = host.fingerprint(sid, run_id, name).await;
-        // TEMPORARY lease diagnostic: why a renewal revokes. Remove with the fix.
-        if let Err(error) = &fresh {
-            eprintln!("lease-renew-error {name} {sid} {run_id} {error:#}");
-        }
         let valid = fresh.is_ok_and(|value| record["access_fingerprint"] == value.as_str());
         let identity = trusted(store.current_user_id(), sid, &record["access_fingerprint"]);
         let command = if valid {
