@@ -123,6 +123,10 @@ fn event(
             "compaction_result",
             json!({"summary":item["summary"],"error":item["error"]}),
         ),
+        "preload" => (
+            "preload",
+            json!({"preloaded":item["preloaded"],"suggested":item["suggested"],"skipped":item["skipped"]}),
+        ),
         "retry_scheduled" => (
             "retry_scheduled",
             json!({"attempt":item["attempt"],"of":item["of"],"wait_seconds":item["wait_seconds"],

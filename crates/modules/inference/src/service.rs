@@ -21,8 +21,10 @@ use serde_json::{json, Map, Value};
 use crate::embedder::{cosine, Embedder, MODEL_DIR, QUERY_PREFIX, RUNTIME};
 use crate::matcher::{Matcher, Request, Setting};
 
-/// Longer requests are refused rather than truncated.
+/// Longer setting requests are refused rather than truncated.
 const MAX_TEXT_CHARS: usize = 500;
+/// A rank query only guards against runaway input; the tokenizer keeps its first 512 tokens.
+const MAX_QUERY_CHARS: usize = 20_000;
 /// Bounds on one `rank` request.
 const MAX_ITEMS: usize = 1024;
 const MAX_ITEM_TEXTS: usize = 16;
@@ -140,8 +142,8 @@ pub fn serve() -> Result<()> {
 
 fn rank(ranker: &mut Ranker, request: &Value) -> Result<Value> {
     let query = request["query"].as_str().context("Rank query required")?;
-    if query.trim().is_empty() || query.chars().count() > MAX_TEXT_CHARS {
-        bail!("Rank query must be 1 to {MAX_TEXT_CHARS} characters");
+    if query.trim().is_empty() || query.chars().count() > MAX_QUERY_CHARS {
+        bail!("Rank query must be 1 to {MAX_QUERY_CHARS} characters");
     }
     let items: Vec<Vec<String>> =
         serde_json::from_value(request["items"].clone()).context("Rank items required")?;

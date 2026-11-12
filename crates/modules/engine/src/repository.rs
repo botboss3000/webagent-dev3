@@ -520,11 +520,15 @@ impl<
                     }
                 }
             }
-            // Activity-only rows (compaction call/result, scheduled retries); context assembly skips their steps.
+            // Activity-only rows (compaction call/result, scheduled retries, preloads); context assembly skips their steps.
             for entry in run["_activity_items"].as_array().into_iter().flatten() {
                 let step = entry["step"]
                     .as_str()
-                    .filter(|step| step.starts_with("compaction:") || step.starts_with("retry:"))
+                    .filter(|step| {
+                        ["compaction:", "retry:", "preload:"]
+                            .iter()
+                            .any(|prefix| step.starts_with(prefix))
+                    })
                     .ok_or_else(|| anyhow!("Activity row has an invalid step"))?;
                 crate::send_future(self.chat.insert_interaction(
                     &mut tx,

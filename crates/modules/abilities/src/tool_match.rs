@@ -25,8 +25,10 @@ pub const PRELOAD_TOOLS: usize = 6;
 pub const PRELOAD_SKILLS: usize = 2;
 pub const SUGGESTIONS: usize = 5;
 /// Message characters ranked, and parts scored on their own besides the whole message.
-pub const PRELOAD_TEXT: usize = 2000;
-pub const PRELOAD_CLAUSES: usize = 6;
+/// The cap matches the inference service's runaway guard; the model itself keeps the first 512
+/// tokens of each query.
+pub const PRELOAD_TEXT: usize = 20_000;
+pub const PRELOAD_CLAUSES: usize = 12;
 
 /// One ranked candidate, by its index in the caller's list.
 #[derive(Debug, Clone, PartialEq)]

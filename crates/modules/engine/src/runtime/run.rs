@@ -33,8 +33,23 @@ fn always_on(name: &str) -> bool {
 }
 /// The first model call's suggestion line: likely items from the user's message that were not
 /// preloaded or loaded since. Call-scoped; it never enters durable history.
+/// Queue the run's latest preload (names, kinds, scores or the skip reason, never message
+/// text) as an activity row, so the chat's activity group shows what was preloaded.
+fn preload_activity(run: &mut Value) {
+    let preload = &run["preload"];
+    let item = json!({"type":"preload","preloaded":preload["preloaded"],
+        "suggested":preload["suggested"],"skipped":preload["skipped"]});
+    let entry = json!({"step":format!("preload:{}", run["preload_round"].as_u64().unwrap_or(0)),
+        "item":item});
+    match run["_activity_items"].as_array_mut() {
+        Some(items) => items.push(entry),
+        None => run["_activity_items"] = json!([entry]),
+    }
+}
+
 pub fn preload_suggestions(run: &Value) -> String {
-    if model_turn(run) != 0 {
+    // Shown on the call right after the preload: the first, or the one after a joined message.
+    if model_turn(run) != run["preload_turn"].as_u64().unwrap_or(0) {
         return String::new();
     }
     let loaded = |name: &str| {
@@ -1698,6 +1713,9 @@ impl<
                 app.native
                     .preload_prepare(app.native_view(), &sid, &mut run)
                     .await;
+                if preload_before != run["preload_checked"] {
+                    preload_activity(&mut run);
+                }
                 if optimization_before
                     != digest(&json!([
                         run["optimization_checked"],
@@ -1785,7 +1803,10 @@ impl<
                                 json!(webagent_assets_contracts::Operation::Activate {
                                     selectors,
                                     expected_revision: state.revision,
-                                    request_id: format!("preload:{}", digest(&json!([run["id"]]))),
+                                    request_id: format!(
+                                        "preload:{}",
+                                        digest(&json!([run["id"], run["preload_round"]]))
+                                    ),
                                 });
                         }
                     }

@@ -81,14 +81,19 @@ function diagnostic() {
 }
 // Construct a tool or message row with stable control nodes; patchTranscriptRow supplies current data.
 export function createTranscriptRow(row) {
-  const tool=row.category==='tools',compaction=row.compaction===true,retry=row.retry===true;
+  const tool=row.category==='tools',compaction=row.compaction===true,retry=row.retry===true,preload=row.preload===true;
   const node=el('div','','v2-mini-row '+(tool?'v2-mini-tool':compaction?'v2-mini-tool v2-mini-compaction'
-    :retry?'v2-mini-tool v2-mini-retry':'v2-mini-message'));
+    :retry?'v2-mini-tool v2-mini-retry':preload?'v2-mini-tool v2-mini-preload':'v2-mini-message'));
   const content=el('div','','v2-mini-content');
   const footer=el('div','','turn-gutter ca-activity-entry-footer notice-gutter');
   const raw=diagnostic();
-  node._parts={content,footer,raw,tool,compaction,retry};
-  if(retry) {
+  node._parts={content,footer,raw,tool,compaction,retry,preload};
+  if(preload) {
+    // One compact line; expanding lists each preloaded and suggested item with its score.
+    const disclosure=el('details','','v2-mini-tool-disclosure');
+    const head=el('summary');disclosure.append(head,content);node.append(disclosure,footer,raw);
+    node._parts.head=head;footer.append(copy('Copy preload list',()=>node._text));
+  } else if(retry) {
     // Collapsed like a tool row; expanding shows the provider error that caused the retry.
     const disclosure=el('details','','v2-mini-tool-disclosure');
     const head=el('summary');disclosure.append(head,content);node.append(disclosure,footer,raw);
@@ -137,7 +142,10 @@ export function patchTranscriptRow(node,row) {
   const signature=JSON.stringify(row.events);if(node.dataset.signature===signature)return;
   node.dataset.signature=signature;node.dataset.category=row.category;
   const value=normalizeRow(row),p=node._parts;node._text=value.text;
-  if(p.retry) {
+  if(p.preload) {
+    p.head.textContent='⚡ '+row.label;node.dataset.status='preload';
+    markdown(p.content,row.text);
+  } else if(p.retry) {
     p.head.textContent='↻ '+row.label;node.dataset.status='retry';
     markdown(p.content,row.text || 'No provider detail.');
   } else if(p.compaction) {

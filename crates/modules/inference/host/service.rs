@@ -28,6 +28,14 @@ struct Matcher {
     stdin: ChildStdin,
     replies: Lines<BufReader<ChildStdout>>,
     next: u64,
+    /// A request was dropped mid-write, so its line on stdin may be partial: start over.
+    torn: bool,
+}
+
+/// Whether the slot holds a running service whose stdin is in step.
+fn usable(slot: &mut Option<Matcher>) -> bool {
+    slot.as_mut()
+        .is_some_and(|m| !m.torn && matches!(m.child.try_wait(), Ok(None)))
 }
 
 fn matcher_slot() -> &'static Mutex<Option<Matcher>> {
@@ -108,11 +116,18 @@ async fn ask_within(request: Value, within: Duration) -> Result<Value, ApiError>
         )
     };
     let mut slot = matcher_slot().lock().await;
-    if !slot
-        .as_mut()
-        .is_some_and(|m| matches!(m.child.try_wait(), Ok(None)))
-    {
-        *slot = Some(start().await.map_err(|_| unavailable())?);
+    if !usable(&mut slot) {
+        drop(slot);
+        // Start in a task of its own: a caller with a short deadline (preload) may give up
+        // waiting, but the service still finishes starting and the next request finds it.
+        let _ = tokio::spawn(async {
+            let mut slot = matcher_slot().lock().await;
+            if !usable(&mut slot) {
+                *slot = start().await.ok();
+            }
+        })
+        .await;
+        slot = matcher_slot().lock().await;
     }
     let matcher = slot.as_mut().ok_or_else(unavailable)?;
     matcher.next += 1;
@@ -120,11 +135,14 @@ async fn ask_within(request: Value, within: Duration) -> Result<Value, ApiError>
     let mut request = request;
     request["id"] = json!(id);
     let answer = async {
+        matcher.torn = true;
         matcher
             .stdin
             .write_all(format!("{request}\n").as_bytes())
             .await
             .ok()?;
+        matcher.torn = false;
+        // Replies to requests whose callers stopped waiting arrive first; skip them by id.
         loop {
             let reply: Value =
                 serde_json::from_str(&matcher.replies.next_line().await.ok()??).ok()?;
@@ -135,8 +153,8 @@ async fn ask_within(request: Value, within: Duration) -> Result<Value, ApiError>
     };
     let reply = tokio::time::timeout(within, answer).await.ok().flatten();
     let Some(reply) = reply else {
-        // A lost or late reply leaves the stream out of step: start over next time.
-        *slot = None;
+        // A late reply is skipped by id next time, so the warming service keeps running;
+        // only a torn write or a dead child (checked by `usable`) starts it over.
         return Err(unavailable());
     };
     match reply.get("result") {
@@ -171,6 +189,7 @@ async fn start() -> std::io::Result<Matcher> {
         stdin,
         replies,
         next: 0,
+        torn: false,
     })
 }
 
@@ -179,10 +198,38 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn matcher_answers_through_the_service() {
-        let answer = ask(json!({"text": "x", "page": "app"}))
+    // One test owns the process-wide service: its pipes belong to this test's runtime.
+    async fn the_service_answers_and_a_timed_out_request_keeps_it() {
+        let request = json!({"text": "x", "page": "app"});
+        let _ = ask(request.clone()).await;
+        let before = matcher_slot()
+            .lock()
             .await
-            .map_err(|e| e.1);
-        assert_eq!(answer, Ok(json!({"outcome": "no_match"})));
+            .as_ref()
+            .and_then(|m| m.child.id());
+        {
+            // A caller that gave up after writing: its reply stays unread on the stream.
+            let mut slot = matcher_slot().lock().await;
+            let matcher = slot.as_mut().unwrap();
+            matcher.next += 1;
+            let mut late = request.clone();
+            late["id"] = json!(matcher.next);
+            matcher
+                .stdin
+                .write_all(format!("{late}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+        // The same child answers next, after skipping the late reply by its id.
+        assert_eq!(
+            ask(request).await.map_err(|e| e.1),
+            Ok(json!({"outcome": "no_match"}))
+        );
+        let after = matcher_slot()
+            .lock()
+            .await
+            .as_ref()
+            .and_then(|m| m.child.id());
+        assert_eq!(before, after);
     }
 }

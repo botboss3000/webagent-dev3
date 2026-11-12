@@ -611,17 +611,23 @@ async fn preload_candidates(
     }
     let texts: Vec<Vec<String>> = items.iter().map(|item| item.5.clone()).collect();
     let mut best = vec![0.0_f32; items.len()];
+    let mut ranked = false;
     for clause in tool_match::clauses(text) {
+        // A clause the service refuses is skipped; only a request with no ranked clause fails.
         let Some(scores) = crate::api::inference::rank(&clause, texts.clone()).await else {
-            return Ok(None);
+            continue;
         };
         if scores.len() != items.len() {
-            return Ok(None);
+            continue;
         }
+        ranked = true;
         for (index, score) in scores.into_iter().enumerate() {
             let item = &items[index];
             best[index] = best[index].max(tool_match::adjusted(&clause, &item.2, &item.3, score));
         }
+    }
+    if !ranked {
+        return Ok(None);
     }
     let candidates = items
         .into_iter()

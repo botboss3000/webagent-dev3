@@ -119,8 +119,17 @@ impl<
             return Ok(false);
         }
         let s = run["session_id"].as_str().unwrap().to_owned();
-        self.native
+        let joined = self
+            .native
             .followup_consume(self.store.records(), &s, "steer", run)
-            .await
+            .await?;
+        if joined {
+            // A message that joins the run gets its own preload before the next call.
+            run["preload_checked"] = json!(false);
+            run["preload_staged"] = json!(false);
+            run["preload_round"] = json!(run["preload_round"].as_u64().unwrap_or(0) + 1);
+            run["preload_turn"] = json!(crate::runtime::run::model_turn(run));
+        }
+        Ok(joined)
     }
 }

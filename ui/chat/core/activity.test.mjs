@@ -78,3 +78,22 @@ test('messages shown in chat and the publish control stay out of activity rows',
   ]);
   assert.deepEqual(rows.map(row=>row.text),['private note']);
 });
+
+test('a preload shows its preloaded and suggested names in one line, scores when expanded',()=>{
+  const rows=activityRows([{kind:'preload',event_id:'p1',payload:{
+    preloaded:[{kind:'tool',name:'file_read',score:0.86},{kind:'skill',name:'codebase_admin:selectable:ui_proposals',score:0.9}],
+    suggested:[{kind:'tool',name:'browser_read',score:0.7}],skipped:null}}]);
+  assert.equal(rows[0].category,'preloads');
+  assert.equal(rows[0].label,'Preloaded: file_read, skill ui_proposals · Suggested: browser_read');
+  assert.match(rows[0].text,/file_read — 0\.86/);
+  assert.match(rows[0].text,/skill ui_proposals — 0\.90/);
+});
+
+test('a skipped preload names its reason and is not counted in the group summary',()=>{
+  const rows=activityRows([{kind:'preload',event_id:'p2',payload:{skipped:'matcher_unavailable'}}]);
+  assert.equal(rows[0].label,'Preload skipped: matcher unavailable');
+  const groups=activityGroups({events:[{kind:'preload',event_id:'p2',seq:1,run_id:'r1',payload:{skipped:'timeout'}}],
+    segments:[{...segment('a','r1'),first_seq:1,last_seq:1}]},[{id:'r1',state:'completed'}]);
+  assert.equal(groups[0].rows.length,1);
+  assert.equal(Object.values(groups[0].counts).reduce((a,b)=>a+b,0),0);
+});
