@@ -284,6 +284,13 @@ fn search_honours_globs_comments_and_regex_options() {
     assert_eq!(comments.lines().count(), 1);
     let empty = fixture.call("file_search", json!({"path":folder,"query":""}));
     assert_eq!(empty["output"], "query must not be empty");
+    // file_list with a pattern lists matching paths recursively.
+    let names = fixture.call("file_list", json!({"path":folder,"pattern":"*.py"}));
+    let names = names["output"].as_str().expect("text");
+    assert!(
+        names.ends_with("b.py") && !names.contains("a.rs"),
+        "{names}"
+    );
 }
 
 #[test]

@@ -589,6 +589,21 @@ fn operation(
         "file_edit" => return edit(&directory, leaf, args),
         "file_write" => write(&directory, leaf, args, checkout)?,
         "file_read" => return read(&directory, leaf, args),
+        "file_list" if args.contains_key("pattern") => {
+            // A pattern lists matching file paths under the folder, recursively.
+            let mut walk = Map::new();
+            walk.insert("file_glob".into(), args["pattern"].clone());
+            walk.insert("names_only".into(), Value::Bool(true));
+            search(
+                roots,
+                &directory,
+                leaf,
+                &walk,
+                raw,
+                checkout_top,
+                &mut scan_limited,
+            )?
+        }
         "file_list" => return list(&directory, leaf, args),
         "file_search" => search(
             roots,
@@ -992,6 +1007,8 @@ struct Search<'a> {
     regex: bool,
     comments_only: bool,
     file_glob: &'a str,
+    /// List matching paths only (file_list with a pattern); never read contents.
+    names_only: bool,
     output_bytes: usize,
     line_bytes: usize,
     found: Vec<String>,
@@ -1214,6 +1231,17 @@ impl Search<'_> {
             if !glob_matches(label, self.file_glob) && !glob_matches(&name, self.file_glob) {
                 return Ok(());
             }
+            if self.names_only {
+                // Name listing: report the path without reading the file.
+                let encoded = label.len() + usize::from(!self.found.is_empty());
+                if self.size + encoded > self.output_bytes || self.found.len() >= 200 {
+                    self.limited = true;
+                    return Ok(());
+                }
+                self.found.push(label.to_owned());
+                self.size += encoded;
+                return Ok(());
+            }
         }
         if self.bytes_left <= 0 {
             self.limited = true;
@@ -1359,17 +1387,22 @@ fn search(
         None => Some(false),
         Some(value) => value.as_bool(),
     };
-    let (Some(query), Some(regex), Some(comments_only), Some(file_glob)) = (
+    let (Some(query), Some(regex), Some(comments_only), Some(file_glob), Some(names_only)) = (
         text("query"),
         flag("regex"),
         flag("comments_only"),
         text("file_glob"),
+        flag("names_only"),
     ) else {
         return Err(rejected("invalid search options"));
     };
     // Agents write `a|b` meaning alternation and forget `regex`; a literal pipe search is rare.
     let regex = regex || query.contains('|');
-    if query.is_empty() && !comments_only {
+    // file_list with a pattern arrives here as a name-only walk (see the dispatch).
+    if names_only && (file_glob.is_empty() || !query.is_empty()) {
+        return Err(rejected("invalid file pattern"));
+    }
+    if query.is_empty() && !comments_only && !names_only {
         return Err(rejected("query must not be empty"));
     }
     if file_glob.contains(['\\', '\0']) {
@@ -1386,6 +1419,7 @@ fn search(
         regex,
         comments_only,
         file_glob,
+        names_only,
         output_bytes,
         line_bytes,
         found: Vec::new(),
@@ -1399,7 +1433,7 @@ fn search(
     match FileType::from_raw_mode(fstat(&target)?.st_mode) {
         FileType::RegularFile => search.scan_file(&target, raw)?,
         FileType::Directory => {
-            if query.is_empty() {
+            if query.is_empty() && !names_only {
                 return Err(rejected("a query is required for directory search"));
             }
             let prefix = if raw == "." { "" } else { raw };

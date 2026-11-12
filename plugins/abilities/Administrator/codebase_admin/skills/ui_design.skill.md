@@ -3,8 +3,8 @@ id: ui_design
 title: UI design and controls
 when_to_use: Use before building or changing any WebAgent UI — layout, buttons and controls, theming and palette, option lists and config pages — and when investigating how an element looks or lays out.
 default_mode: discoverable
-examples: add a button to the page; change the app's colours; build a list of options with toggles; fix the layout on mobile
-keywords: ui, button, theme, layout, toggle list, mobile
+examples: add a button to the page; change the app's colours; build a list of options with toggles; fix the layout on mobile; the keyboard hides when I touch the row below the composer; check the chat panel on phone width in the browser
+keywords: ui, button, theme, layout, toggle list, mobile, keyboard, composer
 minimum_access: registered
 ---
 

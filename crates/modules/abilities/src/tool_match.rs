@@ -192,8 +192,9 @@ const COMPILED: &[(&str, &[&str], &[&str])] = &[
             "list the files in a folder",
             "what is in this directory",
             "show the folder contents",
+            "find files named composer",
         ],
-        &["ls", "directory", "folder"],
+        &["ls", "directory", "folder", "find files"],
     ),
     (
         "file_read",
