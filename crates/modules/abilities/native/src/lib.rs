@@ -87,12 +87,14 @@ pub trait NativeHost: Sync {
         sid: &'a str,
         agent: &'a str,
     ) -> Pending<'a, Result<Relationship>>;
-    /// Run `name` on the isolated tool worker for session `sid`.
+    /// Run `name` on the isolated tool worker for session `sid` in `run`, the caller's run
+    /// record (it decides grants such as Codebase Admin's live-checkout reads).
     fn worker<'a>(
         &'a self,
         name: &'a str,
         args: &'a Value,
         sid: &'a str,
+        run: &'a Value,
         cancel: CancellationToken,
     ) -> Pending<'a, Result<Value>>;
     /// Write session artifact `kind`/`id` at `call`'s position under a stable receipt, so a

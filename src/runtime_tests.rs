@@ -13,8 +13,15 @@ pub(crate) fn native_catalog() -> abilities::Catalog {
     let root = ROOT.get_or_init(|| {
         let target = tempfile::tempdir().expect("native catalog fixture");
         let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities");
-        copy_native(&source, target.path(), &[]);
-        if !source.join("Administrator/codebase_admin").is_dir() {
+        // A build without the Administrator tier has no adapters for the real pack, so it
+        // gets the test-only ability like an installation without the pack.
+        let tier = cfg!(feature = "administrator");
+        copy_native(
+            &source,
+            target.path(),
+            if tier { &[] } else { &["Administrator"] },
+        );
+        if !tier || !source.join("Administrator/codebase_admin").is_dir() {
             synthetic_codebase_admin(target.path());
         }
         target
@@ -121,9 +128,20 @@ fn core_catalog_loads_without_the_administrator_pack() {
     ] {
         assert!(!catalog.known(id), "{id} needs the Administrator pack");
     }
+    #[cfg(feature = "administrator")]
     let pack_tools = webagent_administration::tools::TOOLS
         .iter()
         .chain(&webagent_administration::tools::CHECKOUT_TOOLS);
+    #[cfg(not(feature = "administrator"))]
+    let pack_tools = [
+        "file_list",
+        "file_read",
+        "file_search",
+        "file_edit",
+        "file_write",
+        "checkout_edit",
+    ]
+    .iter();
     for name in pack_tools {
         for id in catalog.ids() {
             assert!(
@@ -767,6 +785,7 @@ async fn typed_stop_phrase_stops_running_work_without_a_message() {
 }
 
 #[tokio::test]
+#[cfg(feature = "administrator")]
 async fn source_review_route_requires_auth_policy_and_existing_session() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixListener;
@@ -872,6 +891,7 @@ async fn source_review_route_requires_auth_policy_and_existing_session() {
 }
 
 #[tokio::test]
+#[cfg(feature = "administrator")]
 async fn tool_reply_must_match_the_dispatched_request() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixListener;
@@ -11437,6 +11457,7 @@ async fn exact_native_tool_selection_obeys_visibility_mode_denial_and_suppressio
 }
 
 #[tokio::test]
+#[cfg(feature = "administrator")]
 async fn workspace_host_uses_scoped_host_socket_and_rejects_missing_envelope() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixListener;

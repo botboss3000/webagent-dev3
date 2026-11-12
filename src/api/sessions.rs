@@ -459,6 +459,12 @@ pub(crate) async fn session_abilities(State(app): State<App>, Path(id): Path<Str
         "abilities":abilities})))
 }
 pub(crate) async fn source_review(State(app): State<App>, Path(id): Path<String>) -> Api {
+    if !cfg!(feature = "administrator") {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            "Source review needs the Administrator tier".into(),
+        ));
+    }
     let _guard = app.gate.lock().await;
     if app.store.get(&key("session", &id)).await?.is_none() {
         return Err(ApiError(StatusCode::NOT_FOUND, "Session not found".into()));

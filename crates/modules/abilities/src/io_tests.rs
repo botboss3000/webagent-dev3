@@ -9,6 +9,7 @@ use std::{
     sync::Arc,
 };
 thread_local! {static SOURCE:RefCell<Option<PathBuf>>=const {RefCell::new(None)};static OPTIONAL:RefCell<Option<PathBuf>>=const {RefCell::new(None)};}
+thread_local! {static TIER:std::cell::Cell<bool>=const {std::cell::Cell::new(true)};}
 #[derive(Clone)]
 struct Fixture;
 impl Host for Fixture {
@@ -60,6 +61,30 @@ impl Host for Fixture {
     fn mcp_available() -> bool {
         false
     }
+    fn administrator_tier() -> bool {
+        TIER.with(std::cell::Cell::get)
+    }
+}
+
+/// Without the Administrator tier the catalog skips that group: its abilities, which would
+/// have no installed adapters, neither load nor fail the catalog.
+#[test]
+fn a_build_without_the_administrator_tier_skips_its_group() {
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("Administrator/build_tools");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("build_tools.json"),
+        json!({"display_name":"Build tools","kind":"ability","description":"Pack fixture",
+            "readiness":"ready","tools":["build_work"]})
+        .to_string(),
+    )
+    .unwrap();
+    assert!(Catalog::<Fixture>::load(root.path()).is_err());
+    TIER.with(|tier| tier.set(false));
+    let catalog = Catalog::<Fixture>::load(root.path());
+    TIER.with(|tier| tier.set(true));
+    assert!(!catalog.unwrap().known("build_tools"));
 }
 fn package(root: &Path) -> PathBuf {
     let path = root.join("Custom/fixture_echo");

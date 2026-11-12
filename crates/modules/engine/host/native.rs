@@ -429,14 +429,21 @@ impl
                     &app.tool_socket,
                     tools::administrator::checkout_grant(
                         &app,
+                        &sid,
+                        &optimization_run,
                         &name,
                         Some(json!({"codebase_revision":optimization_run["asset_revision"]})),
-                    ),
+                    )
+                    .await,
                     cancel,
                 )
                 .await
-            } else if let Some(grant) = tools::administrator::checkout_grant(&app, &name, None) {
-                // Codebase Admin commands may read the live checkout; others stay in the workspace.
+            } else if let Some(grant) =
+                tools::administrator::checkout_grant(&app, &sid, &optimization_run, &name, None)
+                    .await
+            {
+                // Commands Codebase Admin supplies to this run may read the live checkout;
+                // the same tools from another ability stay in the workspace.
                 tools::execute_trusted(&name, &args, &sid, &app.tool_socket, Some(grant), cancel)
                     .await
             } else {

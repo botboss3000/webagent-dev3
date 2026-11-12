@@ -25,6 +25,7 @@ mod account_management;
 mod accounts;
 #[path = "../crates/modules/actions/host/actions.rs"]
 mod actions;
+#[cfg(feature = "administrator")]
 mod administrator_services;
 #[path = "../crates/modules/agents/host/storage.rs"]
 mod agent_storage;

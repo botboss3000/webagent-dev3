@@ -25,6 +25,11 @@ impl webagent_abilities::Host for NativeHost {
     fn administrator_supported(name: &str) -> bool {
         crate::tools::administrator::supported_schema_name(name)
     }
+    /// Test builds keep the group: the shared catalog tests use Administrator fixtures, and
+    /// the native fixture catalog leaves the real pack out when the tier is off.
+    fn administrator_tier() -> bool {
+        cfg!(any(feature = "administrator", test))
+    }
     fn module_known(name: &str) -> bool {
         crate::modules::package_root(name).is_some()
     }

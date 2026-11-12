@@ -812,13 +812,16 @@ async fn run_process() -> Result<()> {
         // Tool schemas come from the candidate's own tool folders.
         webagent_abilities::tool_definitions::use_root(path.join("plugins/abilities"));
         let catalog = abilities::Catalog::load_snapshot(&path.join("plugins/abilities"))?;
-        let administrator =
-            webagent_administration::schemas::load(&path.join("plugins/abilities"))?;
-        anyhow::ensure!(
-            administrator.problems.is_empty(),
-            "Invalid Administrator tool folders: {}",
-            administrator.problems.join("; ")
-        );
+        #[cfg(feature = "administrator")]
+        {
+            let administrator =
+                webagent_administration::schemas::load(&path.join("plugins/abilities"))?;
+            anyhow::ensure!(
+                administrator.problems.is_empty(),
+                "Invalid Administrator tool folders: {}",
+                administrator.problems.join("; ")
+            );
+        }
         let engine = crate::engine_components::load(&path, "candidate")?;
         let prompts: Value =
             serde_json::from_slice(&crate::live_assets::prompt_defaults_at(Some(&path))?)?;
@@ -1089,6 +1092,7 @@ async fn run_process() -> Result<()> {
     let notification_relay = tokio::spawn(futures_util::FutureExt::boxed(
         api::notifications::service(app.clone()),
     ));
+    #[cfg(feature = "administrator")]
     let administrator_watch = tokio::spawn(futures_util::FutureExt::boxed(
         administrator_services::watch(app.clone()),
     ));
@@ -1107,6 +1111,7 @@ async fn run_process() -> Result<()> {
     })
     .await?;
     app.stop.cancel();
+    #[cfg(feature = "administrator")]
     let _ = administrator_watch.await;
     let _ = notification_relay.await;
     app.store.pool.close().await;

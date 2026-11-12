@@ -53,14 +53,14 @@ pub async fn execute(
                             "output":format!("Not run; nothing changed. {error}")}))
                     }
                 };
-                host.worker(name, &live, sid, codebase_revision(run), cancel)
-                    .await
+                let trusted = host.checkout(sid, run, name, codebase_revision(run)).await;
+                host.worker(name, &live, sid, trusted, cancel).await
             }
         }
         // The direct live-checkout writer never becomes a broker draft.
         "checkout_edit" => {
-            host.worker(name, args, sid, codebase_revision(run), cancel)
-                .await
+            let trusted = host.checkout(sid, run, name, codebase_revision(run)).await;
+            host.worker(name, args, sid, trusted, cancel).await
         }
         "build_work" => {
             let mut request = args.clone();

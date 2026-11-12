@@ -24,10 +24,15 @@ len_without_is_empty = "warn"
 wrong_self_convention = "warn"
 
 [features]
-default = ["linked-context", "local-worker"]
+default = ["linked-context", "local-worker", "administrator"]
 linked-context = ["webagent-engine/linked-context", "dep:webagent-usage-reports", "dep:webagent-model-discovery", "dep:webagent-context-assembly", "dep:webagent-background-dispatch", "dep:webagent-boot-supervisor", "dep:webagent-context-assets", "dep:webagent-capability-context", "dep:webagent-provider-projection"]
-# The server release build uses live-context alone, so it keeps the local worker.
-live-context = ["webagent-engine/live-context", "local-worker"]
+# The server release build uses live-context alone, so it keeps the local worker and the
+# Administrator tier.
+live-context = ["webagent-engine/live-context", "local-worker", "administrator"]
+# The Administrator tier: the Administration module behind the optional Administrator
+# pack (build broker, source promotion, live-checkout grants). Without it the app is a
+# non-coding platform: no Administrator routes, and its tools report unavailable.
+administrator = ["dep:webagent-administration", "dep:webagent-administration-host"]
 # The local tool worker: file tools, commands, terminals, browsers and Git under the
 # Linux workspace sandbox. Builds for platforms without it (phones, remote clients)
 # leave it out; their tool calls then report that no local worker is available.
@@ -43,8 +48,8 @@ webagent-accounts = { path = "crates/modules/accounts" }
 webagent-accounts-host = { path = "crates/modules/accounts/host" }
 webagent-webapp = { path = "crates/modules/webapp" }
 webagent-abilities = { path = "crates/modules/abilities" }
-webagent-administration = { path = "crates/modules/administration" }
-webagent-administration-host = { path = "crates/modules/administration/host" }
+webagent-administration = { path = "crates/modules/administration", optional = true }
+webagent-administration-host = { path = "crates/modules/administration/host", optional = true }
 webagent-native-tools = { path = "crates/modules/abilities/native" }
 webagent-extensions = { path = "crates/modules/extensions" }
 webagent-abilities-host = { path = "crates/modules/abilities/host/storage" }

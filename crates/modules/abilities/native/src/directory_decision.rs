@@ -207,6 +207,7 @@ async fn work(
             &json!({"path":input.path,"offset":input.offset,"file_glob":input.file_glob,
             "recursive":input.recursive,"include_content":input.include_content}),
             sid,
+            &run,
             cancel.clone(),
         )
         .await?;

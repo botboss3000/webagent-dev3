@@ -1,9 +1,11 @@
 //! Root compatibility for the Engine-owned typed failure evidence.
 pub(crate) use webagent_engine::tools::failure::*;
-#[cfg(test)] mod tests {
- use super::*;
- use serde_json::json;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
     #[tokio::test]
+    #[cfg(feature = "administrator")]
     async fn host_authority_failures_are_typed_before_any_socket_request() {
         let (_root, app) = crate::runtime_tests::fixture().await;
         let sid = crate::runtime_tests::conversation(&app).await;

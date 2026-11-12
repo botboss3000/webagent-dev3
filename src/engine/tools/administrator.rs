@@ -24,6 +24,19 @@ pub fn owns(name: &str) -> bool {
     webagent_administration::tools::owns(name)
 }
 
+/// Administrator tools the definition check counts as handled: the compiled ones when the
+/// optional pack has folders in the current catalog, else none, since without the pack
+/// its compiled tools have no folders by design.
+pub(crate) fn pack_tools() -> Vec<String> {
+    if !webagent_administration::tools::installed() {
+        return Vec::new();
+    }
+    webagent_administration::tools::TOOLS
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect()
+}
+
 /// Administrator schemas from the tool folders this process reads definitions from,
 /// normalized for the model. Catalog snapshots carry their own copy.
 pub fn schemas() -> Vec<Value> {
@@ -35,13 +48,23 @@ pub fn schemas() -> Vec<Value> {
     tools::normalize_native_schemas(definitions)
 }
 
-/// The tool worker's live-checkout grant for `name`: `trusted` with `"checkout": true` added
-/// when the Administrator pack is installed and the loaded Codebase Admin ability declares
-/// the tool, else `trusted` unchanged. The engine has already authorized the call itself;
-/// without this grant the worker confines file tools and commands to the session workspace.
-pub(crate) fn checkout_grant(app: &App, name: &str, trusted: Option<Value>) -> Option<Value> {
+/// The tool worker's live-checkout grant for `name` in this call of `run` in session `sid`:
+/// `trusted` with `"checkout": true` added when the Administrator pack is installed and
+/// Codebase Admin itself supplies the tool here, else `trusted` unchanged. The engine has
+/// already authorized the call itself; without this grant the worker confines file tools
+/// and commands to the session workspace. A lookup failure grants nothing.
+pub(crate) async fn checkout_grant(
+    app: &App,
+    sid: &str,
+    run: &Value,
+    name: &str,
+    trusted: Option<Value>,
+) -> Option<Value> {
     if !webagent_administration::tools::installed()
-        || !app.abilities.has_tool("codebase_admin", name)
+        // Boxed so the lookups do not grow the shared dispatch future's stack frame.
+        || !Box::pin(codebase_admin_supplies(app, sid, run, name))
+            .await
+            .unwrap_or(false)
     {
         return trusted;
     }
@@ -49,6 +72,32 @@ pub(crate) fn checkout_grant(app: &App, name: &str, trusted: Option<Value>) -> O
     trusted["checkout"] = json!(true);
     Some(trusted)
 }
+
+/// Whether Codebase Admin is the ability supplying `name` to this call: it declares the
+/// tool, is active for session `sid` or loaded by `run`, and the caller's live access is
+/// admitted and does not deny the ability. The same tool offered by another ability (Core's
+/// `shell`) does not qualify.
+async fn codebase_admin_supplies(app: &App, sid: &str, run: &Value, name: &str) -> Result<bool> {
+    if !app.abilities.has_tool(CODEBASE_ADMIN, name) {
+        return Ok(false);
+    }
+    let agent = session_agent_id(app, sid).await?;
+    let mut scoped = app.clone();
+    scoped.store = app.store.for_agent(&agent).await?;
+    let (_, _, visibility, state) = ability_controls(&scoped, sid).await?;
+    let loaded = &run["loaded_abilities"];
+    if !scoped
+        .abilities
+        .supplies(CODEBASE_ADMIN, name, &visibility, &state, loaded)
+    {
+        return Ok(false);
+    }
+    let actor = crate::shared_chat::actor(&scoped);
+    let access = crate::shared_chat::live_access(&scoped.store, actor, sid, &agent).await?;
+    Ok(access.admitted() && access.ability_permission(CODEBASE_ADMIN) != access::Permission::Deny)
+}
+
+const CODEBASE_ADMIN: &str = "codebase_admin";
 
 pub fn build_socket(app: &App) -> std::path::PathBuf {
     app.build_socket.clone()
@@ -303,9 +352,18 @@ impl AdministrationHost for Host<'_> {
             args,
             sid,
             &self.0.tool_socket,
-            checkout_grant(self.0, name, trusted),
+            trusted,
             cancel,
         ))
+    }
+    fn checkout<'a>(
+        &'a self,
+        sid: &'a str,
+        run: &'a Value,
+        name: &'a str,
+        trusted: Option<Value>,
+    ) -> Pending<'a, Option<Value>> {
+        Box::pin(checkout_grant(self.0, sid, run, name, trusted))
     }
     fn broker<'a>(
         &'a self,
@@ -490,27 +548,59 @@ mod tests {
         }
     }
 
-    /// The worker sees the live checkout only for tools of the installed Codebase Admin pack.
+    /// The worker sees the live checkout only when Codebase Admin itself supplies the tool
+    /// to this run: active for the session or loaded by the run, and not denied to the
+    /// caller. The same tool without Codebase Admin active stays in the workspace.
     #[tokio::test]
-    async fn checkout_grant_needs_the_installed_codebase_admin_tool() {
+    #[cfg_attr(not(administrator_pack), ignore = "needs the Administrator pack")]
+    async fn checkout_grant_needs_codebase_admin_to_supply_the_call() {
         let (_root, app) = crate::runtime_tests::fixture().await;
+        let sid = crate::runtime_tests::conversation(&app).await;
         let revision = json!({"codebase_revision":"r"});
+        let loaded = json!({"loaded_abilities":["codebase_admin"]});
+        let other = json!({"loaded_abilities":[]});
+        let granted = Some(json!({"codebase_revision":"r","checkout":true}));
+        // Not a Codebase Admin tool, whatever is loaded.
         assert_eq!(
-            checkout_grant(&app, "web_search", Some(revision.clone())),
+            checkout_grant(&app, &sid, &loaded, "web_search", Some(revision.clone())).await,
             Some(revision.clone())
         );
-        assert_eq!(checkout_grant(&app, "read_attachment", None), None);
-        let granted = checkout_grant(&app, "file_read", Some(revision));
-        if cfg!(administrator_pack) {
-            assert_eq!(
-                granted,
-                Some(json!({"codebase_revision":"r","checkout":true}))
-            );
-        } else {
-            // Without the pack the fixture's test-only codebase_admin grants nothing.
-            assert!(!webagent_administration::tools::installed());
-            assert_eq!(granted, Some(json!({"codebase_revision":"r"})));
+        assert_eq!(
+            checkout_grant(&app, &sid, &loaded, "read_attachment", None).await,
+            None
+        );
+        // Codebase Admin neither active nor loaded: the call comes from another ability.
+        assert_eq!(
+            checkout_grant(&app, &sid, &other, "shell", Some(revision.clone())).await,
+            Some(revision.clone())
+        );
+        // Loaded by this run, or active in the session.
+        assert_eq!(
+            checkout_grant(&app, &sid, &loaded, "shell", Some(revision.clone())).await,
+            granted
+        );
+        crate::runtime_tests::activate_codebase(&app, &sid).await;
+        assert_eq!(
+            checkout_grant(&app, &sid, &other, "file_read", None).await,
+            Some(json!({"checkout":true}))
+        );
+        // Denied to the caller: no grant even while active and loaded.
+        let mut levels = app.store.capability_levels("shared_default").await.unwrap();
+        for id in ["operator", "member", "visitor"] {
+            let mut level = levels.levels[id].clone();
+            level
+                .ability_permissions
+                .insert("codebase_admin".into(), access::Permission::Deny);
+            levels = app
+                .store
+                .save_capability_level("shared_default", level, levels.revision)
+                .await
+                .unwrap();
         }
+        assert_eq!(
+            checkout_grant(&app, &sid, &loaded, "shell", Some(revision.clone())).await,
+            Some(revision)
+        );
     }
 
     #[test]

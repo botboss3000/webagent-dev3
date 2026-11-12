@@ -8,8 +8,15 @@ pub(crate) fn native_schemas_for_catalog(
     root: &std::path::Path,
     _publication: bool,
 ) -> Result<Vec<Value>> {
-    let loaded = webagent_administration::schemas::load(root)?;
-    Ok(crate::tools::normalize_native_schemas(loaded.schemas))
+    #[cfg(feature = "administrator")]
+    let schemas = webagent_administration::schemas::load(root)?.schemas;
+    // Without the Administrator tier no catalog carries Administrator schemas.
+    #[cfg(not(feature = "administrator"))]
+    let schemas = {
+        let _ = root;
+        Vec::new()
+    };
+    Ok(crate::tools::normalize_native_schemas(schemas))
 }
 
 pub(crate) fn published_root() -> Option<PathBuf> {
@@ -163,6 +170,7 @@ pub(crate) mod native_schema_file_tests {
         assert_eq!(schema["parameters"]["properties"]["limit"]["maximum"], 123);
     }
     #[test]
+    #[cfg(feature = "administrator")]
     #[cfg_attr(not(administrator_pack), ignore = "needs the Administrator pack")]
     fn an_invalid_folder_withdraws_only_its_tool() {
         let root = source_fixture();

@@ -6,6 +6,21 @@ use crate::tools::administrator::Host;
 use webagent_administration::dashboard::{CancelRequest, SchedulerRequest};
 use webagent_administration_host::dashboard;
 
+/// The administrator Builds page routes; the caller adds administrator authentication.
+pub(super) fn admin_router() -> Router<App> {
+    Router::new()
+        .route("/admin/builds", get(list))
+        .route("/admin/builds/scheduler", post(scheduler))
+        .route("/admin/builds/{job_id}/result", get(result))
+        .route("/admin/builds/{job_id}/cancel", post(cancel))
+        .route("/admin/builds/leftovers/{id}/review", post(review_leftover))
+}
+
+/// The Broker card page reads one task without sign-in (names, states and timings only).
+pub(super) fn public_router() -> Router<App> {
+    Router::new().route("/api/v3/builds/tasks/{task_id}", get(task))
+}
+
 pub(crate) async fn list(State(app): State<App>) -> Api {
     Ok(Json(dashboard::list(&Host(&app)).await?))
 }

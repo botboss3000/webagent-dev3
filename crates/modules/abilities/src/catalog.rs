@@ -460,6 +460,9 @@ impl<H: Host> Catalog<H> {
                 continue;
             }
             let group_id = group.file_name().to_string_lossy().to_string();
+            if group_id == "Administrator" && !H::administrator_tier() {
+                continue;
+            }
             if group_id.is_empty()
                 || group_id.len() > 64
                 || !group_id
@@ -1627,6 +1630,31 @@ impl<H: Host> Catalog<H> {
                         && !Self::suppressed(&state, &ability.id)));
         }
         (available, visible)
+    }
+
+    /// Whether ability `id` itself supplies tool `name` to this call: it is executable,
+    /// declares the tool, and is active in the call-local selection (saved session state
+    /// or loaded this run) without being off or suppressed. Another ability offering the
+    /// same tool does not count. Tool modes, policy and caller permissions are decided
+    /// separately.
+    pub fn supplies(
+        &self,
+        id: &str,
+        name: &str,
+        visibility: &Value,
+        state: &Value,
+        loaded: &Value,
+    ) -> bool {
+        if !self.installed(name) {
+            return false;
+        }
+        let state = self.selected_state(visibility, state, loaded);
+        Self::active(&state, id)
+            && self.abilities.iter().any(|ability| {
+                ability.id == id
+                    && ability.tools.iter().any(|tool| tool == name)
+                    && Self::available(ability, visibility, &state)
+            })
     }
 
     pub fn tool_available(

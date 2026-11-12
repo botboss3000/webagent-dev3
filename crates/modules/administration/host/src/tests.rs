@@ -34,6 +34,8 @@ struct Fake {
     /// When set, authority is refused with this message.
     refuse: Option<&'static str>,
     settings: Value,
+    /// Whether Codebase Admin supplies the call, so live-checkout tools get the grant.
+    checkout: bool,
     broker_reply: fn(&str, &Value) -> Value,
     events: Mutex<Vec<(String, String)>>,
 }
@@ -48,6 +50,7 @@ impl Fake {
             administrator: true,
             refuse: None,
             settings: json!({}),
+            checkout: false,
             broker_reply: |_, _| json!({"status":"success","output":{"status":"success"}}),
             events: Mutex::new(Vec::new()),
         }
@@ -136,6 +139,23 @@ impl AdministrationHost for Fake {
     ) -> Pending<'a, Result<Value>> {
         self.push("worker", name, args, trusted);
         Box::pin(async { Ok(json!({"status":"success","output":"worker"})) })
+    }
+    fn checkout<'a>(
+        &'a self,
+        _sid: &'a str,
+        _run: &'a Value,
+        _name: &'a str,
+        trusted: Option<Value>,
+    ) -> Pending<'a, Option<Value>> {
+        let grant = self.checkout;
+        Box::pin(async move {
+            if !grant {
+                return trusted;
+            }
+            let mut trusted = trusted.unwrap_or_else(|| json!({}));
+            trusted["checkout"] = json!(true);
+            Some(trusted)
+        })
     }
     fn broker<'a>(
         &'a self,
@@ -339,6 +359,27 @@ async fn live_files_use_the_worker_with_the_run_revision() {
     .await
     .unwrap();
     assert_eq!(host.sent()[1].socket, "broker");
+}
+
+/// Live-checkout tools ask the host for the grant; other worker tools never get it.
+#[tokio::test]
+async fn only_live_checkout_tools_carry_the_host_grant() {
+    let dir = root();
+    let mut host = Fake::new(dir.path()).await;
+    host.checkout = true;
+    call(&host, "file_read", json!({"path":"src/a.rs"}))
+        .await
+        .unwrap();
+    call(&host, "checkout_edit", json!({"path":"src/a.rs"}))
+        .await
+        .unwrap();
+    call(&host, "terminal_list", json!({})).await.unwrap();
+    let sent = host.sent();
+    let granted = Some(json!({"codebase_revision":"rev-1","checkout":true}));
+    assert_eq!(sent[0].trusted, granted);
+    assert_eq!(sent[1].trusted, granted);
+    assert_eq!(sent[2].name, "terminal_list");
+    assert_eq!(sent[2].trusted, None);
 }
 
 #[tokio::test]

@@ -3,6 +3,7 @@
 //! snapshots, clearing finished tasks from the chip, and its manual Stop and Cancel. The
 //! session router has already scoped `app` to the session and checked read or write access.
 use super::*;
+#[cfg(feature = "administrator")]
 use crate::tools::administrator::{host_fingerprint, Host};
 use tokio_util::sync::CancellationToken;
 use webagent_engine::runtime::build_tasks::record_key;
@@ -35,6 +36,7 @@ async fn record(app: &App, sid: &str) -> Result<Value> {
 
 /// The caller's broker identity for jobs a run of this session started, if the caller
 /// may run `build_work` there now (Administrator ability permissions).
+#[cfg(feature = "administrator")]
 async fn identity(app: &App, sid: &str, run_id: &str) -> Option<Value> {
     let fingerprint = host_fingerprint(app, sid, run_id, "build_work")
         .await
@@ -44,6 +46,12 @@ async fn identity(app: &App, sid: &str, run_id: &str) -> Option<Value> {
         sid,
         &json!(fingerprint),
     ))
+}
+
+/// Without the Administrator tier no caller has a broker identity.
+#[cfg(not(feature = "administrator"))]
+async fn identity(_: &App, _: &str, _: &str) -> Option<Value> {
+    None
 }
 
 /// Read stale snapshots of active jobs again from the broker; true when any changed.
@@ -207,6 +215,7 @@ pub(crate) async fn clear(app: &App, sid: &str, task_id: Option<&str>) -> Api {
 }
 
 /// A broker reply as the chip's answer: its output, or a conflict naming the refusal.
+#[cfg(feature = "administrator")]
 fn answer(reply: Result<Value>) -> Api {
     let reply = reply.map_err(|_| {
         ApiError(
@@ -227,9 +236,11 @@ fn answer(reply: Result<Value>) -> Api {
     ))
 }
 
+#[cfg(feature = "administrator")]
 const DENIED: &str = "Stopping broker work needs Administrator ability permissions here";
 
 /// Stop one job and keep its task, so it can be reopened and fixed.
+#[cfg(feature = "administrator")]
 pub(crate) async fn stop(app: &App, sid: &str, task_id: &str, job_id: &str) -> Api {
     let record = record(app, sid).await?;
     let task = find(&record, task_id)?;
@@ -256,6 +267,7 @@ pub(crate) async fn stop(app: &App, sid: &str, task_id: &str, job_id: &str) -> A
 }
 
 /// Cancel the whole task: stop its active job, then abandon it.
+#[cfg(feature = "administrator")]
 pub(crate) async fn cancel(app: &App, sid: &str, task_id: &str) -> Api {
     let record = record(app, sid).await?;
     let task = find(&record, task_id)?;
@@ -293,6 +305,26 @@ pub(crate) async fn cancel(app: &App, sid: &str, task_id: &str) -> Api {
         .await?;
     }
     answer(reply)
+}
+
+/// Without the Administrator tier there is no broker work to stop.
+#[cfg(not(feature = "administrator"))]
+pub(crate) async fn stop(_: &App, _: &str, _: &str, _: &str) -> Api {
+    Err(no_broker())
+}
+
+/// Without the Administrator tier there is no broker task to cancel.
+#[cfg(not(feature = "administrator"))]
+pub(crate) async fn cancel(_: &App, _: &str, _: &str) -> Api {
+    Err(no_broker())
+}
+
+#[cfg(not(feature = "administrator"))]
+fn no_broker() -> ApiError {
+    ApiError(
+        StatusCode::NOT_FOUND,
+        "Broker work needs the Administrator tier".into(),
+    )
 }
 
 #[cfg(test)]

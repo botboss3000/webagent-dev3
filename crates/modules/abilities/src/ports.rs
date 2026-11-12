@@ -16,6 +16,11 @@ pub trait Host: Clone + Send + Sync + 'static {
     fn optimization_generation() -> Option<String>;
     fn optimization_guidance() -> Option<String>;
     fn mcp_available() -> bool;
+    /// Whether this build carries the Administrator tier. Without it the catalog skips the
+    /// `Administrator` group, whose abilities would have no installed adapters.
+    fn administrator_tier() -> bool {
+        true
+    }
     /// The live checkout's drift from the running release; none unless the host compares them.
     fn drift() -> std::sync::Arc<crate::drift::Drift> {
         std::sync::Arc::default()

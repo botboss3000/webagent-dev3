@@ -1,5 +1,9 @@
 pub(crate) use webagent_engine::tools::outcome;
 // Single and parallel turns share the same Rust dispatch for native and worker tools.
+#[cfg(feature = "administrator")]
+pub(crate) mod administrator;
+#[cfg(not(feature = "administrator"))]
+#[path = "administrator_absent.rs"]
 pub(crate) mod administrator;
 #[path = "../../../crates/modules/abilities/host/agent_management.rs"]
 pub(crate) mod core_agent_management;
@@ -159,14 +163,8 @@ pub(crate) fn folder_schemas(names: &[&str]) -> Vec<Value> {
 /// definition has a compiled handler. Each problem disables only its own tool.
 pub(crate) fn definition_problems() -> Vec<String> {
     use webagent_abilities::tool_definitions as definitions;
-    // Without the optional Administrator pack its compiled tools have no folders by design.
-    let administrator = webagent_administration::tools::installed();
-    let handlers: std::collections::BTreeSet<_> = folder_handlers()
-        .chain(
-            webagent_administration::tools::TOOLS
-                .into_iter()
-                .filter(|_| administrator),
-        )
+    let pack = administrator::pack_tools();
+    let mut handlers: std::collections::BTreeSet<&str> = folder_handlers()
         .chain(
             webagent_abilities::package::AUTOMATION_TOOLS
                 .iter()
@@ -174,6 +172,7 @@ pub(crate) fn definition_problems() -> Vec<String> {
         )
         .chain(crate::mcp::TOOLS.iter().copied())
         .collect();
+    handlers.extend(pack.iter().map(String::as_str));
     let mut problems = definitions::problems().to_vec();
     problems.extend(
         handlers

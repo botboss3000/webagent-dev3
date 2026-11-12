@@ -70,19 +70,19 @@ impl NativeHost for Host<'_> {
         name: &'a str,
         args: &'a Value,
         sid: &'a str,
+        run: &'a Value,
         cancel: CancellationToken,
     ) -> Pending<'a, Result<Value>> {
-        Box::pin(tools::execute_trusted(
-            name,
-            args,
-            sid,
-            &self.0.tool_socket,
-            // Directory decisions read the live checkout only under Codebase Admin's file_list.
-            (name == "decision_candidates")
-                .then(|| tools::administrator::checkout_grant(self.0, "file_list", None))
-                .flatten(),
-            cancel,
-        ))
+        Box::pin(async move {
+            // Directory decisions read the live checkout only when Codebase Admin supplies
+            // file_list to this run.
+            let trusted = if name == "decision_candidates" {
+                tools::administrator::checkout_grant(self.0, sid, run, "file_list", None).await
+            } else {
+                None
+            };
+            tools::execute_trusted(name, args, sid, &self.0.tool_socket, trusted, cancel).await
+        })
     }
     fn write_artifact<'a>(
         &'a self,

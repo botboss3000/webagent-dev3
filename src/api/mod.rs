@@ -15,6 +15,7 @@ mod ability_admin;
 mod ability_drift;
 #[path = "../../crates/modules/models/host/api/account_catalog.rs"]
 mod account_models;
+#[cfg(feature = "administrator")]
 mod administrator;
 pub(crate) mod agent_members;
 #[path = "../../crates/modules/webapp/host/agent_pages.rs"]
@@ -23,7 +24,33 @@ mod agent_pages;
 mod app_pages;
 #[path = "../../crates/modules/configuration/host/app_settings.rs"]
 mod app_settings;
+#[cfg(feature = "administrator")]
 mod build_dashboard;
+/// Without the Administrator tier its route groups are empty and the Builds view reports
+/// the broker unavailable.
+#[cfg(not(feature = "administrator"))]
+mod administrator {
+    use super::*;
+    pub(super) fn session_router() -> Router<App> {
+        Router::new()
+    }
+}
+#[cfg(not(feature = "administrator"))]
+mod build_dashboard {
+    use super::*;
+    pub(super) fn admin_router() -> Router<App> {
+        Router::new()
+    }
+    pub(super) fn public_router() -> Router<App> {
+        Router::new()
+    }
+    pub(crate) async fn list(State(_): State<App>) -> Api {
+        Err(ApiError(
+            StatusCode::NOT_FOUND,
+            "The build broker needs the Administrator tier".into(),
+        ))
+    }
+}
 pub(crate) mod build_tasks;
 pub(crate) mod chat;
 #[path = "../../crates/modules/chat/host/api/chat_controls.rs"]
@@ -212,20 +239,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/admin/ability-drift", get(ability_drift::read))
         .route("/admin/ability-drift/dismiss", post(ability_drift::dismiss))
         .route("/admin/ability-drift/rebuild", post(ability_drift::rebuild))
-        .route("/admin/builds", get(build_dashboard::list))
-        .route("/admin/builds/scheduler", post(build_dashboard::scheduler))
-        .route(
-            "/admin/builds/{job_id}/result",
-            get(build_dashboard::result),
-        )
-        .route(
-            "/admin/builds/{job_id}/cancel",
-            post(build_dashboard::cancel),
-        )
-        .route(
-            "/admin/builds/leftovers/{id}/review",
-            post(build_dashboard::review_leftover),
-        )
+        .merge(build_dashboard::admin_router())
         .route_layer(middleware::from_fn_with_state(app.clone(), admin_auth));
     // Model handlers enforce tenant authority themselves; all retain browser auth and CSRF.
     let api = Router::new()
@@ -260,21 +274,10 @@ pub(super) fn router(app: App) -> Router {
         )
         .route("/modules/{id}/status", get(crate::modules::status_api))
         .route("/modules/{id}/call", post(crate::modules::call_api))
-        .route(
-            "/sessions/{sid}/administrator/artifacts/{id}",
-            get(administrator::artifact),
-        )
-        .route(
-            "/sessions/{sid}/administrator/notices",
-            get(administrator::notices),
-        )
+        .merge(administrator::session_router())
         .route(
             "/sessions/{sid}/ui-preview/{variant}",
             get(crate::ui_pages::ui_preview_start),
-        )
-        .route(
-            "/sessions/{sid}/administrator/notices/{id}/review",
-            post(administrator::review_notice),
         )
         .nest(
             "/models",
@@ -459,8 +462,7 @@ pub(super) fn router(app: App) -> Router {
         .route("/api/v3/embed/{id}/guest",post(embed::guest))
         .route("/api/v3/embed/redeem",post(embed::redeem))
         .route("/api/v3/core/webhook-receive/{id}",post(tools::core_webhooks::receive).layer(DefaultBodyLimit::max(16384)))
-        // The Broker card page reads one task without sign-in (names, states and timings only).
-        .route("/api/v3/builds/tasks/{task_id}",get(build_dashboard::task))
+        .merge(build_dashboard::public_router())
         .route("/api/v3/auth/login",post(login))
         .route("/api/v3/harness-bridge/next",post(crate::harness_bridge::next))
         .route("/api/v3/harness-bridge/reply",post(crate::harness_bridge::reply))

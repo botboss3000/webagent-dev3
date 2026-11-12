@@ -3,6 +3,21 @@
 use super::*;
 use crate::tools::administrator::Host;
 
+/// Session administrator routes (private artifacts and notices); the caller adds
+/// authentication.
+pub(super) fn session_router() -> Router<App> {
+    Router::new()
+        .route(
+            "/sessions/{sid}/administrator/artifacts/{id}",
+            get(artifact),
+        )
+        .route("/sessions/{sid}/administrator/notices", get(notices))
+        .route(
+            "/sessions/{sid}/administrator/notices/{id}/review",
+            post(review_notice),
+        )
+}
+
 pub(crate) async fn artifact(
     axum::Extension(app): axum::Extension<App>,
     Path((sid, id)): Path<(String, String)>,

@@ -93,6 +93,15 @@ pub trait AdministrationHost: Sync {
         trusted: Option<Value>,
         cancel: CancellationToken,
     ) -> Pending<'a, Result<Value>>;
+    /// `trusted` with the worker's live-checkout grant added when Codebase Admin itself
+    /// supplies `name` to this call of `run` in session `sid`, else `trusted` unchanged.
+    fn checkout<'a>(
+        &'a self,
+        sid: &'a str,
+        run: &'a Value,
+        name: &'a str,
+        trusted: Option<Value>,
+    ) -> Pending<'a, Option<Value>>;
     /// Send `name` to the protected build broker.
     fn broker<'a>(
         &'a self,

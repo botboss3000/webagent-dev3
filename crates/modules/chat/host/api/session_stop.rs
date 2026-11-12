@@ -71,10 +71,16 @@ pub(crate) async fn background_processes(app: &App, sid: &str) -> Result<Vec<Val
             json!({"kind":"sub_agent","id":run["session_id"],"label":"Sub-agent conversation"}),
         );
     }
-    let host = crate::tools::administrator::Host(app);
-    let jobs = webagent_administration_host::watch::session_jobs(&host, sid)
-        .await
-        .unwrap_or(0);
+    #[cfg(feature = "administrator")]
+    let jobs = webagent_administration_host::watch::session_jobs(
+        &crate::tools::administrator::Host(app),
+        sid,
+    )
+    .await
+    .unwrap_or(0);
+    // Without the Administrator tier a session runs no broker jobs.
+    #[cfg(not(feature = "administrator"))]
+    let jobs = 0;
     for n in 0..jobs {
         rows.push(json!({"kind":"build","id":format!("build-{n}"),"label":"Build or host job"}));
     }
