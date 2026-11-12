@@ -120,3 +120,42 @@ a valid finding; never weaken correctness to meet it.
 Testing does not authorize deployment. Follow standard review, preflight,
 synchronization, and authorized finish. Inspect receipts and the existing task/job
 after uncertain effects; never duplicate an uncertain write or deployment.
+
+## Code standard
+
+The applicable subset of the Google Rust style guide is the v3 standard. An
+extraction brings its whole module to it; any other Rust edit brings the files it
+touches. Never widen reservations for cleanup.
+
+- `rustfmt` with `max_width = 100` on touched files; no new Clippy warnings.
+- `// SAFETY:` on every `unsafe` block saying why safe code cannot do it; prefer
+  `libc` over hand-declared `extern "C"`.
+- Never read through a poisoned mutex; caches clear the poison and rebuild.
+- No `.unwrap()` outside tests: pattern-match, `?` or `expect("why it holds")`.
+  Never check-then-unwrap.
+- No glob imports except `use super::*` in inline test modules.
+- `Option` for obvious failures, `Result` when the caller needs the cause,
+  `panic!` only for broken invariants. No `Result<_, String>`; typed errors at
+  contract-crate boundaries; `anyhow` is fine inside the app.
+- Take `&str`, `&[T]`, `Option<&T>`, `&T` rather than references to owning
+  containers. Borrow before `.clone()`.
+- Newtypes where values are easy to mix up, enums rather than unclear `bool`
+  parameters, named fields rather than tuples.
+- Not adopted: `#[non_exhaustive]` on workspace-internal enums.
+
+## Toolchain and language lessons
+
+- Pinned Rust 1.90 and `Cargo.lock`; Cargo with `--locked`. Broker recipe:
+  `CARGO_INCREMENTAL=0`, `RUSTFLAGS="-C debuginfo=0 -C link-arg=-fuse-ld=mold"`,
+  Mold 1.10.1. Confirm the linker from the ELF `.comment`.
+- After extracting or moving code, run the new package's production check
+  first: trait imports, `cfg(test)` fixtures and feature-gated paths break at the
+  new boundary.
+- Run default and live compile-check profiles for shared host code; a package
+  passing alone does not prove the linked build.
+- Do not mask async `Send` inference problems with `unsafe impl Send` or extra
+  boxing; reuse an existing opaque Send-future identity.
+- Parse untrusted JSON straight into its typed owner from the original bytes;
+  going through `serde_json::Value` loses duplicate-field rejection.
+- Validate generated `Cargo.lock`/TOML structurally before applying it, then
+  prove it with pinned `cargo --locked`.

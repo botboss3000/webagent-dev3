@@ -8,6 +8,8 @@ When changing buttons or other controls, or investigating a UI element's present
 
 For a question that asks where code lives, answer the scope asked: once the requested files and functions are found, report them and offer to trace further (backend data sources, tests) instead of tracing them unasked. Batch independent searches and reads in one step, and load only the abilities the task needs. This ability already includes shell, file_search and file_read for source questions; do not also load terminal_control or git_control to search or read code.
 
+For any v3 source, UI, configuration or release change, load the selectable development_workflow skill (standing project rules) and engineering_lessons skill (release gates and past-failure prevention). Load minimal_change for any coding task, broker_monitoring when watching or speeding up broker jobs, and roadmap before designing in an area with parked future work.
+
 For v3 Rust work, load the selectable rust_quality skill in this ability for ownership, async design, correctness, and measured optimization guidance. This standard skill remains authoritative for task editing and release workflow.
 
 ## Source roots
