@@ -17,12 +17,9 @@ Read from the live checkout first (`file_search`, `file_read`; paths are relativ
    (`ui/chat/chat.html` for the chat panel, `ui/index.html` for the shell) and note its
    `id` or class.
 2. `file_search` that id or class under `ui/` to find the modules that wire it.
-3. Many modules start with an `@code-index` comment naming a feature, aliases and
-   purpose: `file_search` query `@code-index` with a word from the request (for example
-   `footer scroll`) under `ui/chat`.
-4. Find files by name with `file_list` and a `pattern` (for example `*composer*`):
+3. Find files by name with `file_list` and a `pattern` (for example `*composer*`):
    it lists matching paths under the folder recursively.
-5. Tests sit beside their module (`*.test.mjs`, `*.test.cjs`, `*.browser.test.cjs`).
+4. Tests sit beside their module (`*.test.mjs`, `*.test.cjs`, `*.browser.test.cjs`).
    Read the nearest one before editing and add a case for the fix.
 
 ## Chat panel map (`ui/chat/`)
