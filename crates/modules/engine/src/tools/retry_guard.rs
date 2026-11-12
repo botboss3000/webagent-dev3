@@ -30,6 +30,28 @@ pub const EXEMPT: &[&str] = &[
     "list_skills",
 ];
 
+/// Read-only actions of write tools. They have no effect to duplicate and their answer can
+/// change between calls (a build's status), so an identical repeat runs instead of being held.
+const READ_ACTIONS: &[(&str, &[&str])] = &[(
+    "build_work",
+    &[
+        "status",
+        "review",
+        "receipt",
+        "preflight",
+        "reservations",
+        "takeover_preview",
+        "wait",
+    ],
+)];
+
+fn read_action(name: &str, args: &Value) -> bool {
+    let action = args["action"].as_str().unwrap_or("");
+    READ_ACTIONS
+        .iter()
+        .any(|(tool, actions)| *tool == name && actions.contains(&action))
+}
+
 /// How a repeat of a matching call is treated.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -93,7 +115,7 @@ pub fn admit(
     retry: &Retry,
     batch_seen: Option<&std::collections::HashMap<String, String>>,
 ) -> Admission {
-    if matches!(retry.risk, Risk::None | Risk::Exempt) {
+    if matches!(retry.risk, Risk::None | Risk::Exempt) || read_action(name, args) {
         return Admission::Run;
     }
     let key = key(name, args);
@@ -392,6 +414,31 @@ mod tests {
             "completed"
         );
     }
+    #[test]
+    fn read_only_build_work_actions_repeat_freely() {
+        let mut run = json!({});
+        let status = json!({"action":"status","job_id":"j1"});
+        for id in ["c1", "c2"] {
+            assert_eq!(
+                admit(&mut run, "build_work", &status, id, &high(), None),
+                Admission::Run
+            );
+            let ok = json!({"status":"success"});
+            record(&mut run, "build_work", &status, id, Some(&ok), &high());
+        }
+        let finish = json!({"action":"finish","task_id":"t"});
+        assert_eq!(
+            admit(&mut run, "build_work", &finish, "c3", &high(), None),
+            Admission::Run
+        );
+        let ok = json!({"status":"success"});
+        record(&mut run, "build_work", &finish, "c3", Some(&ok), &high());
+        assert!(matches!(
+            admit(&mut run, "build_work", &finish, "c4", &high(), None),
+            Admission::Held(_)
+        ));
+    }
+
     #[test]
     fn first_call_runs_and_identical_completed_call_is_held() {
         let mut run = json!({});
