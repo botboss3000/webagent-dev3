@@ -297,6 +297,16 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(set(self.broker.jobs), jobs)
         self.assertEqual("open", self.call("v3_build_work", {"action":"status", "task_id":"plan-task"})["own"][0]["status"])
 
+    def test_finish_names_only_the_missing_or_invalid_field(self):
+        self.runner.blob = context(extra={"v3/README.md":"released"})
+        self.plan_fixture()
+        for args, message in (({}, "^finish requires expected_inputs_sha256$"),
+                              ({"expected_inputs_sha256":None}, "^finish requires expected_inputs_sha256$"),
+                              ({"expected_inputs_sha256":"abc"}, "64 lowercase hex"),
+                              ({"expected_inputs_sha256":"a"*64, "limit":5}, "argument: limit")):
+            with self.assertRaisesRegex(ValueError, message):
+                self.call("v3_build_work", {"action":"finish", "task_id":"plan-task", **args})
+
     def broker_fixture(self, files):
         self.runner.blob = context(extra={"v3/README.md":"released", "v3/build-service/README.md":"broker"})
         task = self.call("v3_build_work", {"action":"begin", "task_id":"broker-task", "summary":"broker", "mode":"isolated"})

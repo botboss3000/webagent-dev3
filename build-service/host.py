@@ -4592,7 +4592,8 @@ class Broker:
         if action in self.scheduler.actions:return self.scheduler.handle(args,request["trusted"],request["workspace"])
         allowed = {"action", "task_id", "summary", "expected_inputs_sha256", "sync_decision",
             "expected_sync_digest", "offset", "job_id", "request_id", "check", "timeout_seconds", "compiler_memory_cap", "package_memory_cap", "test_filter", "feature_profile", "expected_paths", "expected_operation"}
-        if set(args) - allowed: raise ValueError("unsupported build_work argument")
+        if set(args) - allowed:
+            raise ValueError("unsupported build_work argument for action %s: %s" % (action, ", ".join(sorted(map(str, set(args) - allowed)))))
         def call(tool, arguments):
             return self.handle({**request, "name": tool, "arguments": arguments})
         if action == "status" and args.get("job_id"):
@@ -5809,8 +5810,9 @@ class Broker:
                 self._save_work()
                 return dict(receipt)
             if name == "v3_build_work":
-                if set(args) - {"action", "task_id", "summary", "expected_inputs_sha256", "mode", "sync_decision", "expected_sync_digest", "offset", "compiler_memory_cap", "package_memory_cap", "expected_paths", "expected_operation"}:
-                    raise ValueError("unsupported work argument")
+                extra = set(args) - {"action", "task_id", "summary", "expected_inputs_sha256", "mode", "sync_decision", "expected_sync_digest", "offset", "compiler_memory_cap", "package_memory_cap", "expected_paths", "expected_operation"}
+                if extra:
+                    raise ValueError("unsupported work argument: " + ", ".join(sorted(map(str, extra))))
                 action = args.get("action")
                 if action == "status":
                     if set(args) not in ({"action"}, {"action", "task_id"}):
@@ -5978,11 +5980,16 @@ class Broker:
                             released = {"scopes": before["scopes"], "requested": before["requested"]}
                     return {"task_id": task_id, "status": "abandoned", "open_count": len(self._open_work()),
                             "released_scopes": len(released["scopes"]), "cleared_requests": len(released["requested"])}
-                if set(args) - {"action", "task_id", "expected_inputs_sha256", "sync_decision", "expected_sync_digest", "compiler_memory_cap", "package_memory_cap", "expected_paths", "expected_operation"} or not {"action", "task_id", "expected_inputs_sha256"} <= set(args):
-                    raise ValueError("finish requires task_id and expected_inputs_sha256")
+                extra = set(args) - {"action", "task_id", "expected_inputs_sha256", "sync_decision", "expected_sync_digest", "compiler_memory_cap", "package_memory_cap", "expected_paths", "expected_operation"}
+                if extra:
+                    raise ValueError("finish does not accept: " + ", ".join(sorted(map(str, extra))))
+                # A null or missing digest names only that field, so the caller fixes the right one.
+                missing = [name for name in ("task_id", "expected_inputs_sha256") if args.get(name) in (None, "")]
+                if missing:
+                    raise ValueError("finish requires " + " and ".join(missing))
                 expected = args["expected_inputs_sha256"]
                 if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
-                    raise ValueError("expected_inputs_sha256 required")
+                    raise ValueError("expected_inputs_sha256 must be 64 lowercase hex characters (the digest from review or the last write)")
                 if not item:
                     raise ValueError("task_id not registered in this session")
                 if item["status"] == "closed":
