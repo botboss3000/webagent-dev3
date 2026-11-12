@@ -5735,7 +5735,8 @@ class Broker:
                 item = self.work.get(hashlib.sha256(canonical([trusted["user_id"], workspace, args["task_id"]])).hexdigest())
                 receipt = item.get("applies", {}).get(args["request_id"]) if item else None
                 if not receipt:
-                    raise ValueError("source receipt unavailable")
+                    raise ValueError("source receipt unavailable: receipts cover source writes by their request_id, "
+                                     "not releases; for a ui_deploy or plugin_deploy release cite its job ID")
                 return dict(receipt)
             if name == "v3_source_prepare":
                 if set(args) != {"task_id", "files", "expected_inputs_sha256"}:
@@ -5935,9 +5936,13 @@ class Broker:
                     if item:
                         if item["summary"] != summary or item.get("mode", "shared") != mode:
                             raise ValueError("task_id reused with changed summary or mode")
+                        # A repeated begin also carries the current digest the next write expects.
+                        digest = (context_digest(release.snapshot(Path(item["workspace_path"]).parent, TASK_CONTEXT, context_digest))[0]
+                                  if item.get("workspace_path") and item["status"] == "open" else None)
                         return {"task_id": task_id, "status": item["status"],
                                 "open_count": len(self._open_work()),
-                                "workspace_path": item.get("workspace_path")}
+                                "workspace_path": item.get("workspace_path"),
+                                "workspace_inputs_sha256": digest}
                     if mode == "shared" and (self.active is not None or self.active_ui is not None):
                         raise ValueError("build or deployment active; wait before beginning new work")
                     if len(self.work) >= 1000:

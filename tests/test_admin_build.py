@@ -275,6 +275,15 @@ class BuildTests(unittest.TestCase):
         digest = self.call("v3_build_work", {"action":"status", "task_id":"plan-task"})["own"][0]["workspace_inputs_sha256"]
         return digest
 
+    def test_begin_returns_the_digest_status_reports(self):
+        self.runner.blob = context(extra={"v3/README.md":"released"})
+        begin = {"action":"begin", "task_id":"plan-task", "summary":"plan", "mode":"isolated"}
+        first = self.call("v3_build_work", begin)
+        status = lambda: self.call("v3_build_work", {"action":"status", "task_id":"plan-task"})["own"][0]["workspace_inputs_sha256"]
+        self.assertEqual(first["workspace_inputs_sha256"], status())
+        Path(first["workspace_path"], "README.md").write_text("planned edit")
+        self.assertEqual(self.call("v3_build_work", begin)["workspace_inputs_sha256"], status())
+
     def test_preflight_reports_the_release_plan_finish_uses(self):
         self.runner.blob = context(extra={"v3/README.md":"released"})
         digest = self.plan_fixture()
