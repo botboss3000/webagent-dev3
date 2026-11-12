@@ -14,6 +14,13 @@ class UIDependencyPolicyTests(unittest.TestCase):
   self.assertFalse(result["conservative"])
   self.assertIn("v3/ui/chat/a.js",result["affected"])
   self.assertNotIn("v3/ui/chat/unrelated.js",result["dependencies"])
+ def test_paths_outside_the_ui_trees_select_no_fixtures(self):
+  files={"v3/ui/a.js":(420,b"export const a=1;"),"v3/ui/a.test.mjs":(420,b"import {a} from './a.js';"),
+         "v3/docs/notes.md":(420,b"# notes"),"v3/src/main.rs":(420,b"fn main(){}")}
+  result=policy.dependencies(files,["v3/docs/notes.md","v3/src/main.rs"])
+  self.assertFalse(result["conservative"]);self.assertEqual(result["tests"],[])
+  mixed=policy.dependencies(files,["v3/docs/notes.md","v3/ui/a.js"])
+  self.assertFalse(mixed["conservative"]);self.assertEqual(mixed["tests"],["v3/ui/a.test.mjs"])
  def test_dynamic_loading_uses_conservative_validation(self):
   files=self.files(**{"a.js":"import(variable)","b.js":"export const other=1;"})
   result=policy.dependencies(files,["v3/ui/b.js"])

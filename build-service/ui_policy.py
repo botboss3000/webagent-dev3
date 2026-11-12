@@ -5,7 +5,7 @@ from pathlib import Path, PurePosixPath
 import posixpath
 import re
 
-VERSION = 3
+VERSION = 4
 UI_TREES = ("v3/ui/", "ui/")  # the only candidate trees mounted into the UI fixture container
 IMPORT = re.compile(r"(?:\bimport\s+(?:[^;]+?\s+from\s+)?|\bexport\s+[^;]+?\s+from\s+|\bimport\s*\()\s*['\"]([^'\"]+)['\"]")
 ASSET = re.compile(r"(?:src|href)\s*=\s*['\"]([^'\"]+)['\"]|(?:url\(|@import\s+)\s*['\"]?([^)'\"\s;]+)", re.I)
@@ -53,6 +53,9 @@ def dependencies(files, changed):
         if consumers <= affected:
             break
         affected |= consumers
+    # Fixtures see only the mounted UI trees, so docs, Rust and other paths cannot change
+    # their result; only a shared ui/ change (outside the import graph) selects every fixture.
+    changed = [p for p in changed if p.startswith(UI_TREES)]
     conservative = bool(unknown or any(not p.startswith("v3/ui/") for p in changed))
     closure = set(ui)|set(changed) if conservative else set(affected)
     pending = list(closure)
