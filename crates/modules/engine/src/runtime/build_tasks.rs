@@ -1,6 +1,7 @@
 //! The chat's Broker chip record: the broker tasks a session's builds and checks ran,
 //! each job's latest stage snapshot, and the alert state that wakes a waiting agent.
-//! Recovery writes it while it follows a job; the session API lists and clears it.
+//! `begin`/`reserve` add the task; recovery writes jobs while it follows them; the session
+//! API lists and clears it.
 //!
 //! shortcut: the record is read-modify-written without a revision, so a clear racing a
 //! recovery write can be lost (the task shows again); add a revision if that matters.
@@ -45,16 +46,16 @@ pub async fn update<S: ScopedStorage, T>(
     Ok(value)
 }
 
-/// The chip's task name: the broker summary without its provenance bracket.
+/// The chip's task name: the broker summary without its provenance bracket or a leading
+/// `chat <session id>:` the agent may have written.
 pub fn task_name(summary: &str) -> String {
-    summary
-        .split(" [origin=")
-        .next()
-        .unwrap_or(summary)
-        .trim()
-        .chars()
-        .take(120)
-        .collect()
+    let name = summary.split(" [origin=").next().unwrap_or(summary).trim();
+    let name = name
+        .strip_prefix("chat ")
+        .and_then(|rest| rest.split_once(':'))
+        .filter(|(id, _)| !id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'))
+        .map_or(name, |(_, rest)| rest.trim());
+    name.chars().take(120).collect()
 }
 
 /// The task a known job belongs to, if the record has it.
@@ -152,6 +153,21 @@ pub fn name_task(record: &mut Value, task_id: &str, summary: &str) {
         for task in list.iter_mut().filter(|task| task["task_id"] == task_id) {
             task["name"] = json!(task_name(summary));
         }
+    }
+}
+
+/// Show a task on the chip before it has a job, named from its broker summary, so a chat
+/// shows its task from `begin` or `reserve` on. A known task keeps its jobs and only gains
+/// a name it lacked.
+pub fn note_task(record: &mut Value, task_id: &str, summary: Option<&str>, now: u64) {
+    if !tasks(record).iter().any(|task| task["task_id"] == task_id) {
+        push(
+            &mut record["tasks"],
+            json!({"task_id":task_id,"jobs":[],"created_at":now,"updated_at":now}),
+        );
+    }
+    if let Some(summary) = summary.filter(|_| !named(record, task_id)) {
+        name_task(record, task_id, summary);
     }
 }
 
@@ -438,6 +454,30 @@ mod tests {
         assert_eq!(task["jobs"][1]["check"], "test");
         assert_eq!(task_of(&record, "job-2").as_deref(), Some("chip-task"));
         assert!(named(&record, "chip-task") && !named(&record, "other"));
+    }
+
+    #[test]
+    fn names_drop_provenance_and_a_leading_chat_id() {
+        assert_eq!(
+            task_name("chat f15065ed-0aea-443b: live-refresh the chart [origin=webagent]"),
+            "live-refresh the chart"
+        );
+        assert_eq!(
+            task_name("chat about: the toggle"),
+            "chat about: the toggle"
+        );
+        assert_eq!(task_name("Fix the chip"), "Fix the chip");
+    }
+
+    #[test]
+    fn a_begun_task_shows_named_before_its_first_job() {
+        let mut record = json!({"tasks":[]});
+        note_task(&mut record, "t", Some("chat ab12: Fix it"), 5);
+        assert_eq!(record["tasks"][0]["name"], "Fix it");
+        assert_eq!(record["tasks"][0]["jobs"], json!([]));
+        note_task(&mut record, "t", Some("Other"), 6);
+        assert_eq!(record["tasks"].as_array().map(Vec::len), Some(1));
+        assert_eq!(record["tasks"][0]["name"], "Fix it");
     }
 
     #[test]

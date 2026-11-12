@@ -1355,6 +1355,17 @@ impl<
             Ok(value) => {
                 if matches!(name.as_str(), "v3_build_work" | "build_work")
                     && value["status"] == "success"
+                {
+                    super::recovery::note_build_task(
+                        app.store.records(),
+                        &run,
+                        &args["action"],
+                        &value["output"],
+                    )
+                    .await;
+                }
+                if matches!(name.as_str(), "v3_build_work" | "build_work")
+                    && value["status"] == "success"
                     && super::recovery::awaits_broker_job(&args["action"], &value["output"])
                 {
                     // The broker owns the job across our own container replacement. It runs

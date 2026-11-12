@@ -827,6 +827,32 @@ fn job_entry<'a>(record: &'a mut Value, run: &Value, job_id: &str, now: u64) -> 
     build_tasks::job(record, &task, job_id, rid, &kind, now)
 }
 
+/// Show a task on the Broker chip once `begin` or `reserve` returns its Broker ID, named
+/// from the broker summary. The chip is a view, so a failed write is only logged.
+pub(super) async fn note_build_task<S: super::ports::ScopedStorage>(
+    store: &S,
+    run: &Value,
+    action: &Value,
+    output: &Value,
+) {
+    let context = &output["broker_context"];
+    let (Some(sid), Some(task)) = (run["session_id"].as_str(), context["broker_id"].as_str())
+    else {
+        return;
+    };
+    if !matches!(action.as_str(), Some("begin" | "reserve")) {
+        return;
+    }
+    let written = build_tasks::update(store, sid, |record| {
+        build_tasks::note_task(record, task, context["summary"].as_str(), now());
+        build_tasks::trim(record);
+    })
+    .await;
+    if let Err(error) = written {
+        tracing::warn!("Broker chip record not written: {error}");
+    }
+}
+
 /// Show a job on the Broker chip as soon as its call starts waiting on it; the first
 /// recovery poll adds its stages and task name. The chip is a view, so a failed write is
 /// only logged.

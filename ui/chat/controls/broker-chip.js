@@ -324,8 +324,9 @@ export function createBrokerChip({request, note = () => {}, family = () => []}) 
 
   return {
     open(id) { close(); sid = id; tasks = []; renderChip(); void refresh(); },
-    /** Re-reads the list after a published chat item that concerns a build. */
-    published(item) { if (sid && /build_work|:build:/.test(JSON.stringify(item))) soon(); },
+    /** Re-reads the list after a published chat item that concerns a build, or an agent
+     * reply (a task begun or reserved since shows from then on). */
+    published(item) { if (sid && (item?.role === 'assistant' || /build_work|:build:/.test(JSON.stringify(item)))) soon(); },
     refresh,
     disconnect() { close(); sid = ''; tasks = []; ++epoch; clearTimeout(pending); renderChip(); }
   };
