@@ -513,7 +513,8 @@ async fn login_private_cookie_fixed_origin_and_current_routes() {
         "https://outside.invalid/".to_owned(),
         "//outside.invalid/".into(),
         "file:///etc/passwd".into(),
-        format!("/app?session_id={}", uuid::Uuid::new_v4()),
+        // Another session of the same user opens; a malformed id never does.
+        "/app?session_id=not-a-session".into(),
         "/app?tab=agents&agent=another".into(),
         format!("/api/v3/sessions/{}", uuid::Uuid::new_v4()),
         "/app?tab=account&cookie=x".into(),

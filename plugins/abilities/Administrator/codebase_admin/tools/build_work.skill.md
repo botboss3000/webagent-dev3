@@ -24,6 +24,12 @@ on the same unchanged input digest (from a fresh review, list or read):
 5. check=ui_test for UI changes: it runs the browser fixtures the changed paths
    select and its log excerpt carries page errors a failed release may cut off.
 
+Every build_work result has `status` at the top. On success `output` is an object
+with the action's fields (`inputs_sha256`, `job_id`, ...). When a call failed, was
+held (`error_kind`) or is running in the background, `output` is a message string:
+read `status` first, and for a running release take `job_id`, `broker_task_id` and
+`inputs_sha256` from the top level (`task_id` there is the background task).
+
 When a change alters what a route or query returns, lists or counts (for example
 hiding empty sessions), search the whole test suite for tests that assert the old
 result (the route path, the field, `[0]` row checks) and run check=test on each

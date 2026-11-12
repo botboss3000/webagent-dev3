@@ -575,8 +575,11 @@ pub fn validate_path(path: &Value, session_id: &str, agent_id: &str) -> Result<S
         if !shaped(get("tab").unwrap_or("chat"), 1, 40, kebab) {
             return Err(Fault::rejected("Unsupported development page"));
         }
-        if get("session_id").is_some_and(|sid| sid != session_id) {
-            return Err(Fault::rejected("Another chat session is unavailable"));
+        // The browser signs in with the caller's own app cookie, so the app shows only that
+        // user's sessions: another user's id reads as missing there, never as their chat.
+        let hex_id = |c: char| c.is_ascii_hexdigit() || c == '-';
+        if get("session_id").is_some_and(|sid| !shaped(sid, 36, 36, hex_id)) {
+            return Err(Fault::rejected("Invalid chat session id"));
         }
         if get("agent").is_some_and(|agent| agent != agent_id) {
             return Err(Fault::rejected("Another agent is unavailable"));
@@ -1009,6 +1012,15 @@ mod preview_route_tests {
         assert!(format!("{fault:?}").contains("file_read"));
         let api = validate_path(&Value::from("/api/v3/other"), sid, "shared_default").unwrap_err();
         assert!(format!("{api:?}").contains("Unsupported current-session read route"));
+    }
+
+    #[test]
+    fn the_app_route_opens_any_well_formed_session_of_the_caller() {
+        let sid = "083cd9bb-7c27-4022-a9de-09e7110a9e92";
+        let other = "21e5ab5f-89d9-46ee-a417-96b1de77c1a8";
+        let path = |p: String| validate_path(&Value::from(p), sid, "shared_default");
+        assert!(path(format!("/app?session_id={other}")).is_ok());
+        assert!(path("/app?session_id=not-a-session".into()).is_err());
     }
 
     /// A URL for another session names both ids, so the caller can fix it in one step.

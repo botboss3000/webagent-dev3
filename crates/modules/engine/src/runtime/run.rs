@@ -1405,7 +1405,10 @@ impl<
                             &A::retry(&name),
                         );
                         let job = value["output"]["job_id"].as_str().unwrap_or("unknown");
-                        let result = json!({"status":"running","task_id":task_id,"job_id":job,"output":format!(
+                        // task_id is the background task; broker_task_id and inputs_sha256 name the release.
+                        let result = json!({"status":"running","task_id":task_id,"job_id":job,
+                            "broker_task_id":args["task_id"],"inputs_sha256":args["expected_inputs_sha256"],
+                            "output":format!(
                             "Broker job {job} is running as background task {task_id}. You get a \
                              background notice when it ends, and if a stage runs slow or stalls. End \
                              your turn now: do not poll or wait. Use build_work status only if the \
