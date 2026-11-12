@@ -18,7 +18,7 @@ class Element {
 test('nested bubble identities keep one delivery label and one set of actions below the gutter',async()=>{
   const root=new Element(),row=new Element(),bubble=new Element(),gutter=new Element(),host=new Element();
   row.dataset.publicId=bubble.dataset.publicId='user:fixture';gutter.className='turn-gutter';row.append(bubble,gutter);root.append(row,host);
-  const context=vm.createContext({document:{activeElement:null,createElement:tag=>new Element(tag)},Set,Number});
+  const context=vm.createContext({document:{activeElement:null,createElement:tag=>new Element(tag)},Set,Number,setTimeout:()=>{}});
   const module=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'followup-queue.js'),'utf8'),{context});
   await module.link(()=>new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'chat-action-panel.js'),'utf8'),{context}));await module.evaluate();
   const queue=module.namespace.mountFollowupQueue({root,client:{},getSession:()=> 'fixture',guard:fn=>fn,note(){},keyId:()=> 'fixture',forgetKey(){},onSnapshot(){}});

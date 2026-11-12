@@ -10,6 +10,9 @@
 export function mountFollowupQueue({root,client,getSession,guard,note,keyId,forgetKey,onSnapshot,canWrite=()=>true}) {
   let generation=0,revision=-1,entries=[],held=false,reason=null;
   const busy=new Set();
+  // "Delivered" shows for 2s after a queued message is seen joining the run, then hides;
+  // a message already delivered when this panel first saw it shows nothing.
+  const waiting=new Set(),hidden=new Set(),fading=new Set();
   const terminal=new Set(['delivered','cancelled','rejected']);
   // Translate durable queue states into short status text for transcript controls.
   // Every message joins the conversation at the agent's next step; Send now forces that step.
@@ -23,7 +26,12 @@ export function mountFollowupQueue({root,client,getSession,guard,note,keyId,forg
       if(row.parentElement?.closest('[data-public-id]'))continue;
       const entry=entries.find(item=>item.message_id===row.dataset.publicId);
       let box=row.querySelector('.followup-delivery');
-      if(!entry){box?.remove();continue;}
+      if(entry&&entry.status!=='delivered')waiting.add(entry.id);
+      if(entry?.status==='delivered'&&!fading.has(entry.id)&&!hidden.has(entry.id)){
+        if(waiting.has(entry.id)){fading.add(entry.id);const epoch=generation;setTimeout(()=>{if(epoch!==generation)return;hidden.add(entry.id);paint();},2000);}
+        else hidden.add(entry.id);
+      }
+      if(!entry||hidden.has(entry.id)){box?.remove();continue;}
       if(!box){box=document.createElement('div');box.className='followup-delivery';row.append(box);}
       const paintKey=JSON.stringify([entry,held,reason]);
       if(box.queuePaintKey===paintKey){for(const button of box.querySelectorAll('button'))button.disabled=!canWrite()||busy.has(entry.id);continue;}
@@ -70,7 +78,7 @@ export function mountFollowupQueue({root,client,getSession,guard,note,keyId,forg
     paint();
   }
   // Invalidate outstanding work and clear this session queue presentation.
-  function reset(){++generation;revision=-1;entries=[];held=false;reason=null;busy.clear();paint();}
+  function reset(){++generation;revision=-1;entries=[];held=false;reason=null;busy.clear();waiting.clear();hidden.clear();fading.clear();paint();}
   // Dispose the mount after clearing state so no old queue UI remains in the panel.
   return {update,reset,paint,/* True while any queued entry is not in a terminal state. */get pending(){return entries.some(e=>!terminal.has(e.status));},/* Reset state and remove this mount from the panel host. */destroy(){reset();}};
 }

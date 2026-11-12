@@ -17,14 +17,14 @@ const tick=()=>new Promise(setImmediate);
 async function fixture(canWrite=()=>true){
  const root=new E(),row=new E(),host=new E();row.dataset.publicId='user:a';row.dataset.seq='7';root.append(row,host);
  const document={activeElement:null,createElement:tag=>{const node=new E(tag);node.document=document;return node;}};
- const context=vm.createContext({document,Set,Number});
+ const timers=[];const context=vm.createContext({document,Set,Number,setTimeout:fn=>timers.push(fn)});
  const mod=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'../ui/chat/core/followup-queue.js'),'utf8'),{context});await mod.link(()=>new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'../ui/chat/core/chat-action-panel.js'),'utf8'),{context}));await mod.evaluate();
  let session='one',data={queue:[{id:'a',message_id:'user:a',revision:2,choice:'steer',status:'pending'}],queue_state:{revision:3,held:false}};
  const calls=[],errors=[],keys=new Map();let write=null;
  const client={snapshot:async()=>data,delivery:async(...args)=>{calls.push(args);if(write)return write();data={queue:[{...data.queue[0],choice:args[2].choice,revision:3}],queue_state:{revision:4}};},resumeQueue:async(...args)=>calls.push(args)};
  const queue=mod.namespace.mountFollowupQueue({root,client,getSession:()=>session,canWrite,guard:fn=>async()=>{try{await fn();}catch(e){errors.push(e.message);}},note:()=>{},keyId:k=>{if(!keys.has(k))keys.set(k,'request-'+keys.size);return keys.get(k);},forgetKey:k=>keys.delete(k),onSnapshot:d=>queue.update(d)});
  queue.update(data);
- return {queue,row,host,calls,errors,document,buttons:()=>row.querySelector('.followup-delivery-actions').children,setData:d=>data=d,setWrite:fn=>write=fn,session:s=>session=s};
+ return {queue,row,host,calls,errors,document,timers,buttons:()=>row.querySelector('.followup-delivery-actions').children,setData:d=>data=d,setWrite:fn=>write=fn,session:s=>session=s};
 }
 test('send now forces the pending steer with revision and request identity',async()=>{
  const f=await fixture();assert.match(flatten(f.row),/next step/);assert.deepEqual(f.buttons().map(b=>b.textContent),['Send now','Cancel']);await f.buttons()[0].onclick();
@@ -32,6 +32,9 @@ test('send now forces the pending steer with revision and request identity',asyn
  f.queue.update({queue:[{id:'a',message_id:'user:a',revision:3,status:'pending',choice:'steer',send_now:true}],queue_state:{revision:5}});
  assert.match(flatten(f.row),/Sending now/);assert.deepEqual(f.buttons().map(b=>b.textContent),['Cancel']);assert.equal(f.queue.pending,true);
  f.queue.update({queue:[{id:'a',message_id:'user:a',status:'delivered',choice:'steer'}],queue_state:{revision:6}});assert.equal(f.row.querySelector('.followup-delivery-actions'),null);assert.match(flatten(f.row),/Delivered/);
+ // Delivered hides after its 2 s timer; one already delivered on first sight never shows.
+ f.timers.splice(0).forEach(fn=>fn());assert.doesNotMatch(flatten(f.row),/Delivered/);
+ f.queue.reset();f.queue.update({queue:[{id:'b',message_id:'user:a',status:'delivered',choice:'steer'}],queue_state:{revision:1}});assert.doesNotMatch(flatten(f.row),/Delivered/);
 });
 test('held queue offers resume and cancel but not send now',async()=>{
  const f=await fixture();f.queue.update({queue:[{id:'a',message_id:'user:a',revision:2,status:'pending',choice:'steer'}],queue_state:{revision:4,held:true,reason:'Stopped'}});
