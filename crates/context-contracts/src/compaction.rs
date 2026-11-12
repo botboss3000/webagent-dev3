@@ -109,18 +109,22 @@ impl Config {
     /// source limit, large tool outputs become previews, then stubs, so that one oversized tool
     /// exchange cannot block every fold. The plan itself always keeps the exact history.
     pub fn summary_source(&self, input: &[Value]) -> Result<String> {
-        let mut items: Vec<Value> = input
+        let items: Vec<Value> = input
             .iter()
             .filter(|item| item["type"] != "reasoning")
             .cloned()
             .collect();
         let mut source = serde_json::to_string(&items)?;
+        // Each level shortens the original outputs, never an earlier preview: the planner
+        // sizes cut points from stubs of the originals, and a stub of a preview can be
+        // larger, which made the host refuse a plan the planner had fitted.
         for preview_bytes in [self.tool_result_preview_bytes, STUB_PREVIEW_BYTES] {
             if source.len() <= self.max_source_bytes {
                 break;
             }
-            project_tool_results(&mut items, preview_bytes)?;
-            source = serde_json::to_string(&items)?;
+            let mut shortened = items.clone();
+            project_tool_results(&mut shortened, preview_bytes)?;
+            source = serde_json::to_string(&shortened)?;
         }
         Ok(source)
     }
@@ -672,6 +676,42 @@ mod tests {
         let text = serde_json::to_string(&json!({ "bytes_per_token": ratio })).unwrap();
         let parsed: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(parsed["bytes_per_token"].as_f64(), Some(ratio));
+    }
+
+    /// The fullest shortening level is exactly the planner's measure (stubs of the original
+    /// outputs), so a plan the planner fitted under the source limit always validates.
+    #[test]
+    fn stubbed_summary_source_matches_the_planner_measure() {
+        let config: super::Config = serde_json::from_value(json!({
+            "schema_version": 1, "trigger_tokens": 10000, "tail_tokens": 40, "summary_tokens": 20,
+            "characters_per_token": 4, "summary_reserve_bytes": 300, "max_source_bytes": 9000,
+            "max_summary_bytes": 300,
+            "summary_prefix": "Earlier conversation summary (background context, not a new request):\n",
+            "active_summary_prefix": "Active task progress summary (background context, not a new request):\n",
+            "summary_prompt": "Summarize under {summary_characters} characters. Conversation JSON: {source}"
+        }))
+        .unwrap();
+        let mut input = vec![json!({"role": "user", "content": "go"})];
+        for (n, output) in [
+            "\\\"".repeat(9000),
+            "é\n\"".repeat(6000),
+            "x".repeat(50_000),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let id = format!("call-{n}");
+            input.push(
+                json!({"type": "function_call", "call_id": id, "name": "file_read",
+                "arguments": "{}"}),
+            );
+            input.push(json!({"type": "function_call_output", "call_id": id, "output": output}));
+        }
+        let mut stubbed = input.clone();
+        super::project_tool_results(&mut stubbed, super::STUB_PREVIEW_BYTES).unwrap();
+        let source = config.summary_source(&input).unwrap();
+        let expected = serde_json::to_string(&stubbed).unwrap();
+        assert_eq!(source, expected);
     }
 
     /// One parallel exchange larger than the summary-source limit once stalled every fold
