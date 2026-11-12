@@ -2712,6 +2712,105 @@ async fn batched_discovery_calls_run_serially_and_succeed() {
     server.abort();
 }
 #[tokio::test]
+/// A loaded tool adds only itself to the next model request, never its group's other tools.
+async fn loaded_tool_exposes_only_itself_in_the_next_request() {
+    use axum::routing::post;
+
+    let (_root, mut app) = fixture().await;
+    let sid = conversation(&app).await;
+    let sent = send(
+        State(app.clone()),
+        Path(sid.clone()),
+        Json(json!({"client_message_id":uuid(),"text":"read a file"})),
+    )
+    .await
+    .unwrap();
+    let id = sent.1 .0["run_id"].as_str().unwrap().to_owned();
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured = requests.clone();
+    let mock = Router::new().route(
+        "/responses",
+        post(move |Json(body): Json<Value>| {
+            let captured = captured.clone();
+            async move {
+                let mut captured = captured.lock().await;
+                captured.push(body);
+                let output = match captured.len() {
+                    1 => json!([{"type":"function_call","call_id":"load-read",
+                        "name":"load_tool","arguments":"{\"tool_name\":\"file_read\"}"}]),
+                    2 => json!([{"type":"function_call","call_id":"load-search",
+                        "name":"load_tool","arguments":"{\"tool_name\":\"file_search\"}"}]),
+                    3 => json!([{"type":"message","role":"assistant",
+                        "content":[{"type":"output_text","text":"Done."}]}]),
+                    _ => panic!("Unexpected provider turn"),
+                };
+                let event = json!({"type":"response.completed",
+                    "response":{"status":"completed","output":output}});
+                (
+                    [("content-type", "text/event-stream")],
+                    format!("data: {event}\n\n"),
+                )
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, mock).await.unwrap();
+    });
+    app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+    running(&app, &id, "load-one-tool").await;
+    execute_fixture_journey(
+        app.clone(),
+        id.clone(),
+        "load-one-tool".into(),
+        CancellationToken::new(),
+    )
+    .await;
+
+    assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
+    let requests = requests.lock().await;
+    assert_eq!(requests.len(), 3);
+    let names = |request: &Value| {
+        request["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let baseline = names(&requests[0]);
+    for loader in ["list_tools", "load_tool", "list_skills", "load_skill"] {
+        assert!(baseline.contains(loader), "{baseline:?}");
+    }
+    for hidden in ["file_read", "file_search", "calculate", "get_date"] {
+        assert!(
+            !baseline.contains(hidden),
+            "{hidden} visible before loading: {baseline:?}"
+        );
+    }
+    let added = |request: &Value| {
+        names(request)
+            .difference(&baseline)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(added(&requests[1]), vec!["file_read".to_owned()]);
+    let search_load = requests[2]["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["type"] == "function_call_output" && item["call_id"] == "load-search")
+        .map(|item| item["output"].clone());
+    assert_eq!(
+        added(&requests[2]),
+        vec!["file_read".to_owned(), "file_search".to_owned()],
+        "{search_load:?}"
+    );
+    server.abort();
+}
+
+#[tokio::test]
 /// Verify native ability loading adds current guidance only to model-call frames and keeps state inspection scoped to the active session.
 async fn agent_discovers_ability_then_inspects_only_its_current_session() {
     use axum::routing::post;

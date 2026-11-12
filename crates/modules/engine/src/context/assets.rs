@@ -93,14 +93,7 @@ impl<
         if app.asset_legacy_seed(run, &state).await? {
             state = scoped.context_assets(&sid, &agent, &requester).await?;
         }
-        let fresh = app.asset_catalog()?;
-        let (_, _, visibility, session_state) = app.ability_controls_for(&sid, &requester).await?;
-        let changed = webagent_context::assets::hydrate_selectors(
-            run,
-            &state,
-            X::tool_marker,
-            |name, loaded| fresh.tool_abilities(name, &visibility, &session_state, loaded),
-        )?;
+        let changed = webagent_context::assets::hydrate_selectors(run, &state, X::tool_marker)?;
         if changed {
             app.save(run).await?;
         }

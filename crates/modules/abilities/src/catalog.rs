@@ -1601,9 +1601,6 @@ impl<H: Host> Catalog<H> {
         state: &Value,
         loaded: &Value,
     ) -> (bool, bool) {
-        // Only explicit activation (session state, /optimize) supplies a group's discoverable
-        // tools; loaded tools add their owner to the projection below, which must not count.
-        let explicit = state;
         // Conversation selections and context use the same call-local activation.
         // This projection preserves Off, suppression and per-tool discovery gates.
         let state = self.selected_state(visibility, state, loaded);
@@ -1620,8 +1617,8 @@ impl<H: Host> Catalog<H> {
                 && match Self::tool_mode(visibility, name) {
                     "off" => false,
                     // An explicitly activated ability (session state, /optimize) supplies
-                    // its discoverable tools; the model itself loads tools one by one.
-                    "discoverable" => selected || Self::active(explicit, &ability.id),
+                    // its discoverable tools; loaded tools add only their own marker.
+                    "discoverable" => selected || Self::active(&state, &ability.id),
                     _ => true,
                 }
                 && (Self::available(ability, visibility, &state)
@@ -2885,9 +2882,9 @@ pub mod registered_tests {
             let (_root, catalog) = fixture::<H>();
             let state = json!({"active":[],"suppressed":[]});
             let visibility = json!({"visibility":{"codebase_admin":"visible"}});
-            // Loading file_read (or one of its group's skills) also records the owning group,
-            // as context-asset hydration does; that must not expose the group's other tools.
-            let loaded = json!([crate::selection::marker("file_read"), "codebase_admin"]);
+            // A loaded tool records only its own marker (context-asset hydration adds no
+            // owner), so the group's other tools stay hidden.
+            let loaded = json!([crate::selection::marker("file_read")]);
             assert!(catalog.tool_available("file_read", &visibility, &state, &loaded));
             assert!(!catalog.tool_available("file_edit", &visibility, &state, &loaded));
             // Explicit session activation still supplies the group's discoverable tools.

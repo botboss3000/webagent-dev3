@@ -86,7 +86,7 @@ pub(crate) fn denial_message(reason: access::Reason, invalid_arguments: bool) ->
         Reason::CallerDenied => "this caller may not use this tool",
         Reason::AgentDisabled => "the agent is disabled",
         Reason::Unavailable => "no installed ability provides this tool",
-        Reason::Hidden => "this tool is not active in this conversation; load its ability first",
+        Reason::Hidden => "this tool is not loaded in this conversation; load it with load_tool",
         Reason::ReadOnly => "the session is read-only and this tool writes",
         Reason::Allowed | Reason::ApprovalRequired => "the call was not permitted",
     };
@@ -976,7 +976,7 @@ mod denial_tests {
     #[test]
     fn denial_message_names_the_refusing_layer() {
         assert_eq!(denial_message(access::Reason::Hidden,false),
-            "Tool invocation denied: this tool is not active in this conversation; load its ability first");
+            "Tool invocation denied: this tool is not loaded in this conversation; load it with load_tool");
         assert_eq!(
             denial_message(access::Reason::PolicyDenied, false),
             "Tool invocation denied: the installation policy denies this tool"

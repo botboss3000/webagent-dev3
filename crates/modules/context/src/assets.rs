@@ -194,7 +194,6 @@ pub fn hydrate_selectors(
     run: &mut Value,
     state: &State,
     tool_marker: impl Fn(&str) -> String,
-    tool_abilities: impl Fn(&str, &Value) -> Vec<String>,
 ) -> Result<bool> {
     let mut loaded = Vec::new();
     let mut tools = Vec::new();
@@ -205,8 +204,8 @@ pub fn hydrate_selectors(
    Some("tool")=>{
     let Some(name)=selector["tool_name"].as_str() else {continue;};
     tools.push(json!(name));let marker=json!(tool_marker(name));
+    // A tool selector exposes only that tool; ability IDs come from explicit activation alone.
     if !loaded.contains(&marker){loaded.push(marker);}
-    for owner in tool_abilities(name,&json!(loaded)) {let value=json!(owner);if !loaded.contains(&value){loaded.push(value);}}
    },
    Some("skill")=>skills.push(json!({"ability_id":selector["ability_id"],"kind":selector["kind"],"skill_id":selector["skill_id"]})),
    _=>bail!("Invalid context asset selector"),
