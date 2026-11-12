@@ -522,7 +522,11 @@ pub fn validate_path(path: &Value, session_id: &str, agent_id: &str) -> Result<S
         .filter(|path| (1..=2048).contains(&path.chars().count()))
         .filter(|path| !path.chars().any(|c| (c as u32) < 32) && !path.contains('\\'))
         .ok_or_else(invalid)?;
-    let parsed = urlsplit(path)?;
+    let mut parsed = urlsplit(path)?;
+    // The site root serves the app, so open it as the app route instead of refusing.
+    if parsed.path == "/" && parsed.query.is_empty() {
+        parsed.path = "/app".to_owned();
+    }
     if !parsed.scheme.is_empty()
         || !parsed.netloc.is_empty()
         || !parsed.fragment.is_empty()
@@ -1021,6 +1025,7 @@ mod preview_route_tests {
         let path = |p: String| validate_path(&Value::from(p), sid, "shared_default");
         assert!(path(format!("/app?session_id={other}")).is_ok());
         assert!(path("/app?session_id=not-a-session".into()).is_err());
+        assert_eq!(path("/".into()).unwrap(), format!("/app?session_id={sid}"));
     }
 
     /// A URL for another session names both ids, so the caller can fix it in one step.

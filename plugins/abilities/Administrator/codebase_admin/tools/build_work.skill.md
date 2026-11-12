@@ -40,6 +40,24 @@ or status result (a failure notice leads with them too), fix those named tests,
 and rerun each with check=test before the next finish. Never guess the failing
 test from the log tail: it holds the tests that ran after the failure.
 
+Check whether `failure_line` is a timeout (an `.unwrap()` on `tokio::time::timeout`)
+or an assertion. A timeout in a test your change does not touch is usually load
+from the full suite: rerun it alone with check=test, and if it passes, retry the
+release once on the same digest without editing it.
+
+check=clippy reports every warning in the files your task touches, including old
+ones. Fix findings in your own lines; older warnings do not block a release, so
+name them in your report.
+
+When you resume a stopped task, its claims may have lapsed. Call reservations,
+then recover with the revision and epoch it shows, before the first check.
+
+After release, keep acceptance to one live check of the changed behaviour when
+tests already cover it. Read the result from the page URL (browser_read results
+carry `url`) or an API response, not by searching selectors. A completed release
+closes its task: cite the release job ID, and read it with status and job_id.
+If the live check is impossible, say so and stop.
+
 timeout_seconds is 1–600. Use a distinct stable request_id per check; reuse it
 to reconcile a lost response instead of starting another. One check runs beside
 a running build; a second queues. Guidance, JSON, UI and other non-Rust changes

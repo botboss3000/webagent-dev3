@@ -1545,6 +1545,11 @@ impl Service {
                 result.insert("page_errors".into(), Self::errors_value(state).await);
                 result.extend(read);
                 result.insert("fresh_for_input".into(), Value::from(state.observed));
+                // The app keeps the open conversation in its route, so report it for checks.
+                // A route the rules do not accept is left out; it never fails the read.
+                if let Ok(url) = self.safe_url(state).await {
+                    result.insert("url".into(), Value::from(url));
+                }
                 Value::Object(result)
             }
             "click" | "type" => {
