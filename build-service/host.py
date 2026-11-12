@@ -235,6 +235,22 @@ def rejection_kind(error, text):
 
 
 
+
+def session_name(trusted):
+    """The chat title the runtime attached for the caller, bounded to one plain line."""
+    name=trusted.get("session_name")
+    if not isinstance(name,str):return None
+    name=" ".join(name.split())[:80]
+    return name or None
+
+def task_session(item):
+    """A task's owning session name: the runtime-attached chat title, else session= in its summary."""
+    item=item or {}
+    name=(item.get("provenance")or{}).get("session_name")
+    if name:return name
+    found=re.search(r"session=([^;\]]{1,80})",(item.get("summary")or"")[:200])
+    return found.group(1).strip()if found else None
+
 class CommandOutput:
     """Frame before redacting: incomplete or overlong lines never reach readers."""
     limit = 16384
@@ -5202,7 +5218,13 @@ class Broker:
             if not target:
                 if not creates:raise ValueError("No current broker work; start with a source operation or broker_id=new")
                 if not rid:raise ValueError("Automatic broker creation requires runtime-generated request_id")
-                target=("auto-source-"if selected is None and name in files else"broker-")+hashlib.sha256(canonical([token,name,rid])).hexdigest()[:48];selection="created"
+                # New in-app work is named by the agent: a short outcome slug that is the Broker ID.
+                label=args.get("label")
+                if name in files or args.get("action")!="begin":raise ValueError("No current broker work; start with action=begin, a label and a summary")
+                if not isinstance(label,str)or not re.fullmatch(r"[a-z0-9][a-z0-9-]{6,58}[a-z0-9]",label):raise ValueError("begin requires label: 8-60 lowercase letters, digits and hyphens naming the outcome, e.g. abilities-chart-refresh")
+                if not isinstance(args.get("summary"),str)or not args["summary"].strip():raise ValueError("begin requires summary: one plain sentence describing the outcome")
+                if any(item.get("task_id")==label for item in self.work.values()):raise ValueError("Label "+label+" is already used by another broker task; choose another")
+                target=label;selection="created"
             else:selection="selected"if selected else"continued"
             if receipt_key:
                 if len(state["requests"])>=10000:raise ValueError("Broker binding receipt limit reached; maintenance required")
@@ -5219,7 +5241,7 @@ class Broker:
         if args.get("action")=="begin"and item.get("summary")!=(args.get("summary")or"Isolated source work"):
             raise ValueError("Broker work summary changed; select new work explicitly")
         state["current"]=target;self.scheduler.write_record(path,state)
-        normalized={k:v for k,v in args.items()if k!="broker_id"};normalized["task_id"]=target
+        normalized={k:v for k,v in args.items()if k not in {"broker_id","label"}};normalized["task_id"]=target
         if name in {"file_edit","file_write"}and selection=="created"and normalized.get("expected_inputs_sha256")is None:
             normalized["expected_inputs_sha256"]=item["base_inputs_sha256"]
         if name in files and name not in {"file_edit","file_write"}:normalized.pop("request_id",None)
@@ -5234,7 +5256,7 @@ class Broker:
         if not isinstance(request, dict) or set(request) - {"id", "name", "arguments", "workspace", "timeout_seconds", "trusted"}:
             raise ValueError("invalid broker request")
         trusted, workspace, args = request.get("trusted"), request.get("workspace"), request.get("arguments", {})
-        if not isinstance(trusted, dict) or not {"user_id", "session_id"} <= set(trusted) or set(trusted) - {"user_id", "session_id", "lease_until", "access_fingerprint", "local_caller", "bridge_caller", "broker_scope"}:
+        if not isinstance(trusted, dict) or not {"user_id", "session_id"} <= set(trusted) or set(trusted) - {"user_id", "session_id", "lease_until", "access_fingerprint", "local_caller", "bridge_caller", "broker_scope", "session_name"}:
             raise ValueError("trusted caller required")
         if not isinstance(trusted["user_id"], str) or not 1 <= len(trusted["user_id"]) <= 128 or "\0" in trusted["user_id"]:
             raise ValueError("invalid caller")
@@ -5886,7 +5908,8 @@ class Broker:
                             "workspace": workspace, "summary": summary, "status": "open",
                             "created_at": time.time(), "mode": mode, "key": key, "applies": {},
                             "provenance":{"origin":"operator"if trusted.get("local_caller")or trusted.get("bridge_caller")else"webagent",
-                                "session_id":None if trusted.get("local_caller")or trusted.get("bridge_caller")else workspace}}
+                                "session_id":None if trusted.get("local_caller")or trusted.get("bridge_caller")else workspace,
+                                "session_name":session_name(trusted)}}
                     if mode == "isolated":
                         blob = self._current_release_blob()
                         released = release.entries(blob, context_digest)
@@ -6089,10 +6112,9 @@ class Broker:
                 value = job_progress(job, self._stage_baselines[1], time.time())
                 if job.get("status") == "queued":
                     # Who this job waits behind: task, owning session (session= in its summary) and phase.
-                    summaries = {item.get("task_id"): item.get("summary") or "" for item in self.work.values()}
+                    items = {item.get("task_id"): item for item in self.work.values()}
                     def session(task_id):
-                        found = re.search(r"session=([^;\]]{1,80})", summaries.get(task_id, ""))
-                        return found.group(1).strip() if found else None
+                        return task_session(items.get(task_id))
                     value["queued_behind"] = [{"job_id": other["job_id"], "task_id": other.get("task_id"), "session": session(other.get("task_id")),
                                                "status": other.get("status"), "phase": other.get("phase")}
                                               for other in sorted(self.jobs.values(), key=lambda j: j.get("created_at") or 0)

@@ -116,8 +116,11 @@ class Scheduler:
         item=self.broker.work.get(key)or{}
         return operator_origin(item.get("user_id"),item.get("summary"))
     def session(self,key):
-        """The owning session's name from the task summary provenance (session=<name>), if it gave one."""
-        match=re.search(r"session=([^;\]]{1,80})",(self.broker.work.get(key)or{}).get("summary","")[:200])
+        """The owning session's name: the runtime-attached chat title, else session=<name> in the summary."""
+        item=self.broker.work.get(key)or{}
+        name=(item.get("provenance")or{}).get("session_name")
+        if name:return name
+        match=re.search(r"session=([^;\]]{1,80})",item.get("summary","")[:200])
         return match.group(1).strip()if match else None
     def retention_allowed(self,key):
         """Keep registered task source until explicit verified agent completion; old clearances do not release claims."""

@@ -1525,12 +1525,22 @@ class AutomaticBrokerIdentityTests(unittest.TestCase):
     tearDown=_base.tearDown
     call=_base.call
 
+    def begin_new(self,label,request=None,**kwargs):
+        return self.call("build_work",{"action":"begin","broker_id":"new","label":label,"summary":"Fixture "+label,
+            "request_id":request or label+"-begin",**kwargs})
+
+    def digest(self,begun):
+        tree=Path(begun["workspace_path"]).parent
+        return self.broker.scheduler_digest(self.broker.scheduler_task_snapshot(tree))
+
     def write_new(self,path="docs/first.md",request="automatic-first-write",**kwargs):
-        return self.call("file_write",{"path":path,"content":"first\n","broker_id":"new","request_id":request,**kwargs})
+        begun=self.begin_new(request)
+        return self.call("file_write",{"path":path,"content":"first\n","broker_id":begun["broker_id"],"request_id":request,
+            "expected_inputs_sha256":self.digest(begun),**kwargs})
 
     def test_new_default_switch_and_returned_identity(self):
         first=self.write_new();bid=first["broker_id"]
-        self.assertTrue(first["task_created"])
+        self.assertEqual(bid,"automatic-first-write")
         second=self.write_new("docs/second.md","automatic-second-write")
         self.assertNotEqual(bid,second["broker_id"])
         current=self.call("file_read",{"path":"docs/second.md"})
@@ -1540,11 +1550,21 @@ class AutomaticBrokerIdentityTests(unittest.TestCase):
         self.assertEqual(self.call("file_read",{"path":"docs/first.md"})["broker_id"],bid)
 
     def test_retry_new_after_restart_never_creates_twice(self):
-        args={"path":"docs/first.md","content":"first\n","broker_id":"new","request_id":"automatic-first-write"}
-        first=self.call("file_write",args);count=len(self.broker.work)
+        args={"action":"begin","broker_id":"new","label":"restart-retry","summary":"Restart retry","request_id":"automatic-first-begin"}
+        first=self.call("build_work",args);count=len(self.broker.work)
         state=self.broker.state;self.broker.shutdown();self.broker=fixtures.host.Broker(state,self.runner)
-        self.assertEqual(self.call("file_write",args),first);self.assertEqual(len(self.broker.work),count)
-        with self.assertRaisesRegex(ValueError,"reused"):self.call("file_write",{**args,"content":"different"})
+        self.assertEqual(self.call("build_work",args)["broker_id"],first["broker_id"]);self.assertEqual(len(self.broker.work),count)
+        with self.assertRaisesRegex(ValueError,"reused"):self.call("build_work",{**args,"summary":"different"})
+
+    def test_new_work_needs_a_free_label_and_a_summary(self):
+        count=len(self.broker.work)
+        with self.assertRaisesRegex(ValueError,"start with action=begin"):self.call("file_write",{"path":"README.md","content":"x\n","broker_id":"new","request_id":"automatic-unlabelled-write"})
+        with self.assertRaisesRegex(ValueError,"requires label"):self.call("build_work",{"action":"begin","broker_id":"new","summary":"No label","request_id":"automatic-no-label"})
+        with self.assertRaisesRegex(ValueError,"requires label"):self.begin_new("Bad_Label","automatic-bad-label")
+        with self.assertRaisesRegex(ValueError,"requires summary"):self.call("build_work",{"action":"begin","broker_id":"new","label":"no-summary","request_id":"automatic-no-summary"})
+        self.assertEqual(len(self.broker.work),count)
+        self.begin_new("taken-label","automatic-taken-first")
+        with self.assertRaisesRegex(ValueError,"already used"):self.begin_new("taken-label","automatic-taken-second")
 
     def test_branch_defaults_do_not_redirect_other_branches(self):
         self.trusted["broker_scope"]="branch-one";first=self.write_new()
@@ -1555,8 +1575,11 @@ class AutomaticBrokerIdentityTests(unittest.TestCase):
         self.assertEqual(self.call("file_read",{"path":"docs/second.md"})["broker_id"],second["broker_id"])
 
     def test_trusted_provenance_requires_no_model_session_id(self):
-        self.trusted.pop("local_caller",None);self.trusted["lease_until"]=time.time()+30;first=self.write_new()
-        self.assertEqual(first["broker_context"]["provenance"],{"origin":"webagent","session_id":self.workspace})
+        self.trusted.pop("local_caller",None);self.trusted["lease_until"]=time.time()+30
+        self.trusted["session_name"]="  Abilities   chart\nfix  ";first=self.write_new()
+        self.assertEqual(first["broker_context"]["provenance"],{"origin":"webagent","session_id":self.workspace,"session_name":"Abilities chart fix"})
+        key=next(k for k,item in self.broker.work.items()if item["task_id"]==first["broker_id"])
+        self.assertEqual(self.broker.scheduler.session(key),"Abilities chart fix")
         with self.assertRaises(ValueError):self.write_new("docs/spoof.md","automatic-spoof-write",session_id=str(uuid.uuid4()))
 
     def test_explicit_unknown_closed_and_mixed_aliases_do_not_create(self):
@@ -1583,27 +1606,27 @@ class AutomaticBrokerIdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"send the corrected call with a new request_id"):self.call("file_write",{**args,"expected_inputs_sha256":first["workspace_inputs_sha256"]})
 
     def test_preflight_names_the_unsupported_field_and_accepts_either_selector(self):
-        begun=self.call("build_work",{"action":"begin","broker_id":"new","summary":"Preflight selector","request_id":"automatic-preflight-begin"})
+        begun=self.begin_new("preflight-selector","automatic-preflight-begin")
         bid=begun["broker_id"]
-        written=self.call("file_write",{"path":"docs/preflight.md","content":"x\n","broker_id":bid,"request_id":"automatic-preflight-write","expected_inputs_sha256":begun["workspace_inputs_sha256"]})
+        written=self.call("file_write",{"path":"docs/preflight.md","content":"x\n","broker_id":bid,"request_id":"automatic-preflight-write","expected_inputs_sha256":self.digest(begun)})
         with self.assertRaisesRegex(ValueError,"remove expected_inputs_sha256"):self.call("build_work",{"action":"preflight","broker_id":bid,"expected_inputs_sha256":written["workspace_inputs_sha256"]})
         self.assertEqual(self.call("build_work",{"action":"preflight","broker_id":bid})["task_id"],bid)
         self.assertEqual(self.call("build_work",{"action":"preflight","task_id":bid})["task_id"],bid)
 
     def test_new_write_receipt_replays_after_closure_without_reopening(self):
-        args={"path":"docs/first.md","content":"first\n","broker_id":"new","request_id":"automatic-first-write"}
+        begun=self.begin_new("closure-replay","automatic-closure-begin")
+        args={"path":"docs/first.md","content":"first\n","broker_id":begun["broker_id"],"request_id":"automatic-first-write",
+            "expected_inputs_sha256":self.digest(begun)}
         first=self.call("file_write",args);item=next(i for i in self.broker.work.values()if i["task_id"]==first["broker_id"])
         item["status"]="closed";self.broker._save_work();count=len(self.broker.work)
         again=self.call("file_write",args)
         self.assertEqual(again["broker_id"],first["broker_id"]);self.assertEqual(again["file_request_sha256"],first["file_request_sha256"])
         self.assertEqual(item["status"],"closed");self.assertEqual(len(self.broker.work),count)
 
-    def test_first_read_and_begin_create_without_extra_operation(self):
-        read=self.call("file_list",{"path":"","broker_id":"new","request_id":"automatic-initial-read"})
-        self.assertTrue(read["broker_id"].startswith("broker-"))
-        begun=self.call("build_work",{"action":"begin","broker_id":"new","summary":"Separate outcome","request_id":"automatic-explicit-begin"})
-        self.assertNotEqual(read["broker_id"],begun["broker_id"])
-        self.assertEqual(self.call("build_work",{"action":"review"})["broker_id"],begun["broker_id"])
+    def test_begin_creates_labelled_work_and_becomes_current(self):
+        begun=self.begin_new("separate-outcome","automatic-explicit-begin")
+        self.assertEqual(begun["broker_id"],"separate-outcome")
+        self.assertEqual(self.call("build_work",{"action":"review"})["broker_id"],"separate-outcome")
 
 class FrontendAggregateBudgetTests(unittest.TestCase):
  def test_selected_serial_fixture_budget_is_bounded(self):

@@ -298,14 +298,12 @@ class SchedulerBrokerTests(unittest.TestCase):
                 "expected_inputs_sha256":digest,"request_id":"same-edit-request"})
             self.assertEqual(result["status"],"success")
 
-    def test_implicit_source_write_creates_one_draft_and_replays(self):
-        """Source writes without a task create a stable isolated task, leaving live source untouched."""
+    def test_implicit_source_write_needs_labelled_work_first(self):
+        """A source write with no current task is refused: new work starts with a labelled begin."""
         args={"path":"README.md","content":"implicit draft\n","request_id":"implicit-fixture-write"}
-        result=self.call("file_write",args)
-        self.assertTrue(result["task_created"]);self.assertTrue(result["task_id"].startswith("auto-source-"))
-        self.assertEqual(result,self.call("file_write",args))
+        with self.assertRaisesRegex(ValueError,"start with action=begin"):self.call("file_write",args)
         self.assertEqual(self.runner.blob,fixtures.context(extra={"v3/README.md":"original\n"}))
-        self.assertEqual(len(self.broker.work),1)
+        self.assertEqual(len(self.broker.work),0)
 
     def test_current_state_allows_owned_scope_expansion(self):
         """Creation receipts must not reset ownership to revision zero."""
