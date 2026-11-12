@@ -4621,9 +4621,18 @@ class Broker:
             return call("v3_source_receipt", {"task_id": args.get("task_id"), "request_id": args.get("request_id")})
         if action == "review":
             status = call("v3_build_work", {"action": "status", "task_id": args.get("task_id")})
-            if not status["own"] or status["own"][0]["status"] != "open":
+            if not status["own"]:
                 raise ValueError("open task required for review")
             item = status["own"][0]
+            if item["status"] != "open":
+                # A completed release closes its task; review then reports what was released.
+                record = None
+                if item.get("job_id"):
+                    job = call("v3_worker_job", {"job_id": item["job_id"]})
+                    record = {key: job[key] for key in ("job_id", "operation", "status", "changed_paths", "inputs_sha256",
+                        "finished_at", "failing_tests", "failure_line") if key in job}
+                return {**item, "release": record,
+                        "note": "task closed by its release; cite the release job_id (no source receipt applies)"}
             folder = Path(item["workspace_path"]).parent
             baseline = release.entries((folder / "baseline.tar").read_bytes(), context_digest)
             current = release.entries(release.snapshot(folder, TASK_CONTEXT, context_digest), context_digest)
@@ -5736,7 +5745,7 @@ class Broker:
                 receipt = item.get("applies", {}).get(args["request_id"]) if item else None
                 if not receipt:
                     raise ValueError("source receipt unavailable: receipts cover source writes by their request_id, "
-                                     "not releases; for a ui_deploy or plugin_deploy release cite its job ID")
+                                     "not releases; for any release cite its job ID (review shows a closed task's release)")
                 return dict(receipt)
             if name == "v3_source_prepare":
                 if set(args) != {"task_id", "files", "expected_inputs_sha256"}:

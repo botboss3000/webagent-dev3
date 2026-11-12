@@ -116,6 +116,15 @@ class ConcurrentUIEntryTests(unittest.TestCase):
         intervals=sorted((row["preparation"]["publication_lock_at"],row["finished_at"])for row in rows)
         self.assertLessEqual(intervals[0][1],intervals[1][0])
 
+    def test_review_of_a_released_task_reports_its_release(self):
+        self.change("ui-review-task","ui/probe/a.css","body {}\n","body { color: red; }\n")
+        job=self.finish("ui-review-task");row=self.wait([job])[0]
+        self.assertEqual(row["status"],"completed",row.get("reason"))
+        review=self.call("build_work",{"action":"review","task_id":"ui-review-task"})
+        self.assertNotEqual(review["status"],"open")
+        self.assertEqual((review["release"]["job_id"],review["release"]["status"]),(job,"completed"))
+        self.assertIn("v3/ui/probe/a.css",review["release"]["changed_paths"])
+
     def test_same_file_conflict_is_explicit_before_mutation(self):
         self.change("ui-alpha-task","ui/probe/a.css","body {}\n","body { color: red; }\n")
         self.call("v3_build_work",{"action":"begin","task_id":"ui-conflict-task","summary":"Conflicting fixture","mode":"isolated"})
