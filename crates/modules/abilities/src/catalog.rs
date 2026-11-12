@@ -1632,11 +1632,12 @@ impl<H: Host> Catalog<H> {
         (available, visible)
     }
 
-    /// Whether ability `id` itself supplies tool `name` to this call: it is executable,
-    /// declares the tool, and is active in the call-local selection (saved session state
-    /// or loaded this run) without being off or suppressed. Another ability offering the
-    /// same tool does not count. Tool modes, policy and caller permissions are decided
-    /// separately.
+    /// Whether ability `id` itself can supply tool `name` to this call: it is executable,
+    /// declares the tool, and is neither off for the agent nor suppressed in the call-local
+    /// selection (saved session state or loaded this run). It need not be activated yet: a
+    /// discoverable ability's tools serve it as soon as the model calls them. Another
+    /// ability offering the same tool does not count. Tool modes, policy and caller
+    /// permissions are decided separately.
     pub fn supplies(
         &self,
         id: &str,
@@ -1649,12 +1650,11 @@ impl<H: Host> Catalog<H> {
             return false;
         }
         let state = self.selected_state(visibility, state, loaded);
-        Self::active(&state, id)
-            && self.abilities.iter().any(|ability| {
-                ability.id == id
-                    && ability.tools.iter().any(|tool| tool == name)
-                    && Self::available(ability, visibility, &state)
-            })
+        self.abilities.iter().any(|ability| {
+            ability.id == id
+                && ability.tools.iter().any(|tool| tool == name)
+                && Self::available(ability, visibility, &state)
+        })
     }
 
     pub fn tool_available(

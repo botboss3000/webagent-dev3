@@ -73,9 +73,9 @@ pub(crate) async fn checkout_grant(
     Some(trusted)
 }
 
-/// Whether Codebase Admin is the ability supplying `name` to this call: it declares the
-/// tool, is active for session `sid` or loaded by `run`, and the caller's live access is
-/// admitted and does not deny the ability. The same tool offered by another ability (Core's
+/// Whether Codebase Admin can supply `name` to this call: it declares the tool, is not off
+/// for the agent or suppressed in session `sid` (activation is not needed), and the
+/// caller's live access is admitted and does not deny the ability. The same tool offered by another ability (Core's
 /// `shell`) does not qualify.
 async fn codebase_admin_supplies(app: &App, sid: &str, run: &Value, name: &str) -> Result<bool> {
     if !app.abilities.has_tool(CODEBASE_ADMIN, name) {
@@ -554,9 +554,9 @@ mod tests {
         }
     }
 
-    /// The worker sees the live checkout only when Codebase Admin itself supplies the tool
-    /// to this run: active for the session or loaded by the run, and not denied to the
-    /// caller. The same tool without Codebase Admin active stays in the workspace.
+    /// The worker sees the live checkout only when Codebase Admin can supply the tool to
+    /// this run: not off or suppressed, and not denied to the caller. Activation is not
+    /// needed. Denied, the same tool stays in the workspace.
     #[tokio::test]
     #[cfg_attr(not(administrator_pack), ignore = "needs the Administrator pack")]
     async fn checkout_grant_needs_codebase_admin_to_supply_the_call() {
@@ -575,10 +575,10 @@ mod tests {
             checkout_grant(&app, &sid, &loaded, "read_attachment", None).await,
             None
         );
-        // Codebase Admin neither active nor loaded: the call comes from another ability.
+        // Allowed but neither active nor loaded: a discoverable ability still supplies it.
         assert_eq!(
             checkout_grant(&app, &sid, &other, "shell", Some(revision.clone())).await,
-            Some(revision.clone())
+            granted
         );
         // Loaded by this run, or active in the session.
         assert_eq!(
