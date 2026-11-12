@@ -2,9 +2,10 @@
 //! Python `browser_control` package. Each chat session gets one private Chromium, driven
 //! through chromedriver's WebDriver API by its own long-lived session process
 //! (`webagent-v3 --browser-session`, [`session`]), so recorders and observations survive
-//! between calls. The worker's [`Browsers`] pool owns the session processes: at most two
-//! at once, each pinned to its caller's authority and reaped on lease expiry or three
-//! idle minutes. Signed-out browsing goes through the [`egress`] guard; the API decides
+//! between calls. The worker's [`Browsers`] pool owns the session processes: within the live
+//! per-app and per-user limits, each pinned to its caller's authority and reaped on lease
+//! expiry or idle time. On the server they run in the browser container, reached through
+//! its [`host`] service, with Chromium's own sandbox and each one locked to its folder. Signed-out browsing goes through the [`egress`] guard; the API decides
 //! the authority and approvals, and the browser enforces it again here.
 mod base64;
 pub mod egress;
