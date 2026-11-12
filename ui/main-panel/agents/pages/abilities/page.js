@@ -82,17 +82,36 @@ export async function renderAbilities(host, request, options) {
   // the abilities page or reload the browser page for it.
   let compositionRequest = 0;
   let compositionRetry = null;
+  // The revision stamp of the estimate currently painted. The poll below re-reads
+  // the estimate only when the server stamp differs from it.
+  let compositionStamp = compositionResult?.revision ?? null;
   const refreshComposition = (attempt = 0) => {
     if (host._abilityGeneration !== generation || !overview.isConnected) return;
     const serial = ++compositionRequest;
     request(scope + '/context-composition').then(composition => {
       if (serial !== compositionRequest || host._abilityGeneration !== generation || !overview.isConnected) return;
+      compositionStamp = composition?.revision ?? null;
       // 'busy' means the pointer or keyboard is inspecting the chart; retry a
       // couple of times, then leave it to the poll.
       if (overview.update(composition, abilities, slots, { live: true }) === 'busy' && attempt < 2) {
         clearTimeout(compositionRetry);
         compositionRetry = setTimeout(() => refreshComposition(attempt + 1), 900);
       }
+    }).catch(() => {});
+  };
+  // Poll the cheap revision stamp instead of the estimate: one save-triggered
+  // re-read still happens below, so a change made here is immediate; the stamp
+  // covers configuration saved in another tab or chat.
+  let revisionRequest = 0;
+  const checkComposition = (force = false) => {
+    if (host._abilityGeneration !== generation || !overview.isConnected) return;
+    const serial = ++revisionRequest;
+    request(scope + '/context-composition/revision').then(payload => {
+      if (serial !== revisionRequest || host._abilityGeneration !== generation || !overview.isConnected) return;
+      const revision = payload?.revision ?? null;
+      if (!force && (revision === null || revision === compositionStamp)) return;
+      compositionStamp = revision;
+      refreshComposition();
     }).catch(() => {});
   };
   // Keep the legend's inventory counts in step with a save before the chart
@@ -452,20 +471,23 @@ export async function renderAbilities(host, request, options) {
   host.replaceChildren(page);
   window.lucide?.createIcons({ nodes: [...page.querySelectorAll('[data-lucide]:not(.lucide)')] });
   filter();
-  // LIVE-CONTEXT-CHART: a slow poll catches configuration saved in another tab or
-  // chat, and returning to the tab re-reads at once. It skips hidden tabs and pages
-  // that are no longer mounted; the chart itself refuses to repaint under a pointer.
+  // LIVE-CONTEXT-CHART: poll the cheap revision stamp every two seconds while the
+  // tab is visible and the chart is on screen, and re-read the estimate only when
+  // the stamp moved. Hidden tabs and unmounted pages poll nothing; returning to the
+  // tab re-reads at once; the chart itself refuses to repaint under a pointer.
   host._abilityPoll = setInterval(() => {
     if (host._abilityGeneration !== generation || !overview.isConnected ||
         document.visibilityState !== 'visible' || !overview.getClientRects().length) return;
-    refreshComposition();
-  }, 15000);
+    checkComposition();
+  }, 2000);
   host._abilityVisibilityHandler = () => {
     if (host._abilityGeneration !== generation || !overview.isConnected) {
       document.removeEventListener('visibilitychange', host._abilityVisibilityHandler);
       return;
     }
-    if (document.visibilityState === 'visible' && overview.getClientRects().length) refreshComposition();
+    if (document.visibilityState === 'visible' && overview.getClientRects().length) {
+      checkComposition(true);
+    }
   };
   document.addEventListener('visibilitychange', host._abilityVisibilityHandler);
 }

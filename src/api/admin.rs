@@ -189,6 +189,23 @@ pub(crate) async fn agent_ability_catalog(State(app): State<App>, Path(id): Path
 pub(crate) fn estimated_tokens(text: &str) -> usize {
     text.chars().count().div_ceil(4)
 }
+/// Revision stamp over every input the composition estimate reads: the catalog
+/// guidance version, this agent's ability visibility revision, the policy
+/// revision and the prompt-slot rows. The abilities overview polls it often and
+/// rebuilds the estimate only when it moves, so it must cover every input.
+pub(crate) fn composition_revision(
+    catalog_version: &str,
+    visibility: &Value,
+    policy: &Value,
+    prompt_slots: (i64, i64, i64),
+) -> String {
+    let (slots, updated, revisions) = prompt_slots;
+    format!(
+        "{catalog_version}:{}:{}:{slots}:{updated}:{revisions}",
+        visibility["revision"].as_u64().unwrap_or(0),
+        policy["revision"].as_u64().unwrap_or(0)
+    )
+}
 pub(crate) async fn agent_context_composition(
     State(app): State<App>,
     Path(id): Path<String>,
@@ -201,6 +218,12 @@ pub(crate) async fn agent_context_composition(
         .get("policy")
         .await?
         .unwrap_or_else(policy_default);
+    let revision = composition_revision(
+        app.abilities.version(),
+        &visibility,
+        &policy,
+        app.store.prompt_slot_stamp().await?,
+    );
     let mut prompt_sources = vec![json!({"label":"Base instructions",
         "tokens":estimated_tokens(provider::DEFAULT_INSTRUCTIONS)})];
     for slot in slots {
@@ -239,11 +262,34 @@ pub(crate) async fn agent_context_composition(
     Ok(Json(json!({
         "tokens":prompt_tokens + skill_tokens + tool_tokens,
         "estimated":true,
+        "revision":revision,
         "breakdown":{"system_prompt":{"tokens":prompt_tokens},
             "skills":{"tokens":skill_tokens},"tools":{"tokens":tool_tokens}},
         "sources":{"system_prompt":prompt_sources,"skills":skill_sources,
             "tools":tool_sources}
     })))
+}
+/// Cheap composition revision for the overview poll: the same stamp the full
+/// estimate carries, computed without building it. Manager authority only, like
+/// the estimate itself.
+pub(crate) async fn agent_context_composition_revision(
+    State(app): State<App>,
+    Path(id): Path<String>,
+) -> Api {
+    let app = admin_agent_view(&app, &id).await?;
+    let visibility = agent_abilities(&app).await?;
+    let policy = app
+        .store
+        .get("policy")
+        .await?
+        .unwrap_or_else(policy_default);
+    let revision = composition_revision(
+        app.abilities.version(),
+        &visibility,
+        &policy,
+        app.store.prompt_slot_stamp().await?,
+    );
+    Ok(Json(json!({"revision":revision})))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -450,4 +496,55 @@ async fn require_agent_operator(app: &App, agent: &str) -> Result<(), ApiError> 
         return Err(ApiError(StatusCode::NOT_FOUND, "Agent not found".into()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod composition_revision_tests {
+    use super::*;
+
+    #[test]
+    fn stamp_moves_with_each_estimated_input_and_is_stable_otherwise() {
+        let visibility = json!({"revision":3});
+        let policy = json!({"revision":7});
+        let base = composition_revision("catalog-a", &visibility, &policy, (2, 100, 9));
+        assert_eq!(
+            base,
+            composition_revision("catalog-a", &visibility, &policy, (2, 100, 9))
+        );
+        for changed in [
+            composition_revision("catalog-b", &visibility, &policy, (2, 100, 9)),
+            composition_revision("catalog-a", &json!({"revision":4}), &policy, (2, 100, 9)),
+            composition_revision("catalog-a", &visibility, &json!({"revision":8}), (2, 100, 9)),
+            composition_revision("catalog-a", &visibility, &policy, (3, 100, 9)),
+            composition_revision("catalog-a", &visibility, &policy, (2, 101, 9)),
+            composition_revision("catalog-a", &visibility, &policy, (2, 100, 10)),
+        ] {
+            assert_ne!(base, changed);
+        }
+        assert_eq!(
+            composition_revision("c", &json!({}), &json!({}), (0, 0, 0)),
+            "c:0:0:0:0:0"
+        );
+    }
+
+    #[tokio::test]
+    async fn stored_prompt_slots_move_the_stamp() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let visibility = app.store.agent_abilities().await.unwrap();
+        let policy = app
+            .store
+            .get("policy")
+            .await
+            .unwrap()
+            .unwrap_or_else(policy_default);
+        let stamp =
+            |slots| composition_revision(app.abilities.version(), &visibility, &policy, slots);
+        let before = stamp(app.store.prompt_slot_stamp().await.unwrap());
+        assert_eq!(before, stamp(app.store.prompt_slot_stamp().await.unwrap()));
+        app.store
+            .upsert_prompt_slot("stamp-probe", "PROMPT", None, None, None, 0)
+            .await
+            .unwrap();
+        assert_ne!(before, stamp(app.store.prompt_slot_stamp().await.unwrap()));
+    }
 }

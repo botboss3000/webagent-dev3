@@ -511,6 +511,20 @@ impl Store {
         }
         Ok(slots)
     }
+    /// Cheap aggregate over the same prompt rows the composition reads, without
+    /// decrypting or sizing any content. It is the prompt-slot part of the
+    /// composition revision stamp polled by the abilities overview.
+    pub async fn prompt_slot_stamp(&self) -> Result<(i64, i64, i64)> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS slots, COALESCE(MAX(updated_at),0) AS updated,
+                    COALESCE(SUM(revision),0) AS revisions
+             FROM agent_prompts WHERE agent_id=?",
+        )
+        .bind(&self.agent_id)
+        .fetch_one(&self.agent_pool)
+        .await?;
+        Ok((row.get("slots"), row.get("updated"), row.get("revisions")))
+    }
     /// Read an optional named prompt slot only inside the bound agent authority.
     pub async fn get_prompt_slot(&self, name: &str) -> Result<Option<Value>> {
         Self::validate_prompt_slot_name(name)?;

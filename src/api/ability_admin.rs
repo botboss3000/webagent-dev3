@@ -817,6 +817,14 @@ pub(crate) async fn composition(
     authority(&app, &identity, &id, true).await?;
     agent_context_composition(State(app), Path(id)).await
 }
+pub(crate) async fn composition_revision(
+    State(app): State<App>,
+    Extension(identity): Extension<Value>,
+    Path(id): Path<String>,
+) -> Api {
+    authority(&app, &identity, &id, true).await?;
+    agent_context_composition_revision(State(app), Path(id)).await
+}
 pub(crate) async fn skill_content(
     State(app): State<App>,
     Extension(identity): Extension<Value>,

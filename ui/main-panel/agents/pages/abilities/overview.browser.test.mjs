@@ -40,7 +40,7 @@ const data = () => ({
   abilities:abilityRows(),
 });
 const composition = tokens => ({
-  tokens, estimated:true,
+  tokens, estimated:true, revision:'stamp-' + revision,
   breakdown:{system_prompt:{tokens:400},skills:{tokens:300},tools:{tokens:tokens-700}},
   sources:{
     system_prompt:[{label:'Base instructions',tokens:400}],
@@ -53,6 +53,7 @@ const request = async (url, method = 'GET', body) => {
   // The effective read carries level_id as a query string.
   const path = url.split('?')[0];
   if (method === 'GET') {
+    if (path.endsWith('/context-composition/revision')) return {revision: 'stamp-' + revision};
     if (path.endsWith('/context-composition')) {
       compositionReads += 1;
       return clone(composition(compositionReads === 1 ? 1000 : 1400));
@@ -75,6 +76,7 @@ const request = async (url, method = 'GET', body) => {
 };
 window.fixture = {
   requests,
+  bump: () => { revision += 1; },
   reads: () => compositionReads,
   abilityReads: () => requests.filter(item => item.method === 'GET' && /\\/abilities$/.test(item.url)).length,
   ready: renderAbilities(document.getElementById('host'), request, {agentId:'a'})
@@ -172,6 +174,30 @@ test('a repaint waits while the chart is focused, then catches up', async () => 
       'the focused chart must keep its current bars');
     await page.evaluate(() => document.querySelector('[data-context-composition-chart]').blur());
     await waitForChart(page, '1,400 tokens');
+  } finally {
+    await browser?.close();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('a revision poll re-reads the estimate only when the stamp moves', async () => {
+  const server = await serve();
+  let browser;
+  try {
+    const {chromium} = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+    browser = await chromium.launch({executablePath: process.env.CHROMIUM_PATH || '/snap/bin/chromium', headless: true, args: ['--no-sandbox']});
+    const page = await browser.newPage();
+    page.setDefaultTimeout(8000);
+    await page.goto('http://127.0.0.1:' + server.address().port + '/');
+    await waitForChart(page, '1,000 tokens');
+    // Two poll ticks with an unchanged stamp must not re-read the estimate.
+    await page.waitForTimeout(2600);
+    assert.equal(await page.evaluate(() => window.fixture.reads()), 1);
+    // A moved stamp is re-read once, and the following ticks stay quiet.
+    await page.evaluate(() => window.fixture.bump());
+    await waitForChart(page, '1,400 tokens');
+    await page.waitForTimeout(2200);
+    assert.equal(await page.evaluate(() => window.fixture.reads()), 2);
   } finally {
     await browser?.close();
     await new Promise(resolve => server.close(resolve));

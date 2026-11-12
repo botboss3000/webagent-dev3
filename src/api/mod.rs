@@ -300,6 +300,10 @@ pub(super) fn router(app: App) -> Router {
             "/agents/{id}/context-composition",
             get(ability_admin::composition),
         )
+        .route(
+            "/agents/{id}/context-composition/revision",
+            get(ability_admin::composition_revision),
+        )
         .route("/agents/{id}/slots", get(ability_admin::slots))
         .route(
             "/agents/{id}/slots/{name}",
