@@ -415,7 +415,8 @@ def release_mounts(previous, root, asset_root=None, layout=None):
         mount = dict(mount)
         target = mount.get("Target")
         if target == "/live-v3":
-            # The retired in-app promotion broker's frozen-source mount; nothing reads it.
+            # The retired in-app promotion broker's frozen-source mount. Older API containers
+            # read their abilities from it; they read the release snapshot below instead.
             continue
         if api and asset_root is not None and target in legacy_assets:
             continue
@@ -446,6 +447,15 @@ def release_mounts(previous, root, asset_root=None, layout=None):
         mounts.append({"Type": "bind", "Source": str(asset_root),
                        "Target": "/opt/v3/assets", "ReadOnly": True})
         seen.add("/opt/v3/assets")
+    if api and "/opt/v3/plugins/abilities" not in seen:
+        # The API decides tool authority (build lease renewal, policy pages) from the same
+        # read-only ability snapshot the loop runs.
+        source = root / mapping["/opt/v3/plugins/abilities"]
+        if not source.is_dir() or source.is_symlink():
+            raise ValueError("release mount input unavailable: /opt/v3/plugins/abilities")
+        mounts.append({"Type": "bind", "Source": str(source),
+                       "Target": "/opt/v3/plugins/abilities", "ReadOnly": True})
+        seen.add("/opt/v3/plugins/abilities")
     required = ({"/opt/v3/assets" if asset_root is not None else "/opt/v3/ui"} if api
                 else {"/opt/v3/plugins/abilities"} | ({"/opt/v3/assets"} if asset_root is not None else set()))
     if not required <= seen:

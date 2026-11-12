@@ -865,6 +865,10 @@ class BuildTests(unittest.TestCase):
         by_target = {item["Target"]: item for item in mounted}
         # The retired promotion mount is dropped from the next container.
         self.assertNotIn("/live-v3", by_target)
+        # The API reads the release ability snapshot the loop runs.
+        self.assertEqual(str(root / "v3/plugins/abilities"),
+                         by_target["/opt/v3/plugins/abilities"]["Source"])
+        self.assertTrue(by_target["/opt/v3/plugins/abilities"]["ReadOnly"])
         self.assertEqual("/checkout", by_target["/code"]["Source"])
         self.assertEqual("/state", by_target["/state"]["Source"])
         loop = {"Mounts": [{"Type": "bind", "Source": "/old/abilities",
@@ -913,7 +917,7 @@ class BuildTests(unittest.TestCase):
             release.stage_assets(root, second, blob, host.context_digest)
 
         snapshot = self.state / "release-fixture"
-        (snapshot / "v3").mkdir(parents=True)
+        (snapshot / "v3/plugins/abilities").mkdir(parents=True)
         api = {"Mounts": [
             {"Type": "bind", "Source": "/old", "Target": "/live-v3"},
             {"Type": "bind", "Source": "/checkout", "Target": "/code"},

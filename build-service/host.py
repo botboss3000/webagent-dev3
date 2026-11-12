@@ -2249,9 +2249,11 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                                           _config_module.layout(CONFIG))
             if name in TARGETS:
                 env = [value for value in config.get("Env", [])
-                       if not value.startswith(("V3_UI_ROOT=", "V3_SHARED_UI_ROOT="))]
+                       if not value.startswith(("V3_UI_ROOT=", "V3_SHARED_UI_ROOT=",
+                                                "V3_ABILITIES_ROOT="))]
                 env.extend(("V3_UI_ROOT=/opt/v3/assets/current/v3/ui",
-                            "V3_SHARED_UI_ROOT=/opt/v3/assets/current/ui"))
+                            "V3_SHARED_UI_ROOT=/opt/v3/assets/current/ui",
+                            "V3_ABILITIES_ROOT=/opt/v3/plugins/abilities"))
                 config["Env"] = env
                 job=getattr(self.job_context,"job",None)or{}
                 if not re.fullmatch(r"[a-f0-9-]{36}",job.get("job_id","")):raise ValueError("Attributable release container required")
