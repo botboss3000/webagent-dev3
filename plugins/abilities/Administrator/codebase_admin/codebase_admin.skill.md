@@ -77,20 +77,22 @@ attempt, and **Broker Release ID** for a publication. One independently deployab
 outcome normally shares a Broker ID across files, edits, checks and builds.
 Start separate work for an unrelated outcome, even in the same conversation.
 
-When the tool schema exposes `broker_id`, omit it to continue current work,
-pass `"new"` to create independent work within that same source operation,
-or pass a returned Broker ID to select earlier work. Never invent an ID.
-Source edits use this automatic selection. Ordinary reads without a selector keep their published/container behavior, including background reads and search filters. Pass the returned Broker ID when reading or searching the private draft.
+Start each outcome with `build_work` `action: "begin"`, a `label` (the task's
+name and Broker ID, a lowercase hyphenated slug such as `abilities-chart-refresh`)
+and a one-sentence `summary`; the `build_work` tool skill has the rules. Source
+edits have no automatic task: with no current work they are refused until you
+begin one. Afterwards omit `broker_id` to continue current work, use `"new"` with
+`begin` for a separate outcome, or pass a returned Broker ID to select earlier
+work. Never invent an ID.
+Ordinary reads without a selector keep their published/container behavior, including background reads and search filters. Pass the returned Broker ID when reading or searching the private draft.
 The tool result returns the resolved ID and input digest. Continue using that
-digest for edits to existing source; automatic identity does not bypass stale
-input, ownership, authorization, testing or publication checks. Retries use the
-same operation/request identity and must not create another work item.
+digest for edits to existing source; it does not bypass stale input, ownership,
+authorization, testing or publication checks. Retries use the same
+operation/request identity and must not create another work item.
 
 `task_id` is a compatibility alias on older tool schemas; never provide both
-selectors. If `broker_id` is not yet exposed, source edit/write calls without
-`task_id` already create/reuse an isolated draft and return its `task_id`.
-Use the returned alias for related reads and edits. No explicit begin or
-session-ID lookup is required. Explicit runtime/workspace paths retain their
+selectors. No session-ID lookup is required.
+Explicit runtime/workspace paths retain their
 own tools and policy; automatic source work never authorizes direct live edits.
 
 Expanded activity tool details display available broker provenance and receipts.

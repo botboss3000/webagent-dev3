@@ -1,6 +1,6 @@
 {
   "name": "build_work",
-  "description": "Manage isolated broker work. Broker ID selects one independently deployable outcome; omit to continue, new to separate, or reuse a returned ID. Broker Job ID identifies execution; Broker Release ID identifies publication. Session identity and request receipts are runtime owned. Ownership and publication gates remain enforced.",
+  "description": "Manage isolated broker work. Broker ID selects one independently deployable outcome: begin new work with a label and summary, omit to continue it, or reuse a returned ID. Broker Job ID identifies execution; Broker Release ID identifies publication. Session identity and request receipts are runtime owned. Ownership and publication gates remain enforced.",
   "effect": "write",
   "policy_ceiling": "ask",
   "default_access": {
@@ -48,9 +48,15 @@
         "pattern": "^[A-Za-z0-9_-]{8,80}$",
         "description": "Deprecated compatibility alias for broker_id. Do not supply both."
       },
+      "label": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]{6,58}[a-z0-9]$",
+        "description": "Required with begin: the new task's name and Broker ID, a lowercase hyphenated slug naming the outcome (e.g. abilities-chart-refresh). Unique; pick another if refused."
+      },
       "summary": {
         "type": "string",
-        "maxLength": 200
+        "maxLength": 200,
+        "description": "Required with begin: one plain sentence describing the outcome, shown in full on the Broker card. No chat or session IDs; the runtime attaches them."
       },
       "expected_inputs_sha256": {
         "type": "string",
@@ -184,7 +190,7 @@
       "broker_id": {
         "type": "string",
         "pattern": "^(new|[A-Za-z0-9_-]{8,80})$",
-        "description": "Omit to continue current broker work; new creates independent work; a returned Broker ID selects existing work. Runtime attaches chat identity. Never invent an ID."
+        "description": "Omit to continue current broker work; new with begin (label and summary required) creates independent work; a returned Broker ID selects existing work. Runtime attaches chat identity. Never invent an ID."
       }
     },
     "required": [

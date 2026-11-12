@@ -55,7 +55,7 @@ pub fn task_name(summary: &str) -> String {
         .and_then(|rest| rest.split_once(':'))
         .filter(|(id, _)| !id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-'))
         .map_or(name, |(_, rest)| rest.trim());
-    name.chars().take(120).collect()
+    name.chars().take(200).collect()
 }
 
 /// The task a known job belongs to, if the record has it.

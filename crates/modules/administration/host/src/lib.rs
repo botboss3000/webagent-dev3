@@ -102,6 +102,10 @@ pub trait AdministrationHost: Sync {
         name: &'a str,
         trusted: Option<Value>,
     ) -> Pending<'a, Option<Value>>;
+    /// The session's current chat title, if it has one.
+    fn session_title<'a>(&'a self, _sid: &'a str) -> Pending<'a, Result<Option<String>>> {
+        Box::pin(async { Ok(None) })
+    }
     /// Send `name` to the protected build broker.
     fn broker<'a>(
         &'a self,

@@ -14,6 +14,23 @@ export function minutes(seconds) {
   return (Math.floor(Math.max(0, seconds || 0) / 6) / 10).toFixed(1);
 }
 
+/** A task's summary as its card title: clamped to two lines, with "See more" to expand
+ * it when it is longer. */
+function summaryText(text) {
+  const wrap = el('div', '');
+  const body = el('strong', 'broker-card-title broker-card-clamp', text);
+  const more = el('button', 'broker-card-more', 'See more'); more.type = 'button'; more.hidden = true;
+  more.onclick = e => {
+    e.stopPropagation();
+    const open = body.classList.toggle('broker-card-clamp');
+    more.textContent = open ? 'See more' : 'See less';
+  };
+  wrap.append(body, more);
+  // Measure once the card is in the page; a summary that fits shows no button.
+  requestAnimationFrame(() => { more.hidden = body.scrollHeight <= body.clientHeight + 1; });
+  return wrap;
+}
+
 /** The chip or row icon for a task row: spinner, check, error or warning. */
 export function taskIcon(task) {
   if (task?.warning) return 'warning';
@@ -111,7 +128,10 @@ export function renderCard(task, detail, hold = () => {}, {pageLink = false} = {
   const checks = jobs.filter(job => job !== main);
   const offset = (detail.now || Date.now() / 1000) - Date.now() / 1000;
   const head = el('div', 'broker-card-head');
-  head.append(icon(taskIcon(detail.task)), el('strong', 'broker-card-title', task.name || task.task_id));
+  const heading = el('div', 'broker-card-title-wrap');
+  heading.append(summaryText(task.name || task.task_id));
+  if (task.name) heading.append(el('small', 'broker-card-label', task.task_id));
+  head.append(icon(taskIcon(detail.task)), heading);
   box.append(head);
   if (!main) { box.append(el('p', 'broker-note', 'No job yet.')); return {box, tick() {}}; }
   const snapshot = main.snapshot || {}, live = ACTIVE.includes(main.status);

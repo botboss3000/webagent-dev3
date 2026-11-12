@@ -246,6 +246,12 @@ impl AdministrationHost for Host<'_> {
     fn run<'a>(&'a self, run_id: &'a str) -> Pending<'a, Result<Value>> {
         Box::pin(self.0.run(run_id))
     }
+    fn session_title<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Option<String>>> {
+        Box::pin(async move {
+            let session = self.0.store.get(&crate::key("session", sid)).await?;
+            Ok(session.and_then(|session| session["title"].as_str().map(str::to_owned)))
+        })
+    }
     /// Decisions use the caller's own live membership (`store.live_access`) and each
     /// tool's ability as the loaded set.
     fn access<'a>(

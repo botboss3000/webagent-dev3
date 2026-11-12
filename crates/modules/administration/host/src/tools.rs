@@ -191,7 +191,17 @@ async fn broker_call(
     if let Some(object) = forwarded.as_object_mut() {
         object.retain(|_, value| !value.is_null());
     }
-    let identity = trusted(host.actor(), sid, &json!(fingerprint));
+    let mut identity = trusted(host.actor(), sid, &json!(fingerprint));
+    // New work records the chat's title as its owning session on the Builds page.
+    if action == Some("begin") {
+        if let Some(title) = host
+            .session_title(sid)
+            .await?
+            .filter(|t| !t.trim().is_empty())
+        {
+            identity["session_name"] = json!(title);
+        }
+    }
     host.broker(name, &forwarded, sid, Some(identity), cancel)
         .await
 }

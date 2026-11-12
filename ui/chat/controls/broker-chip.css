@@ -23,9 +23,13 @@
   font-size: 12px;
   line-height: 1.4;
 }
-.broker-card-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.broker-card-head { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 6px; }
 .broker-card-head svg { width: 14px; height: 14px; }
-.broker-card-title { overflow-wrap: anywhere; }
+.broker-card-title { overflow-wrap: anywhere; display: block; }
+.broker-card-title-wrap { min-width: 0; }
+.broker-card-clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.broker-card-more { background: none; border: 0; padding: 2px 0; color: var(--brand); text-decoration: underline; cursor: pointer; font: inherit; font-size: 12px; }
+.broker-card-label { display: block; opacity: .7; overflow-wrap: anywhere; }
 .broker-job-title { font-weight: 600; margin-bottom: 2px; -webkit-touch-callout: none; user-select: none; }
 .broker-summary, .broker-note, .broker-stale { color: var(--fg-2); margin: 2px 0; }
 .broker-card p { margin: 4px 0; }
