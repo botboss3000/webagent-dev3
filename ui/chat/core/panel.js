@@ -521,9 +521,10 @@ async function submit(text,clearInput=false,{componentId=''}={}){
     throw error;
   }finally{submitting=false;await refresh();void loadAllowance();}
 }
-// Sends the current composer draft on form submission.
+// Sends the current composer draft on form submission; an empty draft with no attachments is ignored without a notice.
 // A host that supports sign-in handles "/login" itself; it is never sent to the agent.
-$('composer').onsubmit=guard(()=>{const text=$('chat-input').value.trim();if(onLogin&&text.toLowerCase()==='/login'){$('chat-input').value='';saveDraft(session,'');return onLogin();}return submit(text,true);});
+const sendComposer=guard(()=>{const text=$('chat-input').value.trim();if(onLogin&&text.toLowerCase()==='/login'){$('chat-input').value='';saveDraft(session,'');return onLogin();}return submit(text,true);});
+$('composer').onsubmit=event=>{const text=$('chat-input').value.trim();if(!text&&!media.count){event?.preventDefault();return;}return sendComposer(event);};
 // Continue is a new user turn, not an automatic retry of an exhausted run.
 $('chat-continue-btn').onclick=guard(()=>submit('Continue'));
 // Enter behavior follows chat_common.composer.enter_behavior; touch devices are detected once per adoption.
