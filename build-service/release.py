@@ -15,6 +15,8 @@ import uuid
 # Task-only troubleshooting data; never part of an image/release candidate.
 INSPECTION_CONTEXT = ("v3/data/user_data/admin", "v3/data/agent_data/shared_default")
 MAX_INSPECTION_FILE = 256 * 1024 * 1024
+# Changed source files in one release (a whole-folder move touches every file in it).
+MAX_CHANGED_PATHS = 1024
 # Gate settings moved to crates/modules/engine/gates (2026-10-29). Stored task baselines
 # and the release deployed before then still carry these copies: they stay readable,
 # are never snapshotted again and are dropped from every new candidate.
@@ -327,7 +329,7 @@ def candidate(base_blob, task_blob, live_blob, validate, *, allow_empty=False, s
     changed = [name for name in sorted(set(base) | set(task))
                if name not in RETIRED_CONTEXT and not name.startswith("ui/")
                and source_differs(base.get(name), task.get(name))]
-    if (not changed and not allow_empty) or len(changed) > 256 or any(
+    if (not changed and not allow_empty) or len(changed) > MAX_CHANGED_PATHS or any(
             not name.startswith("v3/") or name.startswith("v3/data/")
             for name in changed):
         raise ValueError("isolated task has no bounded V3 source changes")
@@ -366,7 +368,7 @@ def compensating_candidate(before_blob,after_blob,live_blob,owned_paths,validate
     """Invert only one receipt's changed source onto latest source, preserving later independent edits."""
     before,_=candidate_entries(before_blob,validate);after,_=candidate_entries(after_blob,validate)
     paths=sorted(set(owned_paths))
-    if not paths or len(paths)>256 or any(not path.startswith("v3/")or path.startswith("v3/data/")for path in paths):raise ValueError("Bounded receipt-owned source paths required")
+    if not paths or len(paths)>MAX_CHANGED_PATHS or any(not path.startswith("v3/")or path.startswith("v3/data/")for path in paths):raise ValueError("Bounded receipt-owned source paths required")
     reverse=dict(after)
     for path in paths:
         if path in before:reverse[path]=before[path]

@@ -4750,7 +4750,7 @@ class Broker:
         if plan.get("refusal"):raise ValueError(plan["refusal"])
         if "expected_paths" in args:
             paths=args["expected_paths"]
-            if not isinstance(paths,list)or not 1<=len(paths)<=256 or any(not isinstance(p,str)or not 1<=len(p)<=512 for p in paths):raise ValueError("Bounded expected_paths list required")
+            if not isinstance(paths,list)or not 1<=len(paths)<=release.MAX_CHANGED_PATHS or any(not isinstance(p,str)or not 1<=len(p)<=512 for p in paths):raise ValueError("Bounded expected_paths list required")
             expected={p if p.startswith("v3/")else "v3/"+p for p in paths}
             if expected!=set(plan["changed_paths"]):
                 raise ValueError("Release paths differ from expected_paths: unexpected "+json.dumps(sorted(set(plan["changed_paths"])-expected)[:16])+", missing "+json.dumps(sorted(expected-set(plan["changed_paths"]))[:16]))

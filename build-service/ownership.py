@@ -7,6 +7,8 @@ import fnmatch,contextlib,hashlib,json,os,posixpath,re,sqlite3,stat,subprocess,t
 from pathlib import Path
 
 ACTIVE={"owned","validating","orphaned","takeover_pending"}
+# Scopes one task may hold or change at once: a path per changed file plus module scopes.
+MAX_SCOPES=1024
 COMPONENT_CRATES={
     "context-assembly":("context-service","context-assembly","context-contracts"),
     "background-dispatch":("background-service","background-dispatch","background-contracts"),
@@ -316,7 +318,7 @@ class Ownership:
         return self.get(value["id"],db)
     def acquire(self,task,owner,revision,epoch,scopes,request):
         """Acquire the entire requested scope atomically, retaining old claims on blocked expansion."""
-        if not scopes or len(scopes)>256 or len(set(scopes))!=len(scopes)or any(not isinstance(s,str)or not(s.startswith("path:")or s.startswith("module:"))or len(s)>300 for s in scopes):
+        if not scopes or len(scopes)>MAX_SCOPES or len(set(scopes))!=len(scopes)or any(not isinstance(s,str)or not(s.startswith("path:")or s.startswith("module:"))or len(s)>300 for s in scopes):
             raise ValueError("Bounded canonical scope required")
         for s in scopes:
             if s.startswith("path:"):source_path(s[5:])
@@ -421,7 +423,7 @@ class Ownership:
     # @code-index {"version":1,"feature":"owner-claim-release","aliases":["release reservations","unblock engine"],"purpose":"Release exactly held owner claims without deleting source; fence old epochs and retain recovery receipts.","span_lines":17,"configuration":{"status":"not_applicable","rationale":"Ownership fencing and authenticated scope release are fixed authority invariants."}}
     def release_scopes(self,task,owner,revision,epoch,scopes,reason,request):
         """Release explicit owner claims, fence old epochs and retain the unpublished draft."""
-        if not isinstance(scopes,list)or not 1<=len(scopes)<=256 or any(not isinstance(s,str)for s in scopes)or len(set(scopes))!=len(scopes):raise ValueError("Explicit unique held scopes required")
+        if not isinstance(scopes,list)or not 1<=len(scopes)<=MAX_SCOPES or any(not isinstance(s,str)for s in scopes)or len(set(scopes))!=len(scopes):raise ValueError("Explicit unique held scopes required")
         if not isinstance(reason,str)or not 1<=len(reason.encode())<=500:raise ValueError("Bounded release reason required")
         def operation(db):
             """Atomically audit the released set; no completion or transfer is implied."""
@@ -451,7 +453,7 @@ class Ownership:
 
     def release_deployed_scopes(self,task,owner,revision,epoch,scopes,evidence,request):
         """Drop deployed write reservations; freeing the last one completes the verified task."""
-        if not isinstance(scopes,list)or not scopes or len(scopes)>256 or len(scopes)!=len(set(scopes)):raise ValueError("Explicit held scopes required")
+        if not isinstance(scopes,list)or not scopes or len(scopes)>MAX_SCOPES or len(scopes)!=len(set(scopes)):raise ValueError("Explicit held scopes required")
         if not isinstance(evidence,dict)or not evidence.get("release_id")or not evidence.get("commit"):raise ValueError("Verified deployed source/commit required")
         def operation(db):
             """A completed publication no longer needs source exclusivity."""
