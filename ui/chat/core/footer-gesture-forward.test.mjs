@@ -258,3 +258,12 @@ test('the stylesheet disables the browser pan on the element the row scroller pi
   assert.match(rule[0], /#chat-pill-stats-strip/);
   assert.match(rule[0], /touch-action:\s*none/);
 });
+
+test('the composer rows contain their overscroll so a drag cannot chain to the document', async () => {
+  const css = await readFile(new URL('../chat.css', import.meta.url), 'utf8');
+  const blocks = [...css.matchAll(/#composer:focus-within[^{]*\{[^}]*\}/g)].map(match => match[0]).join('\n');
+  // A gesture the document receives is what Android hides the keyboard for, so a drag that reaches
+  // a row's edge must stay inside that row.
+  assert.match(blocks, /overscroll-behavior:\s*contain/);
+  assert.match(blocks, /overscroll-behavior-y:\s*contain/);
+});

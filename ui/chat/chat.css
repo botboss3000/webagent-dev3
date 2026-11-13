@@ -170,6 +170,16 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
   touch-action: none;
 }
 
+/* A drag that reaches a row's edge must not chain to the document: the gesture the root receives
+   is what Android Chrome reacts to by hiding the soft keyboard. The strip keeps the shared
+   overscroll-behavior-x: none, so only its vertical axis is contained here. */
+#composer:focus-within :is(#chat-pill-stats-row, #chat-footer-row) {
+  overscroll-behavior: contain;
+}
+#composer:focus-within #chat-pill-stats-strip {
+  overscroll-behavior-y: contain;
+}
+
 /* Theme tokens keep durable delivery choices legible in docked and embedded chat. */
 .followup-delivery{font-size:12px;margin-top:4px;color:var(--fg-2);display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;justify-content:flex-end}
 .followup-delivery p{margin:0;overflow-wrap:anywhere}
