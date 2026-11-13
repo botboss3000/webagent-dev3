@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"ui-vibration","aliases":["touch haptics","button vibration"],"purpose":"Shared optional touch feedback. Config: ui/vibrate.json -> enabled and duration_ms; loaded once per page, adopted on reload.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
+// Shared optional touch feedback.
 import {createTouchVibration} from '../chat/widget/window.js';
 let config = null;
 

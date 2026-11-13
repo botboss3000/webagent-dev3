@@ -12,7 +12,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-// @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Linked compatibility fixture delegates projection to the same planner and materializer as the registered service; the host retains compatible transport execution.","span_lines":20,"configuration":{"status":"not_applicable","rationale":"Provider identity and compatibility reconstruction are fixed protocol invariants."}}
+// Linked compatibility fixture delegates projection to the same planner and materializer as the registered service; the host retains compatible transport execution.
 /// Compatibility fixture for the linked planner; production translation is a registered component.
 /// Calls provider-projection::project, shared materialize_owned and host compatible_body; starts no network request.
 #[cfg(test)]

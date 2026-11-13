@@ -1,5 +1,5 @@
 //! Version-one provider projection references. The host owns content, authority and transport.
-// @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Shared provider wire types and reference-only validation; materialize reconstructs host-owned content without accepting routing authority.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Reference coverage, provider identity, replay rules and transport authority are fixed protocol invariants."}}
+// Shared provider wire types and reference-only validation; materialize reconstructs host-owned content without accepting routing authority.
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

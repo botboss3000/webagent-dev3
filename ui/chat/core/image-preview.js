@@ -4,7 +4,7 @@
 // re-render still work; the dialog mounts where the chat lives (its own root),
 // not blindly in document.body, and carries the critical layout inline so it is
 // visible even if the chat stylesheet is not in scope.
-// @code-index {"version":1,"feature":"chat-image-preview","aliases":["image preview","attachment zoom","thumbnail lightbox"],"purpose":"Shows composer and message image attachments in a dismissible full-screen viewer Trigger config: none","span_lines":70,"configuration":{"status":"static","references":[],"opportunities":[]}}
+// Shows composer and message image attachments in a dismissible full-screen viewer Trigger config: none
 
 let _activePreview = null;
 const _boundRoots = new WeakSet();

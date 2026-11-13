@@ -27,7 +27,7 @@ const MAX_FRAME: usize = 16 * 1024 * 1024;
 
 pub use crate::provider::{ProviderId, ProviderSelection};
 
-// @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Map host-selected providers into the pure projection contract without granting endpoint or credential selection.","span_lines":28,"configuration":{"status":"not_applicable","rationale":"Provider identity and compatibility reconstruction are fixed protocol invariants."}}
+// Map host-selected providers into the pure projection contract without granting endpoint or credential selection.
 /// Bind the projection contract to the already selected installation provider.
 /// No component result may select another provider, endpoint or credential family.
 pub fn projection_id(provider: ProviderId) -> webagent_provider_contracts::ProviderIdV1 {

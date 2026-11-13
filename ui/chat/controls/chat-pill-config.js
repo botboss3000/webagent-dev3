@@ -1,5 +1,5 @@
 // V2 schema adapter with V3-specific incremental layout and focus-preserving reconciliation.
-// @code-index {"version":1,"feature":"chat-ui-config","aliases":["chat configuration","chat pill layout"],"purpose":"Normalizes chat pill settings and renders configured composer controls Config: ui/chat/chat.json -> chat_common, chat_desktop, chat_mobile, chat_widget, chat_display.default.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_display/default","/chat_common","/chat_desktop","/chat_mobile","/chat_widget"],"profile_overrides":true}],"opportunities":[]}}
+// Normalizes chat pill settings and renders configured composer controls Config: ui/chat/chat.json -> chat_common, chat_desktop, chat_mobile, chat_widget, chat_display.default.
 'use strict';
 
 // Canonical chat-pill schema and renderer.

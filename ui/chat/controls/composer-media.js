@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-composer-media","aliases":["chat footer","composer media","voice capture"],"purpose":"Locates composer attachments and dictation behavior Config: ui/chat/chat.json -> chat_limits.attachments.{max_file_size_mb,max_per_message}; chat_common.{active_footer,idle_footer}.chat_pill.controls.{attach,mic,mic_send}. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_limits/attachments","/chat_common/active_footer/chat_pill/controls","/chat_common/idle_footer/chat_pill/controls"],"profile_overrides":true}],"opportunities":[]}}
+// Locates composer attachments and dictation behavior Config: ui/chat/chat.json -> chat_limits.attachments.{max_file_size_mb,max_per_message};…
 import {createAudioCapture,encodeBytes} from './audio-capture.js';
 import {openChatImagePreview} from '../core/image-preview.js';
 // V2 attachment staging and composer dictation; the server recognizes speech locally.

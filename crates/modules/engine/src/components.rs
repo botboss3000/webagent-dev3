@@ -1,6 +1,6 @@
 //! Engine-owned engine discovery, activation and disposable process generations.
 //! Catalog entries never grant tools or authority; only registered contracts run.
-// @code-index {"version":1,"feature":"engine-components","aliases":["live engine modules","context service","component catalog"],"purpose":"Engine catalog, control fencing and disposable generation lifecycle. Config: config/engine-components.json seeds initial disabled defaults; data-root config/engine-components.json owns live revision/disabled. Registered engine descriptors own bounded execution limits and runtime requirements; pure result contracts never grant authority.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"config/engine-components.json","pointers":["/disabled"]},{"path":"plugins/engine/context-assembly/component.json","pointers":["/limits/max_request_bytes","/limits/max_response_bytes","/limits/timeout_ms","/runtime_requirements"]},{"path":"plugins/engine/background-dispatch/component.json","pointers":["/limits/max_request_bytes","/limits/max_response_bytes","/limits/timeout_ms","/runtime_requirements"]}],"opportunities":[]}}
+// Engine catalog, control fencing and disposable generation lifecycle.
 use crate::context::{
     accounting as context_accounting, assembly as context_assembly,
     compaction as context_compaction, input as context_input,
@@ -26,7 +26,7 @@ pub const ASSETS: &str = "context-assets";
 pub const CAPABILITY: &str = "capability-context";
 pub const PROJECTION: &str = "provider-projection";
 pub const WORKING_COMPONENTS: [&str; 5] = [CONTEXT, BACKGROUND, ASSETS, CAPABILITY, PROJECTION];
-// @code-index {"version":1,"feature":"context-component-registration","purpose":"Register bounded context preparation operations and reviewed build closures. Config: plugins/engine context-assets, capability-context and provider-projection descriptors own execution limits; host retains authority.","span_lines":30,"configuration":{"status":"configured","references":[{"path":"plugins/engine/context-assets/component.json","pointers":["/limits/max_request_bytes","/limits/max_response_bytes","/limits/timeout_ms","/runtime_requirements"]},{"path":"plugins/engine/capability-context/component.json","pointers":["/limits/max_request_bytes","/limits/max_response_bytes","/limits/timeout_ms","/runtime_requirements"]},{"path":"plugins/engine/provider-projection/component.json","pointers":["/limits/max_request_bytes","/limits/max_response_bytes","/limits/timeout_ms","/runtime_requirements"]}],"opportunities":[]},"aliases":[]}
+// Register bounded context preparation operations and reviewed build closures.
 /// Bind newly registered operations to exact reviewed build closures; declarations cannot choose commands.
 fn context_registration(
     operation: &str,

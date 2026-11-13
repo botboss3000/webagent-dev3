@@ -1831,7 +1831,7 @@ impl<H: Host> Catalog<H> {
         text
     }
 
-    // @code-index {"version":1,"feature":"live-capability-sources","aliases":["live skill refresh","permanent selections"],"purpose":"Resolve registered current sources and conversation identities for capability composition. Caller policy and encrypted visibility remain separate authority; fixed path/source safety is not configurable.","span_lines":80,"configuration":{"status":"not_applicable","references":[],"opportunities":[],"rationale":"Live encrypted policy/visibility and validated catalog state own authority. This group maps those inputs to safe selectors/current bytes; another JSON switch would duplicate or bypass those checks."}}
+    // Resolve registered current sources and conversation identities for capability composition.
     /// Project conversation-selected identities into a call-local activation view.
     /// This never changes saved session state or overrides Off, suppression,
     /// executable presence, tool modes, policy, or caller permission checks.

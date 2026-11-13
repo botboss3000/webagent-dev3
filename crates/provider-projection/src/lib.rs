@@ -7,7 +7,7 @@ use webagent_provider_contracts::{
 /// The service reports the package version attested by its registered descriptor.
 pub const IMPLEMENTATION_VERSION: &str = "0.1.1";
 
-// @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Plan native provider profiles and ordered source groups; Calls provider-contracts validate_request and validate_result.","span_lines":60,"configuration":{"status":"not_applicable","rationale":"Reference coverage, provider identity, replay rules and transport authority are fixed protocol invariants."}}
+// Plan native provider profiles and ordered source groups; Calls provider-contracts validate_request and validate_result.
 /// Plan installed provider formatting without files, credentials, network or side effects.
 /// The shared host contract validates ordered source coverage before any reconstruction.
 pub fn project(request: &RequestV1) -> Result<ResultV1> {

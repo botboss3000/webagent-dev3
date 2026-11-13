@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown config"],"purpose":"Loads component settings from ui/chat/controls/session-dropdown/session-dropdown.json -> common and desktop/mobile/widget overlays; live adoption through the chat.json poll.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"ui/chat/controls/session-dropdown/session-dropdown.json","pointers":["/common","/desktop","/mobile","/widget"]}],"opportunities":[]}}
+// Loads component settings from ui/chat/controls/session-dropdown/session-dropdown.json -> common and desktop/mobile/widget overlays; live adoption through the chat.json poll.
 let documentConfig = {}, agentOverlay = {};
 /** Merge component objects without letting absent surface settings erase common values. */
 function merge(base, overlay) {

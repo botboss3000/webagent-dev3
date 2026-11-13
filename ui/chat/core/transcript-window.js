@@ -1,5 +1,5 @@
 'use strict';
-// @code-index {"version":1,"feature":"chat-transcript-window","aliases":["transcript windowing","chat history window","saved chat position"],"purpose":"Renders only a window of a session's messages around the reader's saved position or the latest message, loading and dropping rows as the reader scrolls. Config: ui/chat/chat.json -> chat_common.transcript_window. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides. The saved position is a browser-local preference.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_common/transcript_window"],"profile_overrides":true}],"opportunities":[]}}
+// Renders only a window of a session's messages around the reader's saved position or the latest message, loading and dropping rows as the reader scrolls.
 /** Keeps the transcript DOM to a bounded slice of the session's messages. render(item) draws one row; paint() runs once after a batch. */
 export function mountTranscriptWindow({scroller,inner,getProfile,render,paint,storage=globalThis.localStorage}) {
   const abort=new AbortController();

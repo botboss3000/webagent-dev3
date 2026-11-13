@@ -120,7 +120,7 @@ fn runtime_input_hashes(
     }
     Ok(files)
 }
-// @code-index {"version":1,"feature":"automation-drop-in","aliases":["standalone automation","automation ability plugin"],"purpose":"Fixed automation_v1 identity, bounded schemas and content-addressed native artifact resolution.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Native host registration, activation identity and confined execution are authority invariants; settings cannot bypass them."}}
+// Fixed automation_v1 identity, bounded schemas and content-addressed native artifact resolution.
 /// Fixed native bridge registration; a package cannot request another host service.
 pub const AUTOMATION_TOOLS: &[&str] = &[
     "list_event_sources",

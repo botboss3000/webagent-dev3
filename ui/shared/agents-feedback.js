@@ -1,7 +1,7 @@
 import { mountControlFeedback } from '../chat/widget/window.js';
 import { requestTouchVibration } from './vibrate.js';
 
-// @code-index {"version":1,"feature":"agents-control-feedback","aliases":["Agents clickable controls","Agents touch haptics"],"purpose":"Owns Agents cards, tabs, Config, Identity, Primary Models, Abilities and Sessions actions plus their body portals. Config: ui/vibrate.json -> enabled, duration_ms. Selectors follow actual custom click handlers; editing and pointer-only charts stay quiet.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
+// Owns Agents cards, tabs, Config, Identity, Primary Models, Abilities and Sessions actions plus their body portals.
 export const AGENT_ACTIONS = [
   'button', '[role="button"]', '[role="menuitem"]', '[role="switch"]', '[role="checkbox"]', '[role="radio"]', 'summary', 'a[href]',
   'input[type="checkbox"]', 'input[type="radio"]', 'label:has(input[type="checkbox"]), label:has(input[type="radio"])',

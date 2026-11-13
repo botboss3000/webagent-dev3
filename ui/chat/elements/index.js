@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-tool-activity","aliases":["session activity groups","activity journal view"],"purpose":"Coordinates chat elements and authorized private activity. Config: ui/chat/chat.json -> chat_common.chat_elements and show_activity_groups, merged with desktop/mobile/widget profiles.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_common/show_activity_groups","/chat_common/chat_elements"],"profile_overrides":true}],"opportunities":[]}}
+// Coordinates chat elements and authorized private activity.
 import {activityRows} from '../core/activity.js';
 import {createMiniTranscript} from './mini-transcript/index.js';
 import {createActivityGroup,activityLabel} from './activity-group/index.js';

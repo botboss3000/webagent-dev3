@@ -1,9 +1,9 @@
 import { createAppViewDispatcher, appViewUrl, credentialRequest } from './app-control.js';
 import { openRegistrationDialog } from './registration.js';
 import {createMainNotes} from '../elements/main-notes/index.js';
-// @code-index {"version":1,"feature":"chat-panel","aliases":["chat panel","conversation panel","session transcript"],"purpose":"Locates the v3 chat panel lifecycle, transcript, and run controls Config: data/config/chat.json -> chat_display.default and chat_common.composer.keyboard_focus. Profile keys merge chat_common with chat_desktop/chat_mobile/chat_widget overrides. Touch feedback: ui/vibrate.json -> enabled, duration_ms; gestures stay client-owned.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_display/default","/chat_common/composer/keyboard_focus"],"profile_overrides":true},{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
+// Locates the v3 chat panel lifecycle, transcript, and run controls Config: data/config/chat.json -> chat_display.default and chat_common.composer.keyboard_focus.
 // V2-style panel/client separation; markup and message protocol remain V3.
-// @code-index {"version":1,"feature":"chat-screen-panel-routing","aliases":["conversation display lifecycle"],"purpose":"Panel feeds selected-session runs/live messages to display policy from data/config/chat.json -> chat_common.screen_display and surface overrides; history loading is excluded.","span_lines":3,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/screen_display"],"profile_overrides":true}],"opportunities":[]}}
+// Panel feeds selected-session runs/live messages to display policy from data/config/chat.json -> chat_common.screen_display and surface overrides; history loading is excluded.
 import {mountScreenAwake} from '../../shared/screen-awake.js';
 import {mountChatControlFeedback} from '../controls/feedback.js';
 import {mountSharedChat} from '../controls/shared-chat.js';

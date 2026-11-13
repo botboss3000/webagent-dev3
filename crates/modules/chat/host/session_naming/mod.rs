@@ -2,11 +2,22 @@
 use crate::*;
 pub(crate) mod config;
 /// Validate administrator naming settings with the same parser used by queued jobs.
-pub(crate) fn validate_settings(value:&Value)->Result<()> {webagent_chat::naming::validate_settings_at(value,None,&crate::live_assets::fallback_directory())}
-pub(crate) use webagent_chat::naming::{fallback, validate_source_settings};
+pub(crate) fn validate_settings(value: &Value) -> Result<()> {
+    webagent_chat::naming::validate_settings_at(
+        value,
+        None,
+        &crate::live_assets::fallback_directory(),
+    )
+}
 use webagent_chat::naming::clean;
+pub(crate) use webagent_chat::naming::{fallback, validate_source_settings};
 fn dispatch(session: &Value, state: &model_selection::FailoverState) -> Result<Value> {
-    webagent_chat::naming::dispatch_at(session, state, None, &crate::live_assets::fallback_directory())
+    webagent_chat::naming::dispatch_at(
+        session,
+        state,
+        None,
+        &crate::live_assets::fallback_directory(),
+    )
 }
 /// Recheck naming claim, participation, shared-chat access, model authorization and global shutdown before using a private title result.
 async fn permitted(app: &App, session: &Value, run: &Value) -> bool {
@@ -20,31 +31,61 @@ async fn permitted(app: &App, session: &Value, run: &Value) -> bool {
             )
             .await
             .unwrap_or(false)
-        && app.store.participation_allows_run(run).await.unwrap_or(false)
-        && crate::shared_chat::live_access(&app.store,run["requester_user_id"].as_str().unwrap_or(app.store.current_user_id()),
-            run["session_id"].as_str().unwrap_or(""),run["agent_id"].as_str().unwrap_or("shared_default")).await.is_ok_and(|access|access.admitted())
+        && app
+            .store
+            .participation_allows_run(run)
+            .await
+            .unwrap_or(false)
+        && crate::shared_chat::live_access(
+            &app.store,
+            run["requester_user_id"]
+                .as_str()
+                .unwrap_or(app.store.current_user_id()),
+            run["session_id"].as_str().unwrap_or(""),
+            run["agent_id"].as_str().unwrap_or("shared_default"),
+        )
+        .await
+        .is_ok_and(|access| access.admitted())
         && app.run_model_authorized(run).await
 }
 /// Reuse the matching pinned naming role or claim-fence a freshly authorized selection plan without changing the chat run's plan.
 async fn prepare_plan(app: &App, session: &Value) -> Result<Value> {
     let settings = config::for_session(session)?;
     let existing = serde_json::from_value::<model_selection::SelectionPlan>(
-        session["auto_naming"]["system_plan"].clone()).ok();
-    if existing.as_ref().is_some_and(|plan| plan.role == settings.model_role) {
+        session["auto_naming"]["system_plan"].clone(),
+    )
+    .ok();
+    if existing
+        .as_ref()
+        .is_some_and(|plan| plan.role == settings.model_role)
+    {
         return Ok(session.clone());
     }
-    let agent = session["agent_id"].as_str().ok_or_else(|| anyhow!("Missing naming agent"))?;
-    let mut plan = app.store.model_catalog().await?.resolve_role(agent, settings.model_role)?;
+    let agent = session["agent_id"]
+        .as_str()
+        .ok_or_else(|| anyhow!("Missing naming agent"))?;
+    let mut plan = app
+        .store
+        .model_catalog()
+        .await?
+        .resolve_role(agent, settings.model_role)?;
     app.pin_model_plan(&mut plan).await?;
-    if !app.store.naming_pin_plan(session["id"].as_str().unwrap_or(""),
-        session["auto_naming"]["claim"].as_str().unwrap_or(""), &json!(plan)).await? {
+    if !app
+        .store
+        .naming_pin_plan(
+            session["id"].as_str().unwrap_or(""),
+            session["auto_naming"]["claim"].as_str().unwrap_or(""),
+            &json!(plan),
+        )
+        .await?
+    {
         return Err(anyhow!("Naming claim unavailable"));
     }
     let mut pinned = session.clone();
     pinned["auto_naming"]["system_plan"] = json!(plan);
     Ok(pinned)
 }
-// @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Naming caller prepares provider projection before admission. Config: crates/modules/configuration/prompts -> session_naming (snapshotted per job); engine controls/descriptor fence dispatch.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"config/engine-components.json","pointers":["/disabled","/revision"]},{"path":"plugins/engine/provider-projection/component.json","pointers":["/interface_version","/implementation_version","/limits"]},{"path":"crates/modules/configuration/prompts","pointers":["/session_naming/prompt","/session_naming/model_role","/session_naming/attempts_per_job","/session_naming/retry_delay_ms","/session_naming/request_timeout_seconds","/session_naming/recovery_retry_delay_seconds","/session_naming/max_job_attempts"]}],"opportunities":[]}}
+// Naming caller prepares provider projection before admission.
 /// Generate a private title from the job's pinned settings and safe failover plan.
 /// Calls CallDraft::prepare before dispatch admission; rechecks naming/model/component authority before the first network poll.
 async fn generate(app: &App, original: &Value) -> Result<String> {
@@ -80,23 +121,29 @@ async fn generate(app: &App, original: &Value) -> Result<String> {
                     let cancel = cancel.clone();
                     // Projection may use a disposable component; finish IPC before dispatch admission.
                     let engine_revision = crate::engine_components::catalog()?.revision.clone();
-                    let engine_controls = crate::engine_components::controls(&app.store.root)?.revision;
+                    let engine_controls =
+                        crate::engine_components::controls(&app.store.root)?.revision;
                     let prepared = crate::provider::CallDraft::new(
                         selection,
                         input.clone(),
                         Vec::new(),
                         &request_session,
                         &settings.prompt,
-                    ).prepare(&app.store.root, &cancel).await?;
+                    )
+                    .prepare(&app.store.root, &cancel)
+                    .await?;
                     let dispatch_guard = app.gate.lock().await;
                     if !permitted(app, session, &run).await {
                         return Err(anyhow!("Naming authority unavailable"));
                     }
                     if cancel.is_cancelled()
                         || crate::engine_components::catalog()?.revision != engine_revision
-                        || crate::engine_components::controls(&app.store.root)?.revision != engine_controls
+                        || crate::engine_components::controls(&app.store.root)?.revision
+                            != engine_controls
                         || !crate::engine_components::component_available(
-                            &app.store.root, crate::engine_components::PROJECTION)
+                            &app.store.root,
+                            crate::engine_components::PROJECTION,
+                        )
                     {
                         return Err(anyhow!("Provider component or authority changed"));
                     }
@@ -113,7 +160,8 @@ async fn generate(app: &App, original: &Value) -> Result<String> {
                             immediate = Some(result);
                         }
                         std::task::Poll::Ready(())
-                    }).await;
+                    })
+                    .await;
                     drop(dispatch_guard);
                     match immediate {
                         Some(result) => result,
@@ -121,7 +169,8 @@ async fn generate(app: &App, original: &Value) -> Result<String> {
                     }
                 };
                 tokio::pin!(operation);
-                let deadline = tokio::time::sleep(Duration::from_secs(settings.request_timeout_seconds));
+                let deadline =
+                    tokio::time::sleep(Duration::from_secs(settings.request_timeout_seconds));
                 tokio::pin!(deadline);
                 let mut authority = tokio::time::interval(Duration::from_secs(1));
                 let result = loop {
@@ -182,17 +231,22 @@ async fn work(app: App, sid: String, recovery: bool) -> Result<()> {
     let Some(session) = app.store.naming_claim(&sid, recovery).await? else {
         return Ok(());
     };
-    let mut app=app;
-    let requester=session["auto_naming"]["requester_user_id"].as_str().unwrap_or(app.store.current_user_id()).to_owned();
-    app.chat_actor=Some(requester.clone());
-    let access=crate::shared_chat::resolve(&app,&sid,&requester).await?;
-    if !access.can_write() {return Err(anyhow!("Naming requester unavailable"));}
-    app.chat_access=Some(access);
+    let mut app = app;
+    let requester = session["auto_naming"]["requester_user_id"]
+        .as_str()
+        .unwrap_or(app.store.current_user_id())
+        .to_owned();
+    app.chat_actor = Some(requester.clone());
+    let access = crate::shared_chat::resolve(&app, &sid, &requester).await?;
+    if !access.can_write() {
+        return Err(anyhow!("Naming requester unavailable"));
+    }
+    app.chat_access = Some(access);
     let claim = session["auto_naming"]["claim"]
         .as_str()
         .ok_or_else(|| anyhow!("Missing naming claim"))?
         .to_owned();
-    let operation = app.session_operation(&sid,app.stop.child_token(),generate(&app, &session));
+    let operation = app.session_operation(&sid, app.stop.child_token(), generate(&app, &session));
     tokio::pin!(operation);
     let mut renew = tokio::time::interval(Duration::from_secs(10));
     let result = loop {
@@ -289,13 +343,16 @@ mod acceptance_tests {
         let (root, mut app) = fixture().await;
         let seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let capture = seen.clone();
-        let router = Router::new().route("/responses", post(move |Json(_): Json<Value>| {
-            let capture = capture.clone();
-            async move {
-                capture.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                std::future::pending::<Json<Value>>().await
-            }
-        }));
+        let router = Router::new().route(
+            "/responses",
+            post(move |Json(_): Json<Value>| {
+                let capture = capture.clone();
+                async move {
+                    capture.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    std::future::pending::<Json<Value>>().await
+                }
+            }),
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
@@ -312,7 +369,10 @@ mod acceptance_tests {
         work(app.clone(), sid.clone(), false).await.unwrap();
         assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(saved(&app, &sid).await["auto_naming"]["stage"], "exhausted");
-        assert_eq!(saved(&app, &sid).await["title"], "New: Timeout keeps fallback");
+        assert_eq!(
+            saved(&app, &sid).await["title"],
+            "New: Timeout keeps fallback"
+        );
         assert_eq!(app.store.chat_snapshot(&sid).await.unwrap(), before);
         server.abort();
     }
@@ -320,7 +380,11 @@ mod acceptance_tests {
     fn write_invalid(root: &std::path::Path) -> std::path::PathBuf {
         let prompts = root.join(webagent_configuration::prompts::PROMPTS);
         std::fs::create_dir_all(prompts.join("session_naming")).unwrap();
-        std::fs::write(prompts.join("session_naming/prompt.md"), "private-invalid-marker").unwrap();
+        std::fs::write(
+            prompts.join("session_naming/prompt.md"),
+            "private-invalid-marker",
+        )
+        .unwrap();
         let path = prompts.join("session_naming.json");
         std::fs::write(&path, br#"{"max_job_attempts":0}"#).unwrap();
         path
@@ -331,8 +395,16 @@ mod acceptance_tests {
         std::fs::create_dir_all(prompts.join("session_naming")).unwrap();
         let mut value = serde_json::to_value(settings).unwrap();
         let prompt = value.as_object_mut().unwrap().remove("prompt").unwrap();
-        std::fs::write(prompts.join("session_naming/prompt.md"), prompt.as_str().unwrap()).unwrap();
-        std::fs::write(prompts.join("session_naming.json"), serde_json::to_vec(&value).unwrap()).unwrap();
+        std::fs::write(
+            prompts.join("session_naming/prompt.md"),
+            prompt.as_str().unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            prompts.join("session_naming.json"),
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
     }
     /// Verify queued settings stay pinned through capped retries while a later job observes new configuration.
     #[tokio::test]
@@ -346,20 +418,32 @@ mod acceptance_tests {
         let sid = create(&app, None).await;
         let mut run = accept(&app, &sid, "Keep my fallback").await;
         finish(&app, &mut run).await;
-        assert_eq!(saved(&app, &sid).await["auto_naming"]["config"]["prompt"], "First naming prompt");
+        assert_eq!(
+            saved(&app, &sid).await["auto_naming"]["config"]["prompt"],
+            "First naming prompt"
+        );
         settings.prompt = "Second naming prompt".into();
         settings.max_job_attempts = 5;
         write_settings(root.path(), &settings);
         let first = app.store.naming_claim(&sid, false).await.unwrap().unwrap();
         assert_eq!(first["auto_naming"]["config"]["max_job_attempts"], 2);
         let before = now();
-        app.store.naming_finish(&sid, first["auto_naming"]["claim"].as_str().unwrap(), None).await.unwrap();
+        app.store
+            .naming_finish(&sid, first["auto_naming"]["claim"].as_str().unwrap(), None)
+            .await
+            .unwrap();
         let mut failed = saved(&app, &sid).await;
         assert!(failed["auto_naming"]["retry_at"].as_u64().unwrap() >= before + 7);
         failed["auto_naming"]["retry_at"] = json!(0);
-        app.store.put(&format!("session:{sid}"), &failed).await.unwrap();
+        app.store
+            .put(&format!("session:{sid}"), &failed)
+            .await
+            .unwrap();
         let second = app.store.naming_claim(&sid, true).await.unwrap().unwrap();
-        app.store.naming_finish(&sid, second["auto_naming"]["claim"].as_str().unwrap(), None).await.unwrap();
+        app.store
+            .naming_finish(&sid, second["auto_naming"]["claim"].as_str().unwrap(), None)
+            .await
+            .unwrap();
         let exhausted = saved(&app, &sid).await;
         assert_eq!(exhausted["auto_naming"]["stage"], "exhausted");
         assert_eq!(exhausted["auto_naming"]["attempts"], 2);
@@ -369,10 +453,19 @@ mod acceptance_tests {
         let next = create(&app, None).await;
         let mut run = accept(&app, &next, "New configuration").await;
         finish(&app, &mut run).await;
-        assert_eq!(saved(&app, &next).await["auto_naming"]["config"]["prompt"], "Second naming prompt");
+        assert_eq!(
+            saved(&app, &next).await["auto_naming"]["config"]["prompt"],
+            "Second naming prompt"
+        );
         let reopened = Store::open(root.path()).await.unwrap();
-        assert_eq!(reopened.get(&format!("session:{sid}")).await.unwrap().unwrap()
-            ["auto_naming"]["stage"], "exhausted");
+        assert_eq!(
+            reopened
+                .get(&format!("session:{sid}"))
+                .await
+                .unwrap()
+                .unwrap()["auto_naming"]["stage"],
+            "exhausted"
+        );
     }
     /// Verify a configured naming role has its own durable plan and stale claims cannot replace it.
     #[tokio::test]
@@ -388,12 +481,21 @@ mod acceptance_tests {
         let claimed = app.store.naming_claim(&sid, false).await.unwrap().unwrap();
         let pinned = prepare_plan(&app, &claimed).await.unwrap();
         assert_eq!(pinned["auto_naming"]["system_plan"]["role"], "standard");
-        assert_eq!(saved(&app, &sid).await["auto_naming"]["system_plan"],
-            pinned["auto_naming"]["system_plan"]);
+        assert_eq!(
+            saved(&app, &sid).await["auto_naming"]["system_plan"],
+            pinned["auto_naming"]["system_plan"]
+        );
         assert_eq!(run["system_selection_plan"], system);
-        assert!(!app.store.naming_pin_plan(&sid, "stale", &pinned["auto_naming"]["system_plan"]).await.unwrap());
-        assert_eq!(dispatch(&pinned, &model_selection::FailoverState::default()).unwrap()
-            ["selection_plan"]["role"], "standard");
+        assert!(!app
+            .store
+            .naming_pin_plan(&sid, "stale", &pinned["auto_naming"]["system_plan"])
+            .await
+            .unwrap());
+        assert_eq!(
+            dispatch(&pinned, &model_selection::FailoverState::default()).unwrap()
+                ["selection_plan"]["role"],
+            "standard"
+        );
     }
     /// Verify legacy queued work gains a settings snapshot and an expired final lease cannot publish a late title.
     #[tokio::test]
@@ -403,43 +505,73 @@ mod acceptance_tests {
         let mut run = accept(&app, &sid, "Recover bounded naming").await;
         finish(&app, &mut run).await;
         let mut queued = saved(&app, &sid).await;
-        queued["auto_naming"].as_object_mut().unwrap().remove("config");
+        queued["auto_naming"]
+            .as_object_mut()
+            .unwrap()
+            .remove("config");
         queued["auto_naming"]["attempts"] = json!(2);
-        app.store.put(&format!("session:{sid}"), &queued).await.unwrap();
+        app.store
+            .put(&format!("session:{sid}"), &queued)
+            .await
+            .unwrap();
         let claimed = app.store.naming_claim(&sid, false).await.unwrap().unwrap();
         assert_eq!(claimed["auto_naming"]["attempts"], 3);
         assert_eq!(claimed["auto_naming"]["config"]["max_job_attempts"], 3);
         let mut expired = claimed.clone();
         expired["auto_naming"]["lease_until"] = json!(0);
-        app.store.put(&format!("session:{sid}"), &expired).await.unwrap();
+        app.store
+            .put(&format!("session:{sid}"), &expired)
+            .await
+            .unwrap();
         assert!(app.store.naming_claim(&sid, true).await.unwrap().is_none());
         assert_eq!(saved(&app, &sid).await["auto_naming"]["stage"], "exhausted");
         assert!(app.store.naming_candidates(true).await.unwrap().is_empty());
-        assert!(!app.store.naming_finish(&sid, claimed["auto_naming"]["claim"].as_str().unwrap(), Some("Late title")).await.unwrap());
+        assert!(!app
+            .store
+            .naming_finish(
+                &sid,
+                claimed["auto_naming"]["claim"].as_str().unwrap(),
+                Some("Late title")
+            )
+            .await
+            .unwrap());
     }
 
     /// Verify a participation generation change withdraws naming authority permanently from the old claim.
     #[tokio::test]
     async fn deactivation_cancels_naming_claim_and_reactivation_cannot_publish_late_title() {
-        let (_root,app)=fixture().await;
-        let sid=create(&app,None).await;
-        let mut run=accept(&app,&sid,"NAMING-SENTINEL").await;
-        finish(&app,&mut run).await;
-        let claimed=app.store.naming_claim(&sid,false).await.unwrap().unwrap();
-        let naming_run=dispatch(&claimed,&model_selection::FailoverState::default()).unwrap();
-        assert_eq!(naming_run["requester_user_id"],run["requester_user_id"]);
-        assert_eq!(naming_run["participation_generation"],run["participation_generation"]);
-        let claim=claimed["auto_naming"]["claim"].as_str().unwrap();
-        app.store.set_participation(&sid,app.store.current_user_id(),false,0,"off").await.unwrap();
-        app.store.set_participation(&sid,app.store.current_user_id(),true,1,"on").await.unwrap();
-        assert!(!permitted(&app,&claimed,&naming_run).await);
-        assert!(!app.store.naming_finish(&sid,claim,Some("Late private title")).await.unwrap());
-        assert!(app.store.naming_claim(&sid,true).await.unwrap().is_none());
-        work(app.clone(),sid.clone(),true).await.unwrap();
-        let saved=saved(&app,&sid).await;
-        assert_eq!(saved["auto_naming"]["stage"],"cancelled");
+        let (_root, app) = fixture().await;
+        let sid = create(&app, None).await;
+        let mut run = accept(&app, &sid, "NAMING-SENTINEL").await;
+        finish(&app, &mut run).await;
+        let claimed = app.store.naming_claim(&sid, false).await.unwrap().unwrap();
+        let naming_run = dispatch(&claimed, &model_selection::FailoverState::default()).unwrap();
+        assert_eq!(naming_run["requester_user_id"], run["requester_user_id"]);
+        assert_eq!(
+            naming_run["participation_generation"],
+            run["participation_generation"]
+        );
+        let claim = claimed["auto_naming"]["claim"].as_str().unwrap();
+        app.store
+            .set_participation(&sid, app.store.current_user_id(), false, 0, "off")
+            .await
+            .unwrap();
+        app.store
+            .set_participation(&sid, app.store.current_user_id(), true, 1, "on")
+            .await
+            .unwrap();
+        assert!(!permitted(&app, &claimed, &naming_run).await);
+        assert!(!app
+            .store
+            .naming_finish(&sid, claim, Some("Late private title"))
+            .await
+            .unwrap());
+        assert!(app.store.naming_claim(&sid, true).await.unwrap().is_none());
+        work(app.clone(), sid.clone(), true).await.unwrap();
+        let saved = saved(&app, &sid).await;
+        assert_eq!(saved["auto_naming"]["stage"], "cancelled");
         assert!(saved["auto_naming"]["source"].is_null());
-        assert_ne!(saved["title"],"Late private title");
+        assert_ne!(saved["title"], "Late private title");
     }
 
     use crate::runtime_tests::fixture;
@@ -506,9 +638,16 @@ mod acceptance_tests {
 
         for (id, terminal) in [(&sid, &mut run), (&locked, &mut locked_run)] {
             finish(&app, terminal).await;
-            assert_eq!(app.run(terminal["id"].as_str().unwrap()).await.unwrap()["status"], "completed");
+            assert_eq!(
+                app.run(terminal["id"].as_str().unwrap()).await.unwrap()["status"],
+                "completed"
+            );
             let before = app.store.chat_snapshot(id).await.unwrap();
-            let replies: Vec<_> = before.0.iter().filter(|row| row["role"] == "assistant").collect();
+            let replies: Vec<_> = before
+                .0
+                .iter()
+                .filter(|row| row["role"] == "assistant")
+                .collect();
             assert_eq!(replies.len(), 1);
             assert_eq!(replies[0]["content"], "One final reply");
             assert_eq!(replies[0]["run_id"], terminal["id"]);
@@ -516,19 +655,30 @@ mod acceptance_tests {
             finish(&app, terminal).await;
             assert_eq!(app.store.chat_snapshot(id).await.unwrap(), before);
             assert_eq!(saved(&app, id).await, session);
-            assert!(app.store.get(&format!("session_naming:{id}")).await.unwrap().is_none());
+            assert!(app
+                .store
+                .get(&format!("session_naming:{id}"))
+                .await
+                .unwrap()
+                .is_none());
         }
         let skipped = saved(&app, &sid).await;
         assert_eq!(skipped["title"], "New: Keep the completed reply");
         assert_eq!(skipped["auto_naming"]["stage"], "skipped");
-        assert_eq!(skipped["auto_naming"]["last_error"], "Title configuration unavailable");
+        assert_eq!(
+            skipped["auto_naming"]["last_error"],
+            "Title configuration unavailable"
+        );
         assert_eq!(skipped["auto_naming"]["claim"], Value::Null);
         assert_eq!(skipped["auto_naming"]["lease_until"], 0);
         assert_eq!(skipped["auto_naming"]["attempts"], 0);
         assert!(app.store.naming_claim(&sid, true).await.unwrap().is_none());
         assert_eq!(saved(&app, &locked).await["title"], "My locked title");
         assert_eq!(saved(&app, &locked).await["auto_naming"], before_locked);
-        assert_eq!(std::fs::read(&invalid).unwrap(), br#"{"max_job_attempts":0}"#);
+        assert_eq!(
+            std::fs::read(&invalid).unwrap(),
+            br#"{"max_job_attempts":0}"#
+        );
     }
 
     /// Legacy configuration loading observes participation/lease fences before retiring unavailable work.
@@ -541,42 +691,98 @@ mod acceptance_tests {
             let sid = create(&app, None).await;
             let mut run = accept(&app, &sid, "Legacy title fallback").await;
             finish(&app, &mut run).await;
-            assert!(app.store.get(&format!("session_naming:{sid}")).await.unwrap().is_some());
+            assert!(app
+                .store
+                .get(&format!("session_naming:{sid}"))
+                .await
+                .unwrap()
+                .is_some());
             let mut session = saved(&app, &sid).await;
             session["auto_naming"]["config"] = Value::Null;
             session["auto_naming"]["claim"] = json!("legacy-claim");
-            let generation = session["auto_naming"]["participation_generation"].as_u64().unwrap();
+            let generation = session["auto_naming"]["participation_generation"]
+                .as_u64()
+                .unwrap();
             session["participation"]["generation"] = json!(generation + 1);
-            app.store.put(&format!("session:{sid}"), &session).await.unwrap();
+            app.store
+                .put(&format!("session:{sid}"), &session)
+                .await
+                .unwrap();
             write_invalid(root.path());
-            assert!(app.store.naming_claim(&sid, recovery).await.unwrap().is_none());
+            assert!(app
+                .store
+                .naming_claim(&sid, recovery)
+                .await
+                .unwrap()
+                .is_none());
             assert_eq!(saved(&app, &sid).await, session);
-            assert!(app.store.get(&format!("session_naming:{sid}")).await.unwrap().is_some());
+            assert!(app
+                .store
+                .get(&format!("session_naming:{sid}"))
+                .await
+                .unwrap()
+                .is_some());
             session["participation"]["generation"] = json!(generation);
             if recovery {
                 session["auto_naming"]["stage"] = json!("generating");
                 session["auto_naming"]["lease_until"] = json!(now() + 300);
-                app.store.put(&format!("session:{sid}"), &session).await.unwrap();
+                app.store
+                    .put(&format!("session:{sid}"), &session)
+                    .await
+                    .unwrap();
                 assert!(app.store.naming_claim(&sid, true).await.unwrap().is_none());
                 assert_eq!(saved(&app, &sid).await, session);
-                assert!(app.store.get(&format!("session_naming:{sid}")).await.unwrap().is_some());
+                assert!(app
+                    .store
+                    .get(&format!("session_naming:{sid}"))
+                    .await
+                    .unwrap()
+                    .is_some());
             }
             session["auto_naming"]["lease_until"] = json!(0);
-            app.store.put(&format!("session:{sid}"), &session).await.unwrap();
-            assert!(app.store.naming_claim(&sid, recovery).await.unwrap().is_none());
+            app.store
+                .put(&format!("session:{sid}"), &session)
+                .await
+                .unwrap();
+            assert!(app
+                .store
+                .naming_claim(&sid, recovery)
+                .await
+                .unwrap()
+                .is_none());
             let skipped = saved(&app, &sid).await;
             assert_eq!(skipped["auto_naming"]["stage"], "skipped");
-            assert_eq!(skipped["auto_naming"]["last_error"], "Title configuration unavailable");
+            assert_eq!(
+                skipped["auto_naming"]["last_error"],
+                "Title configuration unavailable"
+            );
             assert_eq!(skipped["auto_naming"]["claim"], Value::Null);
             assert_eq!(skipped["auto_naming"]["lease_until"], 0);
-            assert_eq!(skipped["auto_naming"]["attempts"], session["auto_naming"]["attempts"]);
+            assert_eq!(
+                skipped["auto_naming"]["attempts"],
+                session["auto_naming"]["attempts"]
+            );
             assert_eq!(skipped["title"], session["title"]);
-            assert_eq!(skipped["auto_naming"]["source"], session["auto_naming"]["source"]);
-            assert_eq!(skipped["metadata_revision"].as_u64().unwrap(),
-                session["metadata_revision"].as_u64().unwrap() + 1);
-            assert!(app.store.get(&format!("session_naming:{sid}")).await.unwrap().is_none());
+            assert_eq!(
+                skipped["auto_naming"]["source"],
+                session["auto_naming"]["source"]
+            );
+            assert_eq!(
+                skipped["metadata_revision"].as_u64().unwrap(),
+                session["metadata_revision"].as_u64().unwrap() + 1
+            );
+            assert!(app
+                .store
+                .get(&format!("session_naming:{sid}"))
+                .await
+                .unwrap()
+                .is_none());
             assert!(!app.store.naming_renew(&sid, "legacy-claim").await.unwrap());
-            assert!(!app.store.naming_finish(&sid, "legacy-claim", Some("Stale title")).await.unwrap());
+            assert!(!app
+                .store
+                .naming_finish(&sid, "legacy-claim", Some("Stale title"))
+                .await
+                .unwrap());
             assert!(app.store.naming_claim(&sid, true).await.unwrap().is_none());
             assert_eq!(saved(&app, &sid).await, skipped);
         }
@@ -762,7 +968,9 @@ mod acceptance_tests {
             .contains("Plan a vegetable garden"));
         assert!(!calls[0]["input"].to_string().contains("One final reply"));
         assert!(calls[0]["tools"].as_array().is_none_or(Vec::is_empty));
-        assert!(calls.iter().all(|call| call["instructions"] == "Configured title instruction"));
+        assert!(calls
+            .iter()
+            .all(|call| call["instructions"] == "Configured title instruction"));
         drop(calls);
         settings.prompt = "One attempt".into();
         settings.attempts_per_job = 1;
@@ -772,8 +980,14 @@ mod acceptance_tests {
         let mut run = accept(&app, &next, "Preserve this fallback").await;
         finish(&app, &mut run).await;
         work(app.clone(), next.clone(), false).await.unwrap();
-        assert_eq!(saved(&app, &next).await["auto_naming"]["stage"], "exhausted");
-        assert_eq!(saved(&app, &next).await["title"], "New: Preserve this fallback");
+        assert_eq!(
+            saved(&app, &next).await["auto_naming"]["stage"],
+            "exhausted"
+        );
+        assert_eq!(
+            saved(&app, &next).await["title"],
+            "New: Preserve this fallback"
+        );
         let captured = captured.lock().await;
         assert_eq!(captured.len(), 3);
         assert_eq!(captured[2]["instructions"], "One attempt");

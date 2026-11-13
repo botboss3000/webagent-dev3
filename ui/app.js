@@ -679,7 +679,7 @@ async function mountAgentModels(){
   }
 }
 // A rejected sign-in is a credential error, not expiry of an authenticated session.
-// @code-index {"version":1,"feature":"password-error-feedback","aliases":["incorrect password","sign-in error"],"purpose":"Keep credential forms open and report errors below their password fields; error feedback is an accessibility invariant.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Credential rejection must remain visible and cannot be hidden by a preference."}}
+// Keep credential forms open and report errors below their password fields; error feedback is an accessibility invariant.
 /** Set an inline password error and its accessible invalid/description state. */
 function passwordError(fieldId,errorId,message=''){
   const field=$(fieldId);

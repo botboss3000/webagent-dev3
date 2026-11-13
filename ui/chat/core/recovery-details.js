@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-recovery-details","aliases":["run recovery details","uncertain tool outcome","interrupted run details"],"purpose":"Renders inert detail text and explicit user choices for interrupted tool runs; the supplied callback and runtime retain recovery authority. No chat JSON key is consumed; only presentation preferences are candidates for configuration.","span_lines":40,"configuration":{"status":"opportunity","references":[],"opportunities":["Consider recovery detail labels or disclosure preferences; recovery authorization and retry consent remain enforced."]}}
+// Renders inert detail text and explicit user choices for interrupted tool runs; the supplied callback and runtime retain recovery authority.
 /**
  * Render the recovery choices for a run whose tool calls were interrupted.
  * The choices are always visible: each open call has "Run again" and "Use my result"

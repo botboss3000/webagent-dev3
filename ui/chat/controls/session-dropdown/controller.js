@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown","conversation selector"],"purpose":"Session dropdown presentation and interactions. Config: ui/chat/controls/session-dropdown/session-dropdown.json -> common.trigger, common.menu, common.footer, common.gestures with desktop/mobile/widget overlays; adopted on page reload.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"ui/chat/controls/session-dropdown/session-dropdown.json","pointers":["/common/trigger","/common/menu","/common/footer","/common/gestures","/desktop","/mobile","/widget"]}],"opportunities":[]}}
+// Session dropdown presentation and interactions.
 // Adapted from running v2 session-dropdown/controller.js. V3 owns data/actions.
 /** Mounts menu positioning, keyboard/focus behavior, animation, and teardown around V3-owned data callbacks. */
 export function mountSessionDropdown(root, {refresh, select, guard, resetSearch = () => {}}) {

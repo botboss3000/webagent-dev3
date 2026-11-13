@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-embed-auth","aliases":["embedded chat authorization","PKCE popup handoff","embed sign in"],"purpose":"Locates single-flight PKCE redemption, popup completion, bounded polling, and terminal popup/expiry handling.","span_lines":40,"configuration":{"status":"not_applicable","references":[],"opportunities":[],"rationale":"The one-use authorization handoff and popup/expiry boundaries are security invariants, not presentation preferences."}}
+// Locates single-flight PKCE redemption, popup completion, bounded polling, and terminal popup/expiry handling.
 // Popup messages are the fast path; bounded polling recovers a lost notification.
 // A single in-flight redemption preserves the server's one-use PKCE handoff.
 /** Watches a popup authorization challenge. One redemption runs at a time; complete triggers immediate redemption, while one-second polling checks closure/expiry and retries every tenth tick. Returns complete/cancel controls. */

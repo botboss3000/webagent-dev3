@@ -9,7 +9,7 @@ import { createStorageNotice } from './storage-notice.js';
  * @returns {object} Session, run, attachment, voice, approval, and recovery request methods.
  * Errors from the initial session request propagate; stream recovery retries are bounded.
  */
-// @code-index {"version":1,"feature":"chat-transport-recovery","aliases":["chat client","chat event stream","session transport recovery"],"purpose":"Locates the v3 chat transport and sequence-based stream recovery","span_lines":80,"configuration":{"status":"opportunity","references":[],"opportunities":["Consider bounded retry timing and backoff configuration; preserve recovery and publication invariants."]}}
+// Locates the v3 chat transport and sequence-based stream recovery
 export function createChatClient({request, note, issues, clearNoticeFrom = () => {}, createStream, EventSourceClass = EventSource,
   setTimeoutFn = globalThis.setTimeout, clearTimeoutFn = globalThis.clearTimeout}) {
   const administratorNotices = createAdministratorNotices({ request });

@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-transport-recovery","aliases":["chat fetch stream","SSE reconnect parser","Last-Event-ID recovery"],"purpose":"Adapts the authenticated fetch event stream and fixed retry loop; the chat client owns sequence-gap snapshot recovery. No chat JSON key is consumed; consider bounded retry timing and backoff settings without changing recovery or publication invariants.","span_lines":40,"configuration":{"status":"opportunity","references":[],"opportunities":["Consider a bounded retry delay/backoff setting; sequence recovery and publication behavior remain fixed."]}}
+// Adapts the authenticated fetch event stream and fixed retry loop; the chat client owns sequence-gap snapshot recovery.
 /**
  * Adapt fetch streaming to the EventSource-like interface consumed by the chat client.
  * @param {string} url Stream endpoint; headers supplies the request headers required by the endpoint.

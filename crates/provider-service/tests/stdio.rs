@@ -1,6 +1,6 @@
 //! Exercise the actual isolated private-pipe executable against the linked planner.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
-// @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Actual provider-service subprocess tests compare typed library results and reject malformed routing input without a listener connection.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Reference coverage, provider identity, replay rules and transport authority are fixed protocol invariants."}}
+// Actual provider-service subprocess tests compare typed library results and reject malformed routing input without a listener connection.
 use serde_json::{json, Value};
 use std::io::{ErrorKind, Write};
 use std::net::TcpListener;
@@ -45,10 +45,14 @@ fn actual_stdio_profile_and_projection_equal_linked_implementation() {
         ProviderIdV1::Openrouter,
     ] {
         requests.push(RequestV1::Profile {
-            version: CONTRACT_VERSION, provider, model: "fixture".into(),
+            version: CONTRACT_VERSION,
+            provider,
+            model: "fixture".into(),
         });
         requests.push(RequestV1::Project {
-            version: CONTRACT_VERSION, provider, model: "fixture".into(),
+            version: CONTRACT_VERSION,
+            provider,
+            model: "fixture".into(),
             instructions: "Live base instructions\nwith exact spacing. ".into(),
             input: vec![
                 json!({"role":"user","content":[
@@ -69,13 +73,20 @@ fn actual_stdio_profile_and_projection_equal_linked_implementation() {
                 "properties":{"path":{"type":"string"}},"required":["path"]}})],
         });
     }
-    let frames = requests.iter().enumerate()
+    let frames = requests
+        .iter()
+        .enumerate()
         .map(|(id, request)| frame(id, serde_json::to_value(request).unwrap()))
         .collect::<Vec<_>>();
     let output = invoke(&frames);
-    assert!(output.status.success(), "isolated service must accept valid frames");
+    assert!(
+        output.status.success(),
+        "isolated service must accept valid frames"
+    );
     assert!(output.stderr.is_empty());
-    let replies = output.stdout.split(|byte| *byte == b'\n')
+    let replies = output
+        .stdout
+        .split(|byte| *byte == b'\n')
         .filter(|line| !line.is_empty())
         .map(|line| serde_json::from_slice::<Value>(line).unwrap())
         .collect::<Vec<_>>();
@@ -84,15 +95,20 @@ fn actual_stdio_profile_and_projection_equal_linked_implementation() {
         assert_eq!(reply["version"], 1);
         assert_eq!(reply["id"], format!("fixture-{id}"));
         assert_eq!(reply["result"]["status"], "success");
-        assert_eq!(reply["result"]["implementation_version"],
-            webagent_provider_projection::IMPLEMENTATION_VERSION);
-        let actual: ResultV1 = serde_json::from_value(reply["result"]["projection"].clone()).unwrap();
+        assert_eq!(
+            reply["result"]["implementation_version"],
+            webagent_provider_projection::IMPLEMENTATION_VERSION
+        );
+        let actual: ResultV1 =
+            serde_json::from_value(reply["result"]["projection"].clone()).unwrap();
         let expected = webagent_provider_projection::project(request).unwrap();
         assert_eq!(actual, expected);
         if matches!(request, RequestV1::Project { .. }) {
             // Reference equality must also reconstruct identical exact host-owned content.
-            assert_eq!(materialize(request, &actual).unwrap(),
-                materialize(request, &expected).unwrap());
+            assert_eq!(
+                materialize(request, &actual).unwrap(),
+                materialize(request, &expected).unwrap()
+            );
         }
     }
 }
@@ -114,16 +130,28 @@ fn malformed_invocations_cannot_acquire_endpoint_or_header_authority() {
         json!({"version":2,"id":"fixture","run_key":"fixture","input":valid}),
         json!({"version":1,"id":"fixture","run_key":"fixture","operation":"dispatch",
             "input":{"kind":"profile","version":1,"provider":"deepseek","model":"fixture"}}),
-        frame(0, json!({"kind":"project","version":1,"provider":"deepseek","model":"fixture",
+        frame(
+            0,
+            json!({"kind":"project","version":1,"provider":"deepseek","model":"fixture",
             "instructions":"fixture","input":[{"type":"function_call","call_id":"c",
-            "name":"inspect","arguments":{}}],"tools":[]})),
+            "name":"inspect","arguments":{}}],"tools":[]}),
+        ),
     ];
     for invocation in malformed {
         let output = invoke(&[invocation]);
         assert!(!output.status.success());
-        assert!(output.stdout.is_empty(), "no success response for malformed invocation");
-        assert!(output.stderr.is_empty(), "service errors must not expose private input");
-        assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock,
-            "rejected routing fields must never cause ambient network activity");
+        assert!(
+            output.stdout.is_empty(),
+            "no success response for malformed invocation"
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "service errors must not expose private input"
+        );
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            ErrorKind::WouldBlock,
+            "rejected routing fields must never cause ambient network activity"
+        );
     }
 }

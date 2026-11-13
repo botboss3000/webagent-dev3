@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-widget","aliases":["floating chat","chat launcher","native chat widget"],"purpose":"Connects the native chat surface, floating window, and launcher. Config: ui/chat/chat.json (live, read from the checkout) -> chat_common.window and chat_common.launcher; chat_widget overlays the common profile. Window geometry and launcher draft/position are browser-local preferences.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_common/window","/chat_common/launcher"],"profile_overrides":true}],"opportunities":[]}}
+// Connects the native chat surface, floating window, and launcher.
 // Purpose: Use fallback geometry whenever a configured or saved value is non-finite.
 const finite=(v,d)=>Number.isFinite(Number(v))?Number(v):d;
 /** Clamps widget dimensions and position to the viewport using profile min/default sizes; narrow viewports use the full available width. */
@@ -162,7 +162,7 @@ function wireLauncherFeatures({element,button,profile,onAction,onPickup,error,st
 /** Recursively overlays object-valued widget profile fields; arrays and scalar values replace the base. */
 export function mergeProfile(base,override){const result={...base};for(const [key,value] of Object.entries(override||{}))result[key]=value&&typeof value==='object'&&!Array.isArray(value)?mergeProfile(base?.[key]||{},value):value;return result;}
 
-// @code-index {"version":1,"feature":"ui-vibration","aliases":["chat touch feedback","chat control haptics"],"purpose":"Shared optional touch-feedback factories and bounded gesture ownership. Config: ui/vibrate.json -> enabled, duration_ms, supplied by the native helper or validated iframe configuration bridge. This widget asset remains dependency-free for external embedding.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
+// Shared optional touch-feedback factories and bounded gesture ownership.
 /** Accepts one stage object; a missing or malformed stage falls back to the legacy single duration. */
 function stageTiming(config, stage) {
   const value = config?.[stage];
@@ -362,7 +362,7 @@ function createRegistry(doc) {
   return state;
 }
 
-// @code-index {"version":1,"feature":"chat-feedback-ownership","aliases":["chat button feedback","touch gesture ownership"],"purpose":"Registers one synchronous feedback owner for chat controls, detached portals and shadow widget chrome. Config: ui/vibrate.json -> enabled, duration_ms, supplied through the UI pulse callback. Native and embedded owners dispose registration with their surface.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
+// Registers one synchronous feedback owner for chat controls, detached portals and shadow widget chrome.
 /** Registers one owned surface with a synchronous feedback callback; the disposer releases its capture listeners.
  * Shared document capture handles dynamic children, open-shadow controls, and declared body portals once per click.
  * Only completed touch gestures qualify; drags, scrolling, edits, disabled and inert actions remain quiet.

@@ -1,5 +1,5 @@
 // V2 dropdown presentation/lifecycle, with independent Rust data authority.
-// @code-index {"version":1,"feature":"chat-session-selector","aliases":["session dropdown","conversation selector","session list"],"purpose":"Session dropdown presentation and interactions. Config: ui/chat/controls/session-dropdown/session-dropdown.json -> common.trigger, common.menu, common.footer, common.gestures with desktop/mobile/widget overlays; adopted on page reload.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"ui/chat/controls/session-dropdown/session-dropdown.json","pointers":["/common/trigger","/common/menu","/common/footer","/common/gestures","/desktop","/mobile","/widget"]}],"opportunities":[]}}
+// Session dropdown presentation and interactions.
 /** Renders active/archived sessions, private search results, and revision-fenced management actions. Controller callbacks own navigation; client writes retain retry receipts, and teardown fences pending work. */
 export function createSessionList(root, {guard, refresh, select, client, archived = () => {}, screenSettings = () => null}) {
   const protectedSession=item=>item?.main_chat===true||item?.can_delete===false;

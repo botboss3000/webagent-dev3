@@ -10,7 +10,7 @@ function mark(surface, delta) {
   else { markers.delete(surface);surface.removeAttribute('data-page-control-feedback'); }
 }
 
-// @code-index {"version":1,"feature":"page-control-feedback","aliases":["page button haptics","main panel touch feedback"],"purpose":"Registers dynamic page controls and known body portals with the shared gesture registry. Config: ui/vibrate.json -> enabled, duration_ms. Default editing, disabled and drag exclusions remain; ownership is gated by the visible page and DOM menu owner.","span_lines":65,"configuration":{"status":"configured","references":[{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
+// Registers dynamic page controls and known body portals with the shared gesture registry.
 /** Owns feedback for one page, its dynamic descendants and declared detached surfaces.
  * Short taps on draggable tabs remain eligible; armed reorder holds and movement stay quiet.
  * Caller supplies only verified custom action selectors and portal roots; no business handlers change.

@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-administrator-notices","aliases":["repository status reminder","repository notice"],"purpose":"Locates administrator repository notices in the chat composer","span_lines":80,"configuration":{"status":"opportunity","references":[],"opportunities":["Consider notice presentation preferences; access authority remains enforced by policy."]}}
+// Locates administrator repository notices in the chat composer
 import {createChatAction} from './chat-action-panel.js';
 // The poller owns freshness and access; all visible cards come from chat notifications.
 export function repositoryNoticeRenderer(documentObject=globalThis.document) {

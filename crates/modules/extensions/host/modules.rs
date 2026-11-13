@@ -78,7 +78,7 @@ fn host_lock(app: &App, id: &str) -> Result<File> {
         .map_err(|_| anyhow!("Module busy"))?;
     Ok(file)
 }
-// @code-index {"version":1,"feature":"automation-drop-in","aliases":["standalone automation","automation ability plugin"],"purpose":"Trusted Automation lifecycle, pinned reducer execution and current permissions. Config: abilities/Core/automation/automation.json -> /config/settings; settings flow through host execution_scope and never grant authority.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"abilities/Core/automation/automation.json","pointers":["/config/settings"]}],"opportunities":[]}}
+// Trusted Automation lifecycle, pinned reducer execution and current permissions.
 /// Automation has one fixed native ability bridge; legacy roots cannot restore a removed package.
 fn automation_ability_host(id: &str) -> bool {
     id == "automation"

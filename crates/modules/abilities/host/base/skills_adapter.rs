@@ -2,7 +2,7 @@
 //! Loading is evidence only: it never activates an ability or grants execution.
 #[cfg(test)]
 use webagent_accounts_host::AccountsStore;
-// @code-index {"version":1,"feature":"live-skill-selection","aliases":["live context","source correspondence"],"purpose":"Native current-source skill reads and identity-only conversation receipts. Encrypted caller/agent policy remains authoritative input; fixed scope and correspondence checks are not bypass settings.","span_lines":80,"configuration":{"status":"not_applicable","references":[],"opportunities":[],"rationale":"Private scope, live-authority fences and identity-only receipt persistence are mandatory. Skill content and mode are current caller inputs, not configurable alternatives to these safety checks."}}
+// Native current-source skill reads and identity-only conversation receipts.
 use crate::{ability_controls, live_tool_decision, session_agent_id, session_mode, App};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;

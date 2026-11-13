@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-elements","aliases":["chat elements","activity group","typing ellipsis","mini transcript"],"purpose":"Owns modular chat elements. Config: ui/chat/chat.json -> chat_common.chat_elements and show_activity_groups, merged with desktop/mobile/widget profiles.","span_lines":30,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_common/chat_elements","/chat_common/show_activity_groups"],"profile_overrides":true}],"opportunities":[]}}
+// Owns modular chat elements.
 // Activity group owns its compact label and disclosure; mini-transcript owns the body.
 /** Compact group label: nonzero counts, any extra parts (such as sub-agent notices), then status. */
 export function activityLabel(group,{error='',extra=[]}={}) {

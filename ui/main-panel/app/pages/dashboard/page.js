@@ -1,7 +1,7 @@
 import { readDashboard, paintDashboard, metricOptions } from './advanced.js';
 import { readActivity } from './activity.js';
 // The catalog owns tile identity and size; system summary supplies current resource values.
- // @code-index {"version":1,"feature":"app-dashboard","purpose":"Config: ui/main-panel/app/pages/dashboard/cards.json -> cards; frontend tile inventory and pending backend state","span_lines":64,"configuration":{"status":"configured","references":[{"path":"ui/main-panel/app/pages/dashboard/cards.json","pointers":["/cards"]}],"opportunities":[]},"aliases":["dashboard tiles"]}
+ // Config: ui/main-panel/app/pages/dashboard/cards.json -> cards; frontend tile inventory and pending backend state
 /** Mount resource tiles from the administrator summary; return a polling disposer. */
 export async function mountDashboard(host) {
   host._dashboardDispose?.();

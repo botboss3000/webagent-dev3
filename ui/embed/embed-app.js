@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-embed-runtime","aliases":["embedded chat runtime","iframe chat session","embedded chat commands"],"purpose":"Locates the embedded chat runtime, credential lifecycle, session wiring, and serialized parent command bridge. Presentation profile is supplied by the public descriptor; authorization policy remains server-authoritative in the encrypted agent embed record. Touch feedback: ui/vibrate.json -> enabled, duration_ms; gestures stay client-owned.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_common","/chat_widget"],"profile_overrides":false},{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
+// Locates the embedded chat runtime, credential lifecycle, session wiring, and serialized parent command bridge.
 import {vibrationConfigReady,getVibrationConfig} from '../shared/vibrate.js';
 import {mountChatPanel} from '../chat/core/panel.js';
 import {initChatConfig,setChatSurfaceActions} from '../chat/controls/chat-config.js';
@@ -67,7 +67,7 @@ const access=await publicRequest('/auth/access-mode').catch(()=>({guest_access:f
 const windowStyle={...descriptor.chat_ui?.chat_common?.window,...descriptor.chat_ui?.chat_widget?.window};
 let theme=['light','dark'].includes(windowStyle.theme)?windowStyle.theme:null;if(!theme)try{theme=localStorage.getItem('v3-theme')}catch{}document.body.classList.toggle('light-mode',theme==='light');
 const background=typeof windowStyle.background==='string'?windowStyle.background.trim():'';if(background&&CSS.supports('color',background))document.body.style.setProperty('--bg-0',background);
-// @code-index {"version":1,"feature":"chat-embed-auth","aliases":["embedded chat authorization","PKCE popup handoff","embed sign in"],"purpose":"Locates popup consent, PKCE challenge creation, one-use redemption, and popup-origin/source validation for embedded chat authorization.","span_lines":40,"configuration":{"status":"not_applicable","references":[],"opportunities":[],"rationale":"Origin binding, channel checks, one-use authorization and command validation are security invariants; they must not become UI bypass settings."}}
+// Locates popup consent, PKCE challenge creation, one-use redemption, and popup-origin/source validation for embedded chat authorization.
 const signIn=guard(async()=>{
  if(authBusy)throw Error('Connection is pending');
  popup=window.open('about:blank','webagent-widget-signin','popup,width=580,height=720');if(!popup)throw Error('Allow the sign-in popup to connect');

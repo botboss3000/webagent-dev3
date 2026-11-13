@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-run-notifications","aliases":["run approval","mode confirmation"],"purpose":"Locates guarded mode confirmations and pending run-approval cards in the composer","span_lines":80,"configuration":{"status":"opportunity","references":[],"opportunities":["Consider notice labels and presentation settings; approval and cancellation authority remain enforced."]}}
+// Locates guarded mode confirmations and pending run-approval cards in the composer
 // One composer surface for confirmations issued by chat controls and the runtime.
 // Mount composer confirmation slots; decisions remain caller-owned guarded callbacks.
 // All chat notices use these card and action primitives, including notices owned by other controllers.

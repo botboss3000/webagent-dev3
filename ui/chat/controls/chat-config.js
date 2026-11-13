@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-ui-config","aliases":["chat configuration","chat surface settings"],"purpose":"Applies the V3 chat surface profile from ui/chat/chat.json (live, read from the checkout), including live_reload, chat_common, desktop/mobile/widget overlays, and chat_display.default.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_display/default","/chat_common","/chat_desktop","/chat_mobile","/chat_widget"],"profile_overrides":true}],"opportunities":[]}}
+// Applies the V3 chat surface profile from ui/chat/chat.json (live, read from the checkout), including live_reload, chat_common, desktop/mobile/widget overlays, and chat_display.default.
 import {loadSessionDropdownConfig, sessionDropdownConfig, setSessionDropdownOverlay} from './session-dropdown/config.js';
 import { watchChatConfig } from './chat-config-live.js';
 import { applyBubblePaint } from '../core/bubble-paint.js';

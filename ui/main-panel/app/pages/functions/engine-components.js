@@ -1,5 +1,5 @@
 'use strict';
-// @code-index {"version":1,"feature":"engine-component-control-feedback","aliases":["engine component buttons"],"purpose":"Engine component buttons delegate feedback to the App page owner. Config: ui/vibrate.json -> enabled, duration_ms. Revision-fenced component authorization remains in the owning request handler.","span_lines":65,"configuration":{"status":"configured","references":[{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
+// Engine component buttons delegate feedback to the App page owner.
 // Engine controls withdraw functionality; package editing/publication stays broker-owned.
 export function mountEngineComponents(host) {
  const section=document.createElement('section');section.className='app-engine-components';

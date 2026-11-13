@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"chat-voice-reply","aliases":["voice reply","read replies aloud","agent voice output"],"purpose":"Below-composer on/off control that adds a seekable voice player under each new agent reply, spoken in the agent's Kokoro voice. Config: ui/chat/chat.json -> */active_footer/below_pill rows/controls.voice_reply places it; the agent's Identity voice_output decides whether it shows.","span_lines":90,"configuration":{"status":"configured","references":[{"path":"ui/chat/chat.json","pointers":["/chat_common/active_footer/below_pill/controls/voice_reply"],"profile_overrides":true}],"opportunities":[]}}
+// Below-composer on/off control that adds a seekable voice player under each new agent reply, spoken in the agent's Kokoro voice.
 import {setVoiceReplyControl} from './chat-config.js';
 import {textForSpeech} from './composer-media.js';
 import {createVoicePlayer} from './voice-player.js';

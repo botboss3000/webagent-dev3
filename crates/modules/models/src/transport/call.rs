@@ -68,7 +68,7 @@ enum ReadyTransport<'a> {
     },
 }
 
-// @code-index {"version":1,"feature":"provider-projection","aliases":["provider formatting","pure provider component"],"purpose":"Host projection preparation precedes credential binding and network dispatch. Config: config/engine-components.json -> disabled; provider descriptor -> versions and limits.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"config/engine-components.json","pointers":["/disabled"]},{"path":"plugins/engine/provider-projection/component.json","pointers":["/interface_version","/implementation_version","/limits"]}],"opportunities":[]}}
+// Host projection preparation precedes credential binding and network dispatch.
 impl<'a> CallDraft<'a> {
     /// Own the ephemeral input/schema vectors while borrowing the host-selected route and instructions.
     pub fn new(

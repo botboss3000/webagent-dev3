@@ -19,7 +19,7 @@ function collapsible(className, heading) {
 }
 
 /** Keep logical tasks visible independently of dismissible build receipt cards. */
-// @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Builds task/resource controls; indirect Config: build-service/scheduler-defaults.json -> mode and resource thresholds via protected broker snapshot. Touch feedback is page-owned: ui/vibrate.json -> enabled, duration_ms.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent"]},{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
+// Builds task/resource controls; indirect Config: build-service/scheduler-defaults.json -> mode and resource thresholds via protected broker snapshot.
 export function schedulerPanel() {
   const root = document.createElement('section');
   root.className = 'build-scheduler';

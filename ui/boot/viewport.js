@@ -1,4 +1,4 @@
-// @code-index {"version":1,"feature":"mobile-keyboard-viewport","aliases":["keyboard dismissal","mobile keyboard","visible viewport"],"purpose":"Tracks viewport geometry and OS keyboard dismissal; only trusted editor interaction clears dismissal, and programmatic focus never clears it.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Focus preservation and honoring OS keyboard dismissal are interaction invariants rather than user preferences."}}
+// Tracks viewport geometry and OS keyboard dismissal; only trusted editor interaction clears dismissal, and programmatic focus never clears it.
 "use strict";
   // Track the visible viewport height so the app shrinks when the mobile
   // on-screen keyboard appears. dvh handles browser chrome but on Android
@@ -139,7 +139,7 @@
     document.addEventListener('input', engageEditor, true);
     document.addEventListener('focusout', function () { setTimeout(applyKb, 0); });
 
-    // @code-index {"version":1,"feature":"composer-keyboard-motion","aliases":["composer movement","keyboard smoothing"],"purpose":"Keeps app viewport sizing immediate while composer/footer controls ease from their current rendered position to the new layout. Config: data/config/chat.json -> composer.keyboard_motion in merged profiles; no focus or opacity changes.","span_lines":70,"configuration":{"status":"configured","references":[{"path":"data/config/chat.json","pointers":["/chat_common/composer/keyboard_motion/enabled","/chat_common/composer/keyboard_motion/duration_ms"],"profile_overrides":true}],"opportunities":[]}}
+    // Keeps app viewport sizing immediate while composer/footer controls ease from their current rendered position to the new layout.
     var motionSettings = {enabled: false, duration_ms: 140}, motionSignature = '';
     var motionEffects = [], motionHeight = vv ? vv.height : window.innerHeight;
     var motionWidth = window.innerWidth, motionScale = vv ? vv.scale : 1;

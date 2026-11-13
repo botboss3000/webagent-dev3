@@ -1,7 +1,7 @@
 import { mountControlFeedback } from '../chat/widget/window.js';
 import { requestTouchVibration } from './vibrate.js';
 
-// @code-index {"version":1,"feature":"main-header-feedback","aliases":["app tabs haptics","header button feedback"],"purpose":"Owns touch feedback for app navigation and its body-portaled account menu. Config: ui/vibrate.json -> enabled, duration_ms. Reuses the chat gesture registry to avoid duplicate Chat/Float pulses.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"ui/vibrate.json","pointers":["/enabled","/duration_ms"]}],"opportunities":[]}}
+// Owns touch feedback for app navigation and its body-portaled account menu.
 /** Registers dynamic header controls and the account portal without intercepting their actions.
  * The shared registry rejects scrolling/dragging; armed tab holds are also quiet,
  * because page-tabs.js suppresses navigation after its reorder hold completes.
