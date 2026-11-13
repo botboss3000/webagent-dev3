@@ -51,6 +51,11 @@ shared code. Never cut validation at trust boundaries, error handling that
 prevents data loss, security or accessibility. End with what you skipped or did
 not check.
 
+Leave no dead code. When a fix turns out not to work, remove what it added (code,
+tests, styles, config) in the same task before or alongside the next attempt,
+unless it is still needed; keep only what the working fix uses. Remove code your
+change made unused, and do not leave commented-out code or unused helpers behind.
+
 ## Evidence
 
 - Report only what evidence shows; an absent counter is unavailable, not zero.
