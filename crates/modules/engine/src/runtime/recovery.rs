@@ -336,8 +336,17 @@ impl<
     async fn follow_claim_wait(app: &Self, task: &mut Value, follow: &Value) -> Result<()> {
         let poll =
             tokio::time::timeout(Duration::from_secs(5), Self::build_result(app, follow)).await;
-        let Ok(Ok(BuildPoll::Done(result))) = poll else {
-            return Ok(());
+        let result = match poll {
+            Ok(Ok(BuildPoll::Done(result))) => result,
+            Ok(Ok(BuildPoll::Waiting(_))) => return Ok(()),
+            Ok(Err(error)) => {
+                tracing::warn!(task = %task["id"], "claim wait poll failed: {error:#}");
+                return Ok(());
+            }
+            Err(_) => {
+                tracing::warn!(task = %task["id"], "claim wait poll timed out");
+                return Ok(());
+            }
         };
         let sid = follow["session_id"].as_str().unwrap_or_default();
         let output = &result["output"];
@@ -636,6 +645,8 @@ impl<
             ask["paths"] = json!(paths);
         }
         let reply = call(ask).await?;
+        tracing::info!(task, status = %reply["status"], acquired = %reply["output"]["acquired"],
+            "claim wait retried the reservation");
         if reply["output"]["acquired"] == true {
             return done("claims_granted", format!("Task {task} now holds its claims. Reread the files, then apply your edits again."));
         }
