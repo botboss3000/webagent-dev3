@@ -1923,6 +1923,17 @@ class FailedReleaseLifecycleTests(unittest.TestCase):
         # A reopened task reacquires its claims on the next apply.
         self.action(item["task_id"],"reopen");self.write(item,"README.md","fixed\n")
         self.assertEqual(store.get(item["key"])["state"],"owned")
+    def test_silent_orphans_release_claims_after_window(self):
+        scheduler=self.broker.scheduler;store=scheduler.store
+        item=self.begin("orphan-open");self.write(item,"README.md","open\n")
+        before=store.get(item["key"])
+        with store.transaction()as db:store.update(db,before,state="orphaned")
+        scheduler.settle();self.assertEqual(store.get(item["key"])["scopes"],before["scopes"])
+        # A claim row whose work record is gone is released the same way.
+        self.broker.work.pop(item["key"],None)
+        with patch.object(store,"clock",return_value=store.clock()+scheduler.orphan_release+1):scheduler.settle()
+        after=store.get(item["key"])
+        self.assertEqual((after["state"],after["scopes"],after["epoch"]),("waiting",[],before["epoch"]+1))
     def test_completed_release_keeps_claims_until_commit_release(self):
         item,before=self.failed(status="completed")
         with patch.object(self.broker.scheduler.store,"clock",return_value=time.time()+86400):self.broker.scheduler.settle()

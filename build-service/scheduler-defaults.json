@@ -2,6 +2,7 @@
   "mode": "observe",
   "orphan_after_seconds": 300,
   "failure_grace_seconds": 1800,
+  "orphan_release_seconds": 7200,
   "registry_retention_seconds": 604800,
   "registry_keep_finished": 200,
   "registry_high_water": 800,

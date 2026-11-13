@@ -668,6 +668,12 @@ Apply the correction and finish as usual; unchanged Rust inputs reuse the
 verified compiler artifacts. When the window ends without a reopen, or the
 heartbeat lapses and the task orphans, housekeeping drops every claim and queued
 request (the task returns to `waiting`; a later reopen reacquires on apply).
+
+Any other orphaned task, including an open one or a claim row with no work
+record, keeps its claims for `scheduler.orphan_release_seconds` (default 7200,
+range 1800–86400) after its last heartbeat; then housekeeping drops them so one
+stale holder cannot stall the queue. Its tree stays, and a later apply queues
+for the claims again. Only a completed release waiting for its commit is kept.
 A closed task never keeps queued requests, so it cannot block other writers.
 
 ## Task registry trimming

@@ -38,6 +38,7 @@ class Scheduler:
         self.mode=policy.get("mode","observe")
         self.orphan_after=policy.get("orphan_after_seconds",300)
         self.failure_grace=policy.get("failure_grace_seconds",1800)
+        self.orphan_release=policy.get("orphan_release_seconds",7200)
         self.registry_retention=policy.get("registry_retention_seconds",604800)
         self.registry_keep=policy.get("registry_keep_finished",200)
         self.registry_high_water=policy.get("registry_high_water",800)
@@ -68,7 +69,8 @@ class Scheduler:
     def settle(self):
         """Closed tasks never keep queued requests. A failed release keeps its claims for the grace window so
         its owner can reopen, fix and resubmit; once that ends or the heartbeat lapses, every claim drops.
-        Abandoned tasks keep nothing. Claims of a completed release wait for its commit and release_claims."""
+        Abandoned tasks keep nothing. Claims of a completed release wait for its commit and release_claims.
+        Any other orphan frees its claims after orphan_release_seconds without a heartbeat."""
         rows={r["id"]:r for r in self.store.list()if r["scopes"]or r["requested"]}
         for item in list(self.broker.work.values()):
             value=rows.get(item.get("key"))
@@ -82,6 +84,15 @@ class Scheduler:
                 job=self.broker.jobs[item["job_id"]]
                 if value["state"]=="orphaned"or self.store.clock()-job.get("finished_at",job.get("created_at",0))>self.failure_grace:
                     self.store.retire(item["key"],"Failed release "+job["job_id"][:8]+" was not reopened within the grace window")
+        # An orphan silent past orphan_release_seconds frees its claims, as does one with no work record
+        # (nothing can resume it). Its tree stays; a later apply reacquires through the queue.
+        now=self.store.clock();items={i.get("key"):i for i in self.broker.work.values()}
+        for key,value in rows.items():
+            if value["state"]!="orphaned"or now-value["heartbeat"]<=self.orphan_release:continue
+            item=items.get(key)
+            # A completed release keeps its claims for the commit's release_claims.
+            if item is not None and(not self.settled(item)or self.broker.jobs.get(item.get("job_id"),{}).get("status")=="completed"):continue
+            self.store.retire(key,"Orphaned task released its claims after "+str(self.orphan_release//60)+" minutes without a heartbeat")
     def trim_registry(self):
         """Hourly, or at once above the high-water mark: forget finished tasks that nothing on disk still uses.
         Both registries refuse new tasks at 1,000 rows. A task goes only when its record holds no claim, its
