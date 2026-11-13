@@ -30,7 +30,7 @@ export async function mountAppModels(host) {
   if(!live())return()=>{};
   host.replaceChildren(template.content.querySelector('template').content.cloneNode(true));
   host.classList.add('v3-reference-models');host.querySelector('#settings-page-models').hidden=false;
-  for(const href of ['/v3-ui/shared/models/reference.css','/v3-ui/shared/models/pending.css','/v3-ui/main-panel/app/pages/models/models.css']) {
+  for(const href of ['/ui/shared/models/reference.css','/ui/shared/models/pending.css','/ui/main-panel/app/pages/models/models.css']) {
     const link=document.createElement('link');link.rel='stylesheet';link.href=href;host.prepend(link);
   }
   const q=selector=>host.querySelector(selector);

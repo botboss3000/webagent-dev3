@@ -20,7 +20,7 @@ On Agents → Identity → Website chat widget, explicitly enable embedding and 
 ## Install and control
 
 ```html
-<script src="https://dev.webagent.live/v3-ui/embed/loader.js" data-agent="AUTHORIZED_AGENT_ID" async></script>
+<script src="https://dev.webagent.live/ui/embed/loader.js" data-agent="AUTHORIZED_AGENT_ID" async></script>
 ```
 
 The loader isolates window/launcher CSS in a Shadow DOM and loads `/embed/AGENT_ID?origin=HOST_ORIGIN`. Only this dedicated route permits configured framing; native `/app` remains unframeable. The public descriptor exposes chat presentation only. Host CSP must permit the WebAgent script, module, stylesheet, descriptor connection and iframe.

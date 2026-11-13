@@ -13,7 +13,7 @@
   (function ensureCss() {
     if (document.querySelector('link[data-bg="' + RID + '"]')) return;
     var l = document.createElement('link');
-    l.rel = 'stylesheet'; l.href = '/v3-ui/boot/background/aurora/aurora.css';
+    l.rel = 'stylesheet'; l.href = '/ui/boot/background/aurora/aurora.css';
     l.setAttribute('data-bg', RID);
     // start() reads the palette synchronously on register — BEFORE this async
     // sheet (which defines the --aurora-* tokens) has applied. Re-read once it

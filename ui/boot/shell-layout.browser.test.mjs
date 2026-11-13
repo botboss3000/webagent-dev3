@@ -13,12 +13,12 @@ const html=fs.readFileSync(path.join(root,'ui/index.html'),'utf8')
  .replace('class="is-booting"','')
  .replace('<div id="app" hidden>','<div id="app" data-mobile-view="chat">')
  .replace('<div id="chat-panel" class="chat-surface"></div>','<div id="chat-panel" class="chat-surface">'+fs.readFileSync(path.join(root,'ui/chat/chat.html'),'utf8')+'</div>')
- .replace('</body>','<script src="/v3-ui/boot/boot.js"></script><script src="/v3-ui/boot/viewport.js"></script></body>');
+ .replace('</body>','<script src="/ui/boot/boot.js"></script><script src="/ui/boot/viewport.js"></script></body>');
 const server=http.createServer((req,res)=>{
  const url=new URL(req.url,'http://localhost'),rel=url.pathname;
  if(rel==='/app'){res.setHeader('content-type','text/html');res.end(html);return;}
- const base=rel.startsWith('/v3-ui/')?path.join(root,'ui'):rel.startsWith('/ui/')?shared:null;
- const target=base&&path.resolve(base,rel.replace(/^\/(v3-ui|ui)\//,''));
+ const base=rel.startsWith('/ui/')?path.join(root,'ui'):rel.startsWith('/ui/')?shared:null;
+ const target=base&&path.resolve(base,rel.replace(/^\/ui\//,''));
  if(!target||!target.startsWith(base+path.sep)||!fs.existsSync(target)){res.writeHead(404);res.end();return;}
  res.setHeader('content-type',target.endsWith('.css')?'text/css':target.endsWith('.js')?'text/javascript':'text/plain');res.end(fs.readFileSync(target));
 });

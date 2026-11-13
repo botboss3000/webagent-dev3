@@ -87,7 +87,7 @@ export async function start(mount) {
         body:JSON.stringify({action:'tree',path:''})
       });
       if (!probe.ok) throw Error('V3 File Manager backend is not ready ('+probe.status+')');
-      const response=await fetch('/v3-ui/main-panel/app/pages/files/files.html',{credentials:'same-origin'});
+      const response=await fetch('/ui/main-panel/app/pages/files/files.html',{credentials:'same-origin'});
       if (!response.ok) throw Error('File Manager view unavailable');
       const markup=await response.text();
       if (!active() || selected!=='files') return;

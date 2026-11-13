@@ -8,8 +8,8 @@ import { showNotification } from '../../../../chat/core/chat-action-panel.js';
 export async function mountSelectionTable(host,{request,agentId,onAssignment}) {
   const bridge=createModelAdapter(request,agentId,onAssignment);await bridge.ready();
   host.replaceChildren();
-  const css=document.createElement('link');css.rel='stylesheet';css.href='/v3-ui/shared/models/reference.css';
-  const pendingCss=document.createElement('link');pendingCss.rel='stylesheet';pendingCss.href='/v3-ui/shared/models/pending.css';
+  const css=document.createElement('link');css.rel='stylesheet';css.href='/ui/shared/models/reference.css';
+  const pendingCss=document.createElement('link');pendingCss.rel='stylesheet';pendingCss.href='/ui/shared/models/pending.css';
   const group=document.createElement('div');group.className='v3-reference-models';
   const analyticsHost=document.createElement('div');analyticsHost.className='agent-model-analytics-host';
   const tableHost=document.createElement('div');tableHost.style.marginTop='8px';group.append(analyticsHost,tableHost);host.append(css,pendingCss,group);

@@ -8,7 +8,7 @@
 
    Colours come from the --bgrid-* tokens in bullet-grid.css (this
    folder), derived from the app palette, so it suits dark and light.
-   Self-contained: delete /v3-ui/boot/background/bullet-grid/ and it's gone.
+   Self-contained: delete /ui/boot/background/bullet-grid/ and it's gone.
    ============================================================ */
 (function () {
   var RID = 'bullet-grid';
@@ -17,7 +17,7 @@
   (function ensureCss() {
     if (document.querySelector('link[data-bg="' + RID + '"]')) return;
     var l = document.createElement('link');
-    l.rel = 'stylesheet'; l.href = '/v3-ui/boot/background/bullet-grid/bullet-grid.css';
+    l.rel = 'stylesheet'; l.href = '/ui/boot/background/bullet-grid/bullet-grid.css';
     l.setAttribute('data-bg', RID);
     // start() reads the palette synchronously on register — BEFORE this async
     // sheet (which defines the --bgrid-* tokens) has applied. Re-read once it

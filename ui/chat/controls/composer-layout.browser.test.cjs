@@ -11,7 +11,7 @@ async function fixture(t,{fallback=false,widget=false}={}){
  const hashes=()=>Object.fromEntries(files.map(p=>[p,crypto.createHash('sha256').update(fs.readFileSync(path.join(UI,p))).digest('hex')]));
  const before=hashes();
  const html='<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1,interactive-widget=resizes-content"><style>body{margin:0}#chat-panel{width:100%;height:var(--app-height,100vh)}textarea{font-size:16px}</style><main id="chat-panel">'+fs.readFileSync(path.join(UI,'chat/chat.html'),'utf8')+'</main>';
- const server=http.createServer((req,res)=>{let rel=new URL(req.url,'http://localhost').pathname;if(rel==='/'){res.setHeader('content-type','text/html');return res.end(html);}rel=rel.replace(/^\/v3-ui\//,'');const p=path.resolve(UI,rel);if(!p.startsWith(UI+path.sep)){res.writeHead(403);return res.end();}fs.readFile(p,(e,b)=>{res.writeHead(e?404:200,{'content-type':p.endsWith('.js')?'text/javascript':p.endsWith('.css')?'text/css':'text/plain'});res.end(e?'missing':b);});});
+ const server=http.createServer((req,res)=>{let rel=new URL(req.url,'http://localhost').pathname;if(rel==='/'){res.setHeader('content-type','text/html');return res.end(html);}rel=rel.replace(/^\/ui\//,'');const p=path.resolve(UI,rel);if(!p.startsWith(UI+path.sep)){res.writeHead(403);return res.end();}fs.readFile(p,(e,b)=>{res.writeHead(e?404:200,{'content-type':p.endsWith('.js')?'text/javascript':p.endsWith('.css')?'text/css':'text/plain'});res.end(e?'missing':b);});});
  await new Promise(r=>server.listen(0,'127.0.0.1',r));
  const browser=await chromium.launch({headless:true,...(process.env.BROWSER_EXECUTABLE?{executablePath:process.env.BROWSER_EXECUTABLE}:{}),args:['--no-sandbox']});
  const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});const page=await context.newPage();
@@ -23,7 +23,7 @@ async function fixture(t,{fallback=false,widget=false}={}){
   window.ResizeObserver=class extends Native{constructor(fn){super(fn);window.__observers.push(this);}disconnect(){this.disconnected=true;super.disconnect();}};
  },{fallback,widget});
  await page.goto('http://127.0.0.1:'+server.address().port+'/');
- await page.evaluate(async cfg=>{window.initialPanelHtml=document.querySelector('#chat-panel').innerHTML;window.api=await import('/v3-ui/chat/controls/chat-config.js');window.pillApi=await import('/v3-ui/chat/controls/chat-pill-config.js');await window.api.initChatConfig({config:cfg});window.input=document.querySelector('#chat-input');window.rows=document.querySelector('.chat-pill-layout-rows');window.inputParent=input.parentNode;window.events={blur:0,focus:0};input.addEventListener('blur',()=>events.blur++);input.addEventListener('focus',()=>events.focus++);},config(layout()));
+ await page.evaluate(async cfg=>{window.initialPanelHtml=document.querySelector('#chat-panel').innerHTML;window.api=await import('/ui/chat/controls/chat-config.js');window.pillApi=await import('/ui/chat/controls/chat-pill-config.js');await window.api.initChatConfig({config:cfg});window.input=document.querySelector('#chat-input');window.rows=document.querySelector('.chat-pill-layout-rows');window.inputParent=input.parentNode;window.events={blur:0,focus:0};input.addEventListener('blur',()=>events.blur++);input.addEventListener('focus',()=>events.focus++);},config(layout()));
  return page;
 }
 async function settle(page){await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));}
@@ -74,7 +74,7 @@ test('desktop and widget profile changes retain rows when their structure is ide
  await p.evaluate(()=>{window.__CHAT_PORTAL__=false;api.refreshChatSurface();});await settle(p);assert.equal((await stable(p)).rows,true);assert.equal((await stable(p)).blur,0);
 });
 test('dismissal survives programmatic focus and viewport jitter until editor interaction',async t=>{
- const p=await fixture(t);await p.evaluate(async()=>{window.vh=500;window.ih=844;Object.defineProperty(window,'innerHeight',{configurable:true,get:()=>ih});Object.defineProperty(window.visualViewport,'height',{configurable:true,get:()=>vh});await new Promise((ok,no)=>{const s=document.createElement('script');s.src='/v3-ui/boot/viewport.js';s.onload=ok;s.onerror=no;document.head.append(s);});input.focus();});
+ const p=await fixture(t);await p.evaluate(async()=>{window.vh=500;window.ih=844;Object.defineProperty(window,'innerHeight',{configurable:true,get:()=>ih});Object.defineProperty(window.visualViewport,'height',{configurable:true,get:()=>vh});await new Promise((ok,no)=>{const s=document.createElement('script');s.src='/ui/boot/viewport.js';s.onload=ok;s.onerror=no;document.head.append(s);});input.focus();});
  assert.equal(await p.evaluate(()=>document.body.classList.contains('kb-open')),true);
  await p.evaluate(()=>{vh=844;visualViewport.dispatchEvent(new Event('resize'));});await settle(p);
  assert.equal((await stable(p)).focused,false);assert.equal((await stable(p)).blur,1);
@@ -87,7 +87,7 @@ test('dismissal survives programmatic focus and viewport jitter until editor int
 
 test('a keyboard close after a row touch is a normal dismissal',async t=>{
  const p=await fixture(t);
- await p.evaluate(async()=>{window.vh=500;window.ih=844;Object.defineProperty(window,'innerHeight',{configurable:true,get:()=>ih});Object.defineProperty(window.visualViewport,'height',{configurable:true,get:()=>vh});await new Promise((ok,no)=>{const s=document.createElement('script');s.src='/v3-ui/boot/viewport.js';s.onload=ok;s.onerror=no;document.head.append(s);});input.focus();});
+ await p.evaluate(async()=>{window.vh=500;window.ih=844;Object.defineProperty(window,'innerHeight',{configurable:true,get:()=>ih});Object.defineProperty(window.visualViewport,'height',{configurable:true,get:()=>vh});await new Promise((ok,no)=>{const s=document.createElement('script');s.src='/ui/boot/viewport.js';s.onload=ok;s.onerror=no;document.head.append(s);});input.focus();});
  assert.equal(await p.evaluate(()=>document.body.classList.contains('kb-open')),true);
  // The finger is on a control row below the composer while the keyboard animates away.
  await p.evaluate(()=>{document.querySelector('#chat-footer-row').dispatchEvent(new Event('touchstart',{bubbles:true}));vh=844;visualViewport.dispatchEvent(new Event('resize'));});
@@ -98,7 +98,7 @@ test('a keyboard close after a row touch is a normal dismissal',async t=>{
 
 test('a keyboard close after a row gesture is a normal dismissal',async t=>{
  const p=await fixture(t);
- await p.evaluate(async()=>{window.vh=500;window.ih=844;Object.defineProperty(window,'innerHeight',{configurable:true,get:()=>ih});Object.defineProperty(window.visualViewport,'height',{configurable:true,get:()=>vh});await new Promise((ok,no)=>{const s=document.createElement('script');s.src='/v3-ui/boot/viewport.js';s.onload=ok;s.onerror=no;document.head.append(s);});input.focus();});
+ await p.evaluate(async()=>{window.vh=500;window.ih=844;Object.defineProperty(window,'innerHeight',{configurable:true,get:()=>ih});Object.defineProperty(window.visualViewport,'height',{configurable:true,get:()=>vh});await new Promise((ok,no)=>{const s=document.createElement('script');s.src='/ui/boot/viewport.js';s.onload=ok;s.onerror=no;document.head.append(s);});input.focus();});
  assert.equal(await p.evaluate(()=>document.body.classList.contains('kb-open')),true);
  // A real Android scroll lifts the finger first, then the platform animates the keyboard away.
  await p.evaluate(()=>{const row=document.querySelector('#chat-footer-row');for(const type of ['touchstart','touchmove','touchend'])row.dispatchEvent(new Event(type,{bubbles:true}));});
@@ -126,7 +126,7 @@ test('empty-editor active/idle transitions retain DOM across themes and width ch
 
 /** Pin the real composer to the fixture panel bottom and load the actual viewport owner. */
 async function motionFixture(t,settings={enabled:true,duration_ms:140}) {
- const p=await fixture(t);await p.evaluate(async()=>{document.querySelector('#chat-panel').style.position='relative';document.querySelector('#chat-input-area').style.cssText='position:absolute;bottom:0';window.motionVh=844;window.motionScale=1;Object.defineProperty(visualViewport,'height',{configurable:true,get:()=>motionVh});Object.defineProperty(visualViewport,'scale',{configurable:true,get:()=>motionScale});await new Promise((ok,no)=>{const s=document.createElement('script');s.src='/v3-ui/boot/viewport.js';s.onload=ok;s.onerror=no;document.head.append(s);});});
+ const p=await fixture(t);await p.evaluate(async()=>{document.querySelector('#chat-panel').style.position='relative';document.querySelector('#chat-input-area').style.cssText='position:absolute;bottom:0';window.motionVh=844;window.motionScale=1;Object.defineProperty(visualViewport,'height',{configurable:true,get:()=>motionVh});Object.defineProperty(visualViewport,'scale',{configurable:true,get:()=>motionScale});await new Promise((ok,no)=>{const s=document.createElement('script');s.src='/ui/boot/viewport.js';s.onload=ok;s.onerror=no;document.head.append(s);});});
  const cfg=config(layout());cfg.chat_common.composer={keyboard_motion:settings};await p.evaluate(async cfg=>api.initChatConfig({config:cfg}),cfg);await focusDraft(p);return p;
 }
 test('keyboard movement starts at the rendered position while app height changes immediately',async t=>{
@@ -292,7 +292,7 @@ async function keyboardFixture(t,mode='content') {
    Object.defineProperty(visualViewport,'height',{configurable:true,get:()=>keyboardHeight});
    Object.defineProperty(visualViewport,'scale',{configurable:true,get:()=>keyboardScale});
   }
-  await new Promise((ok,no)=>{const s=document.createElement('script');s.src='/v3-ui/boot/viewport.js';s.onload=ok;s.onerror=no;document.head.append(s);});
+  await new Promise((ok,no)=>{const s=document.createElement('script');s.src='/ui/boot/viewport.js';s.onload=ok;s.onerror=no;document.head.append(s);});
  },mode);
  return p;
 }

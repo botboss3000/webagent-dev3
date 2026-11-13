@@ -72,7 +72,7 @@ pub fn discover(ui: &Path) -> Result<Value, String> {
         {
             return Err(format!("Invalid page identity: {}", descriptor.display()));
         }
-        let base = format!("/v3-ui/main-panel/{}", page.id);
+        let base = format!("/ui/main-panel/{}", page.id);
         let html = page
             .html
             .as_deref()
@@ -126,7 +126,7 @@ pub fn seo_head(origin: &str) -> String {
     let home = format!("{origin}/");
     let structured = json!([
         {"@context": "https://schema.org", "@type": "Organization", "name": "WebAgent", "url": home,
-         "logo": format!("{origin}/v3-ui/app-icon.svg"), "description": SEO_DESCRIPTION,
+         "logo": format!("{origin}/ui/app-icon.svg"), "description": SEO_DESCRIPTION,
          "sameAs": ["https://github.com/botboss3000/webagent"]},
         {"@context": "https://schema.org", "@type": "WebSite", "name": "WebAgent", "url": home}
     ])
@@ -134,7 +134,7 @@ pub fn seo_head(origin: &str) -> String {
     .replace("</", "<\\/");
     let (home, image, description) = (
         escape(&home),
-        escape(&format!("{origin}/v3-ui/og-card.png")),
+        escape(&format!("{origin}/ui/og-card.png")),
         escape(SEO_DESCRIPTION),
     );
     format!(
@@ -210,6 +210,8 @@ pub fn routes<S: Clone + Send + Sync + 'static>(ui: &Path) -> Router<S> {
             }),
         )
         .route_service("/setup.html", ServeFile::new(ui.join("setup.html")))
+        .nest_service("/ui", ServeDir::new(ui))
+        // Former prefix: installed apps, embeds on other sites and stored links still use it.
         .nest_service("/v3-ui", ServeDir::new(ui))
 }
 
@@ -349,7 +351,7 @@ mod tests {
         let head = seo_head("https://example.test");
         for tag in [
             r#"<link rel="canonical" href="https://example.test/">"#,
-            r#"<meta property="og:image" content="https://example.test/v3-ui/og-card.png">"#,
+            r#"<meta property="og:image" content="https://example.test/ui/og-card.png">"#,
             r#"<meta name="twitter:card" content="summary_large_image">"#,
             r#""@type":"WebSite""#,
         ] {
@@ -414,7 +416,7 @@ mod tests {
         }
         let pages = discover(root.path()).unwrap();
         assert_eq!(pages["main"][0]["id"], "first");
-        assert_eq!(pages["main"][1]["entry"], "/v3-ui/main-panel/later/page.js");
+        assert_eq!(pages["main"][1]["entry"], "/ui/main-panel/later/page.js");
     }
     #[test]
     fn rejects_asset_escape() {

@@ -2,7 +2,7 @@
 /** Resolves the requested embed challenge, explains the agent and delegated chat actions, and posts a one-use authorization result to the same-origin opener after explicit consent. Returns false when no embed_auth challenge is present and true when the popup route is handled. */
 export async function authorizeEmbedPopup({request,me}){
  const challenge=new URL(location.href).searchParams.get('embed_auth');if(!challenge)return false;
- const style=document.createElement('link');style.rel='stylesheet';style.href='/v3-ui/embed/embed.css';document.head.append(style);
+ const style=document.createElement('link');style.rel='stylesheet';style.href='/ui/embed/embed.css';document.head.append(style);
  document.getElementById('app').hidden=true;document.body.classList.remove('is-booting');window.__boot?.reveal();
  const card=document.createElement('section');card.className='wa-embed-connect';const title=document.createElement('h1');title.textContent='Connect website chat';
  const detail=document.createElement('p'),status=document.createElement('p');status.setAttribute('role','status');

@@ -5,12 +5,12 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const UI=path.resolve(__dirname,'../../..'),shared=UI;
 /** Serve real isolated source to a networkless browser with deterministic private-session fixtures. */
 async function fixture(t,{mobile=false}={}) {
- const html='<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/shared/shared/css/design-system.css"><link rel="stylesheet" href="/shared/shared/css/app1.css"><link rel="stylesheet" href="/v3-ui/chat/chat.css"><style>body{margin:0}#chat-panel{width:100%;height:100vh}#chat-header{position:fixed;top:20px;left:12px;width:340px}#session-dropdown{width:320px;min-height:40px}#session-dropdown-trigger{display:flex;width:100%;align-items:center}</style><main id="chat-panel">'+fs.readFileSync(path.join(UI,'chat/chat.html'),'utf8')+'</main>';
+ const html='<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/shared/shared/css/design-system.css"><link rel="stylesheet" href="/shared/shared/css/app1.css"><link rel="stylesheet" href="/ui/chat/chat.css"><style>body{margin:0}#chat-panel{width:100%;height:100vh}#chat-header{position:fixed;top:20px;left:12px;width:340px}#session-dropdown{width:320px;min-height:40px}#session-dropdown-trigger{display:flex;width:100%;align-items:center}</style><main id="chat-panel">'+fs.readFileSync(path.join(UI,'chat/chat.html'),'utf8')+'</main>';
  const server=http.createServer((req,res)=>{
   const u=new URL(req.url,'http://localhost').pathname;
   if(u==='/'){res.setHeader('content-type','text/html');return res.end(html);}
   const root=u.startsWith('/shared/')?shared:UI;
-  const p=path.resolve(root,u.replace(/^\/(?:v3-ui|shared)\//,''));
+  const p=path.resolve(root,u.replace(/^\/(?:ui|shared)\//,''));
   if(!p.startsWith(root+path.sep)){res.writeHead(403);return res.end();}
   fs.readFile(p,(err,b)=>{res.writeHead(err?404:200,{'content-type':p.endsWith('.js')?'text/javascript':p.endsWith('.css')?'text/css':p.endsWith('.json')?'application/json':'text/plain'});res.end(err?'missing':b);});
  });
@@ -20,9 +20,9 @@ async function fixture(t,{mobile=false}={}) {
  t.after(async()=>{await browser.close();await new Promise(r=>server.close(r));});
  await page.goto('http://127.0.0.1:'+server.address().port+'/');
  await page.evaluate(async()=>{
-  const {mountSessionDropdown}=await import('/v3-ui/chat/controls/session-dropdown/controller.js');
-  const {createSessionList}=await import('/v3-ui/chat/controls/session-dropdown/list.js');
-  const cfg=await import('/v3-ui/chat/controls/session-dropdown/config.js');await cfg.loadSessionDropdownConfig();window.cfg=cfg;
+  const {mountSessionDropdown}=await import('/ui/chat/controls/session-dropdown/controller.js');
+  const {createSessionList}=await import('/ui/chat/controls/session-dropdown/list.js');
+  const cfg=await import('/ui/chat/controls/session-dropdown/config.js');await cfg.loadSessionDropdownConfig();window.cfg=cfg;
   window.config=cfg.sessionDropdownConfig('chat_desktop');window.selectedCalls=[];window.writes=[];window.refreshes=0;
   const root=document.querySelector('#session-dropdown');
   window.items=Array.from({length:18},(_,i)=>({id:'s'+i,title:'Session '+i,agent_id:'shared_default',last_active_at:123,metadata_revision:1,status:'active'}));

@@ -2,7 +2,7 @@ import {createBackgroundIssues} from './shared/background-issues.js';
 import {createAbilityDrift,abilityDriftView} from './shared/ability-drift.js';
 import {requestTouchVibration} from './shared/vibrate.js';
 // Port of V2 private-access shell; authentication remains exclusively V3.
-const privateResponse=await fetch('/v3-ui/private-access/private-access-page/private-access-page.html');
+const privateResponse=await fetch('/ui/private-access/private-access-page/private-access-page.html');
 if(!privateResponse.ok)throw Error('Private access page failed to load');
 document.getElementById('app-restricted-overlay').innerHTML=await privateResponse.text();
 const privateHost=document.querySelector('[data-private-access-form]');
@@ -119,7 +119,7 @@ async function mountAgents(){
   create.querySelector('#create-page-tab').setAttribute('aria-controls',createDescriptor.panelId);
   create.querySelector('section').id=createDescriptor.panelId;
   grid.append(create);
-  const css=document.createElement('link');css.rel='stylesheet';css.href='/v3-ui/main-panel/agents/pages/sessions/sessions.css';document.head.append(css);
+  const css=document.createElement('link');css.rel='stylesheet';css.href='/ui/main-panel/agents/pages/sessions/sessions.css';document.head.append(css);
   $('agents-grid').replaceWith(grid);
   // The shared CSS fades and shows a chevron at each edge with hidden squares; these classes drive it.
   const strip=grid.querySelector('.agents-squares-wrap'),edges=()=>{
@@ -223,7 +223,7 @@ function startProtectedPage(page){
     for(const href of page.css||[]){
       if(!protectedAsset(href))continue;
       const link=document.createElement('link');link.rel='stylesheet';link.href=href;
-      document.head.insertBefore(link,document.querySelector('link[href^="/v3-ui/app.css"]'));
+      document.head.insertBefore(link,document.querySelector('link[href^="/ui/app.css"]'));
     }
     if(protectedAsset(page.html)){
       const response=await fetch(page.html,{credentials:'same-origin'});
@@ -251,7 +251,7 @@ async function loadMainPages(){
       if(protectedAsset(href))continue;
       const link=document.createElement('link');
       link.rel='stylesheet';link.href=href;
-      document.head.insertBefore(link,document.querySelector('link[href^="/v3-ui/app.css"]'));
+      document.head.insertBefore(link,document.querySelector('link[href^="/ui/app.css"]'));
     }
     const tab=document.createElement('button');
     tab.id='tab-button-'+page.id;tab.type='button';tab.className='main-tab';

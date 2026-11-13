@@ -16,7 +16,7 @@ pub(super) async fn live_ui(
     next: Next,
 ) -> Response {
     let path = request.uri().path();
-    if (path == "/app" || path.starts_with("/v3-ui/"))
+    if (path == "/app" || path.starts_with("/ui/") || path.starts_with("/v3-ui/"))
         && request
             .headers()
             .get("cookie")
@@ -30,7 +30,8 @@ pub(super) async fn live_ui(
     }
     let path = request.uri().path();
     if matches!(path, "/" | "/app" | "/setup.html")
-        || path == "/v3-ui"
+        || matches!(path, "/ui" | "/v3-ui")
+        || path.starts_with("/ui/")
         || path.starts_with("/v3-ui/")
     {
         if let Some(ui) = webagent_webapp::configuration::live_root(
@@ -137,7 +138,9 @@ mod preview {
     pub(super) fn variant_file(root: &Path, request_path: &str) -> Option<PathBuf> {
         let relative = match request_path {
             "/app" => "index.html",
-            path => path.strip_prefix("/v3-ui/")?,
+            path => path
+                .strip_prefix("/ui/")
+                .or_else(|| path.strip_prefix("/v3-ui/"))?,
         };
         let mut file = root.to_path_buf();
         for part in relative.split('/') {
@@ -277,6 +280,7 @@ mod preview {
             std::fs::write(dir.path().join("index.html"), "x").expect("file");
             std::fs::write(dir.path().join("chat/a.js"), "x").expect("file");
             assert!(variant_file(dir.path(), "/app").is_some());
+            assert!(variant_file(dir.path(), "/ui/chat/a.js").is_some());
             assert!(variant_file(dir.path(), "/v3-ui/chat/a.js").is_some());
             assert!(variant_file(dir.path(), "/v3-ui/chat/missing.js").is_none());
             assert!(variant_file(dir.path(), "/v3-ui/../index.html").is_none());

@@ -3,7 +3,7 @@
    ------------------------------------------------------------
    These --sg-* tokens used to live in ui/shared/css/design-system.css.
    They moved here so the Stargaze background is fully self-contained:
-   deleting /v3-ui/boot/background/stargaze/ removes the renderer AND its palette.
+   deleting /ui/boot/background/stargaze/ removes the renderer AND its palette.
    stargaze.js carries identical hard-coded fallbacks, so there is no
    flash before this stylesheet (injected by the plugin) applies.
 

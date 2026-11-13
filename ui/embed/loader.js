@@ -14,7 +14,7 @@
  const READER_WIDTH=480;
  const host=document.createElement('div');host.setAttribute('data-webagent-widget','');document.body.append(host);
  const shadow=host.attachShadow({mode:'open'});
- const style=document.createElement('link');style.rel='stylesheet';style.href=origin+'/v3-ui/chat/widget/window.css';shadow.append(style);
+ const style=document.createElement('link');style.rel='stylesheet';style.href=origin+'/ui/chat/widget/window.css';shadow.append(style);
  const iframe=document.createElement('iframe');iframe.hidden=true;iframe.title='WebAgent chat';iframe.referrerPolicy='origin';iframe.src=origin+'/embed/'+encodeURIComponent(agent)+'?origin='+encodeURIComponent(location.origin);
  // Allow the first-party authentication popup without sharing its credential with the embedding page.
  iframe.setAttribute('allow','clipboard-write; microphone; autoplay');
@@ -78,7 +78,7 @@
   const response=await fetch(origin+'/api/v3/embed/'+encodeURIComponent(agent)+'/descriptor?origin='+encodeURIComponent(location.origin),{credentials:'omit'});
   if(!response.ok)throw new Error('Chat embedding is unavailable for this website.');
   const descriptor=await response.json();
-  const {mergeProfile,createFloatingChat,createChatLauncher,createTouchVibration}=await import(origin+'/v3-ui/chat/widget/window.js');
+  const {mergeProfile,createFloatingChat,createChatLauncher,createTouchVibration}=await import(origin+'/ui/chat/widget/window.js');
   if(destroyed)throw new Error('Widget destroyed.');
   // Host chrome uses local user activation and the iframe-loaded central UI configuration.
   const feedback=createTouchVibration(()=>vibrationConfig);

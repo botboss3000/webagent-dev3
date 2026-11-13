@@ -256,7 +256,7 @@ body #app-restricted-overlay {
 }
 /* Shared desktop scrollbar: a persistent 6px rounded thumb on a transparent
    track in every browser. Chromium/Safari draw it from the layer below; desktop
-   Firefox draws the same thumb (.wa-scrollbar) from /v3-ui/shared/scrollbars.js.
+   Firefox draws the same thumb (.wa-scrollbar) from /ui/shared/scrollbars.js.
    Layered !important outranks every unlayered !important, so page-specific
    widths and colours yield. Bars hidden with scrollbar-width:none stay hidden,
    and touch devices keep their native bars. */

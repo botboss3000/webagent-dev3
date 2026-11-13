@@ -349,7 +349,7 @@ async fn agent_sites(host: &tools::native_host::Host<'_>, sid: &str) -> Result<V
 
 fn install_url() -> String {
     format!(
-        "{}/v3-ui/shared/browser-extension/install.html",
+        "{}/ui/shared/browser-extension/install.html",
         webagent_webapp::pages::public_origin()
     )
 }

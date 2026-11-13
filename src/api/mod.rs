@@ -500,14 +500,12 @@ pub(super) fn router(app: App) -> Router {
             (if healthy{StatusCode::OK}else{StatusCode::SERVICE_UNAVAILABLE},Json(json!({"ready":healthy,"catalog_version":app.abilities.version()})))
         }))
         .merge(webagent_webapp::pages::routes(std::path::Path::new(&ui)))
-        // /ui is the original prefix of the base CSS, fonts and icons, now kept in ui/ itself.
-        .nest_service("/ui",ServeDir::new(&ui))
         .layer(middleware::from_fn_with_state(app.clone(), ui_pages::live_ui))
         .layer(DefaultBodyLimit::max(2*1024*1024))
         .layer(middleware::from_fn_with_state(app.clone(), crate::request_limits::per_address))
         .layer(middleware::from_fn(diagnostics::http_errors))
         .layer(middleware::from_fn(|request:Request,next:Next|async move{
-            let public_widget_module=request.uri().path()=="/v3-ui/chat/widget/window.js";
+            let public_widget_module=matches!(request.uri().path(),"/ui/chat/widget/window.js"|"/v3-ui/chat/widget/window.js");
             // Static UI code is the same for every account: let the browser keep it and
             // revalidate each use (a body-less 304 when unchanged), so a page load stops
             // re-downloading every module while a live UI publish still applies at once.

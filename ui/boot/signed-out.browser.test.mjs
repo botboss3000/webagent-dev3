@@ -8,7 +8,7 @@ const shared=path.join(root,'ui');
 const pages=[];
 for(const id of ['app','agents','builds','account','session-metrics']){
  const meta=JSON.parse(await fs.readFile(path.join(root,'ui/main-panel',id,'page.json'),'utf8'));
- const asset=name=>name?'/v3-ui/main-panel/'+id+'/'+name:null;
+ const asset=name=>name?'/ui/main-panel/'+id+'/'+name:null;
  pages.push({...meta,entry:asset(meta.entry),html:asset(meta.html),css:(meta.css||[]).map(asset)});
 }
 pages.push({id:'automation',label:'Automations',entry:'/api/v3/modules/automation/assets/page.js',html:'/api/v3/modules/automation/assets/page.html',css:['/api/v3/modules/automation/assets/page.css']});
@@ -23,8 +23,7 @@ const server=http.createServer(async(req,res)=>{
  if(url.pathname.startsWith('/api/')){res.statusCode=401;res.end('{"error":"Sign in required"}');return;}
  let asset;
  if(url.pathname==='/'||url.pathname==='/app')asset=path.join(root,'ui/index.html');
- else if(url.pathname.startsWith('/v3-ui/'))asset=path.join(root,'ui',url.pathname.slice(7));
- else if(url.pathname.startsWith('/ui/'))asset=path.join(shared,url.pathname.slice(4));
+ else if(url.pathname.startsWith('/ui/'))asset=path.join(root,'ui',url.pathname.slice(4));
  try{
   if(!asset)throw Error('missing');
   const mime={'.js':'text/javascript','.mjs':'text/javascript','.css':'text/css','.html':'text/html','.json':'application/json','.svg':'image/svg+xml','.woff2':'font/woff2'};

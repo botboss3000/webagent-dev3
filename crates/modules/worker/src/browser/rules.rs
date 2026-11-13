@@ -1037,7 +1037,7 @@ mod preview_route_tests {
     fn source_asset_route_points_to_file_read() {
         let sid = "083cd9bb-7c27-4022-a9de-09e7110a9e92";
         let fault = validate_path(
-            &Value::from("/v3-ui/chat/elements/activity-group/style.css"),
+            &Value::from("/ui/chat/elements/activity-group/style.css"),
             sid,
             "shared_default",
         )

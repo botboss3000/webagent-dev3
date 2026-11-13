@@ -14,7 +14,7 @@ async function fixture(t,{mobile=false,dark=false,reduced=false,counts={}}={}) {
  const server=http.createServer((req,res)=>{
   const url=new URL(req.url,'http://localhost');
   if(url.pathname==='/'){res.setHeader('content-type','text/html');res.setHeader('content-security-policy',CSP);return res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>:root{--fg-3:#777;--fg-2:#444;--accent:#369;--bg-tint:#eee;--bg-2:#fff;--border-width:1px;--border:#aaa;--r-sm:6px}body{background:'+(dark?'#151515':'white')+'}</style><main id="messages"><div data-public-id="q">Question</div></main>');}
-  const file=path.resolve(ROOT,'ui',url.pathname.replace(/^\/v3-ui\//,''));
+  const file=path.resolve(ROOT,'ui',url.pathname.replace(/^\/ui\//,''));
   if(!file.startsWith(path.join(ROOT,'ui')+path.sep)){res.writeHead(403);return res.end();}
   fs.readFile(file,(e,b)=>{res.writeHead(e?404:200,{'content-type':file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/plain'});res.end(e?'missing':b);});
  });
@@ -28,7 +28,7 @@ async function fixture(t,{mobile=false,dark=false,reduced=false,counts={}}={}) {
  t.after(async()=>{await browser.close();await new Promise(r=>server.close(r));assert.deepEqual(hashes(),before);assert.deepEqual(errors,[]);});
  await page.goto('http://127.0.0.1:'+server.address().port+'/');
  await page.evaluate(async()=>{
-  window.api=await import('/v3-ui/chat/elements/index.js');window.admin=true;window.flags={show_activity_groups:true};window.app={currentSessionId:'s'};
+  window.api=await import('/ui/chat/elements/index.js');window.admin=true;window.flags={show_activity_groups:true};window.app={currentSessionId:'s'};
   window.view=api.createChatElements({app,isAdmin:()=>admin,chatUiFlag:(k,f)=>flags[k]??f});
   window.render=(state='running',id='s')=>{app.currentSessionId=id;view.render({sessionId:id,runs:[{id:'r',state}]},document.querySelector('#messages'));};render();
  });
@@ -78,7 +78,7 @@ for(const opts of [{},{mobile:true,dark:true}])test('sub agent spawns read as su
 });
 test('mini transcript can be opened by an alternate ellipsis trigger',async t=>{
  const p=await fixture(t);await p.evaluate(async()=>{
-  view.disconnect();const {createMiniTranscript}=await import('/v3-ui/chat/elements/mini-transcript/index.js');const {createTypingEllipsis}=await import('/v3-ui/chat/elements/typing-ellipsis/index.js');
+  view.disconnect();const {createMiniTranscript}=await import('/ui/chat/elements/mini-transcript/index.js');const {createTypingEllipsis}=await import('/ui/chat/elements/typing-ellipsis/index.js');
   window.transcript=createMiniTranscript();transcript.update({rows:[],events:[]});window.indicator=createTypingEllipsis({onActivate:()=>transcript.toggle()});indicator.update([{state:'running'}]);document.querySelector('#messages').append(indicator.element,transcript.element);
  });
  await p.locator('.chat-typing-ellipsis').click();assert.equal(await p.locator('.v2-activity-body').isVisible(),true);
@@ -89,7 +89,7 @@ test('mini transcript can be opened by an alternate ellipsis trigger',async t=>{
 test('broker metadata renders inside expanded tool details with inert values',async t=>{
  const p=await fixture(t);
  await p.evaluate(async()=>{
-  view.disconnect();const {createTranscriptRow,patchTranscriptRow}=await import('/v3-ui/chat/elements/mini-transcript/rows.js');
+  view.disconnect();const {createTranscriptRow,patchTranscriptRow}=await import('/ui/chat/elements/mini-transcript/rows.js');
   const context={broker_id:'broker-example-123',summary:'<img src=x onerror=alert(1)>',selection:'created',state:'open',provenance:{session_id:'00000000-0000-4000-8000-000000000001'}};
   window.brokerRow={id:'broker-tool',category:'tools',label:'file_write',events:[{kind:'tool_call',payload:{arguments:{broker_id:'new'}}},{kind:'tool_result',payload:{output:JSON.stringify({status:'success',output:{broker_context:context,broker_job_id:'job-example',broker_release_id:'release-example'}})}}]};
   window.brokerNode=createTranscriptRow(brokerRow);document.querySelector('#messages').append(brokerNode);
@@ -108,12 +108,12 @@ test('broker metadata renders inside expanded tool details with inert values',as
 
 test('bundled DOMPurify renders chat and mini Markdown under deployed CSP',async t=>{
  const p=await fixture(t);
- await p.addScriptTag({url:'/v3-ui/vendor/marked.min.js'});
- await p.addScriptTag({url:'/v3-ui/vendor/purify.min.js'});
+ await p.addScriptTag({url:'/ui/vendor/marked.min.js'});
+ await p.addScriptTag({url:'/ui/vendor/purify.min.js'});
  await p.evaluate(async()=>{
   view.disconnect();
-  const {createMessage}=await import('/v3-ui/chat/core/message-view.js');
-  const {createTranscriptRow}=await import('/v3-ui/chat/elements/mini-transcript/rows.js');
+  const {createMessage}=await import('/ui/chat/core/message-view.js');
+  const {createTranscriptRow}=await import('/ui/chat/elements/mini-transcript/rows.js');
   const text='**Safe bold** [link](https://example.com)\n\n<span style="color:red">Styled text</span><img src=x onerror="window.__sanitizerXss=true"><script>window.__sanitizerXss=true</script>';
   window.chatNode=createMessage({id:'chat-markdown',seq:1,run_id:'r',role:'assistant',content:text});
   window.miniNode=createTranscriptRow({id:'mini-markdown',category:'messages',label:'Agent',text,events:[{kind:'agent_step_end',created_at:'2026-01-01T00:00:00Z',payload:{}}]});
@@ -134,9 +134,9 @@ test('agent reply screenshots use the attachment tile row and scroll sideways at
  await p.evaluate(async()=>{
   view.disconnect();
   history.replaceState(null,'','/?session_id=s');
-  const css=document.createElement('link');css.rel='stylesheet';css.href='/v3-ui/chat/chat.css';document.head.append(css);
+  const css=document.createElement('link');css.rel='stylesheet';css.href='/ui/chat/chat.css';document.head.append(css);
   await new Promise(resolve=>{css.onload=resolve;css.onerror=resolve;});
-  const {createMessage}=await import('/v3-ui/chat/core/message-view.js');
+  const {createMessage}=await import('/ui/chat/core/message-view.js');
   const files=Array.from({length:12},(_,i)=>({id:'00000000-0000-4000-8000-0000000000'+String(i).padStart(2,'0'),name:'screenshot-'+i+'.png',media_type:'image/png'}));
   window.reply=createMessage({id:'assistant:r',seq:2,run_id:'r',role:'assistant',content:'Checked both widths.',attachments:files});
   window.progress=createMessage({id:'working:r:auto:1:0',seq:1,run_id:'r',role:'assistant',content:'Reading the page.'});

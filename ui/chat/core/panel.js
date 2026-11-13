@@ -74,7 +74,7 @@ export async function mountChatPanel({root = document.getElementById('chat-panel
   async function loadAgentPrivacy(){if(session)return;void setChatConfigAgent(getAgentId());privacyNotice(null);try{const data=await request('/agents/'+encodeURIComponent(getAgentId())+'/access-summary');if(!session)privacyNotice(data.conversation_privacy,data.tools_notice);}catch(error){if(!session){privacyNotice(null);const notice=$('chat-privacy-notice');if(notice)notice.textContent='Conversation privacy unavailable. Retry before sending.';}}}
 /** Fetches, validates, and mounts the required V3 chat partial into the supplied root. */
 async function mountChat(){
-  const response=await fetch('/v3-ui/chat/chat.html?v=chat-partial-20261027-actions',{credentials:'same-origin'});
+  const response=await fetch('/ui/chat/chat.html?v=chat-partial-20261027-actions',{credentials:'same-origin'});
   if(!response.ok)throw Error('Chat shell unavailable');
   const template=document.createElement('template');
   template.innerHTML=await response.text();

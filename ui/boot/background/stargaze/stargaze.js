@@ -3,8 +3,8 @@
    ------------------------------------------------------------
    The app's original animated background, now a drop-in plugin. Colours
    come entirely from the --sg-* tokens in stargaze.css (this folder), so
-   deleting /v3-ui/boot/background/stargaze/ removes the look AND its tokens with
-   no edit anywhere else. The engine (/v3-ui/boot/background/_engine/manager.js)
+   deleting /ui/boot/background/stargaze/ removes the look AND its tokens with
+   no edit anywhere else. The engine (/ui/boot/background/_engine/manager.js)
    calls start(genui) when Stargaze is the chosen background for the
    active theme, and stop() when it is swapped out.
    ============================================================ */
@@ -14,7 +14,7 @@
 
   // Ensure this plugin's stylesheet (its --sg-* tokens) is present.
   (function ensureCss() {
-    var href = '/v3-ui/boot/background/stargaze/stargaze.css';
+    var href = '/ui/boot/background/stargaze/stargaze.css';
     if (document.querySelector('link[data-bg="' + RID + '"]')) return;
     var l = document.createElement('link');
     l.rel = 'stylesheet'; l.href = href; l.setAttribute('data-bg', RID);

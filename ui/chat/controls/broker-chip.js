@@ -89,7 +89,7 @@ function queueAhead(ahead) {
     const row = el('div', 'broker-blocker');
     const name = other.name || other.task_id || other.job_id.slice(0, 8);
     if (other.task_id) {
-      const link = el('a', '', name); link.href = '/v3-ui/broker-card.html?task_id=' + encodeURIComponent(other.task_id); row.append(link);
+      const link = el('a', '', name); link.href = '/ui/broker-card.html?task_id=' + encodeURIComponent(other.task_id); row.append(link);
     } else row.append(name);
     row.append(' · ' + (LABELS[other.status] || other.status) + (other.phase ? ' (' + other.phase + ')' : '') + (other.session ? ' · session ' + other.session : ''));
     box.append(row);
@@ -168,7 +168,7 @@ export function renderCard(task, detail, hold = () => {}, {pageLink = false} = {
   }
   if (pageLink) {
     const link = el('a', 'broker-page-link', 'Task progress page');
-    link.href = '/v3-ui/broker-card.html?task_id=' + encodeURIComponent(task.task_id);
+    link.href = '/ui/broker-card.html?task_id=' + encodeURIComponent(task.task_id);
     box.append(link);
   }
   // Recomputes every counter from the snapshot and the time since it was read.

@@ -18,7 +18,7 @@ export function describe(node){
 /** Keeps the nearest stack frames as "function (path:line:column)" with the origin removed. */
 export function frames(stack){
   return clean(String(stack||'').split('\n').slice(2,6).map(line=>line.trim().replace(/^at /,'')
-    .replace(/https?:\/\/[^/\s)]+\/(v3-ui\/)?/,'').replace(/\?[^:)\s]*/,'')).join(' > '));
+    .replace(/https?:\/\/[^/\s)]+\/(ui\/)?/,'').replace(/\?[^:)\s]*/,'')).join(' > '));
 }
 
 /** Starts collection when the category is enabled; resolves to a disposer. */

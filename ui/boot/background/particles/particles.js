@@ -12,7 +12,7 @@
   (function ensureCss() {
     if (document.querySelector('link[data-bg="' + RID + '"]')) return;
     var l = document.createElement('link');
-    l.rel = 'stylesheet'; l.href = '/v3-ui/boot/background/particles/particles.css';
+    l.rel = 'stylesheet'; l.href = '/ui/boot/background/particles/particles.css';
     l.setAttribute('data-bg', RID);
     // start() reads the palette synchronously on register — BEFORE this async
     // sheet (which defines --particles-rgb) has applied. Re-read once it lands so

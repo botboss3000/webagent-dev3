@@ -230,7 +230,7 @@ fn page(title: &str, description: &str, canonical: &str, body: &str) -> Html<Str
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
 <title>{title}</title>\n<meta name=\"description\" content=\"{description}\">\n<link rel=\"canonical\" href=\"{origin}{canonical}\">\n\
 <meta property=\"og:type\" content=\"article\">\n<meta property=\"og:title\" content=\"{title}\">\n<meta property=\"og:description\" content=\"{description}\">\n\
-<link rel=\"icon\" href=\"/v3-ui/app-icon.svg\" type=\"image/svg+xml\">\n<link rel=\"stylesheet\" href=\"/ui/vendor/fonts/fonts.css\">\n\
+<link rel=\"icon\" href=\"/ui/app-icon.svg\" type=\"image/svg+xml\">\n<link rel=\"stylesheet\" href=\"/ui/vendor/fonts/fonts.css\">\n\
 <link rel=\"stylesheet\" href=\"/ui/shared/css/design-system.css\">\n<style>{PAGE_CSS}</style>\n</head>\n<body>\n<div class=\"pw-wrap\">\n\
 <nav class=\"pw-top\"><a class=\"pw-brand\" href=\"/\">WebAgent</a><a href=\"/wiki\">Wiki</a></nav>\n{body}\n</div>\n</body>\n</html>\n"
     ))

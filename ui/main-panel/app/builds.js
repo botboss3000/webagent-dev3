@@ -313,7 +313,7 @@ export function mountBuilds(panel, onStatus = () => {}) {
         // The task's Broker card page: its build and checks with live stage times.
         const page = document.createElement('a');
         page.className = 'build-card-link';
-        page.href = '/v3-ui/broker-card.html?task_id=' + encodeURIComponent(job.task_id);
+        page.href = '/ui/broker-card.html?task_id=' + encodeURIComponent(job.task_id);
         page.textContent = 'Task progress';
         card.append(page);
       }

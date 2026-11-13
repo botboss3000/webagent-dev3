@@ -29,7 +29,7 @@
   window.WA_BG.active = function () { return activeApi ? 'bullet-grid' : 'none'; };
   if (!bootActive()) { finish(); return; }
   var script = document.createElement('script');
-  script.src = '/v3-ui/boot/background/bullet-grid/bullet-grid.js';
+  script.src = '/ui/boot/background/bullet-grid/bullet-grid.js';
   script.onerror = finish;
   window.WA_BG.whenReady('bullet-grid', function (api) {
     if (ended || !bootActive()) return;

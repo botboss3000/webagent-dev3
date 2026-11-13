@@ -3,7 +3,7 @@
 // GET /api/v3/builds/tasks/{task_id} (names, states and timings only), counts in the browser and re-reads every 15 s
 // while the newest job is queued or running. A failed read keeps the last card, says so with a
 // Retry now link and retries sooner (2 s, doubling, up to 15 s), even after the job finished. Linked from the chip's card, each Builds page
-// job and Claude Code release updates: /v3-ui/broker-card.html?task_id=<Broker ID>.
+// job and Claude Code release updates: /ui/broker-card.html?task_id=<Broker ID>.
 import {renderCard} from './chat/controls/broker-chip.js';
 
 const REFRESH_MS = 15000, FETCH_TIMEOUT_MS = 10000;

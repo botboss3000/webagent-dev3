@@ -2,7 +2,7 @@
    Background registry  —  window.WA_BG (renderer-facing API)
    ------------------------------------------------------------
    This is core infrastructure, NOT a background. Every background
-   plugin (a folder under /v3-ui/boot/background/<id>/) ships an <id>.js that,
+   plugin (a folder under /ui/boot/background/<id>/) ships an <id>.js that,
    when loaded, calls:
 
        window.WA_BG.register('<id>', { start: fn, stop: fn, refresh: fn });

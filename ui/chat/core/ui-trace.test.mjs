@@ -5,7 +5,7 @@ import {describe,frames,mountUiTrace} from './ui-trace.js';
 test('elements and stack frames reduce to the structural alphabet',()=>{
   globalThis.document={};globalThis.window={};
   assert.equal(describe({nodeType:1,tagName:'TEXTAREA',id:'chat-input',className:'a b c d'}),'textarea#chat-input.a.b.c');
-  assert.equal(frames('Error\n    at HTMLElement.blur (https://dev.webagent.live/v3-ui/chat/core/ui-trace.js:1:1)\n    at applyKb (https://dev.webagent.live/v3-ui/boot/viewport.js?v=2:45:52)\n    at applyAll (https://dev.webagent.live/v3-ui/boot/viewport.js:63:36)'),
+  assert.equal(frames('Error\n    at HTMLElement.blur (https://dev.webagent.live/ui/chat/core/ui-trace.js:1:1)\n    at applyKb (https://dev.webagent.live/ui/boot/viewport.js?v=2:45:52)\n    at applyAll (https://dev.webagent.live/ui/boot/viewport.js:63:36)'),
     'applyKb (boot/viewport.js:45:52) > applyAll (boot/viewport.js:63:36)');
 });
 test('collection stays off unless the Diagnostics category enables it',async()=>{

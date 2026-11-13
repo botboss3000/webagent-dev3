@@ -9,13 +9,13 @@
   "background_color": "#000000",
   "icons": [
     {
-      "src": "/v3-ui/app-icon.svg",
+      "src": "/ui/app-icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"
     },
     {
-      "src": "/v3-ui/app-icon.svg",
+      "src": "/ui/app-icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "maskable"

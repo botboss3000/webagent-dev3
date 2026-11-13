@@ -20,7 +20,7 @@ function startupModules(){
 
 test('index.html preloads exactly the modules app.js imports at start-up',()=>{
  const html=fs.readFileSync(path.join(__dirname,'index.html'),'utf8');
- const listed=[...html.matchAll(/<link rel="modulepreload" href="\/v3-ui\/([^"]+)">/g)].map(m=>m[1]);
+ const listed=[...html.matchAll(/<link rel="modulepreload" href="\/ui\/([^"]+)">/g)].map(m=>m[1]);
  const expected=startupModules();
- assert.deepEqual(listed,expected,'Replace the modulepreload block in index.html with:\n'+expected.map(f=>`<link rel="modulepreload" href="/v3-ui/${f}">`).join('\n'));
+ assert.deepEqual(listed,expected,'Replace the modulepreload block in index.html with:\n'+expected.map(f=>`<link rel="modulepreload" href="/ui/${f}">`).join('\n'));
 });
