@@ -1901,6 +1901,7 @@ impl Service {
         let dx = args.get("dx").and_then(Value::as_f64).unwrap_or(0.0);
         let dy = args.get("dy").and_then(Value::as_f64).unwrap_or(0.0);
         let moves = if dx == 0.0 && dy == 0.0 { 0 } else { 10 };
+        wd::execute(state.driver(), scripts::GESTURE_WATCH, Vec::new()).await?;
         let point = |step: i32| {
             let share = f64::from(step) / 10.0;
             json!([{"x":x + dx * share,"y":y + dy * share}])
@@ -1945,6 +1946,22 @@ impl Service {
         state.step(step);
         let after =
             wd::execute(state.driver(), scripts::TOUCH_TARGET, vec![json!(selector)]).await?;
+        let counts = wd::execute(state.driver(), scripts::GESTURE_READ, Vec::new()).await?;
+        // The browser took the pan when it cancelled the pointer or stopped letting the page
+        // cancel touchmove; the page owned it when every touchmove stayed cancelable.
+        let gesture = if counts.is_object() {
+            let count = |key: &str| counts[key].as_u64().unwrap_or(0);
+            let owner = if count("pointercancel") > 0 || count("uncancelable") > 0 {
+                "browser"
+            } else {
+                "page"
+            };
+            json!({"owner":owner,"pointercancel":count("pointercancel"),
+                "touchmove":count("touchmove"),"uncancelable_touchmove":count("uncancelable"),
+                "prevented_touchmove":count("prevented")})
+        } else {
+            Value::Null
+        };
         let focus = wd::execute(state.driver(), scripts::FOCUS, Vec::new()).await?;
         let focused = if focus.is_object() {
             focus_summary(state, &focus, true)
@@ -1954,7 +1971,8 @@ impl Service {
         let scroll = |value: &Value| json!({"left":value["scroll_left"],"top":value["scroll_top"]});
         Ok(
             json!({"action":"touch","applied":true,"target":used,"focused":focused,
-            "scroll_before":scroll(&before),"scroll_after":scroll(&after),"read_required":true}),
+            "scroll_before":scroll(&before),"scroll_after":scroll(&after),"gesture":gesture,
+            "read_required":true}),
         )
     }
 

@@ -174,6 +174,25 @@ const b=n.getBoundingClientRect();
 return {x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2),scroll_left:Math.round(n.scrollLeft),scroll_top:Math.round(n.scrollTop)};
 "#;
 
+/// Starts recording who owns a touch gesture: the browser cancels the pointer and stops
+/// letting the page cancel `touchmove` once it takes the pan for native scrolling.
+pub const GESTURE_WATCH: &str = r#"
+/* V3_GESTURE_WATCH */
+const g={pointercancel:0,touchmove:0,uncancelable:0,prevented:0};
+const opts={capture:true,passive:true};
+const cancel=()=>{g.pointercancel++;};
+const move=e=>{g.touchmove++;if(!e.cancelable)g.uncancelable++;setTimeout(()=>{if(e.defaultPrevented)g.prevented++;},0);};
+addEventListener('pointercancel',cancel,opts);addEventListener('touchmove',move,opts);
+window.__v3Gesture={g,stop(){removeEventListener('pointercancel',cancel,opts);removeEventListener('touchmove',move,opts);delete window.__v3Gesture;return g;}};
+return true;
+"#;
+
+/// Stops the gesture recording and returns its counts.
+pub const GESTURE_READ: &str = r#"
+/* V3_GESTURE_READ */
+return window.__v3Gesture?window.__v3Gesture.stop():null;
+"#;
+
 /// Re-checks an input target at dispatch against the region last read.
 pub const TARGET: &str = r#"
 /* V3_TARGET */

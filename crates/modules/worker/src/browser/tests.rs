@@ -667,6 +667,12 @@ async fn touch_drags_with_trusted_events_and_reports_focus() {
                 Some(Ok(
                     json!({"tag":"textarea","id":"chat-input","label":"","secret":false}),
                 ))
+            } else if source.contains("V3_GESTURE_WATCH") {
+                Some(Ok(json!(true)))
+            } else if source.contains("V3_GESTURE_READ") {
+                Some(Ok(
+                    json!({"pointercancel":1,"touchmove":10,"uncancelable":9,"prevented":0}),
+                ))
             } else {
                 None
             }
@@ -684,6 +690,8 @@ async fn touch_drags_with_trusted_events_and_reports_focus() {
     assert_eq!(dragged["applied"], true, "{dragged}");
     assert_eq!(dragged["focused"]["id"], "chat-input", "{dragged}");
     assert_eq!(dragged["scroll_after"]["left"], 80, "{dragged}");
+    assert_eq!(dragged["gesture"]["owner"], "browser", "{dragged}");
+    assert_eq!(dragged["gesture"]["uncancelable_touchmove"], 9, "{dragged}");
     let touches: Vec<String> = driver.page().cdp[before..]
         .iter()
         .filter(|(command, _)| command == "Input.dispatchTouchEvent")
