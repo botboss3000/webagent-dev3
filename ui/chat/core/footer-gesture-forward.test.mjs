@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { forwardFooterGestures, pullRefreshOwnsPull } from './footer-gesture-forward.js';
 
 const selection = { removed: 0, removeAllRanges() { this.removed += 1; } };
@@ -246,4 +247,14 @@ test('wiring is idempotent and the disposer aborts every listener', () => {
   duplicate();
   f.dispose();
   assert.ok(f.footer.registrations.every(({ options }) => options.signal.aborted));
+});
+
+test('the stylesheet disables the browser pan on the element the row scroller picks', async () => {
+  const css = await readFile(new URL('../chat.css', import.meta.url), 'utf8');
+  const rule = /#composer:focus-within[^{]*\{[^}]*\}/.exec(css);
+  assert.ok(rule, 'the composer rows have a focus-within pan rule');
+  // touch-action does not inherit, so naming only the rows leaves the row's own scroll container
+  // (the stats strip) panning under the browser — the case Android dismisses the keyboard for.
+  assert.match(rule[0], /#chat-pill-stats-strip/);
+  assert.match(rule[0], /touch-action:\s*none/);
 });
