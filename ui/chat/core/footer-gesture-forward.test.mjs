@@ -117,21 +117,53 @@ test('touch inside a nested scroller is ignored', () => {
   assert.equal(f.intent(), 0);
 });
 
-test('a press on the footer keeps the focused editor instead of closing its keyboard', () => {
+test('a press on a row below the composer keeps the composer focused', () => {
   const f = fixture();
-  const editor = { matches: () => true };
-  globalThis.document.activeElement = editor;
-  f.footer.contains = node => node === editor;
-  assert.equal(f.footer.dispatch('pointerdown', { button: 0 }).prevented, true);
-  // A press that lands in an editor keeps its caret placement.
-  assert.equal(f.footer.dispatch('pointerdown', { button: 0, target: { closest: () => editor } }).prevented, false);
-  // A press outside this surface, another button, or with no focused editor is untouched.
-  f.footer.contains = () => false;
-  assert.equal(f.footer.dispatch('pointerdown', { button: 0 }).prevented, false);
-  f.footer.contains = node => node === editor;
-  assert.equal(f.footer.dispatch('pointerdown', { button: 2 }).prevented, false);
-  globalThis.document.activeElement = {};
-  assert.equal(f.footer.dispatch('pointerdown', { button: 0 }).prevented, false);
+  const composer = { matches: () => true, closest: () => ({ id: 'chat-input-area' }) };
+  globalThis.document.activeElement = composer;
+  for (const type of ['pointerdown', 'mousedown']) {
+    // A touch tap still generates the compatibility mousedown that moves focus,
+    // so pointerdown alone would leave the keyboard closing on touch.
+    assert.equal(f.footer.dispatch(type, { button: 0 }).prevented, true);
+    f.footer.dispatch('pointerup');
+    // A press that lands in an editor keeps its caret placement.
+    assert.equal(f.footer.dispatch(type, { button: 0, target: { closest: () => composer } }).prevented, false);
+    f.footer.dispatch('pointerup');
+    // Another mouse button, or no focused composer, is untouched.
+    assert.equal(f.footer.dispatch(type, { button: 2 }).prevented, false);
+    globalThis.document.activeElement = {};
+    assert.equal(f.footer.dispatch(type, { button: 0 }).prevented, false);
+    f.footer.dispatch('pointerup');
+    globalThis.document.activeElement = composer;
+  }
+  // The chips row is a separate target with the composer outside it.
+  assert.equal(f.row.dispatch('mousedown', { button: 0 }).prevented, true);
+  globalThis.document.activeElement = null;
+});
+
+test('focus the press lost is restored when that gesture ends', () => {
+  const f = fixture();
+  let focused = 0;
+  const composer = {
+    isConnected: true,
+    matches: () => true,
+    closest: () => ({ id: 'chat-input-area' }),
+    focus: () => { focused += 1; globalThis.document.activeElement = composer; },
+  };
+  globalThis.document.activeElement = composer;
+  f.footer.dispatch('pointerdown', { button: 0 });
+  globalThis.document.activeElement = globalThis.document.body; // the browser dropped focus to the page
+  f.footer.dispatch('pointerup');
+  assert.equal(focused, 1);
+  // Focus that never left the composer is not touched again.
+  f.footer.dispatch('pointerdown', { button: 0 });
+  f.footer.dispatch('pointerup');
+  assert.equal(focused, 1);
+  // A control the user has just focused is never taken over.
+  f.footer.dispatch('pointerdown', { button: 0 });
+  globalThis.document.activeElement = { id: 'menu-item' };
+  f.footer.dispatch('pointerup');
+  assert.equal(focused, 1);
   globalThis.document.activeElement = null;
 });
 

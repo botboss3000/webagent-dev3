@@ -35,6 +35,19 @@ export function pullRefreshOwnsPull({ lastY, currentY, indicator } = {}) {
   return !!node && !node.hidden;
 }
 
+const EDITABLE_SELECTOR = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
+
+/**
+ * The chat composer's focused editor, or null. Only the composer keeps focus
+ * across a press on the rows below it; an editor in another surface keeps the
+ * browser's own focus behaviour.
+ */
+function _composerEditor() {
+  const active = typeof document === 'undefined' ? null : document.activeElement;
+  if (!active || !active.matches?.(EDITABLE_SELECTOR)) return null;
+  return active.closest?.('#chat-input-area, #chat-footer-row') ? active : null;
+}
+
 /**
  * Wires targets to the transcript scroller. Returns a disposer that removes
  * every listener it added; wiring is idempotent per element.
@@ -55,20 +68,43 @@ export function forwardFooterGestures({ targets = [], scroller, markIntent, canF
     el.dataset.chatFooterGestureWired = '1';
 
     // ── Press ──────────────────────────────────────────────────────────────
-    // Pressing a row under the composer would move focus off the editor and
-    // close the mobile keyboard before any scroll starts. Keep the editor that
-    // owns the gesture focused for presses on non-editable footer content;
-    // presses inside an editor still place its caret. Scrolling is driven by
-    // touch events, so cancelling pointerdown does not block it, and clicks
-    // (including the row's buttons) still fire.
-    el.addEventListener('pointerdown', (event) => {
-      if (event.button !== 0 || event.defaultPrevented) return;
-      const active = document.activeElement;
-      if (!active || active === event.target || !active.matches?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
-      if (el.contains && !el.contains(active)) return;
-      if (event.target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+    // A press on any row below the composer must not move focus off the editor:
+    // the browser dismisses the mobile keyboard as soon as focus leaves it, so a
+    // drag on one of these rows would close it. Cancel only the focus-moving
+    // default. pointerdown covers mouse and pen; mousedown is required as well
+    // because a touch tap still generates the compatibility mouse events that
+    // move focus. Clicks, wheel and touch drags keep working, so the row's
+    // controls and its scrolling are unaffected, and a press that lands in an
+    // editor still places its caret.
+    // The editor the gesture started with is recorded on the first press event,
+    // so the compatibility mousedown that follows keeps the same value instead
+    // of re-reading a focus that has already moved.
+    let pressEditor = null;
+    const keepEditor = (event) => {
+      if (event.button !== 0) return;
+      if (pressEditor === null) pressEditor = _composerEditor();
+      if (event.defaultPrevented) return;
+      const editor = pressEditor;
+      if (!editor || editor === event.target) return;
+      if (event.target?.closest?.(EDITABLE_SELECTOR)) return;
       event.preventDefault();
-    }, { signal });
+    };
+    el.addEventListener('pointerdown', keepEditor, { signal });
+    el.addEventListener('mousedown', keepEditor, { signal });
+    // A browser that still drops focus onto the page mid-gesture (a touch drag
+    // with no compatibility mouse event, for example) leaves the keyboard down.
+    // Put the composer back when that gesture ends, but never over another
+    // control the user has just focused.
+    const restoreEditor = () => {
+      const editor = pressEditor;
+      pressEditor = null;
+      if (!editor || editor.isConnected === false || document.activeElement === editor) return;
+      const active = document.activeElement;
+      if (active && active !== document.body && active !== document.documentElement) return;
+      editor.focus({ preventScroll: true });
+    };
+    el.addEventListener('pointerup', restoreEditor, { signal });
+    el.addEventListener('pointercancel', () => { pressEditor = null; }, { signal });
 
     // ── Wheel ──────────────────────────────────────────────────────────────
     el.addEventListener('wheel', (event) => {
