@@ -223,6 +223,7 @@ function rowChevronZone(line) {
 function syncRowChevrons(line) {
   const zone = rowChevronZone(line);
   const max = zone ? zone.scrollWidth - zone.clientWidth : 0;
+  for (const other of line.querySelectorAll('.chat-header-zone')) other.classList.toggle('v3-row-scroller', other === zone);
   line.querySelector('.v3-row-chev.left')?.classList.toggle('visible', !!zone && zone.scrollLeft > 1);
   line.querySelector('.v3-row-chev.right')?.classList.toggle('visible', !!zone && zone.scrollLeft < max - 1);
   return zone;

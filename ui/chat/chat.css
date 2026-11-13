@@ -160,15 +160,29 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 #chat-input-area.footer-mode-idle .chat-footer-row.v3-footer-configured:not([hidden]){max-height:none;opacity:1;margin-top:2px;margin-bottom:2px;pointer-events:auto}
 .chat-footer-row.v3-footer-configured.expanded{max-height:none}
 
-/* A configured control row that does not fit pages with edge chevrons. Each arrow is a flex
-   item, never an overlay, so it cannot cover the row's own controls; it appears only while
-   that direction still has content. The row's press guard keeps the composer focused, so
-   paging the row never drops the mobile keyboard. */
-.v3-row-chev{flex:0 0 auto;width:28px;height:28px;display:none;align-items:center;justify-content:center;padding:0;border:0;border-radius:var(--r-sm);background:transparent;color:var(--fg-2);font-size:16px;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent}
-.v3-row-chev.left{order:-1}
-.v3-row-chev.right{order:1}
-.v3-row-chev.visible{display:inline-flex}
+/* A configured footer row that does not fit scrolls under a masked edge, exactly like the
+   agent-card tab carousel (.agent-card-tabs) and #main-tabs: an alpha mask fades the content
+   on whichever side can still scroll, and a transparent chevron sits over that fade. A mask
+   paints no colour, so it blends with the live background, and both arrows are absolute, so
+   paging never changes the scroller's width. */
+.v3-row-chev{position:absolute;top:0;bottom:0;width:22px;display:none;align-items:center;justify-content:center;padding:0;background:none;border:none;color:var(--fg-2);cursor:pointer;z-index:2;font-size:12px;line-height:1;transition:color .15s;-webkit-tap-highlight-color:transparent}
+.v3-row-chev.left{left:0}
+.v3-row-chev.right{right:0}
+.v3-row-chev.visible{display:flex}
 .v3-row-chev:hover{color:var(--fg-1)}
+#chat-footer-row .chat-header-row{position:relative;--row-fade:32px}
+#chat-footer-row .chat-header-row:has(.v3-row-chev.left.visible) .chat-header-zone.v3-row-scroller{
+  -webkit-mask-image:linear-gradient(to right,transparent 0,#000 var(--row-fade));
+          mask-image:linear-gradient(to right,transparent 0,#000 var(--row-fade));
+}
+#chat-footer-row .chat-header-row:has(.v3-row-chev.right.visible) .chat-header-zone.v3-row-scroller{
+  -webkit-mask-image:linear-gradient(to left,transparent 0,#000 var(--row-fade));
+          mask-image:linear-gradient(to left,transparent 0,#000 var(--row-fade));
+}
+#chat-footer-row .chat-header-row:has(.v3-row-chev.left.visible):has(.v3-row-chev.right.visible) .chat-header-zone.v3-row-scroller{
+  -webkit-mask-image:linear-gradient(to right,transparent 0,#000 var(--row-fade),#000 calc(100% - var(--row-fade)),transparent 100%);
+          mask-image:linear-gradient(to right,transparent 0,#000 var(--row-fade),#000 calc(100% - var(--row-fade)),transparent 100%);
+}
 
 /* Theme tokens keep durable delivery choices legible in docked and embedded chat. */
 .followup-delivery{font-size:12px;margin-top:4px;color:var(--fg-2);display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;justify-content:flex-end}
