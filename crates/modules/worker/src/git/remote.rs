@@ -390,6 +390,12 @@ async fn transport(
     ]))
 }
 
+/// Changed paths scanned by one `git show` in the outgoing scan: batching keeps the process
+/// count bounded while a whole-folder move no longer needs one process per path.
+const SCAN_PATHS_PER_COMMAND: usize = 64;
+/// A changed-path listing for one commit: a whole-folder move touches thousands of files.
+const SCAN_PATH_LIST_LIMIT: usize = 4 * 1024 * 1024;
+
 fn located(commit: &str) -> Value {
     json!({"status":"located","commit":commit,"match_class":"credential_pattern"})
 }
@@ -463,68 +469,126 @@ async fn scan_outgoing_history(
                 "-z",
                 sha,
             ],
-            Run::default(),
+            Run {
+                output_limit: Some(SCAN_PATH_LIST_LIMIT),
+                ..Run::default()
+            },
         )
         .await?;
-        if changed.split(|b| *b == 0).count() > 257 {
-            return Err(Failure::Rejected(
-                "git_credential_guard",
-                "Outgoing commit exceeds credential scan path bound".into(),
-                Some(json!({"status":"located","commit":sha,"reason":"path_bound"})),
-            ));
-        }
-        for raw in changed.split(|b| *b == 0).filter(|raw| !raw.is_empty()) {
-            let name = OsStr::from_bytes(raw);
-            let text = String::from_utf8_lossy(raw);
-            let safe = (1..=240).contains(&raw.len())
-                && raw
-                    .iter()
-                    .all(|b| b.is_ascii_alphanumeric() || b"._/-".contains(b))
-                && !guard::secret(raw);
-            let reviewed = REVIEWED_HISTORY_LINES
-                .iter()
-                .find(|(commit, path, _)| *commit == sha && *path == text)
-                .map(|(_, _, lines)| *lines);
-            let argv: Vec<&OsStr> = [
-                "show",
-                "-m",
-                "--format=",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--no-renames",
-                "--unified=0",
-                "-p",
-                sha,
-                "--",
-            ]
-            .into_iter()
-            .map(OsStr::new)
-            .chain([name])
+        let paths: Vec<&[u8]> = changed
+            .split(|b| *b == 0)
+            .filter(|raw| !raw.is_empty())
             .collect();
-            match command_os(root, repo, &argv, scan(reviewed)).await {
-                Err(Failure::Rejected("git_credential_guard", message, diagnostics)) => {
-                    let mut location = located(sha);
-                    if safe {
-                        location["path"] = json!(text);
-                    } else {
-                        location["path_sha256"] = json!(hex_digest(raw));
-                        location["path_withheld"] = json!(true);
-                    }
-                    if let Some(line) = diagnostics.as_ref().and_then(|d| d["line"].as_i64()) {
-                        location["line"] = json!(line);
-                    }
-                    return Err(Failure::Rejected(
-                        "git_credential_guard",
-                        message,
-                        Some(location),
-                    ));
-                }
-                Err(other) => return Err(other),
-                Ok(_) => {}
+        for batch in paths.chunks(SCAN_PATHS_PER_COMMAND) {
+            if !scan_paths(root, repo, sha, batch).await? {
+                continue;
+            }
+            // A batch is refused only when it carries a credential: rescan its paths one at a
+            // time so the failure names the exact path, line and any reviewed-line exception.
+            for raw in batch {
+                scan_path(root, repo, sha, raw).await?;
             }
         }
     }
     Ok(())
+}
+
+/// Scans one batch of a commit's changed paths; `true` when the batch was refused, so the
+/// caller rescans its paths individually to name the offending one.
+async fn scan_paths(root: &Path, repo: &Path, sha: &str, paths: &[&[u8]]) -> Outcome<bool> {
+    let mut argv: Vec<&OsStr> = [
+        "show",
+        "-m",
+        "--format=",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "--unified=0",
+        "-p",
+        sha,
+        "--",
+    ]
+    .into_iter()
+    .map(OsStr::new)
+    .collect();
+    argv.extend(paths.iter().map(|raw| OsStr::from_bytes(raw)));
+    match command_os(
+        root,
+        repo,
+        &argv,
+        Run {
+            scan_only: true,
+            ..Run::default()
+        },
+    )
+    .await
+    {
+        Err(Failure::Rejected("git_credential_guard", _, _)) => Ok(true),
+        Err(other) => Err(other),
+        Ok(_) => Ok(false),
+    }
+}
+
+/// Scans one changed path, reporting the credential's exact commit, path and line.
+async fn scan_path(root: &Path, repo: &Path, sha: &str, raw: &[u8]) -> Outcome<()> {
+    let text = String::from_utf8_lossy(raw);
+    let safe = (1..=240).contains(&raw.len())
+        && raw
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || b"._/-".contains(b))
+        && !guard::secret(raw);
+    let reviewed = REVIEWED_HISTORY_LINES
+        .iter()
+        .find(|(commit, path, _)| *commit == sha && *path == text)
+        .map(|(_, _, lines)| *lines);
+    let argv: Vec<&OsStr> = [
+        "show",
+        "-m",
+        "--format=",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "--unified=0",
+        "-p",
+        sha,
+        "--",
+    ]
+    .into_iter()
+    .map(OsStr::new)
+    .chain([OsStr::from_bytes(raw)])
+    .collect();
+    match command_os(
+        root,
+        repo,
+        &argv,
+        Run {
+            scan_only: true,
+            reviewed,
+            ..Run::default()
+        },
+    )
+    .await
+    {
+        Err(Failure::Rejected("git_credential_guard", message, diagnostics)) => {
+            let mut location = located(sha);
+            if safe {
+                location["path"] = json!(text);
+            } else {
+                location["path_sha256"] = json!(hex_digest(raw));
+                location["path_withheld"] = json!(true);
+            }
+            if let Some(line) = diagnostics.as_ref().and_then(|d| d["line"].as_i64()) {
+                location["line"] = json!(line);
+            }
+            Err(Failure::Rejected(
+                "git_credential_guard",
+                message,
+                Some(location),
+            ))
+        }
+        Err(other) => Err(other),
+        Ok(_) => Ok(()),
+    }
 }
 
 /// Fetch, pull (fast-forward only) or push the current branch; a push first scans every

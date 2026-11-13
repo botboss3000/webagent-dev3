@@ -282,6 +282,61 @@ async fn the_file_manager_lists_checkouts_past_the_read_cap() {
     );
 }
 
+async fn bulk_outgoing_commits_are_scanned_without_a_path_bound() {
+    if !available() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("workspace");
+    let base = std::fs::canonicalize(dir.path()).expect("base");
+    git(&base, &["init", "-q", "--bare", "many-remote.git"]);
+    let repo = base.join("many");
+    std::fs::create_dir_all(repo.join("many")).expect("repo");
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["remote", "add", "origin", "../many-remote.git"]);
+    let head = || {
+        String::from_utf8(
+            Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&repo)
+                .output()
+                .expect("head")
+                .stdout,
+        )
+        .expect("head")
+    };
+    // One commit touching 320 paths: past the old 256-path refusal.
+    for index in 0..320 {
+        let name = repo.join(format!("many/f{index:03}.txt"));
+        std::fs::write(name, "x\n").expect("file");
+    }
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "many paths"]);
+    let pushed = read(
+        &base,
+        json!({"operation":"push","repo":"many","expected_head":head().trim()}),
+    )
+    .await;
+    assert_eq!(pushed["status"], "success", "{pushed}");
+    // The same paths carrying a credential at path 300 are refused with their exact location.
+    for index in 0..320 {
+        let line = if index == 300 {
+            "password = \"abcdefghijklmnopqrs\"\n"
+        } else {
+            "y\n"
+        };
+        std::fs::write(repo.join(format!("many/f{index:03}.txt")), line).expect("file");
+    }
+    git(&repo, &["commit", "-qam", "credential at path 300"]);
+    let blocked = read(
+        &base,
+        json!({"operation":"push","repo":"many","expected_head":head().trim()}),
+    )
+    .await;
+    assert_eq!(blocked["error_kind"], "git_credential_guard", "{blocked}");
+    assert_eq!(blocked["diagnostics"]["path"], "many/f300.txt");
+    assert_eq!(blocked["diagnostics"]["line"], 1);
+}
+
 fn main() {
     harness::main(&[
         ("status_reports_changes_with_a_stable_review_digest", || {
@@ -303,5 +358,9 @@ fn main() {
         ("pushes_scan_outgoing_history_and_conflicts_resolve", || {
             Box::pin(pushes_scan_outgoing_history_and_conflicts_resolve())
         }),
+        (
+            "bulk_outgoing_commits_are_scanned_without_a_path_bound",
+            || Box::pin(bulk_outgoing_commits_are_scanned_without_a_path_bound()),
+        ),
     ]);
 }
