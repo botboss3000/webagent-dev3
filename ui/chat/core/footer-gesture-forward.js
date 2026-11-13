@@ -54,6 +54,22 @@ export function forwardFooterGestures({ targets = [], scroller, markIntent, canF
     if (!el || el.dataset.chatFooterGestureWired === '1') continue;
     el.dataset.chatFooterGestureWired = '1';
 
+    // ── Press ──────────────────────────────────────────────────────────────
+    // Pressing a row under the composer would move focus off the editor and
+    // close the mobile keyboard before any scroll starts. Keep the editor that
+    // owns the gesture focused for presses on non-editable footer content;
+    // presses inside an editor still place its caret. Scrolling is driven by
+    // touch events, so cancelling pointerdown does not block it, and clicks
+    // (including the row's buttons) still fire.
+    el.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || event.defaultPrevented) return;
+      const active = document.activeElement;
+      if (!active || active === event.target || !active.matches?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+      if (el.contains && !el.contains(active)) return;
+      if (event.target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
+      event.preventDefault();
+    }, { signal });
+
     // ── Wheel ──────────────────────────────────────────────────────────────
     el.addEventListener('wheel', (event) => {
       // Ctrl+wheel belongs to chat-zoom; a handled or zero-delta event stays put.

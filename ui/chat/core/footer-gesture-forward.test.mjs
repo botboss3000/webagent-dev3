@@ -7,7 +7,7 @@ globalThis.window = {
   getComputedStyle: node => node.style || { overflowY: 'visible' },
   getSelection: () => selection,
 };
-globalThis.document = { body: {}, documentElement: {} };
+globalThis.document = { body: {}, documentElement: {}, activeElement: null };
 
 function makeElement() {
   const handlers = new Map();
@@ -115,6 +115,24 @@ test('touch inside a nested scroller is ignored', () => {
   f.footer.dispatch('touchmove', { target: nested, touches: [{ clientY: 280 }] });
   assert.deepEqual(f.calls, []);
   assert.equal(f.intent(), 0);
+});
+
+test('a press on the footer keeps the focused editor instead of closing its keyboard', () => {
+  const f = fixture();
+  const editor = { matches: () => true };
+  globalThis.document.activeElement = editor;
+  f.footer.contains = node => node === editor;
+  assert.equal(f.footer.dispatch('pointerdown', { button: 0 }).prevented, true);
+  // A press that lands in an editor keeps its caret placement.
+  assert.equal(f.footer.dispatch('pointerdown', { button: 0, target: { closest: () => editor } }).prevented, false);
+  // A press outside this surface, another button, or with no focused editor is untouched.
+  f.footer.contains = () => false;
+  assert.equal(f.footer.dispatch('pointerdown', { button: 0 }).prevented, false);
+  f.footer.contains = node => node === editor;
+  assert.equal(f.footer.dispatch('pointerdown', { button: 2 }).prevented, false);
+  globalThis.document.activeElement = {};
+  assert.equal(f.footer.dispatch('pointerdown', { button: 0 }).prevented, false);
+  globalThis.document.activeElement = null;
 });
 
 test('a claimed touch move cancels forwarding for the rest of the gesture', () => {
