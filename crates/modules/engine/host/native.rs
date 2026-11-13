@@ -294,6 +294,19 @@ impl
                 "workspace_seed" | "source_review" | "source_patch"
             ) {
                 tools::administrator::workspace_host(&app, &sid, &name, &args, None, cancel).await
+            } else if let Some(ability) = tools::administrator::plugin(&name) {
+                crate::extension_plugins::execute(crate::extension_plugins::Call {
+                    app: &app,
+                    sid: &sid,
+                    run_id: &run_id,
+                    generation: &generation,
+                    pending: &pending_id,
+                    name: &name,
+                    args: &args,
+                    cancel,
+                    ability,
+                })
+                .await
             } else if tools::administrator::owns(&name) {
                 tools::administrator::execute(
                     &app,

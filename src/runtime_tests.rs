@@ -11089,7 +11089,7 @@ fn consolidated_codebase_schema_and_guidance_contract() {
                 );
             }
         }
-        assert!(tools::administrator::owns(name));
+        assert!(tools::administrator::owns(name) || tools::administrator::plugin(name).is_some());
     }
     assert!(schema.iter().any(|s| s["name"] == "build_work"));
     let visibility = json!({"visibility":{"codebase_admin":"visible"}});

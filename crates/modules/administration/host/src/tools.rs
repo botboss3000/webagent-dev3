@@ -84,55 +84,6 @@ pub async fn execute(
         }
         "performance_work" => performance(host, sid, run_id, args, cancel).await,
         "repository_access" => repository_access(host, sid, args, cancel).await,
-        "read_diagnostics" if args["issues"] == true => Ok(match host.issues(sid, args).await {
-            // A refusal carries its own status; anything else is a successful view.
-            Ok(view) if view["status"].is_string() => view,
-            Ok(issues) => json!({"status":"success","output":issues}),
-            Err(_) => json!({"status":"error","error_kind":"diagnostics_unavailable",
-                "output":"Issue groups are unavailable for this session"}),
-        }),
-        "agent_review" if args["action"] == "resolve" => {
-            Ok(if host.administrator(sid).await.unwrap_or(false) {
-                match host.resolve_issue(sid, args).await {
-                    Ok(value) => value,
-                    Err(_) => json!({"status":"error","error_kind":"diagnostics_unavailable",
-                        "output":"The resolution could not be recorded"}),
-                }
-            } else {
-                json!({"status":"denied","error_kind":"denied",
-                    "output":"agent_review is administrator-only"})
-            })
-        }
-        "agent_review" if args["action"] == "open" => {
-            Ok(if host.administrator(sid).await.unwrap_or(false) {
-                match host.open_issue(sid, run_id, args).await {
-                    Ok(value) => value,
-                    Err(_) => json!({"status":"error","error_kind":"diagnostics_unavailable",
-                        "output":"The review issue could not be recorded"}),
-                }
-            } else {
-                json!({"status":"denied","error_kind":"denied",
-                    "output":"agent_review is administrator-only"})
-            })
-        }
-        "agent_review" => Ok(if host.administrator(sid).await.unwrap_or(false) {
-            match host.note_issue(sid, run_id, args).await {
-                Ok(value) => value,
-                Err(_) => json!({"status":"error","error_kind":"diagnostics_unavailable",
-                    "output":"The review note could not be recorded"}),
-            }
-        } else {
-            json!({"status":"denied","error_kind":"denied",
-                "output":"agent_review is administrator-only"})
-        }),
-        "read_diagnostics" => Ok(match arguments::diagnostics_target(args, run_id) {
-            Some(target) if target == run_id => diagnostics(host, Some(run), sid),
-            Some(target) => {
-                let selected = host.run(target).await.ok();
-                diagnostics(host, selected.as_ref(), sid)
-            }
-            None => diagnostics(host, None, sid),
-        }),
         "git_tool" | "resolve_conflict" | "commit_and_push" => {
             git(host, sid, name, args, cancel).await
         }
@@ -162,14 +113,6 @@ async fn register_renewal(
     let record = json!({"session_id":sid,"run_id":run_id,"tool_name":authority,
         "access_fingerprint":fingerprint});
     host.store().put(&renewal_key(sid), &record).await
-}
-
-fn diagnostics(host: &dyn AdministrationHost, selected: Option<&Value>, sid: &str) -> Value {
-    match selected.filter(|run| run["session_id"].as_str() == Some(sid)) {
-        Some(run) => json!({"status":"success","output":host.progress(run)}),
-        None => json!({"status":"error","error_kind":"diagnostics_unavailable",
-            "output":"Diagnostics unavailable in this session; omit run_id or use current"}),
-    }
 }
 
 /// A broker request admitted under the call's current authority.

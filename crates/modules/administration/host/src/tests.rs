@@ -206,49 +206,6 @@ impl AdministrationHost for Fake {
     fn optimization_generation(&self) -> Option<String> {
         None
     }
-    fn progress(&self, run: &Value) -> Value {
-        json!({"run":run["id"]})
-    }
-    fn issues<'a>(&'a self, sid: &'a str, filter: &'a Value) -> Pending<'a, Result<Value>> {
-        Box::pin(async move {
-            if filter["scope"].as_str() == Some("all") {
-                if !self.administrator {
-                    return Ok(json!({"status":"denied","error_kind":"denied",
-                        "output":"Only an administrator reads the whole review log"}));
-                }
-                return Ok(json!({"whole_log":true}));
-            }
-            Ok(json!({"tree_of":sid}))
-        })
-    }
-    fn note_issue<'a>(
-        &'a self,
-        _sid: &'a str,
-        _run_id: &'a str,
-        args: &'a Value,
-    ) -> Pending<'a, Result<Value>> {
-        Box::pin(async move {
-            Ok(json!({"status":"success","output":{"recorded":true,
-                "note":args["note"]}}))
-        })
-    }
-    fn resolve_issue<'a>(&'a self, _sid: &'a str, args: &'a Value) -> Pending<'a, Result<Value>> {
-        Box::pin(async move {
-            Ok(json!({"status":"success","output":{"resolved":true,
-                "release_id":args["release_id"]}}))
-        })
-    }
-    fn open_issue<'a>(
-        &'a self,
-        _sid: &'a str,
-        _run_id: &'a str,
-        args: &'a Value,
-    ) -> Pending<'a, Result<Value>> {
-        Box::pin(async move {
-            Ok(json!({"status":"success","output":{"opened":true,
-                "title":args["title"]}}))
-        })
-    }
     fn abilities_version(&self) -> String {
         "abilities".into()
     }
@@ -380,46 +337,6 @@ async fn only_live_checkout_tools_carry_the_host_grant() {
     assert_eq!(sent[1].trusted, granted);
     assert_eq!(sent[2].name, "terminal_list");
     assert_eq!(sent[2].trusted, None);
-}
-
-#[tokio::test]
-async fn an_administrator_can_read_the_whole_log() {
-    let dir = root();
-    let host = Fake::new(dir.path()).await;
-    let all = call(
-        &host,
-        "read_diagnostics",
-        json!({"issues":true,"scope":"all"}),
-    )
-    .await
-    .unwrap();
-    assert_eq!(all["output"]["whole_log"], json!(true));
-    let mut plain = Fake::new(dir.path()).await;
-    plain.administrator = false;
-    let refused = call(
-        &plain,
-        "read_diagnostics",
-        json!({"issues":true,"scope":"all"}),
-    )
-    .await
-    .unwrap();
-    assert_eq!(refused["status"], json!("denied"));
-}
-
-#[tokio::test]
-async fn diagnostics_stay_in_the_session() {
-    let dir = root();
-    let host = Fake::new(dir.path()).await;
-    let own = call(&host, "read_diagnostics", json!({})).await.unwrap();
-    assert_eq!(own["output"]["run"], RUN);
-    let bad = call(&host, "read_diagnostics", json!({"run_id":"nope"}))
-        .await
-        .unwrap();
-    assert_eq!(bad["error_kind"], "diagnostics_unavailable");
-    let issues = call(&host, "read_diagnostics", json!({"issues":true}))
-        .await
-        .unwrap();
-    assert_eq!(issues["output"], json!({"tree_of":SID}));
 }
 
 #[tokio::test]

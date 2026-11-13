@@ -138,27 +138,6 @@ pub trait AdministrationHost: Sync {
     fn optimization_settings(&self, settings: Option<Value>) -> Result<Value>;
     /// The installed optimization plugin's generation, if one is installed.
     fn optimization_generation(&self) -> Option<String>;
-    /// The content-free progress view of a run.
-    fn progress(&self, run: &Value) -> Value;
-    /// Grouped run-health issues of the session's conversation tree (content-free), or
-    /// with `scope: all` the whole shared log for an administrator.
-    fn issues<'a>(&'a self, sid: &'a str, filter: &'a Value) -> Pending<'a, Result<Value>>;
-    /// Record the agent's own explanation of one issue group (administrator review only).
-    fn note_issue<'a>(
-        &'a self,
-        sid: &'a str,
-        run_id: &'a str,
-        args: &'a Value,
-    ) -> Pending<'a, Result<Value>>;
-    /// Mark a reviewed group or agent issue resolved by a release.
-    fn resolve_issue<'a>(&'a self, sid: &'a str, args: &'a Value) -> Pending<'a, Result<Value>>;
-    /// Open an issue the agent observed without a failed call behind it.
-    fn open_issue<'a>(
-        &'a self,
-        sid: &'a str,
-        run_id: &'a str,
-        args: &'a Value,
-    ) -> Pending<'a, Result<Value>>;
     /// The live ability bundle version.
     fn abilities_version(&self) -> String;
     /// A token cancelled when the application stops.

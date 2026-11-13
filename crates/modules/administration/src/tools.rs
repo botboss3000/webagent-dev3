@@ -73,10 +73,26 @@ pub fn installed() -> bool {
         .any(|name| webagent_abilities::tool_definitions::get(name).is_some())
 }
 
+/// Administrator tools served by their ability's plugin (`plugin.json`, `requests_v1`)
+/// rather than this module, with that ability's `Group/ability_id` folder.
+pub const PLUGINS: [(&str, &str); 2] = [
+    ("read_diagnostics", "Administrator/diagnostics"),
+    ("agent_review", "Administrator/diagnostics"),
+];
+
+/// The ability folder whose plugin serves `name`, if a plugin does.
+#[must_use]
+pub fn plugin(name: &str) -> Option<&'static str> {
+    PLUGINS
+        .iter()
+        .find(|(tool, _)| *tool == name)
+        .map(|(_, ability)| *ability)
+}
+
 /// Whether this module executes `name`.
 #[must_use]
 pub fn owns(name: &str) -> bool {
-    CHECKOUT_TOOLS.contains(&name) || supported(name)
+    CHECKOUT_TOOLS.contains(&name) || (supported(name) && plugin(name).is_none())
 }
 
 #[cfg(test)]

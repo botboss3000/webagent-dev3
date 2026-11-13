@@ -19,6 +19,11 @@ pub(crate) fn supported_schema_name(name: &str) -> bool {
     webagent_administration::tools::supported(name)
 }
 
+/// The ability folder whose plugin serves Administrator tool `name`, if a plugin does.
+pub(crate) fn plugin(name: &str) -> Option<&'static str> {
+    webagent_administration::tools::plugin(name)
+}
+
 /// Whether the Administrator handlers execute `name`.
 pub fn owns(name: &str) -> bool {
     webagent_administration::tools::owns(name)
@@ -440,48 +445,6 @@ impl AdministrationHost for Host<'_> {
     }
     fn optimization_generation(&self) -> Option<String> {
         crate::optimization::generation()
-    }
-    fn progress(&self, run: &Value) -> Value {
-        task_progress::project(run)
-    }
-    fn issues<'a>(&'a self, sid: &'a str, filter: &'a Value) -> Pending<'a, Result<Value>> {
-        Box::pin(async move {
-            let whole = filter["scope"].as_str() == Some("all") || filter["user_id"].is_string();
-            if !whole {
-                return self.0.store.issues(Some(sid), 0).await;
-            }
-            if !self.administrator(sid).await? {
-                return Ok(json!({"status":"denied","error_kind":"denied",
-                    "output":"Only an administrator reads the whole review log"}));
-            }
-            self.0
-                .store
-                .issues_all(
-                    filter["user_id"].as_str(),
-                    filter["since"].as_i64().unwrap_or(0),
-                    filter["include_resolved"] == true,
-                )
-                .await
-        })
-    }
-    fn note_issue<'a>(
-        &'a self,
-        sid: &'a str,
-        run_id: &'a str,
-        args: &'a Value,
-    ) -> Pending<'a, Result<Value>> {
-        Box::pin(self.0.store.note_issue(sid, run_id, args))
-    }
-    fn resolve_issue<'a>(&'a self, sid: &'a str, args: &'a Value) -> Pending<'a, Result<Value>> {
-        Box::pin(self.0.store.resolve_issue(sid, args))
-    }
-    fn open_issue<'a>(
-        &'a self,
-        sid: &'a str,
-        run_id: &'a str,
-        args: &'a Value,
-    ) -> Pending<'a, Result<Value>> {
-        Box::pin(self.0.store.open_issue(sid, run_id, args))
     }
     fn abilities_version(&self) -> String {
         self.0.abilities.live_version()

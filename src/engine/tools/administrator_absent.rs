@@ -12,6 +12,11 @@ pub(crate) fn supported_schema_name(_: &str) -> bool {
     false
 }
 
+/// No Administrator tool has a plugin in this build.
+pub(crate) fn plugin(_: &str) -> Option<&'static str> {
+    None
+}
+
 /// Whether the Administrator handlers execute `name`: never in this build.
 pub fn owns(_: &str) -> bool {
     false

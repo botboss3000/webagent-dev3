@@ -5,7 +5,7 @@
   "color": "#e0af68",
   "description": "Read sanitized V3 run diagnostics: the current session's runs, checkpoints and context assembly, without model text or credentials.",
   "skill_summary": "Typed, sanitized run diagnostics for the current session.",
-  "migration_note": "Compiled V3 adapter, scoped policy and configuration passed focused tests and authenticated V3 API acceptance. Execution still requires applicable installation, account-tier, agent, membership and session grants.",
+  "migration_note": "Runs as an ability plugin (plugin.json, requests_v1): the app answers its diagnostics and review requests for the calling session and checks administrator authority. Execution still requires applicable installation, account-tier, agent, membership and session grants.",
   "order": 2,
   "placeholder": false,
   "tools": [

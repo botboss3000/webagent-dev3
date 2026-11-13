@@ -145,21 +145,6 @@ pub fn live_git_operation(name: &str, args: &Value) -> Result<bool> {
     Ok(true)
 }
 
-/// The run `read_diagnostics` targets: the current run for an omitted, empty or
-/// `current` ID, a canonical UUID otherwise, and `None` for anything else.
-#[must_use]
-pub fn diagnostics_target<'a>(args: &'a Value, current: &'a str) -> Option<&'a str> {
-    match args.get("run_id") {
-        None | Some(Value::Null) => Some(current),
-        Some(Value::String(value)) if value.is_empty() || value == "current" => Some(current),
-        Some(Value::String(value)) => uuid::Uuid::parse_str(value)
-            .ok()
-            .filter(|id| id.to_string() == *value)
-            .map(|_| value.as_str()),
-        _ => None,
-    }
-}
-
 /// `repository_access` takes only an optional `verify_remote` boolean; returns it.
 pub fn repository_access(args: &Value) -> Result<bool> {
     let valid = args.as_object().is_some_and(|object| {
@@ -278,31 +263,6 @@ mod tests {
         assert_eq!(git("push", "webagent-v3").ok(), Some(false));
         assert!(git("add", "__root__").is_err());
         assert!(live_git_operation("commit_and_push", &json!({"repo":"__root__"})).is_err());
-    }
-
-    #[test]
-    fn current_aliases_and_canonical_run_ids() {
-        let current = "11111111-1111-4111-8111-111111111111";
-        for args in [
-            json!({}),
-            json!({"run_id":null}),
-            json!({"run_id":""}),
-            json!({"run_id":"current"}),
-        ] {
-            assert_eq!(diagnostics_target(&args, current), Some(current));
-        }
-        let explicit = json!({"run_id":"22222222-2222-4222-8222-222222222222"});
-        assert_eq!(
-            diagnostics_target(&explicit, current),
-            explicit["run_id"].as_str()
-        );
-        for args in [
-            json!({"run_id":"not-a-run"}),
-            json!({"run_id":42}),
-            json!({"run_id":" current "}),
-        ] {
-            assert!(diagnostics_target(&args, current).is_none());
-        }
     }
 
     #[test]

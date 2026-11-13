@@ -20,6 +20,10 @@ pub enum Kind {
     /// (`providers`, see `crate::providers`). The app makes it, adding the caller's
     /// vault key and counting the month's use, so the plugin never sees the key.
     ProviderRequest,
+    /// The current session's run diagnostics and review log. The app binds the call's own
+    /// session and run, checks administrator authority where the action needs it, and
+    /// returns the finished tool result.
+    Review(ReviewAction),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,8 +34,20 @@ pub enum SkillAction {
     Remove,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReviewAction {
+    /// One run's sanitized progress; `params.run_id` is absent, `"current"` or a run of
+    /// this session.
+    Progress,
+    /// Issue groups: this session's, or the whole log for an administrator.
+    Issues,
+    Note,
+    Open,
+    Resolve,
+}
+
 /// Every request the app offers, by name.
-pub const OFFERED: [(&str, Kind); 24] = [
+pub const OFFERED: [(&str, Kind); 29] = [
     ("agents.list", Kind::Route("GET", "/models/agents")),
     (
         "agents.identity.read",
@@ -101,6 +117,11 @@ pub const OFFERED: [(&str, Kind); 24] = [
     ("sessions.watch", Kind::Watch),
     ("ability.settings", Kind::Settings),
     ("web.provider_request", Kind::ProviderRequest),
+    ("diagnostics.progress", Kind::Review(ReviewAction::Progress)),
+    ("diagnostics.issues", Kind::Review(ReviewAction::Issues)),
+    ("review.note", Kind::Review(ReviewAction::Note)),
+    ("review.open", Kind::Review(ReviewAction::Open)),
+    ("review.resolve", Kind::Review(ReviewAction::Resolve)),
 ];
 
 /// Why a declaration or a request was refused.
@@ -229,6 +250,22 @@ pub fn valid_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
+/// The run a diagnostics read targets: the current run when `run_id` is absent, empty or
+/// `"current"`, else a lowercase hyphenated UUID; anything else targets none.
+#[must_use]
+pub fn diagnostics_target<'a>(run_id: &'a Value, current: &'a str) -> Option<&'a str> {
+    match run_id {
+        Value::Null => Some(current),
+        Value::String(value) if value.is_empty() || value == "current" => Some(current),
+        Value::String(value)
+            if valid_uuid(value) && !value.bytes().any(|byte| byte.is_ascii_uppercase()) =>
+        {
+            Some(value)
+        }
+        _ => None,
+    }
+}
+
 /// A hyphenated UUID.
 #[must_use]
 pub fn valid_uuid(value: &str) -> bool {
@@ -294,6 +331,29 @@ mod tests {
         )
         .is_err());
         assert_eq!(path("/sessions", &Value::Null).unwrap(), "/sessions");
+    }
+
+    #[test]
+    fn diagnostics_target_defaults_to_the_current_run() {
+        let current = "11111111-2222-3333-4444-555555555555";
+        let other = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        assert_eq!(diagnostics_target(&Value::Null, current), Some(current));
+        assert_eq!(diagnostics_target(&Value::from(""), current), Some(current));
+        assert_eq!(
+            diagnostics_target(&Value::from("current"), current),
+            Some(current)
+        );
+        assert_eq!(
+            diagnostics_target(&Value::from(other), current),
+            Some(other)
+        );
+        for bad in [
+            Value::from("nope"),
+            Value::from(other.to_uppercase()),
+            Value::from(7),
+        ] {
+            assert_eq!(diagnostics_target(&bad, current), None);
+        }
     }
 
     #[test]

@@ -1,0 +1,17 @@
+[package]
+name = "webagent-diagnostics-ability"
+version = "1.0.0"
+edition = "2021"
+publish = false
+
+# Built alone by the broker's plugin lane; every build runs it as its own process, since
+# the Administrator pack is optional. The root workspace excludes this folder.
+[lib]
+path = "plugin/lib.rs"
+
+[[bin]]
+name = "webagent_diagnostics"
+path = "plugin/main.rs"
+
+[dependencies]
+serde_json = "1"

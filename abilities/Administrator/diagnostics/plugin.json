@@ -1,0 +1,41 @@
+{
+  "id": "diagnostics",
+  "dispatch": "isolated",
+  "host_interface": "requests_v1",
+  "protocol": 2,
+  "interface": 1,
+  "runtime": "executable",
+  "entrypoint": "webagent_diagnostics",
+  "effect": "write",
+  "tools": [
+    "read_diagnostics",
+    "agent_review"
+  ],
+  "requests": [
+    "diagnostics.progress",
+    "diagnostics.issues",
+    "review.note",
+    "review.open",
+    "review.resolve"
+  ],
+  "build": {
+    "toolchain": "rust-1.99",
+    "inputs": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "plugin/lib.rs",
+      "plugin/main.rs"
+    ],
+    "dependencies": [],
+    "flags": [],
+    "assets": [
+      "diagnostics.json",
+      "skills/diagnostics.skill.md",
+      "skills/journey_testing.skill.md",
+      "tools/read_diagnostics/tool.json",
+      "tools/read_diagnostics/tool.skill.md",
+      "tools/agent_review/tool.json",
+      "tools/agent_review/tool.skill.md"
+    ]
+  }
+}

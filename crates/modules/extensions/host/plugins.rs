@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use webagent_abilities::package::RequestsPlugin;
 use webagent_extensions::plugin::Request;
 use webagent_extensions::providers::{self, Method, ProviderCall, Providers};
-use webagent_extensions::requests::{self, Declaration, Kind, SkillAction};
+use webagent_extensions::requests::{self, Declaration, Kind, ReviewAction, SkillAction};
 
 /// Longest a plugin call may run, host requests included.
 const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
@@ -95,6 +95,14 @@ pub(crate) async fn execute(call: Call<'_>) -> Result<Value> {
     if output["status"] == "error" {
         return Ok(output);
     }
+    // A result the app built for the plugin (a `Review` request) passes through whole, so
+    // its denied or rejected status reaches the engine unchanged.
+    if let Some(result) = output
+        .get("tool_result")
+        .filter(|result| result["status"].is_string())
+    {
+        return Ok(result.clone());
+    }
     Ok(json!({"status": "success", "output": output}))
 }
 
@@ -106,6 +114,11 @@ async fn run(
     host: &Host<'_>,
     context: &Value,
 ) -> Result<Value> {
+    spawn(plugin, host, context).await
+}
+
+/// One call in the plugin's own process from the published release, in the engine sandbox.
+async fn spawn(plugin: &RequestsPlugin, host: &Host<'_>, context: &Value) -> Result<Value> {
     use std::os::unix::process::CommandExt as _;
     let executable =
         plugin.executable(&webagent_configuration::paths::app().join("assets/artifacts"))?;
@@ -148,14 +161,10 @@ async fn run(
     result.map_err(|error| anyhow!("{error}"))
 }
 
-/// Stable: the plugin is linked into this binary.
+/// Stable: linked plugins run in this binary; the rest (the optional Administrator pack)
+/// run as in dev.
 #[cfg(feature = "stable-abilities")]
-async fn run(
-    _plugin: &RequestsPlugin,
-    id: &str,
-    host: &Host<'_>,
-    context: &Value,
-) -> Result<Value> {
+async fn run(plugin: &RequestsPlugin, id: &str, host: &Host<'_>, context: &Value) -> Result<Value> {
     let now_ms = context["now_ms"].as_u64().unwrap_or_default();
     match id {
         "agent_management" => {
@@ -180,7 +189,7 @@ async fn run(
                 .await
                 .map_err(|error| anyhow!(error))
         }
-        _ => Err(anyhow!("Plugin {id} is not linked into this build")),
+        _ => spawn(plugin, host, context).await,
     }
 }
 
@@ -289,8 +298,89 @@ impl Host<'_> {
                 .map(|(_, _, visibility, _)| visibility["settings"][self.ability].clone()),
             Kind::Watch => self.watch(&request.params, &request.body).await,
             Kind::ProviderRequest => self.provider_request(&request.params, &request.body).await,
+            Kind::Review(action) => Ok(self.review(action, &request.params, &request.body).await),
         };
         result.map_err(|error| format!("{error:#}"))
+    }
+
+    /// Whether the caller holds administrator authority in this session.
+    async fn administrator(&self) -> Result<bool> {
+        let app = self.call.app;
+        let agent = crate::session_agent_id(app, self.call.sid).await?;
+        let access =
+            shared_chat::live_access(&app.store, self.actor, self.call.sid, &agent).await?;
+        Ok(access.admitted() && access.principal.administrator())
+    }
+
+    /// A diagnostics or review-log request for this call's own session and run. Every
+    /// outcome is a finished tool result; a store failure reads as unavailable.
+    async fn review(&self, action: ReviewAction, params: &Value, body: &Value) -> Value {
+        let (app, sid, run_id) = (self.call.app, self.call.sid, self.call.run_id);
+        let unavailable = |output: &str| json!({"status":"error","error_kind":"diagnostics_unavailable","output":output});
+        let denied =
+            |output: &str| json!({"status":"denied","error_kind":"denied","output":output});
+        match action {
+            ReviewAction::Progress => {
+                let run = match requests::diagnostics_target(&params["run_id"], run_id) {
+                    Some(target) => app.run(target).await.ok(),
+                    None => None,
+                };
+                match run.filter(|run| run["session_id"].as_str() == Some(sid)) {
+                    Some(run) => {
+                        json!({"status":"success","output":crate::task_progress::project(&run)})
+                    }
+                    None => unavailable(
+                        "Diagnostics unavailable in this session; omit run_id or use current",
+                    ),
+                }
+            }
+            ReviewAction::Issues => {
+                let whole = body["scope"].as_str() == Some("all") || body["user_id"].is_string();
+                let view = if !whole {
+                    app.store.issues(Some(sid), 0).await
+                } else {
+                    match self.administrator().await {
+                        Ok(true) => {
+                            app.store
+                                .issues_all(
+                                    body["user_id"].as_str(),
+                                    body["since"].as_i64().unwrap_or(0),
+                                    body["include_resolved"] == true,
+                                )
+                                .await
+                        }
+                        Ok(false) => {
+                            return denied("Only an administrator reads the whole review log")
+                        }
+                        Err(error) => Err(error),
+                    }
+                };
+                match view {
+                    Ok(issues) => json!({"status":"success","output":issues}),
+                    Err(_) => unavailable("Issue groups are unavailable for this session"),
+                }
+            }
+            ReviewAction::Note | ReviewAction::Open | ReviewAction::Resolve => {
+                if !self.administrator().await.unwrap_or(false) {
+                    return denied("agent_review is administrator-only");
+                }
+                let (result, failed) = match action {
+                    ReviewAction::Resolve => (
+                        app.store.resolve_issue(sid, body).await,
+                        "The resolution could not be recorded",
+                    ),
+                    ReviewAction::Open => (
+                        app.store.open_issue(sid, run_id, body).await,
+                        "The review issue could not be recorded",
+                    ),
+                    _ => (
+                        app.store.note_issue(sid, run_id, body).await,
+                        "The review note could not be recorded",
+                    ),
+                };
+                result.unwrap_or_else(|_| unavailable(failed))
+            }
+        }
     }
 
     /// One call to a provider the plugin declared, made as the caller. The caller's vault
@@ -542,6 +632,110 @@ mod tests {
             .answer(request("accounts.delete", Value::Null))
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn review_requests_stay_in_the_calls_session() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let sid = crate::runtime_tests::conversation(&app).await;
+        let run_id = crate::runtime_tests::queued(&app, &sid).await;
+        let other = crate::runtime_tests::conversation(&app).await;
+        let foreign = crate::runtime_tests::queued(&app, &other).await;
+        let declared = Declaration::parse(&json!({"requests": [
+            "diagnostics.progress", "diagnostics.issues", "review.note"]}))
+        .unwrap();
+        let args = json!({});
+        let call = Call {
+            app: &app,
+            sid: &sid,
+            run_id: &run_id,
+            generation: "generation",
+            pending: "pending",
+            name: "read_diagnostics",
+            args: &args,
+            cancel: CancellationToken::new(),
+            ability: "Administrator/diagnostics",
+        };
+        let actor = shared_chat::actor(&app).to_owned();
+        let host = Host {
+            call: &call,
+            ability: "diagnostics",
+            actor: &actor,
+            request_id: "request",
+            declared: &declared,
+            providers: &Providers::default(),
+        };
+        let ask = |name: &str, params: Value, body: Value| Request {
+            name: name.into(),
+            params,
+            body,
+        };
+        let own = host
+            .answer(ask(
+                "diagnostics.progress",
+                json!({"run_id": null}),
+                Value::Null,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(own["status"], "success", "{own}");
+        let current = host
+            .answer(ask(
+                "diagnostics.progress",
+                json!({"run_id": "current"}),
+                Value::Null,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(current, own);
+        for run in [json!("nope"), json!(foreign)] {
+            let refused = host
+                .answer(ask(
+                    "diagnostics.progress",
+                    json!({"run_id": run}),
+                    Value::Null,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                refused["error_kind"], "diagnostics_unavailable",
+                "{refused}"
+            );
+        }
+        let issues = host
+            .answer(ask(
+                "diagnostics.issues",
+                Value::Null,
+                json!({"issues": true}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(issues["status"], "success", "{issues}");
+        let administrator = host.administrator().await.unwrap();
+        let whole = host
+            .answer(ask(
+                "diagnostics.issues",
+                Value::Null,
+                json!({"scope": "all"}),
+            ))
+            .await
+            .unwrap();
+        let note = host
+            .answer(ask("review.note", Value::Null, json!({"note": ""})))
+            .await
+            .unwrap();
+        if administrator {
+            assert_eq!(whole["status"], "success", "{whole}");
+            assert_eq!(note["status"], "rejected", "{note}");
+        } else {
+            assert_eq!(whole["status"], "denied", "{whole}");
+            assert_eq!(note["status"], "denied", "{note}");
+        }
+        assert!(host
+            .answer(ask("review.open", Value::Null, Value::Null))
+            .await
+            .unwrap_err()
+            .contains("Undeclared"));
     }
 
     #[tokio::test]
