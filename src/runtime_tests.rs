@@ -1374,6 +1374,7 @@ fn joined_preload_stub(query: &str, items: &[Vec<String>]) -> Option<Vec<f32>> {
 }
 
 /// A message that joins a running run gets its own preload before the next model call.
+#[ignore = "preload is switched off (tool_match::PRELOAD_ENABLED)"]
 #[tokio::test]
 async fn a_joined_message_preloads_before_the_next_call() {
     use axum::routing::post;
@@ -3035,6 +3036,7 @@ fn request_tools(request: &Value) -> Vec<String> {
         .collect()
 }
 
+#[ignore = "preload is switched off (tool_match::PRELOAD_ENABLED)"]
 #[tokio::test]
 /// A strong match from the user's message is loaded before the first model call; the next best
 /// is suggested in that call only.
@@ -3055,6 +3057,7 @@ async fn user_message_preloads_and_suggests_before_the_first_call() {
     assert!(request_tools(&requests[1]).contains(&"file_read".to_owned()));
 }
 
+#[ignore = "preload is switched off (tool_match::PRELOAD_ENABLED)"]
 #[tokio::test]
 /// Without matcher scores nothing is preloaded and the run still completes.
 async fn matcher_failure_preloads_nothing_and_the_run_works() {

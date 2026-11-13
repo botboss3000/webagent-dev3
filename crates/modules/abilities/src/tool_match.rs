@@ -24,6 +24,10 @@ pub const PRELOAD_TOOL: f32 = 0.80;
 pub const PRELOAD_TOOLS: usize = 6;
 pub const PRELOAD_SKILLS: usize = 2;
 pub const SUGGESTIONS: usize = 5;
+/// Preloading and suggestions are off: they could load tools, or steer a working agent, on
+/// feedback that needed no new tool. Its runtime tests are ignored until it is switched back on.
+pub static PRELOAD_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 /// Message characters ranked, and parts scored on their own besides the whole message.
 /// The cap matches the inference service's runaway guard; the model itself keeps the first 512
 /// tokens of each query.

@@ -392,7 +392,10 @@ pub(crate) fn apply_selection(run: &mut Value, result: &Value) {
 /// The engine stages `preload.selectors` as ordinary activation selectors, so preloads persist
 /// like `load_tool` and `load_skill`; live policy, approval and read-only checks still decide.
 pub(crate) async fn preload(app: &App, sid: &str, run: &mut Value) {
-    if run["preload_checked"] == true {
+    if run["preload_checked"] == true
+        || !webagent_abilities::tool_match::PRELOAD_ENABLED
+            .load(std::sync::atomic::Ordering::Relaxed)
+    {
         return;
     }
     run["preload_checked"] = json!(true);

@@ -4,4 +4,4 @@ Use `list_tools` with a short task-word `query` such as "edit file", "screenshot
 
 Call `load_tool` with an exact returned name to select it for this conversation, agent and authenticated requester. Current schemas and applicable guidance are supplied separately in model context. Listing never selects a tool, grants permission or changes approval requirements. Off, unavailable and denied tools stay excluded under current live authority. Use `context_assets` to inspect or unload existing dynamic selectors.
 
-Tools and skills likely needed are preloaded or suggested; when you need more, send all your list_tools/list_skills queries in one step and load everything with one load_tool call.
+When you need more tools or skills, send all your list_tools/list_skills queries in one step and load everything with one load_tool call.
