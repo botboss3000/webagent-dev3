@@ -215,6 +215,23 @@ function applyHeader(profile) {
   header.append(...extensions);
 }
 
+/** Footer control rows page with edge chevrons; the zone that does not fit is the scroller. */
+function rowChevronZone(line) {
+  return Array.from(line.querySelectorAll('.chat-header-zone')).find(zone => zone.scrollWidth > zone.clientWidth + 1) || null;
+}
+/** Shows only the arrow of a direction that still has content in the overflowing zone. */
+function syncRowChevrons(line) {
+  const zone = rowChevronZone(line);
+  const max = zone ? zone.scrollWidth - zone.clientWidth : 0;
+  line.querySelector('.v3-row-chev.left')?.classList.toggle('visible', !!zone && zone.scrollLeft > 1);
+  line.querySelector('.v3-row-chev.right')?.classList.toggle('visible', !!zone && zone.scrollLeft < max - 1);
+  return zone;
+}
+/** Re-checks every configured footer row after a layout change, not only the one that scrolled. */
+function syncFooterChevrons(row) {
+  for (const line of row.querySelectorAll(':scope > .chat-header-row')) syncRowChevrons(line);
+}
+let footerChevronsWatched = false;
 let footerNodes = null;
 let applyingFooter = false;
 let footerControls = null;
@@ -290,13 +307,30 @@ function applyFooter(profile, mode) {
         }
         line.append(zone);
       }
+      for(const direction of ['left','right']) {
+        const chevron=document.createElement('button'); chevron.type='button';
+        chevron.className='v3-row-chev '+direction;
+        chevron.setAttribute('aria-label',direction==='left'?'Scroll left':'Scroll right');
+        chevron.textContent=direction==='left'?'‹':'›';
+        chevron.addEventListener('click',event=>{
+          event.preventDefault();
+          rowChevronZone(line)?.scrollBy({left:direction==='left'?-160:160,behavior:'smooth'});
+        });
+        line.append(chevron);
+      }
+      for(const zone of line.querySelectorAll('.chat-header-zone')) zone.addEventListener('scroll',()=>syncRowChevrons(line),{passive:true});
       row.append(line);
     }
     row.hidden=below.enabled === false;
+    if(!footerChevronsWatched){
+      footerChevronsWatched=true;
+      new ResizeObserver(()=>syncFooterChevrons(row)).observe(row);
+    }
     row.classList.toggle('idle-collapsed',mode === 'idle'&&!footer.below_pill);
     row.classList.toggle('v3-footer-configured',!!footer.below_pill);
     byId('chat-footer-handle').style.display=mode === 'idle' || row.hidden ? 'none' : '';
     window.lucide?.createIcons();
+    syncFooterChevrons(row);
   } finally { applyingFooter=false; }
 }
 
