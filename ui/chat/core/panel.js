@@ -520,6 +520,9 @@ async function submit(text,clearInput=false,{componentId=''}={}){
     if(clearInput&&readDraft(sid)===draft)saveDraft(sid,'');
     if(clearInput&&sid===session&&$('chat-input').value===draft)$('chat-input').value='';
     applyChatConfig();await refresh();
+    // A sent message ends typing mode: drop the composer's focus so the mobile keyboard closes with
+    // it and the next tap starts a fresh draft. Only on success, and never over another control.
+    if(document.activeElement===$('chat-input'))$('chat-input').blur();
     onEvent('sent',{session_id:sid});return {session_id:sid};
   }catch(error){
     // Fallback after automatic retries: the draft stays in the composer and Retry resubmits it.
