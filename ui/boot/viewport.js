@@ -20,6 +20,21 @@
     }
     var keyboardWasOpen = false;
     var keyboardDismissed = false;
+    // True while a finger is down on the composer's own rows (the pill controls, the stats strip
+    // or the footer row) rather than on an editor. A sideways or upward scroll there makes the
+    // platform animate the keyboard away; that is the drag itself, not a dismissal the user
+    // asked for, so applyKb must not turn it into a blur.
+    var composerRowDrag = false;
+    function isComposerRow(target) {
+      if (!target || !target.closest) return false;
+      if (target.closest('input, textarea, select, [contenteditable]')) return false;
+      return !!target.closest('#chat-input-area, #chat-footer-row');
+    }
+    document.addEventListener('touchstart', function (event) {
+      composerRowDrag = isComposerRow(event.target);
+    }, { capture: true, passive: true });
+    document.addEventListener('touchend', function () { composerRowDrag = false; }, { capture: true, passive: true });
+    document.addEventListener('touchcancel', function () { composerRowDrag = false; }, { capture: true, passive: true });
     var keyboardWidth = window.innerWidth, keyboardHeight = window.innerHeight;
     function applyKb() {
       if (!document.body) return;
@@ -40,9 +55,16 @@
       // mobile browsers briefly report a shrunken viewport again during the
       // hide animation; latch that dismissal until the user re-engages an editor.
       if (keyboardWasOpen && !open && editable) {
-        keyboardDismissed = true;
-        // Use normal focusout handling to restore the mobile composer's idle layout.
-        if (isMobile && ae.id === 'chat-input') ae.blur();
+        if (composerRowDrag) {
+          // The drag on the composer's rows is still down, so this reading is the keyboard
+          // animation of that scroll gesture, not a dismissal. Blurring would take focus off the
+          // editor the user is typing in; keep the editor and skip the dismissal latch.
+          composerRowDrag = false;
+        } else {
+          keyboardDismissed = true;
+          // Use normal focusout handling to restore the mobile composer's idle layout.
+          if (isMobile && ae.id === 'chat-input') ae.blur();
+        }
       }
       keyboardWasOpen = open;
       open = open && !keyboardDismissed;

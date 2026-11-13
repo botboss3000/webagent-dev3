@@ -25,6 +25,24 @@ function _isInsideScrollableChild(root, target) {
 }
 
 /**
+ * Nearest horizontally scrollable ancestor of `target` below `root`, or null.
+ * The control rows below the composer scroll sideways. While the composer is
+ * focused the browser must not own that pan — Chrome on Android dismisses the
+ * soft keyboard as soon as it starts a scroll gesture — so the drag is applied
+ * to the row here instead (see the touch-action rule in chat.css).
+ */
+function _horizontalScroller(root, target) {
+  let node = target && target.nodeType === 1 ? target : null;
+  while (node && node !== root && node !== document.body && node !== document.documentElement) {
+    const cs = window.getComputedStyle(node);
+    const ox = cs.overflowX;
+    if ((ox === 'auto' || ox === 'scroll' || ox === 'overlay') && node.scrollWidth > node.clientWidth + 1) return node;
+    node = node.parentElement;
+  }
+  return null;
+}
+
+/**
  * True when a downward pull is already owned by the app's pull-to-refresh
  * indicator. Upward movement never yields to refresh, so a gesture can reverse
  * direction and start scrolling the transcript.
@@ -104,7 +122,9 @@ export function forwardFooterGestures({ targets = [], scroller, markIntent, canF
       editor.focus({ preventScroll: true });
     };
     el.addEventListener('pointerup', restoreEditor, { signal });
-    el.addEventListener('pointercancel', () => { pressEditor = null; }, { signal });
+    // A touch scroll cancels the pointer instead of releasing it, so the same
+    // restore runs there; it never takes focus from a control the user chose.
+    el.addEventListener('pointercancel', restoreEditor, { signal });
 
     // ── Wheel ──────────────────────────────────────────────────────────────
     el.addEventListener('wheel', (event) => {
@@ -125,20 +145,32 @@ export function forwardFooterGestures({ targets = [], scroller, markIntent, canF
     // Touch has no wheel-style chaining: the browser only scrolls the touch
     // target's scrollable ancestor, and the footer has none. Translate the drag
     // into scrollBy() by hand, one pixel of movement per pixel of finger travel.
+    // A sideways drag on a control row scrolls that row instead: while the
+    // composer is focused the browser must not own the row's pan (chat.css sets
+    // touch-action: none) because Chrome on Android dismisses the soft keyboard
+    // as soon as it starts a scroll gesture.
     let active = false;
     let engaged = false;
+    let axis = '';
+    let startX = 0;
     let startY = 0;
+    let lastX = 0;
     let lastY = 0;
+    let rowScroller = null;
     el.addEventListener('touchstart', (event) => {
       active = false;
       engaged = false;
+      axis = '';
+      rowScroller = null;
       const t = event.touches && event.touches[0];
       if (!t) return;
       if (canForward && !canForward(event, el)) return;
-      // A nested scroller inside the footer keeps its own gesture.
+      // A nested vertical scroller inside the footer keeps its own gesture.
       if (_isInsideScrollableChild(el, event.target)) return;
       active = true;
+      startX = lastX = typeof t.clientX === 'number' ? t.clientX : 0;
       startY = lastY = t.clientY;
+      rowScroller = _horizontalScroller(el, event.target);
     }, { passive: true, signal });
     el.addEventListener('touchmove', (event) => {
       if (!active) return;
@@ -147,29 +179,45 @@ export function forwardFooterGestures({ targets = [], scroller, markIntent, canF
       if (canForward && !canForward(event, el)) { active = false; return; }
       const t = event.touches && event.touches[0];
       if (!t) return;
+      const currentX = typeof t.clientX === 'number' ? t.clientX : startX;
       const currentY = t.clientY;
       // A higher-priority surface (pull-to-refresh) owns this move. Keep tracking
       // the finger so a reversal can still start scrolling without a new touch.
       if (touchGuard && touchGuard({ event, element: el, startY, lastY, currentY })) {
+        lastX = currentX;
         lastY = currentY;
         return;
       }
       if (!engaged) {
-        if (Math.abs(currentY - startY) < TOUCH_ENGAGE_PX) return;
+        const dx = Math.abs(currentX - startX), dy = Math.abs(currentY - startY);
+        if (dx < TOUCH_ENGAGE_PX && dy < TOUCH_ENGAGE_PX) return;
         engaged = true;
+        axis = rowScroller && dx >= dy ? 'x' : 'y';
         // The drag is a scroll, not a caret placement — drop any selection the
         // touchstart began in the composer so text does not smear while scrolling.
         const sel = window.getSelection && window.getSelection();
         if (sel && sel.removeAllRanges) sel.removeAllRanges();
       }
+      if (axis === 'x') {
+        const stepX = lastX - currentX; // > 0 = finger left = the row scrolls right
+        lastX = currentX;
+        lastY = currentY;
+        if (!stepX || !rowScroller) return;
+        event.preventDefault();
+        rowScroller.scrollLeft += stepX;
+        return;
+      }
       const dy = lastY - currentY; // > 0 = finger up = scroll down
+      lastX = currentX;
       lastY = currentY;
       if (!dy) return;
       event.preventDefault();
       markIntent?.();
       scroller.scrollBy({ top: dy, behavior: 'auto' });
     }, { passive: false, signal });
-    const release = () => { active = false; engaged = false; };
+    // A scrolling touch ends with touchend even when the browser cancelled the
+    // pointer, so focus lost during the drag is restored here as well.
+    const release = () => { active = false; engaged = false; axis = ''; restoreEditor(); };
     el.addEventListener('touchend', release, { passive: true, signal });
     el.addEventListener('touchcancel', release, { passive: true, signal });
   }

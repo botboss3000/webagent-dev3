@@ -164,7 +164,33 @@ test('focus the press lost is restored when that gesture ends', () => {
   globalThis.document.activeElement = { id: 'menu-item' };
   f.footer.dispatch('pointerup');
   assert.equal(focused, 1);
+  // A touch scroll cancels the pointer instead of releasing it; focus still returns.
+  globalThis.document.activeElement = composer;
+  f.footer.dispatch('pointerdown', { button: 0 });
+  globalThis.document.activeElement = globalThis.document.body;
+  f.footer.dispatch('pointercancel');
+  assert.equal(focused, 2);
   globalThis.document.activeElement = null;
+});
+
+test('a sideways drag on a control row scrolls that row instead of the transcript', () => {
+  const f = fixture();
+  const strip = makeElement();
+  strip.style = { overflowX: 'auto', overflowY: 'hidden' };
+  strip.scrollWidth = 400;
+  strip.clientWidth = 100;
+  strip.scrollLeft = 0;
+  strip.parentElement = f.footer;
+  f.footer.dispatch('touchstart', { target: strip, touches: [{ clientX: 200, clientY: 300 }] });
+  f.footer.dispatch('touchmove', { target: strip, touches: [{ clientX: 150, clientY: 300 }] });
+  assert.equal(strip.scrollLeft, 50);
+  assert.deepEqual(f.calls, []);
+  // A vertical drag on the same row still forwards to the transcript.
+  f.footer.dispatch('touchend');
+  f.footer.dispatch('touchstart', { target: strip, touches: [{ clientX: 200, clientY: 300 }] });
+  f.footer.dispatch('touchmove', { target: strip, touches: [{ clientX: 200, clientY: 260 }] });
+  assert.equal(strip.scrollLeft, 50);
+  assert.deepEqual(f.calls, [40]);
 });
 
 test('a claimed touch move cancels forwarding for the rest of the gesture', () => {

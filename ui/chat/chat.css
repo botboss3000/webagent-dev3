@@ -160,6 +160,14 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 #chat-input-area.footer-mode-idle .chat-footer-row.v3-footer-configured:not([hidden]){max-height:none;opacity:1;margin-top:2px;margin-bottom:2px;pointer-events:auto}
 .chat-footer-row.v3-footer-configured.expanded{max-height:none}
 
+/* While the composer holds focus, the rows below it own their own pans. Chrome on Android
+   dismisses the soft keyboard as soon as the browser starts a scroll gesture, so a drag on a
+   control row would close it; core/footer-gesture-forward.js applies the row's scroll itself
+   (vertical drags still forward to the transcript). */
+#composer:focus-within :is(#chat-pill-stats-row, #chat-footer-row) {
+  touch-action: none;
+}
+
 /* Theme tokens keep durable delivery choices legible in docked and embedded chat. */
 .followup-delivery{font-size:12px;margin-top:4px;color:var(--fg-2);display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;justify-content:flex-end}
 .followup-delivery p{margin:0;overflow-wrap:anywhere}
