@@ -98,6 +98,9 @@ struct State {
     /// The last read's selector matched nothing; input on it reports the missing target.
     observed_missing: bool,
     viewport: Option<&'static str>,
+    /// Emulated on-screen keyboard height: the touch viewport loses this many pixels at its
+    /// bottom, as when a phone keyboard opens. 0 is closed.
+    keyboard: u32,
     media: BTreeMap<String, String>,
     last_action: String,
     last_action_at: Option<Instant>,
@@ -697,6 +700,7 @@ impl Service {
             observed_at: Instant::now(),
             observed_missing: false,
             viewport: None,
+            keyboard: 0,
             media: BTreeMap::new(),
             last_action: String::new(),
             last_action_at: None,
@@ -910,6 +914,7 @@ impl Service {
             .find(|(name, _, _)| Some(*name) == state.viewport)
         {
             let touch = matches!(state.viewport, Some("phone" | "phone_small" | "tablet"));
+            let height = height.saturating_sub(if touch { state.keyboard } else { 0 });
             wd::cdp(
                 state.driver(),
                 "Emulation.setDeviceMetricsOverride",
@@ -1687,10 +1692,30 @@ impl Service {
                     .copied()
                     .ok_or_else(|| Fault::rejected("Viewport preset must be one of phone"))?;
                 state.viewport = Some(preset.0);
+                state.keyboard = 0;
                 Self::apply_viewport(state).await?;
                 state.observed = false;
                 json!({"viewport":preset.0,"width":preset.1,"height":preset.2,
                     "navigate_required":true})
+            }
+            "keyboard" => {
+                // A phone keyboard shrinks the visible viewport from the bottom; resizing the
+                // emulated screen fires the same resize events the app's keyboard tracking reads.
+                if !matches!(state.viewport, Some("phone" | "phone_small" | "tablet")) {
+                    return Err(Fault::rejected(
+                        "keyboard needs a touch viewport: set viewport phone or tablet first",
+                    ));
+                }
+                state.keyboard = args.get("height").and_then(Value::as_u64).unwrap_or(0) as u32;
+                Self::apply_viewport(state).await?;
+                state.acted("keyboard");
+                let focus = wd::execute(state.driver(), scripts::FOCUS, Vec::new()).await?;
+                let focused = if focus.is_object() {
+                    focus_summary(state, &focus, true)
+                } else {
+                    Value::Null
+                };
+                json!({"keyboard_height":state.keyboard,"focused":focused})
             }
             "measure" => {
                 // Styles are about 2 KB per element, so a styled page holds fewer elements.

@@ -705,6 +705,37 @@ async fn touch_drags_with_trusted_events_and_reports_focus() {
     assert!(output(&far).contains("within 2000"), "{far}");
 }
 
+#[tokio::test]
+async fn keyboard_shrinks_the_touch_viewport_from_the_bottom() {
+    let f = fixture();
+    f.call(json!({"action":"navigate","url":"/app"})).await;
+    let desktop = f.call(json!({"action":"keyboard","height":300})).await;
+    assert!(output(&desktop).contains("touch viewport"), "{desktop}");
+    f.call(json!({"action":"viewport","preset":"phone"})).await;
+    let driver = f.driver(0);
+    driver.on_script(Box::new(|source, _args| {
+        source
+            .contains("V3_FOCUS")
+            .then(|| Ok(json!({"tag":"textarea","id":"chat-input","label":"","secret":false})))
+    }));
+    let heights = |from: usize| -> Vec<Value> {
+        driver.page().cdp[from..]
+            .iter()
+            .filter(|(command, _)| command == "Emulation.setDeviceMetricsOverride")
+            .map(|(_, params)| params["height"].clone())
+            .collect()
+    };
+    let start = driver.page().cdp.len();
+    let open = f.call(json!({"action":"keyboard","height":300})).await;
+    assert_eq!(open["keyboard_height"], 300, "{open}");
+    assert_eq!(heights(start), vec![json!(544)]);
+    let start = driver.page().cdp.len();
+    f.call(json!({"action":"keyboard","height":0})).await;
+    assert_eq!(heights(start), vec![json!(844)]);
+    let tall = f.call(json!({"action":"keyboard","height":700})).await;
+    assert!(output(&tall).contains("0 (closed) to 600"), "{tall}");
+}
+
 fn lock<T>(value: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     value.lock().unwrap_or_else(PoisonError::into_inner)
 }

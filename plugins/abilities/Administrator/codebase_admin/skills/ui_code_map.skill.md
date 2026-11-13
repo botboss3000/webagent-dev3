@@ -20,8 +20,9 @@ edit and test. When a fix does not work, re-check the mechanism against the exac
 case the user describes rather than reading more files.
 
 Reproduce a touch, focus or keyboard bug in the browser before and after the fix: a
-phone viewport, then `browser_input` `touch` with `dx`/`dy` on the element, and check
-`focused` in the result (see that tool's guidance).
+phone viewport, `browser_read` `keyboard` to open an emulated keyboard when the bug
+involves it, then `browser_input` `touch` with `dx`/`dy` on the element, and check
+`focused` in the result (see those tools' guidance).
 
 Comments that mention older app versions or `v2` paths describe history, not files:
 search this checkout instead.

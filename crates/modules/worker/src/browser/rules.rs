@@ -25,10 +25,11 @@ const APP_PARAMS: [&str; 12] = [
     "ui_sample",
     "window",
 ];
-pub(crate) const READ_ACTIONS: [&str; 12] = [
+pub(crate) const READ_ACTIONS: [&str; 13] = [
     "animations",
     "close",
     "emulate",
+    "keyboard",
     "measure",
     "navigate",
     "performance",
@@ -689,6 +690,7 @@ fn permitted(action: &str) -> &'static [&'static str] {
         "type" => &["selector", "text", "vault", "totp"],
         "save_login" => &["origin"],
         "viewport" => &["preset"],
+        "keyboard" => &["height"],
         "measure" => &["selector", "offset", "styles"],
         "pixels" => &["points", "selector"],
         "wait_for" => &["condition", "selector", "text", "timeout_ms", "quiet_ms"],
@@ -731,6 +733,7 @@ pub fn validate_args(name: &str, args: &mut Map<String, Value>) -> Result<&'stat
                     "dx",
                     "dy",
                     "preset",
+                    "height",
                     "color_scheme",
                     "reduced_motion",
                     "styles",
@@ -935,6 +938,15 @@ pub fn validate_args(name: &str, args: &mut Map<String, Value>) -> Result<&'stat
                 "Scroll needs a selector to bring into view or a distance",
             ));
         }
+    }
+    if action == "keyboard"
+        && !args
+            .get("height")
+            .is_some_and(|value| is_int(value) && (0..=600).contains(&value.as_i64().unwrap_or(-1)))
+    {
+        return Err(Fault::rejected(
+            "keyboard needs height: whole pixels 0 (closed) to 600",
+        ));
     }
     if action == "touch" {
         if blank(args.get("selector")) {

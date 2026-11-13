@@ -23,6 +23,7 @@
           "animations",
           "scroll",
           "viewport",
+          "keyboard",
           "emulate",
           "screenshot",
           "close",
@@ -97,6 +98,12 @@
           "desktop_wide"
         ],
         "description": "viewport only: phone 390x844, phone_small 360x640 and tablet 768x1024 emulate touch devices; desktop 1280x900, desktop_wide 1440x900; navigate again afterwards"
+      },
+      "height": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 600,
+        "description": "keyboard only: emulated on-screen keyboard height in px (0 closes it); the touch viewport shrinks by this much from the bottom"
       },
       "color_scheme": {
         "type": "string",

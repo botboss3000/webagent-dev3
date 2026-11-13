@@ -49,7 +49,7 @@ The agent's Browser Control settings hold an allow list and a block list of host
 
 ## Viewport, media and images
 
-- `viewport` `preset`: `phone` 390x844, `phone_small` 360x640 and `tablet` 768x1024 emulate touch devices with mobile media queries; `desktop` 1280x900 and `desktop_wide` 1440x900. Navigate again afterwards so the page loads at that size. The preset stays in force across navigation.
+- `viewport` `preset`: `phone` 390x844, `phone_small` 360x640 and `tablet` 768x1024 emulate touch devices with mobile media queries; `desktop` 1280x900 and `desktop_wide` 1440x900. Navigate again afterwards so the page loads at that size. The preset stays in force across navigation. `keyboard` `height` emulates an open on-screen keyboard on a touch viewport (see browser_read's guidance).
 - `emulate` (`color_scheme`: light, dark or default; `reduced_motion`: reduce or default): sets the system preferences the page sees and keeps them across navigation; navigate again afterwards. A site's own theme setting can override the system colour scheme.
 - `screenshot`: the current viewport as a PNG. It is attached to your reply in this conversation, so the user sees it. Inputs, secret nodes and credentials are masked.
 - `close`: end the browser session.
