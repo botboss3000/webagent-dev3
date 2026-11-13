@@ -124,7 +124,7 @@
       },
       "styles": {
         "type": "boolean",
-        "description": "measure only: include computed CSS for each element (5 elements per call)"
+        "description": "measure only: include computed CSS for each element, touch-action included (5 elements per call)"
       },
       "points": {
         "type": "array",

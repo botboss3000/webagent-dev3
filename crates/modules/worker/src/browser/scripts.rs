@@ -38,7 +38,7 @@ const all=[...document.querySelectorAll(sel)];
 const nodes=all.filter(n=>n.checkVisibility({checkVisibilityCSS:true}));
 const props=['display','position','zIndex','fontSize','fontWeight','lineHeight','color','backgroundColor','borderRadius',
  'borderTopWidth','paddingTop','paddingRight','paddingBottom','paddingLeft','marginTop','marginRight','marginBottom','marginLeft',
- 'overflowX','overflowY','opacity','textOverflow','whiteSpace'];
+ 'overflowX','overflowY','opacity','textOverflow','whiteSpace','touchAction'];
 const label=n=>(n.closest('[data-secret],[data-sensitive]')||n.matches('input,textarea,select'))?'':
  (n.getAttribute('aria-label')||n.innerText||n.getAttribute('title')||'').trim().replace(/\s+/g,' ').slice(0,60);
 const rows=nodes.map(n=>{const b=n.getBoundingClientRect();

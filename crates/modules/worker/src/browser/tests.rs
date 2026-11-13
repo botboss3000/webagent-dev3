@@ -423,7 +423,7 @@ fn page_scripts_are_byte_identical_to_the_python_adapter() {
     }
     assert_eq!(
         hex::encode(digest.finalize()),
-        "a5ecfcece4bcbba1ea09ca33d17229f24e75d27257bee68dadbbe6e28ac91ac5"
+        "7bc30a0cfbcb09f75d08d84bdc17e18f9e8b03ed5827f184d9a2ccc9af0beec4"
     );
     // The page sees a JavaScript newline escape, not a raw newline in a string literal.
     assert!(scripts::READ.contains("text+=chunk+'\\n';"));

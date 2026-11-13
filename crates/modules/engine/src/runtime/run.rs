@@ -3022,9 +3022,15 @@ impl<
                     let chosen = super::images::select(&sid, &projected_input, &records);
                     super::images::apply(&mut projected_input, &chosen);
                     // The model sees its own tool screenshots instead of asking another model about them.
-                    let found = super::images::tool_images(&projected_input);
+                    let bridge = selection.provider.is_bridge();
+                    let found = super::images::tool_images(&projected_input, bridge);
                     let mut shots = std::collections::HashMap::new();
-                    for (id, _) in found.iter().take(super::images::MAX_IMAGES) {
+                    let most = if bridge {
+                        super::images::BRIDGE_MAX_IMAGES
+                    } else {
+                        super::images::MAX_IMAGES
+                    };
+                    for (id, _) in found.iter().take(most) {
                         if let Some(record) = app
                             .store
                             .get(&format!("attachment:{id}"))
@@ -3036,7 +3042,13 @@ impl<
                             }
                         }
                     }
-                    super::images::insert_tool_images(&mut projected_input, &sid, &found, &shots);
+                    super::images::insert_tool_images(
+                        &mut projected_input,
+                        &sid,
+                        &found,
+                        &shots,
+                        bridge,
+                    );
                 }
                 let prepared_provider = match crate::provider::CallDraft::new(
                     &selection,

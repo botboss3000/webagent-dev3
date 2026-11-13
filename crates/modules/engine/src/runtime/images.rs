@@ -12,6 +12,9 @@ const MEDIA_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/w
 /// At most this many images, and this many base64 bytes, are sent with one call.
 pub const MAX_IMAGES: usize = 8;
 pub const MAX_BYTES: usize = 20 * 1024 * 1024;
+/// A harness bridge resumes its own session and keeps every image it was shown, so it is
+/// given the whole session's screenshots: dropping one rewrites history and restarts it.
+pub const BRIDGE_MAX_IMAGES: usize = 32;
 const INLINE_NOTE: &str = "Image sent with this message for you to view directly.";
 
 /// Split a user message into its text and the attachment list that follows the marker.
@@ -119,14 +122,18 @@ pub fn apply(input: &mut [Value], chosen: &HashMap<String, String>) {
     }
 }
 
-/// Screenshots from the current turn's tool results (since the last user message), newest
-/// first: `(id, attachment)` pairs. Browser results carry `attachment`, scripts and
-/// recordings `artifacts[].attachment`.
-pub fn tool_images(input: &[Value]) -> Vec<(String, Value)> {
-    let start = input
-        .iter()
-        .rposition(|item| item["role"] == "user")
-        .map_or(0, |at| at + 1);
+/// Screenshots from tool results, newest first: `(id, attachment)` pairs. Browser results
+/// carry `attachment`, scripts and recordings `artifacts[].attachment`. Only the current turn
+/// (since the last user message) unless `whole` asks for the session's history (bridges).
+pub fn tool_images(input: &[Value], whole: bool) -> Vec<(String, Value)> {
+    let start = if whole {
+        0
+    } else {
+        input
+            .iter()
+            .rposition(|item| item["role"] == "user")
+            .map_or(0, |at| at + 1)
+    };
     let mut found = Vec::new();
     for item in input[start..].iter().rev() {
         if item["type"] != "function_call_output" {
@@ -162,7 +169,9 @@ pub fn insert_tool_images(
     sid: &str,
     found: &[(String, Value)],
     records: &HashMap<String, Value>,
+    whole: bool,
 ) {
+    let max_images = if whole { BRIDGE_MAX_IMAGES } else { MAX_IMAGES };
     // Newest first within the bounds; `found` is already newest first.
     let mut chosen = std::collections::HashSet::new();
     let mut bytes = 0;
@@ -171,7 +180,7 @@ pub fn insert_tool_images(
             continue;
         };
         let data = record["data"].as_str().unwrap_or("");
-        if chosen.len() >= MAX_IMAGES
+        if chosen.len() >= max_images
             || data.is_empty()
             || bytes + data.len() > MAX_BYTES
             || record["session_id"] != sid
@@ -194,13 +203,13 @@ pub fn insert_tool_images(
             at -= 1;
         }
         if at == end {
-            if input[at - 1]["role"] == "user" {
+            if input[at - 1]["role"] == "user" && !whole {
                 break;
             }
             at -= 1;
             continue;
         }
-        let shots: Vec<(String, Value)> = tool_images(&input[at..end])
+        let shots: Vec<(String, Value)> = tool_images(&input[at..end], true)
             .into_iter()
             .rev()
             .filter(|(id, _)| chosen.contains(id))
@@ -251,11 +260,11 @@ mod tests {
             shot("b"),
         ];
         let mut first = base[..3].to_vec();
-        let found = tool_images(&first);
-        insert_tool_images(&mut first, "s", &found, &records);
+        let found = tool_images(&first, false);
+        insert_tool_images(&mut first, "s", &found, &records, false);
         let mut second = base.clone();
-        let found = tool_images(&second);
-        insert_tool_images(&mut second, "s", &found, &records);
+        let found = tool_images(&second, false);
+        insert_tool_images(&mut second, "s", &found, &records, false);
         // The earlier screenshot item sits after its own result both times.
         assert_eq!(first[3], second[3]);
         assert_eq!(
@@ -268,9 +277,36 @@ mod tests {
             .unwrap()
             .contains("b.png"));
         let mut other = base.clone();
-        let found = tool_images(&other);
-        insert_tool_images(&mut other, "other", &found, &records);
+        let found = tool_images(&other, false);
+        insert_tool_images(&mut other, "other", &found, &records, false);
         assert_eq!(other.len(), base.len());
+    }
+
+    #[test]
+    fn bridge_screenshots_stay_after_a_new_user_message() {
+        let shot = json!({"type":"function_call_output","call_id":"a","output":json!({"status":"success",
+            "attachment":{"id":"a","name":"a.png","media_type":"image/png","sha256":"ha"}}).to_string()});
+        let records = HashMap::from([("a".to_owned(), record("s", "ha", "QUE="))]);
+        let base = vec![
+            json!({"role":"user","content":"go"}),
+            json!({"type":"function_call","call_id":"a"}),
+            shot,
+            json!({"role":"assistant","content":"done"}),
+            json!({"role":"user","content":"next"}),
+        ];
+        let mut first = base[..3].to_vec();
+        let found = tool_images(&first, true);
+        insert_tool_images(&mut first, "s", &found, &records, true);
+        let mut later = base.clone();
+        let found = tool_images(&later, true);
+        insert_tool_images(&mut later, "s", &found, &records, true);
+        // A resumed harness sees the same screenshot item in the same place.
+        assert_eq!(first[3], later[3]);
+        // The current-turn mode drops it once the user speaks again.
+        let mut direct = base.clone();
+        let found = tool_images(&direct, false);
+        insert_tool_images(&mut direct, "s", &found, &records, false);
+        assert_eq!(direct.len(), base.len());
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! Exact and word-ranked tool discovery. Rust alone controls exposure, grants and approvals.
-// @code-index {"version":1,"feature":"conversation-tool-selection","aliases":["live context","source correspondence"],"purpose":"Identity-only conversation tool selection never grants access. Current encrypted policy, visibility and model appointment control eligibility; native fences and endpoint confinement are fixed invariants.","span_lines":80,"configuration":{"status":"not_applicable","references":[],"opportunities":[],"rationale":"Model appointment and encrypted tool policy are resolved by their owners. Native receipts, fixed-endpoint confinement and current-permission fences cannot be made optional by another setting."}}
+// Identity-only conversation tool selection never grants access.
 use crate::{Call, NativeHost};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
@@ -341,7 +341,11 @@ async fn exact(
         }
     }
     if selected.is_empty() && available.is_empty() {
-        bail!("Tool unavailable");
+        // Read-only mode hides tools that change things; say so instead of a bare refusal.
+        if read_only {
+            bail!("Tool unavailable: {}. This conversation is in read-only mode, which withholds tools that change things; ask the user to switch it to a write mode if the task needs them", refused.join(", "));
+        }
+        bail!("Tool unavailable: {}", refused.join(", "));
     }
     let status = if selected.is_empty() {
         "already_available"

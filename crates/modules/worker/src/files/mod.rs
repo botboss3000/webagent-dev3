@@ -24,6 +24,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 mod decision;
+mod outline;
 
 /// The tools this module runs; everything else goes to the Python worker.
 pub const TOOLS: [&str; 7] = [
@@ -889,6 +890,9 @@ fn read(directory: &OwnedFd, leaf: &OsStr, args: &Map<String, Value>) -> Outcome
     if stat.st_size > (32 * LIMIT) as i64 {
         return Err(rejected("file exceeds inspection limit"));
     }
+    if args.get("outline") == Some(&Value::Bool(true)) {
+        return outline_of(file, leaf);
+    }
     let mut reader = BufReader::new(file);
     let (mut output, mut output_size, mut total, mut size) = (Vec::new(), 0, 0_i64, 0);
     let (mut next_offset, mut truncated, mut cut_line) = (None, false, None);
@@ -930,6 +934,23 @@ fn read(directory: &OwnedFd, leaf: &OsStr, args: &Map<String, Value>) -> Outcome
         ));
     }
     Ok(result)
+}
+
+/// The file's named blocks with line ranges instead of its lines, so a read can target one span.
+fn outline_of(mut file: File, leaf: &OsStr) -> Outcome<Value> {
+    let mut data = Vec::new();
+    (&mut file)
+        .take((32 * LIMIT) as u64)
+        .read_to_end(&mut data)?;
+    let text = String::from_utf8_lossy(&data);
+    let blocks = outline::blocks(&leaf.to_string_lossy(), &text);
+    let output = if blocks.is_empty() {
+        "No named blocks found; read the file in pages or search it instead.".to_owned()
+    } else {
+        outline::render(&blocks, 400)
+    };
+    Ok(json!({"status":"success","output":output,"outline":true,
+        "total_lines":text.lines().count(),"blocks":blocks.len()}))
 }
 
 /// Entry names of an open directory, without `.` and `..`, stopping at `cap`.
@@ -1272,6 +1293,9 @@ impl Search<'_> {
             None
         };
         let markers = comment_markers(label);
+        // Each match names its enclosing block once, so a read can target that span.
+        let mut blocks: Option<Vec<outline::Block>> = None;
+        let mut last_block = None;
         for (index, line) in split_lines(&text).into_iter().enumerate() {
             let index = index + 1;
             if Instant::now() >= self.deadline {
@@ -1303,7 +1327,14 @@ impl Search<'_> {
                 shown.push_str(" …[line clipped]");
                 self.limited = true;
             }
-            let result = format!("{label}:{index}:{shown}");
+            let blocks = blocks.get_or_insert_with(|| outline::blocks(label, &text));
+            let mut result = format!("{label}:{index}:{shown}");
+            if let Some(block) = outline::enclosing(blocks, index) {
+                if last_block != Some((block.start, block.end)) {
+                    last_block = Some((block.start, block.end));
+                    result.push_str(&format!("  ⟨{} {}-{}⟩", block.name, block.start, block.end));
+                }
+            }
             let encoded = result.len() + usize::from(!self.found.is_empty());
             if self.size + encoded > self.output_bytes || self.found.len() >= 200 {
                 self.limited = true;
@@ -1402,7 +1433,7 @@ fn search(
         return Err(rejected("invalid file pattern"));
     }
     if query.is_empty() && !comments_only && !names_only {
-        return Err(rejected("query must not be empty"));
+        return Err(rejected("query must not be empty: pass the text to find as query (file_list with pattern finds files by name)"));
     }
     if file_glob.contains(['\\', '\0']) {
         return Err(rejected("invalid file glob"));
