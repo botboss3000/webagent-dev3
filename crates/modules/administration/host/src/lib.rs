@@ -102,6 +102,15 @@ pub trait AdministrationHost: Sync {
         name: &'a str,
         trusted: Option<Value>,
     ) -> Pending<'a, Option<Value>>;
+    /// Matcher scores of `items` (each a few texts) against `query`, or `None` when the local
+    /// inference service is unavailable.
+    fn rank<'a>(
+        &'a self,
+        _query: &'a str,
+        _items: Vec<Vec<String>>,
+    ) -> Pending<'a, Option<Vec<f32>>> {
+        Box::pin(async { None })
+    }
     /// The session's current chat title, if it has one.
     fn session_title<'a>(&'a self, _sid: &'a str) -> Pending<'a, Result<Option<String>>> {
         Box::pin(async { Ok(None) })

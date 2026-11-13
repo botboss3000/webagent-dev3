@@ -41,6 +41,11 @@ pub async fn execute(
     } = call;
     match name {
         "file_list" | "file_read" | "file_search" | "file_edit" | "file_write" => {
+            let lookup = name == "file_search" && args["find"] == true;
+            if lookup && !(args["broker_id"].is_null() && args["task_id"].is_null()) {
+                return Ok(json!({"status":"rejected","error_kind":"invalid_arguments",
+                    "output":"Not run; nothing changed. find searches the published checkout; omit broker_id"}));
+            }
             if let Some(draft) = arguments::broker_file(sid, pending_id, name, args)? {
                 let mut reply = broker_call(host, sid, run_id, name, &draft, cancel).await?;
                 // A refused claim stays queued; say how to be woken when it is granted.
@@ -63,7 +68,11 @@ pub async fn execute(
                     }
                 };
                 let trusted = host.checkout(sid, run, name, codebase_revision(run)).await;
-                host.worker(name, &live, sid, trusted, cancel).await
+                let reply = host.worker(name, &live, sid, trusted, cancel).await?;
+                if lookup {
+                    return Ok(ranked_blocks(host, &live, reply).await);
+                }
+                Ok(reply)
             }
         }
         // The direct live-checkout writer never becomes a broker draft.
@@ -105,6 +114,82 @@ pub async fn execute(
         }
         _ => host.worker(name, args, sid, None, cancel).await,
     }
+}
+
+/// Blocks a `find` lookup returns.
+const FOUND_BLOCKS: usize = 8;
+
+/// Finish a `file_search` `find`: the worker scored named blocks on the query's words; the
+/// matcher reranks its best and the two scores are blended equally, so a plain-language
+/// question lands on code even when its words differ from the identifiers. Without the
+/// matcher the word ranking stands.
+pub(crate) async fn ranked_blocks(
+    host: &dyn AdministrationHost,
+    args: &Value,
+    reply: Value,
+) -> Value {
+    let Some(found) = reply["output"]
+        .as_str()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .filter(|found| found["find"] == true)
+    else {
+        return reply;
+    };
+    let candidates = found["candidates"].as_array().cloned().unwrap_or_default();
+    if candidates.is_empty() {
+        return json!({"status":"success","truncated":found["limited"],"output":format!(
+            "No block under this path shares a word with the query ({} blocks scanned). Try other words, a wider path, or a literal search without find.",
+            found["blocks"])});
+    }
+    let texts = candidates
+        .iter()
+        .map(|c| {
+            vec![c["text"]
+                .as_str()
+                .unwrap_or("")
+                .chars()
+                .take(1900)
+                .collect()]
+        })
+        .collect();
+    let meaning = host
+        .rank(args["query"].as_str().unwrap_or(""), texts)
+        .await
+        .filter(|scores| scores.len() == candidates.len());
+    let best = candidates[0]["score"].as_f64().unwrap_or(1.0).max(1e-9);
+    let mut order: Vec<(f64, &Value)> = candidates
+        .iter()
+        .enumerate()
+        .map(|(at, c)| {
+            let words = c["score"].as_f64().unwrap_or(0.0) / best;
+            let score = meaning
+                .as_ref()
+                .map_or(words, |scores| 0.5 * words + 0.5 * f64::from(scores[at]));
+            (score, c)
+        })
+        .collect();
+    order.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let lines: Vec<String> = order
+        .iter()
+        .take(FOUND_BLOCKS)
+        .map(|(_, c)| {
+            format!(
+                "{}:{}-{}  {}",
+                c["path"].as_str().unwrap_or(""),
+                c["start"],
+                c["end"],
+                c["name"].as_str().unwrap_or("")
+            )
+        })
+        .collect();
+    let by = if meaning.is_some() {
+        "words and meaning"
+    } else {
+        "words only; the matcher is unavailable"
+    };
+    json!({"status":"success","truncated":found["limited"],"output":format!(
+        "{}\n({} of {} blocks shown, ranked by {by}; read one with file_read offset and limit)",
+        lines.join("\n"), lines.len(), found["blocks"])})
 }
 
 /// Live-checkout reads see the codebase revision the run was admitted with.

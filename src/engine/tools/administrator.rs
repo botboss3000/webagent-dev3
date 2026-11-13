@@ -251,6 +251,13 @@ impl AdministrationHost for Host<'_> {
     fn run<'a>(&'a self, run_id: &'a str) -> Pending<'a, Result<Value>> {
         Box::pin(self.0.run(run_id))
     }
+    fn rank<'a>(
+        &'a self,
+        query: &'a str,
+        items: Vec<Vec<String>>,
+    ) -> Pending<'a, Option<Vec<f32>>> {
+        Box::pin(crate::api::inference::rank(query, items))
+    }
     fn session_title<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Option<String>>> {
         Box::pin(async move {
             let session = self.0.store.get(&crate::key("session", sid)).await?;

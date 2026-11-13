@@ -465,3 +465,38 @@ async fn dashboard_requests_are_checked_before_the_broker() {
         "00000000-0000-0000-0000-000000000000"
     );
 }
+
+/// A `find` reply lists the worker's best blocks with their ranges; without the matcher
+/// the word ranking stands. Draft lookups are refused before any call.
+#[tokio::test]
+async fn find_lists_ranked_blocks_and_refuses_drafts() {
+    let dir = root();
+    let host = Fake::new(dir.path()).await;
+    let found = json!({"find":true,"blocks":40,"limited":false,"candidates":[
+        {"path":"ui/a.css","start":3,"end":9,"name":".row:has(.menu)","text":"t","score":4.0},
+        {"path":"ui/b.js","start":1,"end":20,"name":"function open()","text":"t","score":2.0}]});
+    let reply = crate::tools::ranked_blocks(
+        &host,
+        &json!({"query":"menu row"}),
+        json!({"status":"success","output":found.to_string()}),
+    )
+    .await;
+    let text = reply["output"].as_str().unwrap();
+    assert!(
+        text.starts_with("ui/a.css:3-9  .row:has(.menu)\nui/b.js:1-20  function open()\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("2 of 40 blocks shown, ranked by words only"),
+        "{text}"
+    );
+    let refused = call(
+        &host,
+        "file_search",
+        json!({"path":"ui","query":"menu","find":true,"broker_id":"new"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(refused["error_kind"], "invalid_arguments");
+    assert!(host.sent().is_empty());
+}

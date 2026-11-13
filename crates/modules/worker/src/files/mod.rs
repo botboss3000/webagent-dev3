@@ -24,6 +24,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 mod decision;
+mod find;
 mod outline;
 
 /// The tools this module runs; everything else goes to the Python worker.
@@ -1039,6 +1040,9 @@ struct Search<'a> {
     limited: bool,
     /// The search starts at the checkout root, so runtime folders there are skipped.
     checkout_top: bool,
+    /// Collect named blocks for a plain-language lookup instead of matching lines.
+    find: bool,
+    blocks: Vec<find::Candidate>,
 }
 
 fn comment_markers(label: &str) -> &'static [&'static str] {
@@ -1276,6 +1280,16 @@ impl Search<'_> {
             data.truncate(LIMIT);
         }
         let text = String::from_utf8_lossy(&data);
+        if self.find {
+            let named = outline::blocks(label, &text);
+            if self.blocks.len() + named.len() > find::MAX_BLOCKS {
+                self.limited = true;
+                return Ok(());
+            }
+            let lines: Vec<&str> = text.lines().collect();
+            self.blocks.extend(find::candidates(label, &lines, &named));
+            return Ok(());
+        }
         let hits = if self.regex && !self.query.is_empty() {
             match regex_lines(self.query, &data, self.deadline)? {
                 None => {
@@ -1417,13 +1431,22 @@ fn search(
         None => Some(false),
         Some(value) => value.as_bool(),
     };
-    let (Some(query), Some(regex), Some(comments_only), Some(file_glob), Some(names_only)) = (
+    let (
+        Some(query),
+        Some(regex),
+        Some(comments_only),
+        Some(file_glob),
+        Some(names_only),
+        Some(find),
+    ) = (
         text("query"),
         flag("regex"),
         flag("comments_only"),
         text("file_glob"),
         flag("names_only"),
-    ) else {
+        flag("find"),
+    )
+    else {
         return Err(rejected("invalid search options"));
     };
     // Agents write `a|b` meaning alternation and forget `regex`; a literal pipe search is rare.
@@ -1431,6 +1454,11 @@ fn search(
     // file_list with a pattern arrives here as a name-only walk (see the dispatch).
     if names_only && (file_glob.is_empty() || !query.is_empty()) {
         return Err(rejected("invalid file pattern"));
+    }
+    if find && (query.is_empty() || regex || comments_only || names_only) {
+        return Err(rejected(
+            "find needs a plain-language query and no regex or comments_only",
+        ));
     }
     if query.is_empty() && !comments_only && !names_only {
         return Err(rejected("query must not be empty: pass the text to find as query (file_list with pattern finds files by name)"));
@@ -1456,9 +1484,12 @@ fn search(
         size: 0,
         entries_left: 10_000,
         bytes_left: (32 * LIMIT) as i64,
-        deadline: Instant::now() + Duration::from_secs(2),
+        // A lookup outlines every source file under the path, so it gets more time.
+        deadline: Instant::now() + Duration::from_secs(if find { 6 } else { 2 }),
         limited: false,
         checkout_top,
+        find,
+        blocks: Vec::new(),
     };
     match FileType::from_raw_mode(fstat(&target)?.st_mode) {
         FileType::RegularFile => search.scan_file(&target, raw)?,
@@ -1472,6 +1503,13 @@ fn search(
         _ => return Err(rejected("search path must be a regular file or directory")),
     }
     *scan_limited = search.limited;
+    if find {
+        return Ok(Written::Text(find::output(
+            &search.blocks,
+            query,
+            search.limited,
+        )));
+    }
     if search.found.is_empty() && search.limited {
         // An empty page alone reads as "no matches"; say the scan stopped before covering the path.
         return Ok(Written::Text(format!(

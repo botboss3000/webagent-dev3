@@ -1,5 +1,7 @@
 # file_search
 
+To find where something is done when you do not know its identifiers, ask first with `find: true` and a plain-language `query` (for example "move the dropdown menu to the body when it opens"), narrowed with `path` where you can. It returns the 8 best-matching named blocks (functions, classes, CSS rules, headings) as `path:start-end  name`; read the best one or two with file_read offset and limit. Use a literal or regex query instead for an exact string such as an error message or class name, which find can miss inside a long block. find searches published source only.
+
 Each match line is cut to a window around the match. The first match inside a block names it with its line range, for example `ui/chat/chat.css:169:...  ⟨#chat-pill-stats-strip 165-174⟩`; read that range with file_read offset and limit instead of a wide page. A bounded result does not prove absence.
 
 Paths are source-relative (src/example.rs). Writes without task_id create or reuse an isolated task and return its ID; reuse it. Writes need a stable request_id and the latest expected_inputs_sha256; reread after a stale-input error. No task write may modify data/. Live files (listed in /code/live-files.json) are edited with checkout_edit instead. Pass the task ID to read or search the private draft; reads without it see published source. A draft search takes a literal query and an optional path (a file or folder) to narrow it; regex, file_glob and comments_only work only on published source.
