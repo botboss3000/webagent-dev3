@@ -83,6 +83,17 @@ investigation, not another finish. Preflight drift needs an explicit
 synchronization decision (decide); it never authorises overwriting another
 writer.
 
+## Waiting for claims
+
+A file edit refused with `ownership_conflict` is not lost: your task is now
+queued for those files behind the named blockers. Do not tell the user you are
+blocked or ask them to say retry. Call `wait` with your `broker_id` (no
+`job_id`) and end your turn; it runs in the background and a notice wakes you
+when the task holds its claims (then reread the files and apply your edits
+again), when the task closes, or if it is still queued after 2 hours (then
+tell the user which session blocks it). Work on files that are not blocked
+first. Never abandon another session's task to get ahead of it.
+
 ## Ownership and cleanup
 
 reservations/reserve before editing; continue reopens corrections after a

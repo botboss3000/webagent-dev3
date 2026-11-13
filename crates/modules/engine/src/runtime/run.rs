@@ -1386,9 +1386,11 @@ impl<
                     // The broker owns the job across our own container replacement. It runs
                     // as a background task: the agent is free, and recovery follows the job
                     // and reports its end, or a slow or stalled stage, as a background notice.
+                    let claims = value["output"]["status"] == "waiting_claims";
                     run["pending"]["external_job"] = json!({"kind":"v3_build",
                             "task_id":args["task_id"],"expected_inputs_sha256":args["expected_inputs_sha256"],
-                            "job_id":value["output"]["job_id"],"submitted_at":now()});
+                            "job_id":value["output"]["job_id"],"submitted_at":now(),
+                            "claims_for":if claims { value["output"]["broker_id"].clone() } else { Value::Null }});
                     super::recovery::note_build_job(app.store.records(), &run, &value["output"])
                         .await;
                     let external = run["pending"].clone();
@@ -1406,13 +1408,22 @@ impl<
                         );
                         let job = value["output"]["job_id"].as_str().unwrap_or("unknown");
                         // task_id is the background task; broker_task_id and inputs_sha256 name the release.
-                        let result = json!({"status":"running","task_id":task_id,"job_id":job,
+                        let result = if claims {
+                            json!({"status":"running","task_id":task_id,
+                            "broker_id":value["output"]["broker_id"],"output":
+                            "Your task is queued for its claims as a background task. You get a \
+                             background notice when it holds them (then reread the files and apply \
+                             your edits again), or if it closes or is still queued after 2 hours. \
+                             End your turn now: do not retry or poll."})
+                        } else {
+                            json!({"status":"running","task_id":task_id,"job_id":job,
                             "broker_task_id":args["task_id"],"inputs_sha256":args["expected_inputs_sha256"],
                             "output":format!(
                             "Broker job {job} is running as background task {task_id}. You get a \
                              background notice when it ends, and if a stage runs slow or stalls. End \
                              your turn now: do not poll or wait. Use build_work status only if the \
-                             user asks how it is going, and build_work cancel to stop it.")});
+                             user asks how it is going, and build_work cancel to stop it.")})
+                        };
                         Self::append_tool(&mut run, &result)?;
                         app.store
                             .save_run_observed(

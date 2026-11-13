@@ -81,7 +81,7 @@
       },
       "job_id": {
         "type": "string",
-        "description": "Broker Job ID. status inspects it; wait follows it again after an early still_running result (returning at the next alert or its end); cancel stops it and keeps the task for a fix."
+        "description": "Broker Job ID. status inspects it; wait follows it again after an early still_running result (returning at the next alert or its end); wait without job_id but with broker_id follows that task's queued claim request until it is granted; cancel stops it and keeps the task for a fix."
       },
       "request_id": {
         "type": "string"

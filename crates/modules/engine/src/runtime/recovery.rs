@@ -254,6 +254,10 @@ impl<
             let sid = task["session_id"].as_str().unwrap_or_default().to_owned();
             let follow = json!({"id":task["run_id"],"session_id":sid,
                 "pending":task["external_pending"]});
+            if follow["pending"]["external_job"]["claims_for"].is_string() {
+                Self::follow_claim_wait(app, &mut task, &follow).await?;
+                continue;
+            }
             let poll =
                 tokio::time::timeout(Duration::from_secs(3), Self::build_result(app, &follow))
                     .await;
@@ -327,6 +331,37 @@ impl<
             }
         }
         Ok(())
+    }
+    /// Follow one background claim wait; its end is a background notice that wakes the agent.
+    async fn follow_claim_wait(app: &Self, task: &mut Value, follow: &Value) -> Result<()> {
+        let poll =
+            tokio::time::timeout(Duration::from_secs(5), Self::build_result(app, follow)).await;
+        let Ok(Ok(BuildPoll::Done(result))) = poll else {
+            return Ok(());
+        };
+        let sid = follow["session_id"].as_str().unwrap_or_default();
+        let output = &result["output"];
+        let broker_id = output["broker_id"].as_str().unwrap_or("task");
+        let revision = task["revision"].as_u64().unwrap_or(0);
+        task["result"] = result.clone();
+        task["status"] = json!("completed");
+        task["completed_at"] = json!(now());
+        task["lease_until"] = json!(0);
+        task["delivery_run_id"] = json!("background_notice");
+        if !app.store.background_cas(task, Some(revision)).await? {
+            return Ok(());
+        }
+        app.store
+            .background_delivered(task, "background_notice")
+            .await?;
+        if task["quiet"] == true {
+            return Ok(());
+        }
+        let status = output["status"].as_str().unwrap_or("ended");
+        app.stage_background_notice(sid, &format!("claims:{broker_id}:{status}:{}", now()),
+            json!({"source":"build","title":"claim wait","task":broker_id,"status":status,
+            "run_id":task["run_id"],"task_id":task["id"],"reply":output["message"],"result":result}))
+            .await
     }
     /// Post one build chat line, keyed by job, kind and time so each is posted once.
     async fn build_line(
@@ -404,6 +439,9 @@ impl<
         let sid = run["session_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing session"))?;
+        if let Some(task) = run["pending"]["external_job"]["claims_for"].as_str() {
+            return Self::claim_result(app, run, sid, task).await;
+        }
         let task = finish_task(run);
         let (trusted, socket_path) = Self::broker_identity(app, run).await?;
         let socket = &socket_path;
@@ -522,6 +560,99 @@ impl<
                     && containers[*role]["health"] == "healthy"));
         }
         Ok(BuildPoll::Done(json!({"status":"success","output":output})))
+    }
+    /// One poll of a task queued for claims. The broker never grants a queued request on
+    /// its own, so this asks again once a minute, which also renews the request before the
+    /// broker would orphan it. Done when granted, when the task closes or after two hours.
+    async fn claim_result(app: &Self, run: &Value, sid: &str, task: &str) -> Result<BuildPoll> {
+        let (trusted, socket) = Self::broker_identity(app, run).await?;
+        let call = |args: Value| {
+            let trusted = trusted.clone();
+            let socket = socket.clone();
+            async move {
+                crate::tools::transport::execute_host_trusted(
+                    "v3_build_work",
+                    &args,
+                    sid,
+                    &socket,
+                    Some(trusted),
+                    CancellationToken::new(),
+                )
+                .await
+            }
+        };
+        let done = |status: &str, message: String| {
+            Ok(BuildPoll::Done(
+                json!({"status":"success","output":{"status":status,
+                "broker_id":task,"message":message}}),
+            ))
+        };
+        let read = call(json!({"action":"reservations","task_id":task})).await?;
+        if read["status"] != "success" {
+            bail!("Task reservations unavailable");
+        }
+        let row = read["output"]["tasks"].as_array().and_then(|rows| {
+            rows.iter()
+                .find(|row| row["label"] == task && row["owned_by_caller"] == true)
+                .cloned()
+        });
+        let Some(row) = row else {
+            return done(
+                "closed",
+                format!("Task {task} closed or was abandoned while it waited for claims."),
+            );
+        };
+        let requested: Vec<&str> = row["requested"]
+            .as_array()
+            .map(|q| q.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        if requested.is_empty() {
+            return done("claims_granted", format!("Task {task} now holds its claims. Reread the files, then apply your edits again."));
+        }
+        let waited = now().saturating_sub(
+            run["pending"]["external_job"]["submitted_at"]
+                .as_u64()
+                .unwrap_or(0),
+        );
+        if waited > CLAIM_WAIT_SECONDS {
+            return done("still_queued", format!("Task {task} is still queued for claims after 2 hours; tell the user who blocks it (reservations)."));
+        }
+        let beat = row["heartbeat"].as_f64().unwrap_or(0.0);
+        if (now() as f64) - beat < CLAIM_RETRY_SECONDS {
+            return Ok(BuildPoll::Waiting(None));
+        }
+        let revision = &row["revision"];
+        let paths: Vec<&str> = requested
+            .iter()
+            .filter_map(|scope| scope.strip_prefix("path:"))
+            .collect();
+        // Retrying the reservation also renews the request; module-only requests renew only.
+        let mut ask = json!({"task_id":task,"expected_revision":revision,
+            "expected_epoch":row["epoch"],"request_id":format!("claim-wait-{task}-{revision}")});
+        if paths.is_empty() {
+            ask["action"] = json!("heartbeat");
+        } else {
+            ask["action"] = json!("reserve");
+            ask["paths"] = json!(paths);
+        }
+        let reply = call(ask).await?;
+        if reply["output"]["acquired"] == true {
+            return done("claims_granted", format!("Task {task} now holds its claims. Reread the files, then apply your edits again."));
+        }
+        if reply["status"] == "success" || reply["output"]["kind"] == "ownership_conflict" {
+            return Ok(BuildPoll::Waiting(None));
+        }
+        let reason = reply["output"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| reply["output"].to_string());
+        done(
+            "refused",
+            format!(
+                "The broker refused the queued request for {task}: {}",
+                reason.chars().take(300).collect::<String>()
+            ),
+        )
     }
     /// A planned restart's mark (`restart-cause.json` in the control directory): written by
     /// the loop on SIGTERM, or first by the broker with its deploy job and owning session.
@@ -793,6 +924,7 @@ fn ended_summary(output: &Value, job_id: &str) -> String {
 pub(crate) fn awaits_broker_job(action: &Value, output: &Value) -> bool {
     match action.as_str() {
         Some("finish") => output["status"] == "closed",
+        Some("wait") if output["status"] == "waiting_claims" => true,
         Some("check" | "wait") => {
             output["job_id"].is_string()
                 && matches!(output["status"].as_str(), Some("queued" | "running"))
@@ -874,6 +1006,11 @@ pub(super) async fn note_build_job<S: super::ports::ScopedStorage>(
     }
 }
 
+/// How long a queued claim request is followed before the agent is told it is still queued.
+const CLAIM_WAIT_SECONDS: u64 = 7200;
+/// How often a queued claim request is retried; well inside the broker's orphan window.
+const CLAIM_RETRY_SECONDS: f64 = 60.0;
+
 /// How long a finished release's result waits for the broker's commit and claim release.
 const CLOSEOUT_WAIT_SECONDS: f64 = 120.0;
 
@@ -898,6 +1035,14 @@ mod tests {
             &json!({"status":"closed","job_id":"j"})
         ));
         assert!(!awaits_broker_job(&finish, &json!({"status":"open"})));
+        assert!(awaits_broker_job(
+            &json!("wait"),
+            &json!({"status":"waiting_claims"})
+        ));
+        assert!(!awaits_broker_job(
+            &json!("wait"),
+            &json!({"status":"owned"})
+        ));
         assert!(awaits_broker_job(
             &check,
             &json!({"status":"queued","job_id":"j"})

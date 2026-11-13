@@ -42,7 +42,16 @@ pub async fn execute(
     match name {
         "file_list" | "file_read" | "file_search" | "file_edit" | "file_write" => {
             if let Some(draft) = arguments::broker_file(sid, pending_id, name, args)? {
-                broker_call(host, sid, run_id, name, &draft, cancel).await
+                let mut reply = broker_call(host, sid, run_id, name, &draft, cancel).await?;
+                // A refused claim stays queued; say how to be woken when it is granted.
+                if reply.to_string().contains("ownership_conflict") {
+                    reply["next"] = json!(
+                        "Your task is now queued for these files behind the \
+                        blockers named here. Call build_work wait with your broker_id and end \
+                        your turn; a background notice wakes you when the claim is granted."
+                    );
+                }
+                Ok(reply)
             } else {
                 // An argument mistake is refused before any effect, so it must not read as an
                 // unknown write outcome.
@@ -70,6 +79,13 @@ pub async fn execute(
             let request_id = request["request_id"].as_str().unwrap_or_default();
             match args["action"].as_str() {
                 // A read of the job; the run then follows it like a finish (engine recovery).
+                // A wait on a Broker ID follows the task's queued claim request instead.
+                Some("wait") if args["job_id"].is_null() && args["broker_id"].is_string() => {
+                    let task = args["broker_id"].as_str().unwrap_or_default();
+                    let read = json!({"action":"reservations","task_id":task});
+                    let reply = broker_call(host, sid, run_id, name, &read, cancel).await?;
+                    Ok(claim_wait(task, reply))
+                }
                 Some("wait") => {
                     let job_id = job_argument(args)?;
                     let status = json!({"action":"status","job_id":job_id,"request_id":request_id});
@@ -147,6 +163,28 @@ async fn broker_call(
     }
     host.broker(name, &forwarded, sid, Some(identity), cancel)
         .await
+}
+
+/// What a `wait` on a Broker ID returns: `waiting_claims` while the task has a queued
+/// claim request, so the run follows it like a job; otherwise the task's state.
+fn claim_wait(task: &str, reply: Value) -> Value {
+    if reply["status"] != "success" {
+        return reply;
+    }
+    let row = reply["output"]["tasks"].as_array().and_then(|rows| {
+        rows.iter()
+            .find(|row| row["label"] == task && row["owned_by_caller"] == true)
+    });
+    match row {
+        Some(row) if row["requested"].as_array().is_some_and(|q| !q.is_empty()) => {
+            json!({"status":"success","output":{"status":"waiting_claims","broker_id":task,
+                "requested":row["requested"]}})
+        }
+        Some(row) => json!({"status":"success","output":{"status":row["state"],"broker_id":task,
+            "scopes":row["scopes"],"message":"No queued claim request: nothing to wait for."}}),
+        None => json!({"status":"error","error_kind":"invalid_arguments",
+            "output":format!("No open task of this session is named {task}")}),
+    }
 }
 
 /// The `job_id` a `wait` or `cancel` names: a broker Job ID, never a task ID.
