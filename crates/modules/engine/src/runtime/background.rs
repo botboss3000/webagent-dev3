@@ -10,14 +10,6 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use webagent_access as access;
 
-pub fn schemas() -> Vec<Value> {
-    [("background_status","Read the status of a caller-owned background task (a background read, or a call moved to the background when the user sent a message). Its result arrives on its own; do not poll."),
-     ("background_cancel","Cancel a caller-owned background task, for example when the user asks to stop a call that is still running in the background.")]
-    .into_iter().map(|(name,description)|json!({
-        "type":"function","name":name,"description":description,
-        "parameters":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false}
-    })).collect()
-}
 pub fn owns(name: &str) -> bool {
     matches!(name, "background_status" | "background_cancel")
 }

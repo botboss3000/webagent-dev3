@@ -1,0 +1,30 @@
+{
+  "name": "search_this_session",
+  "description": "Search this conversation's user and assistant messages by keywords; words match by stem (garden finds gardening), so add related words to the query (feline cat). Nearby matches merge into one excerpt",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "maximum": 20,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "query": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

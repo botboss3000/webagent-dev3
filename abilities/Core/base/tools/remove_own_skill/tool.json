@@ -1,0 +1,29 @@
+{
+  "name": "remove_own_skill",
+  "description": "Remove this agent's self-authored skill by name and revision; bundled ability guidance cannot be removed.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "expected_revision": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "name": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[a-z0-9_]+$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "write",
+  "policy_ceiling": "ask",
+  "default_access": {
+    "operator": "auto"
+  }
+}

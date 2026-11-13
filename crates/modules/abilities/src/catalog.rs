@@ -763,17 +763,16 @@ impl<H: Host> Catalog<H> {
             });
         let base_path = root.join("Core").join(crate::base::ID);
         let base_skill = optional_skill(&primary_skill_path(&base_path, crate::base::ID))?;
-        let mut base_tool_skills = BTreeMap::new();
-        for (tool, file) in crate::base::TOOL_SKILLS {
-            if let Some(text) =
-                optional_skill(&base_path.join("tools").join(format!("{file}.skill.md")))?
-            {
-                base_tool_skills.insert(tool.to_string(), text);
-            }
-        }
+        // Base tools are `tools/<tool>/` folders; their definitions load through
+        // `tool_definitions`, and their skills and bytes join Base's identity here.
+        let base_tools = crate::tool_definitions::read_folder(&base_path)?.unwrap_or_default();
+        let base_tool_skills: BTreeMap<String, String> = base_tools
+            .iter()
+            .filter_map(|tool| Some((tool.name.clone(), tool.skill.clone()?)))
+            .collect();
         let base_digest = hex::encode(Sha256::digest(serde_json::to_vec(&json!([
             base_skill,
-            base_tool_skills
+            crate::tool_definitions::folded_digest("", &base_tools)
         ]))?));
         abilities.push(Ability {
             id: crate::base::ID.into(),

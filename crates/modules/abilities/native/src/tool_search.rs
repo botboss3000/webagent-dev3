@@ -14,14 +14,6 @@ use webagent_host_core::{key, StoreCore};
 pub fn owns(name: &str) -> bool {
     matches!(name, "list_tools" | "load_tool")
 }
-/// Describe bounded conversation selection without granting execution.
-#[must_use]
-pub fn schemas() -> Vec<Value> {
-    vec![
-        json!({"type":"function","name":"list_tools","description":"Find permitted tools. query: a few task words (for example \"edit file\"); results are ranked with a score, best_match first, never empty, and include tools you already have. Without query: the tools that need loading, optionally in one group (ability ID from the index); include_available=true adds tools you already have.","parameters":{"type":"object","properties":{"query":{"type":"string","maxLength":4096},"group":{"type":"string","maxLength":128},"include_available":{"type":"boolean"}},"required":[],"additionalProperties":false}}),
-        json!({"type":"function","name":"load_tool","description":"Load permitted tools by exact name for this conversation: pass every tool the task needs in tool_names (up to 8) in one call. Each loaded tool's own skill comes with it. Already supplied tools are acknowledged; refused names are listed. Live policy still applies.","parameters":{"type":"object","properties":{"tool_names":{"type":"array","items":{"type":"string","minLength":1,"maxLength":128},"minItems":1,"maxItems":8},"tool_name":{"type":"string","minLength":1,"maxLength":128}},"required":[],"additionalProperties":false}}),
-    ]
-}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ListArgs {

@@ -13,16 +13,6 @@ pub fn owns(name: &str) -> bool {
         "register_user" | "manage_agent_profiles" | "rate_skill" | "request_agent_login"
     )
 }
-/// Schemas for this family's tools.
-#[must_use]
-pub fn schemas() -> Vec<Value> {
-    [
- ("register_user","Request a private account-registration form in the active browser. The user enters their own credentials; the existing registration policy and administrator approval still apply. No account is created until the user submits the form.",json!({}),vec![]),
- ("manage_agent_profiles","List/read/save/remove caller-private identity presets, or apply one to an agent the caller manages using its exact identity revision. Presets contain only name and description; they never carry tools, permissions, model assignments or credentials.",json!({"action":{"type":"string","enum":["list","read","save","remove","apply"]},"profile_id":{"type":"string","maxLength":64},"name":{"type":"string","maxLength":200},"description":{"type":"string","maxLength":2000},"expected_revision":{"type":"integer","minimum":0},"agent_id":{"type":"string","maxLength":128},"agent_revision":{"type":"integer","minimum":0}}),vec!["action"]),
- ("rate_skill","Record private feedback for one currently accessible bundled or own skill. Score is 1..5; optional comment is at most 1000 bytes. A rating does not edit guidance, change permissions or become a human instruction. Omit score to read the current rating and revision; when writing use that revision, initially zero.",json!({"ability_id":{"type":"string","maxLength":64},"kind":{"type":"string","enum":["ability","tool","selectable","own"]},"skill_id":{"type":"string","maxLength":64},"score":{"type":"integer","minimum":1,"maximum":5},"comment":{"type":"string","maxLength":1000},"expected_revision":{"type":"integer","minimum":0}}),vec!["ability_id","kind","skill_id"]),
- ("request_agent_login","Begin device authorization for a caller-owned subscription connection through Models. The user completes it on the protected model page; passwords, device codes and tokens never enter this result. API-key connections must be set up manually on that page.",json!({"connection_id":{"type":"string","maxLength":128}}),vec!["connection_id"])
- ].into_iter().map(|(name,description,properties,required)|json!({"type":"function","name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})).collect()
-}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Args {

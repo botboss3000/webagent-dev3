@@ -17,13 +17,6 @@ pub const TOOLS: &[&str] = &["compact_context"];
 pub fn owns(name: &str) -> bool {
     name == "compact_context"
 }
-/// The built-in tool schemas.
-#[must_use]
-pub fn schemas() -> Vec<Value> {
-    vec![json!({"type":"function","name":"compact_context",
-        "description":"Request a safe summary of older current-session context at the next model boundary. Original history stays encrypted for recall_compacted.",
-        "parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}})]
-}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Empty {}
@@ -97,7 +90,6 @@ mod tests {
     use super::*;
     #[test]
     fn schema_has_no_target_selector() {
-        assert_eq!(schemas()[0]["name"], "compact_context");
         assert!(serde_json::from_value::<Empty>(json!({"session_id":"foreign"})).is_err());
         assert!(serde_json::from_value::<Empty>(json!({})).is_ok());
     }

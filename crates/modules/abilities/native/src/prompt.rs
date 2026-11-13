@@ -13,13 +13,6 @@ const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 pub fn owns(name: &str) -> bool {
     name == "read_own_prompt"
 }
-/// The model-facing schema of `read_own_prompt`.
-#[must_use]
-pub fn schemas() -> Vec<Value> {
-    vec![json!({"type":"function","name":"read_own_prompt",
-        "description":"Read the current agent's ordered prompt slots and revisions; internal slots are omitted",
-        "parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}})]
-}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PromptArgs {}

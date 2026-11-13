@@ -1,0 +1,33 @@
+{
+  "name": "list_skills",
+  "description": "List inactive discoverable skills; include_available also shows visible and already loaded guidance",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "ability_id": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[a-z0-9_]+$",
+        "type": "string"
+      },
+      "include_available": {
+        "type": "boolean"
+      },
+      "query": {
+        "maxLength": 200,
+        "type": "string"
+      }
+    },
+    "required": [
+      "ability_id"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

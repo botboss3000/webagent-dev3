@@ -1,7 +1,7 @@
-//! Base: the built-in core tools every agent has. Their handlers, schemas and role
-//! defaults are compiled in; `abilities/Core/base` holds only their guidance. Capability
-//! levels, saved tool permissions, account tiers and installation policy still apply.
-use webagent_access::Permission;
+//! Base: the built-in core tools every agent has. Their handlers are compiled in; each
+//! tool's schema, effect, policy ceiling, role defaults and skill live in its
+//! `abilities/Core/base/tools/<tool>/` folder. Capability levels, saved tool
+//! permissions, account tiers and installation policy still apply.
 
 pub const ID: &str = "base";
 pub const NAME: &str = "Base";
@@ -55,68 +55,16 @@ pub const TOOLS: &[&str] = &[
     "test_owner_purchase",
 ];
 
-/// Tool skill files under `abilities/Core/base/tools/`, as (tool, file stem).
-/// One skill covers the three session-script tools.
-pub const TOOL_SKILLS: &[(&str, &str)] = &[
-    ("calculate", "calculate"),
-    ("context_assets", "context_assets"),
-    ("get_date", "get_date"),
-    ("get_time", "get_time"),
-    ("list_skills", "list_skills"),
-    ("list_tools", "list_tools"),
-    ("load_skill", "load_skill"),
-    ("load_tool", "load_tool"),
-    ("main_notes_read", "main_notes_read"),
-    ("main_notes_write", "main_notes_write"),
-    ("script_save", "session_scripts"),
-    ("script_list", "session_scripts"),
-    ("script_run", "session_scripts"),
-    ("read_attachment", "read_attachment"),
-    ("read_own_prompt", "read_own_prompt"),
-    ("search_this_session", "search_this_session"),
-    ("background_cancel", "background_cancel"),
-    ("background_status", "background_status"),
-];
+/// Base tools defined by a tool folder: every tool except the test-only fixture, whose
+/// owner-authorization schema stays compiled.
+pub const FOLDER_TOOLS: &[&str] = TOOLS.split_at(TOOLS.len() - TEST_FIXTURES).0;
+#[cfg(feature = "test-support")]
+const TEST_FIXTURES: usize = 1;
+#[cfg(not(feature = "test-support"))]
+const TEST_FIXTURES: usize = 0;
 
 pub fn owns(name: &str) -> bool {
     TOOLS.contains(&name)
-}
-
-/// Role defaults (operator, member, visitor) that differ from the coded rule: the
-/// credential vault keeps the defaults it had as a Visualizer tool, so private setup
-/// stays open to Members and its metadata reads to Visitors.
-const ROLE_DEFAULTS: &[(&str, [Permission; 3])] = &[
-    (
-        "request_credential",
-        [Permission::Auto, Permission::Auto, Permission::Ask],
-    ),
-    (
-        "check_credential",
-        [Permission::Auto, Permission::Auto, Permission::Auto],
-    ),
-    (
-        "list_vault_keys",
-        [Permission::Auto, Permission::Auto, Permission::Auto],
-    ),
-];
-
-/// Coded role defaults: Operators get every Base tool; Members and Visitors may ask to
-/// use read tools and get no write tools, unless `ROLE_DEFAULTS` names the tool. A custom
-/// level takes the next role down.
-pub fn default_access(name: &str, rungs: &[String], is_read: bool) -> Permission {
-    let role = rungs.iter().find_map(|rung| {
-        crate::tool_definitions::ROLES
-            .iter()
-            .position(|role| role == rung)
-    });
-    if let Some((_, defaults)) = ROLE_DEFAULTS.iter().find(|(tool, _)| *tool == name) {
-        return role.map_or(Permission::Deny, |index| defaults[index]);
-    }
-    match role {
-        Some(0) => Permission::Auto,
-        Some(_) if is_read => Permission::Ask,
-        _ => Permission::Deny,
-    }
 }
 
 #[cfg(test)]
@@ -124,44 +72,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn role_defaults_and_skills_name_real_tools() {
-        let rungs = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
-        assert_eq!(
-            default_access(
-                "get_time",
-                &rungs(&["operator", "member", "visitor"]),
-                false
-            ),
-            Permission::Auto
-        );
-        assert_eq!(
-            default_access("get_time", &rungs(&["trusted", "member", "visitor"]), true),
-            Permission::Ask
-        );
-        assert_eq!(
-            default_access("get_time", &rungs(&["visitor"]), false),
-            Permission::Deny
-        );
-        // The vault keeps its earlier tool-folder defaults.
-        assert_eq!(
-            default_access("request_credential", &rungs(&["trusted", "member"]), false),
-            Permission::Auto
-        );
-        assert_eq!(
-            default_access("request_credential", &rungs(&["visitor"]), false),
-            Permission::Ask
-        );
-        assert_eq!(
-            default_access("list_vault_keys", &rungs(&["visitor"]), true),
-            Permission::Auto
-        );
-        assert_eq!(
-            default_access("check_credential", &rungs(&["trusted"]), true),
-            Permission::Deny
-        );
-        assert!(ROLE_DEFAULTS.iter().all(|(tool, _)| owns(tool)));
-        assert!(TOOL_SKILLS
-            .iter()
-            .all(|(tool, text)| owns(tool) && !text.trim().is_empty()));
+    fn every_folder_tool_is_a_base_tool() {
+        assert!(FOLDER_TOOLS.iter().all(|tool| owns(tool)));
+        assert!(!FOLDER_TOOLS.contains(&"test_owner_purchase"));
     }
 }

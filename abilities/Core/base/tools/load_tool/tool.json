@@ -1,0 +1,33 @@
+{
+  "name": "load_tool",
+  "description": "Load permitted tools by exact name for this conversation: pass every tool the task needs in tool_names (up to 8) in one call. Each loaded tool's own skill comes with it. Already supplied tools are acknowledged; refused names are listed. Live policy still applies.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "tool_name": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "tool_names": {
+        "items": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 8,
+        "minItems": 1,
+        "type": "array"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

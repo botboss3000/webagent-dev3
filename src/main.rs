@@ -268,6 +268,8 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("workspace_seed");
+        policy["rules"]["file_read"] = json!("deny");
+        // A tool folder's policy ceiling is its installation rule and replaces a saved one.
         policy["rules"]["calculate"] = json!("deny");
         store.put("policy", &policy).await.unwrap();
         migrate_tool_policy_defaults(&store).await.unwrap();
@@ -275,7 +277,8 @@ mod tests {
         let migrated = store.get("policy").await.unwrap().unwrap();
         assert_eq!(migrated["rules"]["file_edit"], "deny");
         assert_eq!(migrated["rules"]["workspace_seed"], "deny");
-        assert_eq!(migrated["rules"]["calculate"], "deny");
+        assert_eq!(migrated["rules"]["file_read"], "deny");
+        assert_eq!(migrated["rules"]["calculate"], "allow");
         assert_eq!(migrated["rules"]["get_time"], "allow");
         assert_eq!(migrated["version"], 2);
     }

@@ -1,0 +1,52 @@
+{
+  "name": "manage_agent_profiles",
+  "description": "List/read/save/remove caller-private identity presets, or apply one to an agent the caller manages using its exact identity revision. Presets contain only name and description; they never carry tools, permissions, model assignments or credentials.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "enum": [
+          "list",
+          "read",
+          "save",
+          "remove",
+          "apply"
+        ],
+        "type": "string"
+      },
+      "agent_id": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "agent_revision": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "description": {
+        "maxLength": 2000,
+        "type": "string"
+      },
+      "expected_revision": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "name": {
+        "maxLength": 200,
+        "type": "string"
+      },
+      "profile_id": {
+        "maxLength": 64,
+        "type": "string"
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "write",
+  "policy_ceiling": "ask",
+  "default_access": {
+    "operator": "auto"
+  }
+}

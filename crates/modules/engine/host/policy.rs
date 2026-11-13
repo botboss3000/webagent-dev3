@@ -75,13 +75,34 @@ impl webagent_engine::runtime::ports::NativePolicy for NativePolicy {
     fn default_policy_schemas() -> Vec<Value> {
         tools::administrator::schemas()
             .into_iter()
-            .chain(tools::native::mode::schemas())
-            .chain(tools::native::compaction::schemas())
-            .chain(tools::native::recall::schemas())
-            .chain(tools::native::self_edit::schemas())
-            .chain(crate::main_chat::schemas())
-            .chain(tools::native::task::schemas())
-            .chain(tools::native::tool_search::schemas())
+            // Base tools with a default installation rule, from their tool folders.
+            .chain(tools::native::schemas(&[
+                "set_execution_mode",
+                "compact_context",
+                "recall_compacted",
+                "edit_own_prompt",
+                "save_own_skill",
+                "remove_own_skill",
+                "main_notes_read",
+                "main_notes_write",
+                "get_task_checkpoint",
+                "update_task_checkpoint",
+                "present_plan",
+                "present_chat_component",
+                "list_tools",
+                "load_tool",
+                "register_user",
+                "manage_agent_profiles",
+                "rate_skill",
+                "request_agent_login",
+                "register_webhook",
+                "list_webhooks",
+                "delete_webhook",
+                "get_webhook_log",
+                "request_credential",
+                "check_credential",
+                "list_vault_keys",
+            ]))
             .chain(tools::native::schemas(tools::native::decision::TOOLS))
             .chain(tools::native::schemas(
                 tools::native::directory_decision::TOOLS,
@@ -94,9 +115,6 @@ impl webagent_engine::runtime::ports::NativePolicy for NativePolicy {
             .chain(tools::core_config_controller::schemas())
             .chain(tools::native::schemas(tools::native::app_control::TOOLS))
             .chain(tools::native::schemas(tools::native::orchestration::TOOLS))
-            .chain(tools::native::base_extras::schemas())
-            .chain(tools::native::webhooks::schemas())
-            .chain(tools::native::vault::schemas())
             .chain(tools::native::schemas(webagent_browser::TOOLS))
             .chain(tools::native::schemas(
                 tools::native::human_escalation::TOOLS,

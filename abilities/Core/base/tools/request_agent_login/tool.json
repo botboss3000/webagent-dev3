@@ -1,0 +1,22 @@
+{
+  "name": "request_agent_login",
+  "description": "Begin device authorization for a caller-owned subscription connection through Models. The user completes it on the protected model page; passwords, device codes and tokens never enter this result. API-key connections must be set up manually on that page.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "connection_id": {
+        "maxLength": 128,
+        "type": "string"
+      }
+    },
+    "required": [
+      "connection_id"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "write",
+  "policy_ceiling": "ask",
+  "default_access": {
+    "operator": "auto"
+  }
+}

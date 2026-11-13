@@ -1,0 +1,94 @@
+{
+  "name": "script_save",
+  "description": "Save a named sequence of read-only or Browser Control tool calls. Scope session (default): for this conversation and its sub-agents, saved at once; the same name replaces it. Scope saved: propose a reusable script for later conversations with this agent; it is saved only after the user approves it on the Artifacts page. A step that would need approval is refused",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "description": {
+        "description": "One short sentence, about 150 characters: what the script does. Describe each param in its own description",
+        "maxLength": 1000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "name": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string"
+      },
+      "params": {
+        "description": "Up to 10 distinct params usable as {{name}} in step argument strings",
+        "items": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "description": {
+                  "description": "A few words: what text to pass",
+                  "maxLength": 1000,
+                  "type": "string"
+                },
+                "name": {
+                  "pattern": "^[A-Za-z0-9_]{1,32}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            },
+            {
+              "pattern": "^[A-Za-z0-9_]{1,32}$",
+              "type": "string"
+            }
+          ]
+        },
+        "maxItems": 10,
+        "type": "array"
+      },
+      "scope": {
+        "description": "session (default) for this work only; saved for a script worth reusing in other conversations",
+        "enum": [
+          "session",
+          "saved"
+        ],
+        "type": "string"
+      },
+      "steps": {
+        "description": "1 to the configured step limit (20 by default)",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "arguments": {
+              "description": "The tool's arguments, under 16 KiB as JSON; {{param}} inside a string is replaced at run time",
+              "type": "object"
+            },
+            "tool": {
+              "description": "Tool name: a read-only tool, browser_read or browser_input",
+              "type": "string"
+            }
+          },
+          "required": [
+            "tool",
+            "arguments"
+          ],
+          "type": "object"
+        },
+        "minItems": 1,
+        "type": "array"
+      }
+    },
+    "required": [
+      "name",
+      "description",
+      "steps"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

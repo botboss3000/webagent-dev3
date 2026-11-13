@@ -16,23 +16,9 @@ pub fn owns(name: &str) -> bool {
         "check_credential" | "request_credential" | "list_vault_keys"
     )
 }
-/// Built-in Base tools this module executes; their schemas are compiled below.
+/// Built-in Base tools this module executes; each one's schema and effect live in its
+/// `abilities/Core/base/tools/<tool>/tool.json`.
 pub const TOOLS: &[&str] = &["check_credential", "request_credential", "list_vault_keys"];
-#[must_use]
-pub fn is_read(name: &str) -> bool {
-    matches!(name, "check_credential" | "list_vault_keys")
-}
-#[must_use]
-pub fn schemas() -> Vec<Value> {
-    [
-        ("request_credential", "Request a private human credential form in the active conversation. Supply a plain key name and HTTPS service origin, plus a human label and the HTTPS page where the user creates the value when known. The form stays in this conversation until the user saves or dismisses it. The user enters the value directly; models and mini apps receive only metadata. Does not grant network access or silently use this credential.", json!({"create_url":{"maxLength":500,"type":"string"},"label":{"maxLength":80,"type":"string"},"name":{"maxLength":64,"type":"string"},"origin":{"maxLength":500,"type":"string"}}), vec!["name", "origin"]),
-        ("check_credential", "Check presence, revision and service origin for one caller-private credential. Returns metadata only; does not validate a remote provider or reveal the secret.", json!({"name":{"maxLength":64,"type":"string"}}), vec!["name"]),
-        ("list_vault_keys", "List caller-private credential names, origins and revisions without values.", json!({}), vec![]),
-    ]
-    .into_iter()
-    .map(|(name, description, properties, required)| json!({"type":"function","name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}}))
-    .collect()
-}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Args {

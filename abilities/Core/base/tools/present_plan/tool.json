@@ -1,0 +1,47 @@
+{
+  "name": "present_plan",
+  "description": "Persist a declarative plan overview and checklist in this session; expected_revision is 0 for the first plan",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "checklist": {
+        "items": {
+          "type": "object"
+        },
+        "maxItems": 32,
+        "minItems": 1,
+        "type": "array"
+      },
+      "criteria": {
+        "maxLength": 1200,
+        "type": "string"
+      },
+      "expected_revision": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "goal": {
+        "maxLength": 1200,
+        "type": "string"
+      },
+      "notes": {
+        "maxLength": 1200,
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 80,
+        "type": "string"
+      }
+    },
+    "required": [
+      "expected_revision",
+      "checklist"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "write",
+  "policy_ceiling": "ask",
+  "default_access": {
+    "operator": "auto"
+  }
+}

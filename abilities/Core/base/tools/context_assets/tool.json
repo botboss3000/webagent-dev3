@@ -1,0 +1,116 @@
+{
+  "name": "context_assets",
+  "description": "List or unload this requester's dynamically selected conversation tools and skills. Changes selection only; never changes permissions, files or configured visible guidance.",
+  "strict": false,
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "enum": [
+          "list",
+          "unload"
+        ],
+        "type": "string"
+      },
+      "expected_revision": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "request_id": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "selector": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "ability_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "ability"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "ability_id"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "tool_name": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "tool"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "tool_name"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "ability_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "ability",
+                  "tool",
+                  "selectable",
+                  "own"
+                ],
+                "type": "string"
+              },
+              "skill_id": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "skill"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "ability_id",
+              "kind",
+              "skill_id"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

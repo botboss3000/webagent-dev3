@@ -1,0 +1,161 @@
+{
+  "name": "main_notes_write",
+  "description": "Contribute durable cross-session goals, decisions, blockers or actions; reuse topic and entry IDs. Policy may save a proposal for approval. Never invent timing. This does not execute or schedule actions.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "contribution": {
+        "additionalProperties": false,
+        "properties": {
+          "entry": {
+            "additionalProperties": false,
+            "properties": {
+              "condition": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "outcome": {
+                "description": "Observed outcome; never an execution authorization",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "progress": {
+                "description": "Current progress; preserve text as the action intent",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sources": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "state": {
+                "enum": [
+                  "open",
+                  "waiting",
+                  "blocked",
+                  "scheduled",
+                  "in_progress",
+                  "done",
+                  "cancelled"
+                ],
+                "type": "string"
+              },
+              "subtopic": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "timing": {
+                "additionalProperties": false,
+                "description": "Only user-requested timing, using the existing Automation trigger shape",
+                "properties": {
+                  "at_ms": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "delay_ms": {
+                    "minimum": 1,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "expression": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "kind": {
+                    "enum": [
+                      "once",
+                      "delay",
+                      "cron"
+                    ],
+                    "type": "string"
+                  },
+                  "timezone": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "text",
+              "state"
+            ],
+            "type": "object"
+          },
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "topic_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic_id",
+          "title",
+          "scope",
+          "entry"
+        ],
+        "type": "object"
+      },
+      "expected_revision": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "request_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "request_id",
+      "expected_revision",
+      "contribution"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "write",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto"
+  }
+}

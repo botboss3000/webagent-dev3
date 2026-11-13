@@ -1,0 +1,54 @@
+{
+  "name": "present_chat_component",
+  "description": "Show the user a panel in the chat, after your message. choice and form panels need a title naming their topic (for example \"For Bob\"); keep titles distinct across panels. choice: clickable options (data {prompt, options:[{label}]}, 1-8 one-line labels); a click sends \"<title>: <label>\" as the user's message. form: fields the user fills and submits as one message starting with the title (data {prompt, fields:[{name,label,type:text|email|number|select|multi,required,options}]}); multi is a checkbox group of 1-8 one-line options, sent as \"<title>: A, C\". Answered panels stay in the chat, read-only. status and todo_list are display only. Reuse component_id with the latest revision to update a panel, including after a refused call; dismiss:true closes one you replace. Panels never authorize actions",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "component_id": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "data": {
+        "type": "object"
+      },
+      "dismiss": {
+        "type": "boolean"
+      },
+      "expected_revision": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "placement": {
+        "enum": [
+          "inline",
+          "hover",
+          "sticky"
+        ],
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 80,
+        "type": "string"
+      },
+      "type": {
+        "enum": [
+          "todo_list",
+          "status",
+          "choice",
+          "form"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "type",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "write",
+  "policy_ceiling": "ask",
+  "default_access": {
+    "operator": "auto"
+  }
+}

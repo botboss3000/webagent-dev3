@@ -14,17 +14,6 @@ use webagent_host_core::StoreCore;
 pub fn owns(name: &str) -> bool {
     matches!(name, "read_attachment" | "search_this_session")
 }
-/// The model-facing schemas of this family's tools.
-#[must_use]
-pub fn schemas() -> Vec<Value> {
-    [
-        ("read_attachment", "Read a bounded Unicode-character page of a current-session text attachment", json!({"attachment_id":{"type":"string","format":"uuid"},"offset_chars":{"type":"integer","minimum":0},"limit_chars":{"type":"integer","minimum":1,"maximum":4096}}), vec!["attachment_id"]),
-        ("search_this_session", "Search this conversation's user and assistant messages by keywords; words match by stem (garden finds gardening), so add related words to the query (feline cat). Nearby matches merge into one excerpt", json!({"query":{"type":"string","minLength":1,"maxLength":500},"limit":{"type":"integer","minimum":1,"maximum":20}}), vec!["query"]),
-    ].into_iter().map(|(name,description,properties,required)|json!({
-        "type":"function","name":name,"description":description,
-        "parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}
-    })).collect()
-}
 fn attachment_limit() -> usize {
     4096
 }

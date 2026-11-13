@@ -87,39 +87,16 @@ pub fn is_read(name: &str) -> bool {
         return definition.is_read();
     }
     crate::source_control::is_read(name)
-        || native::webhooks::is_read(name)
-        || native::vault::is_read(name)
-        || name == "main_notes_read"
-        // Session scripts count as reads: they store only this tree's step lists, and each
-        // step is checked as its own call, so a write step is denied in read-only modes.
-        || webagent_abilities::scripts::TOOLS.contains(&name)
         || crate::modules::is_read(name)
         || matches!(
             name,
-            "background_status"
-                | "background_cancel"
-                | "search_tools"
-                | "list_tools"
-                | "load_tool"
-                | "get_time"
-                | "get_date"
-                | "calculate"
-                | "read_attachment"
-                | "search_this_session"
-                | "list_skills"
-                | "load_skill"
-                | "context_assets"
-                | "read_own_prompt"
-                | "get_task_checkpoint"
-                | "compact_context"
-                | "recall_compacted"
+            "search_tools"
                 | "file_list"
                 | "file_read"
                 | "file_search"
                 | "source_review"
                 | "state_inspect"
                 | "prompt_slot_read"
-                | "set_execution_mode"
         )
 }
 
@@ -140,6 +117,7 @@ pub(crate) fn folder_handlers() -> impl Iterator<Item = &'static str> {
         native::image_vision::TOOLS,
         core_image_generation::TOOLS,
         core_config_controller::TOOLS,
+        webagent_abilities::base::FOLDER_TOOLS,
         native::app_control::TOOLS,
         native::orchestration::TOOLS,
         webagent_browser::TOOLS,
@@ -193,13 +171,9 @@ pub(crate) fn definition_problems() -> Vec<String> {
     problems
 }
 
-/// Default access for a tool built into Base or defined in a tool folder; `None` keeps
-/// the earlier Auto for tools still defined only in code.
+/// Default access for a tool defined in a tool folder; `None` keeps the earlier Auto for
+/// tools still defined only in code.
 pub(crate) fn tool_defaults(name: &str, rungs: &[String]) -> Option<webagent_access::Permission> {
-    if webagent_abilities::base::owns(name) {
-        let read = is_read(name) || webagent_abilities::is_discovery(name);
-        return Some(webagent_abilities::base::default_access(name, rungs, read));
-    }
     // Role defaults edited in the live checkout apply at once.
     if let Some(definition) = crate::ability_drift::current().definition(name) {
         return Some(definition.default_for(rungs));
@@ -304,7 +278,6 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
                 schema["description"] = json!(format!("{description}. Source writes use isolated broker work automatically. Files are read from the source checkout (/code) and this session's workspace; other container paths, including runtime data, are refused. Reads without a selector inspect published/container files; pass a returned broker_id for private-source reads. Optional broker_id selects current, new or returned work. Explicit runtime/workspace paths retain their owning tools. Never deploys."));
             }
         }
-        schemas.extend(crate::background_tasks::schemas());
         schemas.extend(native::schemas(native::web_access::TOOLS));
         schemas.extend(web_search::schemas());
         schemas.extend(native::schemas(native::human_escalation::TOOLS));
@@ -313,7 +286,6 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         schemas.extend(native::schemas(native::wiki::TOOLS));
         schemas.extend(native::schemas(native::decision::TOOLS));
         schemas.extend(native::schemas(native::directory_decision::TOOLS));
-        schemas.extend(native::utilities::schemas());
         schemas.extend(native::schemas(native::user_files::TOOLS));
         schemas.extend(native::schemas(native::model_switcher::TOOLS));
         schemas.extend(core_agent_management::schemas());
@@ -322,22 +294,8 @@ pub(crate) fn native_schemas_without_administrator() -> Vec<Value> {
         schemas.extend(core_config_controller::schemas());
         schemas.extend(native::schemas(native::app_control::TOOLS));
         schemas.extend(native::schemas(native::orchestration::TOOLS));
-        schemas.extend(native::base_extras::schemas());
-        schemas.extend(native::webhooks::schemas());
-        schemas.extend(native::vault::schemas());
         schemas.extend(native::schemas(webagent_browser::TOOLS));
-        schemas.extend(native::session::schemas());
-        schemas.extend(crate::main_chat::schemas());
-        schemas.extend(core_scripts::schemas());
-        schemas.extend(core_skills::schemas());
-        schemas.extend(native::context_assets::schemas());
-        schemas.extend(native::prompt::schemas());
-        schemas.extend(native::tool_search::schemas());
-        schemas.extend(native::self_edit::schemas());
-        schemas.extend(native::task::schemas());
-        schemas.extend(native::compaction::schemas());
-        schemas.extend(native::recall::schemas());
-        schemas.extend(native::mode::schemas());
+        schemas.extend(native::schemas(webagent_abilities::base::TOOLS));
         #[cfg(test)] schemas.push(json!({"type":"function","name":"test_owner_purchase","description":"Development-only owner authorization fixture",
             "authorization":{"kind":"credential_owner","credential_kind":"test"},
             "parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}}));

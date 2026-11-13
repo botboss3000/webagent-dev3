@@ -1,0 +1,17 @@
+{
+  "name": "script_list",
+  "description": "List this conversation tree's session scripts and this agent's approved saved scripts: scope, name, description and params, plus saved-script proposals awaiting the user's approval",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "background_cancel",
+  "description": "Cancel a caller-owned background task, for example when the user asks to stop a call that is still running in the background.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "task_id": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "task_id"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

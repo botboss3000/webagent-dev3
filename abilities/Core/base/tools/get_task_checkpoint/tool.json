@@ -1,0 +1,25 @@
+{
+  "name": "get_task_checkpoint",
+  "description": "Read the current session's durable task checkpoint and revision plus bounded requester-owned action statuses; optional action_id reads a saved result",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action_id": {
+        "maxLength": 128,
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

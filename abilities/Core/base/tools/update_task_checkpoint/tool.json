@@ -1,0 +1,59 @@
+{
+  "name": "update_task_checkpoint",
+  "description": "Save bounded task progress using a compare-and-swap revision; summaries are claims, not verified evidence",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "expected_revision": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "update": {
+        "additionalProperties": false,
+        "properties": {
+          "active_step": {
+            "maxLength": 120,
+            "type": "string"
+          },
+          "blockers": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "type": "array"
+          },
+          "next_action": {
+            "maxLength": 1200,
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "type": "object"
+            },
+            "maxItems": 32,
+            "type": "array"
+          },
+          "summary": {
+            "maxLength": 1200,
+            "minLength": 20,
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "expected_revision",
+      "update"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "write",
+  "policy_ceiling": "ask",
+  "default_access": {
+    "operator": "auto"
+  }
+}

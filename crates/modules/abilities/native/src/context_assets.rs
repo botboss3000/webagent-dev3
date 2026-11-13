@@ -17,28 +17,6 @@ pub fn owns(name: &str) -> bool {
     name == "context_assets"
 }
 
-/// Publish content-free scope controls; selectors are validated again by the fixed contract.
-#[must_use]
-pub fn schemas() -> Vec<Value> {
-    vec![
-        json!({"type":"function","name":"context_assets","strict":false,
-  "description":"List or unload this requester's dynamically selected conversation tools and skills. Changes selection only; never changes permissions, files or configured visible guidance.",
-  "parameters":{"type":"object","properties":{
-   "action":{"type":"string","enum":["list","unload"]},
-   "selector":{"anyOf":[
-    {"type":"object","properties":{"type":{"type":"string","enum":["ability"]},"ability_id":{"type":"string","minLength":1}},
-     "required":["type","ability_id"],"additionalProperties":false},
-    {"type":"object","properties":{"type":{"type":"string","enum":["tool"]},"tool_name":{"type":"string","minLength":1}},
-     "required":["type","tool_name"],"additionalProperties":false},
-    {"type":"object","properties":{"type":{"type":"string","enum":["skill"]},"ability_id":{"type":"string","minLength":1},
-     "kind":{"type":"string","enum":["ability","tool","selectable","own"]},"skill_id":{"type":"string","minLength":1}},
-     "required":["type","ability_id","kind","skill_id"],"additionalProperties":false}]},
-   "expected_revision":{"type":"integer","minimum":0},
-   "request_id":{"type":"string","minLength":1,"maxLength":128}},
-   "required":["action"],"additionalProperties":false}}),
-    ]
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Args {
@@ -214,6 +192,5 @@ mod tests {
             serde_json::from_value::<Args>(json!({"action":"unload","expected_revision":-1}))
                 .is_err()
         );
-        assert_eq!(schemas()[0]["name"], "context_assets");
     }
 }

@@ -1,0 +1,45 @@
+{
+  "name": "save_own_skill",
+  "description": "Create or revise this agent's selectable reusable skill. List or load it first; use revision 0 to create.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "description": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "expected_revision": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "instructions": {
+        "maxLength": 16384,
+        "minLength": 1,
+        "type": "string"
+      },
+      "mode": {
+        "enum": [
+          "selectable"
+        ],
+        "type": "string"
+      },
+      "name": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[a-z0-9_]+$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "write",
+  "policy_ceiling": "ask",
+  "default_access": {
+    "operator": "auto"
+  }
+}

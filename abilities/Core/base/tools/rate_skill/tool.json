@@ -1,0 +1,50 @@
+{
+  "name": "rate_skill",
+  "description": "Record private feedback for one currently accessible bundled or own skill. Score is 1..5; optional comment is at most 1000 bytes. A rating does not edit guidance, change permissions or become a human instruction. Omit score to read the current rating and revision; when writing use that revision, initially zero.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "ability_id": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "comment": {
+        "maxLength": 1000,
+        "type": "string"
+      },
+      "expected_revision": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "kind": {
+        "enum": [
+          "ability",
+          "tool",
+          "selectable",
+          "own"
+        ],
+        "type": "string"
+      },
+      "score": {
+        "maximum": 5,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "skill_id": {
+        "maxLength": 64,
+        "type": "string"
+      }
+    },
+    "required": [
+      "ability_id",
+      "kind",
+      "skill_id"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "write",
+  "policy_ceiling": "ask",
+  "default_access": {
+    "operator": "auto"
+  }
+}

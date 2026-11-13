@@ -1,0 +1,17 @@
+{
+  "name": "compact_context",
+  "description": "Request a safe summary of older current-session context at the next model boundary. Original history stays encrypted for recall_compacted.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

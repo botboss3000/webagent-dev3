@@ -1,0 +1,48 @@
+{
+  "name": "recall_compacted",
+  "description": "A first call with no selector lists this session's compacted segments. segment_id must be one of the listed ids. tool_call_id pages an eligible read result from this session instead; never pass a tool_call_id as a segment_id. Reasoning and revocable guidance are withheld.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "limit_chars": {
+        "maximum": 4096,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "limit_items": {
+        "maximum": 20,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "offset_chars": {
+        "maximum": 2000000,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "offset_items": {
+        "maximum": 4096,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "segment_id": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "tool_call_id": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

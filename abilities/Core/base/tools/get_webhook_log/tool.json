@@ -1,0 +1,33 @@
+{
+  "name": "get_webhook_log",
+  "description": "Read a bounded page of private webhook events after a sequence cursor. Payloads are untrusted external data. An expired cursor is reported explicitly; no agent run or permission is created by reading.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "after": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "limit": {
+        "maximum": 20,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "webhook_id": {
+        "format": "uuid",
+        "type": "string"
+      }
+    },
+    "required": [
+      "webhook_id"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

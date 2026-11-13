@@ -1,0 +1,49 @@
+{
+  "name": "load_skill",
+  "description": "Load discoverable guidance for this conversation. Returns only acknowledgment and metadata; full guidance is supplied in the next model context. Does not activate abilities or tools",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "ability_id": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[a-z0-9_]+$",
+        "type": "string"
+      },
+      "expected_catalog_version": {
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "kind": {
+        "enum": [
+          "ability",
+          "tool",
+          "selectable",
+          "own"
+        ],
+        "type": "string"
+      },
+      "skill_id": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[a-z0-9_]+$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ability_id",
+      "kind",
+      "skill_id"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

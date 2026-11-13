@@ -26,34 +26,6 @@ pub fn owns(name: &str) -> bool {
             | "present_chat_component"
     )
 }
-/// The built-in tool schemas.
-#[must_use]
-pub fn schemas() -> Vec<Value> {
-    [
-        ("get_task_checkpoint", "Read the current session's durable task checkpoint and revision plus bounded requester-owned action statuses; optional action_id reads a saved result", json!({"action_id":{"type":["string","null"],"maxLength":128}}), vec![]),
-        ("update_task_checkpoint", "Save bounded task progress using a compare-and-swap revision; summaries are claims, not verified evidence",
-            json!({"expected_revision":{"type":"integer","minimum":0},"update":{"type":"object",
-                "properties":{"summary":{"type":"string","minLength":20,"maxLength":1200},
-                "steps":{"type":"array","maxItems":32,"items":{"type":"object"}},
-                "active_step":{"type":"string","maxLength":120},
-                "next_action":{"type":"string","maxLength":1200},
-                "blockers":{"type":"array","maxItems":8,"items":{"type":"string"}}},
-                "required":["summary"],"additionalProperties":false}}), vec!["expected_revision","update"]),
-        ("present_plan", "Persist a declarative plan overview and checklist in this session; expected_revision is 0 for the first plan",
-            json!({"expected_revision":{"type":"integer","minimum":0},
-                "goal":{"type":"string","maxLength":1200},"criteria":{"type":"string","maxLength":1200},
-                "notes":{"type":"string","maxLength":1200},"title":{"type":"string","maxLength":80},
-                "checklist":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"object"}}}), vec!["expected_revision","checklist"]),
-        ("present_chat_component", "Show the user a panel in the chat, after your message. choice and form panels need a title naming their topic (for example \"For Bob\"); keep titles distinct across panels. choice: clickable options (data {prompt, options:[{label}]}, 1-8 one-line labels); a click sends \"<title>: <label>\" as the user's message. form: fields the user fills and submits as one message starting with the title (data {prompt, fields:[{name,label,type:text|email|number|select|multi,required,options}]}); multi is a checkbox group of 1-8 one-line options, sent as \"<title>: A, C\". Answered panels stay in the chat, read-only. status and todo_list are display only. Reuse component_id with the latest revision to update a panel, including after a refused call; dismiss:true closes one you replace. Panels never authorize actions",
-            json!({"type":{"type":"string","enum":["todo_list","status","choice","form"]},
-                "title":{"type":"string","maxLength":80},"placement":{"type":"string","enum":["inline","hover","sticky"]},
-                "data":{"type":"object"},"component_id":{"type":"string","maxLength":64},
-                "expected_revision":{"type":"integer","minimum":0},"dismiss":{"type":"boolean"}}), vec!["type","expected_revision"]),
-    ].into_iter().map(|(name,description,properties,required)|json!({
-        "type":"function","name":name,"description":description,
-        "parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}
-    })).collect()
-}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CheckpointArgs {

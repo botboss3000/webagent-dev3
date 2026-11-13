@@ -27,40 +27,6 @@ pub fn owns(name: &str) -> bool {
     scripts::TOOLS.contains(&name)
 }
 
-pub fn schemas() -> Vec<Value> {
-    let step = json!({"type":"object","properties":{
-        "tool":{"type":"string","description":"Tool name: a read-only tool, browser_read or browser_input"},
-        "arguments":{"type":"object","description":"The tool's arguments, under 16 KiB as JSON; {{param}} inside a string is replaced at run time"}},
-        "required":["tool","arguments"],"additionalProperties":false});
-    [
-        ("script_save", "Save a named sequence of read-only or Browser Control tool calls. Scope session (default): for this conversation and its sub-agents, saved at once; the same name replaces it. Scope saved: propose a reusable script for later conversations with this agent; it is saved only after the user approves it on the Artifacts page. A step that would need approval is refused", json!({
-            "name":{"type":"string","pattern":"^[A-Za-z0-9_-]{1,64}$"},
-            "scope":{"type":"string","enum":["session","saved"],"description":"session (default) for this work only; saved for a script worth reusing in other conversations"},
-            "description":{"type":"string","minLength":1,"maxLength":1000,"description":"One short sentence, about 150 characters: what the script does. Describe each param in its own description"},
-            "steps":{"type":"array","minItems":1,"items":step,"description":"1 to the configured step limit (20 by default)"},
-            "params":{"type":"array","maxItems":10,"items":{"anyOf":[
-                {"type":"object","properties":{
-                    "name":{"type":"string","pattern":"^[A-Za-z0-9_]{1,32}$"},
-                    "description":{"type":"string","maxLength":1000,"description":"A few words: what text to pass"}},
-                    "required":["name"],"additionalProperties":false},
-                {"type":"string","pattern":"^[A-Za-z0-9_]{1,32}$"}]},
-                "description":"Up to 10 distinct params usable as {{name}} in step argument strings"}}),
-            vec!["name","description","steps"]),
-        ("script_list", "List this conversation tree's session scripts and this agent's approved saved scripts: scope, name, description and params, plus saved-script proposals awaiting the user's approval", json!({}), vec![]),
-        ("script_run", "Run a session or saved script's steps in order as ordinary tool calls; stops at the first failed step and returns every step's result. Without scope, a session script of that name runs before a saved one", json!({
-            "name":{"type":"string","pattern":"^[A-Za-z0-9_-]{1,64}$"},
-            "scope":{"type":"string","enum":["session","saved"]},
-            "args":{"type":"object","additionalProperties":{"type":"string","maxLength":2000},"description":"Text for each declared param, up to 2000 characters each"}}),
-            vec!["name"]),
-    ]
-    .into_iter()
-    .map(|(name, description, properties, required)| json!({
-        "type":"function","name":name,"description":description,
-        "parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}
-    }))
-    .collect()
-}
-
 /// The tree's root session: the spawn record's root, else this session.
 async fn root(app: &App, sid: &str) -> Result<String> {
     Ok(app
@@ -615,17 +581,16 @@ mod tests {
 
     #[test]
     fn save_schema_declares_the_limits() {
-        let save = schemas()
-            .into_iter()
-            .find(|s| s["name"] == "script_save")
-            .unwrap();
+        let schema = |name| {
+            webagent_abilities::tool_definitions::get(name)
+                .unwrap()
+                .schema()
+        };
+        let save = schema("script_save");
         let props = &save["parameters"]["properties"];
         assert_eq!(props["description"]["maxLength"], 1000);
         assert_eq!(props["params"]["maxItems"], 10);
-        let run = schemas()
-            .into_iter()
-            .find(|s| s["name"] == "script_run")
-            .unwrap();
+        let run = schema("script_run");
         assert_eq!(
             run["parameters"]["properties"]["args"]["additionalProperties"]["maxLength"],
             2000

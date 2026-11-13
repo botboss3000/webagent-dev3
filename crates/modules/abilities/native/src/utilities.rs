@@ -11,18 +11,6 @@ const MAX_NUMBER: f64 = 1e100;
 pub fn owns(name: &str) -> bool {
     matches!(name, "get_time" | "get_date" | "calculate")
 }
-// Provider schemas keep numeric shape simple; Rust enforces finite magnitude
-// bounds on every operand and intermediate result before execution.
-pub fn schemas() -> Vec<Value> {
-    [
-        ("get_time", "Current time in UTC or a fixed UTC offset; IANA timezones are unsupported", json!({"timezone":{"type":"string","maxLength":9}}), vec![]),
-        ("get_date", "Current Gregorian date in UTC or a fixed UTC offset", json!({"timezone":{"type":"string","maxLength":9},"format":{"type":"string","enum":["full","short","iso"]}}), vec![]),
-        ("calculate", "Bounded finite arithmetic on explicit operands; no expressions or code", json!({"operation":{"type":"string","enum":["add","subtract","multiply","divide","remainder","power","sqrt","abs","min","max"]},"operands":{"type":"array","items":{"type":"number"},"minItems":1,"maxItems":32}}), vec!["operation","operands"]),
-    ].into_iter().map(|(name, description, properties, required)| json!({
-        "type":"function","name":name,"description":description,
-        "parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}
-    })).collect()
-}
 fn utc() -> String {
     "UTC".into()
 }

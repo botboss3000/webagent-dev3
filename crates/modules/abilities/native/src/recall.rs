@@ -19,20 +19,6 @@ pub const TOOLS: &[&str] = &["recall_compacted"];
 pub fn owns(name: &str) -> bool {
     name == "recall_compacted"
 }
-/// The compacted-recall tool schema.
-#[must_use]
-pub fn schemas() -> Vec<Value> {
-    vec![json!({"type":"function","name":"recall_compacted",
-        "description":"A first call with no selector lists this session's compacted segments. segment_id must be one of the listed ids. tool_call_id pages an eligible read result from this session instead; never pass a tool_call_id as a segment_id. Reasoning and revocable guidance are withheld.",
-        "parameters":{"type":"object","properties":{
-            "segment_id":{"type":"string","minLength":1,"maxLength":128},
-            "offset_items":{"type":"integer","minimum":0,"maximum":4096},
-            "limit_items":{"type":"integer","minimum":1,"maximum":20},
-            "tool_call_id":{"type":"string","minLength":1,"maxLength":128},
-            "offset_chars":{"type":"integer","minimum":0,"maximum":2000000},
-            "limit_chars":{"type":"integer","minimum":1,"maximum":4096}},
-            "required":[],"additionalProperties":false}})]
-}
 fn default_limit() -> usize {
     10
 }

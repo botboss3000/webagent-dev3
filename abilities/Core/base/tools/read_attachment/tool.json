@@ -1,0 +1,33 @@
+{
+  "name": "read_attachment",
+  "description": "Read a bounded Unicode-character page of a current-session text attachment",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "attachment_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "limit_chars": {
+        "maximum": 4096,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "offset_chars": {
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "attachment_id"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

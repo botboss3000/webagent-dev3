@@ -1,7 +1,8 @@
 //! Root composition for the actual Engine background service and lifecycle.
 use crate::tool_execution::Settings;
 use crate::*;
-pub(crate) use webagent_engine::runtime::background::{owns, schemas};
+#[cfg(test)]
+use webagent_engine::runtime::background::owns;
 #[cfg(test)]
 fn identity(rid: &str, call_id: &str) -> String {
     webagent_engine::runtime::background::fixture_task_identity(rid, call_id)
@@ -80,7 +81,6 @@ mod tests {
         assert_ne!(identity("r", "c"), identity("r2", "c"));
         assert!(owns("background_cancel"));
         assert!(!owns("task_wait"));
-        assert_eq!(schemas().len(), 2);
     }
     #[tokio::test]
     async fn encrypted_task_cas_reopens() {

@@ -1,0 +1,33 @@
+{
+  "name": "set_execution_mode",
+  "description": "Change this session to an agent execution mode ID (ask, plan, auto, or custom); legacy read_only/write are supported at a revision checkpoint. Moving to write requires human approval.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "expected_revision": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "mode": {
+        "maxLength": 32,
+        "type": "string"
+      },
+      "reason": {
+        "maxLength": 500,
+        "type": "string"
+      }
+    },
+    "required": [
+      "mode",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

@@ -15,35 +15,6 @@ pub fn owns(name: &str) -> bool {
         "edit_own_prompt" | "save_own_skill" | "remove_own_skill"
     )
 }
-/// The model-facing schemas of this family's tools.
-#[must_use]
-pub fn schemas() -> Vec<Value> {
-    vec![
-        json!({"type":"function","name":"edit_own_prompt",
-            "description":"Edit one unlocked section of this agent's prompt; read_own_prompt first. Takes effect on later runs.",
-            "parameters":{"type":"object","properties":{
-                "slot_name":{"type":"string","minLength":1,"maxLength":128},
-                "content":{"type":"string","minLength":1,"maxLength":16384},
-                "mode":{"type":"string","enum":["replace","append"]},
-                "expected_revision":{"type":"integer","minimum":0}},
-                "required":["slot_name","content","expected_revision"],"additionalProperties":false}}),
-        json!({"type":"function","name":"save_own_skill",
-            "description":"Create or revise this agent's selectable reusable skill. List or load it first; use revision 0 to create.",
-            "parameters":{"type":"object","properties":{
-                "name":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[a-z0-9_]+$"},
-                "description":{"type":"string","minLength":1,"maxLength":256},
-                "instructions":{"type":"string","minLength":1,"maxLength":16384},
-                "mode":{"type":"string","enum":["selectable"]},
-                "expected_revision":{"type":"integer","minimum":0}},
-                "required":["name","expected_revision"],"additionalProperties":false}}),
-        json!({"type":"function","name":"remove_own_skill",
-            "description":"Remove this agent's self-authored skill by name and revision; bundled ability guidance cannot be removed.",
-            "parameters":{"type":"object","properties":{
-                "name":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[a-z0-9_]+$"},
-                "expected_revision":{"type":"integer","minimum":1}},
-                "required":["name","expected_revision"],"additionalProperties":false}}),
-    ]
-}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PromptArgs {
@@ -242,6 +213,5 @@ mod tests {
         assert!(serde_json::from_value::<RemoveArgs>(json!({"name":"how_to",
             "expected_revision":1,"ability_id":"foreign"}))
         .is_err());
-        assert_eq!(schemas().len(), 3);
     }
 }

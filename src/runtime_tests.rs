@@ -7984,7 +7984,7 @@ async fn web_access_api_support_auth_csrf_revision_and_persistence() {
 }
 
 #[tokio::test]
-async fn renamed_background_controls_keep_their_old_rules() {
+async fn renamed_background_controls_drop_old_rules_and_follow_their_ceilings() {
     let (_root, app) = fixture().await;
     let mut p = policy_default();
     p["rules"]["task_cancel"] = json!("allow");
@@ -7999,8 +7999,9 @@ async fn renamed_background_controls_keep_their_old_rules() {
     migrate_tool_policy_defaults(&app.store).await.unwrap();
     migrate_tool_policy_defaults(&app.store).await.unwrap();
     let migrated = app.store.get("policy").await.unwrap().unwrap();
+    // Both are Base tool folders, so their policy ceilings are the installation rule.
     assert_eq!(migrated["rules"]["background_cancel"], "allow");
-    assert_eq!(migrated["rules"]["background_status"], "require_approval");
+    assert_eq!(migrated["rules"]["background_status"], "allow");
     for old in ["task_cancel", "task_status", "task_wait"] {
         assert!(migrated["rules"].get(old).is_none(), "{old}");
     }

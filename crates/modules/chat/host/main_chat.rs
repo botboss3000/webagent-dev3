@@ -400,7 +400,7 @@ pub(crate) async fn decide_api(
     wake::notify(&app).await;
     Ok(Json(result))
 }
-pub(crate) use webagent_chat::main_chat::{owns, schemas};
+pub(crate) use webagent_chat::main_chat::owns;
 pub(crate) async fn tool(
     app: &App,
     sid: &str,

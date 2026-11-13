@@ -1,0 +1,27 @@
+{
+  "name": "delete_webhook",
+  "description": "Revoke a private webhook using its exact revision. Retained private logs are preserved.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "expected_revision": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "webhook_id": {
+        "format": "uuid",
+        "type": "string"
+      }
+    },
+    "required": [
+      "webhook_id",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "write",
+  "policy_ceiling": "ask",
+  "default_access": {
+    "operator": "auto"
+  }
+}

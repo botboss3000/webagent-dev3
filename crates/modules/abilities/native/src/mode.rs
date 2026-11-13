@@ -11,17 +11,6 @@ use tokio_util::sync::CancellationToken;
 pub fn owns(name: &str) -> bool {
     name == "set_execution_mode"
 }
-/// The mode tool's schema; the session is always the authenticated run's own.
-#[must_use]
-pub fn schemas() -> Vec<Value> {
-    vec![json!({"type":"function","name":"set_execution_mode",
-        "description":"Change this session to an agent execution mode ID (ask, plan, auto, or custom); legacy read_only/write are supported at a revision checkpoint. Moving to write requires human approval.",
-        "parameters":{"type":"object","properties":{
-            "mode":{"type":"string","maxLength":32},
-            "expected_revision":{"type":"integer","minimum":0},
-            "reason":{"type":"string","maxLength":500}},
-            "required":["mode","expected_revision"],"additionalProperties":false}})]
-}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Args {
@@ -71,7 +60,6 @@ mod tests {
     use super::*;
     #[test]
     fn schema_cannot_select_another_session() {
-        assert_eq!(schemas()[0]["name"], "set_execution_mode");
         assert!(serde_json::from_value::<Args>(json!({"mode":"write",
             "expected_revision":0,"session_id":"other"}))
         .is_err());

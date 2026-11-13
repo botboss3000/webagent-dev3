@@ -13,19 +13,6 @@ use tokio_util::sync::CancellationToken;
 pub fn owns(name: &str) -> bool {
     matches!(name, "list_skills" | "load_skill")
 }
-/// Expose bounded selectors and metadata-only load acknowledgments.
-pub fn schemas() -> Vec<Value> {
-    let id = json!({"type":"string","minLength":1,"maxLength":64,"pattern":"^[a-z0-9_]+$"});
-    vec![
-        json!({"type":"function","name":"list_skills","description":"List inactive discoverable skills; include_available also shows visible and already loaded guidance",
-            "parameters":{"type":"object","properties":{"ability_id":id,"query":{"type":"string","maxLength":200},"include_available":{"type":"boolean"}},"required":["ability_id"],"additionalProperties":false}}),
-        json!({"type":"function","name":"load_skill","description":"Load discoverable guidance for this conversation. Returns only acknowledgment and metadata; full guidance is supplied in the next model context. Does not activate abilities or tools",
-            "parameters":{"type":"object","properties":{"ability_id":id,"skill_id":id,
-                "kind":{"type":"string","enum":["ability","tool","selectable","own"]},
-                "expected_catalog_version":{"type":"string","minLength":64,"maxLength":64,"pattern":"^[a-f0-9]{64}$"}},
-                "required":["ability_id","kind","skill_id"],"additionalProperties":false}}),
-    ]
-}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ListArgs {

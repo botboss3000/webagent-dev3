@@ -1,0 +1,39 @@
+{
+  "name": "script_run",
+  "description": "Run a session or saved script's steps in order as ordinary tool calls; stops at the first failed step and returns every step's result. Without scope, a session script of that name runs before a saved one",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "args": {
+        "additionalProperties": {
+          "maxLength": 2000,
+          "type": "string"
+        },
+        "description": "Text for each declared param, up to 2000 characters each",
+        "type": "object"
+      },
+      "name": {
+        "pattern": "^[A-Za-z0-9_-]{1,64}$",
+        "type": "string"
+      },
+      "scope": {
+        "enum": [
+          "session",
+          "saved"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

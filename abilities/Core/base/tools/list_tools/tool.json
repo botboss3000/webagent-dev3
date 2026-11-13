@@ -1,0 +1,29 @@
+{
+  "name": "list_tools",
+  "description": "Find permitted tools. query: a few task words (for example \"edit file\"); results are ranked with a score, best_match first, never empty, and include tools you already have. Without query: the tools that need loading, optionally in one group (ability ID from the index); include_available=true adds tools you already have.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "group": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "include_available": {
+        "type": "boolean"
+      },
+      "query": {
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

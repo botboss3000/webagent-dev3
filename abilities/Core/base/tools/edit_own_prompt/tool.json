@@ -1,0 +1,41 @@
+{
+  "name": "edit_own_prompt",
+  "description": "Edit one unlocked section of this agent's prompt; read_own_prompt first. Takes effect on later runs.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "content": {
+        "maxLength": 16384,
+        "minLength": 1,
+        "type": "string"
+      },
+      "expected_revision": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "mode": {
+        "enum": [
+          "replace",
+          "append"
+        ],
+        "type": "string"
+      },
+      "slot_name": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "slot_name",
+      "content",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "write",
+  "policy_ceiling": "ask",
+  "default_access": {
+    "operator": "auto"
+  }
+}
