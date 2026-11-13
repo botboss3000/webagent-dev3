@@ -103,7 +103,7 @@ class Components:
                             if not member.isfile()or not 0<member.size<=262144:raise ValueError("Bounded regular Cargo manifest required")
                             prior[name]=archive.extractfile(member).read(262145)
         paths={"Cargo.toml"}|set(prior)
-        for folder in ["crates","src/plugin_packages","abilities","plugins/abilities"]:
+        for folder in ["crates","src/plugin_packages","abilities"]:
             if not (self.root/folder).is_dir():continue
             paths.update(str(p.relative_to(self.root))for p in(self.root/folder).rglob("Cargo.toml"))
         if len(paths)>256:raise ValueError("Cargo reservation inventory exceeds limit")
@@ -132,7 +132,6 @@ class Components:
                     scope="module:backend:"+folder.split("/")[2]
                 elif folder=="src/plugin_packages/diagnostics":scope="module:backend:diagnostics"
                 elif folder.startswith("abilities/"):scope="module:ability:"+"/".join(folder.split("/")[1:3])
-                elif folder.startswith("plugins/abilities/"):scope="module:ability:"+"/".join(folder.split("/")[2:4])
                 elif folder=="crates/engine-service":continue  # layout_scopes assigns it to every component it is built into
                 else:
                     component=next((key for key,values in COMPONENT_CRATES.items()if folder in {"crates/"+x for x in values}),None)
@@ -180,7 +179,6 @@ class Components:
             package=self.package_scopes(path,patch)
             if package is not None:output.update(package)
             elif path.startswith("abilities/")and len(parts)>=3:output.add("module:ability:"+"/".join(parts[1:3]))
-            elif path.startswith("plugins/abilities/")and len(parts)>=4:output.add("module:ability:"+"/".join(parts[2:4]))
             elif path=="plugins/engine/catalog.json":output.update("module:engine-component:"+c for c in COMPONENT_CRATES)
             elif path.startswith("plugins/engine/")and len(parts)>3:output.add("module:engine-component:"+parts[2])
             elif path.startswith("build-service/")or path.startswith("tests/test_build")or path.startswith("tests/test_scheduler")or path in {"tests/test_ui_policy.py","tests/test_admin_build_install.py",

@@ -865,11 +865,11 @@ class BuildTests(unittest.TestCase):
     def test_loop_release_mounts_include_read_only_active_guidance(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder) / "release"
-            (root / "v3/plugins/abilities").mkdir(parents=True)
+            (root / "v3/abilities").mkdir(parents=True)
             assets = Path(folder) / "assets"
             assets.mkdir()
             old = {"Mounts": [{"Type": "bind", "Source": "/old/abilities",
-                              "Target": "/opt/v3/plugins/abilities", "ReadOnly": True},
+                              "Target": "/opt/v3/abilities", "ReadOnly": True},
                              {"Type": "bind", "Source": "/state",
                               "Target": "/state", "ReadOnly": False}]}
             mounted = host.release.release_mounts(old, root, assets)["Mounts"]
@@ -883,7 +883,7 @@ class BuildTests(unittest.TestCase):
 
     def test_release_mounts_pin_source_and_keep_state_writable(self):
         root = self.state / "release-fixture"
-        for name in ("v3/ui", "v3/config", "v3/plugins/abilities",
+        for name in ("v3/ui", "v3/config", "v3/abilities",
                      "ui/shared/css", "ui/main-panel/agents", "ui/vendor/fonts",
                      "ui/vendor/lucide"):
             (root / name).mkdir(parents=True)
@@ -898,29 +898,29 @@ class BuildTests(unittest.TestCase):
         # The retired promotion mount is dropped from the next container.
         self.assertNotIn("/live-v3", by_target)
         # The API reads the release ability snapshot the loop runs.
-        self.assertEqual(str(root / "v3/plugins/abilities"),
-                         by_target["/opt/v3/plugins/abilities"]["Source"])
-        self.assertTrue(by_target["/opt/v3/plugins/abilities"]["ReadOnly"])
+        self.assertEqual(str(root / "v3/abilities"),
+                         by_target["/opt/v3/abilities"]["Source"])
+        self.assertTrue(by_target["/opt/v3/abilities"]["ReadOnly"])
         self.assertEqual("/checkout", by_target["/code"]["Source"])
         self.assertEqual("/state", by_target["/state"]["Source"])
         loop = {"Mounts": [{"Type": "bind", "Source": "/old/abilities",
-                            "Target": "/opt/v3/plugins/abilities"}]}
+                            "Target": "/opt/v3/abilities"}]}
         target = host.release.release_mounts(loop, root)["Mounts"][0]
-        self.assertEqual(str(root / "v3/plugins/abilities"), target["Source"])
+        self.assertEqual(str(root / "v3/abilities"), target["Source"])
 
     def test_release_mounts_follow_the_release_ability_layout(self):
         """A moved tree mounts /opt/v3/abilities; rolling back to an older tree restores the old target."""
         with tempfile.TemporaryDirectory() as folder:
             moved, older = Path(folder) / "moved", Path(folder) / "older"
             (moved / "v3/abilities").mkdir(parents=True)
-            (older / "v3/plugins/abilities").mkdir(parents=True)
+            (older / "v3/abilities").mkdir(parents=True)
             loop = {"Mounts": [{"Type": "bind", "Source": "/old/abilities",
-                                "Target": "/opt/v3/plugins/abilities", "ReadOnly": True}]}
+                                "Target": "/opt/v3/abilities", "ReadOnly": True}]}
             mounted = host.release.release_mounts(loop, moved)["Mounts"]
             self.assertEqual([("/opt/v3/abilities", str(moved / "v3/abilities"))],
                              [(m["Target"], m["Source"]) for m in mounted])
             back = host.release.release_mounts({"Mounts": mounted}, older)["Mounts"]
-            self.assertEqual([("/opt/v3/plugins/abilities", str(older / "v3/plugins/abilities"))],
+            self.assertEqual([("/opt/v3/abilities", str(older / "v3/abilities"))],
                              [(m["Target"], m["Source"]) for m in back])
 
     def test_staging_failure_blocks_full_and_ui_effects(self):
@@ -964,7 +964,7 @@ class BuildTests(unittest.TestCase):
             release.stage_assets(root, second, blob, host.context_digest)
 
         snapshot = self.state / "release-fixture"
-        (snapshot / "v3/plugins/abilities").mkdir(parents=True)
+        (snapshot / "v3/abilities").mkdir(parents=True)
         api = {"Mounts": [
             {"Type": "bind", "Source": "/old", "Target": "/live-v3"},
             {"Type": "bind", "Source": "/checkout", "Target": "/code"},

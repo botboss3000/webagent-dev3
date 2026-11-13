@@ -89,7 +89,7 @@ class MonitoringTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError,"source patch path denied"):fixtures.host.inspect_source_patch(source,text)
     def test_only_pure_monitoring_changes_avoid_ability_runtime(self):
         self.assertTrue(m.only_paths([m.PREFIX+"src/main.rs",m.PREFIX+"Cargo.lock"]))
-        for paths in [[],[m.PREFIX+"src/main.rs","v3/plugins/abilities/Other/x.rs"],["v3/services/unknown/src/main.rs"],[m.PREFIX+"src/main.rs","v3/src/main.rs"]]:self.assertFalse(m.only_paths(paths))
+        for paths in [[],[m.PREFIX+"src/main.rs","v3/abilities/Other/x.rs"],["v3/services/unknown/src/main.rs"],[m.PREFIX+"src/main.rs","v3/src/main.rs"]]:self.assertFalse(m.only_paths(paths))
     def test_service_release_admission_is_independent_of_ability_protocol(self):
         import test_admin_build as fixtures
         case=fixtures.BuildTests(methodName="runTest");case.setUp()

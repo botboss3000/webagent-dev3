@@ -379,7 +379,7 @@ def backup_database(parent, name):
 
 
 # Root-installed executable plugin folders inside the source tree; never source inputs.
-INSTALLED_PACKAGES = ("v3/abilities/Core/mcp/package", "v3/plugins/abilities/Core/mcp/package")
+INSTALLED_PACKAGES = ("v3/abilities/Core/mcp/package",)
 
 
 def snapshot_context(context):
@@ -399,7 +399,7 @@ def snapshot_context(context):
                 # Preserve archive names while reading V3 from its independent root.
                 inspection = name in INSPECTION_CONTEXT
                 source = V3 / name.removeprefix("v3/")
-                if name in {"v3/build-service","v3/crates","v3/plugins/engine","v3/services/system-monitoring","v3/abilities","v3/plugins/abilities"} and not source.exists()and not source.is_symlink():continue
+                if name in {"v3/build-service","v3/crates","v3/plugins/engine","v3/services/system-monitoring","v3/abilities"} and not source.exists()and not source.is_symlink():continue
                 parent_path, leaf = source.parent, source.name
                 try:
                     parent = directory(parent_path)

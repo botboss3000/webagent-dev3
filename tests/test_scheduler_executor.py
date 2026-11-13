@@ -12,7 +12,7 @@ class CacheTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name);self.job={"job_id":str(uuid.uuid4())}
         self.extra={"v3/src/main.rs":"fn main() {}","v3/config/embedded.json":"compiled value",
-            "v3/plugins/abilities/Core/example/example.skill.md":"guidance"}
+            "v3/abilities/Core/example/example.skill.md":"guidance"}
         self.blob=fixtures.context(extra=self.extra)
         self.worker=module.Executor(types.SimpleNamespace(execution_entries=fixtures.host.Runner.execution_entries,compiler_runtime=lambda *args:{"image":"sha256:"+"7"*64}),None,{"state_root":str(self.root)})
         self.artifacts=self.root/"execution"/self.job["job_id"]/"output/artifacts";self.artifacts.mkdir(parents=True)
@@ -38,14 +38,14 @@ class CacheTests(unittest.TestCase):
         path=self.root/uuid.uuid4().hex;path.mkdir();return path
     def test_runtime_guidance_change_reuses_all_verified_artifacts(self):
         """A guidance edit does not change core compilation or drop registry/test attestations."""
-        cached=self.worker.cached_engine(self.candidate({"v3/plugins/abilities/Core/example/example.skill.md":"new guidance"}),self.output())
+        cached=self.worker.cached_engine(self.candidate({"v3/abilities/Core/example/example.skill.md":"new guidance"}),self.output())
         self.assertIsNotNone(cached)
         self.assertEqual(self.worker.artifact_hashes(cached[0]),self.worker.artifact_hashes(self.artifacts))
     def test_changed_or_new_rust_input_requires_compilation(self):
         """Added code is as significant as changed existing code for reuse decisions."""
         for changed in [{"v3/src/main.rs":"fn main(){panic!()}"},
             {"v3/src/new.rs":"fn new(){}"},{"v3/Cargo.lock":"different lock"},
-            {"v3/plugins/abilities/Core/mcp/service/main.rs":"fn main(){}"}]:
+            {"v3/abilities/Core/mcp/service/main.rs":"fn main(){}"}]:
             self.assertIsNone(self.worker.cached_engine(self.candidate(changed),self.output()))
     def test_embedded_json_is_a_compile_dependency(self):
         """File extensions cannot conceal a compiler-declared JSON dependency."""
@@ -470,7 +470,7 @@ class NativeBuilderPhaseTests(unittest.TestCase):
         from unittest.mock import patch
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
         root=Path(temp.name);assets=root/'assets';state=root/'state';job_id=str(uuid.uuid4())
-        package=assets/'releases'/job_id/'v3/plugins/abilities/Custom/fixture';(package/'src').mkdir(parents=True)
+        package=assets/'releases'/job_id/'v3/abilities/Custom/fixture';(package/'src').mkdir(parents=True)
         inputs={'Cargo.toml':'[package]\nname="fixture_runner"\nversion="0.1.0"\nedition="2021"\n','Cargo.lock':'version = 4\n','src/main.rs':'fn main() {}'}
         for name,value in inputs.items():(package/name).write_text(value)
         (package/'plugin.json').write_text(json.dumps({'id':'fixture','dispatch':'isolated','runtime':'executable','entrypoint':'fixture_runner','build':{'toolchain':'rust-1.99','inputs':list(inputs),'dependencies':[],'flags':[],'assets':[]}}))

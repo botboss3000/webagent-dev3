@@ -66,7 +66,7 @@ BRIDGE_SOCKET = Path(CONFIG["runtime_root"])/"python.sock"
 BRIDGE_WORKSPACE = "94c353d5-70bd-44b2-9af0-757c4a979fc9"
 CONTEXT = (
     "v3/Dockerfile", "v3/Cargo.toml", "v3/Cargo.lock", "v3/build.rs", "v3/.gitignore",
-    "v3/src", "v3/crates", "v3/services/system-monitoring", "v3/ui", "v3/plugins/engine", "v3/abilities", "v3/plugins/abilities", "v3/plugins/gates",
+    "v3/src", "v3/crates", "v3/services/system-monitoring", "v3/ui", "v3/plugins/engine", "v3/abilities", "v3/plugins/gates",
     "v3/sandbox.py", "v3/ui-baseline.json", "v3/live-files.json", "v3/rustfmt.toml", "v3/tests",
     "v3/README.md", "v3/docs", "v3/deploy.sh", "v3/config", "v3/build-service")
 UI_SOURCE_PREFIX = "v3/ui/"
@@ -90,9 +90,8 @@ def checked_git_modes(patch):
         out.append(line);i+=1
     return "".join(out)
 
-# Abilities moved from plugins/abilities to the checkout root; a tree has one of the two.
-ABILITY_ROOTS=("v3/abilities/","v3/plugins/abilities/")
-OPTIONAL_CONTEXT={"v3/abilities","v3/plugins/abilities"}
+ABILITY_ROOTS=("v3/abilities/",)
+OPTIONAL_CONTEXT={"v3/abilities"}
 def ability_rest(path):
     """The ability root a path is under and the path below it, or (None, None)."""
     root=next((r for r in ABILITY_ROOTS if path.startswith(r)),None)
@@ -1046,7 +1045,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         images=job.get("images") if publication_id is None else {role:previous[role]["Image"]for role in ("api","loop")}
         if not images or set(images)!={"api","loop"}:raise ValueError("Runtime preflight requires both candidate images")
         results=[];plans=[]
-        allowed={"/opt/v3/config","/opt/v3/ui","/opt/v3/abilities","/opt/v3/plugins/abilities","/opt/v3/assets",
+        allowed={"/opt/v3/config","/opt/v3/ui","/opt/v3/abilities","/opt/v3/assets",
             }
         for role in ("api","loop"):
             proposed=release.release_mounts(previous[role]["HostConfig"],root,ASSET_ROOT);mounts=[]
@@ -1757,7 +1756,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 "--mount","type=bind,src="+str(ASSET_ROOT/"artifacts")+",dst=/opt/v3/assets/artifacts,readonly",
                 "--entrypoint","/usr/local/bin/webagent-v3",image,"--validate-assets=/candidate/v3"],timeout=30)
             receipt=json.loads(result)
-            program=("import json,pathlib; root=next(p for p in map(pathlib.Path,('/candidate/v3/abilities','/candidate/v3/plugins/abilities')) if p.is_dir()); "
+            program=("import json,pathlib; root=pathlib.Path('/candidate/v3/abilities'); "
                 "packages=[p for p in root.glob('*/*/plugin.json') if json.loads(p.read_bytes()).get('dispatch')=='isolated']; "
                 "[(compile(source.read_bytes(),str(source),'exec')) for p in packages "
                 "if json.loads(p.read_bytes()).get('runtime')=='python3' for source in p.parent.rglob('*.py')]; print('syntax valid')")
@@ -2279,7 +2278,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                        if not value.startswith(("V3_UI_ROOT=", "V3_SHARED_UI_ROOT=",
                                                 "V3_ABILITIES_ROOT="))]
                 abilities = next((m["Target"] for m in host.get("Mounts") or []
-                                  if m.get("Target") in release.ABILITY_TARGETS), "/opt/v3/plugins/abilities")
+                                  if m.get("Target") in release.ABILITY_TARGETS), "/opt/v3/abilities")
                 env.extend(("V3_UI_ROOT=/opt/v3/assets/current/v3/ui",
                             "V3_ABILITIES_ROOT=" + abilities))
                 config["Env"] = env

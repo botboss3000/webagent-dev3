@@ -274,7 +274,7 @@ use domain APIs; protected infrastructure changes use lifecycle reconfigure, whi
 retains images and replaces only affected services.
 
 Codebase Admin interface 1 is an independent Python executable package under
-plugins/abilities/Administrator/codebase_admin. Its build manifest lists runner.py
+abilities/Administrator/codebase_admin. Its build manifest lists runner.py
 as the executable input; existing guidance and compatible catalog metadata are
 runtime assets. Isolated tasks affecting only this package use plugin_deploy:
 validate the complete protocol/catalog, compile-check Python, run package tests,
@@ -973,7 +973,7 @@ native application tool schemas are unchanged.
 
 Use standalone checks to catch feature-specific imports and cfg errors before a
 full optimized build. The canonical decision rule and agent workflow are in
-[Codebase Admin: Early Rust feature checks](../plugins/abilities/Administrator/codebase_admin/codebase_admin.skill.md#early-rust-feature-checks).
+[Codebase Admin: Early Rust feature checks](../abilities/Administrator/codebase_admin/skills/codebase_admin.skill.md#early-rust-feature-checks).
 
 | feature_profile | Fixed compile recipe |
 | --- | --- |

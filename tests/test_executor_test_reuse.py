@@ -16,7 +16,7 @@ class RuntimeInputsDigestTest(unittest.TestCase):
         self.folder = tempfile.TemporaryDirectory()
         self.root = Path(self.folder.name)
         for name, text in {"crates/a/src/lib.rs": "fn a() {}", "src/main.rs": "fn main() {}",
-                           "live-files.json": "{}", "plugins/abilities/x/adapter.rs": "fn x() {}",
+                           "live-files.json": "{}", "abilities/x/adapter.rs": "fn x() {}",
                            "ui/app.css": "a{}"}.items():
             (self.root / name).parent.mkdir(parents=True, exist_ok=True)
             (self.root / name).write_text(text)
@@ -32,7 +32,7 @@ class RuntimeInputsDigestTest(unittest.TestCase):
         self.assertEqual(digest(self.root), self.before)
 
     def test_files_tests_read_at_runtime_change_it(self):
-        for name in ["live-files.json", "plugins/abilities/x/adapter.rs", "ui/app.css"]:
+        for name in ["live-files.json", "abilities/x/adapter.rs", "ui/app.css"]:
             original = (self.root / name).read_text()
             (self.root / name).write_text(original + " ")
             self.assertNotEqual(digest(self.root), self.before, name)

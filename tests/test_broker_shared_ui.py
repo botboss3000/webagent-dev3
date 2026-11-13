@@ -40,12 +40,12 @@ class SnapshotTests(unittest.TestCase):
     def test_installed_ability_package_is_never_a_source_input(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            ability = root / "v3/plugins/abilities/Core/mcp"
+            ability = root / "v3/abilities/Core/mcp"
             (ability / "package").mkdir(parents=True)
             (ability / "package/webagent-mcp").write_bytes(b"installed")
             (ability / "mcp.json").write_bytes(b"{}")
-            entries = read(release.snapshot(root, ("v3/plugins/abilities",), NOOP))
-        self.assertEqual(list(entries), ["v3/plugins/abilities/Core/mcp/mcp.json"])
+            entries = read(release.snapshot(root, ("v3/abilities",), NOOP))
+        self.assertEqual(list(entries), ["v3/abilities/Core/mcp/mcp.json"])
 
 
 class CandidateTests(unittest.TestCase):

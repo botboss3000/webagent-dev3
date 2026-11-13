@@ -232,7 +232,7 @@ def ui_baseline_mismatch(blob):
     return wrong
 
 # Root-installed executable plugin folders inside the source tree; never source inputs.
-INSTALLED_PACKAGES = ("abilities/Core/mcp/package", "plugins/abilities/Core/mcp/package")
+INSTALLED_PACKAGES = ("abilities/Core/mcp/package",)
 
 
 def installed_package(name):
@@ -357,14 +357,11 @@ def release_mounts(previous, root, asset_root=None, layout=None):
     /runtime. With `layout` (config.layout), live folders follow the installation config
     instead of the previous container, so a folder move needs only a config change.
     """
-    # Abilities moved from plugins/abilities to the checkout root (and /opt/v3/abilities);
-    # the release tree decides, so a rollback to an older release keeps its old layout.
-    moved = (root / "v3/abilities").is_dir()
-    abilities = "/opt/v3/abilities" if moved else "/opt/v3/plugins/abilities"
+    abilities = "/opt/v3/abilities"
     mapping = {
         "/opt/v3/config": "v3/config",
         "/opt/v3/ui": "v3/ui",
-        abilities: "v3/abilities" if moved else "v3/plugins/abilities",
+        abilities: "v3/abilities",
     }
     host = dict(previous)
     host["Mounts"] = [dict(item, Target=LEGACY_TARGETS.get(item.get("Target"), item.get("Target")))

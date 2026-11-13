@@ -445,7 +445,7 @@ class Scheduler:
             for scope in current["scopes"]:
                 if scope.startswith("module:ability:"):
                     name=scope.removeprefix("module:ability:")+"/"
-                    closure.update(p for p in files if p.startswith(("v3/abilities/"+name,"v3/plugins/abilities/"+name)))
+                    closure.update(p for p in files if p.startswith("v3/abilities/"+name))
         for name in closure:
             if not historical and files.get(name)!=active.get(name):raise ValueError("Release dependency changed; revalidate a current generation")
         self.broker.scheduler_verify_health()

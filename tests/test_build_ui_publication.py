@@ -169,7 +169,7 @@ class ConcurrentUIEntryTests(unittest.TestCase):
 
     def test_activated_completion_rejects_executable_plugin_inputs(self):
         job=self.failed_post_switch_activation();row=self.broker.jobs[job];row["operation"]="plugin_deploy"
-        row["changed_paths"].append("v3/plugins/abilities/fixture/runner.py")
+        row["changed_paths"].append("v3/abilities/fixture/runner.py")
         with self.assertRaisesRegex(ValueError,"activated UI recovery"):self.recovery("ui-activated-recover",job,"complete_activated_release")
         self.assertEqual(row["status"],"uncertain")
 

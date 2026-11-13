@@ -56,7 +56,7 @@ def main():
  else:
   gate=Path(live["/runtime/gate"]);gate.mkdir(exist_ok=True);mounts += [(gate,"/runtime/gate",False),(root/"plugins","/code/plugins",True)]+([(root/"abilities","/code/abilities",True)] if (root/"abilities").is_dir() else [])
  for source,target,ro in mounts:argv+=["--mount","type=bind,src="+str(source)+",dst="+target+(",readonly" if ro else "")]
- for key,value in {"V3_PROCESS_ROLE":role,"V3_ABILITIES_ROOT":"/opt/v3/abilities" if (root/"abilities").is_dir() else "/opt/v3/plugins/abilities","V3_PUBLIC_ORIGIN":c["public_origin"],"V3_BUILD_SOCKET":"/runtime/"+Path(c["runtime_root"]).name+"/build.sock"}.items():argv+=["--env",key+"="+value]
+ for key,value in {"V3_PROCESS_ROLE":role,"V3_ABILITIES_ROOT":"/opt/v3/abilities","V3_PUBLIC_ORIGIN":c["public_origin"],"V3_BUILD_SOCKET":"/runtime/"+Path(c["runtime_root"]).name+"/build.sock"}.items():argv+=["--env",key+"="+value]
  argv+=["--tmpfs","/run:rw,nosuid,nodev,size=16m","--tmpfs","/tmp:rw,nosuid,nodev,size=32m","--stop-timeout","30",name+":local"];run(argv)
 BROWSER_SECURITY="/etc/webagent/development/browser/seccomp-browser.json"
 def start_browser(c):

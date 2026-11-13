@@ -1064,7 +1064,7 @@ class Executor:
     def rust_inputs(files):
         """Detect all core Rust/Cargo source changes and added files, independent of old compiler dependencies."""
         return {name:hashlib.sha256(body).hexdigest()for name,(_,body)in files.items()
-            if name in {"v3/Cargo.toml","v3/Cargo.lock","v3/build.rs"}or(name.startswith("v3/crates/")or name.startswith("v3/src/")and(name.endswith(".rs")or name.startswith("v3/src/plugin_packages/"))or name.startswith(("v3/abilities/Core/mcp/service/","v3/plugins/abilities/Core/mcp/service/")))}
+            if name in {"v3/Cargo.toml","v3/Cargo.lock","v3/build.rs"}or(name.startswith("v3/crates/")or name.startswith("v3/src/")and(name.endswith(".rs")or name.startswith("v3/src/plugin_packages/"))or name.startswith("v3/abilities/Core/mcp/service/"))}
     def cached_engine(self,blob,output,mode="dev"):
         """Reuse only artifacts whose pinned recipe, release mode and complete compiled inputs still match the candidate."""
         cache=Path(self.config["state_root"])/"engine-artifacts";cache.mkdir(mode=0o700,exist_ok=True)

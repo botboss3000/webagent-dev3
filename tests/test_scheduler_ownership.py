@@ -118,8 +118,8 @@ class OwnershipTests(unittest.TestCase):
         for p in ["data/config/x","../src","src/../data","target/bin","src//main"]:
             with self.assertRaises(ValueError):m.source_path(p)
     def test_manifest_cannot_hide_compiled_input(self):
-        root=Path(self.root.name);folder=root/"plugins/abilities/Developer/test";folder.mkdir(parents=True)
-        (folder/"plugin.json").write_text(json.dumps({"dispatch":"isolated"}));p="plugins/abilities/Developer/test/src/main.rs"
+        root=Path(self.root.name);folder=root/"abilities/Developer/test";folder.mkdir(parents=True)
+        (folder/"plugin.json").write_text(json.dumps({"dispatch":"isolated"}));p="abilities/Developer/test/src/main.rs"
         expected=["module:ability:Developer/test","path:"+p]
         self.assertEqual(m.Components(root).scopes([p]),expected);self.assertEqual(m.Components(root,[p]).scopes([p]),expected)
     def test_root_abilities_folder_reserves_the_same_ability_scope(self):
@@ -130,7 +130,7 @@ class OwnershipTests(unittest.TestCase):
     def test_deleted_isolated_manifest_retains_plugin_scope_without_hiding_core_inputs(self):
         """Ability files reserve their ability whether native, isolated, deleted or compiler-attested."""
         import io,tarfile
-        root=Path(self.root.name)/"v3";root.mkdir();package="plugins/abilities/Developer/removed"
+        root=Path(self.root.name)/"v3";root.mkdir();package="abilities/Developer/removed"
         path=package+"/main.rs";baseline=root.parent/"baseline.tar"
         body=json.dumps({"dispatch":"isolated"}).encode()
         with tarfile.open(baseline,"w")as archive:
@@ -367,7 +367,7 @@ class CargoModuleReservationTests(unittest.TestCase):
         self.write('crates/modules/models/Cargo.toml','invalid toml = [')
         for path in ['Cargo.toml','Cargo.lock','build.rs','Dockerfile','crates/unknown/src/lib.rs','crates/modules/models/src/private.rs',
             'crates/engine-service/src/lib.rs','crates/context-contracts/src/lib.rs','src/main.rs','tests/test_sandbox.py',
-            'plugins/engine/new/component.json','plugins/abilities/Core/base/runtime.rs','config/chat.json']:
+            'plugins/engine/new/component.json','abilities/Core/base/runtime.rs','config/chat.json']:
             self.assertNotIn('module:engine',m.Components(self.root,[path]).scopes([path]),path)
     def test_invalid_cargo_table_falls_back_to_the_layout_without_blocking_repair(self):
         self.write('crates/modules/models/Cargo.toml','[package]\nname="models"\nversion="0.1.0"\ntarget=1\n')

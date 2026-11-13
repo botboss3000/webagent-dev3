@@ -132,7 +132,7 @@ def install(args):
   import shutil
   if not shutil.which("setfacl"):raise RuntimeError("Install the Linux acl package before using a separate service account")
   subprocess.run(["setfacl","-m","u:"+account.pw_name+":rwx",str(checkout)],check=True)
-  for relative in ("src","ui","build-service","abilities","plugins/abilities","plugins/gates","tests","docs","config"):
+  for relative in ("src","ui","build-service","abilities","plugins/gates","tests","docs","config"):
    path=checkout/relative
    if path.is_symlink():raise PermissionError("Source ACL path is a symlink")
    if not path.exists():continue

@@ -345,7 +345,7 @@ class HostSourceReleaseTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as temporary:
    broker=fixtures.host.Broker(Path(temporary)/"jobs",fixtures.FakeRunner())
    try:
-    for path in ("v3/src/app.rs","v3/sandbox.py","v3/build-service/workspace_executor.py","v3/build-service/config.py","v3/plugins/abilities/catalog.json"):
+    for path in ("v3/src/app.rs","v3/sandbox.py","v3/build-service/workspace_executor.py","v3/build-service/config.py","v3/abilities/catalog.json"):
      self.assertFalse(broker.host_source_only([path],b"unused",{"local_caller":True}))
     self.assertFalse(broker.host_source_only(["v3/build-service/host.py"],b"unused",{}))
    finally:broker.shutdown()
@@ -545,8 +545,8 @@ class PluginStagingRebaseTests(unittest.TestCase):
   with tempfile.TemporaryDirectory()as temporary:
    root=Path(temporary);runner=fixtures.FakeRunner();runner.hot_assets=True
    broker=fixtures.host.Broker(root/"jobs",runner);broker.scheduler.mode="enforce"
-   original=fixtures.context(extra={"v3/ui/index.html":"entry","v3/plugins/abilities/Developer/probe/probe.skill.md":"beta"})
-   rebased=fixtures.context(extra={"v3/ui/index.html":"entry","v3/plugins/abilities/Developer/probe/probe.skill.md":"beta","v3/plugins/abilities/Developer/other/other.skill.md":"alpha"})
+   original=fixtures.context(extra={"v3/ui/index.html":"entry","v3/abilities/Developer/probe/probe.skill.md":"beta"})
+   rebased=fixtures.context(extra={"v3/ui/index.html":"entry","v3/abilities/Developer/probe/probe.skill.md":"beta","v3/abilities/Developer/other/other.skill.md":"alpha"})
    job={"job_id":str(uuid.uuid4()),"operation":"plugin_deploy","status":"queued",
         "lease_until":time.time()+120,"created_at":time.time(),"release_root":str(root/"frozen"),"inputs_sha256":fixtures.host.context_digest(original)[0]}
    broker.jobs[job["job_id"]]=job;compile_roots=[]
