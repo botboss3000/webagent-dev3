@@ -161,7 +161,7 @@ def build_one(runner,job_id,root,state,assets,executor,scheduler,identity):
             source.mkdir()
             # Cargo metadata needs every declared workspace member; only the
             # registered package and its dependency closure compile or key reuse.
-            for name in ("Cargo.toml","Cargo.lock","build.rs","src","crates","config","plugins"):
+            for name in ("Cargo.toml","Cargo.lock","build.rs","src","crates","config","abilities","plugins"):
                 path=application/name
                 if path.is_symlink():raise ValueError("Compiler source symlink")
                 if path.is_dir():shutil.copytree(path,source/name)

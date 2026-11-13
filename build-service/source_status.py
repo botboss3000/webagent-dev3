@@ -6,7 +6,7 @@ import subprocess
 import threading
 import time
 
-_PATHS=("src","crates","ui","plugins","build-service","config","tests","Cargo.toml","Cargo.lock","build.rs","deploy.sh")
+_PATHS=("src","crates","ui","abilities","plugins","build-service","config","tests","Cargo.toml","Cargo.lock","build.rs","deploy.sh")
 _LOCK=threading.Lock()
 _CACHE={}
 

@@ -769,7 +769,7 @@ def inspect_source_patch_corrected(root, patch):
     allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
                      ".gitignore", "README.md", "deploy.sh",
                      "sandbox.py", "ui-baseline.json", "live-files.json", "rustfmt.toml"}
-    allowed_dirs = {"crates", "src", "plugins", "tests", "ui", "docs", "config", "build-service"}
+    allowed_dirs = {"crates", "src", "abilities", "plugins", "tests", "ui", "docs", "config", "build-service"}
     for record in records:
         fields = record.split(b"\t", 2)
         binary = len(fields) == 3 and fields[:2] == [b"-", b"-"]
@@ -1017,7 +1017,7 @@ for directory,dirs,files in os.walk(root,followlinks=False,onerror=failed):
   if path.is_symlink()or not path.is_file():raise RuntimeError('Runtime file identity')
   with path.open('rb')as stream:
    parts=path.relative_to(root).parts
-   runtime_json=parts[:2]==('v3','config')or(parts[:2]==('v3','plugins')and name in {'plugin.json','component.json','catalog.json'})
+   runtime_json=parts[:2]==('v3','config')or(parts[:2]in(('v3','plugins'),('v3','abilities'))and name in {'plugin.json','component.json','catalog.json'})
    if path.suffix=='.json'and runtime_json:json.load(stream);counts['json_files']+=1
    else:stream.read(1)
   counts['files']+=1
@@ -1818,7 +1818,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         for path in raw.splitlines():
             if path.startswith("/build/"):path=path[len("/build/"):]
             normalized=posixpath.normpath(path)
-            if normalized.startswith(("src/","crates/","plugins/","config/","docs/")):paths.add("v3/"+normalized)
+            if normalized.startswith(("src/","crates/","abilities/","plugins/","config/","docs/")):paths.add("v3/"+normalized)
         if "v3/src/main.rs"not in paths:raise ValueError("Installed compiler dependency manifest unavailable")
         return paths
     def plugin_hot_swappable(self):
@@ -5608,7 +5608,7 @@ class Broker:
                 source = root / "v3"
                 matches = []
                 scanned = 0
-                for folder in ("src", "plugins", "tests", "ui", "docs", "config", "build-service"):
+                for folder in ("src", "abilities", "plugins", "tests", "ui", "docs", "config", "build-service"):
                     for path in sorted((source / folder).rglob("*")):
                         if path.is_symlink() or not path.is_file() or path.suffix not in {
                                 ".rs", ".py", ".json", ".md", ".html", ".js", ".css", ".toml", ".sh"}:
@@ -5636,7 +5636,7 @@ class Broker:
                 if not isinstance(name_path, str) or len(name_path) > 240:
                     raise ValueError("bounded source directory path required")
                 parts = name_path.split("/") if name_path else []
-                allowed_dirs = {"crates", "src", "plugins", "tests", "ui", "docs", "config", "build-service"}
+                allowed_dirs = {"crates", "src", "abilities", "plugins", "tests", "ui", "docs", "config", "build-service"}
                 allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
                                  ".gitignore", "README.md", "deploy.sh",
                                  "sandbox.py", "ui-baseline.json", "live-files.json", "rustfmt.toml"}

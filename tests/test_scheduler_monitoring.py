@@ -81,7 +81,7 @@ class MonitoringTests(unittest.TestCase):
         repo=self.root/"repo";repo.mkdir()
         subprocess.run(["git","init","-q",str(repo)],check=True)
         source=repo/"v3";source.mkdir()
-        for name,allowed in [("services/system-monitoring/src/main.rs",True),("services/unknown/src/main.rs",False),("services/system-monitoring-other/src/main.rs",False)]:
+        for name,allowed in [("services/system-monitoring/src/main.rs",True),("services/unknown/src/main.rs",False),("services/system-monitoring-other/src/main.rs",False),("abilities/Core/example/skills/example.skill.md",True)]:
             text="diff --git a/"+name+" b/"+name+"\nnew file mode 100644\n--- /dev/null\n+++ b/"+name+"\n@@ -0,0 +1 @@\n+fn main() {}\n"
             with patch.object(fixtures.host,"SOURCE",repo):
                 if allowed:self.assertEqual(fixtures.host.inspect_source_patch(source,text),[name])
