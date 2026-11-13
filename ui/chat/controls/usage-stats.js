@@ -132,6 +132,7 @@ export function mountUsageStats({root,client,note,issues}) {
       node.hidden=!visible;node.style.display=visible?'':'none';
     }
     if(!panel.hidden && !panel.contains(document.activeElement))paintPanel();
+    syncChevrons();
   }
     // Coalesce usage requests and throttle ordinary refreshes to 1.5 seconds; generation checks discard stale results and failures leave prior data visible.
   async function refresh(force=false) {
@@ -169,6 +170,18 @@ export function mountUsageStats({root,client,note,issues}) {
       event.stopPropagation();$('chat-pill-stats-strip').scrollBy({left:direction==='left'?-160:160,behavior:'smooth'});
     },{signal:abort.signal});
   }
+    // The strip scrolls by its edge chevrons instead of a drag, so show each one only while that
+    // direction still has content; the shared stylesheet reveals a chevron carrying .visible and
+    // fades that edge of the strip.
+  const statsStrip=$('chat-pill-stats-strip');
+  const chevrons={left:anchor.querySelector('.chat-stats-chev.left'),right:anchor.querySelector('.chat-stats-chev.right')};
+  function syncChevrons() {
+    const max=statsStrip.scrollWidth-statsStrip.clientWidth;
+    chevrons.left?.classList.toggle('visible',max>1&&statsStrip.scrollLeft>1);
+    chevrons.right?.classList.toggle('visible',max>1&&statsStrip.scrollLeft<max-1);
+  }
+  statsStrip.addEventListener('scroll',syncChevrons,{passive:true,signal:abort.signal});
+  window.addEventListener('resize',syncChevrons,{signal:abort.signal});
   document.addEventListener('click',event=>{if(!panel.contains(event.target)&&!anchor.contains(event.target))close();},{signal:abort.signal});
   document.addEventListener('keydown',event=>{if(event.key==='Escape')close();},{signal:abort.signal});
   window.addEventListener('resize',close,{signal:abort.signal});
