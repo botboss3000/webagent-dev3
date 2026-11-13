@@ -68,7 +68,7 @@ fn publication_source(source: Option<&std::path::Path>) -> Result<String> {
             }
             #[cfg(not(any(test, feature = "test-support")))]
             {
-                std::path::PathBuf::from("/opt/v3").join(relative)
+                webagent_configuration::paths::app().join(relative)
             }
         }
     };
@@ -753,7 +753,10 @@ pub mod protocol {
     };
 
     pub const MODULE_ID: &str = "publication_size_guard_v1";
-    pub const SOCKET_PATH: &str = "/runtime/gate/gate.sock";
+    /// The gate socket under the runtime root.
+    pub fn socket_path() -> std::path::PathBuf {
+        webagent_configuration::paths::runtime().join("gate/gate.sock")
+    }
     const PROTOCOL_VERSION: u32 = 1;
     const MAX_FRAME: usize = 16 * 1024;
     const GATE_UID: u32 = 1102;

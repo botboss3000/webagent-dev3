@@ -346,7 +346,10 @@ impl RequestsPlugin {
 /// Resolve a content-addressed artifact from the same immutable ability revision as its assets.
 /// Missing/invalid artifacts withdraw the service; there is no image-distribution fallback.
 pub fn automation_service(root: &FsPath) -> Result<AutomationService> {
-    automation_service_at(root, FsPath::new("/opt/v3/assets/artifacts"))
+    automation_service_at(
+        root,
+        &webagent_configuration::paths::app().join("assets/artifacts"),
+    )
 }
 /// Keep the artifact registry explicit for private contract tests; callers never supply it through an API.
 mod automation_cache;
@@ -441,7 +444,8 @@ impl Package {
         }
         let executable = if manifest["build"]["toolchain"] == "rust-1.99" {
             let build_key = build_key(root, &manifest, legacy)?;
-            PathBuf::from("/opt/v3/assets/artifacts")
+            webagent_configuration::paths::app()
+                .join("assets/artifacts")
                 .join(build_key)
                 .join(
                     manifest["entrypoint"]

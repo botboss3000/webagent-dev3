@@ -26,8 +26,12 @@ fn strings(value: &Value) -> Vec<String> {
 
 /// Every tool and every bundled skill, with the texts and keywords the live tools rank by.
 fn candidates() -> Result<(Vec<Candidate>, Vec<Candidate>)> {
-    let root = std::env::var("V3_ABILITIES_ROOT")
-        .unwrap_or_else(|_| "/opt/v3/plugins/abilities".to_owned());
+    let root = std::env::var("V3_ABILITIES_ROOT").unwrap_or_else(|_| {
+        webagent_configuration::paths::app()
+            .join("plugins/abilities")
+            .to_string_lossy()
+            .into_owned()
+    });
     let catalog = crate::abilities::Catalog::load(&PathBuf::from(root))?;
     let tools = catalog
         .all_schemas()

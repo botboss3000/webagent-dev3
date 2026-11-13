@@ -40,9 +40,9 @@ fn abilities_root() -> PathBuf {
     crate::live_assets::published_root()
         .map(|root| root.join("plugins/abilities"))
         .unwrap_or_else(|| {
-            PathBuf::from(
-                std::env::var("V3_ABILITIES_ROOT")
-                    .unwrap_or_else(|_| "/opt/v3/plugins/abilities".into()),
+            std::env::var_os("V3_ABILITIES_ROOT").map_or_else(
+                || webagent_configuration::paths::app().join("plugins/abilities"),
+                PathBuf::from,
             )
         })
 }
@@ -107,7 +107,8 @@ async fn run(
     context: &Value,
 ) -> Result<Value> {
     use std::os::unix::process::CommandExt as _;
-    let executable = plugin.executable(std::path::Path::new("/opt/v3/assets/artifacts"))?;
+    let executable =
+        plugin.executable(&webagent_configuration::paths::app().join("assets/artifacts"))?;
     let sandbox = crate::engine_sandbox::prepare(&executable)?;
     let mut command = std::process::Command::new(&executable);
     // SAFETY: `prepare` built every rule in the parent; the closure only applies that

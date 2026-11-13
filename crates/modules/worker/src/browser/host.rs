@@ -18,13 +18,16 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWrite
 use tokio::net::{UnixListener, UnixStream};
 
 /// Where the worker finds the browser host.
-pub const DEFAULT_SOCKET: &str = "/runtime/browser/host.sock";
+#[must_use]
+pub fn default_socket() -> PathBuf {
+    webagent_configuration::paths::runtime().join("browser/host.sock")
+}
 /// Largest header line and reply (a screenshot in base64).
 pub const MAX_REPLY: usize = 32 * 1024 * 1024;
 /// How long a session process may take to close its browsers after the worker leaves.
 const CLOSE_GRACE: Duration = Duration::from_secs(5);
 
-/// Serves `spec` (the socket, [`DEFAULT_SOCKET`] when empty) or, for `ping`, checks that a
+/// Serves `spec` (the socket, [`default_socket`] when empty) or, for `ping`, checks that a
 /// running host answers; returns the exit code.
 #[must_use]
 pub fn run(spec: &str) -> i32 {
@@ -35,14 +38,14 @@ pub fn run(spec: &str) -> i32 {
         return 1;
     };
     if spec == "ping" {
-        let ping = ping(Path::new(DEFAULT_SOCKET));
-        return i32::from(!runtime.block_on(ping));
+        let socket = default_socket();
+        return i32::from(!runtime.block_on(ping(&socket)));
     }
-    let socket = PathBuf::from(if spec.is_empty() {
-        DEFAULT_SOCKET
+    let socket = if spec.is_empty() {
+        default_socket()
     } else {
-        spec
-    });
+        PathBuf::from(spec)
+    };
     let client = std::env::var("V3_BROWSER_CLIENT_UID")
         .ok()
         .and_then(|uid| uid.parse().ok())

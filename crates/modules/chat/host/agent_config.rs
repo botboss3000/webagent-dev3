@@ -55,10 +55,15 @@ pub(crate) async fn apply_to_ui_config(
 fn session_dropdown_base(_state: &std::path::Path) -> Value {
     let ui = webagent_webapp::configuration::live_root(
         std::path::Path::new(webagent_webapp::configuration::LIVE_SETTINGS),
-        std::path::Path::new("/code/ui"),
+        &webagent_configuration::paths::checkout().join("ui"),
     )
     .unwrap_or_else(|| {
-        PathBuf::from(std::env::var("V3_UI_ROOT").unwrap_or_else(|_| "/opt/v3/ui".into()))
+        PathBuf::from(std::env::var("V3_UI_ROOT").unwrap_or_else(|_| {
+            webagent_configuration::paths::app()
+                .join("ui")
+                .to_string_lossy()
+                .into_owned()
+        }))
     });
     std::fs::read(ui.join("chat/controls/session-dropdown/session-dropdown.json"))
         .ok()

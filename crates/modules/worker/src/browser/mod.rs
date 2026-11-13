@@ -131,12 +131,12 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// The container layout: `/runtime/worker/browser`, and the origin from
+    /// `worker/browser` under the runtime root, and the origin from
     /// `V3_PUBLIC_ORIGIN` as the API uses it.
     #[must_use]
     pub fn container() -> Self {
         Self {
-            root: PathBuf::from("/runtime/worker/browser"),
+            root: webagent_configuration::paths::runtime().join("worker/browser"),
             origin: std::env::var("V3_PUBLIC_ORIGIN")
                 .unwrap_or_else(|_| "https://dev.webagent.live".into())
                 .trim_end_matches('/')

@@ -35,7 +35,7 @@ pub(super) async fn live_ui(
     {
         if let Some(ui) = webagent_webapp::configuration::live_root(
             Path::new(webagent_webapp::configuration::LIVE_SETTINGS),
-            Path::new("/code/ui"),
+            &webagent_configuration::paths::checkout().join("ui"),
         ) {
             return webagent_webapp::pages::routes(&ui)
                 .oneshot(request)
@@ -48,12 +48,15 @@ pub(super) async fn live_ui(
 pub async fn catalog(State(_app): State<crate::App>) -> Result<Json<Value>, (StatusCode, String)> {
     let ui = webagent_webapp::configuration::live_root(
         Path::new(webagent_webapp::configuration::LIVE_SETTINGS),
-        Path::new("/code/ui"),
+        &webagent_configuration::paths::checkout().join("ui"),
     )
     .unwrap_or_else(|| {
-        std::path::PathBuf::from(
-            std::env::var("V3_UI_ROOT").unwrap_or_else(|_| "/opt/v3/ui".into()),
-        )
+        std::path::PathBuf::from(std::env::var("V3_UI_ROOT").unwrap_or_else(|_| {
+            webagent_configuration::paths::app()
+                .join("ui")
+                .to_string_lossy()
+                .into_owned()
+        }))
     });
     let packages = crate::modules::package_ids()
         .into_iter()
@@ -183,8 +186,7 @@ mod preview {
         if candidate.finish()?.identity.user_id != grant.user_id {
             return None;
         }
-        let workspaces =
-            std::env::var("V3_WORKSPACE_ROOT").unwrap_or_else(|_| "/workspaces".into());
+        let workspaces = webagent_configuration::paths::workspaces();
         Some(
             Path::new(&workspaces)
                 .join(&grant.session_id)

@@ -95,8 +95,10 @@ impl Store {
             sqlx::query_scalar("SELECT key FROM docs WHERE key LIKE 'session:%'")
                 .fetch_all(&self.pool)
                 .await?;
-        let usage = std::env::var("V3_BROWSER_USAGE")
-            .unwrap_or_else(|_| "/runtime/worker/browser-usage.json".into());
+        let usage = std::env::var_os("V3_BROWSER_USAGE").map_or_else(
+            || webagent_configuration::paths::runtime().join("worker/browser-usage.json"),
+            std::path::PathBuf::from,
+        );
         Ok(tokio::task::spawn_blocking(move || {
             // Small (one number per session folder); missing until the worker first writes it.
             let browser: std::collections::HashMap<String, u64> = std::fs::read(&usage)

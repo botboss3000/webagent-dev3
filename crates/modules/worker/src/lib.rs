@@ -55,15 +55,15 @@ impl Config {
     /// # Errors
     /// When `V3_TOOL_CLIENT_UID` is not a number.
     pub fn from_env() -> io::Result<Self> {
-        let path = |name: &str, default: &str| {
-            PathBuf::from(std::env::var(name).unwrap_or_else(|_| default.into()))
-        };
         let client_uid = std::env::var("V3_TOOL_CLIENT_UID")
             .unwrap_or_else(|_| "1100".into())
             .parse()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid client UID"))?;
         Ok(Self {
-            socket: path("V3_TOOL_SOCKET", "/runtime/worker/tools.sock"),
+            socket: std::env::var_os("V3_TOOL_SOCKET").map_or_else(
+                || webagent_configuration::paths::runtime().join("worker/tools.sock"),
+                PathBuf::from,
+            ),
             client_uid,
             files: files::Roots::container(),
             // The app executable's supervisor mode, dispatched before its async runtime.

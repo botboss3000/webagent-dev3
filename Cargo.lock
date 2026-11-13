@@ -3173,6 +3173,7 @@ dependencies = [
  "tokio",
  "uuid",
  "webagent-browser",
+ "webagent-configuration",
 ]
 
 [[package]]

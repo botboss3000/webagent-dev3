@@ -155,14 +155,20 @@ pub(super) async fn page(
 ) -> std::result::Result<Response, ApiError> {
     let origin = args.get("origin").map(String::as_str).unwrap_or("");
     allowed(&app, &id, origin).await?;
-    let root = std::env::var("V3_UI_ROOT").unwrap_or_else(|_| "/opt/v3/ui".into());
+    let root = std::env::var("V3_UI_ROOT").unwrap_or_else(|_| {
+        webagent_configuration::paths::app()
+            .join("ui")
+            .to_string_lossy()
+            .into_owned()
+    });
+    let live = webagent_configuration::paths::checkout().join("ui");
     let root = if webagent_webapp::configuration::app_settings(std::path::Path::new(
         webagent_webapp::configuration::LIVE_SETTINGS,
     ))
     .is_ok_and(|s| s["development"]["live_ui_editing"] == true)
-        && std::path::Path::new("/code/ui/embed/embed.html").is_file()
+        && live.join("embed/embed.html").is_file()
     {
-        "/code/ui".into()
+        live.to_string_lossy().into_owned()
     } else {
         root
     };

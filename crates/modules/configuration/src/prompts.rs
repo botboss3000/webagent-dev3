@@ -107,7 +107,7 @@ pub fn runtime_prompts_at(
     _fallback_directory: &std::path::Path,
 ) -> Result<Value> {
     assemble(
-        &runtime_roots(std::path::Path::new(crate::live::CHECKOUT), source)?,
+        &runtime_roots(&crate::paths::checkout(), source)?,
         PROMPTS,
         0,
     )

@@ -639,7 +639,10 @@ fn marker(app: &App, shutoff: bool) -> Result<()> {
 }
 /// Shared API/loop coordination folder (`/runtime/control`); never part of state.
 fn control_root() -> PathBuf {
-    PathBuf::from(std::env::var("V3_CONTROL_ROOT").unwrap_or_else(|_| "/runtime/control".into()))
+    std::env::var_os("V3_CONTROL_ROOT").map_or_else(
+        || webagent_configuration::paths::runtime().join("control"),
+        PathBuf::from,
+    )
 }
 /// Restore persisted global control after launcher initialization, including API-only replacement.
 /// Never infer enablement from container health: a saved shutoff remains disabled.
@@ -863,8 +866,7 @@ async fn run_process() -> Result<()> {
             &path.join(webagent_models::providers::FOLDER),
         )?;
         // Composition is read-only: no model preparation, credential access or provider dispatch.
-        let state_root =
-            PathBuf::from(std::env::var("V3_STATE_ROOT").unwrap_or_else(|_| "/state".into()));
+        let state_root = webagent_configuration::paths::state();
         let effective = provider::Provider::instructions_for_snapshot("", &state_root, Some(&path))
             .map_err(|_| anyhow!("Effective prompt validation failed"))?;
         // This reader uses mounted state/current fallback, independently of the candidate source above.
@@ -879,7 +881,7 @@ async fn run_process() -> Result<()> {
         );
         return Ok(());
     }
-    let root = PathBuf::from(std::env::var("V3_STATE_ROOT").unwrap_or_else(|_| "/state".into()));
+    let root = webagent_configuration::paths::state();
     let role = std::env::var("V3_PROCESS_ROLE").unwrap_or_else(|_| "api".into());
     if role == "health" {
         let url = format!("sqlite://{}?mode=ro", root.join("db/app.db").display());
@@ -914,7 +916,12 @@ async fn run_process() -> Result<()> {
     };
     // Live configuration files are saved through the broker, before any owner reads them.
     crate::live_files::install(PathBuf::from(
-        std::env::var("V3_BUILD_SOCKET").unwrap_or_else(|_| "/runtime/build/build.sock".into()),
+        std::env::var("V3_BUILD_SOCKET").unwrap_or_else(|_| {
+            webagent_configuration::paths::runtime()
+                .join("build/build.sock")
+                .to_string_lossy()
+                .into_owned()
+        }),
     ));
     let store = Store::open(&root).await?;
     diagnostics::init(&root, &store, &role).await;
@@ -955,8 +962,12 @@ async fn run_process() -> Result<()> {
     model_selection_api::migrate_legacy_default(&store).await?;
     migrate_tool_policy_defaults(&store).await?;
     crate::tools::install_tool_defaults();
-    let abilities_root = std::env::var("V3_ABILITIES_ROOT")
-        .unwrap_or_else(|_| "/opt/v3/plugins/abilities".to_owned());
+    let abilities_root = std::env::var("V3_ABILITIES_ROOT").unwrap_or_else(|_| {
+        webagent_configuration::paths::app()
+            .join("plugins/abilities")
+            .to_string_lossy()
+            .into_owned()
+    });
     let catalog = abilities::Catalog::load(&PathBuf::from(abilities_root))?;
     store.ensure_agent_connections(&catalog.ids()).await?;
     let bridge = Arc::new(harness_bridge::Queue(store.clone()));
@@ -985,12 +996,18 @@ async fn run_process() -> Result<()> {
         stop: CancellationToken::new(),
         login_attempts: webagent_accounts::LoginAttempts::default(),
         control_dir: control_root(),
-        tool_socket: PathBuf::from(
-            std::env::var("V3_TOOL_SOCKET").unwrap_or_else(|_| "/runtime/worker/tools.sock".into()),
-        ),
-        build_socket: PathBuf::from(
-            std::env::var("V3_BUILD_SOCKET").unwrap_or_else(|_| "/runtime/build/build.sock".into()),
-        ),
+        tool_socket: PathBuf::from(std::env::var("V3_TOOL_SOCKET").unwrap_or_else(|_| {
+            webagent_configuration::paths::runtime()
+                .join("worker/tools.sock")
+                .to_string_lossy()
+                .into_owned()
+        })),
+        build_socket: PathBuf::from(std::env::var("V3_BUILD_SOCKET").unwrap_or_else(|_| {
+            webagent_configuration::paths::runtime()
+                .join("build/build.sock")
+                .to_string_lossy()
+                .into_owned()
+        })),
         secure: std::env::var("V3_SECURE_COOKIE").unwrap_or_else(|_| "true".into()) != "false",
         // Checkout-relative: read live (`live-files.json`) on every use.
         chat_ui_config_path: PathBuf::from(webagent_chat::configuration::LIVE_CHAT),

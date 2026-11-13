@@ -25,7 +25,10 @@ async fn tools_in_paths(paths: &[String]) -> std::collections::BTreeSet<String> 
             }
         }
         if clean.ends_with(".rs") {
-            let Ok(text) = tokio::fs::read_to_string(format!("/code/{clean}")).await else {
+            let Ok(text) =
+                tokio::fs::read_to_string(webagent_configuration::paths::checkout().join(&clean))
+                    .await
+            else {
                 continue;
             };
             let Some(at) = text.find("const TOOLS") else {
@@ -869,10 +872,7 @@ mod tests {
         assert_eq!(group["source"], json!("derived"));
         assert_eq!(group["release_id"], json!("job-1"));
         // A week later, with no recurrence, the release counts as the fix.
-        let later = store
-            .release_effects(Some("root"), None)
-            .await
-            .unwrap();
+        let later = store.release_effects(Some("root"), None).await.unwrap();
         assert_eq!(later.len(), 1);
         assert_eq!(later[0]["job_id"], json!("job-1"));
     }

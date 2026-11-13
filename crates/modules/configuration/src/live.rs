@@ -19,9 +19,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-/// Mounted checkout in the API and loop containers.
-pub const CHECKOUT: &str = "/code";
-
 /// A file's version from one `stat`. The kernel sets the change time on every write and
 /// no tool can set it back, and a save that replaces the file changes its inode, so a
 /// same-size edit with a copied modification time is still seen.
@@ -96,9 +93,10 @@ fn cache<T: Default>(lock: &'static Mutex<T>) -> MutexGuard<'static, T> {
 /// workspace only where there is no checkout (tests and local runs).
 pub fn roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    let checkout = Path::new(CHECKOUT).is_dir();
+    let root = crate::paths::checkout();
+    let checkout = root.is_dir();
     if checkout {
-        roots.push(PathBuf::from(CHECKOUT));
+        roots.push(root);
     }
     if let Ok(Some(published)) = crate::prompts::default_source(None) {
         roots.push(published);

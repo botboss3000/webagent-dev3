@@ -10,7 +10,11 @@ use tokio::{
 };
 static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 pub fn folder() -> PathBuf {
-    PathBuf::from(std::env::var("V3_PLUGIN_TEST_ROOT").unwrap_or_else(|_| "/code/plugins".into()))
+    std::env::var_os("V3_PLUGIN_TEST_ROOT")
+        .map_or_else(
+            || webagent_configuration::paths::checkout().join("plugins"),
+            PathBuf::from,
+        )
         .join("diagnostics")
 }
 pub fn available() -> bool {
@@ -124,7 +128,12 @@ pub async fn init(root: &Path, role: &str) {
         return;
     }
     let root = root.to_path_buf();
-    let plugins = std::env::var("V3_PLUGIN_TEST_ROOT").unwrap_or_else(|_| "/code/plugins".into());
+    let plugins = std::env::var("V3_PLUGIN_TEST_ROOT").unwrap_or_else(|_| {
+        webagent_configuration::paths::checkout()
+            .join("plugins")
+            .to_string_lossy()
+            .into_owned()
+    });
     tokio::spawn(async move {
         let folder = PathBuf::from(plugins).join("diagnostics");
         let mut child: Option<Child> = None;

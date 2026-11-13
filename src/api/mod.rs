@@ -455,8 +455,18 @@ pub(super) fn router(app: App) -> Router {
         .merge(self::shared_chat::router())
         .merge(admin_api)
         .route_layer(middleware::from_fn_with_state(app.clone(), auth));
-    let ui = std::env::var("V3_UI_ROOT").unwrap_or_else(|_| "/opt/v3/ui".into());
-    let shared = std::env::var("V3_SHARED_UI_ROOT").unwrap_or_else(|_| "/opt/v3/shared-ui".into());
+    let ui = std::env::var("V3_UI_ROOT").unwrap_or_else(|_| {
+        webagent_configuration::paths::app()
+            .join("ui")
+            .to_string_lossy()
+            .into_owned()
+    });
+    let shared = std::env::var("V3_SHARED_UI_ROOT").unwrap_or_else(|_| {
+        webagent_configuration::paths::app()
+            .join("shared-ui")
+            .to_string_lossy()
+            .into_owned()
+    });
     Router::new().merge(event_aliases).route("/api/v3/pages/catalog",get(ui_pages::catalog))
         .route("/embed/{id}",get(embed::page))
         .route("/wiki",get(wiki::public_index))

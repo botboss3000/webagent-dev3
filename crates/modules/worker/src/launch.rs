@@ -147,13 +147,28 @@ pub fn run() -> i32 {
 fn launch() -> io::Result<i32> {
     // Preserve worker access to live checkout data across startup. Other tenant profiles
     // keep private modes beneath the listable state root.
-    directory("/state", APP_UID, 0o770)?;
-    directory("/workspaces", 1101, 0o770)?;
-    for folder in ["/runtime", "/runtime/control", "/runtime/worker"] {
+    let text = |path: &Path| path.to_string_lossy().into_owned();
+    let runtime = webagent_configuration::paths::runtime();
+    let (control, worker_dir) = (
+        text(&runtime.join("control")),
+        text(&runtime.join("worker")),
+    );
+    let runtime = text(&runtime);
+    directory(
+        &text(&webagent_configuration::paths::state()),
+        APP_UID,
+        0o770,
+    )?;
+    directory(
+        &text(&webagent_configuration::paths::workspaces()),
+        1101,
+        0o770,
+    )?;
+    for folder in [&runtime, &control, &worker_dir] {
         directory(folder, 0, 0o700)?;
     }
     for (name, content) in [("dispatch.lock", ""), ("shutoff", "1")] {
-        let file = format!("/runtime/control/{name}");
+        let file = format!("{control}/{name}");
         if Path::new(&file).exists() {
             chown(&file, 0, 0)?;
         }
@@ -161,11 +176,11 @@ fn launch() -> io::Result<i32> {
         chmod(&file, 0o640)?;
     }
     for name in ["dispatch.lock", "shutoff"] {
-        chown(&format!("/runtime/control/{name}"), APP_UID, APP_GID)?;
+        chown(&format!("{control}/{name}"), APP_UID, APP_GID)?;
     }
-    directory("/runtime/control", APP_UID, 0o750)?;
-    directory("/runtime/worker", WORKER_UID, 0o750)?;
-    directory("/runtime", APP_UID, 0o755)?;
+    directory(&control, APP_UID, 0o750)?;
+    directory(&worker_dir, WORKER_UID, 0o750)?;
+    directory(&runtime, APP_UID, 0o755)?;
 
     // SAFETY: plain system calls; the launcher keeps root only to start the worker.
     unsafe {
@@ -173,24 +188,26 @@ fn launch() -> io::Result<i32> {
             return Err(io::Error::last_os_error());
         }
     }
+    let tools_socket = format!("{worker_dir}/tools.sock");
+    let browser_socket = text(&crate::browser::host::default_socket());
     let mut env = vec![
         ("PATH", "/usr/bin:/bin"),
         ("LANG", "C.UTF-8"),
-        ("V3_TOOL_SOCKET", "/runtime/worker/tools.sock"),
+        ("V3_TOOL_SOCKET", tools_socket.as_str()),
         ("V3_TOOL_CLIENT_UID", "1100"),
     ];
     // Browsers run in the browser container once its socket folder exists (the operator
     // creates it with that container); the worker then never starts a browser itself.
     let host = std::env::var("V3_BROWSER_HOST").ok().or_else(|| {
-        Path::new("/runtime/browser")
+        Path::new(&format!("{runtime}/browser"))
             .is_dir()
-            .then(|| crate::browser::host::DEFAULT_SOCKET.to_owned())
+            .then(|| browser_socket.clone())
     });
     if let Some(host) = &host {
         env.push(("V3_BROWSER_HOST", host));
     }
     let mut tools = worker(&[APP_BINARY, "--tool-worker"], &env)?;
-    wait_for("/runtime/worker/tools.sock", &mut tools, "tool worker")?;
+    wait_for(&tools_socket, &mut tools, "tool worker")?;
     // The API keeps the container environment, as before.
     let mut app = Command::new(APP_BINARY);
     // SAFETY: drop_to only makes raw system calls.

@@ -39,7 +39,7 @@ pub(crate) fn current() -> Arc<Drift> {
     else {
         return Arc::default();
     };
-    let checkout = Path::new(webagent_configuration::live::CHECKOUT).join("plugins/abilities");
+    let checkout = webagent_configuration::paths::checkout().join("plugins/abilities");
     if !checkout.is_dir() {
         return Arc::default();
     }

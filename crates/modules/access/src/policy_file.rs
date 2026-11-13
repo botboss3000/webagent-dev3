@@ -7,8 +7,6 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 /// The live access policy (`live-files.json`), relative to the checkout.
 pub const LIVE_POLICY: &str = "crates/modules/access/access-policy.json";
-/// Cross-process lock for policy saves; app-only (the tool worker cannot reach it).
-const POLICY_LOCK: &str = "/runtime/control/access-policy.lock";
 const POLICY_LIMIT: u64 = 4 * 1024 * 1024;
 /// Fresh-install tiers are explicit; only Operator receives codebase_admin.
 fn fresh_install_tiers() -> [Tier; 2] {
@@ -58,7 +56,8 @@ impl<C: RecordCodec> Repository<'_, C> {
     /// in the shared `/runtime/control` mount, never in `state/`; fixtures use their state root.
     pub fn policy_lock_path(&self) -> std::path::PathBuf {
         if webagent_configuration::live::writable() {
-            return std::path::PathBuf::from(POLICY_LOCK);
+            // Cross-process lock for policy saves; app-only (the tool worker cannot reach it).
+            return webagent_configuration::paths::runtime().join("control/access-policy.lock");
         }
         self.root.join("access-policy.lock")
     }

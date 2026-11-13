@@ -3515,10 +3515,10 @@ impl<
                                 call_index: run["call_index"].as_u64().unwrap_or(0),
                                 text_bytes: text.len(),
                             };
-                            let gate_socket = PathBuf::from(
-                                std::env::var("V3_GATE_SOCKET")
-                                    .unwrap_or_else(|_| gate_protocol::SOCKET_PATH.into()),
-                            );
+                            let gate_socket =
+                                PathBuf::from(std::env::var("V3_GATE_SOCKET").unwrap_or_else(
+                                    |_| gate_protocol::socket_path().to_string_lossy().into_owned(),
+                                ));
                             match gate_protocol::evaluate_publication(
                                 &gate_socket,
                                 &publication_policy,

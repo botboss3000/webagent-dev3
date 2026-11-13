@@ -68,7 +68,11 @@ pub fn supervise_plugin(spec_json: &str) -> i32 {
 /// sockets and the checkout's runtime folders stay out. Checkout writes go through
 /// checkout_edit or broker tasks.
 pub(crate) fn command_read_paths(checkout: bool) -> Vec<PathBuf> {
-    read_paths(Path::new("/"), Path::new("/code"), checkout)
+    read_paths(
+        Path::new("/"),
+        &webagent_configuration::paths::checkout(),
+        checkout,
+    )
 }
 
 fn read_paths(root: &Path, code: &Path, checkout: bool) -> Vec<PathBuf> {

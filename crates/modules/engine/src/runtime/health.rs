@@ -243,12 +243,14 @@ fn seen_before(list: &mut Value, print: u64) -> bool {
     false
 }
 
-/// A write under `/workspaces/<id>` where `<id>` is not this session. A sub-agent writing
+/// A write under `<workspaces>/<id>` where `<id>` is not this session. A sub-agent writing
 /// in its parent's workspace counts too; the review decides whether that was intended.
 fn foreign_workspace(args: &Value, sid: &str) -> bool {
+    let root = webagent_configuration::paths::workspaces();
+    let root = format!("{}/", root.to_string_lossy().trim_end_matches('/'));
     args["path"]
         .as_str()
-        .and_then(|path| path.strip_prefix("/workspaces/"))
+        .and_then(|path| path.strip_prefix(root.as_str()))
         .and_then(|rest| rest.split('/').next())
         .is_some_and(|owner| !owner.is_empty() && owner != sid)
 }

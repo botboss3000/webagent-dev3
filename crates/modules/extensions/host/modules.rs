@@ -88,9 +88,9 @@ fn automation_ability_root() -> PathBuf {
     crate::live_assets::published_root()
         .map(|root| root.join("plugins/abilities"))
         .unwrap_or_else(|| {
-            PathBuf::from(
-                std::env::var("V3_ABILITIES_ROOT")
-                    .unwrap_or_else(|_| "/opt/v3/plugins/abilities".into()),
+            std::env::var_os("V3_ABILITIES_ROOT").map_or_else(
+                || webagent_configuration::paths::app().join("plugins/abilities"),
+                PathBuf::from,
             )
         })
         .join("Core/automation")
@@ -276,20 +276,18 @@ pub(crate) fn package_root(id: &str) -> Option<PathBuf> {
         return Some(automation_ability_root().join("service"));
     }
     IDS.contains(&id).then(|| {
-        PathBuf::from(std::env::var("V3_MODULE_ROOT").unwrap_or_else(|_| {
-            PathBuf::from(std::env::var("V3_STATE_ROOT").unwrap_or_else(|_| "/state".into()))
-                .join("plugins/services")
-                .to_string_lossy()
-                .into_owned()
-        }))
-        .join(id)
+        std::env::var_os("V3_MODULE_ROOT")
+            .map_or_else(
+                || webagent_configuration::paths::state().join("plugins/services"),
+                PathBuf::from,
+            )
+            .join(id)
     })
 }
 fn manifest(id: &str) -> Result<(PathBuf, Value)> {
     let root = package_root(id).ok_or_else(|| anyhow!("Unknown module"))?;
     if automation_ability_host(id) {
-        let state =
-            PathBuf::from(std::env::var("V3_STATE_ROOT").unwrap_or_else(|_| "/state".into()));
+        let state = webagent_configuration::paths::state();
         let activation = automation_activation(&state)?;
         if activation["installed"] != true || activation["enabled"] != true {
             return Err(anyhow!("Module disabled"));
@@ -405,7 +403,7 @@ fn available_now(id: &str) -> bool {
     } else {
         None
     };
-    let root = PathBuf::from(std::env::var("V3_STATE_ROOT").unwrap_or_else(|_| "/state".into()));
+    let root = webagent_configuration::paths::state();
     webagent_extensions::health::available(
         &health_path(&root, id),
         &gen,

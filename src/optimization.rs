@@ -20,7 +20,11 @@ pub(crate) const FILES: [&str; 6] = [
     "workload.py",
 ];
 pub(crate) fn folder() -> PathBuf {
-    PathBuf::from(std::env::var("V3_PLUGIN_TEST_ROOT").unwrap_or_else(|_| "/code/plugins".into()))
+    std::env::var_os("V3_PLUGIN_TEST_ROOT")
+        .map_or_else(
+            || webagent_configuration::paths::checkout().join("plugins"),
+            PathBuf::from,
+        )
         .join("optimization")
 }
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -32,10 +32,14 @@ fn pick(object: &Map<String, Value>, keys: &[&str]) -> Map<String, Value> {
 
 /// The source-relative path of a `file_edit`/`file_write` that enters an owned broker
 /// draft, or `None` when the write targets an explicit runtime or workspace path.
-/// The source-relative part of a checkout path. `/live-checkout/` is the image's
-/// compatibility link to `/code/`, still named by stored prompts and history.
+/// The source-relative part of a checkout path: under the configured checkout root, or
+/// the names prompts and history use, `/code/` and the image's compatibility link
+/// `/live-checkout/`.
 fn checkout_relative(raw: &str) -> Option<&str> {
-    raw.strip_prefix("/code/")
+    let root = webagent_configuration::paths::checkout();
+    let root = format!("{}/", root.to_string_lossy().trim_end_matches('/'));
+    raw.strip_prefix(root.as_str())
+        .or_else(|| raw.strip_prefix("/code/"))
         .or_else(|| raw.strip_prefix("/live-checkout/"))
 }
 

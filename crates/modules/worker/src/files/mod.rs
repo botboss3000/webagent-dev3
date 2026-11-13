@@ -101,18 +101,17 @@ pub struct Roots {
 }
 
 impl Roots {
-    /// The container layout; `V3_WORKSPACE_ROOT` overrides the workspace root.
+    /// The configured roots (`webagent_configuration::paths`); the container layout by default.
     #[must_use]
     pub fn container() -> Self {
-        let live_checkout = PathBuf::from("/code");
+        let live_checkout = webagent_configuration::paths::checkout();
+        let runtime = webagent_configuration::paths::runtime();
         Self {
-            workspaces: PathBuf::from(
-                std::env::var("V3_WORKSPACE_ROOT").unwrap_or_else(|_| "/workspaces".into()),
-            ),
+            workspaces: webagent_configuration::paths::workspaces(),
             context_config: live_checkout.join("crates/modules/context/context-compaction.json"),
             live_checkout,
-            control: PathBuf::from("/runtime/control"),
-            port_claims: PathBuf::from("/runtime/worker/port-claims"),
+            control: runtime.join("control"),
+            port_claims: runtime.join("worker/port-claims"),
         }
     }
 }

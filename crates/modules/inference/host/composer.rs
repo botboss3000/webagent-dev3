@@ -22,7 +22,7 @@ const LIVE_LIMIT: u64 = 4 * 1024 * 1024;
 
 /// The catalog's descriptors with the owner file each came from.
 fn descriptors() -> Result<Vec<(Setting, Value, String)>, ApiError> {
-    let root = FilePath::new(webagent_configuration::live::CHECKOUT);
+    let root = &webagent_configuration::paths::checkout();
     Ok(catalog::load(root)?
         .into_iter()
         .map(|s| {

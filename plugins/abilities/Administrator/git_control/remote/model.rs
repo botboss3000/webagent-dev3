@@ -217,7 +217,7 @@ pub fn lock(store: &Store, agent: &str, id: &str) -> Result<File> {
     );
     // Runtime coordination lives in the shared control mount; fixtures use their state root.
     let folder = if webagent_configuration::live::writable() {
-        std::path::PathBuf::from("/runtime/control/source-control")
+        webagent_configuration::paths::runtime().join("control/source-control")
     } else {
         store.root.join("control")
     };

@@ -31,12 +31,13 @@ pub struct Packages {
 }
 
 impl Packages {
-    /// The container layout.
+    /// The installed release's assets (`webagent_configuration::paths::app`).
     #[must_use]
     pub fn container() -> Self {
+        let assets = webagent_configuration::paths::app().join("assets");
         Self {
-            releases: PathBuf::from("/opt/v3/assets/releases"),
-            artifacts: PathBuf::from("/opt/v3/assets/artifacts"),
+            releases: assets.join("releases"),
+            artifacts: assets.join("artifacts"),
         }
     }
 }

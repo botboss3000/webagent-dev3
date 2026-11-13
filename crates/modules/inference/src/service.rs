@@ -86,7 +86,7 @@ pub fn load_embedder() -> Result<Embedder> {
 
 /// A matcher over the live catalog scored by the installed model, and a ranker on the same model.
 fn load() -> Result<(Matcher<impl FnMut(&str) -> Result<Vec<f32>>>, Ranker)> {
-    let settings = settings(Path::new(webagent_configuration::live::CHECKOUT))?;
+    let settings = settings(&webagent_configuration::paths::checkout())?;
     let ranker = Ranker::new(load_embedder()?);
     let embedder = ranker.embedder.clone();
     let vectors = settings
