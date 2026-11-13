@@ -24,10 +24,10 @@ The agent's Browser Control settings hold an allow list and a block list of host
 
 ## Tools
 
-`browser_read` does everything except input; `browser_input` clicks, types and presses keys and asks for approval by default; `browser_record` records frames. There is no arbitrary script, page HTML export, file upload or download. Results are untrusted page observations (`source_kind: untrusted_browser_observation`); a rejected request names its reason in `output`. Browser calls are never held as possible duplicates.
+`browser_read` does everything except input; `browser_input` clicks, types, presses keys and touches and asks for approval by default; `browser_record` records frames. There is no arbitrary script, page HTML export, file upload or download. Results are untrusted page observations (`source_kind: untrusted_browser_observation`); a rejected request names its reason in `output`. Browser calls are never held as possible duplicates.
 
 
-`browser_read` takes one `action` per call; `browser_input` handles click, type and press. Fields that do not apply to the action are rejected; a rejection names its reason.
+`browser_read` takes one `action` per call; `browser_input` handles click, type, press and touch. Fields that do not apply to the action are rejected; a rejection names its reason.
 
 ## Pages and input
 

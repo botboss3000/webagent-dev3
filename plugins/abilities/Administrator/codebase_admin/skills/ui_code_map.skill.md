@@ -19,6 +19,10 @@ reading widely: which event or handler causes it (a `pointerdown` moving focus, 
 edit and test. When a fix does not work, re-check the mechanism against the exact
 case the user describes rather than reading more files.
 
+Reproduce a touch, focus or keyboard bug in the browser before and after the fix: a
+phone viewport, then `browser_input` `touch` with `dx`/`dy` on the element, and check
+`focused` in the result (see that tool's guidance).
+
 Comments that mention older app versions or `v2` paths describe history, not files:
 search this checkout instead.
 

@@ -19,13 +19,14 @@
           "click",
           "type",
           "press",
+          "touch",
           "save_login",
           "script"
         ]
       },
       "selector": {
         "type": "string",
-        "description": "The target; it must lie inside the region your last browser_read read covered. press: optional, defaults to the focused element"
+        "description": "The target; it must lie inside the region your last browser_read read covered. press: optional, defaults to the focused element; touch: required, the element touched"
       },
       "text": {
         "type": "string",
@@ -58,6 +59,18 @@
         ],
         "description": "press only: sent to selector, or to the focused element"
       },
+      "dx": {
+        "type": "integer",
+        "minimum": -2000,
+        "maximum": 2000,
+        "description": "touch only: drag this many pixels horizontally after touching (negative is left); omit dx and dy for a tap"
+      },
+      "dy": {
+        "type": "integer",
+        "minimum": -2000,
+        "maximum": 2000,
+        "description": "touch only: drag this many pixels vertically (negative is up)"
+      },
       "origin": {
         "type": "string",
         "description": "save_login only: the https origin of the site the browser is signed in to, for example https://example.com"
@@ -71,7 +84,7 @@
           "properties": {
             "action": {
               "type": "string",
-              "description": "a browser_read action (navigate, read, wait_for, scroll, ...) or click, type, press"
+              "description": "a browser_read action (navigate, read, wait_for, scroll, ...) or click, type, press, touch"
             },
             "timeout_ms": {
               "type": "integer",
@@ -89,13 +102,13 @@
               "type": "integer",
               "minimum": -20000,
               "maximum": 20000,
-              "description": "scroll only: horizontal pixels"
+              "description": "scroll or touch: horizontal pixels"
             },
             "dy": {
               "type": "integer",
               "minimum": -20000,
               "maximum": 20000,
-              "description": "scroll only: vertical pixels"
+              "description": "scroll or touch: vertical pixels"
             },
             "offset": {
               "type": "integer",

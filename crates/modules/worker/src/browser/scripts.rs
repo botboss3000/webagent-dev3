@@ -164,6 +164,16 @@ const b=n.getBoundingClientRect();
 return {x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2)};
 "#;
 
+/// A touch target's viewport centre and scroll offsets, brought into view first.
+pub const TOUCH_TARGET: &str = r#"
+/* V3_TOUCH_TARGET */
+const n=[...document.querySelectorAll(arguments[0])].find(x=>x.checkVisibility({checkVisibilityCSS:true}));
+if (!n) return null;
+n.scrollIntoView({block:'nearest',inline:'nearest'});
+const b=n.getBoundingClientRect();
+return {x:Math.round(b.x+b.width/2),y:Math.round(b.y+b.height/2),scroll_left:Math.round(n.scrollLeft),scroll_top:Math.round(n.scrollTop)};
+"#;
+
 /// Re-checks an input target at dispatch against the region last read.
 pub const TARGET: &str = r#"
 /* V3_TARGET */

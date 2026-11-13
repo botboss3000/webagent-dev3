@@ -39,7 +39,7 @@ pub(crate) const READ_ACTIONS: [&str; 12] = [
     "viewport",
     "wait_for",
 ];
-const INPUT_ACTIONS: [&str; 4] = ["click", "type", "press", "save_login"];
+const INPUT_ACTIONS: [&str; 5] = ["click", "type", "press", "touch", "save_login"];
 const WAIT_CONDITIONS: [&str; 6] = [
     "animations_done",
     "hidden",
@@ -695,6 +695,7 @@ fn permitted(action: &str) -> &'static [&'static str] {
         "animations" => &["selector"],
         "scroll" => &["selector", "dx", "dy"],
         "press" => &["key", "selector"],
+        "touch" => &["selector", "dx", "dy"],
         "emulate" => &["color_scheme", "reduced_motion"],
         "screenshot" => &["label"],
         _ => &[],
@@ -712,7 +713,7 @@ pub fn validate_args(name: &str, args: &mut Map<String, Value>) -> Result<&'stat
         "browser_read" => {
             let Some(found) = READ_ACTIONS.iter().find(|known| **known == action) else {
                 return Err(Fault::rejected(format!(
-                    "browser_read actions: {}; click, type and press use browser_input",
+                    "browser_read actions: {}; click, type, press and touch use browser_input",
                     READ_ACTIONS.join(", ")
                 )));
             };
@@ -743,7 +744,7 @@ pub fn validate_args(name: &str, args: &mut Map<String, Value>) -> Result<&'stat
         "browser_input" => {
             let Some(found) = INPUT_ACTIONS.iter().find(|known| **known == action) else {
                 return Err(Fault::rejected(
-                    "browser_input actions: click, type, press, save_login; everything else uses browser_read",
+                    "browser_input actions: click, type, press, touch, save_login; everything else uses browser_read",
                 ));
             };
             (
@@ -755,6 +756,8 @@ pub fn validate_args(name: &str, args: &mut Map<String, Value>) -> Result<&'stat
                     "vault",
                     "totp",
                     "origin",
+                    "dx",
+                    "dy",
                     "expected_sequence",
                 ],
                 found,
@@ -931,6 +934,20 @@ pub fn validate_args(name: &str, args: &mut Map<String, Value>) -> Result<&'stat
             return Err(Fault::rejected(
                 "Scroll needs a selector to bring into view or a distance",
             ));
+        }
+    }
+    if action == "touch" {
+        if blank(args.get("selector")) {
+            return Err(Fault::rejected("touch needs a selector"));
+        }
+        for key in ["dx", "dy"] {
+            if let Some(value) = args.get(key) {
+                if !is_int(value) || value.as_i64().is_none_or(|v| v.abs() > 2000) {
+                    return Err(Fault::rejected(
+                        "Touch distances must be whole pixels within 2000",
+                    ));
+                }
+            }
         }
     }
     if action == "press"

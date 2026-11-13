@@ -640,6 +640,71 @@ async fn current_app_routes_viewport_page_errors_and_named_rejections() {
     );
 }
 
+#[tokio::test]
+async fn touch_drags_with_trusted_events_and_reports_focus() {
+    let f = fixture();
+    f.call(json!({"action":"navigate","url":"/app"})).await;
+    let desktop = f
+        .tool(
+            "browser_input",
+            json!({"action":"touch","selector":"#button"}),
+            &f.trusted,
+        )
+        .await;
+    assert!(output(&desktop).contains("touch viewport"), "{desktop}");
+    f.call(json!({"action":"viewport","preset":"phone"})).await;
+    let driver = f.driver(0);
+    let scrolled = Arc::new(Mutex::new(0));
+    {
+        let scrolled = Arc::clone(&scrolled);
+        driver.on_script(Box::new(move |source, _args| {
+            if source.contains("V3_TOUCH_TARGET") {
+                let mut left = lock(&scrolled);
+                let value = json!({"x":100,"y":700,"scroll_left":*left,"scroll_top":0});
+                *left += 80;
+                Some(Ok(value))
+            } else if source.contains("V3_FOCUS") {
+                Some(Ok(
+                    json!({"tag":"textarea","id":"chat-input","label":"","secret":false}),
+                ))
+            } else {
+                None
+            }
+        }));
+    }
+    f.call(json!({"action":"read"})).await;
+    let before = driver.page().cdp.len();
+    let dragged = f
+        .tool(
+            "browser_input",
+            json!({"action":"touch","selector":"#button","dx":-80}),
+            &f.trusted,
+        )
+        .await;
+    assert_eq!(dragged["applied"], true, "{dragged}");
+    assert_eq!(dragged["focused"]["id"], "chat-input", "{dragged}");
+    assert_eq!(dragged["scroll_after"]["left"], 80, "{dragged}");
+    let touches: Vec<String> = driver.page().cdp[before..]
+        .iter()
+        .filter(|(command, _)| command == "Input.dispatchTouchEvent")
+        .map(|(_, params)| params["type"].as_str().unwrap_or("").to_owned())
+        .collect();
+    assert_eq!(touches.first().map(String::as_str), Some("touchStart"));
+    assert_eq!(touches.last().map(String::as_str), Some("touchEnd"));
+    assert_eq!(
+        touches.iter().filter(|kind| *kind == "touchMove").count(),
+        10
+    );
+    let far = f
+        .tool(
+            "browser_input",
+            json!({"action":"touch","selector":"#button","dx":5000}),
+            &f.trusted,
+        )
+        .await;
+    assert!(output(&far).contains("within 2000"), "{far}");
+}
+
 fn lock<T>(value: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     value.lock().unwrap_or_else(PoisonError::into_inner)
 }

@@ -1769,6 +1769,10 @@ impl Service {
                 result
             }
             "press" => self.press(state, args, selector).await?,
+            "touch" => {
+                self.touch(state, args, selector.unwrap_or_default())
+                    .await?
+            }
             "emulate" => {
                 for key in ["color_scheme", "reduced_motion"] {
                     if let Some(value) = args.get(key).and_then(Value::as_str) {
@@ -1846,6 +1850,89 @@ impl Service {
         )
     }
 
+    /// A real (trusted) touch on `selector`: a tap, or with `dx`/`dy` a drag, dispatched through
+    /// the DevTools input domain so native scrolling and focus changes happen as with a finger.
+    /// Reports the element focused afterwards and the target's scroll offsets before and after.
+    async fn touch(
+        &self,
+        state: &mut State,
+        args: &Map<String, Value>,
+        selector: &str,
+    ) -> Result<Value, Fault> {
+        if !matches!(state.viewport, Some("phone" | "phone_small" | "tablet")) {
+            return Err(Fault::rejected(
+                "touch needs a touch viewport: set viewport phone or tablet first",
+            ));
+        }
+        let (_target, used) = self.fresh_target(state, selector, false, true).await?;
+        state.observed = false;
+        let before =
+            wd::execute(state.driver(), scripts::TOUCH_TARGET, vec![json!(selector)]).await?;
+        if !before.is_object() {
+            return Err(Fault::rejected("No rendered element matches the selector"));
+        }
+        let number = |value: &Value| value.as_f64().unwrap_or(0.0);
+        let (x, y) = (number(&before["x"]), number(&before["y"]));
+        let dx = args.get("dx").and_then(Value::as_f64).unwrap_or(0.0);
+        let dy = args.get("dy").and_then(Value::as_f64).unwrap_or(0.0);
+        let moves = if dx == 0.0 && dy == 0.0 { 0 } else { 10 };
+        let point = |step: i32| {
+            let share = f64::from(step) / 10.0;
+            json!([{"x":x + dx * share,"y":y + dy * share}])
+        };
+        let applied = async {
+            let driver = state.driver();
+            wd::cdp(
+                driver,
+                "Input.dispatchTouchEvent",
+                json!({"type":"touchStart","touchPoints":point(0)}),
+            )
+            .await?;
+            for step in 1..=moves {
+                wd::cdp(
+                    driver,
+                    "Input.dispatchTouchEvent",
+                    json!({"type":"touchMove","touchPoints":point(step)}),
+                )
+                .await?;
+            }
+            wd::cdp(
+                driver,
+                "Input.dispatchTouchEvent",
+                json!({"type":"touchEnd","touchPoints":[]}),
+            )
+            .await?;
+            Ok::<(), Fault>(())
+        }
+        .await;
+        if applied.is_err() {
+            return Err(Fault::Uncertain(
+                "Touch outcome is uncertain; inspect the page before another action".into(),
+            ));
+        }
+        state.acted("touch");
+        self.safe_url(state).await?;
+        let mut step = json!({"action":"touch","selector":selector});
+        if moves > 0 {
+            step["dx"] = json!(dx);
+            step["dy"] = json!(dy);
+        }
+        state.step(step);
+        let after =
+            wd::execute(state.driver(), scripts::TOUCH_TARGET, vec![json!(selector)]).await?;
+        let focus = wd::execute(state.driver(), scripts::FOCUS, Vec::new()).await?;
+        let focused = if focus.is_object() {
+            focus_summary(state, &focus, true)
+        } else {
+            Value::Null
+        };
+        let scroll = |value: &Value| json!({"left":value["scroll_left"],"top":value["scroll_top"]});
+        Ok(
+            json!({"action":"touch","applied":true,"target":used,"focused":focused,
+            "scroll_before":scroll(&before),"scroll_after":scroll(&after),"read_required":true}),
+        )
+    }
+
     /// Runs one browser tool call, or a `script` of them, and publishes only sanitized
     /// known or uncertain outcomes.
     pub async fn call(
@@ -1904,7 +1991,7 @@ impl Service {
             let tool = if super::rules::READ_ACTIONS.contains(&action.as_str()) {
                 "browser_read"
             } else if name == "browser_input"
-                && matches!(action.as_str(), "click" | "type" | "press")
+                && matches!(action.as_str(), "click" | "type" | "press" | "touch")
             {
                 "browser_input"
             } else {
