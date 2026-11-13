@@ -13,6 +13,7 @@ pub(super) const MAX_BLOCKS: usize = 60_000;
 const DOC_LINES: usize = 4;
 const BODY_LINES: usize = 5;
 const TEXT_CHARS: usize = 600;
+const GIST_CHARS: usize = 120;
 
 /// One named block with the text it is scored on.
 pub(super) struct Candidate {
@@ -20,6 +21,7 @@ pub(super) struct Candidate {
     start: usize,
     end: usize,
     name: String,
+    gist: String,
     text: String,
     words: Vec<String>,
 }
@@ -38,15 +40,17 @@ pub(super) fn candidates(label: &str, lines: &[&str], blocks: &[Block]) -> Vec<C
                 at -= 1;
                 doc.insert(0, lines[at].trim());
             }
-            let body = lines
+            let body: Vec<&str> = lines
                 .iter()
                 .skip(block.start)
                 .take(BODY_LINES.min(block.end.saturating_sub(block.start)))
-                .map(|line| line.trim());
+                .map(|line| line.trim())
+                .collect();
+            let gist = gist(&doc, &body);
             let text: String = std::iter::once(format!("{label}:"))
                 .chain(doc.into_iter().map(str::to_owned))
                 .chain(std::iter::once(lines[header].trim().to_owned()))
-                .chain(body.map(str::to_owned))
+                .chain(body.iter().map(|line| (*line).to_owned()))
                 .collect::<Vec<_>>()
                 .join(" ")
                 .chars()
@@ -57,11 +61,32 @@ pub(super) fn candidates(label: &str, lines: &[&str], blocks: &[Block]) -> Vec<C
                 start: block.start,
                 end: block.end,
                 name: block.name.clone(),
+                gist,
                 words: tokens(&text),
                 text,
             }
         })
         .collect()
+}
+
+/// One line telling what the block does: the comment above it, else its first non-empty
+/// body line, cut to [`GIST_CHARS`].
+fn gist(doc: &[&str], body: &[&str]) -> String {
+    let comment = doc
+        .iter()
+        .map(|line| {
+            line.trim_start_matches(['/', '*', '#', '-', '"', '!', ' '])
+                .trim()
+        })
+        .find(|line| !line.is_empty());
+    let line = comment
+        .or_else(|| body.iter().copied().find(|line| !line.is_empty()))
+        .unwrap_or("");
+    let mut gist: String = line.chars().take(GIST_CHARS).collect();
+    if line.chars().count() > GIST_CHARS {
+        gist.push('…');
+    }
+    gist
 }
 
 fn is_comment(line: &str) -> bool {
@@ -139,7 +164,7 @@ pub(super) fn output(found: &[Candidate], query: &str, limited: bool) -> String 
         .into_iter()
         .take(CANDIDATES)
         .map(|(score, c)| {
-            json!({"path":c.label,"start":c.start,"end":c.end,"name":c.name,"text":c.text,"score":score})
+            json!({"path":c.label,"start":c.start,"end":c.end,"name":c.name,"gist":c.gist,"text":c.text,"score":score})
         })
         .collect();
     json!({"find":true,"blocks":found.len(),"limited":limited,"candidates":candidates}).to_string()
@@ -180,5 +205,9 @@ mod tests {
         assert_eq!(ranked["candidates"].as_array().unwrap().len(), 1);
         assert_eq!(ranked["candidates"][0]["name"], "function openMenu()");
         assert_eq!(ranked["candidates"][0]["start"], 2);
+        assert_eq!(
+            ranked["candidates"][0]["gist"],
+            "Moves the menu to the body while open."
+        );
     }
 }

@@ -173,13 +173,19 @@ pub(crate) async fn ranked_blocks(
         .iter()
         .take(FOUND_BLOCKS)
         .map(|(_, c)| {
-            format!(
+            let gist = c["gist"].as_str().unwrap_or("");
+            let mut line = format!(
                 "{}:{}-{}  {}",
                 c["path"].as_str().unwrap_or(""),
                 c["start"],
                 c["end"],
                 c["name"].as_str().unwrap_or("")
-            )
+            );
+            if !gist.is_empty() {
+                line.push_str("\n    ");
+                line.push_str(gist);
+            }
+            line
         })
         .collect();
     let by = if meaning.is_some() {
@@ -188,7 +194,7 @@ pub(crate) async fn ranked_blocks(
         "words only; the matcher is unavailable"
     };
     json!({"status":"success","truncated":found["limited"],"output":format!(
-        "{}\n({} of {} blocks shown, ranked by {by}; read one with file_read offset and limit)",
+        "{}\n({} of {} blocks shown, ranked by {by}; read the best one or two with file_read offset and limit before searching again)",
         lines.join("\n"), lines.len(), found["blocks"])})
 }
 

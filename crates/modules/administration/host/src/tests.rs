@@ -473,7 +473,7 @@ async fn find_lists_ranked_blocks_and_refuses_drafts() {
     let dir = root();
     let host = Fake::new(dir.path()).await;
     let found = json!({"find":true,"blocks":40,"limited":false,"candidates":[
-        {"path":"ui/a.css","start":3,"end":9,"name":".row:has(.menu)","text":"t","score":4.0},
+        {"path":"ui/a.css","start":3,"end":9,"name":".row:has(.menu)","gist":"Keeps the row inside the screen","text":"t","score":4.0},
         {"path":"ui/b.js","start":1,"end":20,"name":"function open()","text":"t","score":2.0}]});
     let reply = crate::tools::ranked_blocks(
         &host,
@@ -483,7 +483,7 @@ async fn find_lists_ranked_blocks_and_refuses_drafts() {
     .await;
     let text = reply["output"].as_str().unwrap();
     assert!(
-        text.starts_with("ui/a.css:3-9  .row:has(.menu)\nui/b.js:1-20  function open()\n"),
+        text.starts_with("ui/a.css:3-9  .row:has(.menu)\n    Keeps the row inside the screen\nui/b.js:1-20  function open()\n"),
         "{text}"
     );
     assert!(
