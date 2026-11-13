@@ -283,6 +283,14 @@ impl<
     ) -> access::ToolDecision {
         let installation = access::Permission::from_policy(policy_decision(policy, name))
             .unwrap_or(access::Permission::Deny);
+        // Administrator tools serve only Administrator-role accounts, whatever the agent,
+        // tier or policy grants.
+        if self.abilities.administrator_tool(name) && !access.principal.administrator() {
+            return access::ToolDecision {
+                permission: access::Permission::Deny,
+                reason: access::Reason::CallerDenied,
+            };
+        }
         // The loaders only list and select tools the caller may already use, so like the
         // former ability loaders they skip ability and tier gating; each listed tool is
         // still decided here on its own.
@@ -349,6 +357,9 @@ impl<
         };
         tools.retain(|tool| {
             let name = tool["name"].as_str().unwrap_or("");
+            if self.abilities.administrator_tool(name) && !access.principal.administrator() {
+                return false;
+            }
             let installation = access::Permission::from_policy(policy_decision(policy, name))
                 .unwrap_or(access::Permission::Deny);
             let (available, _) = self.abilities.tool_gate(name, visibility, state, loaded);

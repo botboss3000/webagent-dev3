@@ -22,7 +22,7 @@ pub async fn workspace_host(
         name,
         args,
         sid,
-        Some(trusted(user, sid, &fingerprint)),
+        Some(trusted(user, sid, &fingerprint, false)),
         cancel.clone(),
     );
     tokio::pin!(future);
@@ -40,14 +40,14 @@ pub async fn workspace_host(
                 return Ok(reply);
             },
             () = cancel.cancelled() => {
-                let revoke = trusted(user, sid, &fingerprint);
+                let revoke = trusted(user, sid, &fingerprint, false);
                 let _ = host
                     .broker("administrator_host_revoke", &empty, sid, Some(revoke), CancellationToken::new())
                     .await;
                 bail!("Workspace operation interrupted; inspect its receipt");
             },
             () = tokio::time::sleep(Duration::from_secs(10)) => {
-                let lease = trusted(user, sid, &fingerprint);
+                let lease = trusted(user, sid, &fingerprint, false);
                 host.broker("administrator_host_lease", &empty, sid, Some(lease), cancel.clone()).await?;
             }
         }

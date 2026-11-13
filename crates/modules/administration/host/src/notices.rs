@@ -62,7 +62,7 @@ async fn build_notice_broker(
         name,
         &arguments,
         sid,
-        Some(trusted(user, sid, &fingerprint)),
+        Some(trusted(user, sid, &fingerprint, false)),
         CancellationToken::new(),
     );
     let response = tokio::time::timeout(Duration::from_secs(3), request)

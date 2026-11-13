@@ -3019,7 +3019,7 @@ class Broker:
             raise ValueError("Exact leftover notice identity required")
         self._incoming_lease(trusted)
         self._reconcile_leftover_state()
-        administrator = trusted["user_id"] == "admin" and workspace == "00000000-0000-0000-0000-000000000000"
+        administrator = self.administrator(trusted)
         for item in self.work.values():
             notice = item.get("leftover_notice", {})
             if notice.get("id") != args["notice_id"]:
@@ -3560,7 +3560,7 @@ class Broker:
             raise ValueError("stable cancellation request_id required")
         self._incoming_lease(trusted)
         job = self.jobs.get(args["job_id"])
-        dashboard = trusted["user_id"] == "admin" and workspace == "00000000-0000-0000-0000-000000000000"
+        dashboard = self.administrator(trusted)
         if job is None:
             return {"job": None}
         if not dashboard and not self._owned(job, trusted, workspace):
@@ -3820,6 +3820,11 @@ class Broker:
         cache[str(root)] = (stamp.hexdigest(), digest)
         return digest
 
+    @staticmethod
+    def administrator(trusted):
+        """The local operator, or a caller whose runtime vouches for a live Administrator role."""
+        return trusted.get("local_caller") is True or trusted.get("administrator") is True
+
     def _owned(self, job, trusted, workspace):
         return job["user_id"] == trusted["user_id"] and job["workspace"] == workspace
 
@@ -3906,7 +3911,7 @@ class Broker:
         plan pick the lane (ability-only drift publishes packages), stable forces a
         full build linking ability crates and needs the root STABLE_FEATURE. A
         completed rebuild commits its released paths and releases its claims."""
-        admin = trusted["user_id"] == "admin" and workspace == ADMIN_WORKSPACE
+        admin = self.administrator(trusted) and workspace == ADMIN_WORKSPACE
         local = trusted.get("local_caller") is True and trusted["user_id"] == "codex-local" and workspace == LOCAL_WORKSPACE
         if not (admin or local):
             raise PermissionError("Administrator rebuild required")
@@ -5298,7 +5303,7 @@ class Broker:
         if not isinstance(request, dict) or set(request) - {"id", "name", "arguments", "workspace", "timeout_seconds", "trusted"}:
             raise ValueError("invalid broker request")
         trusted, workspace, args = request.get("trusted"), request.get("workspace"), request.get("arguments", {})
-        if not isinstance(trusted, dict) or not {"user_id", "session_id"} <= set(trusted) or set(trusted) - {"user_id", "session_id", "lease_until", "access_fingerprint", "local_caller", "bridge_caller", "broker_scope", "session_name"}:
+        if not isinstance(trusted, dict) or not {"user_id", "session_id"} <= set(trusted) or set(trusted) - {"user_id", "session_id", "lease_until", "access_fingerprint", "local_caller", "bridge_caller", "broker_scope", "session_name", "administrator"} or not isinstance(trusted.get("administrator", False), bool):
             raise ValueError("trusted caller required")
         if not isinstance(trusted["user_id"], str) or not 1 <= len(trusted["user_id"]) <= 128 or "\0" in trusted["user_id"]:
             raise ValueError("invalid caller")
@@ -5370,7 +5375,7 @@ class Broker:
             if name == "performance_work":
                 return self.performance.handle(trusted, workspace, args)
             if name == "v3_build_scheduler":
-                if trusted["user_id"]!="admin"or workspace!="00000000-0000-0000-0000-000000000000":raise PermissionError("Administrator scheduler denied")
+                if not self.administrator(trusted):raise PermissionError("Administrator scheduler denied")
                 self._incoming_lease(trusted)
                 return self.scheduler.handle(args,trusted,workspace)
             if name == "build_work":
@@ -5444,7 +5449,7 @@ class Broker:
             if name == "v3_build_leftover_review":
                 return self._review_leftover(args, trusted, workspace)
             if name == "v3_build_dashboard":
-                if args or trusted["user_id"] != "admin" or workspace != "00000000-0000-0000-0000-000000000000":
+                if args or not self.administrator(trusted):
                     raise PermissionError("administrator build dashboard denied")
                 self._incoming_lease(trusted)
                 tasks = {item.get("job_id"): item for item in self.work.values() if item.get("job_id")}
@@ -5500,8 +5505,7 @@ class Broker:
                         "containers": containers, "synchronization": self._sync_report(live, live, ()),
                         "scheduler":self.scheduler.list(trusted,workspace,True),"resources":self.resources.snapshot()}
             if name == "v3_build_result":
-                if (trusted["user_id"] != "admin"
-                        or workspace != "00000000-0000-0000-0000-000000000000"
+                if (not self.administrator(trusted)
                         or set(args) != {"job_id"}
                         or not isinstance(args["job_id"], str)
                         or not re.fullmatch(r"[0-9a-f-]{36}", args["job_id"])):
@@ -5975,7 +5979,7 @@ class Broker:
                         files = self._with_checkout_live(dict(released))
                         # Only authenticated admin and the fixed local operator receive
                         # private troubleshooting snapshots, never another task owner.
-                        if trusted["user_id"] == "admin" or (
+                        if trusted.get("administrator") is True or (
                                 trusted.get("local_caller") is True and
                                 trusted["user_id"] == "codex-local" and workspace == LOCAL_WORKSPACE):
                             inspection = release.entries(self.runner.snapshot(inspection=True), context_digest)
@@ -6005,7 +6009,7 @@ class Broker:
                     reason = None
                     if "task_key" in args or "reason" in args:
                         # Administrators clear any caller's task by the exact key that takeover_preview shows as task.id.
-                        if not (trusted.get("local_caller") is True or trusted["user_id"] == "admin"):
+                        if not self.administrator(trusted):
                             raise PermissionError("Administrator abandon required")
                         reason = args.get("reason")
                         if (set(args) != {"action", "task_id", "task_key", "reason"} or not isinstance(reason, str)
@@ -6183,8 +6187,9 @@ class Broker:
                                   for item in self.work.values())
                 # The administrator dashboard reads any job's stages (the in-app Broker card page),
                 # as it may cancel any job; it is not the owner, so it never keeps a task alive.
-                dashboard = trusted["user_id"] == "admin" and workspace == "00000000-0000-0000-0000-000000000000"
-                if not job or not (self._owned(job, trusted, workspace) or participant or dashboard):
+                owner = bool(job) and (self._owned(job, trusted, workspace) or participant)
+                dashboard = not owner and self.administrator(trusted)
+                if not job or not (owner or dashboard):
                     raise ValueError("job not available to this session")
                 completed = sum(1 for j in self.jobs.values() if j.get("status") == "completed")
                 if getattr(self, "_stage_baselines", (None,))[0] != completed:

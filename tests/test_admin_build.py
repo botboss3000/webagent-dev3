@@ -550,7 +550,7 @@ class BuildTests(unittest.TestCase):
         job_id = self.build()["job_id"]
         terminal = self.wait({"job_id": job_id})
         self.assertEqual("completed", terminal["status"])
-        dashboard = {"user_id": "admin", "session_id": "00000000-0000-0000-0000-000000000000",
+        dashboard = {"user_id": "admin", "administrator": True, "session_id": "00000000-0000-0000-0000-000000000000",
                      "lease_until": time.time() + 30, "access_fingerprint": "a" * 64}
         view = self.call("v3_build_dashboard", trusted=dashboard,
                          workspace=dashboard["session_id"])
@@ -616,7 +616,7 @@ class BuildTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.call("v3_build_progress", {"job_id": "live"}, trusted=other, workspace=self.workspace)
         # The administrator dashboard reads any job's stages; it is not the job's owner.
-        dashboard = dict(self.trusted, user_id="admin", session_id="00000000-0000-0000-0000-000000000000")
+        dashboard = dict(self.trusted, user_id="admin", administrator=True, session_id="00000000-0000-0000-0000-000000000000")
         seen = self.call("v3_build_progress", {"job_id": "live"}, trusted=dashboard,
                          workspace="00000000-0000-0000-0000-000000000000")
         self.assertEqual(seen["stage"], "run tests")
@@ -1144,7 +1144,7 @@ class BuildTests(unittest.TestCase):
                 db.execute("INSERT INTO docs VALUES (?,?)", ("sealed", b"ciphertext\x00fixture"))
             files["v3/" + directory + "/" + filename] = (0o440, db_path.read_bytes())
         self.runner.inspection_blob = host.release.archive(files, host.context_digest)
-        admin = {**self.trusted, "user_id": "admin"}
+        admin = {**self.trusted, "user_id": "admin", "administrator": True}
         begun = self.call("v3_build_work", {"action":"begin", "task_id":"inspect-task", "summary":"Inspect", "mode":"isolated"}, trusted=admin)
         source = Path(begun["workspace_path"])
         for directory, filename in (("data/user_data/admin", "admin.db"), ("data/agent_data/shared_default", "shared_default.db")):
@@ -1906,7 +1906,7 @@ class BuildTests(unittest.TestCase):
         self.assertTrue(accepted["operator_adopted"])
         self.assertEqual("uncertain", self.broker.jobs[receipt["job_id"]]["status"])
         self.assertFalse(self.broker._has_unresolved_release())
-        dashboard = {"user_id": "admin", "session_id": "00000000-0000-0000-0000-000000000000",
+        dashboard = {"user_id": "admin", "administrator": True, "session_id": "00000000-0000-0000-0000-000000000000",
                      "lease_until": time.time() + 30, "access_fingerprint": "a" * 64}
         recent = self.call("v3_build_dashboard", trusted=dashboard, workspace=dashboard["session_id"])
         self.assertNotIn(receipt["job_id"], [job["job_id"] for job in recent["jobs"]])
@@ -1921,7 +1921,7 @@ class BuildTests(unittest.TestCase):
 
 
     def admin(self):
-        return {"user_id": "admin", "session_id": host.ADMIN_WORKSPACE, "lease_until": time.time() + 30, "access_fingerprint": "e" * 64}
+        return {"user_id": "admin", "administrator": True, "session_id": host.ADMIN_WORKSPACE, "lease_until": time.time() + 30, "access_fingerprint": "e" * 64}
 
     def rebuild(self, mode, request_id, trusted=None):
         trusted = trusted or self.admin()

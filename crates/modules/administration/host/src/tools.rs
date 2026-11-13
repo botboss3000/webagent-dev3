@@ -235,7 +235,8 @@ async fn broker_call(
     if let Some(object) = forwarded.as_object_mut() {
         object.retain(|_, value| !value.is_null());
     }
-    let mut identity = trusted(host.actor(), sid, &json!(fingerprint));
+    let administrator = host.administrator(sid).await?;
+    let mut identity = trusted(host.actor(), sid, &json!(fingerprint), administrator);
     // New work records the chat's title as its owning session on the Builds page.
     if action == Some("begin") {
         if let Some(title) = host
@@ -293,7 +294,8 @@ pub async fn stop_job(
 ) -> Result<Value> {
     let args = json!({"action":"cancel","job_id":job_id});
     let fingerprint = host.admit(sid, run_id, "build_work", &args).await?;
-    let identity = trusted(host.actor(), sid, &json!(fingerprint));
+    let administrator = host.administrator(sid).await?;
+    let identity = trusted(host.actor(), sid, &json!(fingerprint), administrator);
     // Unbatched jobs stop alone; the broker refuses if the job joined a batch meanwhile.
     let request = json!({"job_id":job_id,"request_id":request_id,"expected_job_ids":[job_id]});
     host.broker("v3_build_cancel", &request, sid, Some(identity), cancel)
@@ -420,7 +422,7 @@ async fn performance_cancel_existing(
     fingerprint: &str,
     last: Value,
 ) -> Value {
-    let identity = || trusted(host.actor(), sid, &json!(fingerprint));
+    let identity = || trusted(host.actor(), sid, &json!(fingerprint), false);
     let mut args = forwarded.clone();
     args["action"] = json!("cancel");
     let cancel = host.broker(

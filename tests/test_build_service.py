@@ -421,7 +421,7 @@ class DashboardHistoryTests(unittest.TestCase):
      "operation":"build_deploy","created_at":index,"user_id":"codex-local",
      "workspace":fixture.workspace,"access_fingerprint":"f"*64,
      "compiler_checkpoint":{"fixture":"x"*100000}}
-   trusted={"user_id":"admin","session_id":"00000000-0000-0000-0000-000000000000",
+   trusted={"user_id":"admin","administrator":True,"session_id":"00000000-0000-0000-0000-000000000000",
     "lease_until":time.time()+30,"access_fingerprint":"a"*64}
    result=fixture.call("v3_build_dashboard",trusted=trusted,workspace=trusted["session_id"])
    self.assertEqual(result["leftover_total"],65)
@@ -1964,11 +1964,13 @@ class FailedReleaseLifecycleTests(unittest.TestCase):
     def test_administrator_abandons_another_callers_task(self):
         item,before=self.failed("foreign-failed")
         args={"action":"abandon","task_id":item["task_id"],"task_key":item["key"],"reason":"Clear a stuck task"}
-        def as_user(user,arguments):
+        def as_user(user,arguments,administrator=True):
             other=str(uuid.uuid4())
             return self.broker.handle({"name":"build_work","arguments":arguments,"workspace":other,
-                "trusted":{"user_id":user,"session_id":other}})
-        with self.assertRaisesRegex(PermissionError,"Administrator abandon"):as_user("someone",args)
+                "trusted":{"user_id":user,"session_id":other,"administrator":administrator}})
+        with self.assertRaisesRegex(PermissionError,"Administrator abandon"):as_user("someone",args,False)
+        # The username alone grants nothing; only the runtime's role flag does.
+        with self.assertRaisesRegex(PermissionError,"Administrator abandon"):as_user("admin",args,False)
         with self.assertRaisesRegex(ValueError,"task_key does not name"):as_user("admin",args|{"task_id":"other-task-01"})
         result=as_user("admin",args)
         self.assertEqual((result["status"],result["released_scopes"]),("abandoned",len(before["scopes"])))

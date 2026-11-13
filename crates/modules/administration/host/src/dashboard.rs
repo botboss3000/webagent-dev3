@@ -21,7 +21,9 @@ async fn broker(
 ) -> Result<Value, ApiError> {
     let user = host.store().current_user_id();
     let fingerprint = json!(digest(&json!(["v3_build_dashboard", user])));
-    let identity = trusted(user, DASHBOARD_SESSION, &fingerprint);
+    // The router admits only administrators to the Builds page; the public Broker card
+    // reads the same feed and returns only names, states and timings.
+    let identity = trusted(user, DASHBOARD_SESSION, &fingerprint, true);
     let response = host
         .broker(
             name,

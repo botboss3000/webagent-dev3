@@ -1600,6 +1600,14 @@ impl<H: Host> Catalog<H> {
             .collect()
     }
 
+    /// True when any installed ability of the Administrator group lists the tool, executable
+    /// or not, so the administrator-role gate fails closed.
+    pub fn administrator_tool(&self, name: &str) -> bool {
+        self.abilities.iter().any(|ability| {
+            ability.group == "Administrator" && ability.tools.iter().any(|tool| tool == name)
+        })
+    }
+
     /// True when an ability-provided tool is switched off for this agent: the tool
     /// itself, or every executable ability providing it. Tools no ability provides
     /// are never "off".

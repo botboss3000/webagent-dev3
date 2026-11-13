@@ -29,7 +29,12 @@ pub async fn renew_jobs(host: &dyn AdministrationHost) -> Result<()> {
         };
         let fresh = host.fingerprint(sid, run_id, name).await;
         let valid = fresh.is_ok_and(|value| record["access_fingerprint"] == value.as_str());
-        let identity = trusted(store.current_user_id(), sid, &record["access_fingerprint"]);
+        let identity = trusted(
+            store.current_user_id(),
+            sid,
+            &record["access_fingerprint"],
+            false,
+        );
         let command = if valid {
             "administrator_host_lease"
         } else {
@@ -65,7 +70,12 @@ pub async fn session_jobs(host: &dyn AdministrationHost, sid: &str) -> Result<u6
     if !fresh.is_ok_and(|value| record["access_fingerprint"] == value.as_str()) {
         return Ok(0);
     }
-    let identity = trusted(store.current_user_id(), sid, &record["access_fingerprint"]);
+    let identity = trusted(
+        store.current_user_id(),
+        sid,
+        &record["access_fingerprint"],
+        false,
+    );
     let empty = json!({});
     let request = host.broker(
         "administrator_host_lease",

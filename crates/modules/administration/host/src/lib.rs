@@ -153,10 +153,11 @@ pub trait AdministrationHost: Sync {
     fn stopping(&self) -> CancellationToken;
 }
 
-/// The trusted identity block the broker checks on every request.
+/// The trusted identity block the broker checks on every request. `administrator` is the
+/// caller's live Administrator role; the broker grants administrator actions only on it.
 #[must_use]
-pub fn trusted(user: &str, sid: &str, fingerprint: &Value) -> Value {
-    serde_json::json!({"user_id":user,"session_id":sid,
+pub fn trusted(user: &str, sid: &str, fingerprint: &Value, administrator: bool) -> Value {
+    serde_json::json!({"user_id":user,"session_id":sid,"administrator":administrator,
         "lease_until":webagent_host_core::now()+30,"access_fingerprint":fingerprint})
 }
 

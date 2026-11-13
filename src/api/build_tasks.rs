@@ -45,6 +45,7 @@ async fn identity(app: &App, sid: &str, run_id: &str) -> Option<Value> {
         crate::shared_chat::actor(app),
         sid,
         &json!(fingerprint),
+        false,
     ))
 }
 

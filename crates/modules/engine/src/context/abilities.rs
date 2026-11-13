@@ -67,6 +67,8 @@ pub trait Catalog: Clone + Send + Sync + 'static {
         loaded: &Value,
     ) -> Vec<String>;
     fn tool_off(&self, name: &str, visibility: &Value) -> bool;
+    /// Whether an Administrator-group ability provides the tool.
+    fn administrator_tool(&self, name: &str) -> bool;
     fn native_snapshot_current(&self) -> Result<bool>;
     fn current(&self) -> Result<Self>;
 }
@@ -185,6 +187,9 @@ impl<H: webagent_abilities::Host> Catalog for webagent_abilities::Catalog<H> {
     }
     fn tool_off(&self, name: &str, visibility: &Value) -> bool {
         webagent_abilities::Catalog::<H>::tool_off(self, name, visibility)
+    }
+    fn administrator_tool(&self, name: &str) -> bool {
+        webagent_abilities::Catalog::<H>::administrator_tool(self, name)
     }
     fn native_snapshot_current(&self) -> Result<bool> {
         webagent_abilities::Catalog::<H>::native_snapshot_current(self)

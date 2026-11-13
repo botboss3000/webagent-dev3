@@ -6830,6 +6830,22 @@ async fn phase3_http_tier_tools_and_agent_disable_reject_stale_approval() {
     );
     assert_eq!(host.permission, access::Permission::Deny);
     assert_eq!(host.reason, access::Reason::CallerDenied);
+    // The runtime refuses every Administrator tool to a non-administrator, whatever the
+    // tier grants above.
+    for name in ["file_read", "file_write", "shell", "terminal_open"] {
+        let decision = live_tool_decision(
+            &app,
+            &access,
+            name,
+            &json!({}),
+            &json!({}),
+            &json!({}),
+            &json!({}),
+            false,
+        );
+        assert_eq!(decision.permission, access::Permission::Deny, "{name}");
+        assert_eq!(decision.reason, access::Reason::CallerDenied, "{name}");
+    }
     let user_generation =
         app.store.account_by_id(&user_id).await.unwrap().unwrap()["generation"].clone();
     app.store
@@ -8254,7 +8270,8 @@ async fn tenant_ability_http_levels_effective_views_and_stale_updates() {
         .find(|a| a["id"] == "codebase_admin")
         .unwrap();
     assert_eq!(codebase["effective"]["permission"], "deny");
-    assert_eq!(codebase["effective"]["reason"], "capability_denied");
+    // The member is no administrator, so the Administrator-role gate refuses first.
+    assert_eq!(codebase["effective"]["reason"], "caller_denied");
     assert_eq!(
         app.store
             .live_access(&user, "shared_default")

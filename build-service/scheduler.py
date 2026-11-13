@@ -535,7 +535,7 @@ class Scheduler:
     def resource_action(self,args,trusted,workspace):
         """Owners control their own jobs; the existing Builds administrator may inspect/control all."""
         if set(args)-{"action","job_id","phase_id","request_id","expected_revision","priority","memory_bytes"}:raise ValueError("Unsupported resource arguments")
-        admin=trusted.get("local_caller")is True or(trusted["user_id"]=="admin"and workspace=="00000000-0000-0000-0000-000000000000")
+        admin=self.broker.administrator(trusted)
         job=self.broker.jobs.get(args.get("job_id"))
         if args["action"]=="resources":
             if args.get("job_id")and(not job or not(admin or self.broker._owned(job,trusted,workspace))):raise PermissionError("Resource job denied")
@@ -600,7 +600,7 @@ class Scheduler:
         if set(args)-allowed or action not in self.actions:raise ValueError("Unsupported scheduler arguments")
         if action in {"reservations","takeover_preview"}:return self._handle(args,trusted,workspace)
         owner=self.owner(trusted,workspace)
-        administrative=action=="takeover"and(trusted.get("local_caller")is True or trusted["user_id"]=="admin")
+        administrative=action=="takeover"and self.broker.administrator(trusted)
         item=self.item(args,trusted,workspace,administrative)
         path=self.journal_path(owner,args.get("request_id"),item["key"])
         body=ownership.canonical([owner,args]);digest=hashlib.sha256(body.encode()).hexdigest()
@@ -611,7 +611,7 @@ class Scheduler:
             if record["state"]=="done":return record["result"]
             if record["state"]=="rejected":raise ValueError(record["error"])
         else:
-            admin=action=="takeover"and(trusted.get("local_caller")is True or trusted["user_id"]=="admin")
+            admin=action=="takeover"and self.broker.administrator(trusted)
             item=self.item(args,trusted,workspace,admin);value=self.store.get(item["key"])if admin else self.ensure(item,trusted,workspace)
             if self.pending(item["key"]):raise ValueError("Previous scheduler request requires recovery")
             if type(args.get("expected_revision"))is not int or type(args.get("expected_epoch"))is not int:raise ValueError("Expected ownership revision and epoch required")
@@ -754,7 +754,7 @@ class Scheduler:
         action=args.get("action")
         allowed={"action","task_id","task_key","paths","request_id","expected_revision","expected_epoch","job_id","commit","acceptance","target_task_id","reason","offset","limit"}
         if set(args)-allowed or action not in self.actions:raise ValueError("Unsupported scheduler arguments")
-        admin=trusted.get("local_caller")is True or trusted["user_id"]=="admin"
+        admin=self.broker.administrator(trusted)
         if action=="reservations":return self.list(trusted,workspace,admin,args.get("offset",0),args.get("limit",20),args.get("task_id"))
         takeover=action in {"takeover","takeover_preview"}
         if takeover and not admin:raise PermissionError("Administrator takeover required")
