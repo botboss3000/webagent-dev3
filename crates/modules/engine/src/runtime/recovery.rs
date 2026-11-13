@@ -628,7 +628,18 @@ impl<
             return done("still_queued", format!("Task {task} is still queued for claims after 2 hours; tell the user who blocks it (reservations)."));
         }
         let beat = row["heartbeat"].as_f64().unwrap_or(0.0);
-        if (now() as f64) - beat < CLAIM_RETRY_SECONDS {
+        // A task orphaned while it waited goes back to waiting; the next poll retries.
+        if row["state"] == "orphaned" {
+            let reply = call(json!({"action":"recover","task_id":task,
+                "expected_revision":row["revision"],"expected_epoch":row["epoch"],
+                "request_id":format!("claim-wait-recover-{task}-{}", row["revision"])}))
+            .await?;
+            tracing::info!(task, status = %reply["status"], "claim wait recovered an orphaned task");
+            if reply["status"] == "success" {
+                return Ok(BuildPoll::Waiting(None));
+            }
+        }
+        if (now() as f64) - beat < CLAIM_RETRY_SECONDS && row["state"] != "orphaned" {
             return Ok(BuildPoll::Waiting(None));
         }
         let revision = &row["revision"];

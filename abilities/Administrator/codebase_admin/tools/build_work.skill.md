@@ -91,14 +91,14 @@ blocked or ask them to say retry. Call `wait` with your `broker_id` (no
 `job_id`) and end your turn; it runs in the background and a notice wakes you
 when the task holds its claims (then reread the files and apply your edits
 again), when the task closes, or if it is still queued after 2 hours (then
-tell the user which session blocks it). Work on files that are not blocked
-first. Never abandon another session's task to get ahead of it.
+tell the user which session blocks it). The wait recovers your task itself
+if it orphans meanwhile. Work on files that are not blocked first. Never abandon another session's task to get ahead of it.
 
 ## Ownership and cleanup
 
 reservations/reserve before editing; continue reopens corrections after a
 failed release; handoff transfers to an empty followup; orphaned claims need
-recover. A completed release commits exactly the released paths and releases
+recover, and the broker drops them after 2 hours without a heartbeat. A completed release commits exactly the released paths and releases
 the claims itself: no acceptance, complete or release call follows. A closed,
 frozen or abandoned task is never reopened; use a new one. When a task of your
 own is superseded, confirm its unique edits are preserved, then abandon it.
