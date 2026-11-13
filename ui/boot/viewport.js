@@ -20,24 +20,6 @@
     }
     var keyboardWasOpen = false;
     var keyboardDismissed = false;
-    // When the finger last moved on the composer's own rows (the pill controls, the stats strip or
-    // the footer row) rather than on an editor. A sideways or upward scroll there makes the
-    // platform animate the keyboard away *after* the finger lifts, so the keyboard-closed reading
-    // arrives when a finger-down flag is already clear; this records the gesture, not its current
-    // state. The first such reading within the window is that gesture's own hide animation, not a
-    // dismissal the user asked for, so applyKb must not turn it into a blur.
-    var composerRowTouchAt = 0;
-    var COMPOSER_ROW_KB_WINDOW_MS = 700;
-    function isComposerRow(target) {
-      if (!target || !target.closest) return false;
-      if (target.closest('input, textarea, select, [contenteditable]')) return false;
-      return !!target.closest('#chat-input-area, #chat-footer-row');
-    }
-    function noteComposerRowTouch(event) {
-      if (isComposerRow(event.target)) composerRowTouchAt = Date.now();
-    }
-    document.addEventListener('touchstart', noteComposerRowTouch, { capture: true, passive: true });
-    document.addEventListener('touchmove', noteComposerRowTouch, { capture: true, passive: true });
     var keyboardWidth = window.innerWidth, keyboardHeight = window.innerHeight;
     function applyKb() {
       if (!document.body) return;
@@ -58,17 +40,9 @@
       // mobile browsers briefly report a shrunken viewport again during the
       // hide animation; latch that dismissal until the user re-engages an editor.
       if (keyboardWasOpen && !open && editable) {
-        if (composerRowTouchAt && Date.now() - composerRowTouchAt < COMPOSER_ROW_KB_WINDOW_MS) {
-          // This reading belongs to the keyboard animation of a scroll that started on the
-          // composer's rows, not to a dismissal. Blurring would take focus off the editor the user
-          // is typing in; keep the editor, skip the dismissal latch, and consume the note so the
-          // next close is handled as a real dismissal.
-          composerRowTouchAt = 0;
-        } else {
-          keyboardDismissed = true;
-          // Use normal focusout handling to restore the mobile composer's idle layout.
-          if (isMobile && ae.id === 'chat-input') ae.blur();
-        }
+        keyboardDismissed = true;
+        // Use normal focusout handling to restore the mobile composer's idle layout.
+        if (isMobile && ae.id === 'chat-input') ae.blur();
       }
       keyboardWasOpen = open;
       open = open && !keyboardDismissed;

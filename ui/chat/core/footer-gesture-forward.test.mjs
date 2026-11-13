@@ -174,7 +174,7 @@ test('focus the press lost is restored when that gesture ends', () => {
   globalThis.document.activeElement = null;
 });
 
-test('a sideways drag on a control row scrolls that row instead of the transcript', () => {
+test('a sideways drag on a control row is not turned into a row scroll', () => {
   const f = fixture();
   const strip = makeElement();
   strip.style = { overflowX: 'auto', overflowY: 'hidden' };
@@ -184,13 +184,13 @@ test('a sideways drag on a control row scrolls that row instead of the transcrip
   strip.parentElement = f.footer;
   f.footer.dispatch('touchstart', { target: strip, touches: [{ clientX: 200, clientY: 300 }] });
   f.footer.dispatch('touchmove', { target: strip, touches: [{ clientX: 150, clientY: 300 }] });
-  assert.equal(strip.scrollLeft, 50);
+  // The row's chevron buttons scroll it; gesture forwarding never moves it.
+  assert.equal(strip.scrollLeft, 0);
   assert.deepEqual(f.calls, []);
   // A vertical drag on the same row still forwards to the transcript.
   f.footer.dispatch('touchend');
   f.footer.dispatch('touchstart', { target: strip, touches: [{ clientX: 200, clientY: 300 }] });
   f.footer.dispatch('touchmove', { target: strip, touches: [{ clientX: 200, clientY: 260 }] });
-  assert.equal(strip.scrollLeft, 50);
   assert.deepEqual(f.calls, [40]);
 });
 
@@ -249,21 +249,10 @@ test('wiring is idempotent and the disposer aborts every listener', () => {
   assert.ok(f.footer.registrations.every(({ options }) => options.signal.aborted));
 });
 
-test('the stylesheet disables the browser pan on the element the row scroller picks', async () => {
+test('the composer rows leave their native pan alone', async () => {
   const css = await readFile(new URL('../chat.css', import.meta.url), 'utf8');
-  const rule = /#composer:focus-within[^{]*\{[^}]*\}/.exec(css);
-  assert.ok(rule, 'the composer rows have a focus-within pan rule');
-  // touch-action does not inherit, so naming only the rows leaves the row's own scroll container
-  // (the stats strip) panning under the browser — the case Android dismisses the keyboard for.
-  assert.match(rule[0], /#chat-pill-stats-strip/);
-  assert.match(rule[0], /touch-action:\s*none/);
-});
-
-test('the composer rows contain their overscroll so a drag cannot chain to the document', async () => {
-  const css = await readFile(new URL('../chat.css', import.meta.url), 'utf8');
-  const blocks = [...css.matchAll(/#composer:focus-within[^{]*\{[^}]*\}/g)].map(match => match[0]).join('\n');
-  // A gesture the document receives is what Android hides the keyboard for, so a drag that reaches
-  // a row's edge must stay inside that row.
-  assert.match(blocks, /overscroll-behavior:\s*contain/);
-  assert.match(blocks, /overscroll-behavior-y:\s*contain/);
+  // The rows below the composer are scrolled by their chevron buttons; no rule may disable or
+  // contain their panning again.
+  assert.doesNotMatch(css, /#composer:focus-within[^{]*\{[^}]*touch-action/);
+  assert.doesNotMatch(css, /#composer:focus-within[^{]*\{[^}]*overscroll-behavior/);
 });

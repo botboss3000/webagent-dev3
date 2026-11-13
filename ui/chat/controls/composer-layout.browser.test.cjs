@@ -85,23 +85,18 @@ test('dismissal survives programmatic focus and viewport jitter until editor int
  assert.equal(await p.evaluate(()=>document.body.classList.contains('kb-open')),true);
 });
 
-test('a drag on the composer rows cannot dismiss the keyboard or drop focus',async t=>{
+test('a keyboard close after a row touch is a normal dismissal',async t=>{
  const p=await fixture(t);
  await p.evaluate(async()=>{window.vh=500;window.ih=844;Object.defineProperty(window,'innerHeight',{configurable:true,get:()=>ih});Object.defineProperty(window.visualViewport,'height',{configurable:true,get:()=>vh});await new Promise((ok,no)=>{const s=document.createElement('script');s.src='/v3-ui/boot/viewport.js';s.onload=ok;s.onerror=no;document.head.append(s);});input.focus();});
  assert.equal(await p.evaluate(()=>document.body.classList.contains('kb-open')),true);
  // The finger is on a control row below the composer while the keyboard animates away.
  await p.evaluate(()=>{document.querySelector('#chat-footer-row').dispatchEvent(new Event('touchstart',{bubbles:true}));vh=844;visualViewport.dispatchEvent(new Event('resize'));});
  await settle(p);
- const s=await stable(p);assert.equal(s.focused,true);assert.equal(s.blur,0);
+ const s=await stable(p);assert.equal(s.blur,1);
  assert.equal(await p.evaluate(()=>document.body.classList.contains('kb-open')),false);
- // Released again, the ordinary dismissal still collapses the composer.
- await p.evaluate(()=>{document.querySelector('#chat-footer-row').dispatchEvent(new Event('touchend',{bubbles:true}));vh=500;visualViewport.dispatchEvent(new Event('resize'));});
- await settle(p);assert.equal(await p.evaluate(()=>document.body.classList.contains('kb-open')),true);
- await p.evaluate(()=>{vh=844;visualViewport.dispatchEvent(new Event('resize'));});
- await settle(p);assert.equal((await stable(p)).focused,false);
 });
 
-test('a keyboard close that arrives after the row gesture has ended keeps the composer',async t=>{
+test('a keyboard close after a row gesture is a normal dismissal',async t=>{
  const p=await fixture(t);
  await p.evaluate(async()=>{window.vh=500;window.ih=844;Object.defineProperty(window,'innerHeight',{configurable:true,get:()=>ih});Object.defineProperty(window.visualViewport,'height',{configurable:true,get:()=>vh});await new Promise((ok,no)=>{const s=document.createElement('script');s.src='/v3-ui/boot/viewport.js';s.onload=ok;s.onerror=no;document.head.append(s);});input.focus();});
  assert.equal(await p.evaluate(()=>document.body.classList.contains('kb-open')),true);
@@ -110,13 +105,8 @@ test('a keyboard close that arrives after the row gesture has ended keeps the co
  await settle(p);
  await p.evaluate(()=>{vh=844;visualViewport.dispatchEvent(new Event('resize'));});
  await settle(p);
- const s=await stable(p);assert.equal(s.focused,true);assert.equal(s.blur,0);
+ const s=await stable(p);assert.equal(s.blur,1);
  assert.equal(await p.evaluate(()=>document.body.classList.contains('kb-open')),false);
- // That close belonged to the gesture and is consumed; a later close is a real dismissal.
- await p.evaluate(()=>{input.focus();vh=500;visualViewport.dispatchEvent(new Event('resize'));});await settle(p);
- assert.equal(await p.evaluate(()=>document.body.classList.contains('kb-open')),true);
- await p.evaluate(()=>{vh=844;visualViewport.dispatchEvent(new Event('resize'));});await settle(p);
- assert.equal((await stable(p)).focused,false);
 });
 
 test('same-zone reorder also defers the focused editor on fallback browsers',async t=>{
