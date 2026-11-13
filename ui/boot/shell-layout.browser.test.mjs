@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {fileURLToPath} from 'node:url';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
-const shared=[process.env.SHARED_UI_ROOT,path.resolve(root,'../ui'),path.join(root,'build-service/shared-ui/ui')].filter(Boolean).find(p=>fs.existsSync(path.join(p,'shared/css/app1.css')));
+const shared=path.join(root,'ui');
 assert(shared,'shared styles must be available for the real shell cascade');
 // Mount actual shell and chat markup/styles; omit authentication and model activity.
 const html=fs.readFileSync(path.join(root,'ui/index.html'),'utf8')

@@ -53,7 +53,6 @@ def main():
  if role=="api":
   argv+=["--cap-add","CHOWN","--cap-add","FOWNER","--cap-add","SETUID","--cap-add","SETGID","--cap-add","KILL","--publish",c["bind_address"]+":"+str(c["port"])+":8080"]
   mounts += [(root,"/code",False),(root/"ui","/opt/v3/ui",True)]
-  for rel in ("shared/css","main-panel/agents","vendor/fonts","vendor/lucide","favicon.svg"):mounts.append((root/"build-service/shared-ui/ui"/rel,"/opt/v3/shared-ui/"+rel,True))
  else:
   gate=Path(live["/runtime/gate"]);gate.mkdir(exist_ok=True);mounts += [(gate,"/runtime/gate",False),(root/"plugins","/code/plugins",True)]+([(root/"abilities","/code/abilities",True)] if (root/"abilities").is_dir() else [])
  for source,target,ro in mounts:argv+=["--mount","type=bind,src="+str(source)+",dst="+target+(",readonly" if ro else "")]

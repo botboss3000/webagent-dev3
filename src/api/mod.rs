@@ -461,12 +461,6 @@ pub(super) fn router(app: App) -> Router {
             .to_string_lossy()
             .into_owned()
     });
-    let shared = std::env::var("V3_SHARED_UI_ROOT").unwrap_or_else(|_| {
-        webagent_configuration::paths::app()
-            .join("shared-ui")
-            .to_string_lossy()
-            .into_owned()
-    });
     Router::new().merge(event_aliases).route("/api/v3/pages/catalog",get(ui_pages::catalog))
         .route("/embed/{id}",get(embed::page))
         .route("/wiki",get(wiki::public_index))
@@ -506,7 +500,8 @@ pub(super) fn router(app: App) -> Router {
             (if healthy{StatusCode::OK}else{StatusCode::SERVICE_UNAVAILABLE},Json(json!({"ready":healthy,"catalog_version":app.abilities.version()})))
         }))
         .merge(webagent_webapp::pages::routes(std::path::Path::new(&ui)))
-        .nest_service("/ui",ServeDir::new(shared))
+        // /ui is the original prefix of the base CSS, fonts and icons, now kept in ui/ itself.
+        .nest_service("/ui",ServeDir::new(&ui))
         .layer(middleware::from_fn_with_state(app.clone(), ui_pages::live_ui))
         .layer(DefaultBodyLimit::max(2*1024*1024))
         .layer(middleware::from_fn_with_state(app.clone(), crate::request_limits::per_address))

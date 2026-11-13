@@ -225,10 +225,10 @@ gate maintenance need nothing running; jobs queued behind the drain may remain.
 State stays under the configured state root. Sockets, PIDs and supervisor
 diagnostics stay under the runtime root. Receipts and archive names are preserved.
 Retain previous configuration, installed release and stopped application containers.
-Reconcile uncertain effects before rollback. Shared UI inputs are bundled under
-shared-ui; no v2 checkout or v2 application data is required. A release's ui/
-archive namespace is derived from its own v3/build-service/shared-ui/, so a task
-that edits shared UI ships it in that release. Assets pinned in v3/ui-baseline.json
+Reconcile uncertain effects before rollback. The shared base styles, fonts and icons
+live in ui/ with the rest of the app UI (served at /ui/ and /v3-ui/); no v2
+checkout or v2 application data is required. The retired ui/ archive namespace
+of older releases is dropped from new candidates. Assets pinned in v3/ui-baseline.json
 need their sha256 updated in the same task; finish and preflight refuse otherwise. Fresh chat
 configuration comes from the v3 template.
 

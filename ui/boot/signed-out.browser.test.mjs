@@ -4,8 +4,7 @@ import http from 'node:http';
 import assert from 'node:assert/strict';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve(new URL('../..',import.meta.url).pathname);
-let shared=path.resolve(root,'../ui');
-try{await fs.access(path.join(shared,'shared/css/app1.css'));}catch{shared=path.join(root,'build-service/shared-ui/ui');}
+const shared=path.join(root,'ui');
 const pages=[];
 for(const id of ['app','agents','builds','account','session-metrics']){
  const meta=JSON.parse(await fs.readFile(path.join(root,'ui/main-panel',id,'page.json'),'utf8'));

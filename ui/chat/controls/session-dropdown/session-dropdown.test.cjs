@@ -2,7 +2,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
-const UI=path.resolve(__dirname,'../../..'),shared=path.resolve(UI,'../../ui');
+const UI=path.resolve(__dirname,'../../..'),shared=UI;
 /** Serve real isolated source to a networkless browser with deterministic private-session fixtures. */
 async function fixture(t,{mobile=false}={}) {
  const html='<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/shared/shared/css/design-system.css"><link rel="stylesheet" href="/shared/shared/css/app1.css"><link rel="stylesheet" href="/v3-ui/chat/chat.css"><style>body{margin:0}#chat-panel{width:100%;height:100vh}#chat-header{position:fixed;top:20px;left:12px;width:340px}#session-dropdown{width:320px;min-height:40px}#session-dropdown-trigger{display:flex;width:100%;align-items:center}</style><main id="chat-panel">'+fs.readFileSync(path.join(UI,'chat/chat.html'),'utf8')+'</main>';

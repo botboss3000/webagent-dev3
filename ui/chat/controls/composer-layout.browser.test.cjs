@@ -191,7 +191,7 @@ test('live configuration updates existing automatic bubble corners without navig
 /** Exercise configured fill against real shared important rules, including clears and live adoption. */
 test('JSON-only bubble backgrounds cover absent transparent solid alpha themes profiles and live clearing',async t=>{
  const p=await fixture(t);
- const shared=[path.join(ROOT,'build-service/shared-ui/ui/shared/css/index.css'),path.resolve(ROOT,'../ui/shared/css/index.css')].find(fs.existsSync);
+ const shared=[path.join(ROOT,'ui/shared/css/index.css')].find(fs.existsSync);
  assert.ok(shared,'real shared cascade input exists');
  await p.addStyleTag({path:path.join(UI,'chat/chat.css')});await p.addStyleTag({path:shared});
  await p.evaluate(()=>{
@@ -240,7 +240,7 @@ test('JSON-only bubble backgrounds cover absent transparent solid alpha themes p
 /** Opacity changes fill only; independent blur resets on omitted/null/invalid live profiles. */
 test('JSON bubble glass supports role-local opacity blur validation and live reset',async t=>{
  const p=await fixture(t);
- const shared=[path.join(ROOT,'build-service/shared-ui/ui/shared/css/index.css'),path.resolve(ROOT,'../ui/shared/css/index.css')].find(fs.existsSync);
+ const shared=[path.join(ROOT,'ui/shared/css/index.css')].find(fs.existsSync);
  await p.addStyleTag({path:path.join(UI,'chat/chat.css')});await p.addStyleTag({path:shared});
  await p.evaluate(()=>{
   for(const role of ['user','agent']){

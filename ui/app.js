@@ -56,7 +56,7 @@ let explicitAssignment=false;
 const initialTab=new URL(location.href).searchParams.get('tab');
 let agentModel='';
 async function mountAgents(){
-  const response=await fetch('/ui/main-panel/agents/agents.html',{credentials:'same-origin'});
+  const response=await fetch('/ui/main-panel/agents/agents-page.html',{credentials:'same-origin'});
   if(!response.ok)throw Error('Agents page unavailable');
   const template=document.createElement('template');
   template.innerHTML=await response.text();

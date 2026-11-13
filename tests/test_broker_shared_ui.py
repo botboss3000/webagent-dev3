@@ -1,4 +1,4 @@
-"""Shared UI ships from its task source, pins are checked at planning, and failed image pairs are recoverable."""
+"""Shared UI ships from v3/ui, pins are checked at planning, and failed image pairs are recoverable."""
 import ast
 import hashlib
 import importlib.util
@@ -33,37 +33,10 @@ def read(data):
         return {m.name: archive.extractfile(m).read() for m in archive if m.isfile()}
 
 
-CSS = "ui/shared/css/app1.css"
-SOURCE = "v3/build-service/shared-ui/" + CSS
-
-
-class SharedUiContextTests(unittest.TestCase):
-    def test_release_names_match_the_host_build_context(self):
-        tree = ast.parse((ROOT / "host.py").read_text())
-        context = next(node.value for node in tree.body if isinstance(node, ast.Assign)
-                       and getattr(node.targets[0], "id", None) == "CONTEXT")
-        names = tuple(item.value for item in context.elts if item.value.startswith("ui/"))
-        self.assertEqual(names, release.SHARED_UI_CONTEXT)
+CSS = "v3/ui/shared/css/app1.css"
 
 
 class SnapshotTests(unittest.TestCase):
-    def test_ui_is_read_from_the_tree_shared_ui_source(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            for name, body in ((SOURCE, b"new"), (CSS, b"stale sibling")):
-                (root / name).parent.mkdir(parents=True, exist_ok=True)
-                (root / name).write_bytes(body)
-            entries = read(release.snapshot(root, (CSS, "v3/build-service"), NOOP))
-        self.assertEqual(entries[CSS], b"new")
-        self.assertEqual(entries[SOURCE], b"new")
-
-    def test_older_roots_without_shared_ui_keep_their_sibling(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            (root / CSS).parent.mkdir(parents=True)
-            (root / CSS).write_bytes(b"old")
-            self.assertEqual(read(release.snapshot(root, (CSS,), NOOP))[CSS], b"old")
-
     def test_installed_ability_package_is_never_a_source_input(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -77,17 +50,17 @@ class SnapshotTests(unittest.TestCase):
 
 class CandidateTests(unittest.TestCase):
     def test_a_shared_ui_edit_ships_in_the_same_candidate(self):
-        base = blob({SOURCE: b"old", CSS: b"old"})
-        task = blob({SOURCE: b"new", CSS: b"old"})
+        base = blob({CSS: b"old"})
+        task = blob({CSS: b"new"})
         merged, changed = release.candidate(base, task, base, NOOP)
-        self.assertEqual(changed, [SOURCE])
+        self.assertEqual(changed, [CSS])
         self.assertEqual(read(merged)[CSS], b"new")
 
-    def test_ui_differences_alone_are_not_task_changes(self):
-        base = blob({SOURCE: b"same", CSS: b"stale"})
-        task = blob({SOURCE: b"same", CSS: b"same"})
-        with self.assertRaises(ValueError):
-            release.candidate(base, task, base, NOOP)
+    def test_the_retired_ui_namespace_of_a_live_release_is_dropped(self):
+        base = blob({CSS: b"old"})
+        live = blob({CSS: b"old", "ui/shared/css/app1.css": b"old"})
+        merged, _ = release.candidate(base, blob({CSS: b"new"}), live, NOOP)
+        self.assertEqual(sorted(read(merged)), [CSS])
 
 
 class BaselineTests(unittest.TestCase):

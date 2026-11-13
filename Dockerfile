@@ -158,11 +158,6 @@ RUN chmod a+r /opt/v3/*.py
 COPY v3 /opt/v3/source-template
 COPY v3/ui /opt/v3/ui
 COPY v3/ui-baseline.json /opt/v3/ui-baseline.json
-COPY ui/shared/css/app1.css ui/shared/css/app2.css ui/shared/css/app3.css ui/shared/css/design-system.css ui/shared/css/index.css /opt/v3/shared-ui/shared/css/
-COPY ui/main-panel/agents/agents.html ui/main-panel/agents/agents.css /opt/v3/shared-ui/main-panel/agents/
-COPY ui/vendor/fonts /opt/v3/shared-ui/vendor/fonts
-COPY ui/vendor/lucide /opt/v3/shared-ui/vendor/lucide
-COPY ui/favicon.svg /opt/v3/shared-ui/
 ENV PATH=/opt/rust/bin:$PATH
 # The checkout is mounted at /code. Stored prompts, history and Files page rows still name
 # /live-checkout, so it stays as a link; tool sandboxes never grant the link itself.

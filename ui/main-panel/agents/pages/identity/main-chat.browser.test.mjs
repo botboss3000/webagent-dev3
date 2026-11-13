@@ -11,7 +11,7 @@ async function setMainEnabled(page,value){
  assert.equal(await input.isChecked(),value);
 }
 
-const root=path.resolve(new URL('../../../../../',import.meta.url).pathname),shared=path.resolve(root,'../ui');
+const root=path.resolve(new URL('../../../../../',import.meta.url).pathname),shared=path.join(root,'ui');
 const server=http.createServer(async(req,res)=>{try{
  const u=new URL(req.url,'http://localhost').pathname;
  if(u==='/'){res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/shared/shared/css/design-system.css"><link rel="stylesheet" href="/shared/shared/css/app1.css"><link rel="stylesheet" href="/ui/shared/models/reference.css"><main id="host"></main>');return;}

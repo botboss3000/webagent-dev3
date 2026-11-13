@@ -40,8 +40,6 @@ _config_spec.loader.exec_module(_config_module)
 CONFIG = _config_module.load()
 
 V3=Path(CONFIG["checkout_root"])
-SHARED_SOURCE=V3/"build-service/shared-ui"
-if not SHARED_SOURCE.exists():SHARED_SOURCE=Path(CONFIG["service_dir"])/"shared-ui"
 SOURCE=V3/"build-service"
 SERVICE=Path(CONFIG["service_dir"])
 RUNTIME=Path(CONFIG["runtime_root"])
@@ -193,17 +191,6 @@ def install(tree=None):
             publish(service,name,body,0o644)
             extra[name]=hashlib.sha256(body).hexdigest()
             if read_regular(source,name,2*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))!=body:raise ValueError("Installation raced source edit")
-        assets=source_path/"shared-ui"
-        if assets.is_dir():
-            asset_dir=protected_directory(service,"shared-ui");os.close(asset_dir)
-            for file in sorted(assets.rglob("*")):
-                if file.is_symlink():raise PermissionError("Shared asset symlink rejected")
-                if not file.is_file():continue
-                rel=file.relative_to(assets);cursor=SERVICE/"shared-ui"
-                for part in rel.parts[:-1]:
-                    parentfd=directory(cursor);childfd=protected_directory(parentfd,part);os.close(childfd);os.close(parentfd);cursor=cursor/part
-                inputfd=directory(file.parent);body=read_regular(inputfd,file.name,4*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]));os.close(inputfd)
-                outputfd=directory(cursor);publish(outputfd,file.name,body,0o644);os.close(outputfd)
         manifest = {"modules":extra,"performance_sha256": hashlib.sha256(performance).hexdigest(), "host_sha256": hashlib.sha256(host).hexdigest(), "bootstrap_sha256": hashlib.sha256(bootstrap).hexdigest(), "release_sha256": hashlib.sha256(release).hexdigest()}
         publish(service, "installed.json", json.dumps(manifest, sort_keys=True).encode())
         if read_regular(source, "performance.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"])) != performance or read_regular(source, "host.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"])) != host or read_regular(source, "install.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"])) != bootstrap or read_regular(source, "release.py", 2 * 1024 * 1024, owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"])) != release:
@@ -403,7 +390,7 @@ def snapshot_context(context):
     try:
         with tarfile.open(fileobj=stream, mode="w") as archive:
             for name in context:
-                if not isinstance(name, str) or name.startswith("/") or ".." in Path(name).parts or not name.startswith(("v3/", "ui/")):
+                if not isinstance(name, str) or name.startswith("/") or ".." in Path(name).parts or not name.startswith("v3/"):
                     raise ValueError("fixed source context rejected")
                 if name.startswith("v3/data/") and name not in INSPECTION_CONTEXT:
                     raise ValueError("runtime data outside inspection allowlist")
@@ -411,7 +398,7 @@ def snapshot_context(context):
                     raise ValueError("runtime directory rejected")
                 # Preserve archive names while reading V3 from its independent root.
                 inspection = name in INSPECTION_CONTEXT
-                source = V3 / name.removeprefix("v3/") if name.startswith("v3/") else SHARED_SOURCE / name
+                source = V3 / name.removeprefix("v3/")
                 if name in {"v3/build-service","v3/crates","v3/plugins/engine","v3/services/system-monitoring","v3/abilities","v3/plugins/abilities"} and not source.exists()and not source.is_symlink():continue
                 parent_path, leaf = source.parent, source.name
                 try:

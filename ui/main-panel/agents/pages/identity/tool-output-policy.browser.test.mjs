@@ -9,8 +9,8 @@ const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,'http://localhost').pathname;
   if(url==='/') {res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/shared/ui/shared/css/design-system.css"><link rel="stylesheet" href="/shared/ui/main-panel/agents/agents.css"><link rel="stylesheet" href="/ui/app.css"><link rel="stylesheet" href="/ui/shared/models/reference.css"><main id="host" style="padding:12px;max-width:650px"></main><div id="tools"></div>');return;}
   if(url==='/ui/vibrate.json') {res.setHeader('content-type','application/json');res.end(JSON.stringify({enabled:true,duration_ms:17}));return;}
-  const file=url.startsWith('/shared/')?path.resolve(root,'..',url.slice(8)):path.resolve(root,'.'+url);
-  if(!file.startsWith(root+'/ui/')&&!file.startsWith(path.resolve(root,'../ui')+'/'))throw Error('outside fixture');
+  const file=url.startsWith('/shared/')?path.resolve(root,url.slice(8)):path.resolve(root,'.'+url);
+  if(!file.startsWith(root+'/ui/')&&!file.startsWith(path.join(root,'ui')+'/'))throw Error('outside fixture');
   res.setHeader('content-type',file.endsWith('.css')?'text/css':'text/javascript');res.end(await fs.readFile(file));
  } catch {res.statusCode=404;res.end('missing');}
 });

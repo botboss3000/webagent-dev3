@@ -27,6 +27,11 @@ RETIRED_CONTEXT = ("v3/data/config/gates/message_visibility_v1.json",
                    "v3/promote.py")
 
 
+def retired(name):
+    """A retired source name: shared UI shipped as ui/ until it moved into v3/ui/."""
+    return name in RETIRED_CONTEXT or name.startswith("ui/")
+
+
 def inspection_path(name):
     return any(name == prefix or name.startswith(prefix + "/")
                for prefix in INSPECTION_CONTEXT)
@@ -206,24 +211,6 @@ def extract(root, blob, validate):
     _fsync_path(root, os.O_RDONLY | os.O_DIRECTORY)
 
 
-# Shared UI archive names and their source: v3/build-service/shared-ui/<name>, the
-# same mapping install.py uses for the checkout. Keep equal to host.CONTEXT's ui/ entries.
-SHARED_UI_SOURCE = "v3/build-service/shared-ui/"
-SHARED_UI_CONTEXT = (
-    "ui/shared/css/app1.css", "ui/shared/css/app2.css", "ui/shared/css/app3.css",
-    "ui/shared/css/design-system.css", "ui/shared/css/index.css",
-    "ui/main-panel/agents/agents.html", "ui/main-panel/agents/agents.css",
-    "ui/vendor/fonts", "ui/vendor/lucide", "ui/favicon.svg")
-
-
-def shared_ui_name(name):
-    """The ui/ archive name a shared-ui source path ships as, or None."""
-    if not name.startswith(SHARED_UI_SOURCE):
-        return None
-    ui = name.removeprefix(SHARED_UI_SOURCE)
-    return ui if any(ui == p or ui.startswith(p + "/") for p in SHARED_UI_CONTEXT) else None
-
-
 def ui_baseline_mismatch(blob):
     """Pinned shared UI assets whose bytes differ from v3/ui-baseline.json, or [] when they match.
 
@@ -254,12 +241,8 @@ def installed_package(name):
 
 def snapshot(root, allowlist, validate):
     files = {}
-    shared = root / SHARED_UI_SOURCE
     for allowed in allowlist:
-        # A tree's ui/ is derived from its own shared-ui source when it has one, so a task
-        # that edits shared-ui ships those bytes; older roots keep their sibling ui/.
-        base = shared if allowed.startswith("ui/") and shared.is_dir() else root
-        path = base / allowed
+        path = root / allowed
         if not path.exists():
             continue
         paths = [path] if path.is_file() else path.rglob("*")
@@ -270,7 +253,7 @@ def snapshot(root, allowlist, validate):
                 continue
             if not entry.is_file():
                 raise ValueError("source workspace special file forbidden")
-            name = entry.relative_to(base).as_posix()
+            name = entry.relative_to(root).as_posix()
             if "__pycache__" in entry.parts or name.endswith((".pyc", ".pyo")) or installed_package(name):
                 continue
             info = entry.stat()
@@ -325,9 +308,8 @@ def candidate(base_blob, task_blob, live_blob, validate, *, allow_empty=False, s
     (base,base_inspection),(task,task_inspection),(live,_) = (_parsed_once(value,validate)for value in (base_blob,task_blob,live_blob))
     # Same attested identity without holding private inspection bodies in memory.
     if base_inspection!=task_inspection:raise ValueError("read-only inspection snapshot changed")
-    # ui/ is projected from v3/build-service/shared-ui/, so only its source counts as a change.
     changed = [name for name in sorted(set(base) | set(task))
-               if name not in RETIRED_CONTEXT and not name.startswith("ui/")
+               if not retired(name)
                and source_differs(base.get(name), task.get(name))]
     if (not changed and not allow_empty) or len(changed) > MAX_CHANGED_PATHS or any(
             not name.startswith("v3/") or name.startswith("v3/data/")
@@ -339,7 +321,7 @@ def candidate(base_blob, task_blob, live_blob, validate, *, allow_empty=False, s
     held = {name for name in changed if is_live(name, patterns)}
     if skip_live:
         changed = [name for name in changed if name not in held]
-    merged = {name: value for name, value in live.items() if name not in RETIRED_CONTEXT}
+    merged = {name: value for name, value in live.items() if not retired(name)}
     for name in changed:
         if name not in held and live.get(name) not in (base.get(name), task.get(name)):
             raise ValueError("source conflict: " + name)
@@ -347,21 +329,7 @@ def candidate(base_blob, task_blob, live_blob, validate, *, allow_empty=False, s
             merged[name] = task[name]
         else:
             merged.pop(name, None)
-    project_shared_ui(merged)
     return archive(merged, validate), changed
-
-
-def project_shared_ui(entries):
-    """Rebuild ui/ from v3/build-service/shared-ui/ in place; ui/ is never edited directly."""
-    if not any(shared_ui_name(name) for name in entries):
-        return entries
-    for name in [name for name in entries if name.startswith("ui/")]:
-        del entries[name]
-    for name, value in list(entries.items()):
-        ui = shared_ui_name(name)
-        if ui:
-            entries[ui] = value
-    return entries
 
 
 def compensating_candidate(before_blob,after_blob,live_blob,owned_paths,validate):
@@ -397,11 +365,6 @@ def release_mounts(previous, root, asset_root=None, layout=None):
         "/opt/v3/config": "v3/config",
         "/opt/v3/ui": "v3/ui",
         abilities: "v3/abilities" if moved else "v3/plugins/abilities",
-        "/opt/v3/shared-ui/shared/css": "ui/shared/css",
-        "/opt/v3/shared-ui/main-panel/agents": "ui/main-panel/agents",
-        "/opt/v3/shared-ui/vendor/fonts": "ui/vendor/fonts",
-        "/opt/v3/shared-ui/vendor/lucide": "ui/vendor/lucide",
-        "/opt/v3/shared-ui/favicon.svg": "ui/favicon.svg",
     }
     host = dict(previous)
     host["Mounts"] = [dict(item, Target=LEGACY_TARGETS.get(item.get("Target"), item.get("Target")))

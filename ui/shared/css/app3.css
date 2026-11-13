@@ -218,13 +218,13 @@ body.light-mode #db-table-list::-webkit-scrollbar-thumb:hover {
     white-space: nowrap;
   }
 .db-th { position: relative; user-select: none; }
-.th-text { 
-    overflow: hidden; 
-    text-overflow: ellipsis; 
-    display: inline-block; 
-    cursor: pointer; 
-    border-radius: 3px; 
-    padding: 1px 4px; 
+.th-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: inline-block;
+    cursor: pointer;
+    border-radius: 3px;
+    padding: 1px 4px;
     white-space: nowrap;
     max-width: 100%;
     box-sizing: border-box;
@@ -491,11 +491,11 @@ body.light-mode #db-table-list::-webkit-scrollbar-thumb:hover {
 .db-popup-item:hover { background: var(--bg-elev-2); }
 .db-popup-item.unchecked .db-popup-val { opacity: 0.4; }
 .db-popup-check { accent-color: var(--brand); cursor: pointer; margin: 0; flex-shrink: 0; }
-.db-popup-val { 
-    overflow: hidden; 
-    text-overflow: ellipsis; 
-    white-space: nowrap; 
-    flex: 1; 
+.db-popup-val {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
   }
 .db-popup-empty { padding: 10px; color: var(--fg-3); font-size: 11px; text-align: center; }
 .db-popup-status {
@@ -752,7 +752,7 @@ body.light-mode .th-funnel {
   letter-spacing: 0.2px;
 }
 
-/* Tab strip with chevron-scroll carousel (mirrors agent-detail-tabs) 
+/* Tab strip with chevron-scroll carousel (mirrors agent-detail-tabs)
    Hidden: using unified sub-header instead */
 #app-config-tabs-wrap {
 	  position: relative;

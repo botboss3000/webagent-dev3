@@ -68,11 +68,7 @@ CONTEXT = (
     "v3/Dockerfile", "v3/Cargo.toml", "v3/Cargo.lock", "v3/build.rs", "v3/.gitignore",
     "v3/src", "v3/crates", "v3/services/system-monitoring", "v3/ui", "v3/plugins/engine", "v3/abilities", "v3/plugins/abilities", "v3/plugins/gates",
     "v3/sandbox.py", "v3/ui-baseline.json", "v3/live-files.json", "v3/rustfmt.toml", "v3/tests",
-    "v3/README.md", "v3/docs", "v3/deploy.sh", "v3/config", "v3/build-service",
-    "ui/shared/css/app1.css", "ui/shared/css/app2.css", "ui/shared/css/app3.css",
-    "ui/shared/css/design-system.css", "ui/shared/css/index.css",
-    "ui/main-panel/agents/agents.html", "ui/main-panel/agents/agents.css",
-    "ui/vendor/fonts", "ui/vendor/lucide", "ui/favicon.svg")
+    "v3/README.md", "v3/docs", "v3/deploy.sh", "v3/config", "v3/build-service")
 UI_SOURCE_PREFIX = "v3/ui/"
 def checked_git_modes(patch):
     """Render receipt POSIX modes as Git owner-execute modes for checked source patches."""
@@ -443,7 +439,7 @@ def _context_digest(blob):
             if name.startswith("./"):
                 name = name[2:]
             parts = Path(name).parts
-            if name.startswith("/") or ".." in parts or not (name in release.RETIRED_CONTEXT or any(name == p or name.startswith(p + "/") for p in TASK_CONTEXT)):
+            if name.startswith("/") or ".." in parts or not (release.retired(name) or any(name == p or name.startswith(p + "/") for p in TASK_CONTEXT)):
                 raise ValueError("snapshot escaped build allowlist")
             if "__pycache__" in parts or name.endswith((".pyc", ".pyo")):
                 raise ValueError("generated Python cache is not a build input")
@@ -1051,7 +1047,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         if not images or set(images)!={"api","loop"}:raise ValueError("Runtime preflight requires both candidate images")
         results=[];plans=[]
         allowed={"/opt/v3/config","/opt/v3/ui","/opt/v3/abilities","/opt/v3/plugins/abilities","/opt/v3/assets",
-            "/opt/v3/shared-ui/shared/css","/opt/v3/shared-ui/main-panel/agents","/opt/v3/shared-ui/vendor/fonts","/opt/v3/shared-ui/vendor/leaflet","/opt/v3/shared-ui/vendor/lucide","/opt/v3/shared-ui/favicon.svg"}
+            }
         for role in ("api","loop"):
             proposed=release.release_mounts(previous[role]["HostConfig"],root,ASSET_ROOT);mounts=[]
             for item in proposed["Mounts"]:
@@ -2285,7 +2281,6 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 abilities = next((m["Target"] for m in host.get("Mounts") or []
                                   if m.get("Target") in release.ABILITY_TARGETS), "/opt/v3/plugins/abilities")
                 env.extend(("V3_UI_ROOT=/opt/v3/assets/current/v3/ui",
-                            "V3_SHARED_UI_ROOT=/opt/v3/assets/current/ui",
                             "V3_ABILITIES_ROOT=" + abilities))
                 config["Env"] = env
                 job=getattr(self.job_context,"job",None)or{}
@@ -4718,9 +4713,9 @@ class Broker:
         plugin_only=ui_only and not monitoring_component.only_paths(changed) and any(path.startswith(ABILITY_ROOTS) or generic_package_path(path,candidate) or generic_package_path(path,base_blob) or path.startswith("v3/config/") or path in live_changed or path=="v3/src/engine/tools/administrator-schemas.json" for path in changed)
         host_only = self.host_source_only(current_changed,candidate,trusted)
         operation="host_service_deploy" if host_only else "plugin_deploy" if plugin_only else "ui_deploy" if ui_only else "build_deploy"
-        broker_paths=[p for p in current_changed if p.startswith("v3/build-service/")and not p.startswith("v3/build-service/shared-ui/")]
+        broker_paths=[p for p in current_changed if p.startswith("v3/build-service/")]
         refusal=None
-        shared_ui=sorted(p for p in changed if p.startswith(release.SHARED_UI_SOURCE))
+        shared_ui=[]
         pins=release.ui_baseline_mismatch(candidate)
         def malformed(path):
             try:json.loads(files[path][1]);return False

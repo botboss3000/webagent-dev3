@@ -31,7 +31,7 @@ Docker access. Restore network connectivity first. Docker-group membership is
 privileged host authority. Clone the intended reviewed commit into the recorded
 checkout path, owned by that account. Do not use recursive submodule cloning:
 the legacy v2_ref gitlink lacks a .gitmodules mapping and is not a v3 build input.
-Shared UI inputs are tracked in build-service/shared-ui.
+Shared base styles, fonts and icons are tracked in ui/ with the rest of the UI.
 
 The following root-only first-install procedure creates app-owned configuration
 and the root-owned broker input. It refuses existing data, plugin packages or
