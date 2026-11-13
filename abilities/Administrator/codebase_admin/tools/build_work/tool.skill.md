@@ -102,7 +102,11 @@ recover, and the broker drops them after 2 hours without a heartbeat. A complete
 the claims itself: no acceptance, complete or release call follows. A closed,
 frozen or abandoned task is never reopened; use a new one. When a task of your
 own is superseded, confirm its unique edits are preserved, then abandon it.
-Never abandon another writer's task. Artifact pruning is automatic: never run
+Never abandon another writer's task unless the user asks you to clear it: then,
+as administrator, call `takeover_preview` with its `task_id`, check its jobs show
+no live or effect-started release, and call `abandon` with `task_id`, `task_key`
+(the preview's `task.id`) and a `reason`. It drops the task's claims and queued
+requests; a live or uncertain release is refused until cancelled or reconciled. Artifact pruning is automatic: never run
 cleanup or Docker prune. Broker reminders about retained work never justify
 resubmitting a finish.
 

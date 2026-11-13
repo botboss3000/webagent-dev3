@@ -13,7 +13,7 @@
     "properties": {
       "action": {
         "type": "string",
-        "description": "Arguments each action takes besides broker_id: begin label, summary (broker_id new); check check, expected_inputs_sha256, optional test_filter, feature_profile, timeout_seconds; preflight none (offset pages); finish expected_inputs_sha256; decide sync_decision, expected_sync_digest; status optional job_id; wait and cancel job_id; receipt request_id; review, reservations and abandon none. Any other argument is refused by name.",
+        "description": "Arguments each action takes besides broker_id: begin label, summary (broker_id new); check check, expected_inputs_sha256, optional test_filter, feature_profile, timeout_seconds; preflight none (offset pages); finish expected_inputs_sha256; decide sync_decision, expected_sync_digest; status optional job_id; wait and cancel job_id; receipt request_id; review and reservations none; abandon none, or as an administrator task_key (task.id from takeover_preview) and reason to abandon any caller's task. Any other argument is refused by name.",
         "enum": [
           "status",
           "begin",

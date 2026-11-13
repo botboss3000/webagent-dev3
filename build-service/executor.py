@@ -1354,8 +1354,13 @@ class Executor:
             success={p.get("phase")for p in state.get("phase_timings")or[]if p.get("outcome")=="completed"
                 and p.get("recipe")in {"engine:rust1.90:compile_test","engine:rust1.90:test","engine:rust1.90:release"}}
             if not {"compile_test","test","compile_release"}<=success:continue
-            old_blob=self.runner.execution_application_blob(captured.read_bytes())
-            old=self.runner.execution_entries(old_blob);old_rust=self.rust_inputs(old)
+            # A build from before a layout change (such as abilities leaving plugins/) fails today's
+            # allowlist; it simply cannot seed this compile.
+            try:
+                old_blob=self.runner.execution_application_blob(captured.read_bytes())
+                old=self.runner.execution_entries(old_blob)
+            except ValueError:continue
+            old_rust=self.rust_inputs(old)
             def eligible():
                 nonlocal binding
                 if changed or state["status"]!="completed"or not set(old_rust)<=set(rust):return False

@@ -1961,6 +1961,21 @@ class FailedReleaseLifecycleTests(unittest.TestCase):
         self.assertEqual(self.broker.scheduler.store.get(opened["key"])["scopes"],[])
         live,_=self.failed("abandon-live",status="running")
         with self.assertRaisesRegex(ValueError,"abandoned"):self.call("build_work",{"action":"abandon","task_id":"abandon-live"})
+    def test_administrator_abandons_another_callers_task(self):
+        item,before=self.failed("foreign-failed")
+        args={"action":"abandon","task_id":item["task_id"],"task_key":item["key"],"reason":"Clear a stuck task"}
+        def as_user(user,arguments):
+            other=str(uuid.uuid4())
+            return self.broker.handle({"name":"build_work","arguments":arguments,"workspace":other,
+                "trusted":{"user_id":user,"session_id":other}})
+        with self.assertRaisesRegex(PermissionError,"Administrator abandon"):as_user("someone",args)
+        with self.assertRaisesRegex(ValueError,"task_key does not name"):as_user("admin",args|{"task_id":"other-task-01"})
+        result=as_user("admin",args)
+        self.assertEqual((result["status"],result["released_scopes"]),("abandoned",len(before["scopes"])))
+        self.assertEqual(item["abandoned_by"],{"administrator":"admin","reason":"Clear a stuck task"})
+        live,_=self.failed("foreign-live",status="running")
+        with self.assertRaisesRegex(ValueError,"abandoned"):
+            as_user("admin",{"action":"abandon","task_id":live["task_id"],"task_key":live["key"],"reason":"x"})
     def test_blockers_and_reservations_name_the_owning_session(self):
         self.call("build_work",{"action":"begin","task_id":"named-holder","summary":"Fix [origin=claude; session=Landing page and SEO]"})
         holder=next(i for i in self.broker.work.values()if i["task_id"]=="named-holder");self.write(holder,"README.md","held\n")

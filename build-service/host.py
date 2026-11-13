@@ -439,7 +439,7 @@ def _context_digest(blob):
                 name = name[2:]
             parts = Path(name).parts
             if name.startswith("/") or ".." in parts or not (release.retired(name) or any(name == p or name.startswith(p + "/") for p in TASK_CONTEXT)):
-                raise ValueError("snapshot escaped build allowlist")
+                raise ValueError("snapshot escaped build allowlist: " + name[:240])
             if "__pycache__" in parts or name.endswith((".pyc", ".pyo")):
                 raise ValueError("generated Python cache is not a build input")
             if member.isdir():
@@ -4601,6 +4601,8 @@ class Broker:
         if action in self.scheduler.actions:return self.scheduler.handle(args,request["trusted"],request["workspace"])
         allowed = {"action", "task_id", "summary", "expected_inputs_sha256", "sync_decision",
             "expected_sync_digest", "offset", "job_id", "request_id", "check", "timeout_seconds", "compiler_memory_cap", "package_memory_cap", "test_filter", "feature_profile", "expected_paths", "expected_operation"}
+        if action == "abandon":
+            allowed |= {"task_key", "reason"}
         if set(args) - allowed:
             raise ValueError("unsupported build_work argument for action %s: %s" % (action, ", ".join(sorted(map(str, set(args) - allowed)))))
         def call(tool, arguments):
@@ -5839,6 +5841,8 @@ class Broker:
                 return dict(receipt)
             if name == "v3_build_work":
                 extra = set(args) - {"action", "task_id", "summary", "expected_inputs_sha256", "mode", "sync_decision", "expected_sync_digest", "offset", "compiler_memory_cap", "package_memory_cap", "expected_paths", "expected_operation"}
+                if args.get("action") == "abandon":
+                    extra -= {"task_key", "reason"}
                 if extra:
                     raise ValueError("unsupported work argument: " + ", ".join(sorted(map(str, extra))))
                 action = args.get("action")
@@ -5998,9 +6002,26 @@ class Broker:
                             "workspace_path": item.get("workspace_path"),
                             "workspace_inputs_sha256": item.get("base_inputs_sha256")}
                 if action == "abandon":
-                    if set(args) != {"action", "task_id"} or not item or not (item["status"] == "open" or self.scheduler.failed_release(item)):
+                    reason = None
+                    if "task_key" in args or "reason" in args:
+                        # Administrators clear any caller's task by the exact key that takeover_preview shows as task.id.
+                        if not (trusted.get("local_caller") is True or trusted["user_id"] == "admin"):
+                            raise PermissionError("Administrator abandon required")
+                        reason = args.get("reason")
+                        if (set(args) != {"action", "task_id", "task_key", "reason"} or not isinstance(reason, str)
+                                or not 1 <= len(reason) <= 500 or not isinstance(args["task_key"], str)
+                                or not re.fullmatch(r"[a-f0-9]{64}", args["task_key"])):
+                            raise ValueError("administrator abandon takes task_id, its exact task_key and a reason of at most 500 characters")
+                        item = self.work.get(args["task_key"])
+                        if not item or item["task_id"] != task_id:
+                            raise ValueError("task_key does not name that task")
+                    elif set(args) != {"action", "task_id"}:
+                        raise ValueError("abandon takes only task_id, or task_id, task_key and reason as an administrator")
+                    if not item or not (item["status"] == "open" or self.scheduler.failed_release(item)):
                         raise ValueError("only an open task, or a closed task whose release failed without effects, may be abandoned")
                     item.update(status="abandoned", finished_at=time.time())
+                    if reason is not None:
+                        item["abandoned_by"] = {"administrator": trusted["user_id"], "reason": reason}
                     self._save_work()
                     # Claims and queued requests go in the same call; a live check job defers this to housekeeping.
                     released = {"scopes": [], "requested": []}
@@ -6008,7 +6029,8 @@ class Broker:
                         try: before = self.scheduler.store.get(item["key"])
                         except ValueError: before = None
                         if before is not None:
-                            self.scheduler.store.retire(item["key"], "Task abandoned by its owner", abandon=True)
+                            self.scheduler.store.retire(item["key"], "Task abandoned by its owner" if reason is None
+                                                      else "Task abandoned by administrator: " + reason, abandon=True)
                             released = {"scopes": before["scopes"], "requested": before["requested"]}
                     return {"task_id": task_id, "status": "abandoned", "open_count": len(self._open_work()),
                             "released_scopes": len(released["scopes"]), "cleared_requests": len(released["requested"])}
