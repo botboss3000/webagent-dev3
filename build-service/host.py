@@ -4236,10 +4236,10 @@ class Broker:
             result["task_created"] = created
             return result
         if name == "file_search":
-            if path or args.get("regex") or args.get("file_glob") or args.get("comments_only"):
-                raise ValueError("task search supports a literal query across source; omit path and filters")
+            if args.get("regex") or args.get("file_glob") or args.get("comments_only"):
+                raise ValueError("task search supports a literal query, optionally under path; omit regex, file_glob and comments_only")
             result = call("v3_source_search", {"task_id": task_id, "query": args.get("query"),
-                "limit": args.get("limit", 30)})
+                "limit": args.get("limit", 30), **({"path": path} if path else {})})
             result["workspace_inputs_sha256"] = context_digest(release.snapshot(
                 self.work_dir / "trees" / key, TASK_CONTEXT, context_digest))[0]
             result["task_created"] = created
@@ -5591,14 +5591,17 @@ class Broker:
                     raise ValueError("batch source read exceeds result bound")
                 return {"task_id": args["task_id"], "results": results}
             if name == "v3_source_search":
-                if set(args) - {"task_id", "query", "limit"} or not {"task_id", "query"} <= set(args):
+                if set(args) - {"task_id", "query", "limit", "path"} or not {"task_id", "query"} <= set(args):
                     raise ValueError("task_id and literal query required")
                 task_id, query = args["task_id"], args["query"]
-                limit = args.get("limit", 30)
+                limit, scope = args.get("limit", 30), args.get("path", "")
                 if (not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", task_id)
                         or not isinstance(query, str) or not 1 <= len(query) <= 120
                         or any(ord(char) < 32 for char in query)
-                        or type(limit) is not int or not 1 <= limit <= 50):
+                        or type(limit) is not int or not 1 <= limit <= 50
+                        or not isinstance(scope, str) or len(scope) > 240
+                        or (scope and (not re.fullmatch(r"[A-Za-z0-9_./-]+", scope)
+                            or any(part in ("", ".", "..") for part in scope.split("/"))))):
                     raise ValueError("bounded task search required")
                 key = hashlib.sha256(canonical([trusted["user_id"], workspace, task_id])).hexdigest()
                 item = self.work.get(key)
@@ -5608,8 +5611,14 @@ class Broker:
                 source = root / "v3"
                 matches = []
                 scanned = 0
-                for folder in ("src", "abilities", "plugins", "tests", "ui", "docs", "config", "build-service"):
-                    for path in sorted((source / folder).rglob("*")):
+                # A path narrows the walk to one file or folder; otherwise every source folder.
+                folders = (scope,) if scope else ("src", "crates", "abilities", "plugins", "tests", "ui", "docs", "config", "build-service")
+                for folder in folders:
+                    top = source
+                    for part in folder.split("/"):
+                        top = top / part
+                        if top.is_symlink(): raise ValueError("task search path contains symlink")
+                    for path in ([top] if top.is_file() else sorted(top.rglob("*"))):
                         if path.is_symlink() or not path.is_file() or path.suffix not in {
                                 ".rs", ".py", ".json", ".md", ".html", ".js", ".css", ".toml", ".sh"}:
                             continue

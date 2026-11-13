@@ -1216,6 +1216,18 @@ class BuildTests(unittest.TestCase):
         (source / "src" / "sample.rs").write_text("needle first\nother\nneedle second\n")
         found = self.call("v3_source_search", {"task_id": "search-task", "query": "needle"})
         self.assertEqual([1, 3], [entry["line"] for entry in found["matches"]])
+        (source / "crates" / "demo").mkdir(parents=True, exist_ok=True)
+        (source / "crates" / "demo" / "lib.rs").write_text("needle in crate\n")
+        everywhere = self.call("v3_source_search", {"task_id": "search-task", "query": "needle"})
+        self.assertIn("crates/demo/lib.rs", [entry["path"] for entry in everywhere["matches"]])
+        scoped = self.call("v3_source_search", {"task_id": "search-task", "query": "needle",
+            "path": "crates/demo"})
+        self.assertEqual(["crates/demo/lib.rs"], [entry["path"] for entry in scoped["matches"]])
+        single = self.call("v3_source_search", {"task_id": "search-task", "query": "needle",
+            "path": "src/sample.rs"})
+        self.assertEqual([1, 3], [entry["line"] for entry in single["matches"]])
+        with self.assertRaisesRegex(ValueError, "bounded"):
+            self.call("v3_source_search", {"task_id": "search-task", "query": "needle", "path": "../x"})
         batch = self.call("v3_source_read_batch", {"task_id": "search-task",
             "requests": [{"path": "src/sample.rs", "offset": 1, "limit": 1},
                          {"path": "src/sample.rs", "offset": 3, "limit": 1}]})
