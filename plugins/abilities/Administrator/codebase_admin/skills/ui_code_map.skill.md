@@ -13,6 +13,15 @@ minimum_access: registered
 Read from the live checkout first (`file_search`, `file_read`; paths are relative to
 `/code`), then edit through your broker task. Search; never guess a file.
 
+For a behaviour bug (focus, keyboard, scroll, gesture), name the mechanism before
+reading widely: which event or handler causes it (a `pointerdown` moving focus, a
+`scroll` or `resize` handler, a `blur()` call). Confirm it in one or two files, then
+edit and test. When a fix does not work, re-check the mechanism against the exact
+case the user describes rather than reading more files.
+
+Comments that mention older app versions or `v2` paths describe history, not files:
+search this checkout instead.
+
 1. Start from what the user sees. Find the element in the page markup
    (`ui/chat/chat.html` for the chat panel, `ui/index.html` for the shell) and note its
    `id` or class.
@@ -32,7 +41,8 @@ Read from the live checkout first (`file_search`, `file_read`; paths are relativ
 | Scroll and drag gestures on header/footer | `core/footer-gesture-forward.js` |
 | Header chips | `controls/broker-chip.js`, `controls/session-dropdown/`, `elements/main-notes/` |
 | Transport | `core/client.js`, `core/fetch-stream.js` |
-| Styles | `chat.css`; mobile soft keyboard sets `body.kb-open` (see `ui_design`) |
+| Styles | `chat.css`; shared app styles in `build-service/shared-ui/ui/shared/css/` |
+| Mobile soft keyboard | `ui/boot/viewport.js` tracks the visual viewport and sets `body.kb-open` (see `ui_design`) |
 
 Other areas: shell `ui/app.js`, `ui/index.html`; main-panel pages `ui/main-panel/<id>/`
 (`docs/ui-pages.md`); shared assets `ui/shared/`. Routes for browser checks are in
