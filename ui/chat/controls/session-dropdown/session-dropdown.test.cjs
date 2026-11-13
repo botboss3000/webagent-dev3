@@ -125,3 +125,19 @@ test('sub-agent sessions nest under their parent and the header chip lists the f
  await p.evaluate(()=>{for(const item of items)delete item.parent_session_id;list.update(items,'s0');});
  assert.equal(await p.locator('#chat-sub-header').evaluate(e=>e.hasAttribute('data-empty')),true);
 });
+test('the open session menu keeps the header row inside a phone viewport',async t=>{
+ const p=await fixture(t,{mobile:true});
+ // Lay the header out like the panel does: full width, without the fixture's fixed widths.
+ await p.evaluate(()=>{const h=document.getElementById('chat-header');h.style.cssText='position:absolute;top:0;left:0;right:0;width:auto';const d=document.getElementById('session-dropdown');d.style.width='';d.style.minHeight='';});
+ const box=()=>p.evaluate(()=>{const chip=document.getElementById('session-dropdown'),plus=document.getElementById('new'),zone=chip.closest('.chat-header-zone');const c=chip.getBoundingClientRect(),n=plus.getBoundingClientRect();return{chip:c.width,plusRight:n.right,plusWidth:n.width,overflowX:getComputedStyle(zone).overflowX,viewport:window.innerWidth};});
+ const closed=await box();
+ assert.equal(closed.overflowX,'visible');
+ assert.ok(closed.plusRight<=closed.viewport+0.5,'closed + ends at '+closed.plusRight+' of '+closed.viewport);
+ await openList(p);
+ // The menu is moved to document.body while open; the row must not reflow because of it.
+ const open=await box();
+ assert.equal(open.overflowX,'visible','opening the menu must not make the session zone a scroller');
+ assert.ok(Math.abs(open.chip-closed.chip)<0.5,'selector widened from '+closed.chip+' to '+open.chip);
+ assert.ok(Math.abs(open.plusWidth-closed.plusWidth)<0.5,'the trailing + must keep its full size');
+ assert.ok(open.plusRight<=open.viewport+0.5,'open + ends at '+open.plusRight+' of '+open.viewport);
+});
