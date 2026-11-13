@@ -1,0 +1,36 @@
+{
+  "name": "checkout_edit",
+  "description": "Write (content) or edit (old_text/new_text) one live-checkout source file directly, without a broker task; not built or deployed; policy-gated",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      },
+      "content": {
+        "type": "string"
+      },
+      "old_text": {
+        "type": "string"
+      },
+      "new_text": {
+        "type": "string"
+      },
+      "expected_sha256": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "write",
+  "policy_ceiling": "ask",
+  "default_access": {
+    "operator": "ask",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

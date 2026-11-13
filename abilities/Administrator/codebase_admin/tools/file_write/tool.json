@@ -1,0 +1,59 @@
+{
+  "name": "file_write",
+  "description": "Write a container or live-checkout file, or delete a broker task file with delete true and no content; policy-gated. Source writes use isolated broker work automatically. Files are read from the source checkout (/code) and this session's workspace; other container paths, including runtime data, are refused. Reads without a selector inspect published/container files; pass a returned broker_id for private-source reads. Optional broker_id selects current, new or returned work. Explicit runtime/workspace paths retain their owning tools. Never deploys.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      },
+      "content": {
+        "type": "string"
+      },
+      "delete": {
+        "type": "boolean",
+        "description": "true removes the broker task file at path; broker task files only"
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "create",
+          "replace",
+          "append"
+        ],
+        "description": "Broker task files only; workspace and container writes must omit it. append adds to existing content; create refuses an existing path; replace confirms a deliberate full replace (a replace that removes most of the file is refused without it)."
+      },
+      "task_id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{8,80}$",
+        "description": "Deprecated compatibility alias. Prefer broker_id; do not supply both. Never use a chat session ID here."
+      },
+      "broker_id": {
+        "type": "string",
+        "pattern": "^(new|[A-Za-z0-9_-]{8,80})$",
+        "description": "Omit to continue current broker work; new creates independent isolated work in this operation; reuse a returned Broker ID to switch. Session identity is automatic. Never invent an ID."
+      },
+      "expected_inputs_sha256": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$",
+        "description": "Task digest from the latest task read/list/review; required when writing an existing task."
+      },
+      "request_id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{8,80}$",
+        "description": "Stable task-write request ID. Reuse only for identical retries; inspect build_work receipt after uncertainty."
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "write",
+  "policy_ceiling": "ask",
+  "default_access": {
+    "operator": "ask",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

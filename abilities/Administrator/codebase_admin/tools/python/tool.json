@@ -1,0 +1,29 @@
+{
+  "name": "python",
+  "description": "Execute Python in this session workspace; reads any container file, writes only the workspace; source changes use broker task tools or checkout_edit; policy-gated",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "code": {
+        "type": "string"
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 600
+      }
+    },
+    "required": [
+      "code"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "write",
+  "retry_risk": "low",
+  "policy_ceiling": "ask",
+  "default_access": {
+    "operator": "ask",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}

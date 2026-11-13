@@ -1,0 +1,46 @@
+{
+  "name": "file_search",
+  "description": "Search container or live-checkout files by literal or regex query, or with find answer a plain-language question with the best-matching named blocks and their line ranges; outline comments in one file. Source writes use isolated broker work automatically. Files are read from the source checkout (/code) and this session's workspace; other container paths, including runtime data, are refused. Reads without a selector inspect published/container files; pass a returned broker_id for private-source reads. Optional broker_id selects current, new or returned work. Explicit runtime/workspace paths retain their owning tools. Never deploys.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string"
+      },
+      "query": {
+        "type": "string"
+      },
+      "find": {
+        "type": "boolean"
+      },
+      "regex": {
+        "type": "boolean"
+      },
+      "file_glob": {
+        "type": "string"
+      },
+      "comments_only": {
+        "type": "boolean"
+      },
+      "task_id": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{8,80}$",
+        "description": "Deprecated compatibility alias. Prefer broker_id; do not supply both. Never use a chat session ID here."
+      },
+      "broker_id": {
+        "type": "string",
+        "pattern": "^(new|[A-Za-z0-9_-]{8,80})$",
+        "description": "Omit to continue current broker work; new creates independent isolated work in this operation; reuse a returned Broker ID to switch. Session identity is automatic. Never invent an ID."
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  }
+}

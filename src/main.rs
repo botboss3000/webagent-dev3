@@ -263,22 +263,29 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         let mut policy = policy_default();
-        policy["rules"].as_object_mut().unwrap().remove("file_edit");
+        policy["rules"]
+            .as_object_mut()
+            .unwrap()
+            .remove("source_patch");
         policy["rules"]
             .as_object_mut()
             .unwrap()
             .remove("workspace_seed");
-        policy["rules"]["file_read"] = json!("deny");
+        policy["rules"]["source_review"] = json!("deny");
         // A tool folder's policy ceiling is its installation rule and replaces a saved one.
         policy["rules"]["calculate"] = json!("deny");
+        policy["rules"]["file_read"] = json!("deny");
+        policy["rules"].as_object_mut().unwrap().remove("file_edit");
         store.put("policy", &policy).await.unwrap();
         migrate_tool_policy_defaults(&store).await.unwrap();
         migrate_tool_policy_defaults(&store).await.unwrap();
         let migrated = store.get("policy").await.unwrap().unwrap();
-        assert_eq!(migrated["rules"]["file_edit"], "deny");
+        assert_eq!(migrated["rules"]["source_patch"], "deny");
         assert_eq!(migrated["rules"]["workspace_seed"], "deny");
-        assert_eq!(migrated["rules"]["file_read"], "deny");
+        assert_eq!(migrated["rules"]["source_review"], "deny");
         assert_eq!(migrated["rules"]["calculate"], "allow");
+        assert_eq!(migrated["rules"]["file_read"], "allow");
+        assert_eq!(migrated["rules"]["file_edit"], "require_approval");
         assert_eq!(migrated["rules"]["get_time"], "allow");
         assert_eq!(migrated["version"], 2);
     }

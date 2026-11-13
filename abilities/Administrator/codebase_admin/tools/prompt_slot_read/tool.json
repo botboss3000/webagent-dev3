@@ -1,0 +1,30 @@
+{
+  "name": "prompt_slot_read",
+  "description": "List or read the current agent's ordered instruction slots",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "list",
+          "get"
+        ]
+      },
+      "slot_name": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "name": "state_inspect",
+  "description": "Read bounded public metadata for the current session; catalog, session, chat, or runs",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "resource": {
+        "type": "string",
+        "enum": [
+          "catalog",
+          "session",
+          "chat",
+          "runs"
+        ]
+      },
+      "after": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50
+      }
+    },
+    "required": [
+      "resource"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "read",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "auto",
+    "visitor": "auto"
+  }
+}

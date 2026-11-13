@@ -1,0 +1,52 @@
+{
+  "name": "prompt_slot_write",
+  "description": "Create, update or delete a current-agent instruction slot; policy-gated",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "put",
+          "delete"
+        ]
+      },
+      "slot_name": {
+        "type": "string"
+      },
+      "content": {
+        "type": "string"
+      },
+      "expected_revision": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "order_index": {
+        "type": "integer"
+      },
+      "lock": {
+        "type": "boolean"
+      },
+      "merge_mode": {
+        "type": "string",
+        "enum": [
+          "replace",
+          "append"
+        ]
+      }
+    },
+    "required": [
+      "action",
+      "slot_name",
+      "expected_revision"
+    ],
+    "additionalProperties": false
+  },
+  "effect": "write",
+  "policy_ceiling": "ask",
+  "default_access": {
+    "operator": "ask",
+    "member": "ask",
+    "visitor": "ask"
+  }
+}
