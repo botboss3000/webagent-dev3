@@ -766,7 +766,7 @@ mod tests {
             "build_work",
             json!({"action":"status"}),
             json!({"status":"success","output":{"job_id":"01234567-89ab-cdef-0123-456789abcdef",
-                "changed_paths":["v3/plugins/abilities/Web/browser_control/tools/browser_read/tool.json"]}}),
+                "changed_paths":["v3/abilities/Web/browser_control/tools/browser_read/tool.json"]}}),
         );
         assert_eq!(
             run["run_health"]["releases"][0]["job_id"],

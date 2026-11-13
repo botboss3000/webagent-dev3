@@ -813,12 +813,11 @@ async fn run_process() -> Result<()> {
         .find_map(|arg| arg.strip_prefix("--validate-assets=").map(PathBuf::from))
     {
         // Tool schemas come from the candidate's own tool folders.
-        webagent_abilities::tool_definitions::use_root(path.join("plugins/abilities"));
-        let catalog = abilities::Catalog::load_snapshot(&path.join("plugins/abilities"))?;
+        webagent_abilities::tool_definitions::use_root(path.join("abilities"));
+        let catalog = abilities::Catalog::load_snapshot(&path.join("abilities"))?;
         #[cfg(feature = "administrator")]
         {
-            let administrator =
-                webagent_administration::schemas::load(&path.join("plugins/abilities"))?;
+            let administrator = webagent_administration::schemas::load(&path.join("abilities"))?;
             anyhow::ensure!(
                 administrator.problems.is_empty(),
                 "Invalid Administrator tool folders: {}",
@@ -964,7 +963,7 @@ async fn run_process() -> Result<()> {
     crate::tools::install_tool_defaults();
     let abilities_root = std::env::var("V3_ABILITIES_ROOT").unwrap_or_else(|_| {
         webagent_configuration::paths::app()
-            .join("plugins/abilities")
+            .join("abilities")
             .to_string_lossy()
             .into_owned()
     });

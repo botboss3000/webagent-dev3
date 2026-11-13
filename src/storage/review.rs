@@ -858,7 +858,7 @@ mod tests {
         // The release run itself recorded no failure; only the job it saw.
         release["run_health"]["groups"] = json!([]);
         release["run_health"]["releases"] = json!([{"job_id":"job-1","paths":[
-            "v3/plugins/abilities/Web/browser_control/tools/file_read/tool.json"]}]);
+            "v3/abilities/Web/browser_control/tools/file_read/tool.json"]}]);
         release["updated_at"] = json!(unix_now());
         store
             .save_run(&mut release, "run_status", &json!({}))

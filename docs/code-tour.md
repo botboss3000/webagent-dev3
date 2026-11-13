@@ -7,7 +7,7 @@ account-tier ability/tool grants and agent base policy. The same result filters
 model guidance and schemas and is checked again before execution. A listed
 manifest remains metadata until compiled registration and readiness exist.
 Partial ports expose only registered tools and keep unsupported declarations
-unavailable. Core native adapters live under `plugins/abilities/Core/base/`.
+unavailable. Core native adapters live under `abilities/Core/base/`.
 Startup-resume installation configuration lives in `src/services.rs`, with its
 revisioned administrator API in `src/api/service_admin.rs`; startup recovery
 checks it before requeuing safe interrupted work. Uncertain writes still require
@@ -24,7 +24,7 @@ tool markers without removing existing markers. `agent_loop/mod.rs` records them
 Visible tools and previously loaded tools remain exposed across searches.
 Session grants, Off settings and approval requirements still apply.
 
-Core's Decision ability follows `plugins/abilities/Core/decision/adapter.rs`
+Core's Decision ability follows `abilities/Core/decision/adapter.rs`
 and `directory_adapter.rs`. The agent can supply bounded System One JSON,
 or ask for one directory page to be scored without first listing its entries.
 Rust checks file_list permission, then the worker can recursively find
@@ -419,7 +419,7 @@ not establish live microphone/provider acceptance.
 
 One executor process shares a cap of four and per-agent/tool counters across all users/sessions. Changed limits reuse counters and respect active lower ceilings. An installation-wide RwLock permits only concurrency-eligible reads concurrently and makes all other tools exclusive, protecting shared live-checkout access across agents. Resource-lock waits hold no total slot; cancellation/drop release guards and counters, removing idle tool keys. This OnceLock is process-local: multiple tool-executing processes need a cross-process coordinator for a true installation aggregate cap.
 
-Shared bundled usage guidance is `plugins/abilities/Core/base/skills/base.skill.md`, loaded by the catalog’s standard ability-skill path; trusted effective flags come from the runtime helper. Generic background handles/completions and stop/silent/wake are distinct from V3 Build’s durable broker finish/recovery contract. Silent still notifies the user and carries leftover results to the next user turn without a loop; wake has a read-only ceiling, no mode escalation, no new background spawn, and no inherited approvals. Results remain untrusted and settings never grant permission.
+Shared bundled usage guidance is `abilities/Core/base/skills/base.skill.md`, loaded by the catalog’s standard ability-skill path; trusted effective flags come from the runtime helper. Generic background handles/completions and stop/silent/wake are distinct from V3 Build’s durable broker finish/recovery contract. Silent still notifies the user and carries leftover results to the next user turn without a loop; wake has a read-only ceiling, no mode escalation, no new background spawn, and no inherited approvals. Results remain untrusted and settings never grant permission.
 
 Background capability and concurrency capability are separate. In addition to the six background-vetted tools, get_time, get_date, calculate, web_search, get_weather and maps_geocode allow foreground concurrency up to four and use the shared installation read guard, but cannot background or silent/wake. Other stateful discovery/native controls stay concurrency one and exclusive. The API can report max_supported_concurrency(name); omitted/null tool_execution maps or null tool entries resolve to defaults.
 

@@ -1,5 +1,5 @@
 //! Base: the built-in core tools every agent has. Their handlers, schemas and role
-//! defaults are compiled in; `plugins/abilities/Core/base` holds only their guidance. Capability
+//! defaults are compiled in; `abilities/Core/base` holds only their guidance. Capability
 //! levels, saved tool permissions, account tiers and installation policy still apply.
 use webagent_access::Permission;
 
@@ -55,7 +55,7 @@ pub const TOOLS: &[&str] = &[
     "test_owner_purchase",
 ];
 
-/// Tool skill files under `plugins/abilities/Core/base/tools/`, as (tool, file stem).
+/// Tool skill files under `abilities/Core/base/tools/`, as (tool, file stem).
 /// One skill covers the three session-script tools.
 pub const TOOL_SKILLS: &[(&str, &str)] = &[
     ("calculate", "calculate"),

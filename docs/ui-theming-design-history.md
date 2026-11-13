@@ -1,6 +1,6 @@
 # UI theming and surfaces — design history
 
-Moved from plugins/abilities/Administrator/codebase_admin/skills/ui_theming.skill.md on 2026-10-08 (guidance survey F7). This file is provenance for humans. The operative rules live in the skill of the same name; do not load this file for UI work unless the history itself is the question.
+Moved from abilities/Administrator/codebase_admin/skills/ui_theming.skill.md on 2026-10-08 (guidance survey F7). This file is provenance for humans. The operative rules live in the skill of the same name; do not load this file for UI work unless the history itself is the question.
 
 The complete pre-split skill text follows, preserved verbatim.
 

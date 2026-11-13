@@ -89,9 +89,15 @@ impl<T: Transport> Operation<'_, T> {
     pub async fn resolve_cloudflare(&mut self) -> Result<()> {
         if self.account_id().is_empty() {
             let accounts = self
-                .call(ProviderRequest::cf("GET", "/client/v4/accounts".into(), Value::Null))
+                .call(ProviderRequest::cf(
+                    "GET",
+                    "/client/v4/accounts".into(),
+                    Value::Null,
+                ))
                 .await?;
-            let rows = accounts.as_array().ok_or_else(|| anyhow!("Cloudflare account list unavailable"))?;
+            let rows = accounts
+                .as_array()
+                .ok_or_else(|| anyhow!("Cloudflare account list unavailable"))?;
             let id = match rows.as_slice() {
                 [one] => one["id"].as_str().unwrap_or("").to_owned(),
                 [] => anyhow::bail!("The Cloudflare token cannot see any account; give it Account Settings — Read for the hosting account"),
@@ -101,12 +107,19 @@ impl<T: Transport> Operation<'_, T> {
                     many.iter().map(|a| format!("{} = {}", a["name"].as_str().unwrap_or("?"), a["id"].as_str().unwrap_or("?"))).collect::<Vec<_>>().join(", ")
                 ),
             };
-            anyhow::ensure!(id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()), "Cloudflare returned an invalid account ID");
+            anyhow::ensure!(
+                id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()),
+                "Cloudflare returned an invalid account ID"
+            );
             self.remember("cloudflare_account_id", json!(id)).await?;
         }
         if self.build_token().is_empty() {
             let tokens = self
-                .call(ProviderRequest::cf("GET", format!("{}/builds/tokens", self.account()), Value::Null))
+                .call(ProviderRequest::cf(
+                    "GET",
+                    format!("{}/builds/tokens", self.account()),
+                    Value::Null,
+                ))
                 .await?;
             let token = tokens
                 .as_array()
@@ -123,7 +136,9 @@ impl<T: Transport> Operation<'_, T> {
     /// Route the optional custom hostname to the Worker; its zone must belong to the same account.
     pub async fn attach_domain(&mut self) -> Result<()> {
         let cfg = self.site.configuration.clone();
-        if cfg.custom_domain.is_empty() || self.site.runtime["custom_domain"] == cfg.custom_domain.as_str() {
+        if cfg.custom_domain.is_empty()
+            || self.site.runtime["custom_domain"] == cfg.custom_domain.as_str()
+        {
             return Ok(());
         }
         self.call(ProviderRequest::cf(
@@ -133,7 +148,8 @@ impl<T: Transport> Operation<'_, T> {
         ))
         .await
         .map_err(|error| anyhow!("{error}. The domain's zone must be on this Cloudflare account and the token needs Workers Scripts — Edit"))?;
-        self.remember("custom_domain", json!(cfg.custom_domain)).await
+        self.remember("custom_domain", json!(cfg.custom_domain))
+            .await
     }
     pub async fn provision(&mut self, connect: bool) -> Result<Value> {
         self.resolve_cloudflare().await?;

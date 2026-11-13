@@ -94,7 +94,7 @@ mod native_schema_dispatch_tests {
     async fn stale_native_parameters_reject_at_real_foreground_fence_before_missing_run_lookup() {
         let (_state, mut app) = crate::runtime_tests::fixture_uninitialized().await;
         let source = crate::live_assets::native_schema_file_tests::source_fixture();
-        let plugins = source.path().join("plugins/abilities");
+        let plugins = source.path().join("abilities");
         let snapshot = crate::abilities::Catalog::load_current(&plugins).unwrap();
         assert!(snapshot.native_snapshot_current().unwrap());
         app.abilities = Arc::new(snapshot);

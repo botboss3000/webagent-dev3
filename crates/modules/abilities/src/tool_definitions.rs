@@ -337,7 +337,7 @@ pub fn root() -> Option<PathBuf> {
         .or_else(|| {
             webagent_configuration::live::roots()
                 .into_iter()
-                .map(|root| root.join("plugins/abilities"))
+                .map(|root| root.join("abilities"))
                 .find(|path| path.is_dir())
         })
 }
@@ -357,10 +357,7 @@ pub fn problems() -> &'static [String] {
 fn loaded() -> &'static (BTreeMap<String, ToolDefinition>, Vec<String>) {
     DEFINITIONS.get_or_init(|| match root() {
         Some(root) => load_all(&root),
-        None => (
-            BTreeMap::new(),
-            vec!["No plugins/abilities folder found".into()],
-        ),
+        None => (BTreeMap::new(), vec!["No abilities folder found".into()]),
     })
 }
 

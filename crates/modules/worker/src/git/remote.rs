@@ -209,7 +209,7 @@ const REVIEWED_HISTORY_LINES: [(&str, &str, &[&str]); 6] = [
     ),
     (
         "0aa6da670fba3fed8018af1c125eaca164f6f3a0",
-        "plugins/abilities/Administrator/git_control/test_runner.py",
+        "abilities/Administrator/git_control/test_runner.py",
         &[
             "5251d40c76a281311caf4b366d595672db2b280d6c9454d50da72aa03dfc1a5c",
             "d20e527b2b21a4eaeb67130f34d20c2884f3a6680ce6d6296822212b0c333784",
@@ -217,7 +217,7 @@ const REVIEWED_HISTORY_LINES: [(&str, &str, &[&str]); 6] = [
     ),
     (
         "ec514257598a923a9ef6b55723e2dc1d41cf16cc",
-        "plugins/abilities/Administrator/git_control/test_runner.py",
+        "abilities/Administrator/git_control/test_runner.py",
         &["1cb448b9870982d4ffc892f4ade5af24c52ac6d4e60eecce42d4c65bb91a507e"],
     ),
 ];

@@ -35,7 +35,7 @@ fn fixture() -> Fixture {
     let root = packages
         .releases
         .join(RELEASE)
-        .join("v3/plugins/abilities/Core/echo");
+        .join("v3/abilities/Core/echo");
     std::fs::create_dir_all(&root).expect("package");
     let manifest = json!({"id":"echo","protocol":1,"dispatch":"isolated","effect":"write",
         "runtime":"python3","entrypoint":"runner.py","schemas":"schemas.json",

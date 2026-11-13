@@ -1,5 +1,5 @@
 //! The Administrator native tools. Each has a compiled handler and a tool folder under
-//! `plugins/abilities/Administrator/<ability>/tools/<tool>/`. The `v3_*` entries are
+//! `abilities/Administrator/<ability>/tools/<tool>/`. The `v3_*` entries are
 //! older build and source names kept only as permission ceilings for Codebase Admin tools.
 //! Tools no ability owns a folder for live under `Administrator/native_tools/`.
 

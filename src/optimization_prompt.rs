@@ -347,8 +347,8 @@ pub(crate) fn allows_tool(run: &Value, name: &str, args: &Value) -> bool {
                     !path.ends_with(".skill.md")
                         && !path.contains("/config/")
                         && !path.starts_with("config/")
-                        && !path.contains("/plugins/abilities/")
-                        && !path.starts_with("plugins/abilities/")
+                        && !path.contains("/abilities/")
+                        && !path.starts_with("abilities/")
                 })
         }
         "build_work" => matches!(

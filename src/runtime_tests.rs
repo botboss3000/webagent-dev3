@@ -12,7 +12,7 @@ pub(crate) fn native_catalog() -> abilities::Catalog {
     static ROOT: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
     let root = ROOT.get_or_init(|| {
         let target = tempfile::tempdir().expect("native catalog fixture");
-        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities");
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("abilities");
         // A build without the Administrator tier has no adapters for the real pack, so it
         // gets the test-only ability like an installation without the pack.
         let tier = cfg!(feature = "administrator");
@@ -116,7 +116,7 @@ fn synthetic_codebase_admin(root: &std::path::Path) {
 fn core_catalog_loads_without_the_administrator_pack() {
     let target = tempfile::tempdir().unwrap();
     copy_native(
-        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities"),
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("abilities"),
         target.path(),
         &["Administrator"],
     );
@@ -8329,7 +8329,8 @@ async fn ability_revocation_keeps_parallel_write_outcomes_uncertain() {
 async fn removed_manifest_withdraws_cached_schemas_and_guidance_within_run() {
     use axum::routing::post;
     let (root, mut app) = fixture().await;
-    let catalog_root = root.path().join("abilities");
+    // Not named `abilities`, so the catalog has no checkout source root and adopts no live edits.
+    let catalog_root = root.path().join("catalog");
     let directory = catalog_root.join("Administrator/codebase_admin");
     std::fs::create_dir_all(&directory).unwrap();
     let manifest = directory.join("codebase_admin.json");
@@ -10367,7 +10368,7 @@ async fn live_context_default_stack_journey() {
         .await
         .unwrap();
     let source = root.path().join("live-source");
-    let abilities = source.join("plugins/abilities");
+    let abilities = source.join("abilities");
     // Base is built in, so the live selectable skill lives in a folder ability.
     copy_live_context_fixture(
         &app.abilities.snapshot_root().join("Web/web_access"),

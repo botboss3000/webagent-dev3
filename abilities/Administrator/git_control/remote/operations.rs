@@ -21,11 +21,25 @@ impl<T: Transport> Operation<'_, T> {
     /// Configured values win; otherwise the IDs discovered during provisioning are used.
     pub fn account_id(&self) -> String {
         let cfg = &self.site.configuration.cloudflare_account_id;
-        if cfg.is_empty() { self.site.runtime["cloudflare_account_id"].as_str().unwrap_or("").into() } else { cfg.clone() }
+        if cfg.is_empty() {
+            self.site.runtime["cloudflare_account_id"]
+                .as_str()
+                .unwrap_or("")
+                .into()
+        } else {
+            cfg.clone()
+        }
     }
     pub fn build_token(&self) -> String {
         let cfg = &self.site.configuration.build_token_uuid;
-        if cfg.is_empty() { self.site.runtime["build_token_uuid"].as_str().unwrap_or("").into() } else { cfg.clone() }
+        if cfg.is_empty() {
+            self.site.runtime["build_token_uuid"]
+                .as_str()
+                .unwrap_or("")
+                .into()
+        } else {
+            cfg.clone()
+        }
     }
     pub fn account(&self) -> String {
         format!("/client/v4/accounts/{}", self.account_id())
@@ -204,20 +218,30 @@ impl<T: Transport> Operation<'_, T> {
                 "Invalid or duplicate source path"
             );
             anyhow::ensure!(
-                change
-                    .as_object()
-                    .is_some_and(|o| o.keys().all(|k| matches!(k.as_str(), "path" | "content" | "content_base64"))),
+                change.as_object().is_some_and(|o| o
+                    .keys()
+                    .all(|k| matches!(k.as_str(), "path" | "content" | "content_base64"))),
                 "Unsupported change fields"
             );
             if let Some(encoded) = change.get("content_base64") {
                 // Binary files (images, fonts) arrive as base64, usually resolved from a sent chat attachment.
-                anyhow::ensure!(change.get("content").is_none(), "Use content or content_base64, not both");
+                anyhow::ensure!(
+                    change.get("content").is_none(),
+                    "Use content or content_base64, not both"
+                );
                 let len = base64::engine::general_purpose::STANDARD
-                    .decode(encoded.as_str().ok_or_else(|| anyhow!("content_base64 must be a string"))?)
+                    .decode(
+                        encoded
+                            .as_str()
+                            .ok_or_else(|| anyhow!("content_base64 must be a string"))?,
+                    )
                     .map_err(|_| anyhow!("Invalid base64 content for {file}"))?
                     .len();
                 bytes += len;
-                anyhow::ensure!(len <= 10 * 1024 * 1024 && bytes <= 30 * 1024 * 1024, "Binary change exceeds bound (10 MiB per file, 30 MiB per commit)");
+                anyhow::ensure!(
+                    len <= 10 * 1024 * 1024 && bytes <= 30 * 1024 * 1024,
+                    "Binary change exceeds bound (10 MiB per file, 30 MiB per commit)"
+                );
                 continue;
             }
             anyhow::ensure!(

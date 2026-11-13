@@ -22,7 +22,7 @@ COPY v3/config ./config
 COPY v3/build-service ./build-service
 COPY v3/plugins ./plugins
 # Runtime tests load the installed ability catalog and chat configuration.
-COPY v3/plugins/abilities ./plugins/abilities
+COPY v3/abilities ./abilities
 COPY v3/ui ./ui
 # Bound compiler concurrency to three workers on the development host.
 ENV CARGO_BUILD_JOBS=3 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 RUSTFLAGS="-C debuginfo=0 -C link-arg=-fuse-ld=mold"
@@ -139,7 +139,7 @@ COPY --from=tested_builder /out/optimization-cargo /opt/optimization-cargo
 COPY --from=tested_builder /usr/local/rustup/toolchains/1.99.1-x86_64-unknown-linux-gnu /opt/rust
 COPY v3/sandbox.py /opt/v3/
 COPY v3/build-service /opt/v3/build-service
-COPY v3/plugins/abilities /opt/v3/plugins/abilities
+COPY v3/abilities /opt/v3/abilities
 COPY v3/plugins/engine /opt/v3/plugins/engine
 COPY --from=tested_builder /out/webagent-context-service /usr/local/lib/webagent/engine/context-assembly/webagent-context-service
 COPY --from=tested_builder /out/webagent-background-service /usr/local/lib/webagent/engine/background-dispatch/webagent-background-service
@@ -188,7 +188,7 @@ COPY --from=tested_builder /out/core-inputs.txt /usr/local/lib/webagent/core-inp
 # service (crates/modules/inference/host/service.rs): ONNX Runtime and bge-small from the `voice` stage.
 COPY --from=voice /opt/inference/lib/libonnxruntime.so /opt/inference/lib/libonnxruntime.so
 COPY --from=voice /opt/inference/models/bge-small-en-v1.5 /opt/inference/models/bge-small-en-v1.5
-COPY v3/plugins/abilities /opt/v3/plugins/abilities
+COPY v3/abilities /opt/v3/abilities
 COPY v3/plugins/engine /opt/v3/plugins/engine
 COPY --from=tested_builder /out/webagent-context-service /usr/local/lib/webagent/engine/context-assembly/webagent-context-service
 COPY --from=tested_builder /out/webagent-background-service /usr/local/lib/webagent/engine/background-dispatch/webagent-background-service

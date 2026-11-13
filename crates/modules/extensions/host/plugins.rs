@@ -38,10 +38,10 @@ pub(crate) struct Call<'a> {
 /// The abilities folder of the release this process runs.
 fn abilities_root() -> PathBuf {
     crate::live_assets::published_root()
-        .map(|root| root.join("plugins/abilities"))
+        .map(|root| root.join("abilities"))
         .unwrap_or_else(|| {
             std::env::var_os("V3_ABILITIES_ROOT").map_or_else(
-                || webagent_configuration::paths::app().join("plugins/abilities"),
+                || webagent_configuration::paths::app().join("abilities"),
                 PathBuf::from,
             )
         })

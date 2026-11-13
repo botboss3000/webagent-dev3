@@ -72,7 +72,7 @@ eligible steer routes; a remembered route binds later sends to its
 revocation. Polling preserves the explicit checkbox choice; now,
 new-session and onward requests cannot grant a reusable route.
 
-Config: the Agent Management ability (plugins/abilities/Core/agent_management) holds the tool folders and settings.
+Config: the Agent Management ability (abilities/Core/agent_management) holds the tool folders and settings.
 Tool schemas live in session_messaging::schemas; discovery is filtered by live
 ability access and policy. Agent policy rules and runtime access assignments are
 revisioned host state, not a new source JSON switch. policy_defaults fills absent

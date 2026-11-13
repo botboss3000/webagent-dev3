@@ -122,7 +122,7 @@ lifecycle reconfiguration during an idle task-owned drain.
    add the matching executable, set administrator ownership, directories 0755,
    executable 0755 and assets 0644, then rename the complete directory into its
    absent destination: the profile's install path, else plugins/NAME (strip ACLs
-   with setfacl -b under plugins/abilities). Keep Diagnostics configuration writable by
+   with setfacl -b under abilities). Keep Diagnostics configuration writable by
    app UID/GID 1100 (0660); do not restore logs.db or capture-session grants.
    Remove the disposable extraction container after reconciliation.
 5. Run deploy.py start-gate, start and start-loop as root, with the explicit
@@ -135,7 +135,7 @@ lifecycle reconfiguration during an idle task-owned drain.
 
 | Package | Tracked source assets | Image executable |
 | --- | --- | --- |
-| mcp | plugins/abilities/Core/mcp/service/plugin.json, servers.json | webagent-mcp |
+| mcp | abilities/Core/mcp/service/plugin.json, servers.json | webagent-mcp |
 | diagnostics | src/plugin_packages/diagnostics/plugin.json, diagnostics.json | webagent-diagnostics |
 | optimization | src/plugin_packages/optimization/plugin.json, optimization.json, optimization.skill.md, measure.py, workload.py | webagent-optimization |
 

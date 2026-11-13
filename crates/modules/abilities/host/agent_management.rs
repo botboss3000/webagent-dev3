@@ -1,4 +1,4 @@
-//! Agent Management runs as an ability plugin (`plugins/abilities/Core/agent_management`)
+//! Agent Management runs as an ability plugin (`abilities/Core/agent_management`)
 //! through `crate::extension_plugins`. This file keeps its tool list for schemas and the
 //! startup check, and the route bridge its host requests (and Orchestration) go through.
 use crate::{api, shared_chat, App, CancellationToken};

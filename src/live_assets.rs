@@ -2,7 +2,7 @@
 use crate::*;
 use std::sync::OnceLock;
 /// Administrator tool schemas from the tool folders under a catalog root
-/// (`plugins/abilities`), normalized for the model. A missing or invalid folder leaves
+/// (`abilities`), normalized for the model. A missing or invalid folder leaves
 /// only its own tool out; release validation refuses any such problem.
 pub(crate) fn native_schemas_for_catalog(
     root: &std::path::Path,
@@ -43,7 +43,7 @@ pub(crate) fn record_adoption(
     let Some(selected) = published_root() else {
         return Ok(());
     };
-    if catalog.snapshot_root() != selected.join("plugins/abilities") {
+    if catalog.snapshot_root() != selected.join("abilities") {
         anyhow::bail!("Catalog adoption not confirmed");
     }
     let revision = selected
@@ -110,11 +110,10 @@ pub(crate) mod native_schema_file_tests {
     /// all gathered under the `native_tools` folder.
     pub(crate) fn source_fixture() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
-        let checkout =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("plugins/abilities/Administrator");
+        let checkout = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("abilities/Administrator");
         let target = root
             .path()
-            .join("plugins/abilities/Administrator/native_tools/tools");
+            .join("abilities/Administrator/native_tools/tools");
         // Without the optional Administrator pack there are no tool folders to copy.
         let Ok(abilities) = std::fs::read_dir(&checkout) else {
             return root;
@@ -135,7 +134,7 @@ pub(crate) mod native_schema_file_tests {
         root
     }
     fn definition(root: &std::path::Path, name: &str) -> PathBuf {
-        root.join("plugins/abilities/Administrator/native_tools/tools")
+        root.join("abilities/Administrator/native_tools/tools")
             .join(name)
             .join("tool.json")
     }
@@ -150,7 +149,7 @@ pub(crate) mod native_schema_file_tests {
     #[cfg_attr(not(administrator_pack), ignore = "needs the Administrator pack")]
     fn parameter_change_versions_the_catalog_and_rejects_the_stale_snapshot() {
         let root = source_fixture();
-        let plugins = root.path().join("plugins/abilities");
+        let plugins = root.path().join("abilities");
         let catalog = crate::abilities::Catalog::load_current(&plugins).unwrap();
         assert!(catalog.native_snapshot_current().unwrap());
         change_parameter(root.path());
@@ -174,7 +173,7 @@ pub(crate) mod native_schema_file_tests {
     #[cfg_attr(not(administrator_pack), ignore = "needs the Administrator pack")]
     fn an_invalid_folder_withdraws_only_its_tool() {
         let root = source_fixture();
-        let plugins = root.path().join("plugins/abilities");
+        let plugins = root.path().join("abilities");
         let path = definition(root.path(), "build_work");
         for bytes in [
             b"not-json".to_vec(),
@@ -209,8 +208,7 @@ pub(crate) mod native_schema_file_tests {
             "string"
         );
         let catalog =
-            crate::abilities::Catalog::load_current(&root.path().join("plugins/abilities"))
-                .unwrap();
+            crate::abilities::Catalog::load_current(&root.path().join("abilities")).unwrap();
         let schemas = catalog.all_schemas();
         let build = schemas.iter().find(|s| s["name"] == "build_work").unwrap();
         assert_eq!(

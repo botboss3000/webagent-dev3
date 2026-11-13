@@ -2271,8 +2271,8 @@
   },
   "plugins": {
     "mcp": {
-      "source": "plugins/abilities/Core/mcp/service",
-      "install": "plugins/abilities/Core/mcp/package",
+      "source": "abilities/Core/mcp/service",
+      "install": "abilities/Core/mcp/package",
       "executable": "webagent-mcp",
       "source_assets": [
         "plugin.json",

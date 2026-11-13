@@ -81,7 +81,7 @@ impl Drift {
     }
 }
 
-/// Compare the published catalog root with the checkout's (`plugins/abilities` in both).
+/// Compare the published catalog root with the checkout's (`abilities` in both).
 pub fn compare(published: &Path, checkout: &Path) -> Result<Drift> {
     let old = abilities(published)?;
     let new = abilities(checkout)?;

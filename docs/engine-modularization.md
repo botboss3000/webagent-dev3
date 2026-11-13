@@ -55,7 +55,7 @@ Runtime controls live under the data root in config/engine-components.json, inde
 ## Build and publication contract
 The broker discovers workspace source closures and actual Cargo dependency/dep-info inputs. Contract changes require coordinated core release. Compatible service/assembly-only edits use independent compilation and immutable artifact sealing without replacing API/loop/gate. Build cache keys bind source, lockfile, toolchain, flags, recipe and runtime assets; artifact hashes are checked before reuse and activation.
 
-Engine descriptors are under plugins/engine, separate from plugins/abilities. They declare interface/implementation identity, organizational group, runtime requirements, build inputs, modes, limits and sealed executable identity. Validate duplicates, missing/cyclic runtime requirements and supported invocation contracts before activation. Store source and index with the final sealed immutable revision; verify API and loop adoption.
+Engine descriptors are under plugins/engine, separate from abilities. They declare interface/implementation identity, organizational group, runtime requirements, build inputs, modes, limits and sealed executable identity. Validate duplicates, missing/cyclic runtime requirements and supported invocation contracts before activation. Store source and index with the final sealed immutable revision; verify API and loop adoption.
 
 ## Verification and progress
 - Existing assembly/compaction characterization retained. New contracts tests cover Unicode, ordering, cache reconstruction, ephemeral budgets, stale/forged plans and owned transport equivalence.
@@ -468,7 +468,7 @@ cache policies are frozen.
 ## Optional Automation extraction boundary
 
 The Automation reducer is a standalone ability crate at
-plugins/abilities/Core/automation rather than an application Cargo binary.
+abilities/Core/automation rather than an application Cargo binary.
 src/ability_plugins.rs validates its fixed automation_v1 registration and
 immutable artifact identity; crates/modules/extensions/host/modules.rs owns lifecycle, scoped reducer
 transport, namespace CAS and health. The loop retains durable event scanning

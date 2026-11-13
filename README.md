@@ -296,7 +296,7 @@ grants do not expand merely because a plugin is installed. See
 [Administrator coding](docs/administrator-coding.md) for configuration and contracts.
 The loader rejects duplicate declarations. Unknown v2 tools remain catalog-only
 and cannot be discovered by the agent, loaded, or executed. The development
-container reads v3/plugins/abilities from its live v3 mount. If an ability
+container reads v3/abilities from its live v3 mount. If an ability
 directory or manifest disappears, the ability and its tools immediately leave
 agent discovery and execution, even for a session that loaded it earlier. Saved
 agent visibility settings remain in v3's agent database; restoring the files

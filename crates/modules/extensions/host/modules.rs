@@ -78,7 +78,7 @@ fn host_lock(app: &App, id: &str) -> Result<File> {
         .map_err(|_| anyhow!("Module busy"))?;
     Ok(file)
 }
-// @code-index {"version":1,"feature":"automation-drop-in","aliases":["standalone automation","automation ability plugin"],"purpose":"Trusted Automation lifecycle, pinned reducer execution and current permissions. Config: plugins/abilities/Core/automation/automation.json -> /config/settings; settings flow through host execution_scope and never grant authority.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"plugins/abilities/Core/automation/automation.json","pointers":["/config/settings"]}],"opportunities":[]}}
+// @code-index {"version":1,"feature":"automation-drop-in","aliases":["standalone automation","automation ability plugin"],"purpose":"Trusted Automation lifecycle, pinned reducer execution and current permissions. Config: abilities/Core/automation/automation.json -> /config/settings; settings flow through host execution_scope and never grant authority.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"abilities/Core/automation/automation.json","pointers":["/config/settings"]}],"opportunities":[]}}
 /// Automation has one fixed native ability bridge; legacy roots cannot restore a removed package.
 fn automation_ability_host(id: &str) -> bool {
     id == "automation"
@@ -86,10 +86,10 @@ fn automation_ability_host(id: &str) -> bool {
 /// Pin one broker publication before resolving the Automation ability's assets.
 fn automation_ability_root() -> PathBuf {
     crate::live_assets::published_root()
-        .map(|root| root.join("plugins/abilities"))
+        .map(|root| root.join("abilities"))
         .unwrap_or_else(|| {
             std::env::var_os("V3_ABILITIES_ROOT").map_or_else(
-                || webagent_configuration::paths::app().join("plugins/abilities"),
+                || webagent_configuration::paths::app().join("abilities"),
                 PathBuf::from,
             )
         })

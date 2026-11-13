@@ -16,7 +16,7 @@ Disabling retains the session and document; ordinary Compact remains available.
 
 Settings live in encrypted `module_state:main_chat`, not a JSON config file.
 Automation has separate effective settings/ceilings, declared in
-`plugins/abilities/Core/automation/automation.json` under `config.settings`.
+`abilities/Core/automation/automation.json` under `config.settings`.
 Installation, tier, agent, tool, approval and execution permissions still apply.
 A successful Notes write or approval authorizes neither execution nor scheduling.
 
@@ -66,7 +66,7 @@ version occurrence IDs. New evidence or intent still wakes review; Main Chat's
 progress-only writes remain observable without triggering a review loop.
 
 The review skill is
-`plugins/abilities/Core/automation/skills/main_notes_review.skill.md`. It chooses
+`abilities/Core/automation/skills/main_notes_review.skill.md`. It chooses
 an already authorized action, a permitted schedule/reminder, an input/approval
 request, or waiting. Main Chat owns note-bound scheduling. The host verifies its
 stable ID, destination and current intent again before admission. A retimed or

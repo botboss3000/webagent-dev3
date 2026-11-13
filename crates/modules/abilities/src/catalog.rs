@@ -848,8 +848,8 @@ impl<H: Host> Catalog<H> {
     }
     pub fn source_root(&self) -> Option<&Path> {
         self.root
-            .ends_with("plugins/abilities")
-            .then(|| self.root.parent().and_then(Path::parent))
+            .ends_with("abilities")
+            .then(|| self.root.parent())
             .flatten()
     }
     /// Recheck the Administrator schemas at the final dispatch fence: reread this
@@ -935,7 +935,7 @@ impl<H: Host> Catalog<H> {
         let root = ui_root.filter(|root| root.ends_with(Path::new("v3/ui")))?;
         let folder = root
             .parent()?
-            .join(format!("plugins/abilities/Administrator/{}", ability.id));
+            .join(format!("abilities/Administrator/{}", ability.id));
         match kind {
             "ability" if name == ability.id => Some(primary_skill_path(&folder, &ability.id)),
             "tool" if ability.tools.iter().any(|tool| tool == name) => {
@@ -2231,7 +2231,7 @@ pub mod registered_tests {
             let (root, catalog) = fixture::<H>();
             let mut ability = catalog.abilities[0].clone();
             let ui = root.path().join("assets/current/v3/ui");
-            assert_eq!(Catalog::<H>::published_skill_path(&ability, "ability", "codebase_admin", Some(&ui)).unwrap(),root.path().join("assets/current/v3/plugins/abilities/Administrator/codebase_admin/skills/codebase_admin.skill.md"));
+            assert_eq!(Catalog::<H>::published_skill_path(&ability, "ability", "codebase_admin", Some(&ui)).unwrap(),root.path().join("assets/current/v3/abilities/Administrator/codebase_admin/skills/codebase_admin.skill.md"));
             ability.tools = vec!["file_read".into()];
             assert!(
                 Catalog::<H>::published_skill_path(&ability, "tool", "../secret", Some(&ui))

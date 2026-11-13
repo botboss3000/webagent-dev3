@@ -4,22 +4,22 @@ import test_admin_build as fixtures
 ROOT=Path(__file__).resolve().parents[1]
 class PublicationTests(unittest.TestCase):
     def test_general_assets_and_core_inputs_use_different_lanes(self):
-        for path in ("plugins/abilities/Core/base/skills/base.skill.md","plugins/abilities/Custom/new/new.json","plugins/abilities/Custom/new/skills/extra.skill.md","config/prompts.json"):
+        for path in ("abilities/Core/base/skills/base.skill.md","abilities/Custom/new/new.json","abilities/Custom/new/skills/extra.skill.md","config/prompts.json"):
             self.assertTrue(fixtures.host.hot_source_path("v3/"+path),path)
-        for path in ("src/abilities.rs","sandbox.py","plugins/abilities/Core/base/adapter.rs","plugins/abilities/Custom/new/runner.py"):
+        for path in ("src/abilities.rs","sandbox.py","abilities/Core/base/adapter.rs","abilities/Custom/new/runner.py"):
             self.assertFalse(fixtures.host.hot_source_path("v3/"+path),path)
     def test_executable_inputs_require_an_explicit_package_manifest(self):
-        prefix="v3/plugins/abilities/Custom/new/"
+        prefix="v3/abilities/Custom/new/"
         blob=fixtures.context(extra={prefix+"plugin.json":json.dumps({"dispatch":"isolated","build":{"inputs":["runner.py"],"assets":["schemas.json"]}})})
         self.assertTrue(fixtures.host.generic_package_path(prefix+"runner.py",blob))
         self.assertFalse(fixtures.host.generic_package_path(prefix+"undeclared.py",blob))
     def test_deleted_executable_is_recognized_from_its_previous_package(self):
-        prefix="v3/plugins/abilities/Custom/new/"
+        prefix="v3/abilities/Custom/new/"
         previous=fixtures.context(extra={prefix+"plugin.json":json.dumps({"dispatch":"isolated","build":{"inputs":["runner.py"],"assets":[]}})})
         self.assertTrue(fixtures.host.generic_package_path(prefix+"runner.py",previous))
         self.assertFalse(fixtures.host.generic_package_path(prefix+"runner.py",fixtures.context()))
     def test_native_handlers_cannot_be_reclassified_by_a_new_plugin_manifest(self):
-        prefix="v3/plugins/abilities/Core/existing/"
+        prefix="v3/abilities/Core/existing/"
         previous=fixtures.context(extra={prefix+"existing.json":json.dumps({"readiness":"ready","kind":"ability"})})
         self.assertTrue(fixtures.host.native_package_migration(prefix+"runner.py",previous))
         previous=fixtures.context(extra={prefix+"existing.json":json.dumps({"readiness":"pending","kind":"ability"})})
@@ -39,7 +39,7 @@ class ArtifactCacheTests(unittest.TestCase):
         from unittest.mock import Mock,patch
         with tempfile.TemporaryDirectory()as temporary:
             assets=Path(temporary)/"assets";state=Path(temporary)/"state";job=str(uuid.uuid4())
-            package=assets/"releases"/job/"v3/plugins/abilities/Custom/fixture";(package/"src").mkdir(parents=True)
+            package=assets/"releases"/job/"v3/abilities/Custom/fixture";(package/"src").mkdir(parents=True)
             inputs={"Cargo.toml":b'[package]\nname="fixture_runner"\nversion="0.1.0"\nedition="2021"\n',"Cargo.lock":b"version = 4\n","src/main.rs":b"fn main() {}"}
             for name,value in inputs.items():(package/name).write_bytes(value)
             build={"toolchain":"rust-1.99","inputs":list(inputs),"dependencies":[],"flags":[],"assets":[]}

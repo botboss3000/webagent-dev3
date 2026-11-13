@@ -119,7 +119,7 @@ fn package(root: &Path) -> PathBuf {
 fn real_package_io_pins_generation_and_withdraws_invalid_selected_publication() {
     let root = tempfile::tempdir().unwrap();
     let first = root.path().join("first");
-    let catalogs = first.join("plugins/abilities");
+    let catalogs = first.join("abilities");
     let path = package(&catalogs);
     SOURCE.with(|s| *s.borrow_mut() = Some(first));
     let cache = CatalogCache::<Fixture>::default();
@@ -176,12 +176,8 @@ fn real_package_io_pins_generation_and_withdraws_invalid_selected_publication() 
         package::Invocation::Denied(_)
     ));
     let second = root.path().join("second");
-    std::fs::create_dir_all(second.join("plugins/abilities/Custom/bad")).unwrap();
-    std::fs::write(
-        second.join("plugins/abilities/Custom/bad/bad.json"),
-        b"invalid",
-    )
-    .unwrap();
+    std::fs::create_dir_all(second.join("abilities/Custom/bad")).unwrap();
+    std::fs::write(second.join("abilities/Custom/bad/bad.json"), b"invalid").unwrap();
     SOURCE.with(|s| *s.borrow_mut() = Some(second));
     assert!(cache.current(&fallback).is_err());
     SOURCE.with(|s| *s.borrow_mut() = Some(root.path().join("missing")));

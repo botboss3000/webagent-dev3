@@ -1,7 +1,7 @@
 //! Source Control tools ship with the optional Administrator pack (`git_control/remote`).
 //! Without the pack its tools are unknown and its settings routes answer 404.
 #[cfg(administrator_pack)]
-#[path = "../plugins/abilities/Administrator/git_control/remote/mod.rs"]
+#[path = "../abilities/Administrator/git_control/remote/mod.rs"]
 mod installed;
 #[cfg(administrator_pack)]
 pub use installed::*;

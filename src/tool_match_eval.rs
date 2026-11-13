@@ -28,7 +28,7 @@ fn strings(value: &Value) -> Vec<String> {
 fn candidates() -> Result<(Vec<Candidate>, Vec<Candidate>)> {
     let root = std::env::var("V3_ABILITIES_ROOT").unwrap_or_else(|_| {
         webagent_configuration::paths::app()
-            .join("plugins/abilities")
+            .join("abilities")
             .to_string_lossy()
             .into_owned()
     });

@@ -4,7 +4,7 @@ Source audit: 2026-10-02. This ledger records source wiring, not deployment or A
 
 ## Inventory and evidence rules
 
-The original audit catalog had **82 manifests: 2 ready, 68 pending, and 12 placeholders**. The current source has **10 ready, 1 partial, 60 pending, and 12 placeholders**. All eight selected Administrator coding abilities are ready after authenticated API acceptance; Base remains partial. Computer Control and Program Screenshot are explicitly excluded by the user. Administrator includes the newer v3_build and v3_workspace declarations. The counts are derived from each actual `plugins/abilities/<group>/<id>/<id>.json`, not from the presence of a Python module.
+The original audit catalog had **82 manifests: 2 ready, 68 pending, and 12 placeholders**. The current source has **10 ready, 1 partial, 60 pending, and 12 placeholders**. All eight selected Administrator coding abilities are ready after authenticated API acceptance; Base remains partial. Computer Control and Program Screenshot are explicitly excluded by the user. Administrator includes the newer v3_build and v3_workspace declarations. The counts are derived from each actual `abilities/<group>/<id>/<id>.json`, not from the presence of a Python module.
 
 V2 references below are relative to the read-only `v3/v2_ref/` snapshot. A module or stable descriptor establishes a source implementation, not that its inherited contract is safe in V3. Some small Commerce Python modules are adapter markers into `app/integrations/`; they are not placeholder implementations. OAuth identity connectors and installation services are distinct from executable model tools.
 
@@ -19,7 +19,7 @@ Authenticated acceptance on 2026-10-03 exercised each selected Administrator abi
 - Catalog authority: `src/abilities.rs`. It bounds manifests/skills, rejects duplicate installed tool ownership, and checks directory/manifest presence on use. Ready and partial ability/virtual_core entries expose only compiled tools; oauth/channel/service currently remain metadata. Contents refresh requires restart. Removal immediately withdraws presence; reconfiguration must also be enforced live.
 - Registered schema/read classification: `src/agent_loop/tools/mod.rs`. Native/worker dispatch: `src/agent_loop/tools/dispatch.rs`. A manifest cannot install a schema or register worker execution.
 - Ready Codebase Admin: native prompt slots, state inspection, and promotion proposal; bounded filesystem/shell operations delegated to the isolated worker. Native implementations are in `src/api/sessions.rs` and `src/promotion.rs`. A worker is never a policy authority.
-- Ready Web Access: compiled `plugins/abilities/Web/web_access/adapter.rs`; public web search/geocoding/weather with no credential import.
+- Ready Web Access: compiled `abilities/Web/web_access/adapter.rs`; public web search/geocoding/weather with no credential import.
 - Discovery and activation: `src/agent_loop/run.rs`, `src/context/assembly.rs`, `src/api/sessions.rs`. Bootstrap list_abilities/load_ability are loop-native today; their declarations in pending orchestration/base entries must not accidentally duplicate registered ownership.
 - Tenant access: `src/access/policy.rs`, `src/storage/access.rs`; ability-ID account grants and agent-owned membership capability levels now use a shared live calculation. Tenant ability administration flows through `src/api/ability_admin.rs`; account-tier ceilings remain installation-scoped.
 - Existing integral infrastructure is narrower than V2 parity: `src/context/compaction.rs` is automatic compaction; `src/context/memory.rs` is explicit per-session bounded notes; `src/attachments.rs` handles inline text attachments; `src/agent_loop/scheduler.rs` is queued-run lease scheduling. None establishes the similarly named full V2 ability/service.
@@ -28,7 +28,7 @@ Authenticated acceptance on 2026-10-03 exercised each selected Administrator abi
 
 ## Per-ability decisions
 
-Paths named `plugin <id>.py` refer to the owning V2 folder matching the ID and group in this table. Every row has its actual V3 manifest at `plugins/abilities/<group>/<id>/<id>.json`.
+Paths named `plugin <id>.py` refer to the owning V2 folder matching the ID and group in this table. Every row has its actual V3 manifest at `abilities/<group>/<id>/<id>.json`.
 
 | Ability | V2 source/maturity | V3 decision and execution gap | Configuration/credential needs | Tools / shipped skills |
 | --- | --- | --- | --- | --- |
@@ -111,7 +111,7 @@ Paths named `plugin <id>.py` refer to the owning V2 folder matching the ID and g
 | System/task_grouping | app/admin/tasks.py | pending; no v2 task classification/evidence policy | No external secret indicated; scoped settings/runtime authority; 4 declared settings | 0 declared / 0 skills |
 | System/watchdog | app/agent/watchdog.py | pending; Rust cancellation/leases exist; v2 watchdog service unported | No external secret indicated; scoped settings/runtime authority | 0 declared / 0 skills |
 | Web/browser_extension | module `crates/modules/browser` (rules) + `host/browser.rs` | ready; `browser_extension_status`, `browser_extension_action` through the linked Chrome extension; v2 cookie/vault/HTTP tools not ported | per-user linked device + per-agent site allowlist | 2 tool folders / 1 skill |
-| Web/browser_control | native package `plugins/abilities/Web/browser_control` (engine moved from Diagnostics) + `crates/modules/browser/host/browser.rs` | ready; private server browser, signed out behind an egress guard on public sites, or signed in on the development origin through Diagnostics; screenshots attach to the reply | Per-agent allow/block site lists; egress guard refuses non-public addresses | 3 declared |
+| Web/browser_control | native package `abilities/Web/browser_control` (engine moved from Diagnostics) + `crates/modules/browser/host/browser.rs` | ready; private server browser, signed out behind an egress guard on public sites, or signed in on the development origin through Diagnostics; screenshots attach to the reply | Per-agent allow/block site lists; egress guard refuses non-public addresses | 3 declared |
 | Web/host_management | plugin host_management.py; source handlers/adapter | pending; no registered V3 adapter/configuration path | provider-scoped DNS credentials | 4 declared / 0 skills |
 | Web/ssh_control | plugin ssh_control.py; source handlers/adapter | pending; no registered V3 adapter/configuration path | user-owned external SSH connections/keys | 9 declared / 0 skills |
 | Web/web_access | plugin web_access.py; source handlers/adapter | ready; compiled runtime present, access/tenant tests still required | No external secret indicated; scoped settings/runtime authority | 3 declared / 4 skills |

@@ -1,4 +1,4 @@
-//! Configuration Controller ability (`plugins/abilities/Core/config_controller`): the
+//! Configuration Controller ability (`abilities/Core/config_controller`): the
 //! configuration composer from an agent conversation. `find_setting` asks the composer which
 //! setting a request means and what it would change. Saving is split by layer so each has its
 //! own permission: `change_user_setting` (the user's own), `change_agent_setting` (an agent the

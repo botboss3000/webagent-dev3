@@ -474,7 +474,7 @@ mod tests {
         assert_eq!(available(), expected);
         let catalog = crate::abilities::Catalog::load(&PathBuf::from(
             std::env::var("V3_ABILITIES_ROOT")
-                .unwrap_or_else(|_| format!("{}/plugins/abilities", env!("CARGO_MANIFEST_DIR"))),
+                .unwrap_or_else(|_| format!("{}/abilities", env!("CARGO_MANIFEST_DIR"))),
         ))
         .unwrap();
         assert_eq!(catalog.known("optimization"), expected);

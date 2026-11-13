@@ -1,4 +1,4 @@
-//! The running app's view of checkout drift: `/code/plugins/abilities` compared
+//! The running app's view of checkout drift: `/code/abilities` compared
 //! with the published release it runs. Rechecked at most every five seconds, and only
 //! recomputed when a file in either tree changed. Without a publication (tests, local
 //! runs) there is no drift.
@@ -34,12 +34,11 @@ pub(crate) fn current() -> Arc<Drift> {
     {
         return cached.drift.clone();
     }
-    let Some(published) =
-        crate::live_assets::published_root().map(|root| root.join("plugins/abilities"))
+    let Some(published) = crate::live_assets::published_root().map(|root| root.join("abilities"))
     else {
         return Arc::default();
     };
-    let checkout = webagent_configuration::paths::checkout().join("plugins/abilities");
+    let checkout = webagent_configuration::paths::checkout().join("abilities");
     if !checkout.is_dir() {
         return Arc::default();
     }

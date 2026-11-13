@@ -8,7 +8,7 @@ The first general-loader migration requires an engine release.
 ## Tool folders for compiled abilities
 
 A compiled ability declares each tool in its own folder,
-`plugins/abilities/<Group>/<ability_id>/tools/<tool>/`, and leaves `tools` out of
+`abilities/<Group>/<ability_id>/tools/<tool>/`, and leaves `tools` out of
 its manifest; a packaged ability whose package contract checks the manifest list keeps
 it, naming exactly its tool folders. `tool.json` holds `name` (the folder name),
 `description`, JSON-schema `parameters`, optional `strict`, `effect` (`read` or
@@ -43,7 +43,7 @@ upper tier still caps the tiers below it (`crates/modules/abilities/src/ability_
 must stay administrator-only checks that in its own code.
 
 Administrator native tools (`webagent_administration::tools::TOOLS`) use the same
-folders under `plugins/abilities/Administrator/`. Codebase Admin's broker tool `build_work`, the
+folders under `abilities/Administrator/`. Codebase Admin's broker tool `build_work`, the
 Optimization tool `performance_work` and the older `v3_*` build and source names it keeps as
 permission ceilings live in `Administrator/native_tools/`, which the catalog does not list as an ability. Each catalog snapshot reads these schemas from its own folders, so a published
 description edit needs no Rust build; release validation refuses a missing or invalid
@@ -62,14 +62,14 @@ tool folders) and `requests`, the host requests it uses, chosen from the offered
 skills, the ability's settings and session watches). Every request runs as the chatting
 user with that user's permissions, after the app re-authorizes the tool call; a request
 the plugin did not declare is refused, and route parameters cannot leave their path
-segment. Agent Management (`plugins/abilities/Core/agent_management`) is the first.
+segment. Agent Management (`abilities/Core/agent_management`) is the first.
 
 A plugin that needs external services declares them in `providers` with
 `web.provider_request` (`crates/modules/extensions/src/providers.rs`): each provider has
 a fixed HTTPS origin, fixed endpoint methods and paths, and optionally a vault
 credential the app adds to a declared header. The sandboxed plugin has no network; the
 app makes each call as the chatting user, never returns the key, and counts each user's
-monthly use against a cap the plugin passes. Web Search (`plugins/abilities/Web/web_search`)
+monthly use against a cap the plugin passes. Web Search (`abilities/Web/web_search`)
 is the first.
 
 The plugin is one standalone crate with no workspace dependencies (the root workspace
@@ -80,7 +80,7 @@ binary through the root Cargo feature `stable-abilities`.
 
 ## Checkout edits
 
-The running app compares `/code/plugins/abilities` with the published release
+The running app compares `/code/abilities` with the published release
 it runs (`crates/modules/abilities/src/drift.rs`, rechecked at most every five seconds).
 Edits to a tool's description or `default_access`, and changed guidance text
 (`tool.skill.md`, `<id>.skill.md`, `skills/*.skill.md`), apply at once with no notice.
@@ -98,7 +98,7 @@ administrator may rebuild; the broker commits what it released.
 
 ## Isolated packages
 
-An isolated package lives at plugins/abilities/<Group>/<ability_id>. Retain the
+An isolated package lives at abilities/<Group>/<ability_id>. Retain the
 existing <ability_id>.json declaration format, own .skill.md, tools/ guidance
 and skills/ selectable guidance. Add plugin.json and schemas.json:
 
@@ -189,7 +189,7 @@ A new engine capability or incompatible protocol still needs an engine update.
 ## Native Automation ability boundary
 
 Automation uses the fixed host_interface=automation_v1 registration under
-plugins/abilities/Core/automation/plugin.json. Its standalone crate and complete
+abilities/Core/automation/plugin.json. Its standalone crate and complete
 test suite live in service/, alongside the package descriptor, schemas and UI.
 The application Cargo manifest does not build an Automation binary, and its
 image does not copy an Automation distribution. Installations can omit this

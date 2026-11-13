@@ -1,4 +1,4 @@
-//! Web Search runs as an ability plugin (`plugins/abilities/Web/web_search`) through
+//! Web Search runs as an ability plugin (`abilities/Web/web_search`) through
 //! `crate::extension_plugins`; the app makes each provider call it declares. This file
 //! keeps its tool list for schemas and the startup check.
 use crate::{App, CancellationToken};

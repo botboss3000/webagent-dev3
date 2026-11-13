@@ -56,7 +56,7 @@ def acceptance(binary, plugin_binary, test_binary, source):
         origin = "http://127.0.0.1:" + str(port)
         env = os.environ.copy()
         env.update(V3_STATE_ROOT=str(state), V3_PLUGIN_TEST_ROOT=str(plugins),
-                   V3_ABILITIES_ROOT=str(source / "plugins/abilities"),
+                   V3_ABILITIES_ROOT=str(source / "abilities"),
                    V3_CONTEXT_COMPACTION_CONFIG_PATH=str(source / "config/context-compaction.json"),
                    V3_UI_ROOT=str(source / "ui"),
                    V3_CONTROL_ROOT=str(control), V3_LISTEN="127.0.0.1:" + str(port),

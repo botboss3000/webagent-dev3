@@ -28,4 +28,4 @@ node_modules/
 /plugins/diagnostics/
 /plugins/optimization/
 
-/plugins/abilities/Core/mcp/package/
+/abilities/Core/mcp/package/

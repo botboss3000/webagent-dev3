@@ -4,7 +4,7 @@ mod connections;
 use crate::{json, App, CancellationToken, Result, Value};
 pub(crate) use connections::{configured, inspect, put, read, remove, search};
 
-/// Handled here; schemas and guidance live in `plugins/abilities/Core/mcp`.
+/// Handled here; schemas and guidance live in `abilities/Core/mcp`.
 pub(crate) const TOOLS: &[&str] = &[
     "mcp_list_connections",
     "mcp_search_servers",

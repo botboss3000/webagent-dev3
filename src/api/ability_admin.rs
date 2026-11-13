@@ -1551,7 +1551,7 @@ mod optional_package_settings_authority_tests {
         let manifest: Value = serde_json::from_slice(
             &std::fs::read(
                 PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("plugins/abilities/Core/automation/automation.json"),
+                    .join("abilities/Core/automation/automation.json"),
             )
             .unwrap(),
         )

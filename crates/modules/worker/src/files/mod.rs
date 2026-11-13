@@ -1,7 +1,7 @@
 //! File tools run inside the worker: list, read, search, edit and write, the
 //! Administrator's direct live-checkout edit, and directory-decision candidates
 //! ([`decision`]). Ported from the Codebase Admin runner
-//! (`plugins/abilities/Administrator/codebase_admin/runner.py`), which started a Python
+//! (`abilities/Administrator/codebase_admin/runner.py`), which started a Python
 //! process for every call; argument checks, limits, routing refusals and result fields are
 //! unchanged. Paths are walked one component at a time from `/` with `O_NOFOLLOW`, so a
 //! symlink swapped in after resolution is refused rather than followed.

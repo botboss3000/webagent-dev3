@@ -94,14 +94,29 @@ pub fn package(packages: &Packages, binding: &Value) -> Result<Verified, Refused
         .components()
         .map(|part| part.as_os_str().to_string_lossy().into_owned())
         .collect();
-    if release.len() != 6 || release[1..4] != ["v3", "plugins", "abilities"] {
+    // `<job>/v3/abilities/<group>/<id>`; releases before the move used `v3/plugins/abilities`.
+    let layout = match release.get(1..4) {
+        Some([v3, plugins, abilities])
+            if v3 == "v3" && plugins == "plugins" && abilities == "abilities" =>
+        {
+            6
+        }
+        _ if release
+            .get(1..3)
+            .is_some_and(|parts| parts == ["v3", "abilities"]) =>
+        {
+            5
+        }
+        _ => 0,
+    };
+    if release.len() != layout {
         return Err(refused("Invalid package location"));
     }
     if crate::files::uuid_text(&release[0]).is_none() {
         return Err(refused("badly formed hexadecimal UUID string"));
     }
     let ident = binding["id"].as_str().ok_or_else(|| refused("'id'"))?;
-    if release[5] != ident {
+    if release[layout - 1] != ident {
         return Err(refused("Plugin identity mismatch"));
     }
     let read = |name: &str, bound: u64| -> Result<Vec<u8>, Refused> {

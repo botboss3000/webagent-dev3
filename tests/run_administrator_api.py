@@ -21,7 +21,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 ABILITIES = ("codebase_admin", "git_control", "terminal_control", "diagnostics", "browser_control", "remote_tunnel")
-SCHEMAS = [json.loads(path.read_text()) for path in sorted((ROOT / "plugins/abilities/Administrator").glob("*/tools/*/tool.json"))]
+SCHEMAS = [json.loads(path.read_text()) for path in sorted((ROOT / "abilities/Administrator").glob("*/tools/*/tool.json"))]
 TOOLS = {s["name"] for s in SCHEMAS} | {"workspace_seed", "file_read", "file_write", "file_list", "shell", "python"}
 FORBIDDEN_APPROVALS = {"promotion_propose", "propose_promotion", "v3_worker_submit"}
 

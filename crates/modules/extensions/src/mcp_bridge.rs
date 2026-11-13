@@ -27,10 +27,7 @@ const BINARY_LIMIT: u64 = 32 * 1024 * 1024;
 /// The installed package: root-owned, git-ignored and never captured as a source input.
 pub fn folder() -> PathBuf {
     std::env::var_os("V3_PLUGIN_TEST_ROOT")
-        .map_or_else(
-            || webagent_configuration::paths::checkout().join("plugins"),
-            PathBuf::from,
-        )
+        .map_or_else(webagent_configuration::paths::checkout, PathBuf::from)
         .join("abilities/Core/mcp/package")
 }
 

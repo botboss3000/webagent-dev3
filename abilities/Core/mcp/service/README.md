@@ -2,7 +2,7 @@
 
 This optional package runs independently as `webagent-mcp`. Install the reviewed
 binary with `plugin.json` and `servers.json` in the live
-`plugins/abilities/Core/mcp/package/` directory: root-owned, mode 0755 and
+`abilities/Core/mcp/package/` directory: root-owned, mode 0755 and
 without ACLs (`setfacl -b`), because the parent folders' default ACLs would
 otherwise make it group-writable and the supervisor would refuse it. The
 folder is git-ignored and the broker never captures it as a source input.
@@ -67,15 +67,15 @@ not require compiling the WebAgent application. On the development server in an
 isolated reviewed source task and the pinned Rust 1.99 environment:
 
 ```sh
-cargo build --locked --release --manifest-path plugins/abilities/Core/mcp/service/Cargo.toml
-cargo test --locked --manifest-path plugins/abilities/Core/mcp/service/Cargo.toml
+cargo build --locked --release --manifest-path abilities/Core/mcp/service/Cargo.toml
+cargo test --locked --manifest-path abilities/Core/mcp/service/Cargo.toml
 ```
 
 Coordinate Cargo/cache/target use and attest unchanged package inputs before and
 after verification. Release replacements consist of the verified
 `webagent-mcp` (also built into the app image at `/usr/local/bin/webagent-mcp`),
 `plugin.json` and `servers.json` installed into the live
-`plugins/abilities/Core/mcp/package/` directory with administrator-owned secure
+`abilities/Core/mcp/package/` directory with administrator-owned secure
 permissions. Replace the reviewed binary atomically; the live supervisor notices
 replacement, stops the prior process, clears stale readiness and starts the new
 package. Preserve rollback binaries/config and reconcile interrupted external

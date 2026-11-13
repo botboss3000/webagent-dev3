@@ -106,8 +106,7 @@ mod tests {
 
     #[test]
     fn checkout_folders_hold_every_administrator_tool() {
-        let abilities =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../plugins/abilities");
+        let abilities = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../abilities");
         if !abilities.join(GROUP).is_dir() {
             return; // Built without the optional Administrator pack.
         }
@@ -140,7 +139,10 @@ mod tests {
             .problems
             .iter()
             .any(|p| p.contains("Duplicate Administrator tool folder")));
-        assert!(loaded.problems.iter().any(|p| p.contains("performance_work")));
+        assert!(loaded
+            .problems
+            .iter()
+            .any(|p| p.contains("performance_work")));
         assert!(loaded
             .problems
             .iter()
