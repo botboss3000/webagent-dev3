@@ -580,7 +580,8 @@ impl<
             let socket = socket.clone();
             async move {
                 crate::tools::transport::execute_host_trusted(
-                    "v3_build_work",
+                    // Claim actions are served only under the unified build_work name.
+                    "build_work",
                     &args,
                     sid,
                     &socket,
