@@ -64,6 +64,8 @@ CONTEXT_COMPILER_STAGE_SHA256="04d76d4efb9fe52ecc1f7ef778aef9a0c096fea97b22011e6
 CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256="a47b7c8928469f1d9dc535cf9d1df9c6b256052c84f10bd238f36a3b9541597d"
 SHARED_RELEASE_CONTEXT_COMPILER_STAGE_SHA256="1b281eed8db8d8ee5fe71e5efab39e1684fe1256f9ad6e12fdeb179d472403cc"
 PARALLEL_COMPILER_STAGE_SHA256="0cff9cfb6139da95442c7199d49867a88f6becdeba5eaf81e84376792011b020"
+# The Mold stage after abilities moved from plugins/abilities to the checkout root.
+MOVED_ABILITIES_COMPILER_STAGE_SHA256="0a29ef16dee6fa62b189c0b38b7b4e4fe97b2551ac7ab62d6f387fa84aba24f0"
 NEW_CONTEXT_BINARIES={"webagent-assets-service","webagent-capability-service","webagent-provider-service"}
 BINARIES=["webagent-v3","webagent-mcp","webagent-diagnostics","webagent-optimization","webagent-outbound-notifications","webagent-context-service","webagent-background-service","webagent-boot-service","webagent-boot-host","webagent-assets-service","webagent-capability-service","webagent-provider-service"]
 # Official non-test debug ELFs needed by actual subprocess integration tests.
@@ -1500,7 +1502,7 @@ class Executor:
         start=text.index("FROM rust:");end=text.index("FROM debian:",start)
         recipe=hashlib.sha256(text[start:end].encode()).hexdigest()
         if recipe in {COMPILER_STAGE_SHA256,CONTEXT_COMPILER_STAGE_SHA256}:return True
-        if recipe not in {EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256,CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256,SHARED_RELEASE_CONTEXT_COMPILER_STAGE_SHA256,PARALLEL_COMPILER_STAGE_SHA256,MOLD_COMPILER_STAGE_SHA256}:
+        if recipe not in {EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256,CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256,SHARED_RELEASE_CONTEXT_COMPILER_STAGE_SHA256,PARALLEL_COMPILER_STAGE_SHA256,MOLD_COMPILER_STAGE_SHA256,MOVED_ABILITIES_COMPILER_STAGE_SHA256}:
             raise ValueError("Compiler Dockerfile recipe changed; migrate the reviewed attributable engine recipe")
         cargo=tomllib.loads(files["v3/Cargo.toml"][1].decode())
         if any(target.get("name")=="webagent-automation"for target in cargo.get("bin",[]))or "v3/src/plugin_packages/automation/main.rs"in files:
@@ -1510,7 +1512,7 @@ class Executor:
         """Select the additional mandatory outputs from exact reviewed source, never stale binaries."""
         text=self.runner.execution_entries(blob)["v3/Dockerfile"][1].decode()
         stage=text[text.index("FROM rust:"):text.index("FROM debian:",text.index("FROM rust:"))]
-        return hashlib.sha256(stage.encode()).hexdigest()in {CONTEXT_COMPILER_STAGE_SHA256,CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256,SHARED_RELEASE_CONTEXT_COMPILER_STAGE_SHA256,PARALLEL_COMPILER_STAGE_SHA256,MOLD_COMPILER_STAGE_SHA256}
+        return hashlib.sha256(stage.encode()).hexdigest()in {CONTEXT_COMPILER_STAGE_SHA256,CONTEXT_EXTRACTED_AUTOMATION_COMPILER_STAGE_SHA256,SHARED_RELEASE_CONTEXT_COMPILER_STAGE_SHA256,PARALLEL_COMPILER_STAGE_SHA256,MOLD_COMPILER_STAGE_SHA256,MOVED_ABILITIES_COMPILER_STAGE_SHA256}
 
     def test_pass_key(self,blob,row,runtime_digest,support):
         """One test executable's pass identity: its exact bytes, the helper programs it can start,

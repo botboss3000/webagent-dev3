@@ -485,17 +485,19 @@ class CodebasePublicationMetadataTests(unittest.TestCase):
 
 
 # The Administrator pack is optional; the core app builds and tests without it.
-ADMINISTRATOR_PACK=(Path(__file__).resolve().parents[1]/"plugins/abilities/Administrator").is_dir()
+# Abilities moved from plugins/abilities to the checkout root.
+ABILITIES=next((p for p in (Path(__file__).resolve().parents[1]/"abilities",Path(__file__).resolve().parents[1]/"plugins/abilities")if p.is_dir()),Path(__file__).resolve().parents[1]/"abilities")
+ADMINISTRATOR_PACK=(ABILITIES/"Administrator").is_dir()
 
 
 class CodebaseRegisteredGuidanceTests(unittest.TestCase):
  @unittest.skipUnless(ADMINISTRATOR_PACK,"needs the Administrator pack")
  def test_every_installed_selectable_skill_has_an_independent_lane(self):
-  folder=Path(__file__).resolve().parents[1]/"plugins/abilities/Administrator/codebase_admin/skills"
+  folder=ABILITIES/"Administrator/codebase_admin/skills"
   paths=list(folder.glob("*.skill.md"))
   self.assertGreaterEqual(len(paths),4)
   for path in paths:
-   self.assertTrue(fixtures.host.ability_asset_path("v3/plugins/abilities/Administrator/codebase_admin/skills/"+path.name),path.name)
+   self.assertTrue(fixtures.host.ability_asset_path("v3/"+ABILITIES.relative_to(Path(__file__).resolve().parents[1]).as_posix()+"/Administrator/codebase_admin/skills/"+path.name),path.name)
 
 
 class PluginCompilationConcurrencyTests(unittest.TestCase):
@@ -2567,7 +2569,7 @@ class SourceControlContractTests(unittest.TestCase):
   native=["source_remote_read","source_remote_commit","source_site_create","source_site_status",
           "source_preview_start","source_preview_stop","source_publish","source_rollback"]
   tools=["repository_access","git_tool","resolve_conflict","commit_and_push",*native]
-  folder=Path(__file__).resolve().parents[1]/"plugins/abilities/Administrator/git_control"
+  folder=ABILITIES/"Administrator/git_control"
   self.assertEqual(json.loads((folder/"git_control.json").read_bytes())["tools"],tools)
   # Git Control runs in the Rust tool worker; no executable package ships with it.
   self.assertFalse((folder/"plugin.json").exists())
