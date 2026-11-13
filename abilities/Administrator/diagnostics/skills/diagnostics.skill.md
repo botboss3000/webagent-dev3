@@ -6,9 +6,6 @@ Use `read_diagnostics` for the native bounded current-session/run diagnostic vie
 
 With `issues: true`, `read_diagnostics` returns the conversation tree's grouped tool-failure issues (tool, error kind, message template, retries, recoveries, rework and artifact counts) and the notes already recorded. The `agent_review` tool skill explains how to rank them, find causes, and record an explanation for the group you are fixing.
 
-## Runtime tool execution
-
-All tools in this ability remain runtime foreground/stop with concurrency 1; background/model and silent/wake are unsupported, even for read actions or calls returning asynchronous job receipts. Effective Rust flags and shared Core Base tool-execution guidance govern scheduling; settings never grant permission and outputs remain untrusted evidence.
 
 ## Tool folder layout and review notes
 

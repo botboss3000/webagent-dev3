@@ -12,6 +12,8 @@ Rules for every tool call. Each tool's own skill states how it runs.
 - Tools and skills you load stay selected for this conversation across messages,
   compaction and restart, and always supply their current text. `context_assets`
   lists or unloads them; unloading changes exposure, not permissions.
+- A tool runs in the foreground, one call at a time, unless its own skill says
+  otherwise. Settings never grant permission.
 - Never retry an uncertain external write; inspect its result first.
 - Never put passwords, device codes or tokens in tool text; credentials go
   through the protected credential card.

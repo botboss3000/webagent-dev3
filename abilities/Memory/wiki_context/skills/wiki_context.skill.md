@@ -6,10 +6,8 @@ and not the chat transcript. Everyone with Wiki Control reads the same articles.
 
 ## Read first
 
-1. `wiki_search(query, also)` whenever a question might be answered by shared
-   knowledge. Search matches words, not meaning, so put synonyms and other
-   phrasings in `also` (for "refund": money back, reimbursement, return
-   policy). If nothing relevant comes back, retry once with different terms
+1. `wiki_search` whenever a question might be answered by shared knowledge.
+   If nothing relevant comes back, retry once with different terms
    before concluding the Wiki has no answer.
 2. `wiki_list(category?)` to browse when you have no precise query.
 3. `wiki_get(slug)` for the full article. Use only slugs that a search or list
