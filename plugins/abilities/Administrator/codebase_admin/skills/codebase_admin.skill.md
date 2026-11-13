@@ -64,6 +64,11 @@ change made unused, and do not leave commented-out code or unused helpers behind
 - Review a route end to end (registration and dispatch together) and verify
   activation separately from deployment. A user-facing route must work for a
   non-admin caller.
+- A check verifies a fix only if it first reproduces the user's failure. When it
+  cannot (an emulator, fixture or browser that never shows the bug), the fix is
+  unverified: say so, do not mark the work complete, and ask the user to confirm
+  on their device. When the user reports a fix still fails, find what your checks
+  miss on their device instead of repeating the checks that passed.
 
 ## Scope and efficiency
 
