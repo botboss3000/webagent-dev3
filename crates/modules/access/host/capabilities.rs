@@ -67,14 +67,18 @@ mod tests {
             .unwrap();
         crate::runtime_tests::grant_fixture_levels(&store, "shared_default").await;
         let before = store.live_access("admin", "shared_default").await.unwrap();
-        let mut level = before.capability_level.clone();
-        level
-            .ability_permissions
-            .insert("codebase_admin".into(), Permission::Deny);
-        let saved = store
-            .save_capability_level("shared_default", level, 3)
-            .await
-            .unwrap();
+        // Narrow from the bottom up: a save never leaves a lower level above a higher one.
+        let mut saved = store.capability_levels("shared_default").await.unwrap();
+        for id in ["visitor", "member", "operator"] {
+            let mut level = saved.levels[id].clone();
+            level
+                .ability_permissions
+                .insert("codebase_admin".into(), Permission::Deny);
+            saved = store
+                .save_capability_level("shared_default", level, saved.revision)
+                .await
+                .unwrap();
+        }
         let after = store.live_access("admin", "shared_default").await.unwrap();
         assert_ne!(before.context_fingerprint(), after.context_fingerprint());
         assert_eq!(after.revision.capability_level, saved.revision);
@@ -107,7 +111,7 @@ mod tests {
             .ability_permissions
             .insert("codebase_admin".into(), Permission::Ask);
         store
-            .save_capability_level("shared_default", level, 4)
+            .save_capability_level("shared_default", level, saved.revision)
             .await
             .unwrap();
         assert_eq!(

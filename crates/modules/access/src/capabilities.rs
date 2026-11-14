@@ -338,6 +338,61 @@ impl CapabilityLevels {
         }
         Ok(())
     }
+    /// Saves keep the ladder in order: each level gets at most what the level above it
+    /// gets, for every ability, tool and exposure either one names. Reads never call this,
+    /// so a ladder saved before the rule still works through `effective`'s ceilings.
+    pub fn check_order(&self) -> Result<()> {
+        self.validate()?;
+        for pair in self.order.windows(2) {
+            let (upper, lower) = (&self.levels[&pair[0]], &self.levels[&pair[1]]);
+            let rungs = |id: &String| {
+                let at = self.order.iter().position(|item| item == id).unwrap_or(0);
+                self.order[at..].to_vec()
+            };
+            let (upper_rungs, lower_rungs) = (rungs(&upper.id), rungs(&lower.id));
+            let above = |what: &str, key: &str| {
+                anyhow!(
+                    "{} can't get more {what} {key} than {} above it",
+                    lower.name,
+                    upper.name
+                )
+            };
+            for key in lower
+                .ability_permissions
+                .keys()
+                .chain(upper.ability_permissions.keys())
+            {
+                let low = level_ability_permission(&lower.ability_permissions, key);
+                let high = level_ability_permission(&upper.ability_permissions, key);
+                if low.meet(high) != low {
+                    return Err(above("access to ability", key));
+                }
+            }
+            for key in lower
+                .tool_permissions
+                .keys()
+                .chain(upper.tool_permissions.keys())
+            {
+                let low = level_tool_permission(&lower.tool_permissions, &lower_rungs, key);
+                let high = level_tool_permission(&upper.tool_permissions, &upper_rungs, key);
+                if low.meet(high) != low {
+                    return Err(above("access to tool", key));
+                }
+            }
+            for (low_map, high_map) in [
+                (&lower.ability_exposure, &upper.ability_exposure),
+                (&lower.tool_exposure, &upper.tool_exposure),
+                (&lower.skill_exposure, &upper.skill_exposure),
+            ] {
+                for key in low_map.keys().chain(high_map.keys()) {
+                    if exposure(low_map, key) > exposure(high_map, key) {
+                        return Err(above("visibility of", key));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
     pub fn effective(&self, id: &str) -> Result<CapabilityLevel> {
         self.validate()?;
         let position = self
@@ -471,7 +526,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             levels.order.insert(before, level.id.clone());
         }
         levels.levels.insert(level.id.clone(), level.clone());
-        levels.validate()?;
+        levels.check_order()?;
         metadata
             .as_object_mut()
             .ok_or_else(|| anyhow!("Invalid agent metadata"))?

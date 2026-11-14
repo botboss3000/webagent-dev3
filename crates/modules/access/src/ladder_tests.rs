@@ -327,3 +327,51 @@ fn abilities_a_level_does_not_name_stay_off() {
         Permission::Deny
     );
 }
+
+#[test]
+fn saves_refuse_a_lower_level_with_more_than_the_level_above() {
+    let mut levels = CapabilityLevels::default();
+    for level in levels.levels.values_mut() {
+        level
+            .ability_permissions
+            .insert("web_access".into(), Permission::Ask);
+    }
+    levels.check_order().unwrap();
+    let visitor = levels.levels.get_mut("visitor").unwrap();
+    visitor
+        .ability_permissions
+        .insert("web_access".into(), Permission::Auto);
+    let error = levels.check_order().unwrap_err().to_string();
+    assert!(
+        error.contains("Visitor") && error.contains("Member"),
+        "{error}"
+    );
+    // Reads still clamp the out-of-order level instead of failing.
+    assert_eq!(
+        levels
+            .effective("visitor")
+            .unwrap()
+            .ability_permission("web_access"),
+        Permission::Ask
+    );
+    levels
+        .levels
+        .get_mut("visitor")
+        .unwrap()
+        .ability_permissions
+        .insert("web_access".into(), Permission::Deny);
+    levels
+        .levels
+        .get_mut("visitor")
+        .unwrap()
+        .tool_exposure
+        .insert("web_search".into(), Exposure::Off);
+    levels.check_order().unwrap();
+    levels
+        .levels
+        .get_mut("member")
+        .unwrap()
+        .skill_exposure
+        .insert("notes".into(), Exposure::Off);
+    assert!(levels.check_order().is_err());
+}

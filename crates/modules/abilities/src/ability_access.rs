@@ -12,7 +12,8 @@ use webagent_access::{Permission, ADMINISTRATOR_TIER};
 pub const ADMINISTRATOR_GROUP: &str = "Administrator";
 
 /// The tiers built-in Base works for, as a manifest's `tier_access` would list them.
-const BUILT_IN_TIERS: [&str; 2] = [webagent_access::FREE_TIER, ADMINISTRATOR_TIER];
+/// Tiers whose owners' agents get the built-in Base ability, which has no manifest.
+pub const BUILT_IN_TIERS: [&str; 2] = [webagent_access::FREE_TIER, ADMINISTRATOR_TIER];
 
 /// One ability's declared access.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

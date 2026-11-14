@@ -31,7 +31,7 @@ export function renderMemberAccess(host,agent,persist,request,{agentId,reload}) 
   const privacy=select('Conversation privacy',[['private','Private'],['operator_reviewable','Operator-reviewable']],settings.conversation_privacy);
   privacy.disabled=!agent.can_manage;privacyLabel.append(privacy);body.append(privacyLabel,node('p','Applies to new conversations. Existing conversations keep their privacy mode. Reviewable conversations disclose that Operators can read and join.','ac-hint'));
   privacy.onchange=async()=>{privacy.disabled=true;const before=settings.conversation_privacy;settings.conversation_privacy=privacy.value;try{await persist({member_access:settings});status.textContent='Saved';}catch(error){settings.conversation_privacy=before;privacy.value=before;status.textContent=error.message;}finally{privacy.disabled=!agent.can_manage;}};
-  body.append(node('h4','Agent member levels'),node('p','Highest to lowest. Each level is capped by the levels above it. Configure abilities on the Abilities page. Message limits count each user\'s messages to this agent over the last 24 hours and 30 days.','ac-hint'));
+  body.append(node('h4','Agent member levels'),node('p','Highest to lowest. Each level gets no more than the level above it; a change that breaks this order is refused. Configure abilities on the Abilities page. Message limits count each user\'s messages to this agent over the last 24 hours and 30 days.','ac-hint'));
   const levels=agent.capability_levels;
   const save=async(next,reassignments={},confirm_expansion=false)=>{
     status.textContent='Saving…';try{await request('/agents/'+encodeURIComponent(agentId)+'/capability-ladder','PUT',{expected_revision:levels.revision,ladder:next,reassignments,confirm_expansion});await reload();}catch(error){status.textContent=error.message;}
@@ -57,7 +57,7 @@ export function renderMemberAccess(host,agent,persist,request,{agentId,reload}) 
       row.append(button('Rename',()=>{const next=structuredClone(levels);next.levels[id].name=name.value.trim();void save(next);}));
       for(const [label,direction]of [['Move up',-1],['Move down',1]]) {
         const move=button(label,()=>{const next=structuredClone(levels);[next.order[index],next.order[index+direction]]=[next.order[index+direction],next.order[index]];
-          if(window.confirm('New order: '+next.order.map(key=>next.levels[key].name).join(' → ')+'. Effective access will follow the new ceilings. Confirm this change?'))void save(next,{},true);});
+          if(window.confirm('New order: '+next.order.map(key=>next.levels[key].name).join(' → ')+'. It saves only if each level still gets no more than the level above it. Confirm this change?'))void save(next,{},true);});
         move.disabled=index+direction<=0||index+direction>=levels.order.length-1;row.append(move);
       }
       row.append(button('Delete level',()=>{

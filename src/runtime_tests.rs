@@ -8166,7 +8166,7 @@ async fn tenant_ability_http_levels_effective_views_and_stale_updates() {
         .unwrap()
         .iter()
         .any(|a| a["readiness"] != "ready"));
-    let level = json!({"id":"limited","name":"Limited","revision":1,"ability_permissions":{"web_access":"auto"},"tool_permissions":{}});
+    let level = json!({"id":"limited","name":"Limited","revision":1,"ability_permissions":{"codebase_admin":"auto","web_access":"auto"},"tool_permissions":{}});
     let update = json!({"expected_revision":3,"level":level});
     let level_path = "/api/v3/agents/agent-a/capability-levels/limited";
     assert_eq!(

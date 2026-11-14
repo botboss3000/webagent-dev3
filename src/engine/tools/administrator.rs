@@ -562,7 +562,8 @@ mod tests {
         );
         // Denied to the caller: no grant even while active and loaded.
         let mut levels = app.store.capability_levels("shared_default").await.unwrap();
-        for id in ["operator", "member", "visitor"] {
+        // Narrow from the bottom up: a save never leaves a lower level above a higher one.
+        for id in ["visitor", "member", "operator"] {
             let mut level = levels.levels[id].clone();
             level
                 .ability_permissions
