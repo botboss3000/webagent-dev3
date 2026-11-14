@@ -329,19 +329,25 @@ fn abilities_a_level_does_not_name_stay_off() {
 }
 
 #[test]
-fn saves_refuse_a_lower_level_with_more_than_the_level_above() {
+fn saves_refuse_only_new_out_of_order_cases() {
     let mut levels = CapabilityLevels::default();
     for level in levels.levels.values_mut() {
         level
             .ability_permissions
             .insert("web_access".into(), Permission::Ask);
     }
-    levels.check_order().unwrap();
-    let visitor = levels.levels.get_mut("visitor").unwrap();
-    visitor
-        .ability_permissions
-        .insert("web_access".into(), Permission::Auto);
-    let error = levels.check_order().unwrap_err().to_string();
+    let ordered = levels.clone();
+    levels.check_order(&ordered).unwrap();
+    let raise = |levels: &mut CapabilityLevels, id: &str, key: &str, to: Permission| {
+        levels
+            .levels
+            .get_mut(id)
+            .unwrap()
+            .ability_permissions
+            .insert(key.into(), to);
+    };
+    raise(&mut levels, "visitor", "web_access", Permission::Auto);
+    let error = levels.check_order(&ordered).unwrap_err().to_string();
     assert!(
         error.contains("Visitor") && error.contains("Member"),
         "{error}"
@@ -354,24 +360,33 @@ fn saves_refuse_a_lower_level_with_more_than_the_level_above() {
             .ability_permission("web_access"),
         Permission::Ask
     );
-    levels
-        .levels
-        .get_mut("visitor")
-        .unwrap()
-        .ability_permissions
-        .insert("web_access".into(), Permission::Deny);
+    // An out-of-order ladder saved earlier: Operator denies what both lower levels allow.
+    let mut legacy = ordered.clone();
+    raise(&mut legacy, "operator", "web_access", Permission::Deny);
+    // Unrelated saves and step-by-step fixes from the bottom up go through.
+    let mut next = legacy.clone();
+    raise(&mut next, "operator", "notes", Permission::Auto);
+    next.check_order(&legacy).unwrap();
+    let mut fixed = legacy.clone();
+    raise(&mut fixed, "visitor", "web_access", Permission::Deny);
+    fixed.check_order(&legacy).unwrap();
+    // A new case is still refused.
+    let mut worse = legacy.clone();
+    raise(&mut worse, "visitor", "browser", Permission::Auto);
+    assert!(worse.check_order(&legacy).is_err());
     levels
         .levels
         .get_mut("visitor")
         .unwrap()
         .tool_exposure
         .insert("web_search".into(), Exposure::Off);
-    levels.check_order().unwrap();
+    raise(&mut levels, "visitor", "web_access", Permission::Deny);
+    levels.check_order(&ordered).unwrap();
     levels
         .levels
         .get_mut("member")
         .unwrap()
         .skill_exposure
         .insert("notes".into(), Exposure::Off);
-    assert!(levels.check_order().is_err());
+    assert!(levels.check_order(&ordered).is_err());
 }

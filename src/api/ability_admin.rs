@@ -35,8 +35,12 @@ async fn authority(
     Ok(rights)
 }
 fn update_error(error: anyhow::Error) -> ApiError {
-    if error.to_string().contains("revision") {
+    let message = error.to_string();
+    if message.contains("revision") {
         conflict("Ability settings changed; reload before saving")
+    } else if message.contains(" above it") {
+        // A ladder-order refusal names the two levels and what clashes.
+        bad(&message)
     } else {
         bad("Invalid ability policy update")
     }

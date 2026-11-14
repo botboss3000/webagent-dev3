@@ -159,10 +159,10 @@ async fn ladder(
     body.ladder
         .validate()
         .map_err(|_| bad("Invalid capability ladder"))?;
-    body.ladder
-        .check_order()
-        .map_err(|error| bad(&error.to_string()))?;
     let previous = store.capability_levels(&id).await?;
+    body.ladder
+        .check_order(&previous)
+        .map_err(|error| bad(&error.to_string()))?;
     for (level_id, next) in &body.ladder.levels {
         let old = previous
             .levels

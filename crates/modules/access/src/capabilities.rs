@@ -338,11 +338,12 @@ impl CapabilityLevels {
         }
         Ok(())
     }
-    /// Saves keep the ladder in order: each level gets at most what the level above it
-    /// gets, for every ability, tool and exposure either one names. Reads never call this,
-    /// so a ladder saved before the rule still works through `effective`'s ceilings.
-    pub fn check_order(&self) -> Result<()> {
+    /// Each place the ladder is out of order: a level that gets more of an ability, tool or
+    /// visibility than the level above it. Reads never call this, so an out-of-order ladder
+    /// still works through `effective`'s ceilings.
+    pub fn order_problems(&self) -> Result<Vec<String>> {
         self.validate()?;
+        let mut problems = Vec::new();
         for pair in self.order.windows(2) {
             let (upper, lower) = (&self.levels[&pair[0]], &self.levels[&pair[1]]);
             let rungs = |id: &String| {
@@ -350,12 +351,14 @@ impl CapabilityLevels {
                 self.order[at..].to_vec()
             };
             let (upper_rungs, lower_rungs) = (rungs(&upper.id), rungs(&lower.id));
-            let above = |what: &str, key: &str| {
-                anyhow!(
+            let mut above = |what: &str, key: &str| {
+                let problem = format!(
                     "{} can't get more {what} {key} than {} above it",
-                    lower.name,
-                    upper.name
-                )
+                    lower.name, upper.name
+                );
+                if !problems.contains(&problem) {
+                    problems.push(problem);
+                }
             };
             for key in lower
                 .ability_permissions
@@ -365,7 +368,7 @@ impl CapabilityLevels {
                 let low = level_ability_permission(&lower.ability_permissions, key);
                 let high = level_ability_permission(&upper.ability_permissions, key);
                 if low.meet(high) != low {
-                    return Err(above("access to ability", key));
+                    above("access to ability", key);
                 }
             }
             for key in lower
@@ -376,7 +379,7 @@ impl CapabilityLevels {
                 let low = level_tool_permission(&lower.tool_permissions, &lower_rungs, key);
                 let high = level_tool_permission(&upper.tool_permissions, &upper_rungs, key);
                 if low.meet(high) != low {
-                    return Err(above("access to tool", key));
+                    above("access to tool", key);
                 }
             }
             for (low_map, high_map) in [
@@ -386,12 +389,26 @@ impl CapabilityLevels {
             ] {
                 for key in low_map.keys().chain(high_map.keys()) {
                     if exposure(low_map, key) > exposure(high_map, key) {
-                        return Err(above("visibility of", key));
+                        above("visibility of", key);
                     }
                 }
             }
         }
-        Ok(())
+        Ok(problems)
+    }
+    /// Saves keep the ladder in order: a save is refused when it adds an out-of-order case
+    /// that `before` (the saved ladder) did not have. Cases saved before this rule stay
+    /// until an Operator fixes them, which can be done one level at a time.
+    pub fn check_order(&self, before: &Self) -> Result<()> {
+        let existing = before.order_problems().unwrap_or_default();
+        match self
+            .order_problems()?
+            .into_iter()
+            .find(|problem| !existing.contains(problem))
+        {
+            Some(problem) => bail!("{problem}"),
+            None => Ok(()),
+        }
     }
     pub fn effective(&self, id: &str) -> Result<CapabilityLevel> {
         self.validate()?;
@@ -525,8 +542,9 @@ impl<C: RecordCodec> Repository<'_, C> {
             let before = levels.order.len() - 1;
             levels.order.insert(before, level.id.clone());
         }
+        let before = levels.clone();
         levels.levels.insert(level.id.clone(), level.clone());
-        levels.check_order()?;
+        levels.check_order(&before)?;
         metadata
             .as_object_mut()
             .ok_or_else(|| anyhow!("Invalid agent metadata"))?
