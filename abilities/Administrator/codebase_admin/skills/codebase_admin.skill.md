@@ -56,6 +56,13 @@ tests, styles, config) in the same task before or alongside the next attempt,
 unless it is still needed; keep only what the working fix uses. Remove code your
 change made unused, and do not leave commented-out code or unused helpers behind.
 
+When you change a function, class or CSS rule that someone would look for by what it
+does rather than by its name, make sure the line directly above it is one plain sentence
+saying what it does, in the words a person would use to ask about it; fix that sentence
+if your change made it wrong. `file_search` `find` ranks blocks on it and shows it as
+the result's gist. Do not add keyword lists or aliases, and do not comment blocks whose
+names already say what they do.
+
 ## Evidence
 
 - Report only what evidence shows; an absent counter is unavailable, not zero.
