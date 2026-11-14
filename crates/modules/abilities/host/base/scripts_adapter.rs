@@ -528,7 +528,7 @@ mod tests {
     async fn fixture() -> (tempfile::TempDir, App) {
         let (root, app) = crate::runtime_tests::fixture().await;
         let mut access_policy = app.store.read_access_policy().unwrap();
-        access_policy["tiers"]["operator"]["ability_permissions"]["base"] = json!("auto");
+        access_policy["tiers"]["administrator"]["ability_permissions"]["base"] = json!("auto");
         app.store.write_access_policy(&access_policy).unwrap();
         let levels = app.store.capability_levels("shared_default").await.unwrap();
         let mut level = levels.levels["operator"].clone();
@@ -656,7 +656,7 @@ mod tests {
         assert_eq!(result["status"], "denied", "{result}");
         // In the read-only Ask mode a tool the tier sets to ask would ask, so it is refused.
         let mut access_policy = app.store.read_access_policy().unwrap();
-        access_policy["tiers"]["operator"]["tools"]["calculate"] = json!("ask");
+        access_policy["tiers"]["administrator"]["tools"]["calculate"] = json!("ask");
         app.store.write_access_policy(&access_policy).unwrap();
         app.store
             .put(

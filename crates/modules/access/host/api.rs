@@ -350,7 +350,6 @@ async fn stop_tier_runs(app: &App, tier_id: &str) -> Result<(), ApiError> {
 struct AccountChange {
     expected_revision: u64,
     status: AccountStatus,
-    role: Role,
     tier_id: String,
 }
 async fn change_account(
@@ -364,19 +363,13 @@ async fn change_account(
         identity["_user_id"].as_str().unwrap_or(""),
         &id,
         body.status,
-        body.role,
+        &body.tier_id,
     )
     .map_err(|_| invalid("You cannot restrict or demote your own administrator account"))?;
     let _guard = app.gate.lock().await;
     let account = app
         .store
-        .update_account_access(
-            &id,
-            body.expected_revision,
-            body.status,
-            body.role,
-            &body.tier_id,
-        )
+        .update_account_access(&id, body.expected_revision, body.status, &body.tier_id)
         .await
         .map_err(|_| stale("Account update rejected; reload the account and tier"))?;
     stop_user_runs(
@@ -801,8 +794,7 @@ mod tests {
             Json(AccountChange {
                 expected_revision: 1,
                 status: AccountStatus::Active,
-                role: Role::User,
-                tier_id: "basic".into(),
+                tier_id: "free".into(),
             }),
         )
         .await
@@ -820,8 +812,7 @@ mod tests {
             Json(AccountChange {
                 expected_revision: 2,
                 status: AccountStatus::Active,
-                role: Role::Administrator,
-                tier_id: "basic".into(),
+                tier_id: "administrator".into(),
             }),
         )
         .await

@@ -429,13 +429,7 @@ mod tests {
             .unwrap();
         let id = account["user_id"].as_str().unwrap();
         app.store
-            .update_account_access(
-                id,
-                1,
-                crate::access::AccountStatus::Active,
-                crate::access::Role::User,
-                "basic",
-            )
+            .update_account_access(id, 1, crate::access::AccountStatus::Active, "free")
             .await
             .unwrap();
         id.into()
@@ -761,8 +755,7 @@ mod tests {
                 &alice,
                 revision,
                 crate::access::AccountStatus::Suspended,
-                crate::access::Role::User,
-                "basic",
+                "free",
             )
             .await
             .unwrap();

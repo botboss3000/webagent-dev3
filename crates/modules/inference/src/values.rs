@@ -83,12 +83,15 @@ static DECREASE: LazyLock<Regex> =
     LazyLock::new(|| regex(&format!(r"\b({DOWN}|too (big|large|wide|long))\b")));
 static TIERS: LazyLock<[(&str, Regex); 3]> = LazyLock::new(|| {
     [
-        ("basic", regex(r"\b(basic|base|regular|member)\b")),
+        ("free", regex(r"\b(free|basic|base|regular|member)\b")),
         (
             "anonymous",
             regex(r"\b(anonymous|signed[- ]out|guest|without logging)\b"),
         ),
-        ("operator", regex(r"\b(operator|admin)\b")),
+        (
+            "administrator",
+            regex(r"\b(administrator|operator|admin)\b"),
+        ),
     ]
 });
 

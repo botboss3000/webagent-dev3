@@ -37,15 +37,8 @@ impl webagent_accounts::api::Host for App {
         id: &'a str,
     ) -> webagent_accounts::api::Result<()> {
         let assignment = access::initial_user_access();
-        let role = serde_json::from_value(json!(assignment.role)).map_err(anyhow::Error::from)?;
         self.store
-            .update_account_access(
-                id,
-                1,
-                access::AccountStatus::Active,
-                role,
-                assignment.tier_id,
-            )
+            .update_account_access(id, 1, access::AccountStatus::Active, assignment.tier_id)
             .await?;
         Ok(())
     }

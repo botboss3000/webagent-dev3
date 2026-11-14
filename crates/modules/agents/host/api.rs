@@ -625,8 +625,7 @@ mod tests {
                 id,
                 1,
                 crate::access::AccountStatus::Active,
-                crate::access::Role::User,
-                "operator",
+                app.store.full_user_tier().await,
             )
             .await
             .unwrap();

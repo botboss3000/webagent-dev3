@@ -89,8 +89,8 @@
       "max": 100000,
       "parameters": {
         "tier": [
-          "operator",
-          "basic",
+          "administrator",
+          "free",
           "anonymous"
         ]
       },
@@ -117,8 +117,8 @@
       "max": 1000,
       "parameters": {
         "tier": [
-          "operator",
-          "basic",
+          "administrator",
+          "free",
           "anonymous"
         ]
       },
@@ -143,8 +143,8 @@
       "max_length": 40,
       "parameters": {
         "tier": [
-          "operator",
-          "basic",
+          "administrator",
+          "free",
           "anonymous"
         ]
       },

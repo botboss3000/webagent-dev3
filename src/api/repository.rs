@@ -456,13 +456,7 @@ mod tests {
             .unwrap();
         let uid = user["user_id"].as_str().unwrap();
         app.store
-            .update_account_access(
-                uid,
-                1,
-                crate::access::AccountStatus::Active,
-                crate::access::Role::User,
-                "basic",
-            )
+            .update_account_access(uid, 1, crate::access::AccountStatus::Active, "free")
             .await
             .unwrap();
         let agent = "repository-agent";

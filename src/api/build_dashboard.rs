@@ -128,13 +128,7 @@ mod tests {
             .unwrap();
         let uid = user["user_id"].as_str().unwrap();
         app.store
-            .update_account_access(
-                uid,
-                1,
-                access::AccountStatus::Active,
-                access::Role::User,
-                "basic",
-            )
+            .update_account_access(uid, 1, access::AccountStatus::Active, "free")
             .await
             .unwrap();
         let generation = app.store.account_by_id(uid).await.unwrap().unwrap()["generation"].clone();
@@ -248,13 +242,7 @@ mod tests {
             .unwrap();
         let uid = user["user_id"].as_str().unwrap();
         app.store
-            .update_account_access(
-                uid,
-                1,
-                access::AccountStatus::Active,
-                access::Role::User,
-                "basic",
-            )
+            .update_account_access(uid, 1, access::AccountStatus::Active, "free")
             .await
             .unwrap();
         let generation = app.store.account_by_id(uid).await.unwrap().unwrap()["generation"].clone();

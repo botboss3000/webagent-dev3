@@ -7,7 +7,7 @@
     "operator": "auto"
   },
   "account_access": {
-    "operator": "auto"
+    "administrator": "auto"
   },
   "parameters": {
     "type": "object",

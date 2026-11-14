@@ -194,7 +194,7 @@ mod tests {
             .await
             .unwrap();
         let mut tier: crate::access::Tier =
-            serde_json::from_value(store.read_access_policy().unwrap()["tiers"]["basic"].clone())
+            serde_json::from_value(store.read_access_policy().unwrap()["tiers"]["free"].clone())
                 .unwrap();
         tier.id = "quota_one".into();
         tier.revision = 0;
@@ -208,13 +208,7 @@ mod tests {
                 .unwrap();
             let id = account["user_id"].as_str().unwrap().to_owned();
             store
-                .update_account_access(
-                    &id,
-                    1,
-                    crate::access::AccountStatus::Active,
-                    crate::access::Role::User,
-                    "quota_one",
-                )
+                .update_account_access(&id, 1, crate::access::AccountStatus::Active, "quota_one")
                 .await
                 .unwrap();
             ids.push(id);

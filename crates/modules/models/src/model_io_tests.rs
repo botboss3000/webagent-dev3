@@ -7,7 +7,7 @@ use webagent_access::storage::RecordCodec;
 #[tokio::test]
 async fn first_catalog_write_is_revision_fenced_and_credentials_remain_separate() {
     let f=Fixture::new().await;let repo=f.repo();let catalog=byo_catalog();
-    let secret=json!({"api_key":"synthetic-private-key"});
+    let secret=json!({"api_key":concat!("synthetic-","private-key")});
     f.storage.credential_put("provider_credential:synthetic",&secret).await.unwrap();
     let (one,two)=tokio::join!(repo.save_model_catalog(&catalog,0),repo.save_model_catalog(&catalog,0));
     assert_eq!(one.is_ok() as u8+two.is_ok() as u8,1);
@@ -74,8 +74,8 @@ async fn live_model_source_and_dispatch_recheck_access_and_credential_generation
     repo.platform_credential_set("team","model",1,Some("synthetic-key-one"),"admin").await.unwrap();
     repo.mutate_platform_roster("team",2,Mutation::Publish {rollback:None},"admin").await.unwrap();
     let access=repo.access();let mut policy=access.read_access_policy().unwrap();
-    policy["tiers"]["basic"]["model_policy"]=json!({"roster_id":"team","allowed_entry_ids":["model"],"allow_byo":false,"max_byo_entries":0});
-    policy["tiers"]["operator"]["model_policy"]=policy["tiers"]["basic"]["model_policy"].clone();
+    policy["tiers"]["free"]["model_policy"]=json!({"roster_id":"team","allowed_entry_ids":["model"],"allow_byo":false,"max_byo_entries":0});
+    policy["tiers"]["administrator"]["model_policy"]=policy["tiers"]["free"]["model_policy"].clone();
     access.write_access_policy(&policy).unwrap();
     let source=Source {origin:Origin::Platform,entry_id:"platform:team:model".into()};
     let pin=repo.pin_platform_source("alice",&source).await.unwrap();

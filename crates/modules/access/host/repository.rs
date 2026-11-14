@@ -16,12 +16,26 @@ impl Store {
         id: &str,
         expected_revision: u64,
         status: AccountStatus,
-        role: Role,
         tier_id: &str,
     ) -> Result<Value> {
         self.access_repository()
-            .update_account_access(id, expected_revision, status, role, tier_id)
+            .update_account_access(id, expected_revision, status, tier_id)
             .await
+    }
+    /// Test-only non-administrator tier with the administrator tier's grants, for tests
+    /// that need a fully entitled ordinary user.
+    #[cfg(test)]
+    pub async fn full_user_tier(&self) -> &'static str {
+        if self.entitlement_tier("full").await.unwrap().is_none() {
+            let mut tier = self
+                .entitlement_tier("administrator")
+                .await
+                .unwrap()
+                .unwrap();
+            tier.id = "full".into();
+            self.save_entitlement_tier(tier, 0).await.unwrap();
+        }
+        "full"
     }
     pub async fn entitlement_tier(&self, id: &str) -> Result<Option<Tier>> {
         self.access_repository().entitlement_tier(id).await
@@ -125,7 +139,7 @@ mod tests {
             .unwrap();
         let id = value["user_id"].as_str().unwrap();
         store
-            .update_account_access(id, 1, AccountStatus::Active, Role::User, "basic")
+            .update_account_access(id, 1, AccountStatus::Active, "free")
             .await
             .unwrap();
         id.to_owned()
@@ -391,13 +405,7 @@ mod tests {
             .as_u64()
             .unwrap();
         store
-            .update_account_access(
-                &owner,
-                revision,
-                AccountStatus::Suspended,
-                Role::User,
-                "basic",
-            )
+            .update_account_access(&owner, revision, AccountStatus::Suspended, "free")
             .await
             .unwrap();
         assert!(store
@@ -431,7 +439,7 @@ mod tests {
         let id = created["user_id"].as_str().unwrap();
         let before = store.account_by_id(id).await.unwrap().unwrap();
         let active = store
-            .update_account_access(id, 1, AccountStatus::Active, Role::User, "basic")
+            .update_account_access(id, 1, AccountStatus::Active, "free")
             .await
             .unwrap();
         assert_eq!(active["access_revision"], 2);
@@ -439,11 +447,11 @@ mod tests {
         let after = store.account_by_id(id).await.unwrap().unwrap();
         assert_eq!(before["generation"], after["generation"]);
         assert!(store
-            .update_account_access(id, 1, AccountStatus::Suspended, Role::User, "basic")
+            .update_account_access(id, 1, AccountStatus::Suspended, "free")
             .await
             .is_err());
         assert!(store
-            .update_account_access("admin", 1, AccountStatus::Disabled, Role::User, "basic")
+            .update_account_access("admin", 1, AccountStatus::Disabled, "free")
             .await
             .is_err());
         store.app_pool.close().await;
@@ -546,7 +554,7 @@ mod tests {
             .unwrap();
         assert_eq!(tier.revision, 1);
         store
-            .update_account_access(id, 1, AccountStatus::Active, Role::User, "team")
+            .update_account_access(id, 1, AccountStatus::Active, "team")
             .await
             .unwrap();
         let membership = store

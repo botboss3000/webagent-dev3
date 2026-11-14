@@ -11,7 +11,8 @@ impl Store {
             .initialize_authorization_tables()
             .await?;
         self.accounts_repository().import_original_admin().await?;
-        self.access_repository().migrate_access_v1().await
+        self.access_repository().migrate_access_v1().await?;
+        self.access_repository().migrate_tiers_v2().await
     }
     pub async fn create_admin_account(
         &self,

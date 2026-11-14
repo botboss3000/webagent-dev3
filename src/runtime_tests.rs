@@ -2709,7 +2709,7 @@ async fn image_generation_stays_off_without_an_image_out_model() {
     let (_root, mut app) = fixture().await;
     let mut tier = app
         .store
-        .entitlement_tier("operator")
+        .entitlement_tier("administrator")
         .await
         .unwrap()
         .unwrap();
@@ -6349,8 +6349,7 @@ async fn phase3_http_isolation_and_membership_revocation() {
             &user_id,
             1,
             access::AccountStatus::Active,
-            access::Role::User,
-            "operator",
+            app.store.full_user_tier().await,
         )
         .await
         .unwrap();
@@ -6507,8 +6506,7 @@ async fn phase3_http_isolation_and_membership_revocation() {
             &user_id,
             revision,
             access::AccountStatus::Suspended,
-            access::Role::User,
-            "operator",
+            app.store.full_user_tier().await,
         )
         .await
         .unwrap();
@@ -6700,13 +6698,7 @@ async fn phase3_http_tier_tools_and_agent_disable_reject_stale_approval() {
         .unwrap();
     let user_id = account["user_id"].as_str().unwrap().to_owned();
     app.store
-        .update_account_access(
-            &user_id,
-            1,
-            access::AccountStatus::Active,
-            access::Role::User,
-            "basic",
-        )
+        .update_account_access(&user_id, 1, access::AccountStatus::Active, "free")
         .await
         .unwrap();
     app.store
@@ -6768,8 +6760,8 @@ async fn phase3_http_tier_tools_and_agent_disable_reject_stale_approval() {
     );
     let granted_model = app.selection().await.unwrap().model;
     let response=router(app.clone()).oneshot(request(&admin_token,"admin-csrf","PUT",
-        "/api/v3/admin/access/tiers/basic",
-        json!({"expected_revision":1,"tier":{"id":"basic","revision":1,
+        "/api/v3/admin/access/tiers/free",
+        json!({"expected_revision":1,"tier":{"id":"free","revision":1,
             "allowed_models":[granted_model],"tools":{"file_read":"auto","file_write":"ask","build_work":"auto"},
             "ability_permissions":{"codebase_admin":"auto"},"max_sessions":10,"max_active_runs":2}}))).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -8103,8 +8095,7 @@ async fn tenant_ability_http_levels_effective_views_and_stale_updates() {
             &user,
             1,
             access::AccountStatus::Active,
-            access::Role::User,
-            "operator",
+            app.store.full_user_tier().await,
         )
         .await
         .unwrap();
@@ -9093,13 +9084,7 @@ async fn platform_adoption_pins_independent_credentials_and_denies_rotation() {
         .unwrap();
     let user = user["user_id"].as_str().unwrap();
     app.store
-        .update_account_access(
-            user,
-            1,
-            access::AccountStatus::Active,
-            access::Role::User,
-            "basic",
-        )
+        .update_account_access(user, 1, access::AccountStatus::Active, "free")
         .await
         .unwrap();
     app.store
@@ -9140,7 +9125,7 @@ async fn platform_adoption_pins_independent_credentials_and_denies_rotation() {
         .mutate_platform_roster("team", 2, Mutation::Publish { rollback: None }, "admin")
         .await
         .unwrap();
-    let mut tier = app.store.entitlement_tier("basic").await.unwrap().unwrap();
+    let mut tier = app.store.entitlement_tier("free").await.unwrap().unwrap();
     let rev = tier.revision;
     tier.model_policy = Some(access::ModelPolicy {
         roster_id: Some("team".into()),
@@ -9150,7 +9135,7 @@ async fn platform_adoption_pins_independent_credentials_and_denies_rotation() {
     });
     let mut ceiling = app
         .store
-        .entitlement_tier("operator")
+        .entitlement_tier("administrator")
         .await
         .unwrap()
         .unwrap();
@@ -10650,7 +10635,7 @@ async fn retained_read_recall_resolves_only_verified_same_session_origin() {
     app.store.put("policy", &policy).await.unwrap();
     let mut tier = app
         .store
-        .entitlement_tier("operator")
+        .entitlement_tier("administrator")
         .await
         .unwrap()
         .unwrap();
@@ -11198,7 +11183,7 @@ async fn visibility_fixture_base_access(app: &App) {
 async fn visibility_fixture_ability_access(app: &App, id: &str) {
     let mut tier = app
         .store
-        .entitlement_tier("operator")
+        .entitlement_tier("administrator")
         .await
         .unwrap()
         .unwrap();
@@ -11741,7 +11726,7 @@ async fn late_single_tool_case(name: &str, action: &str, mutation: &str, success
         app.store.put("policy", &policy).await.unwrap();
         let mut tier = app
             .store
-            .entitlement_tier("operator")
+            .entitlement_tier("administrator")
             .await
             .unwrap()
             .unwrap();

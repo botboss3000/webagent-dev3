@@ -34,12 +34,12 @@
   "revision": 55,
   "tier_names": {
     "anonymous": "Anonymous",
-    "basic": "Base",
-    "operator": "Admin"
+    "free": "Free",
+    "administrator": "Administrator"
   },
   "tier_order": [
-    "operator",
-    "basic",
+    "administrator",
+    "free",
     "anonymous"
   ],
   "tiers": {
@@ -73,7 +73,7 @@
         "web_search": "auto"
       }
     },
-    "basic": {
+    "free": {
       "ability_permissions": {
         "config_controller": "auto",
         "human_escalation": "auto",
@@ -87,7 +87,7 @@
       "entitlements": {
         "web_read": "auto"
       },
-      "id": "basic",
+      "id": "free",
       "max_active_runs": 2,
       "max_sessions": 10,
       "model_policy": null,
@@ -104,7 +104,7 @@
         "web_search": "auto"
       }
     },
-    "operator": {
+    "administrator": {
       "ability_permissions": {
         "agent_management": "auto",
         "app_control": "auto",
@@ -135,7 +135,7 @@
       "entitlements": {
         "web_read": "auto"
       },
-      "id": "operator",
+      "id": "administrator",
       "max_active_runs": 200,
       "max_sessions": 10000,
       "model_policy": null,

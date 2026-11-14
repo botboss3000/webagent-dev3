@@ -746,13 +746,13 @@ mod independent_runtime_io {
             };
             let access = storage.access(OWNER);
             access.init_access_policy(None).unwrap();
-            let tier = json!({"id":"basic","revision":1,"allowed_models":["*"],"tools":{"*":"auto"},"max_sessions":10,"max_active_runs":10});
+            let tier = json!({"id":"free","revision":1,"allowed_models":["*"],"tools":{"*":"auto"},"max_sessions":10,"max_active_runs":10});
             let mut operator = tier.clone();
-            operator["id"] = json!("operator");
-            access.write_access_policy(&json!({"schema_version":1,"registration":"open","revision":1,"tiers":{"basic":tier,"operator":operator}})).unwrap();
+            operator["id"] = json!("administrator");
+            access.write_access_policy(&json!({"schema_version":1,"registration":"open","revision":1,"tiers":{"free":tier,"administrator":operator}})).unwrap();
             for (id, role, tier) in [
-                (OWNER, "administrator", "operator"),
-                (REQUESTER, "user", "basic"),
+                (OWNER, "administrator", "administrator"),
+                (REQUESTER, "user", "free"),
             ] {
                 let account = json!({"user_id":id,"username":id,"status":"active","role":role,"tier_id":tier,"access_revision":1,"generation":"fixture","is_approved":true});
                 sqlx::query("INSERT INTO user_accounts VALUES(?,?,?)")

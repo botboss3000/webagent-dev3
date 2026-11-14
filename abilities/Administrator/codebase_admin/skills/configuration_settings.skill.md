@@ -63,7 +63,7 @@ setting descriptor in the same patch as the value.
 - `type`: `boolean`, `integer`, `number`, `enum` (with `enum` values), `string`, `length`
   (`{"width", "unit": "px"|"%"}`), `object` (with `value_shape`) or `agent_id`.
 - `pointer`: JSON pointer into the live file (or store). `{name}` placeholders take values from
-  `parameters` (`{"tier": ["operator", "basic", "anonymous"]}`).
+  `parameters` (`{"tier": ["administrator", "free", "anonymous"]}`).
 - `layers`: where it can be set — `app` (the live file, administrators), `agent` (that agent's
   override; add `agent_pointer` into the identity view), `user` (personal). A file setting always
   includes `app`.

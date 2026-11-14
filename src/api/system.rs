@@ -47,7 +47,9 @@ impl DashboardHost for Dashboard {
         })
     }
     fn runtime_config(&self) -> anyhow::Result<Value> {
-        Ok(serde_json::to_value(loop_runtime::Config::read(&self.0.runtime_path)?)?)
+        Ok(serde_json::to_value(loop_runtime::Config::read(
+            &self.0.runtime_path,
+        )?)?)
     }
 }
 
@@ -211,13 +213,7 @@ mod tests {
             .unwrap();
         let user_id = member["user_id"].as_str().unwrap();
         app.store
-            .update_account_access(
-                user_id,
-                1,
-                crate::access::AccountStatus::Active,
-                crate::access::Role::User,
-                "basic",
-            )
+            .update_account_access(user_id, 1, crate::access::AccountStatus::Active, "free")
             .await
             .unwrap();
         let account = app.store.account_by_id(user_id).await.unwrap().unwrap();

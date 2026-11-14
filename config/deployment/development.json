@@ -1991,9 +1991,9 @@
             "*": "auto"
           }
         },
-        "basic": {
+        "free": {
           "allowed_models": [],
-          "id": "basic",
+          "id": "free",
           "max_active_runs": 2,
           "max_sessions": 10,
           "revision": 1,
@@ -2122,7 +2122,7 @@
             "score_directory_with_jev": "auto"
           }
         },
-        "operator": {
+        "administrator": {
           "ability_permissions": {
             "base": "auto",
             "codebase_admin": "auto",
@@ -2137,7 +2137,7 @@
           "allowed_models": [
             "*"
           ],
-          "id": "operator",
+          "id": "administrator",
           "max_active_runs": 200,
           "max_sessions": 10000,
           "model_policy": null,

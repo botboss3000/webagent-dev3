@@ -305,8 +305,7 @@ async fn read_routes_reject_public_and_other_admin_accounts() {
             member["user_id"].as_str().unwrap(),
             1,
             crate::access::AccountStatus::Active,
-            crate::access::Role::Administrator,
-            "basic",
+            "free",
         )
         .await
         .unwrap();

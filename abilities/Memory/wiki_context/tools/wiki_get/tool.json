@@ -9,8 +9,8 @@
     "visitor": "auto"
   },
   "account_access": {
-    "operator": "auto",
-    "basic": "auto",
+    "administrator": "auto",
+    "free": "auto",
     "anonymous": "auto"
   },
   "parameters": {

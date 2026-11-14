@@ -11,7 +11,7 @@ const POLICY_LIMIT: u64 = 4 * 1024 * 1024;
 /// Fresh-install tiers are explicit; only Operator receives codebase_admin.
 fn fresh_install_tiers() -> [Tier; 2] {
     let operator = Tier {
-        id: "operator".into(),
+        id: crate::ADMINISTRATOR_TIER.into(),
         revision: 1,
         model_policy: None,
         ability_permissions: [
@@ -27,7 +27,7 @@ fn fresh_install_tiers() -> [Tier; 2] {
         chain: Vec::new(),
     };
     let basic = Tier {
-        id: "basic".into(),
+        id: crate::FREE_TIER.into(),
         revision: 1,
         model_policy: None,
         ability_permissions: [("web_access".into(), Permission::Auto)].into(),
@@ -125,15 +125,16 @@ impl<C: RecordCodec> Repository<'_, C> {
             return Ok(());
         }
         if policy["tiers"].get("anonymous").is_none() {
-            let mut anonymous = policy["tiers"]["basic"].clone();
+            let mut anonymous = policy["tiers"][crate::FREE_TIER].clone();
             if anonymous.is_null() {
-                return Err(anyhow!("Base account tier missing"));
+                return Err(anyhow!("Free account tier missing"));
             }
             anonymous["id"] = json!("anonymous");
             policy["tiers"]["anonymous"] = anonymous;
         }
         policy["tier_order"] = json!(crate::account_ladder::order(&policy)?);
-        policy["tier_names"] = json!({"operator":"Admin","basic":"Base","anonymous":"Anonymous"});
+        policy["tier_names"] =
+            json!({"administrator":"Administrator","free":"Free","anonymous":"Anonymous"});
         policy["revision"] = json!(policy["revision"]
             .as_u64()
             .unwrap_or(0)

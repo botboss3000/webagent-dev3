@@ -7,7 +7,7 @@ async fn recall_fixture() -> (tempfile::TempDir, App, String, String) {
     let (root, app) = crate::runtime_tests::fixture().await;
     let mut tier = app
         .store
-        .entitlement_tier("operator")
+        .entitlement_tier("administrator")
         .await
         .unwrap()
         .unwrap();

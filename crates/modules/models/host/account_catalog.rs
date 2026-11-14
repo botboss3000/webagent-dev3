@@ -216,13 +216,7 @@ mod source_tests {
             .unwrap();
         let user = user["user_id"].as_str().unwrap();
         app.store
-            .update_account_access(
-                user,
-                1,
-                crate::access::AccountStatus::Active,
-                crate::access::Role::User,
-                "basic",
-            )
+            .update_account_access(user, 1, crate::access::AccountStatus::Active, "free")
             .await
             .unwrap();
         let entry = Entry {
@@ -253,7 +247,7 @@ mod source_tests {
             .resolve_account_model_source(user, &source)
             .await
             .is_err());
-        let mut tier = app.store.entitlement_tier("basic").await.unwrap().unwrap();
+        let mut tier = app.store.entitlement_tier("free").await.unwrap().unwrap();
         let revision = tier.revision;
         tier.model_policy = Some(crate::access::ModelPolicy {
             roster_id: Some("team".into()),
@@ -263,7 +257,7 @@ mod source_tests {
         });
         let mut ceiling = app
             .store
-            .entitlement_tier("operator")
+            .entitlement_tier("administrator")
             .await
             .unwrap()
             .unwrap();
@@ -417,13 +411,7 @@ mod platform_pin_tests {
             .unwrap();
         let user = user["user_id"].as_str().unwrap();
         app.store
-            .update_account_access(
-                user,
-                1,
-                crate::access::AccountStatus::Active,
-                crate::access::Role::User,
-                "basic",
-            )
+            .update_account_access(user, 1, crate::access::AccountStatus::Active, "free")
             .await
             .unwrap();
         app.store
@@ -458,7 +446,7 @@ mod platform_pin_tests {
             origin: Origin::Platform,
             entry_id: platform_id("team", "model"),
         };
-        let mut tier = app.store.entitlement_tier("basic").await.unwrap().unwrap();
+        let mut tier = app.store.entitlement_tier("free").await.unwrap().unwrap();
         let revision = tier.revision;
         tier.model_policy = Some(crate::access::ModelPolicy {
             roster_id: Some("team".into()),
@@ -468,7 +456,7 @@ mod platform_pin_tests {
         });
         let mut ceiling = app
             .store
-            .entitlement_tier("operator")
+            .entitlement_tier("administrator")
             .await
             .unwrap()
             .unwrap();

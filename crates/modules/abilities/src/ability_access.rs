@@ -197,7 +197,7 @@ mod tests {
         write(
             root,
             "Web/web_search/web_search.json",
-            r#"{"default_access":{"operator":"auto","member":"ask"},"account_access":{"basic":"ask"}}"#,
+            r#"{"default_access":{"operator":"auto","member":"ask"},"account_access":{"free":"ask"}}"#,
         );
         write(root, "Web/web_search/tools/web_read/tool.json", "{}");
         write(root, "Core/_group.json", r#"{"name":"Core"}"#);
@@ -221,7 +221,7 @@ mod tests {
         );
         assert_eq!(search.default_for(&rungs(&["visitor"])), None);
         assert_eq!(search.entitlement.as_deref(), Some("web_read"));
-        assert_eq!(search.account_access.get("basic"), Some(&Permission::Ask));
+        assert_eq!(search.account_access.get("free"), Some(&Permission::Ask));
         assert!(search.account_access.get("anonymous").is_none());
         assert_eq!(
             registry.tools.get("web_read").map(String::as_str),

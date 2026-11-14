@@ -25,7 +25,7 @@ export async function mountPolicies(host){
     for(const [index,id]of order.entries()){
       const tier=levels.get(id),next=structuredClone(tier);delete next.name;
       const section=el('details','ac-row');section.append(el('summary','ac-ability-row',title(tier)));const form=el('form','ac-ability-body');section.append(form);host.append(section);
-      if(!['operator','basic','anonymous'].includes(id)){
+      if(!['administrator','free','anonymous'].includes(id)){
         const name=el('input','ac-input');name.value=title(tier);name.maxLength=100;name.setAttribute('aria-label','Account level name');
         form.append(name,button('Rename',()=>saveOrder(order,{...names,[id]:name.value.trim()})));
         for(const [label,step]of [['Move up',-1],['Move down',1]]){

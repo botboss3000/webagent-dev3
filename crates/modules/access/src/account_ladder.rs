@@ -11,16 +11,23 @@ pub fn order(policy: &Value) -> Result<Vec<String>> {
         serde_json::from_value(order.clone())?
     } else {
         let mut ids = Vec::new();
-        if tiers.contains_key("operator") {
-            ids.push("operator".into());
+        if tiers.contains_key(crate::ADMINISTRATOR_TIER) {
+            ids.push(crate::ADMINISTRATOR_TIER.into());
         }
         ids.extend(
             tiers
                 .keys()
-                .filter(|id| !["operator", "basic", "anonymous"].contains(&id.as_str()))
+                .filter(|id| {
+                    ![
+                        crate::ADMINISTRATOR_TIER,
+                        crate::FREE_TIER,
+                        crate::ANONYMOUS_TIER,
+                    ]
+                    .contains(&id.as_str())
+                })
                 .cloned(),
         );
-        for id in ["basic", "anonymous"] {
+        for id in [crate::FREE_TIER, crate::ANONYMOUS_TIER] {
             if tiers.contains_key(id) {
                 ids.push(id.into());
             }
@@ -30,9 +37,10 @@ pub fn order(policy: &Value) -> Result<Vec<String>> {
     if order.len() != tiers.len()
         || order.iter().collect::<BTreeSet<_>>().len() != order.len()
         || order.iter().any(|id| !tiers.contains_key(id))
-        || (tiers.contains_key("operator") && order.first().map(String::as_str) != Some("operator"))
-        || (tiers.contains_key("anonymous")
-            && order.last().map(String::as_str) != Some("anonymous"))
+        || (tiers.contains_key(crate::ADMINISTRATOR_TIER)
+            && order.first().map(String::as_str) != Some(crate::ADMINISTRATOR_TIER))
+        || (tiers.contains_key(crate::ANONYMOUS_TIER)
+            && order.last().map(String::as_str) != Some(crate::ANONYMOUS_TIER))
     {
         bail!("Invalid app account ladder");
     }
@@ -106,41 +114,39 @@ mod tests {
     use serde_json::json;
     #[test]
     fn platform_grants_require_both_child_and_ancestor() {
-        let parent = json!({"id":"operator","revision":1,"allowed_models":["*"],"tools":{},"max_sessions":8,"max_active_runs":2,
+        let parent = json!({"id":"administrator","revision":1,"allowed_models":["*"],"tools":{},"max_sessions":8,"max_active_runs":2,
             "model_policy":{"roster_id":"platform","allowed_entry_ids":["entry"],"allow_byo":false,"max_byo_entries":0}});
         let mut child = parent.clone();
-        child["id"] = json!("basic");
+        child["id"] = json!("free");
         child["model_policy"] = Value::Null;
-        let mut policy =
-            json!({"tiers":{"operator":parent,"basic":child},"tier_order":["operator","basic"]});
-        let resolved = effective(&policy, "basic").unwrap();
+        let mut policy = json!({"tiers":{"administrator":parent,"free":child},"tier_order":["administrator","free"]});
+        let resolved = effective(&policy, "free").unwrap();
         let model = resolved.model_policy.unwrap();
         assert!(model.roster_id.is_none());
         assert!(model.allowed_entry_ids.is_empty());
         assert!(!model.allow_byo);
-        policy["tiers"]["basic"]["model_policy"] =
-            policy["tiers"]["operator"]["model_policy"].clone();
-        policy["tiers"]["operator"]["model_policy"] = Value::Null;
-        let resolved = effective(&policy, "basic").unwrap();
+        policy["tiers"]["free"]["model_policy"] =
+            policy["tiers"]["administrator"]["model_policy"].clone();
+        policy["tiers"]["administrator"]["model_policy"] = Value::Null;
+        let resolved = effective(&policy, "free").unwrap();
         assert!(resolved.model_policy.unwrap().allowed_entry_ids.is_empty());
     }
     #[test]
     fn upper_account_ceiling_limits_permissions_models_and_quotas() {
-        let tier = json!({"id":"operator","revision":1,"allowed_models":["model_a"],"tools":{"*":"ask"},"ability_permissions":{"*":"auto"},"max_sessions":8,"max_active_runs":2});
+        let tier = json!({"id":"administrator","revision":1,"allowed_models":["model_a"],"tools":{"*":"ask"},"ability_permissions":{"*":"auto"},"max_sessions":8,"max_active_runs":2});
         let mut base = tier.clone();
-        base["id"] = json!("basic");
+        base["id"] = json!("free");
         base["tools"] = json!({"*":"auto"});
         base["allowed_models"] = json!(["*"]);
         base["max_sessions"] = json!(100);
-        let policy =
-            json!({"tiers":{"operator":tier,"basic":base},"tier_order":["operator","basic"]});
-        let resolved = effective(&policy, "basic").unwrap();
+        let policy = json!({"tiers":{"administrator":tier,"free":base},"tier_order":["administrator","free"]});
+        let resolved = effective(&policy, "free").unwrap();
         assert_eq!(resolved.tool_permission("file_write"), Permission::Ask);
         assert_eq!(resolved.max_sessions, 8);
         assert_eq!(resolved.allowed_models, vec!["model_a"]);
         let mut invalid = policy;
-        invalid["tier_order"] = json!(["basic", "operator"]);
-        assert!(effective(&invalid, "basic").is_err());
+        invalid["tier_order"] = json!(["free", "administrator"]);
+        assert!(effective(&invalid, "free").is_err());
     }
     #[test]
     fn plans_grant_entitlement_groups_and_named_grants_win() {
@@ -162,10 +168,10 @@ mod tests {
             }
             tier
         };
-        let policy = json!({"tier_order":["operator","basic"],"tiers":{
-            "operator":tier("operator",json!({"entitlements":{"web_read":"auto"}})),
-            "basic":tier("basic",json!({"entitlements":{"web_read":"auto"},"ability_permissions":{"web_access":"ask"}}))}});
-        let basic = effective(&policy, "basic").unwrap();
+        let policy = json!({"tier_order":["administrator","free"],"tiers":{
+            "administrator":tier("administrator",json!({"entitlements":{"web_read":"auto"}})),
+            "free":tier("free",json!({"entitlements":{"web_read":"auto"},"ability_permissions":{"web_access":"ask"}}))}});
+        let basic = effective(&policy, "free").unwrap();
         assert_eq!(basic.ability_permission("web_search"), Permission::Auto);
         assert_eq!(
             basic.ability_permission("web_access"),
@@ -180,15 +186,15 @@ mod tests {
         assert_eq!(basic.tool_permission("web_read"), Permission::Auto);
         // An upper tier without the group still caps a lower tier that grants it.
         let mut capped = policy.clone();
-        capped["tiers"]["operator"]["entitlements"] = json!({});
+        capped["tiers"]["administrator"]["entitlements"] = json!({});
         assert_eq!(
-            effective(&capped, "basic")
+            effective(&capped, "free")
                 .unwrap()
                 .ability_permission("web_search"),
             Permission::Deny
         );
         assert!(serde_json::from_value::<Tier>(tier(
-            "basic",
+            "free",
             json!({"entitlements":{"Web Read":"auto"}})
         ))
         .unwrap()
@@ -201,7 +207,7 @@ mod tests {
             |id, tier| (id == "wiki" && tier != "ghost").then_some(Permission::Auto),
             |name, tier| match (name, tier) {
                 ("wiki_get", _) => Some(Permission::Auto),
-                ("wiki_create", "operator") => Some(Permission::Auto),
+                ("wiki_create", "administrator") => Some(Permission::Auto),
                 _ => None,
             },
         );
@@ -209,19 +215,19 @@ mod tests {
             json!({"id":id,"revision":1,"allowed_models":["*"],"tools":tools,
                 "ability_permissions":abilities,"max_sessions":8,"max_active_runs":2})
         };
-        let mut policy = json!({"tier_order":["operator","basic"],"tiers":{
-            "operator":tier("operator",json!({"*":"auto"}),json!({})),
-            "basic":tier("basic",json!({}),json!({}))}});
-        let basic = effective(&policy, "basic").unwrap();
+        let mut policy = json!({"tier_order":["administrator","free"],"tiers":{
+            "administrator":tier("administrator",json!({"*":"auto"}),json!({})),
+            "free":tier("free",json!({}),json!({}))}});
+        let basic = effective(&policy, "free").unwrap();
         assert_eq!(basic.ability_permission("wiki"), Permission::Auto);
         assert_eq!(basic.tool_permission("wiki_get"), Permission::Auto);
         assert_eq!(basic.tool_permission("wiki_create"), Permission::Deny);
-        let operator = effective(&policy, "operator").unwrap();
+        let operator = effective(&policy, "administrator").unwrap();
         assert_eq!(operator.tool_permission("wiki_create"), Permission::Auto);
         // A tier's own named grant or wildcard overrides the template.
-        policy["tiers"]["basic"]["ability_permissions"] = json!({"wiki":"deny"});
-        policy["tiers"]["basic"]["tools"] = json!({"*":"ask"});
-        let basic = effective(&policy, "basic").unwrap();
+        policy["tiers"]["free"]["ability_permissions"] = json!({"wiki":"deny"});
+        policy["tiers"]["free"]["tools"] = json!({"*":"ask"});
+        let basic = effective(&policy, "free").unwrap();
         assert_eq!(basic.ability_permission("wiki"), Permission::Deny);
         assert_eq!(basic.tool_permission("wiki_get"), Permission::Ask);
     }

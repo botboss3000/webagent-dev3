@@ -533,7 +533,7 @@ mod tests {
     async fn byo_disabled_blocks_credential_writes_without_mutating_catalog() {
         let (_root, app) = fixture().await;
         let catalog = selection_fixture(&app).await;
-        let mut tier = app.store.entitlement_tier("basic").await.unwrap().unwrap();
+        let mut tier = app.store.entitlement_tier("free").await.unwrap().unwrap();
         let revision = tier.revision;
         tier.model_policy = Some(crate::access::ModelPolicy {
             roster_id: None,
@@ -552,8 +552,7 @@ mod tests {
                 &user,
                 account["access_revision"].as_u64().unwrap(),
                 crate::access::AccountStatus::Active,
-                crate::access::Role::User,
-                "basic",
+                "free",
             )
             .await
             .unwrap();
@@ -796,8 +795,7 @@ mod tests {
                 id,
                 1,
                 crate::access::AccountStatus::Active,
-                crate::access::Role::User,
-                "operator",
+                app.store.full_user_tier().await,
             )
             .await
             .unwrap();
@@ -971,8 +969,7 @@ mod tests {
                 &member,
                 revision,
                 crate::access::AccountStatus::Active,
-                crate::access::Role::User,
-                "basic",
+                "free",
             )
             .await
             .unwrap();

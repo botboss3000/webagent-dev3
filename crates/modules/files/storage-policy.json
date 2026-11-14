@@ -22,12 +22,12 @@
       "max_published_agents": 0,
       "user_storage_mb": 10
     },
-    "basic": {
+    "free": {
       "agent_storage_mb": 50,
       "max_published_agents": 5,
       "user_storage_mb": 100
     },
-    "operator": {
+    "administrator": {
       "agent_storage_mb": 50,
       "max_published_agents": null,
       "user_storage_mb": 500

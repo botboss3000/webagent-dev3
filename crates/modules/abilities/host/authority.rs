@@ -28,7 +28,7 @@ mod tests {
         let (_root, app) = crate::runtime_tests::fixture().await;
         let mut tier = app
             .store
-            .entitlement_tier("operator")
+            .entitlement_tier("administrator")
             .await
             .unwrap()
             .unwrap();
@@ -49,7 +49,15 @@ mod tests {
             .ability_permissions
             .insert("app_control".into(), access::Permission::Auto);
         app.store
-            .save_capability_level("shared_default", level, app.store.capability_levels("shared_default").await.unwrap().revision)
+            .save_capability_level(
+                "shared_default",
+                level,
+                app.store
+                    .capability_levels("shared_default")
+                    .await
+                    .unwrap()
+                    .revision,
+            )
             .await
             .unwrap();
         let grants = app

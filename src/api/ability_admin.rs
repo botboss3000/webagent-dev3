@@ -891,13 +891,7 @@ mod tests {
             .unwrap();
         let id = user["user_id"].as_str().unwrap();
         app.store
-            .update_account_access(
-                id,
-                1,
-                crate::access::AccountStatus::Active,
-                crate::access::Role::User,
-                "basic",
-            )
+            .update_account_access(id, 1, crate::access::AccountStatus::Active, "free")
             .await
             .unwrap();
         let identity = json!({"_user_id":id});
@@ -1077,13 +1071,7 @@ mod tests {
             .unwrap();
         let member_id = member["user_id"].as_str().unwrap();
         app.store
-            .update_account_access(
-                member_id,
-                1,
-                crate::access::AccountStatus::Active,
-                crate::access::Role::User,
-                "basic",
-            )
+            .update_account_access(member_id, 1, crate::access::AccountStatus::Active, "free")
             .await
             .unwrap();
         app.store

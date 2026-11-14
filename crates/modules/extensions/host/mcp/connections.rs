@@ -750,13 +750,7 @@ mod tests {
             .unwrap();
         let uid = account["user_id"].as_str().unwrap();
         app.store
-            .update_account_access(
-                uid,
-                1,
-                crate::access::AccountStatus::Active,
-                crate::access::Role::User,
-                "basic",
-            )
+            .update_account_access(uid, 1, crate::access::AccountStatus::Active, "free")
             .await
             .unwrap();
         app.store
@@ -998,13 +992,7 @@ mod tests {
             .unwrap();
         let uid = account["user_id"].as_str().unwrap();
         app.store
-            .update_account_access(
-                uid,
-                1,
-                crate::access::AccountStatus::Active,
-                crate::access::Role::User,
-                "basic",
-            )
+            .update_account_access(uid, 1, crate::access::AccountStatus::Active, "free")
             .await
             .unwrap();
         app.store
@@ -1091,8 +1079,7 @@ mod tests {
                     .as_u64()
                     .unwrap(),
                 crate::access::AccountStatus::Suspended,
-                crate::access::Role::User,
-                "basic",
+                "free",
             )
             .await
             .unwrap();

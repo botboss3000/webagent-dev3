@@ -192,7 +192,7 @@ mod tests {
             .unwrap();
         assert_eq!(account["status"], "pending");
         assert_eq!(account["role"], "user");
-        assert_eq!(account["tier_id"], "basic");
+        assert_eq!(account["tier_id"], "free");
         assert!(register(
             State(app),
             None,
@@ -251,12 +251,12 @@ mod advanced_policy_tests {
             .is_err());
         assert_eq!(
             app.store
-                .entitlement_tier("basic")
+                .entitlement_tier("free")
                 .await
                 .unwrap()
                 .unwrap()
                 .id,
-            "basic"
+            "free"
         );
         let mut policy = app.store.read_access_policy().unwrap();
         policy["extension"] = json!({"future":true});
@@ -279,8 +279,7 @@ mod advanced_policy_tests {
                 user["user_id"].as_str().unwrap(),
                 1,
                 access::AccountStatus::Active,
-                access::Role::User,
-                "basic",
+                "free",
             )
             .await
             .unwrap();

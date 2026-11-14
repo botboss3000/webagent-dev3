@@ -124,7 +124,7 @@ mod tests {
 
     #[test]
     fn tier_identity_must_match_its_policy_key() {
-        let value = json!({"registration":"restricted", "tiers":{"basic":{
+        let value = json!({"registration":"restricted", "tiers":{"free":{
             "id":"other", "revision":1, "allowed_models":[], "tools":{},
             "max_sessions":1, "max_active_runs":1}}});
         assert!(validate_configuration(&value).is_err());
@@ -134,7 +134,7 @@ mod tests {
     fn page_policy_keeps_account_and_administrator_fences() {
         let policy = json!({"pages":{"main":{"chat":"registered"}}});
         let mut principal = crate::Principal::from_account(&json!({"user_id":"person",
-            "status":"active", "role":"guest", "tier_id":"basic", "access_revision":1}))
+            "status":"active", "role":"guest", "tier_id":"anonymous", "access_revision":1}))
         .unwrap();
         assert!(!page_allowed(&policy, "main", "chat", &principal));
         principal.role = crate::Role::User;

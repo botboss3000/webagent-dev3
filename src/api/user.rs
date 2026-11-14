@@ -1152,13 +1152,7 @@ mod shared_observer_mutation_tests {
             .unwrap();
         let owner = account["user_id"].as_str().unwrap();
         app.store
-            .update_account_access(
-                owner,
-                1,
-                crate::access::AccountStatus::Active,
-                crate::access::Role::User,
-                "basic",
-            )
+            .update_account_access(owner, 1, crate::access::AccountStatus::Active, "free")
             .await
             .unwrap();
         let storage = app.store.for_user(owner).await.unwrap();

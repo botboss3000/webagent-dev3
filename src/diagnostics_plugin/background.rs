@@ -1,13 +1,26 @@
 //! HTTP authority stays in the root; Diagnostics owns bounded event semantics.
+use super::*;
+use axum::{extract::DefaultBodyLimit, routing::post};
+use package::background::IssueEvent;
 #[cfg(test)]
 use webagent_accounts_host::AccountsStore;
-use super::*;
-use axum::{extract::DefaultBodyLimit,routing::post};
-use package::background::IssueEvent;
-async fn configuration(Extension(app):Extension<crate::App>)->crate::Api {Ok(Json(package::background::configuration(RECORDER.get(),&app.store)))}
-async fn report(Extension(app):Extension<crate::App>,Extension(identity):Extension<Value>,Json(body):Json<IssueEvent>)->crate::Api {
- authorize(&app,&identity).await?;
- Ok(Json(package::background::report(RECORDER.get(),&app.store,body).await.map_err(api_error)?))
+async fn configuration(Extension(app): Extension<crate::App>) -> crate::Api {
+    Ok(Json(package::background::configuration(
+        RECORDER.get(),
+        &app.store,
+    )))
+}
+async fn report(
+    Extension(app): Extension<crate::App>,
+    Extension(identity): Extension<Value>,
+    Json(body): Json<IssueEvent>,
+) -> crate::Api {
+    authorize(&app, &identity).await?;
+    Ok(Json(
+        package::background::report(RECORDER.get(), &app.store, body)
+            .await
+            .map_err(api_error)?,
+    ))
 }
 pub(super) fn router() -> Router<crate::App> {
     Router::new()
@@ -118,13 +131,7 @@ mod tests {
             .unwrap();
         let uid = account["user_id"].as_str().unwrap();
         app.store
-            .update_account_access(
-                uid,
-                1,
-                crate::access::AccountStatus::Active,
-                crate::access::Role::Administrator,
-                "basic",
-            )
+            .update_account_access(uid, 1, crate::access::AccountStatus::Active, "free")
             .await
             .unwrap();
         let foreign = app.store.account_by_id(uid).await.unwrap().unwrap();

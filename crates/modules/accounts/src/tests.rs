@@ -345,7 +345,7 @@ async fn status_handoff_is_transactional_and_revision_guarded() {
             expected_revision: 1,
             status: AccountStatus::Disabled,
             role: "user",
-            tier_id: "basic",
+            tier_id: "free",
             profile_is_admin: false,
         },
     )
@@ -366,7 +366,7 @@ async fn status_handoff_is_transactional_and_revision_guarded() {
                 expected_revision: 999,
                 status: AccountStatus::Disabled,
                 role: "user",
-                tier_id: "basic",
+                tier_id: "free",
                 profile_is_admin: false
             }
         )
@@ -381,7 +381,7 @@ async fn status_handoff_is_transactional_and_revision_guarded() {
             expected_revision: 1,
             status: AccountStatus::Disabled,
             role: "user",
-            tier_id: "basic",
+            tier_id: "free",
             profile_is_admin: false,
         },
     )
@@ -432,7 +432,7 @@ async fn access_handoff_preserves_credentials_and_rolls_back_with_caller() {
                 expected_revision: 1,
                 status: AccountStatus::Disabled,
                 role: "user",
-                tier_id: "basic",
+                tier_id: "free",
                 profile_is_admin: false,
             },
         )
@@ -452,7 +452,7 @@ async fn access_handoff_preserves_credentials_and_rolls_back_with_caller() {
                 expected_revision: 99,
                 status: AccountStatus::Disabled,
                 role: "user",
-                tier_id: "basic",
+                tier_id: "free",
                 profile_is_admin: false,
             }
         )
@@ -467,7 +467,7 @@ async fn access_handoff_preserves_credentials_and_rolls_back_with_caller() {
             expected_revision: 1,
             status: AccountStatus::Disabled,
             role: "user",
-            tier_id: "basic",
+            tier_id: "free",
             profile_is_admin: false,
         },
     )
@@ -660,7 +660,7 @@ async fn invalid_duration_cannot_overflow_or_issue_a_session() {
 fn fixture_user_access() -> InitialAccess<'static> {
     InitialAccess {
         role: "user",
-        tier_id: "basic",
+        tier_id: "free",
         profile_is_admin: false,
     }
 }
@@ -691,7 +691,7 @@ impl Repository<'_, &Codec> {
             generation,
             InitialAccess {
                 role: "administrator",
-                tier_id: "operator",
+                tier_id: "administrator",
                 profile_is_admin: true,
             },
         )
@@ -963,7 +963,7 @@ impl crate::api::Host for AuthHost<'_> {
             generation,
             InitialAccess {
                 role: "administrator",
-                tier_id: "operator",
+                tier_id: "administrator",
                 profile_is_admin: true,
             },
         )
@@ -986,7 +986,7 @@ impl crate::api::Host for AuthHost<'_> {
                 expected_revision: 1,
                 status: AccountStatus::Active,
                 role: "user",
-                tier_id: "basic",
+                tier_id: "free",
                 profile_is_admin: false,
             },
         )
@@ -1662,7 +1662,7 @@ async fn initial_tier_repair_joins_transaction_and_preserves_identity_and_genera
     let guest = repo
         .create_guest_account(InitialAccess {
             role: "guest",
-            tier_id: "basic",
+            tier_id: "free",
             profile_is_admin: false,
         })
         .await

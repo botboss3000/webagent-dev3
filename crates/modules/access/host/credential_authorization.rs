@@ -63,8 +63,8 @@ mod tests {
         app.abilities = std::sync::Arc::new(abilities::Catalog::load(&packages).unwrap());
         // Install the development adapter grants only in this disposable fixture.
         let mut access_policy = app.store.read_access_policy().unwrap();
-        access_policy["tiers"]["operator"]["tools"]["test_owner_purchase"] = json!("ask");
-        access_policy["tiers"]["operator"]["ability_permissions"]["base"] = json!("auto");
+        access_policy["tiers"]["administrator"]["tools"]["test_owner_purchase"] = json!("ask");
+        access_policy["tiers"]["administrator"]["ability_permissions"]["base"] = json!("auto");
         app.store.write_access_policy(&access_policy).unwrap();
         let levels = app.store.capability_levels("shared_default").await.unwrap();
         let mut level = levels.levels["operator"].clone();

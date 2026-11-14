@@ -29,6 +29,25 @@ pub enum Role {
     Administrator,
 }
 
+/// The app tier that administers the installation and alone may use Administrator tools.
+pub const ADMINISTRATOR_TIER: &str = "administrator";
+/// The signed-in tier new accounts start on; paid tiers sit between it and administrator.
+pub const FREE_TIER: &str = "free";
+/// The tier of visitors who are not signed in; never assigned to a real account.
+pub const ANONYMOUS_TIER: &str = "anonymous";
+
+impl Role {
+    /// An account's role follows from its tier; it is never set on its own.
+    #[must_use]
+    pub fn for_tier(tier_id: &str) -> Self {
+        match tier_id {
+            ADMINISTRATOR_TIER => Self::Administrator,
+            ANONYMOUS_TIER => Self::Guest,
+            _ => Self::User,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Relationship {
@@ -353,16 +372,12 @@ impl Principal {
         }
         let legacy_admin = user_id == "admin";
         let status = webagent_accounts::account_status(account)?;
-        let role = match account["role"].as_str() {
-            Some(value) => serde_json::from_value(Value::String(value.into()))?,
-            None if legacy_admin => Role::Administrator,
-            _ => bail!("Account has no role"),
-        };
         let tier_id = match account["tier_id"].as_str() {
             Some(value) if valid_id(value) => value.to_owned(),
-            None if legacy_admin => "operator".into(),
+            None if legacy_admin => ADMINISTRATOR_TIER.into(),
             _ => bail!("Account has no valid tier"),
         };
+        let role = Role::for_tier(&tier_id);
         let access_revision = match account["access_revision"].as_u64() {
             Some(value) if value > 0 => value,
             None if legacy_admin => 1,
@@ -493,10 +508,10 @@ mod tests {
     fn legacy_admin_is_active_but_new_accounts_need_explicit_access_fields() {
         let admin = Principal::from_account(&json!({"user_id":"admin"})).unwrap();
         assert!(admin.administrator());
-        assert_eq!(admin.tier_id, "operator");
+        assert_eq!(admin.tier_id, "administrator");
         assert!(Principal::from_account(&json!({"user_id":"second"})).is_err());
         let suspended = Principal::from_account(&json!({"user_id":"second",
-            "status":"suspended","role":"administrator","tier_id":"operator",
+            "status":"suspended","role":"administrator","tier_id":"administrator",
             "access_revision":2}))
         .unwrap();
         assert!(!suspended.administrator());
@@ -636,7 +651,7 @@ mod tests {
     #[test]
     fn byo_downgrade_blocks_use_and_growth_but_allows_reduction() {
         let mut tier = Tier {
-            id: "basic".into(),
+            id: "free".into(),
             revision: 1,
             model_policy: None,
             allowed_models: vec!["*".into()],
@@ -672,7 +687,7 @@ mod tests {
     #[test]
     fn tier_is_explicit_and_bounded() {
         let mut tier = Tier {
-            id: "basic".into(),
+            id: "free".into(),
             revision: 1,
             model_policy: None,
             allowed_models: vec!["gpt-6-luna".into()],
@@ -694,7 +709,7 @@ mod tests {
     #[test]
     fn tier_without_ability_permissions_grants_no_abilities() {
         let tier: Tier =
-            serde_json::from_value(json!({"id":"basic","revision":1,"allowed_models":["*"],
+            serde_json::from_value(json!({"id":"free","revision":1,"allowed_models":["*"],
             "tools":{"*":"auto"},"max_sessions":10,"max_active_runs":2}))
             .unwrap();
         assert!(tier.ability_permissions.is_empty());
@@ -720,9 +735,9 @@ pub fn validate_self_administration(
     actor: &str,
     target: &str,
     status: AccountStatus,
-    role: Role,
+    tier_id: &str,
 ) -> anyhow::Result<()> {
-    if actor == target && (status != AccountStatus::Active || role != Role::Administrator) {
+    if actor == target && (status != AccountStatus::Active || tier_id != ADMINISTRATOR_TIER) {
         anyhow::bail!("You cannot restrict or demote your own administrator account");
     }
     Ok(())
@@ -781,21 +796,21 @@ pub mod account_ladder;
 pub const fn initial_user_access() -> webagent_accounts::InitialAccess<'static> {
     webagent_accounts::InitialAccess {
         role: "user",
-        tier_id: "basic",
+        tier_id: FREE_TIER,
         profile_is_admin: false,
     }
 }
 pub const fn initial_guest_access() -> webagent_accounts::InitialAccess<'static> {
     webagent_accounts::InitialAccess {
         role: "guest",
-        tier_id: "anonymous",
+        tier_id: ANONYMOUS_TIER,
         profile_is_admin: false,
     }
 }
 pub const fn initial_admin_access() -> webagent_accounts::InitialAccess<'static> {
     webagent_accounts::InitialAccess {
         role: "administrator",
-        tier_id: "operator",
+        tier_id: ADMINISTRATOR_TIER,
         profile_is_admin: true,
     }
 }

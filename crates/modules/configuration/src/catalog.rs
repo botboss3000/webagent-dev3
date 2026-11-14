@@ -355,7 +355,7 @@ mod tests {
 
     #[test]
     fn descriptors_reject_wrong_types_unknown_fields_and_unbound_parameters() {
-        let config = json!({"chat":{"size":17,"mode":"auto"},"tiers":{"basic":{"cap":2}}});
+        let config = json!({"chat":{"size":17,"mode":"auto"},"tiers":{"free":{"cap":2}}});
         let base = json!({"id":"x","description":"Size.","type":"number","pointer":"/chat/size",
             "layers":["app"],"examples":["bigger"]});
         assert_eq!(validate(&base, Some(&config)).unwrap(), "x");
@@ -373,7 +373,7 @@ mod tests {
         assert!(validate(&no_app, Some(&config)).is_err());
         assert!(validate(&no_app, None).is_ok());
         let tier = json!({"id":"t","description":"Cap.","type":"integer","pointer":"/tiers/{tier}/cap",
-            "parameters":{"tier":["basic"]},"layers":["app"],"examples":["more"]});
+            "parameters":{"tier":["free"]},"layers":["app"],"examples":["more"]});
         assert!(validate(&tier, Some(&config)).is_ok());
         let mut unbound = tier.clone();
         unbound.as_object_mut().unwrap().remove("parameters");

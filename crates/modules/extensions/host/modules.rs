@@ -2505,8 +2505,7 @@ mod authenticated_caller_namespace_tests {
                 &uid,
                 account["access_revision"].as_u64().unwrap(),
                 crate::access::AccountStatus::Active,
-                crate::access::Role::User,
-                "basic",
+                "free",
             )
             .await
             .unwrap();
@@ -2522,7 +2521,7 @@ mod authenticated_caller_namespace_tests {
         // Both ceilings permit Automation; authenticated caller identity still owns its namespace.
         let mut ceiling = app
             .store
-            .entitlement_tier("operator")
+            .entitlement_tier("administrator")
             .await
             .unwrap()
             .unwrap();
@@ -2543,7 +2542,7 @@ mod authenticated_caller_namespace_tests {
             .save_capability_level("shared_default", operator, ladder.revision)
             .await
             .unwrap();
-        let mut tier = app.store.entitlement_tier("basic").await.unwrap().unwrap();
+        let mut tier = app.store.entitlement_tier("free").await.unwrap().unwrap();
         let expected = tier.revision;
         tier.ability_permissions
             .insert("automation".into(), crate::access::Permission::Auto);

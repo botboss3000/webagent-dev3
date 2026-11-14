@@ -59,16 +59,14 @@ impl<C: RecordCodec> Repository<'_, C> {
         id: &str,
         expected_revision: u64,
         status: AccountStatus,
-        role: Role,
         tier_id: &str,
     ) -> Result<Value> {
         if !access::valid_id(id) || !access::valid_id(tier_id) || expected_revision == 0 {
             bail!("Invalid account update");
         }
+        let role = Role::for_tier(tier_id);
         if id == "admin"
-            && (status != AccountStatus::Active
-                || role != Role::Administrator
-                || tier_id != "operator")
+            && (status != AccountStatus::Active || tier_id != access::ADMINISTRATOR_TIER)
         {
             bail!("The original administrator must remain active");
         }
@@ -79,8 +77,9 @@ impl<C: RecordCodec> Repository<'_, C> {
             .account_state_in(&mut tx, id)
             .await?
             .ok_or_else(|| anyhow!("Account not found"))?;
+        // Only visitors who are not signed in hold the anonymous tier, and they hold no other.
         if (account["role"] == "guest") != (role == Role::Guest) {
-            bail!("Guest identity cannot be converted through access administration");
+            bail!("The anonymous tier belongs only to visitors who are not signed in");
         }
         if Principal::from_account(&account)?.access_revision != expected_revision {
             bail!("Account revision changed");
@@ -159,7 +158,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             if !order.contains(&tier.id) {
                 let position = order
                     .iter()
-                    .position(|id| id == "basic")
+                    .position(|id| id == crate::FREE_TIER)
                     .or_else(|| order.iter().position(|id| id == "anonymous"))
                     .unwrap_or(order.len());
                 order.insert(position, tier.id.clone());
@@ -548,7 +547,7 @@ impl<C: RecordCodec> Repository<'_, C> {
                 &mut tx,
                 AccountStatus::Active,
                 "administrator",
-                "operator",
+                access::ADMINISTRATOR_TIER,
             )
             .await?
         {
@@ -567,6 +566,54 @@ impl<C: RecordCodec> Repository<'_, C> {
             sqlx::query("INSERT INTO docs(key,value) VALUES('storage:access_v1',?)")
                 .bind(self.seal(&json!({"version":1}))?)
                 .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+    /// One-time move to the administrator/free/anonymous tiers: renames the former
+    /// `operator` and `basic` tier IDs, puts guests on anonymous and derives every role
+    /// from its tier. Idempotent; an account already consistent is left untouched.
+    pub async fn migrate_tiers_v2(&self) -> Result<()> {
+        let mut tx = self.app_pool.begin().await?;
+        let ids: Vec<String> = sqlx::query_scalar("SELECT user_id FROM user_accounts")
+            .fetch_all(&mut *tx)
+            .await?;
+        for id in ids {
+            let Some(account) = self.accounts().account_state_in(&mut tx, &id).await? else {
+                continue;
+            };
+            let Some(tier) = account["tier_id"].as_str() else {
+                continue;
+            };
+            let tier = if account["role"] == "guest" {
+                access::ANONYMOUS_TIER
+            } else {
+                match tier {
+                    "operator" => access::ADMINISTRATOR_TIER,
+                    "basic" => access::FREE_TIER,
+                    other => other,
+                }
+            };
+            let role = serde_json::to_value(Role::for_tier(tier))?;
+            if account["tier_id"] == tier && account["role"] == role {
+                continue;
+            }
+            let status = webagent_accounts::account_status(&account)?;
+            let revision = account["access_revision"].as_u64().unwrap_or(1);
+            self.accounts()
+                .apply_access_in(
+                    &mut tx,
+                    &id,
+                    webagent_accounts::AccessMutation {
+                        expected_revision: revision,
+                        status,
+                        role: role.as_str().unwrap_or("user"),
+                        tier_id: tier,
+                        profile_is_admin: status == AccountStatus::Active
+                            && tier == access::ADMINISTRATOR_TIER,
+                    },
+                )
                 .await?;
         }
         tx.commit().await?;

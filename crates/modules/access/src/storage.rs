@@ -115,7 +115,7 @@ impl<'a, C: RecordCodec> Repository<'a, C> {
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-    use crate::{AccountStatus, Permission, Relationship, Role};
+    use crate::{AccountStatus, Permission, Relationship};
     use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
     use serde_json::json;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -208,14 +208,14 @@ mod integration_tests {
             };
             let repo = f.repo();
             repo.init_access_policy(None).unwrap();
-            let basic = json!({"id":"basic","revision":1,"allowed_models":["*"],"tools":{"*":"auto"},"max_sessions":10,"max_active_runs":10});
+            let basic = json!({"id":"free","revision":1,"allowed_models":["*"],"tools":{"*":"auto"},"max_sessions":10,"max_active_runs":10});
             let mut operator = basic.clone();
-            operator["id"] = json!("operator");
-            repo.write_access_policy(&json!({"schema_version":1,"registration":"open","revision":1,"tiers":{"basic":basic,"operator":operator},"extension":{"preserve":true}})).unwrap();
+            operator["id"] = json!("administrator");
+            repo.write_access_policy(&json!({"schema_version":1,"registration":"open","revision":1,"tiers":{"free":basic,"administrator":operator},"extension":{"preserve":true}})).unwrap();
             for (id, role, tier) in [
-                ("admin", "administrator", "operator"),
-                ("alice", "user", "basic"),
-                ("guest_test", "guest", "basic"),
+                ("admin", "administrator", "administrator"),
+                ("alice", "user", "free"),
+                ("guest_test", "guest", "free"),
             ] {
                 let value = json!({"user_id":id,"username":id,"status":"active","role":role,"tier_id":tier,"access_revision":1,"generation":"initial","is_approved":true});
                 sqlx::query("INSERT INTO user_accounts VALUES(?,?,?)")
@@ -425,28 +425,22 @@ mod integration_tests {
         let f = Fixture::new().await;
         let repo = f.repo();
         assert!(repo
-            .update_account_access(
-                "admin",
-                1,
-                AccountStatus::Suspended,
-                Role::Administrator,
-                "operator"
-            )
+            .update_account_access("admin", 1, AccountStatus::Suspended, "operator")
             .await
             .is_err());
         assert!(repo
-            .update_account_access("guest_test", 1, AccountStatus::Active, Role::User, "basic")
+            .update_account_access("guest_test", 1, AccountStatus::Active, "free")
             .await
             .is_err());
         assert!(crate::validate_self_administration(
             "admin",
             "admin",
             AccountStatus::Active,
-            Role::User
+            "free"
         )
         .is_err());
         let updated = repo
-            .update_account_access("alice", 1, AccountStatus::Suspended, Role::User, "basic")
+            .update_account_access("alice", 1, AccountStatus::Suspended, "free")
             .await
             .unwrap();
         assert_eq!(updated["access_revision"], 2);
@@ -456,7 +450,7 @@ mod integration_tests {
             .unwrap()
             .admitted());
         assert!(repo
-            .update_account_access("alice", 1, AccountStatus::Active, Role::User, "basic")
+            .update_account_access("alice", 1, AccountStatus::Active, "free")
             .await
             .is_err());
         assert_eq!(
@@ -521,6 +515,55 @@ mod integration_tests {
         assert_ne!(binding, changed);
     }
     #[tokio::test]
+    async fn tier_migration_renames_old_tiers_and_derives_roles_once() {
+        let f = Fixture::new().await;
+        let repo = f.repo();
+        for (id, role, tier) in [
+            ("old_admin", "user", "operator"),
+            ("old_basic", "administrator", "basic"),
+            ("old_guest", "guest", "free"),
+        ] {
+            let value = json!({"user_id":id,"username":id,"status":"active","role":role,
+                "tier_id":tier,"access_revision":3,"generation":"initial","is_approved":true});
+            sqlx::query("INSERT INTO user_accounts VALUES(?,?,?)")
+                .bind(id)
+                .bind(id)
+                .bind(f.codec.seal(&value).unwrap())
+                .execute(&f.app)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO user_profiles VALUES(?,?)")
+                .bind(id)
+                .bind(f.codec.seal(&json!({"is_admin":false})).unwrap())
+                .execute(&f.app)
+                .await
+                .unwrap();
+        }
+        repo.migrate_tiers_v2().await.unwrap();
+        for (id, role, tier) in [
+            ("old_admin", "administrator", "administrator"),
+            ("old_basic", "user", "free"),
+            ("old_guest", "guest", "anonymous"),
+            ("alice", "user", "free"),
+        ] {
+            let account = repo.account_by_id(id).await.unwrap().unwrap();
+            assert_eq!(
+                (account["role"].as_str(), account["tier_id"].as_str()),
+                (Some(role), Some(tier)),
+                "{id}"
+            );
+        }
+        let moved =
+            repo.account_by_id("old_admin").await.unwrap().unwrap()["access_revision"].clone();
+        assert_eq!(moved, 4);
+        // A second run changes nothing.
+        repo.migrate_tiers_v2().await.unwrap();
+        assert_eq!(
+            repo.account_by_id("old_admin").await.unwrap().unwrap()["access_revision"],
+            moved
+        );
+    }
+    #[tokio::test]
     async fn legacy_access_migration_is_atomic_idempotent_and_preserves_credentials() {
         let f = Fixture::new().await;
         let repo = f.repo();
@@ -563,7 +606,7 @@ mod integration_tests {
         assert_eq!(account["generation"], "initial");
         assert_eq!(account["status"], "active");
         assert_eq!(account["role"], "administrator");
-        assert_eq!(account["tier_id"], "operator");
+        assert_eq!(account["tier_id"], "administrator");
         let legacy:Vec<u8>=sqlx::query_scalar("SELECT value FROM agent_memberships WHERE user_id='admin' AND agent_id='shared_default'").fetch_one(&f.app).await.unwrap();
         assert_eq!(f.codec.unseal(&legacy).unwrap()["relationship"], "owner");
         assert!(repo
@@ -600,7 +643,10 @@ mod integration_tests {
         let policy = repo.read_access_policy().unwrap();
         assert_eq!(policy["revision"], 2);
         // Fresh-install seeds are explicit: only Operator receives codebase_admin.
-        for (id, codebase) in [("basic", Permission::Deny), ("operator", Permission::Auto)] {
+        for (id, codebase) in [
+            ("free", Permission::Deny),
+            ("administrator", Permission::Auto),
+        ] {
             let tier: crate::Tier = serde_json::from_value(policy["tiers"][id].clone()).unwrap();
             assert_eq!(tier.ability_permission("codebase_admin"), codebase);
             assert_eq!(tier.ability_permission("web_access"), Permission::Auto);

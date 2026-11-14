@@ -519,6 +519,7 @@ mod tests {
         let (cookie, identity) = credential(&app).await;
         let mut account = app.store.account_by_id("admin").await.unwrap().unwrap();
         account["role"] = json!("user");
+        account["tier_id"] = json!("free");
         sqlx::query("UPDATE user_accounts SET value=? WHERE user_id='admin'")
             .bind(app.store.seal(&account).unwrap())
             .execute(&app.store.app_pool)

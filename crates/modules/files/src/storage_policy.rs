@@ -151,10 +151,10 @@ mod tests {
     #[test]
     fn limits_and_validation() {
         let policy = StoragePolicy::parse(
-            br#"{"warning_percent":80,"compress_idle_days":30,"tiers":{"basic":{"user_storage_mb":2,"max_published_agents":1,"agent_storage_mb":null}}}"#,
+            br#"{"warning_percent":80,"compress_idle_days":30,"tiers":{"free":{"user_storage_mb":2,"max_published_agents":1,"agent_storage_mb":null}}}"#,
         )
         .unwrap();
-        assert_eq!(policy.user_limit("basic"), Some(2 * MIB));
+        assert_eq!(policy.user_limit("free"), Some(2 * MIB));
         assert_eq!(policy.user_limit("operator"), None);
         assert!(check_user(Some(2 * MIB), MIB, MIB).is_ok());
         assert_eq!(
@@ -162,30 +162,30 @@ mod tests {
             "Storage limit reached: 1 of 2 MB used"
         );
         assert!(check_user(None, u64::MAX, 1).is_ok());
-        assert_eq!(policy.max_agents("basic"), Some(1));
-        assert_eq!(policy.agent_limit("basic"), None);
-        let chat = serde_json::json!({"chat_limits":{"storage":{"user_storage_mb":{"basic":1}}}});
-        assert_eq!(agent_user_limit(&chat, "basic"), Some(MIB));
+        assert_eq!(policy.max_agents("free"), Some(1));
+        assert_eq!(policy.agent_limit("free"), None);
+        let chat = serde_json::json!({"chat_limits":{"storage":{"user_storage_mb":{"free":1}}}});
+        assert_eq!(agent_user_limit(&chat, "free"), Some(MIB));
         assert_eq!(agent_user_limit(&chat, "anonymous"), None);
         assert!(policy
-            .check_agent_limits(&serde_json::json!({"basic":2,"other_unset":null}))
+            .check_agent_limits(&serde_json::json!({"free":2,"other_unset":null}))
             .is_ok());
         assert_eq!(
             policy
-                .check_agent_limits(&serde_json::json!({"basic":3}))
+                .check_agent_limits(&serde_json::json!({"free":3}))
                 .unwrap_err(),
-            "Storage limit for basic exceeds the app ceiling of 2 MB"
+            "Storage limit for free exceeds the app ceiling of 2 MB"
         );
         assert!(policy
             .check_agent_limits(&serde_json::json!({"missing":1}))
             .is_err());
         assert!(policy
-            .check_agent_limits(&serde_json::json!({"basic":"1"}))
+            .check_agent_limits(&serde_json::json!({"free":"1"}))
             .is_err());
         for bad in [
             r#"{"warning_percent":0,"compress_idle_days":30,"tiers":{}}"#,
             r#"{"warning_percent":80,"compress_idle_days":0,"tiers":{}}"#,
-            r#"{"warning_percent":80,"compress_idle_days":30,"tiers":{"basic":{"other":1}}}"#,
+            r#"{"warning_percent":80,"compress_idle_days":30,"tiers":{"free":{"other":1}}}"#,
         ] {
             assert!(StoragePolicy::parse(bad.as_bytes()).is_err(), "{bad}");
         }

@@ -1163,13 +1163,7 @@ mod shared_scope_tests {
             .unwrap();
         let actor = account["user_id"].as_str().unwrap().to_owned();
         app.store
-            .update_account_access(
-                &actor,
-                1,
-                crate::access::AccountStatus::Active,
-                crate::access::Role::User,
-                "basic",
-            )
+            .update_account_access(&actor, 1, crate::access::AccountStatus::Active, "free")
             .await
             .unwrap();
         app.store
@@ -1231,13 +1225,7 @@ mod shared_scope_tests {
             .unwrap();
         let other = other["user_id"].as_str().unwrap();
         app.store
-            .update_account_access(
-                other,
-                1,
-                crate::access::AccountStatus::Active,
-                crate::access::Role::User,
-                "basic",
-            )
+            .update_account_access(other, 1, crate::access::AccountStatus::Active, "free")
             .await
             .unwrap();
         let mut outsider = app.clone();
