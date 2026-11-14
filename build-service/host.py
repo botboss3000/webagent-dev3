@@ -30,6 +30,7 @@ import struct
 import subprocess
 import tarfile
 import threading
+import copy
 import time
 import uuid
 import sqlite3
@@ -46,6 +47,8 @@ CONFIG = _config_module.load()
 _scheduler_spec=importlib.util.spec_from_file_location("build_scheduler",_module_root/"scheduler.py")
 scheduler_module=importlib.util.module_from_spec(_scheduler_spec);_scheduler_spec.loader.exec_module(scheduler_module)
 scheduler_module.LOCAL_OPERATOR=CONFIG.get("scheduler",{}).get("local_operator",scheduler_module.LOCAL_OPERATOR)
+# Per-key identities named through operator_shell.py act with the same operator authority.
+scheduler_module.LOCAL_OPERATORS|=set(CONFIG.get("scheduler",{}).get("operators",[]))
 resource_module=scheduler_module.sibling("resources")
 executor_module=scheduler_module.sibling("executor")
 engine_components=scheduler_module.sibling("engine_components")
@@ -176,6 +179,12 @@ MAX_LOG = 1024 * 1024
 PUBLIC_LOG = 16 * 1024
 # _view scrubs each job's full stored log; projecting all receipts made every poll take ~14 s.
 DASHBOARD_JOBS = 50
+# Busy pages poll the dashboard and progress reads every few seconds; these run under the broker
+# lock, so repeat reads within this window reuse the last result instead of recomputing it.
+READ_CACHE_SECONDS = 4
+# When each broker request arrived, so a caller's short authorization lease is judged at arrival,
+# not after it waited for the broker lock.
+_ARRIVAL = threading.local()
 MAX_CONTEXT = 128 * 1024 * 1024
 MIN_DEPLOY_FREE = 8 * 1024 * 1024 * 1024
 MIN_SEQUENCE_FREE = 5 * 1024 * 1024 * 1024
@@ -3824,7 +3833,8 @@ class Broker:
     def _incoming_lease(self, trusted):
         deadline, fingerprint = trusted.get("lease_until"), trusted.get("access_fingerprint")
         max_lease = 4 * 3600 if trusted.get("local_caller") is True or trusted.get("bridge_caller") is True else 35
-        if isinstance(deadline, bool) or not isinstance(deadline, (int, float)) or not time.time() < deadline <= time.time() + max_lease:
+        now = getattr(_ARRIVAL, "at", None) or time.time()
+        if isinstance(deadline, bool) or not isinstance(deadline, (int, float)) or not now < deadline <= now + max_lease:
             raise ValueError("current bounded host authorization lease required")
         if not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
             raise ValueError("host access fingerprint required")
@@ -3939,7 +3949,7 @@ class Broker:
         full build linking ability crates and needs the root STABLE_FEATURE. A
         completed rebuild commits its released paths and releases its claims."""
         admin = self.administrator(trusted) and workspace == ADMIN_WORKSPACE
-        local = trusted.get("local_caller") is True and trusted["user_id"] == scheduler_module.LOCAL_OPERATOR and workspace == LOCAL_WORKSPACE
+        local = trusted.get("local_caller") is True and trusted["user_id"] in scheduler_module.LOCAL_OPERATORS and workspace == LOCAL_WORKSPACE
         if not (admin or local):
             raise PermissionError("Administrator rebuild required")
         if (set(args) != {"mode", "request_id"} or args["mode"] not in ("dev", "stable")
@@ -4043,7 +4053,9 @@ class Broker:
                 message = ("Rebuild current checkout (" + job.get("release_mode", "dev") + ") requested by "
                            + job["rebuild"].get("requested_by", "an administrator") + " (broker job " + job["job_id"] + ")")
             else:
-                message = (item.get("summary") or item["task_id"]) + " (broker job " + job["job_id"] + ")"
+                # Chat provenance tags belong on the Broker card, not in the commit subject.
+                summary = re.sub(r"\s*\[origin=[^\]]*\]", "", item.get("summary") or "").strip()
+                message = (summary or item["task_id"]) + " (broker job " + job["job_id"] + ")"
             # The summary is written before the work and cannot be corrected later, so the
             # body records what the release actually changed.
             listed = paths[:50] + ([f"... and {len(paths) - 50} more"] if len(paths) > 50 else [])
@@ -4052,7 +4064,8 @@ class Broker:
             if not self.runner.release_healthy():
                 raise ValueError("Deployment not healthy; release left uncommitted")
             files = self.scheduler_entries((self.state / job["job_id"] / "candidate.tar").read_bytes())
-            for archive in job.get("changed_paths", []):
+            # Every real runner has the checkout; only checkout-free test runners lack it.
+            for archive in job.get("changed_paths", []) if getattr(self.runner, "source", None) else ():
                 if not archive.startswith("v3/"):
                     continue
                 path = Path(self.runner.source) / archive.removeprefix("v3/")
@@ -4669,12 +4682,16 @@ class Broker:
         if action=="reconcile_release":return self.reconcile_release(request,args)
         if action=="successor_task":return self.successor_task(request,args)
         if action=="release_claims":return self.release_claims(request,args)
+        if action=="maintenance":
+            # Administrators drain or resume the broker like the local operator; mode is status, drain or resume.
+            if set(args)-{"action","mode","task_id"}:raise ValueError("maintenance takes mode and optional task_id")
+            return self.handle({**request,"name":"build_service_maintenance","arguments":{"action":args.get("mode","status"),**({"task_id":args["task_id"]}if "task_id"in args else{})}})
         if action=="reload_resource_policy":return self.reload_resource_policy(args,request["trusted"])
         if action=="reload_memory_policy":return self.reload_memory_policy(args,request["trusted"])
         if action in self.scheduler.actions:return self.scheduler.handle(args,request["trusted"],request["workspace"])
         allowed = {"action", "task_id", "summary", "expected_inputs_sha256", "sync_decision",
             "expected_sync_digest", "offset", "job_id", "request_id", "check", "timeout_seconds", "compiler_memory_cap", "package_memory_cap", "test_filter", "feature_profile", "expected_paths", "expected_operation"}
-        if action == "abandon":
+        if action in ("abandon", "suspend"):
             allowed |= {"task_key", "reason"}
         if set(args) - allowed:
             raise ValueError("unsupported build_work argument for action %s: %s" % (action, ", ".join(sorted(map(str, set(args) - allowed)))))
@@ -4824,8 +4841,8 @@ class Broker:
 
     def host_source_scope(self):
         """Broker modules and their docs/tests that the host-only lane may publish."""
-        review_modules={"source_status.py","workspace.py","compiler.Dockerfile","ui_policy.py","monitoring_component.py","buildctl.py","engine_components.py","release.py","workspace_support.py","executor_worker.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py","reconfigure.py"}
-        allowed={"v3/tests/test_build_source_status.py","v3/tests/test_admin_workspace.py","v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_build_cache_retention.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py","v3/tests/test_broker_shared_ui.py","v3/tests/test_broker_ui_override.py","v3/tests/test_scheduler_broker.py","v3/tests/test_build_cancel.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
+        review_modules={"source_status.py","workspace.py","compiler.Dockerfile","ui_policy.py","monitoring_component.py","buildctl.py","engine_components.py","release.py","workspace_support.py","executor_worker.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py","reconfigure.py","operator_shell.py"}
+        allowed={"v3/tests/test_operator_identities.py","v3/tests/test_build_source_status.py","v3/tests/test_admin_workspace.py","v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_build_cache_retention.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py","v3/tests/test_broker_shared_ui.py","v3/tests/test_broker_ui_override.py","v3/tests/test_scheduler_broker.py","v3/tests/test_build_cancel.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py","v3/tests/test_admin_build.py",
                  "v3/tests/test_context_component_builds.py","v3/tests/test_engine_components.py","v3/tests/test_build_lifecycle_entry.py",
                  "v3/build-service/boot_host.py","v3/tests/test_boot_supervisor.py","v3/tests/test_boot_transport.py",
@@ -5421,7 +5438,7 @@ class Broker:
             return self.cargo_request({"task_id":args.get("task_id"),"task":args.get("check","check"),"expected_inputs_sha256":args.get("expected_inputs_sha256"),"timeout_seconds":args.get("timeout_seconds",600),**({"request_id":args["request_id"]} if "request_id" in args else {}),**({"compiler_memory_cap":args["compiler_memory_cap"]}if "compiler_memory_cap"in args else{}),**({"test_filter":args["test_filter"]}if "test_filter"in args else{}),**({"feature_profile":args["feature_profile"]}if "feature_profile"in args else{})},trusted,workspace)
         with self.lock:
             if name == "build_service_maintenance":
-                if not trusted.get("local_caller") or set(args)-{"action","task_id"} or args.get("action") not in {"status","drain","resume"}:raise PermissionError("Operator maintenance required")
+                if not(trusted.get("local_caller") or self.administrator(trusted)) or set(args)-{"action","task_id"} or args.get("action") not in {"status","drain","resume"}:raise PermissionError("Operator or administrator maintenance required")
                 if args["action"]!="status":
                     state={"drained":args["action"]=="drain","task_id":args.get("task_id") if args["action"]=="drain" else None}
                     temporary=self.maintenance_file.with_suffix(".tmp")
@@ -5449,7 +5466,7 @@ class Broker:
             if name == "v3_build_rebuild_checkout":
                 return self.rebuild_checkout(args, trusted, workspace)
             if name == "v3_build_adopt_release":
-                if (not trusted.get("local_caller") or trusted["user_id"] != scheduler_module.LOCAL_OPERATOR
+                if (not trusted.get("local_caller") or trusted["user_id"] not in scheduler_module.LOCAL_OPERATORS
                         or workspace != LOCAL_WORKSPACE or set(args) not in ({"job_id"}, {"job_id", "accept_ui_failure", "reason"})):
                     raise PermissionError("local release reconciliation required")
                 if "accept_ui_failure" in args:
@@ -5478,14 +5495,14 @@ class Broker:
                 return {"job_id": job["job_id"], "status": job["status"],
                         "operator_adopted": True, "checkout_promotion": "conflicted"}
             if name == "v3_build_mark_not_installed":
-                if (not trusted.get("local_caller") or trusted["user_id"] != scheduler_module.LOCAL_OPERATOR
+                if (not trusted.get("local_caller") or trusted["user_id"] not in scheduler_module.LOCAL_OPERATORS
                         or workspace != LOCAL_WORKSPACE or set(args) != {"job_id"}):
                     raise PermissionError("local release reconciliation required")
                 return self._mark_not_installed(args["job_id"])
             if name == "v3_build_cancel":
                 return self._cancel_job(args, trusted, workspace)
             if name == "v3_build_retention_clearance":
-                if (not trusted.get("local_caller") or trusted["user_id"] != scheduler_module.LOCAL_OPERATOR
+                if (not trusted.get("local_caller") or trusted["user_id"] not in scheduler_module.LOCAL_OPERATORS
                         or workspace != LOCAL_WORKSPACE):
                     raise PermissionError("local operator reconciliation required")
                 if set(args) != {"notice_id", "unique_work_preserved", "effects_reconciled"} or args["unique_work_preserved"] is not True or args["effects_reconciled"] is not True:
@@ -5521,6 +5538,9 @@ class Broker:
                 if args or not self.administrator(trusted):
                     raise PermissionError("administrator build dashboard denied")
                 self._incoming_lease(trusted)
+                cached = getattr(self, "_dashboard_cache", None)
+                if cached and time.monotonic() - cached[0] < READ_CACHE_SECONDS:
+                    return copy.deepcopy(cached[1])
                 tasks = {item.get("job_id"): item for item in self.work.values() if item.get("job_id")}
                 jobs = []
                 # Adopted releases remain addressable by ID but are no longer pending in the queue.
@@ -5568,11 +5588,13 @@ class Broker:
                 leftovers = self._leftover_views(administrator=True)
                 live = self._current_release_blob()
                 source_status_snapshot = scheduler_module.sibling("source_status").snapshot
-                return {"source_git": source_status_snapshot(CONFIG["checkout_root"]),
+                value = {"source_git": source_status_snapshot(CONFIG["checkout_root"]),
                         "leftovers": leftovers, "leftover_total": len(leftovers), "leftover_policy": policy,
                         "jobs": jobs, "busy": self.active is not None or self.active_ui is not None,
                         "containers": containers, "synchronization": self._sync_report(live, live, ()),
                         "scheduler":self.scheduler.list(trusted,workspace,True),"resources":self.resources.snapshot()}
+                self._dashboard_cache = (time.monotonic(), value)
+                return copy.deepcopy(value)
             if name == "v3_build_result":
                 if (not self.administrator(trusted)
                         or set(args) != {"job_id"}
@@ -5914,7 +5936,7 @@ class Broker:
                 return dict(receipt)
             if name == "v3_build_work":
                 extra = set(args) - {"action", "task_id", "summary", "expected_inputs_sha256", "mode", "sync_decision", "expected_sync_digest", "offset", "compiler_memory_cap", "package_memory_cap", "expected_paths", "expected_operation"}
-                if args.get("action") == "abandon":
+                if args.get("action") in ("abandon", "suspend"):
                     extra -= {"task_key", "reason"}
                 if extra:
                     raise ValueError("unsupported work argument: " + ", ".join(sorted(map(str, extra))))
@@ -5937,7 +5959,7 @@ class Broker:
                            for i in (rows if selected else rows[-20:])]
                     return {"open_count": len(self._open_work()), "own": own,
                             "busy": self.active is not None or self.active_ui is not None}
-                if action not in ("begin", "finish", "abandon", "preflight", "decide"):
+                if action not in ("begin", "finish", "abandon", "suspend", "preflight", "decide"):
                     raise ValueError("unsupported work action")
                 task_id = args.get("task_id")
                 if not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", task_id):
@@ -6050,7 +6072,7 @@ class Broker:
                         # private troubleshooting snapshots, never another task owner.
                         if trusted.get("administrator") is True or (
                                 trusted.get("local_caller") is True and
-                                trusted["user_id"] == scheduler_module.LOCAL_OPERATOR and workspace == LOCAL_WORKSPACE):
+                                trusted["user_id"] in scheduler_module.LOCAL_OPERATORS and workspace == LOCAL_WORKSPACE):
                             inspection = release.entries(self.runner.snapshot(inspection=True), context_digest)
                             files.update({name: value for name, value in inspection.items()
                                           if release.inspection_path(name)})
@@ -6074,22 +6096,39 @@ class Broker:
                     return {"task_id": task_id, "status": "open", "open_count": len(self._open_work()),
                             "workspace_path": item.get("workspace_path"),
                             "workspace_inputs_sha256": item.get("base_inputs_sha256")}
+                reason = None
+                if action in ("abandon", "suspend") and ("task_key" in args or "reason" in args):
+                    # Administrators act on any caller's task by the exact key that takeover_preview shows as task.id.
+                    if not self.administrator(trusted):
+                        raise PermissionError("Administrator " + action + " required")
+                    reason = args.get("reason")
+                    if (set(args) != {"action", "task_id", "task_key", "reason"} or not isinstance(reason, str)
+                            or not 1 <= len(reason) <= 500 or not isinstance(args["task_key"], str)
+                            or not re.fullmatch(r"[a-f0-9]{64}", args["task_key"])):
+                        raise ValueError("administrator " + action + " takes task_id, its exact task_key and a reason of at most 500 characters")
+                    item = self.work.get(args["task_key"])
+                    if not item or item["task_id"] != task_id:
+                        raise ValueError("task_key does not name that task")
+                elif action in ("abandon", "suspend") and set(args) != {"action", "task_id"}:
+                    raise ValueError(action + " takes only task_id, or task_id, task_key and reason as an administrator")
+                if action == "suspend":
+                    # Free the claims and queued requests but keep the task open with its edits;
+                    # its next edit or apply requests them again.
+                    if not item or item["status"] != "open" or item.get("mode") != "isolated":
+                        raise ValueError("only an open isolated task may be suspended")
+                    if not self.scheduler.settled(item):
+                        raise ValueError("the task has a queued or running job; cancel it before suspending")
+                    before = self.scheduler.store.get(item["key"])
+                    after = self.scheduler.store.retire(item["key"], "Task suspended by its owner" if reason is None
+                                                        else "Task suspended by administrator: " + reason)
+                    # The owner keeps the task: carry the advanced epoch so its next edit reacquires.
+                    item["ownership_epoch"] = after["epoch"]
+                    if reason is not None:
+                        item["suspended_by"] = {"administrator": trusted["user_id"], "reason": reason}
+                    self._save_work()
+                    return {"task_id": task_id, "status": "open", "suspended": True,
+                            "released_scopes": len(before["scopes"]), "cleared_requests": len(before["requested"])}
                 if action == "abandon":
-                    reason = None
-                    if "task_key" in args or "reason" in args:
-                        # Administrators clear any caller's task by the exact key that takeover_preview shows as task.id.
-                        if not self.administrator(trusted):
-                            raise PermissionError("Administrator abandon required")
-                        reason = args.get("reason")
-                        if (set(args) != {"action", "task_id", "task_key", "reason"} or not isinstance(reason, str)
-                                or not 1 <= len(reason) <= 500 or not isinstance(args["task_key"], str)
-                                or not re.fullmatch(r"[a-f0-9]{64}", args["task_key"])):
-                            raise ValueError("administrator abandon takes task_id, its exact task_key and a reason of at most 500 characters")
-                        item = self.work.get(args["task_key"])
-                        if not item or item["task_id"] != task_id:
-                            raise ValueError("task_key does not name that task")
-                    elif set(args) != {"action", "task_id"}:
-                        raise ValueError("abandon takes only task_id, or task_id, task_key and reason as an administrator")
                     if not item or not (item["status"] == "open" or self.scheduler.failed_release(item)):
                         raise ValueError("only an open task, or a closed task whose release failed without effects, may be abandoned")
                     item.update(status="abandoned", finished_at=time.time())
@@ -6265,7 +6304,15 @@ class Broker:
                     self._stage_baselines = (completed, stage_baselines(list(self.jobs.values())))
                 if not dashboard:
                     self._touch_job_task(job, trusted, workspace)
-                value = job_progress(job, self._stage_baselines[1], time.time())
+                cache = self.__dict__.setdefault("_progress_cache", {})
+                hit = cache.get(job["job_id"])
+                if hit and time.monotonic() - hit[0] < READ_CACHE_SECONDS:
+                    value = copy.deepcopy(hit[1])
+                else:
+                    if len(cache) > 256:
+                        cache.clear()
+                    value = job_progress(job, self._stage_baselines[1], time.time())
+                    cache[job["job_id"]] = (time.monotonic(), copy.deepcopy(value))
                 if job.get("status") == "queued":
                     # Who this job waits behind: task, owning session (session= in its summary) and phase.
                     items = {item.get("task_id"): item for item in self.work.values()}
@@ -7036,10 +7083,14 @@ async def serve(broker, listener, bridge_listener=None):
                     "access_fingerprint": hashlib.sha256(b"python-v2-build-bridge").hexdigest(),
                     "bridge_caller": True}
             elif uid == CONFIG["service_uid"]:
+                # A restricted key's forced command names its identity; the service account alone can.
+                operator = request.pop("operator", scheduler_module.LOCAL_OPERATOR)
+                if operator not in scheduler_module.LOCAL_OPERATORS:
+                    raise ValueError("unknown operator identity")
                 if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "build_service_maintenance", "workspace_seed", "source_review", "source_patch", "v3_workspace_status", "v3_workspace_action", "v3_build_adopt_release", "v3_build_mark_not_installed", "v3_build_rebuild_checkout", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance", "performance_work", "v3_build_progress"):
                     raise ValueError("local caller operation denied")
                 request["workspace"] = LOCAL_WORKSPACE
-                request["trusted"] = {"user_id": scheduler_module.LOCAL_OPERATOR, "session_id": LOCAL_WORKSPACE,
+                request["trusted"] = {"user_id": operator, "session_id": LOCAL_WORKSPACE,
                     "lease_until": time.time() + 4 * 3600,
                     "access_fingerprint": hashlib.sha256(b"local-codex-build").hexdigest(),
                     "local_caller": True}
@@ -7054,7 +7105,13 @@ async def serve(broker, listener, bridge_listener=None):
                        if not bridge and uid == CONFIG["service_uid"] and label in COALESCED_READS else None)
                 work = inflight.get(key) if key else None
                 if work is None:
-                    work = asyncio.ensure_future(asyncio.to_thread(call_labelled, label, broker.handle, request))
+                    def arrived(request, at=time.time()):
+                        _ARRIVAL.at = at
+                        try:
+                            return broker.handle(request)
+                        finally:
+                            _ARRIVAL.at = None
+                    work = asyncio.ensure_future(asyncio.to_thread(call_labelled, label, arrived, request))
                     if key:
                         inflight[key] = work
                         work.add_done_callback(lambda _, key=key: inflight.pop(key, None))

@@ -40,6 +40,9 @@ class BrokerUnresponsive(TimeoutError):
 def call(name, arguments):
     request_id = str(uuid.uuid4())
     request = {"id": request_id, "name": name, "arguments": arguments}
+    # Set only by operator_shell.py from a restricted key's forced command.
+    if os.environ.get("WEBAGENT_OPERATOR"):
+        request["operator"] = os.environ["WEBAGENT_OPERATOR"]
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(75)
         connection.connect(SOCKET)
@@ -621,7 +624,7 @@ def main():
     schedule=commands.add_parser("schedule",help="structured ownership and resource control through build_work")
     schedule.add_argument("--input",required=True,help="JSON request file, or - for stdin")
     apply=commands.add_parser("apply",help="checked isolated source patch with derived ownership")
-    apply.add_argument("task_id");apply.add_argument("--patch",required=True)
+    apply.add_argument("task_id");apply.add_argument("--patch",required=True,help="unified diff file, or - for stdin")
     apply.add_argument("--expected",required=True);apply.add_argument("--request-id",required=True)
     check=commands.add_parser("check",help="Run a durable task-scoped compile check without deployment")
     check.add_argument("task_id");check.add_argument("--expected",required=True)
@@ -653,7 +656,7 @@ def main():
         value=json.loads(sys.stdin.read(1024*1024)if args.input=="-"else Path(args.input).read_text())
         print(json.dumps(call("build_work",value),sort_keys=True));return 0
     if args.command=="apply":
-        patch=Path(args.patch).read_text()
+        patch=sys.stdin.read(4*1024*1024)if args.patch=="-"else Path(args.patch).read_text()
         print(json.dumps(call("v3_source_apply",{"task_id":args.task_id,"request_id":args.request_id,"expected_inputs_sha256":args.expected,"patch":patch}),sort_keys=True));return 0
     if args.command=="maintenance":
         print(json.dumps(call("build_service_maintenance",{"action":args.action,**({"task_id":args.task_id} if args.task_id else {})}),sort_keys=True));return 0

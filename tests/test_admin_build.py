@@ -21,6 +21,8 @@ PATH = Path(__file__).resolve().parents[1] / "build-service/host.py"
 spec = importlib.util.spec_from_file_location("admin_build", PATH)
 host = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(host)
+# Fixtures read the dashboard right after changing jobs; the read cache would hide that.
+host.READ_CACHE_SECONDS = 0
 
 
 def context(version="one", extra=None):
@@ -38,6 +40,9 @@ def context(version="one", extra=None):
 
 
 class FakeRunner:
+    def release_healthy(self):
+        """Fixture deployments are healthy; the closeout's own checks are covered in test_scheduler_broker."""
+        return True
     def compiler_runtime(self,*args,**kwargs):
         return {"image":"sha256:"+"7"*64}
     def engine_execution_modes(self,expected_revision=None):

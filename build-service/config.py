@@ -45,7 +45,7 @@ def validate(value):
  # Retired Code Index keys (code_index_ledger_max_bytes, post_deployment_indexing,
  # documentation_review_order) stay accepted so existing installed configs still load.
  policy=v.get("scheduler",{})
- if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes","task_aware_cleanup","disk_min_free_bytes","disk_grace_seconds","disk_cleanup_batch","documentation_review_order","post_deployment_indexing","package_cache_enabled","package_cache_download_workers","package_cache_max_age_seconds","package_cache_retention_seconds","package_cache_max_bytes","package_cache_prepare_memory_bytes","failure_grace_seconds","orphan_release_seconds","registry_retention_seconds","registry_keep_finished","registry_high_water","local_operator"}-RESOURCE_KEYS-TUNING_KEYS:raise ValueError("Invalid scheduler policy")
+ if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes","task_aware_cleanup","disk_min_free_bytes","disk_grace_seconds","disk_cleanup_batch","documentation_review_order","post_deployment_indexing","package_cache_enabled","package_cache_download_workers","package_cache_max_age_seconds","package_cache_retention_seconds","package_cache_max_bytes","package_cache_prepare_memory_bytes","failure_grace_seconds","orphan_release_seconds","registry_retention_seconds","registry_keep_finished","registry_high_water","local_operator","operators"}-RESOURCE_KEYS-TUNING_KEYS:raise ValueError("Invalid scheduler policy")
  policy={**scheduler_defaults(),**policy}
  cpu=cpu_policy(policy)
  if type(cpu["cpu_budget_millis"])is not int or cpu["cpu_budget_millis"]!=0 and not 1000<=cpu["cpu_budget_millis"]<=max(1,(os.cpu_count()or 1)-1)*1000:raise ValueError("CPU budget must retain host headroom")
@@ -54,6 +54,9 @@ def validate(value):
  validate_tuning(policy)
  # The local operator's broker identity; switch only while no local task is open (task keys hash it).
  if policy.get("local_operator","codex-local")not in {"codex-local","t480"}:raise ValueError("Invalid local operator identity")
+ # Per-key operator identities a restricted SSH key may name (operator_shell.py); the local operator is always one.
+ names=policy.get("operators",[])
+ if not isinstance(names,list)or len(names)>16 or any(not isinstance(n,str)or not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,30}",n)for n in names):raise ValueError("Invalid operator identities")
  if policy["mode"]not in {"observe","enforce"}or type(policy["orphan_after_seconds"])is not int or not 60<=policy["orphan_after_seconds"]<=86400:raise ValueError("Invalid ownership policy")
  if type(policy.get("failure_grace_seconds",1800))is not int or not 300<=policy.get("failure_grace_seconds",1800)<=7200:raise ValueError("Invalid failed-release grace window")
  if type(policy.get("orphan_release_seconds",7200))is not int or not 1800<=policy.get("orphan_release_seconds",7200)<=86400:raise ValueError("Invalid orphan release window")

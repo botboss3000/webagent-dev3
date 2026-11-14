@@ -131,6 +131,44 @@ class SchedulerBrokerTests(unittest.TestCase):
         message=self.closeout("release-closeout-task")
         self.assertTrue(message.startswith("Scheduler fixture (broker job "),message)
         self.assertIn("\n\nReleased files (1):\n- README.md",message)
+    def admin(self):
+        """An in-app administrator in its own session."""
+        session=str(uuid.uuid4())
+        return {"user_id":"admin","session_id":session,"administrator":True,"lease_until":time.time()+30,"access_fingerprint":"e"*64},session
+    def test_suspend_frees_claims_keeps_the_task_and_the_next_edit_reacquires(self):
+        item=self.begin("suspend-own-task");self.write(item,"README.md","edited\n")
+        self.assertTrue(self.broker.scheduler.store.get(item["key"])["scopes"])
+        result=self.call("build_work",{"action":"suspend","task_id":"suspend-own-task"})
+        self.assertTrue(result["suspended"]);self.assertGreater(result["released_scopes"],0)
+        self.assertEqual(self.broker.scheduler.store.get(item["key"])["scopes"],[])
+        self.assertEqual(item["status"],"open");self.assertEqual((Path(item["workspace_path"])/"README.md").read_text(),"edited\n")
+        self.write(item,"README.md","edited again\n")
+        self.assertTrue(self.broker.scheduler.store.get(item["key"])["scopes"])
+    def test_administrator_suspends_or_abandons_another_callers_task_by_key(self):
+        item=self.begin("admin-target-task");self.write(item,"README.md","edited\n")
+        trusted,session=self.admin()
+        def admin(action,**more):
+            return self.broker.handle({"name":"build_work","workspace":session,"trusted":trusted,
+                                       "arguments":{"action":action,"task_id":"admin-target-task",**more}})
+        with self.assertRaises(ValueError):admin("suspend")  # not its own task without the key
+        self.assertTrue(admin("suspend",task_key=item["key"],reason="clearing for broker work")["suspended"])
+        self.assertEqual(self.broker.scheduler.store.get(item["key"])["scopes"],[])
+        self.assertEqual(admin("abandon",task_key=item["key"],reason="dropped")["status"],"abandoned")
+        with self.assertRaises(PermissionError):
+            self.broker.handle({"name":"build_work","workspace":session,"trusted":{**trusted,"administrator":False},
+                                "arguments":{"action":"suspend","task_id":"admin-target-task","task_key":item["key"],"reason":"x"}})
+    def test_administrator_drains_and_resumes_through_build_work(self):
+        trusted,session=self.admin()
+        def maintenance(mode):
+            return self.broker.handle({"name":"build_work","workspace":session,"trusted":trusted,"arguments":{"action":"maintenance","mode":mode}})
+        maintenance("drain");self.assertTrue(self.broker._maintenance()["drained"])
+        maintenance("resume");self.assertFalse(self.broker._maintenance()["drained"])
+    def test_lease_is_judged_when_the_request_arrived(self):
+        host=fixtures.host;trusted={"lease_until":time.time()-5,"access_fingerprint":"f"*64}
+        with self.assertRaisesRegex(ValueError,"lease"):self.broker._incoming_lease(trusted)
+        host._ARRIVAL.at=time.time()-20
+        try:self.broker._incoming_lease(trusted)
+        finally:host._ARRIVAL.at=None
     def test_following_job_progress_keeps_its_task_alive(self):
         item=self.begin("progress-liveness-task");self.write(item,"README.md","followed\n")
         store=self.broker.scheduler.store
