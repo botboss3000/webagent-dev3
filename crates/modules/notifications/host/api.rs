@@ -28,7 +28,7 @@ pub(crate) fn alert(app: &App, kind: &'static str) {
     tracing::warn!(target: "security", kind, count = raised.count, "administrator alert");
     let pool = app.store.app_pool.clone();
     tokio::spawn(async move {
-        if webagent_notifications::alerts::record(&pool, &raised, now() as i64)
+        if webagent_notifications::alerts::deliver(&pool, &raised, now() as i64)
             .await
             .is_err()
         {

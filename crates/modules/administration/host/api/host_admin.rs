@@ -37,6 +37,47 @@ async fn helper(message: Value) -> Result<Value, crate::ApiError> {
     Ok(value["output"].clone())
 }
 
+/// Raise one administrator alert for each host request that starts waiting, so the
+/// Notifications page (and later its push channels) shows it; polls the helper every 15 s.
+pub(crate) async fn watch(app: App) {
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        if app.stop.is_cancelled() {
+            break;
+        }
+        if let Ok(page) = helper(json!({"op": "list"})).await {
+            let pending: std::collections::HashSet<String> = page["pending"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|r| r["id"].as_str().map(str::to_owned))
+                .collect();
+            let config = webagent_notifications::alerts::Config::live();
+            for _ in pending.difference(&seen) {
+                if let Some(alert) =
+                    webagent_notifications::alerts::single(&config, "host_approval")
+                {
+                    if webagent_notifications::alerts::deliver(
+                        &app.store.app_pool,
+                        &alert,
+                        crate::now() as i64,
+                    )
+                    .await
+                    .is_err()
+                    {
+                        tracing::error!("Host approval alert not recorded");
+                    }
+                }
+            }
+            seen = pending;
+        }
+        tokio::select! {
+            () = app.stop.cancelled() => break,
+            () = tokio::time::sleep(std::time::Duration::from_secs(15)) => {}
+        }
+    }
+}
+
 /// Pending requests (with their exact effect and undo class) and the recent decided ones.
 pub(crate) async fn requests(State(_app): State<App>) -> Api {
     Ok(Json(helper(json!({"op": "list"})).await?))

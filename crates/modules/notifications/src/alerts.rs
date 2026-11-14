@@ -12,7 +12,13 @@ use std::sync::{Mutex, OnceLock};
 pub const LIVE_CONFIG: &str = "crates/modules/notifications/admin-alerts.json";
 const MAX_BYTES: u64 = 16 * 1024;
 /// Event kinds the host reports.
-pub const KINDS: [&str; 3] = ["login_failed", "login_blocked", "rate_limited"];
+/// `host_approval` is one host action waiting on the Host Admin page (raised per request).
+pub const KINDS: [&str; 4] = [
+    "login_failed",
+    "login_blocked",
+    "rate_limited",
+    "host_approval",
+];
 /// Delivery channels; only `in_app` is implemented.
 pub const CHANNELS: [&str; 4] = ["in_app", "ntfy", "email", "twilio"];
 const SEVERITIES: [&str; 3] = ["info", "warning", "critical"];
@@ -182,6 +188,9 @@ impl Raised {
                 "{} requests refused by rate limits within {minutes} min",
                 self.count
             ),
+            "host_approval" => {
+                "A host action is waiting for approval on the Host Admin page".into()
+            }
             other => format!("{} {other} events within {minutes} min", self.count),
         }
     }
@@ -225,6 +234,39 @@ pub fn hit(kind: &str, now: u64) -> Option<Raised> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .hit(&config, kind, now)
+}
+
+/// One alert for a single event of `kind` (no counting), when the kind and in-app delivery are on.
+#[must_use]
+pub fn single(config: &Config, kind: &str) -> Option<Raised> {
+    let rule = config.rules.get(kind).filter(|rule| rule.notify)?;
+    Some(Raised {
+        kind: kind.to_owned(),
+        severity: rule.severity.clone(),
+        count: 1,
+        window_seconds: rule.window_seconds,
+    })
+}
+
+/// Deliver one raised alert through every enabled channel of the live configuration; the
+/// single place a new channel (ntfy, email, SMS) is added. Only `in_app` exists, and the
+/// configuration refuses enabling the others, so today this records the alert for the
+/// Notifications page.
+///
+/// # Errors
+/// The in-app record failed.
+pub async fn deliver(pool: &SqlitePool, alert: &Raised, now: i64) -> Result<()> {
+    for (channel, enabled) in Config::live().channels {
+        if !enabled {
+            continue;
+        }
+        match channel.as_str() {
+            "in_app" => record(pool, alert, now).await?,
+            // Config::parse refuses enabling a channel that has no delivery here yet.
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Create the alert table in the application pool.
@@ -358,6 +400,16 @@ mod tests {
             assert_eq!(counter.hit(&config, "login_failed", 700), None);
         }
         assert!(counter.hit(&config, "login_failed", 701).is_some());
+    }
+
+    #[test]
+    fn host_approval_alerts_once_per_request() {
+        let config = config();
+        let first = single(&config, "host_approval").unwrap();
+        assert_eq!((first.count, first.severity.as_str()), (1, "warning"));
+        assert!(single(&config, "host_approval").is_some());
+        assert!(first.message().contains("Host Admin"));
+        assert_eq!(single(&config, "not_a_kind"), None);
     }
 
     #[test]

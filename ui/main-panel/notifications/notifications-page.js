@@ -6,6 +6,7 @@ const LABELS = {
   login_failed: 'Failed sign-ins',
   login_blocked: 'Sign-in blocks',
   rate_limited: 'Rate-limited requests',
+  host_approval: 'Host actions waiting for approval',
 };
 const CHANNELS = {in_app: 'In-app (this page)', ntfy: 'ntfy push', email: 'Email', twilio: 'SMS (Twilio)'};
 

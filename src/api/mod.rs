@@ -66,7 +66,7 @@ mod file_manager;
 #[path = "../../crates/modules/chat/host/api/followup_queue.rs"]
 pub(crate) mod followup_queue;
 #[path = "../../crates/modules/administration/host/api/host_admin.rs"]
-mod host_admin;
+pub(crate) mod host_admin;
 #[path = "../../crates/modules/inference/host/service.rs"]
 pub(crate) mod inference;
 #[path = "../../crates/modules/configuration/host/api.rs"]

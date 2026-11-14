@@ -46,7 +46,8 @@
         "event": [
           "login_failed",
           "login_blocked",
-          "rate_limited"
+          "rate_limited",
+          "host_approval"
         ]
       }
     },
@@ -77,7 +78,8 @@
         "event": [
           "login_failed",
           "login_blocked",
-          "rate_limited"
+          "rate_limited",
+          "host_approval"
         ]
       },
       "bounds": "validator"
@@ -145,6 +147,8 @@
   ],
   "excluded": {
     "/schema_version": "File format version.",
-    "/channels/**": "Delivery channels: only in_app exists; ntfy, email and twilio are not available yet."
+    "/channels/**": "Delivery channels: only in_app exists; ntfy, email and twilio are not available yet.",
+    "/events/host_approval/threshold": "Host approval alerts are raised once per waiting host action; threshold does not apply.",
+    "/events/host_approval/window_seconds": "Host approval alerts are raised once per waiting host action; window does not apply."
   }
 }
