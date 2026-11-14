@@ -248,8 +248,9 @@ pub(crate) async fn stop_session_resources(
     Ok(())
 }
 
-/// Delete a deleted chat session's private browser folder; best effort, since the session
-/// is already gone and the startup sweep removes anything left.
+/// Delete a deleted chat session's private browser folder and its workspace; best effort,
+/// since the session is already gone. The startup sweep removes browser folders left
+/// behind, not workspaces.
 pub(crate) async fn purge_browser_folder(app: &App, sid: &str) {
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(10),

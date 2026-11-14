@@ -380,11 +380,23 @@ async fn handle(
         .as_ref()
         .filter(|_| name == "administrator_browser_purge")
     {
-        // The chat session was deleted: its private browser folder goes with it.
+        // The chat session was deleted: its private browser folder and its workspace go
+        // with it, after its commands, terminals and tunnels stop.
         if let Some(sid) = parsed["workspace"].as_str() {
+            active.stop(sid);
             persistent.browsers.purge(sid).await;
         }
-        let result = json!({"status":"success"});
+        let mut result = json!({"status":"success"});
+        if let Some(base) = existing_workspace(&config.files, parsed) {
+            persistent.terminals.close_all(&base).await;
+            persistent.tunnels.close_workspace(&base).await;
+            // remove_dir_all never follows a symbolic link, so nothing outside the
+            // workspace root is touched.
+            let removed = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(base)).await;
+            if !matches!(removed, Ok(Ok(()))) {
+                result = json!({"status":"failed","output":"Workspace could not be removed"});
+            }
+        }
         return write_reply(&mut client_write, &parsed["id"], result).await;
     }
     if let Some(parsed) = parsed
@@ -809,5 +821,39 @@ mod tests {
             assert_eq!(reply["id"], "q");
             assert_eq!(reply["result"], json!({"status":"success"}));
         }
+    }
+
+    #[tokio::test]
+    async fn session_purge_removes_the_workspace_and_never_follows_a_link() {
+        let fixture = fixture();
+        let root = fixture.socket.parent().expect("root");
+        let workspaces = root.join("workspaces");
+        let purge = |workspace: &str| {
+            json!({"version":2,"id":"r","name":"administrator_browser_purge",
+                "workspace":workspace,"arguments":{}})
+        };
+        let deleted = "2244991a-c2e3-415b-ae5c-054570c91d32";
+        let kept = "3355aa2b-d3f4-426c-bf6d-165d81da2e43";
+        for sid in [deleted, kept] {
+            std::fs::create_dir_all(workspaces.join(sid).join("previews/a")).expect("nested");
+            std::fs::write(workspaces.join(sid).join("previews/a/smoke.txt"), "smoke")
+                .expect("smoke");
+        }
+        let reply = call(&fixture.socket, purge(deleted)).await;
+        assert_eq!(reply["result"], json!({"status":"success"}), "{reply}");
+        assert!(!workspaces.join(deleted).exists());
+        assert!(workspaces.join(kept).join("previews/a/smoke.txt").is_file());
+        // An absent workspace is already purged.
+        let again = call(&fixture.socket, purge(deleted)).await;
+        assert_eq!(again["result"], json!({"status":"success"}));
+        // A workspace that is a link loses only the link.
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&outside).expect("outside");
+        std::fs::write(outside.join("keep.txt"), "keep").expect("keep");
+        std::os::unix::fs::symlink(&outside, workspaces.join(deleted)).expect("link");
+        let linked = call(&fixture.socket, purge(deleted)).await;
+        assert_eq!(linked["result"], json!({"status":"success"}), "{linked}");
+        assert!(std::fs::symlink_metadata(workspaces.join(deleted)).is_err());
+        assert!(outside.join("keep.txt").is_file());
     }
 }
