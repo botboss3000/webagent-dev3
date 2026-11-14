@@ -182,7 +182,7 @@ def install(tree=None):
         publish(service, "release.py", release, 0o644)
         publish(service, "performance.py", performance, 0o644)
         extra={}
-        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","executor_worker.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py","ownership.py","scheduler.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","ui_policy.py","ui_publication.py","ui-test.Dockerfile","compiler.Dockerfile","resources.py","resource_control.py","docker_retention.py","docker_guard_dispatch.py","executor.py","engine_components.py","monitoring_component.py","source_status.py","boot_host.py","operator_shell.py","scheduler-defaults.json"):
+        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","executor_worker.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py","ownership.py","scheduler.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","ui_policy.py","ui_publication.py","ui-test.Dockerfile","compiler.Dockerfile","resources.py","resource_control.py","docker_retention.py","docker_guard_dispatch.py","executor.py","engine_components.py","monitoring_component.py","source_status.py","boot_host.py","operator_shell.py","host_helper.py","scheduler-defaults.json"):
             body=read_regular(source,name,2*1024*1024,owner=(CONFIG["service_uid"] if tree is not None else CONFIG["source_uid"]))
             if name.endswith(".py"):compile(body,name,"exec")
             elif name.endswith(".json"):json.loads(body)

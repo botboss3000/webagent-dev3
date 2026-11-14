@@ -13,7 +13,7 @@ BUILDCTL = "/home/ar/webagent-dev3/code/build-service/buildctl.py"
 CONFIG = "/etc/webagent/development/build-service.json"
 # Subcommands a release key may run; stdin replaces file arguments where a command takes one.
 ALLOWED = {"status", "inputs", "begin", "finish", "preflight", "decide", "abandon", "progress", "watch", "monitor",
-           "job", "cancel", "wait", "check", "heartbeat", "leftovers", "schedule", "apply", "export"}
+           "job", "cancel", "wait", "check", "heartbeat", "leftovers", "schedule", "apply", "export", "host"}
 STDIN_ONLY = {"schedule": "--input", "apply": "--patch"}
 
 

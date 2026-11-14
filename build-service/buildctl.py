@@ -500,6 +500,20 @@ def workcopy(task_id, folder, request=call):
     return {"task_id": task_id, "folder": str(folder), "tree": str(tree)}
 
 
+def host_call(message, path=None):
+    """One request to the root host helper; it identifies this caller by uid."""
+    path = path or os.environ.get("WEBAGENT_HOST_SOCKET", "/home/ar/webagent-dev3/runtime/host/helper.sock")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(60)
+        connection.connect(path)
+        connection.sendall(json.dumps(message).encode() + b"\n")
+        with connection.makefile("rb") as stream:
+            reply = json.loads(stream.readline(2 * 1024 * 1024))
+    if reply.get("status") != "success":
+        raise RuntimeError(str(reply.get("output")))
+    return reply["output"]
+
+
 def export(task_id, stream, request=call):
     """Write the caller's task tree (its v3 sources, no caches) to stream as a tar, for local mirrors."""
     tree = Path(own_task(task_id, request)["workspace_path"]).parent / "v3"
@@ -597,6 +611,9 @@ def main():
     copy = commands.add_parser("workcopy", help="copy a task's tree to a private folder to edit on the server")
     copy.add_argument("task_id")
     copy.add_argument("folder")
+    host = commands.add_parser("host", help="ask the root host helper for an action (approved in the app) or read a request")
+    host.add_argument("op", choices=("request", "status"))
+    host.add_argument("value", help="the action name for request, the request id for status")
     commands.add_parser("export", help="tar of a task's tree on stdout, for a local mirror").add_argument("task_id")
     diff = commands.add_parser("patch", help="credential-guarded unified diff from the task tree to an edited workcopy")
     diff.add_argument("task_id")
@@ -679,6 +696,11 @@ def main():
         return monitor(args.task, args.job, timeout=args.timeout)
     if args.command == "workcopy":
         print(json.dumps(workcopy(args.task_id, args.folder), sort_keys=True));return 0
+    if args.command == "host":
+        message = ({"op": "request", "action": args.value, "args": {},
+                    "requester": {"identity": os.environ.get("WEBAGENT_OPERATOR", "ar")}}
+                   if args.op == "request" else {"op": "status", "id": args.value})
+        print(json.dumps(host_call(message), sort_keys=True));return 0
     if args.command == "export":
         export(args.task_id, sys.stdout.buffer);return 0
     if args.command == "patch":

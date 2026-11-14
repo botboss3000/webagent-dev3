@@ -170,9 +170,14 @@ def install(args):
  if unit.is_symlink():raise PermissionError("Unit symlink")
  unit.write_text(text);unit.chmod(0o644);subprocess.run(["systemctl","daemon-reload"],check=True)
  # Release keys run a root-owned copy of the operator shell (sudoers pins its path); keep it current.
- shell=Path("/usr/local/lib/webagent-ops")
- if shell.is_dir() and not shell.is_symlink():
-  copy=shell/"operator_shell.py.new";copy.write_bytes((Path(value["service_dir"])/"operator_shell.py").read_bytes());copy.chmod(0o644);os.replace(copy,shell/"operator_shell.py")
+ # The root host helper runs a root-owned copy too; restart it only when its code changed.
+ for folder,name,unit in (("/usr/local/lib/webagent-ops","operator_shell.py",None),("/usr/local/lib/webagent-host","host_helper.py","webagent-host-helper.service")):
+  folder=Path(folder)
+  if not folder.is_dir() or folder.is_symlink():continue
+  body=(Path(value["service_dir"])/name).read_bytes();target=folder/name
+  if target.exists() and target.read_bytes()==body:continue
+  copy=folder/(name+".new");copy.write_bytes(body);copy.chmod(0o644);os.replace(copy,target)
+  if unit:subprocess.run(["systemctl","try-restart",unit],check=False)
  boot_host=repoint_boot(boot,boot_home/(BOOT_PIN+".previous")) if boot else {"drop_in":"absent","changed":False,"note":"no "+BOOT_PIN+" drop-in; boot host left unchanged"}
  print(json.dumps({"installed":True,"version":release,"config":str(config_path),"unit":unit_name,"boot_host":boot_host}))
 def resource_policy(config_path,candidate_path,task_id,dry_run=False):
