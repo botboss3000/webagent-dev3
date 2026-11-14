@@ -416,7 +416,8 @@ export function createSessionList(root, {guard, refresh, select, client, archive
   }
   root.querySelector('#session-dropdown-kebab').onclick = e => { e.stopPropagation(); const item = items.find(s => s.id === selected); if (item) actions(item,e.currentTarget); };
   confirmButton(root.querySelector('#session-dropdown-delete'),'Archive?',() => { const item = items.find(s => s.id === selected); return item ? mutate(item,'archive') : undefined; });
-  const tick = setInterval(() => { for (const node of [...menu.querySelectorAll('[data-ts]'),...root.querySelectorAll('[data-ts]')]) node.textContent = elapsed(Number(node.dataset.ts)); },1000);
+  // Refresh relative times each second, writing only labels whose text changed.
+  const tick = setInterval(() => { for (const node of [...menu.querySelectorAll('[data-ts]'),...root.querySelectorAll('[data-ts]')]) { const value = elapsed(Number(node.dataset.ts)); if (node.textContent !== value) node.textContent = value; } },1000);
   // Public lifecycle API keeps selected rows, configuration, search state and timers in sync.
   return {
     /** Loaded sub-agent sessions under `id`, as [{id, label: 'Spawn n'}], for the Broker chip. */

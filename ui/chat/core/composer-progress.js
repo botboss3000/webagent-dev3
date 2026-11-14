@@ -26,13 +26,17 @@ export function mountComposerProgress({root,getProfile,isAdmin}) {
     const placement=(cfg?.rows||[]).flatMap((row,index)=>['left','center','right'].filter(zone=>row[zone]?.includes('activity')).map(zone=>({index,zone})))[0];
     const control=cfg?.controls?.activity||{};
     const placed=cfg?.enabled!==false && !!placement && control.enabled!==false;
-    wrap.dataset.headerControl='activity';wrap.dataset.controlsRow=String(placement?.index??0);
-    wrap.dataset.zone=placement?.zone||'center';wrap.dataset.presentation=control.presentation||'progress-note';
-    wrap.style.alignItems=({left:'flex-start',center:'center',right:'flex-end'})[wrap.dataset.zone];
-    wrap.hidden=!label||!placed;host.classList.toggle('visible',!!label&&placed);bar.classList.toggle('ambient',!!label&&!run);
+    // Each value is written only when it changed, so the per-second tick leaves an unchanged control untouched.
+    const data={headerControl:'activity',controlsRow:String(placement?.index??0),zone:placement?.zone||'center',presentation:control.presentation||'progress-note'};
+    for(const [key,value] of Object.entries(data))if(wrap.dataset[key]!==value)wrap.dataset[key]=value;
+    const align=({left:'flex-start',center:'center',right:'flex-end'})[data.zone];
+    if(wrap.style.alignItems!==align)wrap.style.alignItems=align;
+    const hidden=!label||!placed;if(wrap.hidden!==hidden)wrap.hidden=hidden;
+    host.classList.toggle('visible',!!label&&placed);bar.classList.toggle('ambient',!!label&&!run);
     const seconds=started?Math.floor((performance.now()-started)/1000):0;
     // A stopped note is final state, not progress, so it shows no elapsed time.
-    text.textContent=label+(label&&!held&&seconds>=1?' · '+seconds+'s':'');
+    const shown=label+(label&&!held&&seconds>=1?' · '+seconds+'s':'');
+    if(text.textContent!==shown)text.textContent=shown;
     // A held stop notice may carry extra lines (broker tasks still building).
     text.classList.toggle('multiline',!!held&&label.includes('\n'));
     root.querySelector('#chat-input-row').classList.toggle('thinking',!!run);
@@ -83,7 +87,8 @@ export function mountComposerProgress({root,getProfile,isAdmin}) {
     // A stopped note stays until a different run starts; the stopped run's late snapshots are ignored.
     if(held&&(!next||next.id===held.run)){run=null;optimistic='';close();details();return;}
     held=null;if(next?.id!==run?.id)close();run=next||null;optimistic='';watchRun(run?.id||null);details();}
-  const timer=setInterval(render,1000);
+  // Tick the elapsed seconds only while a label is showing; a hidden control needs no repaint.
+  const timer=setInterval(()=>{if(label)render();},1000);
   const observer=new MutationObserver(render);observer.observe(root.querySelector('#chat-input-area'),{attributes:true,attributeFilter:['class']});
   return {open,update,
     // Surface an optimistic action label until the next run update or reset.

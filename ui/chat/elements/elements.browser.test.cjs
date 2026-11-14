@@ -77,6 +77,20 @@ for(const opts of [{},{mobile:true,dark:true}])test('sub agent spawns read as su
  assert.equal(await body.locator('.v2-activity-group').count(),0,'no nested activity group');
  assert.equal(await p.locator('#messages > .v2-activity-group:not(.v3-activity-cluster)').isVisible(),false,'member stays hidden');
 });
+test('an idle activity poll that finds no changes leaves the transcript DOM untouched',async t=>{
+ const p=await fixture(t);let polls=0;
+ // Later routes win: cursor polls report no new summaries.
+ await p.route('**/api/v3/sessions/*/activity?*after=*',route=>{polls++;return route.fulfill({json:{segments:[],cursor:1}});});
+ const group=p.locator('.v2-activity-group');await group.waitFor();
+ const settle=Date.now()+8000;while(polls<1 && Date.now()<settle)await p.waitForTimeout(100);
+ await p.waitForTimeout(300);
+ await p.evaluate(()=>{window.mutations=0;new MutationObserver(list=>{window.mutations+=list.length;}).observe(document.querySelector('#messages'),{subtree:true,childList:true,attributes:true,characterData:true});});
+ const start=polls,deadline=Date.now()+8000;
+ while(polls<start+2 && Date.now()<deadline)await p.waitForTimeout(100);
+ assert.ok(polls>=start+2,'two idle polls ran');
+ assert.equal(await p.evaluate(()=>window.mutations),0,'idle polls leave the transcript DOM untouched');
+ assert.match(await group.locator('summary').first().textContent(),/^1 message · Working/);
+});
 test('mini transcript can be opened by an alternate ellipsis trigger',async t=>{
  const p=await fixture(t);await p.evaluate(async()=>{
   view.disconnect();const {createMiniTranscript}=await import('/ui/chat/elements/mini-transcript/index.js');const {createTypingEllipsis}=await import('/ui/chat/elements/typing-ellipsis/index.js');

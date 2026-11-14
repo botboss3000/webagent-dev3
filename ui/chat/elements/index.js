@@ -91,7 +91,7 @@ async function loadEvents(id) {
 // Fetches summaries for newly drawn messages, then groups that changed since the cursor.
 async function refresh() {
   if(busy || !session)return;
-  busy=true;const epoch=generation,id=session;
+  busy=true;const epoch=generation,id=session,before=error;let changed=false;
   try {
     const drawn=[...container?.children||[]].map(node=>node.dataset.publicId).filter(value=>value && !requested.has(value));
     // An empty window still needs a cursor for live changes.
@@ -100,14 +100,14 @@ async function refresh() {
       const batch=drawn.slice(index,index+100);
       const page=await get(base(id)+'/activity?view=summary&boundaries='+encodeURIComponent(batch.join(',')));
       if(epoch!==generation)return;
-      batch.forEach(value=>requested.add(value));merge(page.segments);
+      batch.forEach(value=>requested.add(value));merge(page.segments);changed=true;
       // Groups drawn now are current as of this page; later polls only need newer changes.
       if(cursor===null)cursor=page.cursor;
     }
     if(cursor!==null) {
       const page=await get(base(id)+'/activity?view=summary&after='+cursor);
       if(epoch!==generation)return;
-      merge(page.segments);cursor=page.cursor;
+      merge(page.segments);cursor=page.cursor;changed||=page.segments.length>0;
     }
     error='';
   } catch(failure) {
@@ -115,13 +115,16 @@ async function refresh() {
     if([401,403,404].includes(failure.status)){disconnectActivity();return;}
     error='Activity connection lost; retrying…';
   } finally {if(epoch===generation)busy=false;}
-  paint();
+  // An idle poll with no new summaries, messages, error or progress change leaves the DOM untouched.
+  if(changed || error!==before || (document.querySelector('#chat-above-pill.visible')!==null)!==paintedProgress)paint();
 }
 function schedule(){clearTimeout(timer);if(enabled)timer=setTimeout(()=>{void refresh().finally(schedule);},2000);}
+// Progress-pill state at the last paint, so a poll repaints when the pill toggles.
+let paintedProgress=null;
 // Place groups after matching public-message anchors and refresh labels from summary state.
 function paint() {
   if(!enabled || !publicState || !container || session!==app.currentSessionId) return;
-  const progressActive=document.querySelector('#chat-above-pill.visible')!==null;
+  const progressActive=document.querySelector('#chat-above-pill.visible')!==null;paintedProgress=progressActive;
   document.querySelector('#session-dropdown-icon')?.classList.toggle('activity-running',progressActive);
   const rows=new Map([...container.children].map(n=>[n.dataset.publicId,n]));
   const ordered=[...summaries.values()].sort((a,b)=>a.first_seq-b.first_seq);

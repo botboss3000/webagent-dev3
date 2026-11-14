@@ -40,9 +40,12 @@ function chipCounts(counts={}) {
 /** Paint a header's count and status spans, keeping its chevron; extra parts follow the counts. Returns whether it has text. */
 export function paintActivityHead(summary,group,{error='',extra=[]}={}) {
   const text=[chipCounts(group.counts),...extra].filter(Boolean).join(', '),state=activityLabel({...group,counts:{}},{error});
-  const status=summary.querySelector('.tc-head-status');
-  summary.querySelector('.tc-head-label').textContent=text;status.textContent=state?(text?' · ':'')+state:'';
-  status.dataset.tone=error || group.state==='failed'?'danger':'';
+  const status=summary.querySelector('.tc-head-status'),label=summary.querySelector('.tc-head-label');
+  // Write only changed text and tone, so an idle repaint leaves the header untouched.
+  const statusText=state?(text?' · ':'')+state:'',tone=error || group.state==='failed'?'danger':'';
+  if(label.textContent!==text)label.textContent=text;
+  if(status.textContent!==statusText)status.textContent=statusText;
+  if(status.dataset.tone!==tone)status.dataset.tone=tone;
   return Boolean(text || state);
 }
 // Split a text body into display lines, ignoring one trailing newline.
@@ -173,10 +176,10 @@ export function createActivityGroup({transcript}) {
   node.addEventListener('toggle',toggle);
   // Refresh counts/status without replacing the focused summary or open transcript.
   function update(group,{error='',active=false}={}) {
-    node.dataset.activityGroupId=group.id;
+    if(node.dataset.activityGroupId!==group.id)node.dataset.activityGroupId=group.id;
     // A finished group with no rows and no status has nothing to disclose, such as a superseded stop.
-    node.hidden=!paintActivityHead(summary,group,{error});
-    node.setAttribute('aria-label','Activity group');
+    const hidden=!paintActivityHead(summary,group,{error});if(node.hidden!==hidden)node.hidden=hidden;
+    if(node.getAttribute('aria-label')!=='Activity group')node.setAttribute('aria-label','Activity group');
     node.classList.toggle('v2-activity-group-glimmer',active);
     transcript.update(group);
     diffs._events=group.events;renderDiffs(diffs,group.events);
