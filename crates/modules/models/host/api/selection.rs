@@ -881,17 +881,16 @@ mod tests {
             .await
             .unwrap();
         let member_identity = json!({"_user_id":member});
-        let Json(view) = read(
-            State(app.clone()),
-            Extension(member_identity.clone()),
-            agent_query(agent),
-        )
-        .await
-        .unwrap();
-        assert!(view["catalog"]["connections"].get("private").is_none());
-        assert!(view["catalog"]["connections"].get("two").is_none());
-        assert_eq!(view["catalog"]["connections"]["one"]["credential_ref"], "");
-        assert_eq!(view["available_entries"], json!(["one"]));
+        // The Models page is operator-only.
+        assert!(matches!(
+            read(
+                State(app.clone()),
+                Extension(member_identity.clone()),
+                agent_query(agent),
+            )
+            .await,
+            Err(ApiError(StatusCode::FORBIDDEN, _))
+        ));
         assert!(matches!(
             save(
                 State(app.clone()),
@@ -981,10 +980,10 @@ mod tests {
         )
         .await
         .is_err());
-        let Json(view) = read(State(app), Extension(member_identity), agent_query(agent))
-            .await
-            .unwrap();
-        assert_eq!(view["available_entries"], json!([]));
+        assert!(matches!(
+            read(State(app), Extension(member_identity), agent_query(agent)).await,
+            Err(ApiError(StatusCode::FORBIDDEN, _))
+        ));
     }
     // TENANT-API-MUTATION: scoped editors cannot forge shared references or overwrite newer revisions.
     #[tokio::test]

@@ -18,7 +18,7 @@ const $=id=>document.getElementById(id);
 let agentArchive=null,agentId='one',sessionsScope=true,createScope=false,sessionsPage=null,sessionsGeneration=0,selectionTable=null,agentSelectionQueue=Promise.resolve();
 const agentRoster=[{id:'one',name:'One',can_manage:true},{id:'two',name:'Two',can_manage:true}];
 const configPage={id:'config',panelId:'config-page'},sessionsDescriptor={id:'sessions',title:'Sessions',panelId:'sessions-section'},createDescriptor={id:'create',title:'New agent',panelId:'create-agent-page'};
-const agentPages=['model','identity','abilities','members'].map(id=>({id,panelId:id+'-page'})),agentTabOrder=['config','model','identity','abilities','members'];
+const agentPages=['model','identity','abilities','members','artifacts'].map(id=>({id,panelId:id+'-page',operator:id!=='artifacts'})),agentTabOrder=['config','model','identity','abilities','members'];
 const accountMe={is_admin:false},activeMainPage='agents',api=async()=>({}),chat={sessionId:'keep'};
 let explicitAssignment=false;
 const note=text=>{if(text)window.fixture.errors.push(text);};
@@ -26,6 +26,7 @@ const guard=fn=>async event=>{event?.preventDefault();try{await fn(event);note('
 const renderIdentity=async(host,request,{agentId})=>{fixture.identityRenders.push(agentId);host.replaceChildren();await new Promise(r=>setTimeout(r,10));const name=document.createElement('p');name.textContent='Identity '+agentId;host.append(name);};
 const renderAbilities=async(host,request,{agentId})=>{host.textContent='Abilities '+agentId;};
 const renderMembers=async(host,request,{agentId})=>{host.textContent='Members '+agentId;};
+const renderArtifacts=async(host,request,{agentId})=>{host.textContent='Artifacts '+agentId;};
 const renderCreateAgent=(host,request,{onCreated})=>{fixture.createRenders++;host.textContent='Create form';fixture.create=()=>onCreated({id:'three',name:'Three',assignment_required:true});};
 const loadAgentRoster=async()=>{agentRoster.push({id:'three',name:'Three',can_manage:true});renderAgentCards();};
 window.fixture={createRenders:0,guest(){accountMe.role='guest';renderAgentCards();},errors:[],mounts:[],destroyed:[],sessionsDestroyed:0,identityRenders:[],appAdminWithoutAgentAuthority(){accountMe.is_admin=true;agentRoster.find(agent=>agent.id===agentId).can_manage=false;}};
@@ -39,9 +40,9 @@ const mountSessionsPage=async host=>{
  return {destroy(){fixture.sessionsDestroyed++;footer.remove();}};
 };
 `;
-const html=`<!doctype html><main id="tab-agents"><div id="agents-grid"><div class="agents-squares"></div><div id="agents-detail-region" hidden><div class="agent-row"></div><div class="agent-card-tabs"></div><div id="config-page">Config</div><div id="model-page"><div class="ac-model-table"></div><div id="selection-model-table"></div><div id="settings"></div></div><div id="identity-page"></div><div id="abilities-page"></div><div id="members-page"></div></div><div id="sessions-region"><section id="sessions-section"></section></div><div id="create-region" hidden><section id="create-agent-page"></section></div></div></main><textarea id="draft">Unsaved draft</textarea><script type="module" src="/navigation.js"></script>`;
+const html=`<!doctype html><main id="tab-agents"><div id="agents-grid"><div class="agents-squares"></div><div id="agents-detail-region" hidden><div class="agent-row"></div><div class="agent-card-tabs"></div><div id="config-page">Config</div><div id="model-page"><div class="ac-model-table"></div><div id="selection-model-table"></div><div id="settings"></div></div><div id="identity-page"></div><div id="abilities-page"></div><div id="members-page"></div><div id="artifacts-page"></div></div><div id="sessions-region"><section id="sessions-section"></section></div><div id="create-region" hidden><section id="create-agent-page"></section></div></div></main><textarea id="draft">Unsaved draft</textarea><script type="module" src="/navigation.js"></script>`;
 const module=setup+shell+`
-for(const id of ['config','model','identity','abilities','members']){
+for(const id of ['config','model','identity','abilities','members','artifacts']){
  const tab=document.createElement('button');tab.id='agent-tab-'+id;tab.textContent=id;tab.onclick=guard(()=>showAgentView(id));document.querySelector('.agent-card-tabs').append(tab);
 }
 await showSessions('replace');`;
@@ -91,7 +92,9 @@ try{
  assert.equal(state.sessionsDestroyed,2);
  await page.locator('#agent-tab-members').click();assert.equal(await page.locator('#members-page').innerText(),'Members one');
  await page.evaluate(()=>fixture.appAdminWithoutAgentAuthority());await page.locator('#agent-tab-identity').click();
- assert.equal(new URL(page.url()).searchParams.get('agentView'),'abilities');assert.equal(await page.locator('#identity-page').isVisible(),false);
+ // Operator pages are hidden from non-operators, who land on Artifacts.
+ assert.equal(new URL(page.url()).searchParams.get('agentView'),'artifacts');assert.equal(await page.locator('#identity-page').isVisible(),false);
+ assert.equal(await page.locator('#agent-tab-abilities').isVisible(),false);
  // New agent is its own scope; the created agent opens on the page it needs next.
  await page.getByRole('button',{name:'New agent',exact:true}).click();
  await page.waitForFunction(()=>!document.querySelector('#create-region').hidden);

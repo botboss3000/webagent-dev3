@@ -456,6 +456,13 @@ impl<C: RecordCodec> Repository<'_, C> {
             if user == owner {
                 bail!("Owner appointment is protected");
             }
+            // Only the owner appoints, demotes or removes operators; operators manage the rest.
+            let was_operator = previous
+                .as_ref()
+                .is_some_and(|v| v["agent_administrator"] == true);
+            if (operator || was_operator) && actor != owner {
+                bail!("Only the agent owner can appoint or remove Operators");
+            }
             if operator && relationship != Relationship::Member {
                 bail!("Operator must be a member");
             }

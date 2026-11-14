@@ -190,7 +190,8 @@ pub async fn read<C: RuntimeStorage>(
     params: HashMap<String, String>,
 ) -> Api {
     let agent = selected(&params);
-    authority(&app, &identity, agent, false).await?;
+    // The Models page is operator-only; chat picks models through the session.
+    authority(&app, &identity, agent, true).await?;
     response(&app, &identity, agent, &app.store.model_catalog().await?).await
 }
 pub async fn save<C: RuntimeStorage>(

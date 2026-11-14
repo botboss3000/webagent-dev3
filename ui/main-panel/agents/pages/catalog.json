@@ -16,6 +16,7 @@
     },
     {
       "id": "identity",
+      "operator": true,
       "title": "Identity",
       "description": "Edit identity, compaction thresholds, and chat modes.",
       "order": 5,
@@ -25,6 +26,7 @@
     },
     {
       "id": "model",
+      "operator": true,
       "title": "Primary Models",
       "description": "Choose the primary model and manage its provider connection.",
       "order": 10,
@@ -34,6 +36,7 @@
     },
     {
       "id": "abilities",
+      "operator": true,
       "title": "Abilities",
       "description": "Configure the agent's abilities, skills, and tool visibility.",
       "order": 20,
@@ -43,6 +46,7 @@
     },
     {
       "id": "members",
+      "operator": true,
       "title": "Members",
       "description": "Manage this agent’s members and Operators.",
       "order": 25,

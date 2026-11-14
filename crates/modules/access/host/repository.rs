@@ -253,7 +253,7 @@ mod tests {
                 1
             )
             .await
-            .is_ok());
+            .is_err_and(|error| error.to_string().contains("Only the agent owner")));
         store
             .assign_agent_membership(
                 &manager,
@@ -261,7 +261,7 @@ mod tests {
                 "tenant-one",
                 Relationship::Member,
                 false,
-                2,
+                1,
             )
             .await
             .unwrap();

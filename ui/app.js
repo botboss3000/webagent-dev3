@@ -430,13 +430,15 @@ async function showAgentView(view,routeMode='push'){
   disposeSessionsPage();$('sessions-region').hidden=true;$('create-region').hidden=true;
   const pages=[configPage,...agentPages];
   const canManage=agentRoster.find(agent=>agent.id===agentId)?.can_manage===true;
-  const selected=!canManage&&!['model','abilities','artifacts'].includes(view)?'abilities':pages.some(page=>page.id===view)?view:'config';
+  // Operator pages (catalog "operator": true) stay hidden from members and visitors.
+  const allowed=page=>canManage||!page.operator;
+  const selected=!canManage&&!pages.some(page=>page.id===view&&allowed(page)&&page.type!=='directory')?'artifacts':pages.some(page=>page.id===view)?view:'config';
   for(const page of pages){
     $(page.panelId).hidden=page.id!==selected;
     const tab=$('agent-tab-'+page.id);
     tab.setAttribute('aria-selected',String(page.id===selected));
     tab.classList.toggle('active',page.id===selected);
-    tab.hidden=!agentTabOrder.includes(page.id)&&page.id!==selected;
+    tab.hidden=(!agentTabOrder.includes(page.id)&&page.id!==selected)||!allowed(page);
     tab.classList.toggle('ephemeral',!agentTabOrder.includes(page.id)&&page.id===selected);
     if(!tab.hidden&&!agentTabOrder.includes(page.id))tab.parentElement.append(tab);
   }

@@ -181,7 +181,8 @@ const RUNTIME_CONTROLS: &[(&str, &str)] = &[
 ];
 
 async fn catalog(app: &App, identity: &Value, id: &str, params: &HashMap<String, String>) -> Api {
-    let rights = authority(app, identity, id, false).await?;
+    // The Abilities page is operator-only; members get abilities through their sessions.
+    let rights = authority(app, identity, id, true).await?;
     let caller = identity["_user_id"].as_str().ok_or_else(denied)?;
     let user = params.get("user_id").map(String::as_str).unwrap_or(caller);
     if (user != caller || params.contains_key("level_id")) && rights["can_manage"] != true {
@@ -1108,16 +1109,14 @@ mod tests {
             .await
             .unwrap();
         let member_identity = json!({"_user_id":member_id});
-        let member_catalog = read(
+        // The Abilities page is operator-only.
+        assert!(read(
             State(app.clone()),
             Extension(member_identity.clone()),
             Path("shared_default".into()),
         )
         .await
-        .unwrap();
-        assert_eq!(member_catalog.0["authority"]["can_manage"], false);
-        assert!(member_catalog.0.get("tool_execution").is_none());
-        assert_eq!(member_catalog.0["settings"], json!({}));
+        .is_err());
         assert!(execution_set(
             State(app.clone()),
             Extension(member_identity),

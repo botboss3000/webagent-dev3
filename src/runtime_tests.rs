@@ -8158,15 +8158,13 @@ async fn tenant_ability_http_levels_effective_views_and_stale_updates() {
     )
     .await;
     assert!(summary["tools_notice"].is_null());
-    let (_, member_view) = call(&app, &member_token, "m", "GET", path, Value::Null).await;
-    assert_eq!(member_view["authority"]["can_manage"], false);
-    assert_eq!(member_view["permissions"], json!({}));
-    assert_eq!(member_view["tool_modes"], json!({}));
-    assert!(!member_view["abilities"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|a| a["readiness"] != "ready"));
+    // The Abilities page is operator-only.
+    assert_eq!(
+        call(&app, &member_token, "m", "GET", path, Value::Null)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
     let level = json!({"id":"limited","name":"Limited","revision":1,"ability_permissions":{"codebase_admin":"auto","web_access":"auto"},"tool_permissions":{}});
     let update = json!({"expected_revision":3,"level":level});
     let level_path = "/api/v3/agents/agent-a/capability-levels/limited";
@@ -8210,7 +8208,7 @@ async fn tenant_ability_http_levels_effective_views_and_stale_updates() {
         call(&app, &member_token, "m", "GET", path, Value::Null)
             .await
             .0,
-        StatusCode::OK
+        StatusCode::FORBIDDEN
     );
     let (_, preview) = call(
         &app,

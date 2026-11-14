@@ -208,8 +208,20 @@ mod security_tests {
                 .unwrap()["can_manage"],
             true
         );
+        // Only the owner appoints Operators, even when a delegated Operator asks.
+        assert!(repo
+            .manage_agent_member(
+                "alice",
+                "outsider",
+                "shared_default",
+                Some("operator"),
+                false,
+                0,
+            )
+            .await
+            .is_err());
         repo.manage_agent_member(
-            "alice",
+            "admin",
             "outsider",
             "shared_default",
             Some("operator"),
@@ -225,16 +237,9 @@ mod security_tests {
                 .unwrap()["can_manage"],
             true
         );
-        repo.manage_agent_member(
-            "outsider",
-            "alice",
-            "shared_default",
-            Some("member"),
-            false,
-            4,
-        )
-        .await
-        .unwrap();
+        repo.manage_agent_member("admin", "alice", "shared_default", Some("member"), false, 4)
+            .await
+            .unwrap();
         assert_eq!(
             store
                 .agent_authority("alice", "shared_default")

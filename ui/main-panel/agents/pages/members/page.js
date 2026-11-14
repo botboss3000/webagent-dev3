@@ -16,7 +16,7 @@ export async function renderMembers(host,request,{agentId}) {
     const update=async(body)=>{try{await request(path,'PUT',body);await renderMembers(host,request,{agentId});}catch(error){statusText(error.message);}};
     const form=node('form'),username=node('input','','ac-input'),level=choices('member'),add=node('button','Add member','ac-btn');
     username.placeholder='Exact app username';username.setAttribute('aria-label','Exact app username');username.required=true;add.type='submit';form.append(username,level,add);host.append(form);
-    form.onsubmit=async event=>{event.preventDefault();if(level.value==='operator'&&!window.confirm('Appoint this user as an Agent Operator? Operators can configure this agent and appoint other Operators.'))return;add.disabled=true;
+    form.onsubmit=async event=>{event.preventDefault();if(level.value==='operator'&&!window.confirm('Appoint this user as an Agent Operator? Operators can configure this agent and manage its members; only the owner appoints Operators.'))return;add.disabled=true;
       try{const result=await request(path+'?username='+encodeURIComponent(username.value.trim()));await update({user_id:result.user.user_id,level_id:level.value,blocked:false,expected_revision:0});}catch(error){statusText(error.message);}finally{add.disabled=false;}};
     host.append(node('p','Removing an assignment restores automatic Member or Visitor access. Block from agent overrides both. Counts are scoped to this agent.','members-notice'));
     // Pending help requests (agent request_human or the chat's Request help), one row each above the members table.
