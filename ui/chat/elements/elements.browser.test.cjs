@@ -37,16 +37,16 @@ async function fixture(t,{mobile=false,dark=false,reduced=false,counts={}}={}) {
 for(const opts of [{},{mobile:true,dark:true,reduced:true}])test('chat element lifecycle '+JSON.stringify(opts),async t=>{
  const p=await fixture(t,opts);
  const group=p.locator('.v2-activity-group'),dots=p.locator('.chat-typing-ellipsis');
- await group.waitFor();assert.match(await group.locator('summary').first().textContent(),/^1 update · Working/);
+ await group.waitFor();assert.match(await group.locator('summary').first().textContent(),/^1 message · Working/);
  assert.equal(await group.locator('summary').first().evaluate(n=>getComputedStyle(n).listStyleType),'none','no disclosure triangle');
  assert.equal(await group.locator('.v2-mini-row').count(),0,'transcript stays lazy');assert.equal(await dots.isVisible(),true);
  await p.locator('#chat-element-style-typing-ellipsis').evaluate(link=>link.sheet?true:new Promise(r=>link.onload=r));
  assert.equal(await dots.locator('span').first().evaluate(n=>getComputedStyle(n).animationName),opts.reduced?'none':'chat-typing-dot');
- await group.locator('summary').first().click();await group.locator('.v2-mini-row').waitFor();assert.match(await group.textContent(),/A private update/);
+ await group.locator('summary').first().click();await group.locator('.v2-mini-row').first().waitFor();assert.match(await group.textContent(),/A private update/);
  await group.locator('summary').first().click();assert.equal(await group.locator('.v2-activity-body').isVisible(),false);
  await group.locator('summary').first().focus();await p.keyboard.press('Enter');await group.locator('.v2-activity-body').waitFor({state:'visible'});assert.equal(await group.locator('.v2-activity-body').isVisible(),true);
- await p.evaluate(()=>render('completed'));assert.equal(await dots.isVisible(),false);assert.equal(await group.locator('summary').first().textContent(),'1 update');assert.equal(await group.locator('.v2-mini-row').count(),1);
- for(const [state,label] of [['finished','1 update'],['failed','1 update · Failed'],['cancelled','1 update · Stopped'],['queued','1 update · Queued…']]){await p.evaluate(state=>render(state),state);assert.equal(await group.locator('summary').first().textContent(),label);}
+ await p.evaluate(()=>render('completed'));assert.equal(await dots.isVisible(),false);assert.equal(await group.locator('summary').first().textContent(),'1 message');assert.equal(await group.locator('.v2-mini-row:not(.tc-raw)').count(),1,'one message row beside the diagnostics row');
+ for(const [state,label] of [['finished','1 message'],['failed','1 message · Failed'],['cancelled','1 message · Stopped'],['queued','1 message · Queued…']]){await p.evaluate(state=>render(state),state);assert.equal(await group.locator('summary').first().textContent(),label);}
  await p.evaluate(()=>{flags.chat_elements={typing_ellipsis:{enabled:false}};render();});assert.equal(await dots.isVisible(),false);
  await p.evaluate(()=>{admin=false;flags.chat_elements={};render();});assert.equal(await group.count(),0);assert.equal(await dots.isVisible(),true);
  await p.evaluate(()=>render('running','next'));assert.equal(await p.locator('.v2-mini-row').count(),0);assert.equal(await dots.count(),1);
@@ -56,14 +56,15 @@ for(const opts of [{},{mobile:true,dark:true}])test('sub agent spawns read as su
  const p=await fixture(t,{...opts,counts:{subagents:3,tools:18,updates:0}});
  const group=p.locator('.v2-activity-group');
  await group.waitFor();
- assert.equal(await group.locator('summary').first().textContent(),'18 tools · 3 sub-agents · Working…');
+ assert.equal(await group.locator('summary').first().textContent(),'18 tool calls, 3 sub-agents · Working…');
  // The same three sub agents report back; their notice row must not add a second count.
  await p.evaluate(()=>{
   const row=document.createElement('article');row.dataset.publicId='notice';row.dataset.subagentNotices='3';row.dataset.noticeKinds=JSON.stringify({'sub-agent':3});
   for(const title of ['Sub-agent · running slow','Sub-agent · finished']){const entry=document.createElement('details');entry.className='v3-subagent-row';const summary=document.createElement('summary');summary.textContent=title;entry.append(summary);row.append(entry);}
   document.querySelector('#messages').append(row);render();
  });
- assert.equal(await p.locator('.v3-activity-cluster > summary').textContent(),'18 tools · 3 sub-agents · Working…');
+ assert.equal(await p.locator('.v3-activity-cluster > summary').textContent(),'18 tool calls, 3 sub-agents · Working…');
+ assert.equal(await p.locator('.v3-activity-cluster > summary .tc-head-chev').count(),1,'merged header keeps its chevron');
  // One panel: expanding the cluster loads its members and shows their rows and notices together.
  await p.locator('.v3-activity-cluster > summary').click();
  const body=p.locator('.v3-activity-cluster > .v2-activity-body');
@@ -121,6 +122,8 @@ test('bundled DOMPurify renders chat and mini Markdown under deployed CSP',async
  });
  assert.equal(await p.evaluate(()=>DOMPurify.version),'3.4.17');
  assert.equal(await p.evaluate(()=>window.__sanitizerXss),undefined);
+ // Mini message rows start collapsed like tool rows; open it to read the rendered Markdown.
+ await p.locator('.v2-mini-message .v2-mini-tool-disclosure > summary').click();
  for(const selector of ['.chat-bubble .md-body','.v2-mini-message .v2-mini-content']){
   const body=p.locator(selector);await body.waitFor();
   assert.equal(await body.locator('strong').textContent(),'Safe bold');

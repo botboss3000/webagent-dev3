@@ -1,5 +1,8 @@
 // Owns modular chat elements.
 // Activity group owns its compact label and disclosure; mini-transcript owns the body.
+import {_refreshLucideIcons} from '../../core/presentation.js';
+import {toolFailure} from '../../core/activity.js';
+import {lineCount} from '../mini-transcript/rows.js';
 /** Compact group label: nonzero counts, any extra parts (such as sub-agent notices), then status. */
 export function activityLabel(group,{error='',extra=[]}={}) {
     // Summarize nonzero category counts without changing the underlying journal rows.
@@ -25,26 +28,160 @@ export function activityLabel(group,{error='',extra=[]}={}) {
     return [...parts,...extra,status,
       group.boundary_quality==='legacy_unverified'?'Legacy boundary unverified':''].filter(Boolean).join(' · ');
 }
+// Tool chips header counts: "8 tool calls, 3 messages", then any other nonzero kinds.
+function chipCounts(counts={}) {
+  const plural=(count,one,many=one+'s')=>count+' '+(count===1?one:many);
+  const messages=(counts.updates||0)+(counts.responses||0);
+  const nouns={subagents:['sub-agent'],retries:['retry','retries'],compactions:['compaction'],modes:['mode change']};
+  return [counts.tools?plural(counts.tools,'tool call'):'',messages?plural(messages,'message'):'',
+    ...Object.entries(nouns).filter(([kind])=>counts[kind]).map(([kind,noun])=>plural(counts[kind],...noun))]
+    .filter(Boolean).join(', ');
+}
+/** Paint a header's count and status spans, keeping its chevron; extra parts follow the counts. Returns whether it has text. */
+export function paintActivityHead(summary,group,{error='',extra=[]}={}) {
+  const text=[chipCounts(group.counts),...extra].filter(Boolean).join(', '),state=activityLabel({...group,counts:{}},{error});
+  const status=summary.querySelector('.tc-head-status');
+  summary.querySelector('.tc-head-label').textContent=text;status.textContent=state?(text?' · ':'')+state:'';
+  status.dataset.tone=error || group.state==='failed'?'danger':'';
+  return Boolean(text || state);
+}
+// Split a text body into display lines, ignoring one trailing newline.
+const bodyLines=text=>lineCount(text)?String(text).replace(/\n$/,'').split('\n'):[];
+// Estimate each edited file's added and removed lines from successful write/edit call arguments.
+// The journal has no real diff, so a write counts its whole content as added.
+function fileDiffs(events) {
+  const results=new Map(),files=new Map();
+  for(const event of events||[])if(event.kind==='tool_result')results.set(event.payload?.tool_call_id,event.payload);
+  for(const event of events||[]) {
+    const call=event.payload||{};
+    if(event.kind!=='tool_call' || !['file_write','file_edit'].includes(call.tool))continue;
+    const result=results.get(call.tool_call_id),args=call.arguments||call.args||{};
+    if(!result || toolFailure(result)!==null || typeof args.path!=='string')continue;
+    const file=files.get(args.path)||{path:args.path,added:0,removed:0,lines:[]};
+    const removed=call.tool==='file_edit'?bodyLines(args.old_text):[];
+    const added=bodyLines(call.tool==='file_edit'?args.new_text:args.content);
+    file.removed+=removed.length;file.added+=added.length;
+    file.lines.push(...removed.map(line=>['-',line]),...added.map(line=>['+',line]));
+    files.set(args.path,file);
+  }
+  // Chips show the file name, plus its folder when two edited files share a name.
+  const list=[...files.values()],base=path=>path.split('/').at(-1);
+  for(const file of list)file.name=list.filter(other=>base(other.path)===base(file.path)).length>1
+    ?file.path.split('/').slice(-2).join('/'):base(file.path);
+  return list;
+}
+// One body-mounted diff popover is shared by every chip; it is fixed, clamped and flips above.
+let pop=null,popAnchor=null,hideTimer=0;
+const MAX_POP_LINES=14;
+function hidePop() {
+  clearTimeout(hideTimer);if(pop)pop.hidden=true;
+  popAnchor?.setAttribute('aria-expanded','false');popAnchor?.removeAttribute('aria-describedby');popAnchor=null;
+}
+const scheduleHide=()=>{clearTimeout(hideTimer);hideTimer=setTimeout(hidePop,140);};
+function showPop(chip,file) {
+  if(!pop) {
+    pop=document.createElement('div');pop.className='tc-diff-pop';pop.id='tc-diff-pop';pop.setAttribute('role','tooltip');
+    pop.addEventListener('pointerenter',()=>clearTimeout(hideTimer));
+    pop.addEventListener('pointerleave',event=>{if(event.pointerType==='mouse')scheduleHide();});
+    document.addEventListener('pointerdown',event=>{if(popAnchor && !pop.contains(event.target) && !popAnchor.contains(event.target))hidePop();},true);
+    document.addEventListener('keydown',event=>{if(event.key==='Escape' && popAnchor){const anchor=popAnchor;hidePop();anchor.focus();}});
+    window.addEventListener('resize',hidePop);
+    document.addEventListener('scroll',event=>{if(popAnchor && !pop.contains(event.target))hidePop();},true);
+    document.body.append(pop);
+  }
+  clearTimeout(hideTimer);
+  if(popAnchor && popAnchor!==chip)popAnchor.setAttribute('aria-expanded','false');
+  const head=document.createElement('div');head.className='tc-pop-head';
+  const path=document.createElement('span');path.className='tc-pop-path';path.textContent=file.path;
+  const add=document.createElement('span');add.className='tc-add';add.textContent='+'+file.added;
+  const del=document.createElement('span');del.className='tc-del';del.textContent='−'+file.removed;
+  head.append(path,add,del);
+  const lines=document.createElement('div');lines.className='tc-pop-lines';
+  for(const [sign,text] of file.lines.slice(0,MAX_POP_LINES)) {
+    const line=document.createElement('div');line.className='tc-line '+(sign==='+'?'tc-line-add':'tc-line-del');
+    const mark=document.createElement('span');mark.className='tc-sign';mark.textContent=sign==='+'?'+':'−';
+    line.append(mark,document.createTextNode(text||' '));lines.append(line);
+  }
+  if(file.lines.length>MAX_POP_LINES) {
+    const more=document.createElement('div');more.className='tc-line-more';
+    more.textContent='… '+(file.lines.length-MAX_POP_LINES)+' more lines';lines.append(more);
+  }
+  pop.replaceChildren(head,lines);pop.hidden=false;
+  popAnchor=chip;chip.setAttribute('aria-expanded','true');chip.setAttribute('aria-describedby',pop.id);
+  const box=chip.getBoundingClientRect(),width=pop.offsetWidth,height=pop.offsetHeight;
+  let top=box.bottom+6;
+  if(top+height>innerHeight-8 && box.top-6-height>=8)top=box.top-6-height;
+  pop.style.left=Math.max(8,Math.min(box.left,innerWidth-width-8))+'px';
+  pop.style.top=Math.max(8,top)+'px';
+}
+// Build one file-diff chip: name, green added and red removed counts; hover, focus or tap opens its diff.
+function diffChip(file) {
+  const chip=document.createElement('button');chip.type='button';chip.className='tc-diff';
+  chip.setAttribute('aria-expanded','false');
+  chip.setAttribute('aria-label',file.path+': '+file.added+' lines added, '+file.removed+' removed (estimated)');
+  chip.innerHTML='<span class="tc-diff-icon" aria-hidden="true"><i data-lucide="file-diff"></i></span>';
+  const name=document.createElement('span');name.className='tc-diff-name';name.textContent=file.name;
+  const add=document.createElement('span');add.className='tc-add';add.textContent='+'+file.added;
+  const del=document.createElement('span');del.className='tc-del';del.textContent='−'+file.removed;
+  chip.append(name,add,del);
+  chip.addEventListener('pointerenter',event=>{if(event.pointerType==='mouse')showPop(chip,file);});
+  chip.addEventListener('pointerleave',event=>{if(event.pointerType==='mouse')scheduleHide();});
+  chip.addEventListener('focus',()=>{if(chip.matches(':focus-visible'))showPop(chip,file);});
+  chip.addEventListener('blur',()=>{if(popAnchor===chip)scheduleHide();});
+  // Mouse users already see it on hover; touch and keyboard activation toggle it.
+  chip.addEventListener('click',event=>{
+    if(event.pointerType==='mouse')return;
+    if(popAnchor===chip)hidePop();else showPop(chip,file);
+  });
+  return chip;
+}
+const MAX_DIFF_CHIPS=3;
+// Redraw the diff chip strip only when the estimated files change or "+N more" is toggled.
+function renderDiffs(strip,events) {
+  const files=fileDiffs(events);
+  const signature=JSON.stringify(files.map(file=>[file.path,file.added,file.removed]))+':'+!!strip._expanded;
+  if(strip._signature===signature)return;
+  strip._signature=signature;strip.hidden=!files.length;
+  if(popAnchor && strip.contains(popAnchor))hidePop();
+  const label=document.createElement('span');label.className='tc-diffs-label';
+  label.textContent='Edited '+files.length+' file'+(files.length===1?'':'s');
+  const shown=strip._expanded?files:files.slice(0,MAX_DIFF_CHIPS);
+  const children=[label,...shown.map(diffChip)];
+  if(files.length>MAX_DIFF_CHIPS) {
+    const more=document.createElement('button');more.type='button';more.className='tc-more';
+    more.textContent=strip._expanded?'Show less':'+'+(files.length-MAX_DIFF_CHIPS)+' more';
+    more.setAttribute('aria-expanded',String(!!strip._expanded));
+    more.addEventListener('click',()=>{strip._expanded=!strip._expanded;strip._signature='';renderDiffs(strip,strip._events);
+      strip.querySelector('.tc-more')?.focus();});
+    children.push(more);
+  }
+  strip.replaceChildren(...children);_refreshLucideIcons(strip);
+}
 /** Connect a persistent activity disclosure to an independently owned transcript. */
 export function createActivityGroup({transcript}) {
-  const node=document.createElement('details');node.className='v2-activity-group';
-  const summary=document.createElement('summary');
-  node.append(summary,transcript.element);
+  const node=document.createElement('details');node.className='v2-activity-group tc-group';
+  const summary=document.createElement('summary');summary.className='tc-head';
+  const chevron=document.createElement('span');chevron.className='tc-head-chev';chevron.setAttribute('aria-hidden','true');
+  chevron.innerHTML='<i data-lucide="chevron-right"></i>';
+  const counts=document.createElement('span');counts.className='tc-head-label';
+  const status=document.createElement('span');status.className='tc-head-status';
+  summary.append(chevron,counts,status);_refreshLucideIcons(summary);
+  const diffs=document.createElement('div');diffs.className='tc-diffs';diffs.hidden=true;
+  node.append(summary,transcript.element,diffs);
   // Native details supplies pointer and keyboard disclosure semantics.
-  const toggle=()=>{node.open?transcript.open():transcript.close();};
+  const toggle=()=>{node.open?transcript.open():(transcript.close(),popAnchor && diffs.contains(popAnchor) && hidePop());};
   node.addEventListener('toggle',toggle);
   // Refresh counts/status without replacing the focused summary or open transcript.
   function update(group,{error='',active=false}={}) {
     node.dataset.activityGroupId=group.id;
-    const label=activityLabel(group,{error});
-    node.firstElementChild.textContent=label;
     // A finished group with no rows and no status has nothing to disclose, such as a superseded stop.
-    node.hidden=!label;
+    node.hidden=!paintActivityHead(summary,group,{error});
     node.setAttribute('aria-label','Activity group');
     node.classList.toggle('v2-activity-group-glimmer',active);
     transcript.update(group);
+    diffs._events=group.events;renderDiffs(diffs,group.events);
   }
   return {element:node,update,
     // Remove the listener and all transcript-owned resources on session teardown.
-    dispose(){node.removeEventListener('toggle',toggle);transcript.dispose();node.remove();}};
+    dispose(){if(popAnchor && diffs.contains(popAnchor))hidePop();node.removeEventListener('toggle',toggle);transcript.dispose();node.remove();}};
 }

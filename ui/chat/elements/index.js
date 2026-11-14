@@ -1,7 +1,7 @@
 // Coordinates chat elements and authorized private activity.
 import {activityRows} from '../core/activity.js';
 import {createMiniTranscript} from './mini-transcript/index.js';
-import {createActivityGroup,activityLabel} from './activity-group/index.js';
+import {createActivityGroup,paintActivityHead} from './activity-group/index.js';
 import {createTypingEllipsis} from './typing-ellipsis/index.js';
 
 // UI preview captures: `/app?session_id=<id>&ui_sample=activity` replaces the session's activity with one
@@ -178,7 +178,7 @@ function cluster(shown,active) {
     // Spawn calls already count their sub agents; notice rows report the same ones.
     const reported=kinds['sub-agent']||0;delete kinds['sub-agent'];
     counts.subagents=counts.subagents||reported;
-    element.firstElementChild.textContent=activityLabel({...(groups.at(-1)||{state:'completed'}),counts},
+    paintActivityHead(element.firstElementChild,{...(groups.at(-1)||{state:'completed'}),counts},
       {error,extra:Object.entries(kinds).map(([kind,count])=>count+' '+kind+(count===1?'':'s'))});
     element.setAttribute('aria-label','Activity group');
     element.classList.toggle('v2-activity-group-glimmer',active && members.some(node=>node.classList.contains('v2-activity-group-glimmer')));

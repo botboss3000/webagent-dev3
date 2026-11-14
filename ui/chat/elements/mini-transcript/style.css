@@ -37,19 +37,6 @@
 .v2-activity-body .v2-mini-tool-disclosure > summary { font-family: var(--font-mono); }
 .v2-activity-body .v2-mini-tool[data-status="error"] > details > summary { color: var(--danger); }
 .v2-activity-body .v2-mini-tool[data-status="held"] > details > summary { color: var(--warning); }
-/* A compaction call is a system summary call, not an agent tool call.
-   Orange tokens follow the design-system theme pair (dark default, light override). */
-:root { --orange: #fb923c; --orange-rgb: 251, 146, 60; }
-body.light-mode { --orange: #c2410c; --orange-rgb: 194, 65, 12; }
-.v2-activity-body .v2-mini-compaction { border-left: 3px solid var(--orange); }
-/* A provider retry is the app reconnecting, not an agent action; same orange as compaction. */
-.v2-activity-body .v2-mini-retry { border-left: 3px solid var(--orange); }
-.v2-activity-body .v2-mini-retry > details > summary { color: var(--orange); }
-/* A preload is the app loading tools before the agent's call, not an agent action. */
-.v2-activity-body .v2-mini-preload { border-left: 3px solid var(--accent); }
-.v2-activity-body .v2-mini-preload > details > summary { color: var(--fg-2); overflow-wrap: anywhere; }
-.v2-activity-body .v2-mini-compaction[data-status="done"] > details > summary,
-.v2-activity-body .v2-mini-compaction[data-status="running"] > details > summary { color: var(--orange); }
 .v2-activity-body .v2-mini-section-head { display: flex; align-items: center; justify-content: space-between; color: var(--fg-3); }
 .v2-activity-body pre {
   white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono);
@@ -67,3 +54,97 @@ body.light-mode { --orange: #c2410c; --orange-rgb: 194, 65, 12; }
 .v2-activity-body .v2-mini-nav .is-following { color: var(--accent); background: var(--accent-soft); }
 /* The nav floats over the rows; while it shows, row headers wrap before its buttons. */
 .v2-activity-body:has(> .v2-mini-nav:not([hidden])) .v2-mini-row > details > summary { padding-right: 64px; }
+
+/* ---- Tool chips: compact rows with an inline target chip; detail behind a left border. ---- */
+.v2-activity-body { -webkit-tap-highlight-color: transparent; }
+.v2-activity-body .v2-mini-row.tc-tool,
+.v2-activity-body .v2-mini-row.tc-message {
+  margin: 0; padding: 0; border: none; border-radius: 0; background: transparent;
+}
+.v2-activity-body .v2-mini-tool-disclosure > summary.tc-row-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  box-sizing: border-box;
+  min-height: 28px;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  color: var(--fg-2);
+  overflow: hidden;
+  overflow-wrap: normal;
+  list-style: none;
+}
+.v2-activity-body summary.tc-row-head::-webkit-details-marker { display: none; }
+.v2-activity-body summary.tc-row-head:hover { background: var(--bg-tint); }
+.v2-activity-body summary.tc-row-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.v2-activity-body .tc-icon {
+  position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; color: var(--fg-3);
+}
+.v2-activity-body .tc-icon > span { display: inline-flex; }
+.v2-activity-body .tc-icon svg { width: 13px; height: 13px; }
+.v2-activity-body .tc-icon > .tc-chev { display: none; }
+@media (hover: hover) {
+  .v2-activity-body summary.tc-row-head:hover .tc-glyph { display: none; }
+  .v2-activity-body summary.tc-row-head:hover .tc-chev { display: inline-flex; }
+}
+.v2-activity-body details[open] > summary.tc-row-head .tc-glyph { display: none; }
+.v2-activity-body details[open] > summary.tc-row-head .tc-chev { display: inline-flex; transform: rotate(90deg); }
+.v2-activity-body .tc-label { flex: none; font-weight: 500; color: var(--fg-1); white-space: nowrap; }
+.v2-activity-body .tc-chip {
+  flex: 0 1 auto; min-width: 0; display: inline-block; box-sizing: border-box;
+  height: 22px; line-height: calc(22px - 2 * var(--border-width)); padding: 0 7px;
+  border: var(--border-width) solid var(--border); border-radius: 6px; background: var(--bg-2);
+  color: var(--fg-2); font-family: var(--font-mono); font-size: 11.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.v2-activity-body .tc-preview { flex: 1 1 auto; min-width: 0; color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v2-activity-body .tc-note { flex: none; font-size: 11.5px; color: var(--danger); }
+.v2-activity-body .tc-tool[data-status="error"] .tc-label { color: var(--danger); }
+.v2-activity-body .tc-tool[data-status="error"] .tc-icon { color: var(--danger); }
+.v2-activity-body .tc-tool[data-status="held"] .tc-note { color: var(--warning); }
+/* A running call swaps its icon for a small accent spinner until it is opened. */
+.v2-activity-body .tc-tool[data-status="running"] .tc-label { color: var(--accent); }
+.v2-activity-body .tc-tool[data-status="running"] details:not([open]) > summary .tc-glyph { visibility: hidden; }
+.v2-activity-body .tc-tool[data-status="running"] details:not([open]) > summary .tc-icon::after {
+  content: ''; position: absolute; inset: 1px; border-radius: 50%;
+  border: 1.5px solid transparent; border-top-color: var(--accent); border-right-color: var(--accent);
+  animation: v2-agent-icon-spin 1s linear infinite;
+}
+@media (hover: hover) {
+  .v2-activity-body .tc-tool[data-status="running"] summary.tc-row-head:hover .tc-icon::after { display: none; }
+}
+.v2-activity-body .tc-detail {
+  margin: 2px 0 6px 12px;
+  padding: 4px 0 4px 12px;
+  border-left: var(--border-width) solid var(--border);
+}
+.v2-activity-body .tc-detail .v2-mini-section-head { font-size: 11.5px; }
+.v2-activity-body .tc-detail pre { margin: 4px 0 8px; color: var(--fg-1); }
+.v2-activity-body .tc-detail .v2-mini-diagnostics summary { padding: 2px 0; }
+/* Model steps: a muted step head, the step's message, then its tool calls on one rail. */
+.v2-activity-body .tc-step { margin: 2px 0 6px; }
+.v2-activity-body .tc-step + .tc-step { padding-top: 4px; border-top: var(--border-width) solid var(--border-soft); }
+.v2-activity-body .tc-step-head {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
+  padding: 2px 6px 0; font-size: 11.5px; color: var(--fg-3);
+}
+.v2-activity-body .tc-step-num { font-weight: 600; color: var(--fg-2); text-transform: uppercase; letter-spacing: .04em; }
+.v2-activity-body .tc-step-failed { color: var(--danger); }
+.v2-activity-body .tc-step-running { color: var(--accent); }
+.v2-activity-body .tc-step-calls {
+  margin: 0 0 0 12px; padding-left: 6px;
+  border-left: 2px solid var(--border);
+}
+/* The rail stays neutral: the head's failed/running count and the call's own colour mark the state. */
+/* System rows (compaction, retry, preload) use the step look: a titled head and one row on the rail. */
+.v2-activity-body .v2-mini-row.tc-system { margin: 0; padding: 0; border: none; border-radius: 0; background: transparent; }
+.v2-activity-body .tc-system > details > summary.tc-row-head { color: var(--fg-2); }
+.v2-activity-body .tc-step[data-kind="system"] .v2-mini-notice { margin: 0; padding: 2px 0 2px 4px; }
+.v2-activity-body .tc-step-calls .tc-label { overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; min-width: 0; }
+.v2-activity-body .tc-system[data-status="running"] .tc-note { color: var(--accent); }
+@media (prefers-reduced-motion: reduce) {
+  .v2-activity-body .tc-tool[data-status="running"] details:not([open]) > summary .tc-icon::after { animation: none; }
+}

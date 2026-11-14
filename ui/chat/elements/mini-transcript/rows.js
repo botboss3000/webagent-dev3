@@ -31,6 +31,8 @@ function payloadValue(payload,keys) {
 }
 // Format structured tool values for preformatted display; undefined becomes empty text.
 const printable=value=>typeof value==='string'?value:JSON.stringify(value,null,2)??'';
+/** Lines in a text body, ignoring one trailing newline; empty text has none. */
+export const lineCount=text=>text?String(text).replace(/\n$/,'').split('\n').length:0;
 // Project activity events into text, time, arguments/result, and pending/done/error display state.
 export function normalizeRow(row) {
   const call=row.events.find(e=>e.kind==='tool_call');
@@ -79,53 +81,69 @@ function markdown(body,text) {
 function diagnostic() {
   const node=el('details','','v2-mini-diagnostics');node.append(el('summary','Raw diagnostics'),el('pre'));return node;
 }
+// Tool chips: each tool has an icon and a verb; the inline chip names its target.
+const TOOL_VIEWS={file_read:['file-text','Read'],file_write:['file-plus','Write'],file_edit:['pencil','Edit'],
+  file_list:['folder','List'],file_search:['search','Search'],browser_read:['globe','Read page'],
+  browser_input:['mouse-pointer-click','Use page'],start_spawn:['bot','Start sub-agent']};
+// A short chip text: a path's file name or a URL's host and path; the full value stays in the title.
+function chipText(target) {
+  if(typeof target!=='string' || !target)return '';
+  if(/^https?:\/\//.test(target)) {try {const url=new URL(target);return url.host+url.pathname.replace(/\/$/,'');}catch(_){return target;}}
+  return target.split('/').filter(Boolean).at(-1) || target;
+}
+// Draw one compact row head: icon (a chevron on hover or open), label, optional chip, preview and note.
+export function chipHead(head,{icon,label,chip='',title='',preview='',note=''}) {
+  head.replaceChildren();
+  const slot=el('span','','tc-icon');slot.setAttribute('aria-hidden','true');
+  slot.innerHTML='<span class="tc-glyph"><i data-lucide="'+icon+'"></i></span><span class="tc-chev"><i data-lucide="chevron-right"></i></span>';
+  head.append(slot,el('span',label,'tc-label'));
+  if(chip){const node=el('span',chip,'tc-chip');node.title=title||chip;head.append(node);}
+  if(preview)head.append(el('span',preview,'tc-preview'));
+  if(note)head.append(el('span',note,'tc-note'));
+  _refreshLucideIcons(head);
+}
 // Construct a tool or message row with stable control nodes; patchTranscriptRow supplies current data.
 export function createTranscriptRow(row) {
   const tool=row.category==='tools',compaction=row.compaction===true,retry=row.retry===true,preload=row.preload===true;
-  const node=el('div','','v2-mini-row '+(tool?'v2-mini-tool':compaction?'v2-mini-tool v2-mini-compaction'
-    :retry?'v2-mini-tool v2-mini-retry':preload?'v2-mini-tool v2-mini-preload':'v2-mini-message'));
+  const node=el('div','','v2-mini-row '+(tool?'v2-mini-tool tc-tool':compaction?'v2-mini-tool v2-mini-compaction tc-system'
+    :retry?'v2-mini-tool v2-mini-retry tc-system':preload?'v2-mini-tool v2-mini-preload tc-system':'v2-mini-message tc-message'));
   const content=el('div','','v2-mini-content');
   const footer=el('div','','turn-gutter ca-activity-entry-footer notice-gutter');
   const raw=diagnostic();
   node._parts={content,footer,raw,tool,compaction,retry,preload};
-  if(preload) {
-    // One compact line; expanding lists each preloaded and suggested item with its score.
+  if(preload || retry || compaction) {
+    // A system row (preload list, provider retry, compaction summary) is a compact row like a tool call;
+    // expanding shows its detail behind the same left border.
     const disclosure=el('details','','v2-mini-tool-disclosure');
-    const head=el('summary');disclosure.append(head,content);node.append(disclosure,footer,raw);
-    node._parts.head=head;footer.append(copy('Copy preload list',()=>node._text));
-  } else if(retry) {
-    // Collapsed like a tool row; expanding shows the provider error that caused the retry.
-    const disclosure=el('details','','v2-mini-tool-disclosure');
-    const head=el('summary');disclosure.append(head,content);node.append(disclosure,footer,raw);
-    node._parts.head=head;footer.append(copy('Copy error',()=>node._text));
-  } else if(compaction) {
-    // Collapsed like a tool row; expanding shows the summary (or the failure) once the result arrives.
-    const disclosure=el('details','','v2-mini-tool-disclosure');
-    const head=el('summary');disclosure.append(head,content);node.append(disclosure,footer,raw);
-    node._parts.head=head;footer.append(copy('Copy summary',()=>node._text));
+    const head=el('summary','','tc-row-head');const detail=el('div','','tc-detail');
+    detail.append(content,footer,raw);disclosure.append(head,detail);node.append(disclosure);
+    node._parts.head=head;
+    footer.append(copy(preload?'Copy preload list':retry?'Copy error':'Copy summary',()=>node._text));
   } else if(tool) {
+    // One compact row; its detail (arguments, result, copy, diagnostics) sits behind a left border.
     const disclosure=el('details','','v2-mini-tool-disclosure');
-    const head=el('summary');disclosure.append(head,content);node.append(disclosure,footer,raw);
+    const head=el('summary','','tc-row-head');content.classList.add('tc-detail');
+    disclosure.append(head,content);node.append(disclosure);
     node._parts.head=head;
     const broker=el('section','','v2-mini-broker');broker.hidden=true;
     broker.append(el('div','Broker work','v2-mini-section-head'),el('pre'));
     content.append(broker);node._parts.broker=broker;
     // Copy actions read the currently rendered values rather than a stale row snapshot.
-    footer.append(copy('Copy arguments and result',()=>content.textContent));
+    footer.append(copy('Copy arguments and result',()=>['args','result'].map(key=>node._parts[key].pre.textContent).filter(Boolean).join('\n\n')));
     for(const [key,title] of [['args','Arguments'],['result','Result']]) {
       const section=el('section');const label=el('div',title,'v2-mini-section-head');
       const pre=el('pre');label.append(copy('Copy '+title.toLowerCase(),()=>pre.textContent));
       section.append(label,pre);content.append(section);node._parts[key]={section,pre};
     }
+    content.append(footer,raw);
   } else {
+    // A message is a compact "Thinking" row; its text and actions open behind the same left border.
+    const disclosure=el('details','','v2-mini-tool-disclosure');
+    const head=el('summary','','tc-row-head');const detail=el('div','','tc-detail');
+    detail.append(content,footer,raw);disclosure.append(head,detail);node.append(disclosure);node._parts.head=head;
     const time=el('time','','v2-mini-time');footer.append(time);node._parts.time=time;
-    // Collapse only the message body and keep the transcript controls available.
-    footer.append(button('Collapse message','chevron-down',b=>{
-      content.hidden=!content.hidden;b.title=content.hidden?'Expand message':'Collapse message';
-      b.setAttribute('aria-label',b.title);b.setAttribute('aria-expanded',String(!content.hidden));
-    }),
     // Clone visible content for the independent full-view surface.
-    button('Open full view','maximize-2',b=>{
+    footer.append(button('Open full view','maximize-2',b=>{
       const source=content.cloneNode(true);source.hidden=false;
       openChatElementFullView(source,b,'Full message');node._viewer=true;
     }),copy('Copy text',()=>node._text));
@@ -133,7 +151,6 @@ export function createTranscriptRow(row) {
     if(window.speechSynthesis && window.SpeechSynthesisUtterance) footer.append(button('Read aloud','volume-2',()=>{
       window.speechSynthesis.cancel();window.speechSynthesis.speak(new window.SpeechSynthesisUtterance(node._text));
     }));
-    node.append(content,footer,raw);
   }
   patchTranscriptRow(node,row);_refreshLucideIcons(node);return node;
 }
@@ -143,18 +160,31 @@ export function patchTranscriptRow(node,row) {
   node.dataset.signature=signature;node.dataset.category=row.category;
   const value=normalizeRow(row),p=node._parts;node._text=value.text;
   if(p.preload) {
-    p.head.textContent='⚡ '+row.label;node.dataset.status='preload';
+    chipHead(p.head,{icon:'zap',label:row.label});node.dataset.status='preload';
     markdown(p.content,row.text);
   } else if(p.retry) {
-    p.head.textContent='↻ '+row.label;node.dataset.status='retry';
+    chipHead(p.head,{icon:'rotate-ccw',label:row.label});node.dataset.status='retry';
     markdown(p.content,row.text || 'No provider detail.');
   } else if(p.compaction) {
     const result=row.events.find(e=>e.kind==='compaction_result');
     const status=!result?'running':result.payload?.error?'error':'done';
-    p.head.textContent=({done:'✓ ',error:'✗ '}[status]||'◷ ')+row.label;node.dataset.status=status;
+    // The step head names the compaction and its reason; the row shows the size change and the model.
+    const parts=row.label.split(' · ').slice(1).filter(part=>!/^(automatic|requested)/.test(part));
+    const model=parts.find(part=>part.startsWith('System model '));
+    const size=parts.filter(part=>part!==model).join(' · ');
+    chipHead(p.head,{icon:'shrink',label:size || 'Summary',chip:model?model.slice(13):'',
+      note:{error:'failed',running:'running'}[status]||''});
+    p.head.title=row.label;node.dataset.status=status;
     markdown(p.content,value.text || 'Waiting for the summary…');
   } else if(p.tool) {
-    p.head.textContent=({done:'✓ ',error:'✗ ',held:'⏸ '}[value.status]||'◷ ')+row.label;
+    const name=row.events.find(e=>e.kind==='tool_call')?.payload?.tool || row.label.split(' · ')[0];
+    const args=value.args && typeof value.args==='object'?value.args:{};
+    const [icon,verb]=TOOL_VIEWS[name]||['wrench',String(name).replace(/_/g,' ')];
+    const target=[args.path,args.url,args.query,args.selector].find(entry=>typeof entry==='string' && entry);
+    const label=name==='file_write' && typeof args.content==='string'?'Write '+lineCount(args.content)+(lineCount(args.content)===1?' line':' lines'):verb;
+    chipHead(p.head,{icon,label,chip:chipText(target),title:target,
+      note:{error:'failed',held:'held'}[value.status]||''});
+    p.head.title=row.label;
     node.dataset.status=value.status;
     const details=brokerDetails(value.result);p.broker.hidden=!details;
     p.broker.lastElementChild.textContent=details?details.map(([label,text])=>label+': '+text).join('\n'):'';
@@ -164,6 +194,10 @@ export function patchTranscriptRow(node,row) {
     }
   } else {
     markdown(p.content,value.text || row.label);
+    const preview=(value.text || '').replace(/\s+/g,' ').trim();
+    // Agent messages read Thinking or Response; any other row (a mode change, a bare compaction notice) keeps its label.
+    const [icon,label]={updates:['brain','Thinking'],responses:['message-square','Response']}[row.category]||['info',row.label];
+    chipHead(p.head,{icon,label,preview});
     const date=value.time?new Date(value.time):null;
     p.time.textContent=date && Number.isFinite(date.getTime())?date.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}):'';
     if(date && Number.isFinite(date.getTime()))p.time.dateTime=date.toISOString();
@@ -196,6 +230,6 @@ export function mountTranscript(body) {
     // Remove this mount's scroll observer and close a full view opened from one of its rows.
     dispose(){
     disposed=true;observer?.disconnect();body.removeEventListener('scroll',scroll);
-    if([...rows.children].some(n=>n._viewer))closeChatElementFullView();
+    if([...rows.querySelectorAll('.v2-mini-row')].some(n=>n._viewer))closeChatElementFullView();
   }};
 }
