@@ -160,7 +160,7 @@ class SchedulerBrokerTests(unittest.TestCase):
     def test_administrator_drains_and_resumes_through_build_work(self):
         trusted,session=self.admin()
         def maintenance(mode):
-            return self.broker.handle({"name":"build_work","workspace":session,"trusted":trusted,"arguments":{"action":"maintenance","mode":mode}})
+            return self.broker.handle({"name":"build_work","workspace":session,"trusted":trusted,"arguments":{"action":"maintenance","mode":mode,"request_id":"tool-added-"+mode}})
         maintenance("drain");self.assertTrue(self.broker._maintenance()["drained"])
         maintenance("resume");self.assertFalse(self.broker._maintenance()["drained"])
     def test_lease_is_judged_when_the_request_arrived(self):

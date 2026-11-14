@@ -4684,7 +4684,7 @@ class Broker:
         if action=="release_claims":return self.release_claims(request,args)
         if action=="maintenance":
             # Administrators drain or resume the broker like the local operator; mode is status, drain or resume.
-            if set(args)-{"action","mode","task_id"}:raise ValueError("maintenance takes mode and optional task_id")
+            if set(args)-{"action","mode","task_id","request_id"}:raise ValueError("maintenance takes mode and optional task_id")
             return self.handle({**request,"name":"build_service_maintenance","arguments":{"action":args.get("mode","status"),**({"task_id":args["task_id"]}if "task_id"in args else{})}})
         if action=="reload_resource_policy":return self.reload_resource_policy(args,request["trusted"])
         if action=="reload_memory_policy":return self.reload_memory_policy(args,request["trusted"])
