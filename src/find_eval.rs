@@ -6,7 +6,10 @@
 //! case's rank with and without the matcher, then a summary per file.
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
-use webagent_administration_host::tools::{find_order, find_text, FOUND_BLOCKS};
+use webagent_administration_host::tools::{find_order, find_text, FIND_WORDS_WEIGHT, FOUND_BLOCKS};
+
+/// Word-score weights compared against the live one.
+const SWEEP: [f64; 5] = [0.5, 0.4, 0.3, 0.2, 0.1];
 
 /// 1-based rank of the expected block in `order`, if present.
 fn rank_of(candidates: &[Value], order: &[usize], expect: &Value) -> Option<usize> {
@@ -53,6 +56,7 @@ pub fn evaluate(args: &[String]) -> Result<()> {
     let mut ranker = webagent_inference::Ranker::new(webagent_inference::load_embedder()?);
     for file in files {
         let (mut blended, mut words) = (Totals::default(), Totals::default());
+        let mut sweep: Vec<Totals> = SWEEP.iter().map(|_| Totals::default()).collect();
         let text = std::fs::read_to_string(file).with_context(|| format!("Read {file}"))?;
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
             let case: Value = serde_json::from_str(line)?;
@@ -67,9 +71,20 @@ pub fn evaluate(args: &[String]) -> Result<()> {
             let texts: Vec<Vec<String>> = candidates.iter().map(find_text).collect();
             let meaning = ranker.scores(query, &texts)?;
             let elapsed = started.elapsed().as_millis();
-            let order = find_order(&candidates, Some(&meaning));
+            let order = find_order(&candidates, Some(&meaning), FIND_WORDS_WEIGHT);
+            for (weight, totals) in SWEEP.iter().zip(&mut sweep) {
+                totals.add(rank_of(
+                    &candidates,
+                    &find_order(&candidates, Some(&meaning), *weight),
+                    &case["expect"],
+                ));
+            }
             let rank = rank_of(&candidates, &order, &case["expect"]);
-            let word_rank = rank_of(&candidates, &find_order(&candidates, None), &case["expect"]);
+            let word_rank = rank_of(
+                &candidates,
+                &find_order(&candidates, None, 1.0),
+                &case["expect"],
+            );
             let top: Vec<Value> = order
                 .iter()
                 .take(3)
@@ -94,7 +109,8 @@ pub fn evaluate(args: &[String]) -> Result<()> {
         println!(
             "{}",
             json!({"file": file, "cases": blended.cases, "blended": blended.summary(),
-                "words_only": words.summary()})
+                "words_only": words.summary(),
+                "sweep": SWEEP.iter().zip(&sweep).map(|(weight, totals)| json!({"words_weight": weight, "scores": totals.summary()})).collect::<Vec<_>>()})
         );
     }
     Ok(())

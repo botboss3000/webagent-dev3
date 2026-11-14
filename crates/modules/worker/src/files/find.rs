@@ -9,10 +9,12 @@ use std::collections::{HashMap, HashSet};
 /// Most candidates one area hands to the host for reranking.
 pub(super) const CANDIDATES: usize = 200;
 /// Candidates handed to the host in all; the matcher takes at most 1024 texts per request.
-const TOTAL_CANDIDATES: usize = 1000;
+const TOTAL_CANDIDATES: usize = 400;
 /// Blocks kept from one walk; a larger tree reports a limited scan.
 pub(super) const MAX_BLOCKS: usize = 60_000;
 const DOC_LINES: usize = 4;
+/// Furthest a `/* … */` comment's opening line is looked for above its closing line.
+const COMMENT_BLOCK_LINES: usize = 20;
 const BODY_LINES: usize = 5;
 const TEXT_CHARS: usize = 600;
 const GIST_CHARS: usize = 120;
@@ -38,10 +40,14 @@ pub(super) fn candidates(label: &str, lines: &[&str], blocks: &[Block]) -> Vec<C
             let header = block.start - 1;
             let mut doc = Vec::new();
             let mut at = header;
-            while !markdown && at > 0 && doc.len() < DOC_LINES && is_comment(lines[at - 1]) {
-                at -= 1;
-                doc.insert(0, lines[at].trim());
+            while !markdown && doc.len() < DOC_LINES {
+                let Some(start) = comment_above(&lines, at) else {
+                    break;
+                };
+                doc.splice(0..0, lines[start..at].iter().map(|line| line.trim()));
+                at = start;
             }
+            doc.truncate(DOC_LINES);
             let body: Vec<&str> = lines
                 .iter()
                 .skip(block.start)
@@ -89,6 +95,18 @@ fn gist(doc: &[&str], body: &[&str]) -> String {
         gist.push('…');
     }
     gist
+}
+
+/// First line of the comment that ends just above line `at`: one comment line, or a whole
+/// `/* … */` block whose inner lines carry no `*`, as plain CSS comments are written.
+fn comment_above(lines: &[&str], at: usize) -> Option<usize> {
+    let above = lines.get(at.checked_sub(1)?)?;
+    if above.trim_end().ends_with("*/") && !above.contains("/*") {
+        return (at.saturating_sub(COMMENT_BLOCK_LINES)..at - 1)
+            .rev()
+            .find(|&line| lines[line].contains("/*"));
+    }
+    is_comment(above).then(|| at - 1)
 }
 
 fn is_comment(line: &str) -> bool {
@@ -260,5 +278,19 @@ mod tests {
             CANDIDATES
         );
         assert_eq!(ranked["areas"], 2);
+    }
+
+    #[test]
+    fn a_plain_css_block_comment_is_the_blocks_doc() {
+        let text = ".a { color: red; }\n/* Header controls scroll sideways\n   on narrow screens. */\n.header-actions {\n  overflow-x: auto;\n}\n";
+        let lines: Vec<&str> = text.lines().collect();
+        let blocks = super::super::outline::blocks("x.css", text);
+        let found = candidates("x.css", &lines, &blocks);
+        let header = found
+            .iter()
+            .find(|c| c.name.contains("header-actions"))
+            .unwrap();
+        assert_eq!(header.gist, "Header controls scroll sideways");
+        assert!(header.text.contains("on narrow screens."));
     }
 }

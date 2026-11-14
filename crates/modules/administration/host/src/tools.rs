@@ -123,7 +123,11 @@ pub const FOUND_BLOCKS: usize = 8;
 /// worker's best is 1) and the matcher's score blended equally, or the word score alone
 /// when the matcher gave no scores.
 #[must_use]
-pub fn find_order(candidates: &[Value], meaning: Option<&[f32]>) -> Vec<usize> {
+/// Share of a `find` block's score from its word match; the matcher's meaning score has
+/// the rest. `--find-eval` compares weights.
+pub const FIND_WORDS_WEIGHT: f64 = 0.5;
+
+pub fn find_order(candidates: &[Value], meaning: Option<&[f32]>, words_weight: f64) -> Vec<usize> {
     let best = candidates
         .first()
         .and_then(|c| c["score"].as_f64())
@@ -134,7 +138,9 @@ pub fn find_order(candidates: &[Value], meaning: Option<&[f32]>) -> Vec<usize> {
         .enumerate()
         .map(|(at, c)| {
             let words = c["score"].as_f64().unwrap_or(0.0) / best;
-            let score = meaning.map_or(words, |scores| 0.5 * words + 0.5 * f64::from(scores[at]));
+            let score = meaning.map_or(words, |scores| {
+                words_weight * words + (1.0 - words_weight) * f64::from(scores[at])
+            });
             (score, at)
         })
         .collect();
@@ -180,7 +186,7 @@ pub(crate) async fn ranked_blocks(
         .rank(args["query"].as_str().unwrap_or(""), texts)
         .await
         .filter(|scores| scores.len() == candidates.len());
-    let lines: Vec<String> = find_order(&candidates, meaning.as_deref())
+    let lines: Vec<String> = find_order(&candidates, meaning.as_deref(), FIND_WORDS_WEIGHT)
         .into_iter()
         .take(FOUND_BLOCKS)
         .map(|at| {
