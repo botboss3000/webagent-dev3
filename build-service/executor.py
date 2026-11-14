@@ -82,9 +82,9 @@ SERVICE_SOURCES={
  "webagent-models-service":"/build/crates/models-service/src/main.rs",
 }
 SMOKE_CASE_KEYS=("prepared","background_prepared","boot_prepared","assets_prepared","capability_prepared","provider_prepared")
-# @code-index {"version":1,"feature":"build-artifact-execution","aliases":["task fencing","verified builds"],"purpose":"Pinned attributable compiler/test/packaging recipes and verified content-addressed artifact reuse.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Identity, exact input verification and completion rules cannot be disabled by model or preference configuration."}}
+# Pinned attributable compiler/test/packaging recipes and verified content-addressed artifact reuse.
 COMPILER_MEMORY_CAP=4026531840
-# @code-index {"version":1,"feature":"compiler-memory-policy","aliases":["compiler memory defaults","task memory overrides","live memory growth"],"purpose":"Protected compiler ceilings and live growth. Config: build-service/scheduler-defaults.json -> compiler_memory_default_bytes, compiler_memory_min_bytes, compiler_memory_max_bytes, allow_live_memory_increase; installation JSON overrides.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/compiler_memory_default_bytes","/compiler_memory_min_bytes","/compiler_memory_max_bytes","/allow_live_memory_increase"]}]}}
+# Protected compiler ceilings and live growth. Config: build-service/scheduler-defaults.json -> compiler_memory_default_bytes, compiler_memory_min_bytes, compiler_memory_max_bytes, allow_live_memory_increase; installation JSON overrides.
 def compiler_cap(value,policy=None):
     """Validate a pinned compiler ceiling; protected bounds apply when admitting a new request."""
     if value is None:return None
@@ -320,7 +320,7 @@ class Executor:
             if not primary:
                 if oom:raise RuntimeError("Compiler memory cap exceeded (OOM); check failed")
                 if proof_error is not None:raise RuntimeError("Compiler memory completion evidence unavailable or changed")from proof_error
-    # @code-index {"version":1,"feature":"ram-packaging","aliases":["RAM build scratch","tmpfs packaging"],"purpose":"Fixed RAM BuildKit workspace and proof. Config: build-service/scheduler-defaults.json -> package_ram_bytes, package_tmpfs_bytes, reserve_percent.","span_lines":65,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/package_ram_bytes","/package_tmpfs_bytes","/reserve_percent"]}],"opportunities":[]}}
+    # Fixed RAM BuildKit workspace and proof. Config: build-service/scheduler-defaults.json -> package_ram_bytes, package_tmpfs_bytes, reserve_percent.
     @contextlib.contextmanager
     def packager(self,job,role="generic"):
         """Keep the cache volume exclusively owned until this BuildKit daemon is removed."""
@@ -1424,7 +1424,7 @@ class Executor:
         cache=Path(self.config["state_root"])/"engine-artifacts";cache.mkdir(mode=0o700,exist_ok=True)
         temporary=cache/(key+".new-"+uuid.uuid4().hex);temporary.write_text(json.dumps(value));temporary.chmod(0o600);os.replace(temporary,cache/(key+".json"))
 
-    # @code-index {"version":1,"feature":"automation-drop-in","aliases":["standalone automation","automation ability plugin"],"purpose":"Verified standalone Automation compilation, offline dependency provisioning and complete native tests; host publication and permission boundaries remain authoritative.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"The native package contract, test proof and compiler boundaries are invariants; no setting may bypass them."}}
+    # Verified standalone Automation compilation, offline dependency provisioning and complete native tests; host publication and permission boundaries remain authoritative.
     def provision_native_registry(self,cache):
         """Provide a native ability's locked offline dependencies from attested compiler registry bytes.
 

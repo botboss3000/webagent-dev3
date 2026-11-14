@@ -199,7 +199,7 @@ class Connection(sqlite3.Connection):
         try:return super().__exit__(*args)
         finally:self.close()
 
-# @code-index {"version":1,"feature":"build-ownership-integrity","aliases":["task fencing","verified builds"],"purpose":"Durable claims, epochs and completion transactions; verified acceptance is an invariant.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Identity, exact input verification and completion rules cannot be disabled by model or preference configuration."}}
+# Durable claims, epochs and completion transactions; verified acceptance is an invariant.
 class Ownership:
     """Transactional claims and fencing outside application storage; all transitions are durable."""
     def __init__(self,path,clock=time.time):
@@ -418,7 +418,7 @@ class Ownership:
             db.execute("INSERT INTO events(task,at,event)VALUES(?,?,?)",(task,self.clock(),canonical({"retire":{"scopes":value["scopes"],"requested":value["requested"]},"abandon":abandon,"reason":reason})))
             return result
 
-    # @code-index {"version":1,"feature":"owner-claim-release","aliases":["release reservations","unblock engine"],"purpose":"Release exactly held owner claims without deleting source; fence old epochs and retain recovery receipts.","span_lines":17,"configuration":{"status":"not_applicable","rationale":"Ownership fencing and authenticated scope release are fixed authority invariants."}}
+    # Release exactly held owner claims without deleting source; fence old epochs and retain recovery receipts.
     def release_scopes(self,task,owner,revision,epoch,scopes,reason,request):
         """Release explicit owner claims, fence old epochs and retain the unpublished draft."""
         if not isinstance(scopes,list)or not 1<=len(scopes)<=MAX_SCOPES or any(not isinstance(s,str)for s in scopes)or len(set(scopes))!=len(scopes):raise ValueError("Explicit unique held scopes required")

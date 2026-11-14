@@ -29,7 +29,7 @@ def failing_fixtures(text,tests,strict=True):
 
 
 
-# @code-index {"version":1,"feature":"concurrent-ui-publication","aliases":["concurrent ui publication"],"purpose":"Prepare private candidates and serialize exact source/index publication. Config: build-service/scheduler-defaults.json -> concurrent_ui_preparation, max_ui_preparations.","span_lines":70,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/concurrent_ui_preparation","/max_ui_preparations"]}],"opportunities":[]}}
+# Prepare private candidates and serialize exact source/index publication. Config: build-service/scheduler-defaults.json -> concurrent_ui_preparation, max_ui_preparations.
 class UIPublication:
     """Keep stale preparation outside publication; host authorization owns every effect."""
     def __init__(self,broker,release,validate,context,asset_root,policy,scrub=lambda text:text):

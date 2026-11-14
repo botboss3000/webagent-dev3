@@ -12,7 +12,7 @@ ASSET = re.compile(r"(?:src|href)\s*=\s*['\"]([^'\"]+)['\"]|(?:url\(|@import\s+)
 DYNAMIC = re.compile(r"\bimport\s*\(\s*[^'\"\s]|\b(?:fetch|loadPartial|loadHTML)\s*\(")
 
 
-# @code-index {"version":1,"feature":"ui-dependency-policy","aliases":["ui dependency policy"],"purpose":"Select dependency-bound frontend verification with conservative unknowns. Config: build-service/scheduler-defaults.json -> ui_test_image supplies the host verification runtime.","span_lines":70,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/ui_test_image"]}],"opportunities":[]}}
+# Select dependency-bound frontend verification with conservative unknowns. Config: build-service/scheduler-defaults.json -> ui_test_image supplies the host verification runtime.
 def dependencies(files, changed):
     """Return affected consumers and exact dependency hashes, falling back for dynamic loading."""
     ui = {p: v for p, v in files.items() if p.startswith("v3/ui/")}

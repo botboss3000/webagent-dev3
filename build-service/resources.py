@@ -26,7 +26,7 @@ def host_sample():
         if len(ticks)==8 and all(value>=0 for value in ticks):cpu={"count":os.cpu_count()or 1,"ticks":ticks}
     except (OSError,ValueError,StopIteration):pass
     return {"available":memory["MemAvailable"],"total":memory["MemTotal"],"swap_free":memory.get("SwapFree",0),"swap_total":memory.get("SwapTotal",0),"pressure":pressure,"cpu":cpu}
-# @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Measured admission and compiler parking. Config: build-service/scheduler-defaults.json -> reserve_bytes, reserve_percent, max_phases, max_parked, memory_pressure_percent; protected overrides.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent","/ui_file_reservations","/max_ui_preparations","/component_indexing","/concurrent_ui_preparation","/ui_test_image","/package_ram_bytes","/package_tmpfs_bytes"]}],"opportunities":[]}}
+# Measured admission and compiler parking. Config: build-service/scheduler-defaults.json -> reserve_bytes, reserve_percent, max_phases, max_parked, memory_pressure_percent; protected overrides.
 class AdmissionTimeout(TimeoutError):
     """A pre-effect admission wait can resume through normal host authorization."""
     recoverable_admission=True
@@ -351,7 +351,7 @@ class Resources:
             self.persist();self.condition.notify_all();return result
 
 
-    # @code-index {"version":1,"feature":"compiler-memory-policy","aliases":["compiler memory defaults","task memory overrides","live memory growth"],"purpose":"Protected compiler ceilings and live growth. Config: build-service/scheduler-defaults.json -> compiler_memory_default_bytes, compiler_memory_min_bytes, compiler_memory_max_bytes, allow_live_memory_increase; installation JSON overrides.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/compiler_memory_default_bytes","/compiler_memory_min_bytes","/compiler_memory_max_bytes","/allow_live_memory_increase"]}]}}
+    # Protected compiler ceilings and live growth. Config: build-service/scheduler-defaults.json -> compiler_memory_default_bytes, compiler_memory_min_bytes, compiler_memory_max_bytes, allow_live_memory_increase; installation JSON overrides.
     def memory_policy(self):
         """Expose only protected scalar bounds and their canonical broker/helper binding."""
         import hashlib

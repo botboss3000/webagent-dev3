@@ -23,7 +23,7 @@ def host_memory():
     for line in Path("/proc/meminfo").read_text().splitlines():
         key,raw=line.split(":",1);values[key]=int(raw.split()[0])*1024
     return values
-# @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Protected cgroup controls. Config: build-service/scheduler-defaults.json -> mode, reserve_bytes, reserve_percent; installation overrides at restart.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent"]}],"opportunities":[]}}
+# Protected cgroup controls. Config: build-service/scheduler-defaults.json -> mode, reserve_bytes, reserve_percent; installation overrides at restart.
 class Control:
     """Resolve cgroups from exact Docker identities and reject all non-scheduler targets."""
     def __init__(self,config):
@@ -35,7 +35,7 @@ class Control:
         relative=result.stdout.decode().strip()
         if not relative.startswith("/")or relative=="/"or".."in Path(relative).parts:raise ValueError("Build slice unavailable")
         return Path("/sys/fs/cgroup")/relative.lstrip("/")
-    # @code-index {"version":1,"feature":"compiler-memory-policy","aliases":["compiler memory defaults","task memory overrides","live memory growth"],"purpose":"Protected compiler ceilings and live growth. Config: build-service/scheduler-defaults.json -> compiler_memory_default_bytes, compiler_memory_min_bytes, compiler_memory_max_bytes, allow_live_memory_increase; installation JSON overrides.","span_lines":40,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/compiler_memory_default_bytes","/compiler_memory_min_bytes","/compiler_memory_max_bytes","/allow_live_memory_increase"]}]}}
+    # Protected compiler ceilings and live growth. Config: build-service/scheduler-defaults.json -> compiler_memory_default_bytes, compiler_memory_min_bytes, compiler_memory_max_bytes, allow_live_memory_increase; installation JSON overrides.
     def memory_policy(self):
         """Allow validated live CPU/memory settings; keep topology and other policy fixed."""
         path=os.environ.get("WEBAGENT_BUILD_CONFIG")

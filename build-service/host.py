@@ -1591,7 +1591,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 outputs.append({"package":manifest["id"],"build_key":key,"artifact_sha256":hashlib.sha256(binary.read_bytes()).hexdigest(),"reused":False,"compiler_recipe":self.executor.plugin_compiler_recipe()+":native-release:locked:offline","linker":"mold"})
         return outputs
 
-    # @code-index {"version":1,"feature":"ui-verification-runtime","aliases":["ui verification runtime"],"purpose":"Run selected fixtures in an isolated measured browser worker; reuse exact evidence. Config: build-service/scheduler-defaults.json -> ui_test_image, component_indexing.","span_lines":70,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/ui_test_image","/component_indexing"]}],"opportunities":[]}}
+    # Run selected fixtures in an isolated measured browser worker; reuse exact evidence. Config: build-service/scheduler-defaults.json -> ui_test_image, component_indexing.
     def retain_ui_test_runtime(self,image,recipe_hash):
         """Keep the reviewed test image available without application mounts or browser work."""
         if not re.fullmatch(r"sha256:[a-f0-9]{64}",image)or not re.fullmatch(r"[a-f0-9]{64}",recipe_hash):raise ValueError("Pinned UI runtime identity required")
@@ -4353,7 +4353,7 @@ class Broker:
         self._save_work()
         return result
 
-    # @code-index {"version":1,"feature":"owner-claim-release","aliases":["release reservations","unblock engine"],"purpose":"Release exactly held owner claims without deleting source; fence old epochs and retain recovery receipts.","span_lines":48,"configuration":{"status":"not_applicable","rationale":"Ownership fencing and authenticated scope release are fixed authority invariants."}}
+    # Release exactly held owner claims without deleting source; fence old epochs and retain recovery receipts.
     def reconcile_release(self,request,args):
         """Settle one exact release journal; never execute or repeat a scope release."""
         required={"action","task_id","original_request_id","request_id","expected_revision","expected_epoch"}
@@ -5066,7 +5066,7 @@ class Broker:
                     job["finished_at"]=time.time();self._save(job);self.active_jobs.discard(identity);self.active=next(iter(self.active_jobs),None);self.job_cancellations.pop(identity,None)
             return {"job_id":identity,"status":job["status"],"ui_test_runtime":job.get("ui_test_runtime")}
 
-    # @code-index {"version":1,"feature":"partitioned-review-storage","aliases":["review ledger migration"],"purpose":"Authorize explicit lossless partitioning during an idle task-owned maintenance drain.","span_lines":40,"configuration":{"status":"not_applicable","rationale":"Idle migration, exact ownership and lossless storage switching are fixed host integrity gates."}}
+    # Authorize explicit lossless partitioning during an idle task-owned maintenance drain.
     def reload_resource_policy(self,args,trusted):
         """Only the protected operator may adopt allowlisted CPU/memory policy."""
         if not trusted.get("local_caller")or set(args)!={"action","expected_policy_sha256","policy_sha256"}:raise PermissionError("Protected operator resource reload required")

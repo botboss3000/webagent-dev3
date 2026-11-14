@@ -6,7 +6,7 @@ IMAGE=r"sha256:[a-f0-9]{64}"
 UUID=r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}"
 DONE={"completed","cancelled"}
 FLOORS={"compile_test":6*1024**3,"compile_linked":6*1024**3,"compile_release":6*1024**3,"package":8*1024**3}
-# @code-index {"version":1,"feature":"docker-artifact-retention","aliases":["disk guard","retained build images"],"purpose":"Root-owned exact-artifact retention and disk admission. Config: build-service/scheduler-defaults.json -> disk_min_free_bytes, disk_grace_seconds, disk_cleanup_batch.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/disk_min_free_bytes","/disk_grace_seconds","/disk_cleanup_batch"]}]}}
+# Root-owned exact-artifact retention and disk admission. Config: build-service/scheduler-defaults.json -> disk_min_free_bytes, disk_grace_seconds, disk_cleanup_batch.
 class Retention:
     """Delete only registered expired V3 outputs; preserve every uncertain dependency."""
     def __init__(self,config,clock=time.time,docker=None,usage=None):

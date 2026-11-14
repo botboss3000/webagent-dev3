@@ -27,7 +27,7 @@ class Conflict(ValueError):
     def __init__(self,details):
         """Preserve bounded structured blockers through the broker error transport."""
         self.details={"kind":"ownership_conflict",**details};super().__init__(ownership.canonical(self.details))
-# @code-index {"version":1,"feature":"controlled-build-scheduler","aliases":["parallel builds","source ownership","compiler parking"],"purpose":"Source reservations and completion. Config: build-service/scheduler-defaults.json -> mode, orphan_after_seconds; protected installation overrides at broker restart.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/mode","/orphan_after_seconds","/reserve_bytes","/reserve_percent","/max_phases","/max_parked","/memory_pressure_percent","/ui_file_reservations","/max_ui_preparations","/component_indexing","/concurrent_ui_preparation","/ui_test_image"]}],"opportunities":[]}}
+# Source reservations and completion. Config: build-service/scheduler-defaults.json -> mode, orphan_after_seconds; protected installation overrides at broker restart.
 class Scheduler:
     """Derive authority and scope from the broker; caller assertions never certify a release."""
     actions={"create","resources","pause","resume","priority","reconcile","increase_memory","reservations","reserve","heartbeat","continue","acceptance","complete","handoff","takeover_preview","takeover","recover","reconcile_acquisition","clear_pending_requests","reconcile_continuation","reopen"}
@@ -156,7 +156,7 @@ class Scheduler:
         if value["state"]=="waiting"and value["requested"]and self.waiter_changes(item):
             raise ValueError("Waiting task contains edits; preserve and replan before acquiring current source")
 
-    # @code-index {"version":1,"feature":"edited-acquisition-recovery","aliases":["stuck reservation","edited waiter"],"purpose":"Operator recovery preserves a dirty draft and compensates its exact committed acquisition; authority, ownership and retry bindings are invariants.","span_lines":80,"configuration":{"status":"not_applicable","references":[],"opportunities":[],"rationale":"Recovery authority and exact acquisition/source binding are fixed safety invariants."}}
+    # Operator recovery preserves a dirty draft and compensates its exact committed acquisition; authority, ownership and retry bindings are invariants.
     def reconcile_acquisition(self,args,trusted,workspace):
         """Compensate one committed, pre-refresh edited-waiter acquisition without changing its draft.
 

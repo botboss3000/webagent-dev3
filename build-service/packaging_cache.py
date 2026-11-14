@@ -246,7 +246,7 @@ def verify_layout(folder, role, recipe_key, sync=False):
             "diff_ids": diff_ids, "bytes": total}
 
 
-# @code-index {"version":1,"feature":"deployment-dependency-cache","aliases":["persistent BuildKit","versioned runtime bases"],"purpose":"Prepare checksum-bound OCI dependency images separately and retain disk-backed BuildKit/APT state. Config: build-service/scheduler-defaults.json -> package_cache_enabled, package_cache_download_workers, package_cache_max_age_seconds, package_cache_retention_seconds, package_cache_max_bytes.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/package_cache_enabled","/package_cache_download_workers","/package_cache_max_age_seconds","/package_cache_retention_seconds","/package_cache_max_bytes"]}]}}
+# Prepare checksum-bound OCI dependency images separately and retain disk-backed BuildKit/APT state. Config: build-service/scheduler-defaults.json -> package_cache_enabled, package_cache_download_workers, package_cache_max_age_seconds, package_cache_retention_seconds, package_cache_max_bytes.
 class PackagingCache:
     """Host-only cache authority; callers supply no paths, images, mirrors or build commands."""
     def __init__(self, broker, config, entries, validate):

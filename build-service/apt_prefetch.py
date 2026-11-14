@@ -20,7 +20,7 @@ MAX_PACKAGE = 512 * 1024**2
 MAX_TOTAL = 2 * 1024**3
 
 
-# @code-index {"version":1,"feature":"deployment-dependency-cache","aliases":["APT prefetch","verified package archives"],"purpose":"Keep official Debian archives bound to signed APT selections before installation. Config: build-service/scheduler-defaults.json -> package_cache_download_workers; host supplies the bounded worker count.","span_lines":80,"configuration":{"status":"configured","references":[{"path":"build-service/scheduler-defaults.json","pointers":["/package_cache_download_workers"]}]}}
+# Keep official Debian archives bound to signed APT selections before installation. Config: build-service/scheduler-defaults.json -> package_cache_download_workers; host supplies the bounded worker count.
 def selections(output):
     """Require a strong digest for every APT URI and upgrade official transport to HTTPS."""
     result = {}
