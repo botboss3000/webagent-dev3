@@ -5,7 +5,7 @@ const node = (tag, cls = '', text = '') => {
 };
 const permissions = ['deny', 'ask', 'auto'];
 const clone = value => structuredClone(value || {});
-const title = mode => ({ deny: 'Deny', ask: 'Ask', auto: 'Auto' })[mode] || mode;
+const title = mode => ({ deny: 'Off', ask: 'Ask unless Auto', auto: 'Never ask' })[mode] || mode;
 const select = (label, choices, current) => {
   const el = node('select', 'ac-input ac-config-sel'); el.setAttribute('aria-label', label);
   for (const [value, name] of choices) {

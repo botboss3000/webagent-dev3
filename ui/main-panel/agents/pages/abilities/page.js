@@ -230,7 +230,7 @@ export async function renderAbilities(host, request, options) {
   // ability is switched on (a new ability stays off for existing agents).
   const markDefault = (row, value) => {
     if (!value) return;
-    const label = { deny: 'Off', ask: 'Ask', auto: 'Auto', visible: 'Visible', discoverable: 'Discoverable', off: 'Off', on: 'On' }[value] || value;
+    const label = { deny: 'Off', ask: 'Ask unless Auto', auto: 'Never ask', visible: 'Visible', discoverable: 'Discoverable', off: 'Off', on: 'On' }[value] || value;
     const anchor = row.querySelector('.ac-ability-desc') || row.querySelector('.ac-ability-name');
     const mark = node('div', 'ac-hint v3-default-mark', 'Default: ' + label);
     mark.style.whiteSpace = 'nowrap'; // Keep "Default: Auto" on one line on phones.
@@ -306,6 +306,7 @@ export async function renderAbilities(host, request, options) {
           toolPolicy()?.tool_permissions?.['*'] || effectiveTool.default || 'auto',
         // The tool.json policy_ceiling: picks looser than it are shown but disabled.
         ceiling: { allow: 'auto', require_approval: 'ask', deny: 'deny' }[tool.policy],
+        tierBlocked: effectiveTool.effective?.reason === 'tier_denied',
       }, {
         canEdit: canManage && !previewUser && levelId==='operator',
         showPerm: true,
@@ -392,6 +393,11 @@ export async function renderAbilities(host, request, options) {
       markDefault(label, declared && (declared === 'off' ? 'off' : 'on'));
       const availability = node('span', 'ac-ability-status',
         [readinessLabel(ability), effectiveLabel(projected)].filter(Boolean).join(' · '));
+      if (projected.effective?.reason === 'tier_denied') {
+        // Blocked abilities stay configurable and visible to the agent; say why they fail.
+        availability.textContent = 'Unavailable on the agent owner’s tier';
+        availability.style.color = 'var(--danger)';
+      }
       availability.title = ['Declared: ' + !!ability.declared, 'Installed: ' + !!ability.installed,
         'Configured: ' + !!ability.configured, readinessLabel(ability)].join(' · ');
       const toggleWrap = node('label', 'conn-toggle-wrap ac-ability-toggle-wrap');

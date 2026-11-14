@@ -1974,8 +1974,7 @@ impl<
                                 &run["loaded_abilities"],
                                 read_only,
                             )
-                            .permission
-                                != access::Permission::Deny
+                            .offered()
                         }
                     })
                     .collect::<Vec<_>>();

@@ -6964,6 +6964,10 @@ body:has(#tab-app.active) #main-panel:has(.inst-settings-host) > #settings-page-
 /* Section labels inside the panel ("Permission" / "Visibility"). The shared
    info row sets min-width:248px for prose summaries; a section header must not
    widen the panel, so it opts out. */
+/* Tool menu: the owner's tier blocks this tool; settings still save. */
+.files-tab-menu-info.v3-tier-note {
+  color: var(--danger);
+}
 .files-tab-menu-info.ac-tool-state-head {
   min-width: 0;
   padding: 6px 10px 2px;

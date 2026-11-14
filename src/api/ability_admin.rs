@@ -336,6 +336,13 @@ async fn catalog(app: &App, identity: &Value, id: &str, params: &HashMap<String,
             ability["effective"]["reason"] = json!("capability_levels_unset");
         }
     }
+    // Administrator abilities are hidden unless both the owner and the viewer are
+    // administrators; other abilities blocked by the owner's tier stay listed to upgrade.
+    abilities.retain(|a| {
+        let id = a["id"].as_str().unwrap_or("");
+        !webagent_access::administrator_ability(id)
+            || access.tier_ability_permission(id) != Permission::Deny
+    });
     if rights["can_manage"] != true {
         abilities.retain(|a| a["available"] == true);
         for ability in &mut abilities {

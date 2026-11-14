@@ -403,7 +403,8 @@ function _buildToolStateControl(toolMeta, opts) {
   });
   tri.classList.add('ac-tool-perm-tri');
 
-  const _permText = m => (m === 'deny' ? 'Off' : (m === 'ask' ? 'Ask' : 'Auto'));
+  // Approval: Ask asks before each use unless the chat is in Auto mode; Auto never asks.
+  const _permText = m => (m === 'deny' ? 'Off' : (m === 'ask' ? 'Ask unless Auto' : 'Never ask'));
   const _visText = m => (m === 'discoverable' ? 'Discoverable' : 'Visible');
   const _permSvg = m => (m === 'deny' ? _TOOL_STATE_OFF_SVG : (m === 'ask' ? _TOOL_STATE_ASK_SVG : _TOOL_STATE_AUTO_SVG));
 
@@ -412,7 +413,7 @@ function _buildToolStateControl(toolMeta, opts) {
     // Border = the tool's VISIBILITY. An Off (deny) tool has none — it is neither
     // discoverable nor visible — so it reads neutral grey; Ask/Auto read green.
     tri.dataset.vis = (showVisibility && perm !== 'deny') ? vis : 'none';
-    const tip = 'Permission: ' + _permText(perm)
+    const tip = 'Approval: ' + _permText(perm)
       + (showVisibility ? ' · Visibility: ' + _visText(vis) : '')
       + ' — click to choose';
     tri.title = tip;
@@ -512,7 +513,7 @@ function _buildToolStateControl(toolMeta, opts) {
     }
     if (showPerm) {
       if (out.length) out.push({ separator: true });   // the hairline divider
-      out.push({ info: true, className: 'ac-tool-state-head', label: 'Permission' });
+      out.push({ info: true, className: 'ac-tool-state-head', label: 'Approval' });
       for (const m of showVisibility ? ['ask', 'auto'] : ORDER) {
         out.push({
           iconHtml: _permSvg(m),
@@ -526,6 +527,9 @@ function _buildToolStateControl(toolMeta, opts) {
         });
       }
     }
+    // Settings stay editable; the owner's tier decides whether the agent can use them.
+    if (toolMeta.tierBlocked) out.push({ info: true, className: 'v3-tier-note',
+      label: 'Unavailable on the agent owner’s tier: the agent sees this tool, but calls fail until the owner upgrades.' });
     if (showResultDeduplication) {
       out.push({ separator: true });
       out.push({ info: true, className: 'ac-tool-state-head', label: 'Result context' });

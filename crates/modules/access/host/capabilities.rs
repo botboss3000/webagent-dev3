@@ -134,7 +134,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             decide(&store.live_access(id, "shared_default").await.unwrap()).reason,
-            access::Reason::TierDenied
+            access::Reason::CallerDenied
         );
     }
     #[tokio::test]

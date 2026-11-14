@@ -6776,7 +6776,8 @@ async fn phase3_http_tier_tools_and_agent_disable_reject_stale_approval() {
             is_read,
         );
         assert_eq!(decision.permission, access::Permission::Deny, "{name}");
-        assert_eq!(decision.reason, access::Reason::TierDenied, "{name}");
+        // Hidden from non-administrators rather than offered with a tier error.
+        assert_eq!(decision.reason, access::Reason::CallerDenied, "{name}");
     }
     let host = access.tool_decision(
         "build_work",
@@ -8220,19 +8221,12 @@ async fn tenant_ability_http_levels_effective_views_and_stale_updates() {
         Value::Null,
     )
     .await;
-    let codebase = preview["abilities"]
+    // The member is no administrator, so Administrator abilities are not even listed.
+    assert!(preview["abilities"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|a| a["id"] == "codebase_admin")
-        .unwrap();
-    assert_eq!(codebase["effective"]["permission"], "deny");
-    // The member is no administrator, so the Administrator-role gate refuses first.
-    assert_eq!(
-        codebase["effective"]["reason"], "caller_denied",
-        "{}",
-        codebase["effective"]
-    );
+        .all(|a| a["id"] != "codebase_admin"));
     // Administrator abilities need an administrator caller, whatever the level saves.
     assert_eq!(
         app.store

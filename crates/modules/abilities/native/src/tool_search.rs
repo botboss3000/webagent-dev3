@@ -116,7 +116,7 @@ pub async fn eligible(
                 &json!([marker(name)]),
                 read_only,
             );
-            if decision.permission == Permission::Deny {
+            if !decision.offered() {
                 continue;
             }
             let description = host

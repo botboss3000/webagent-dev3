@@ -281,13 +281,11 @@ fn skill_tool_allowed(current: &View, tool: &str) -> bool {
         &json!(loaded),
         current.read_only,
     )
-    .permission
-        != crate::access::Permission::Deny
+    .offered()
 }
 /// Read current bundled or own guidance through catalog and private-record authority gates.
 fn load_asset(current: &View, query: &LoadArgs) -> Result<Value> {
-    let allow_ability =
-        |id: &str| current.access.ability_permission(id) != crate::access::Permission::Deny;
+    let allow_ability = |id: &str| current.access.ability_offered(id);
     let allow_tool = |tool: &str| skill_tool_allowed(current, tool);
     if query.kind == "own" {
         current.app.abilities.bundled_skill_list(
@@ -522,8 +520,7 @@ async fn preload_candidates(
     )
     .await
     {
-        let allow_ability =
-            |id: &str| current.access.ability_permission(id) != crate::access::Permission::Deny;
+        let allow_ability = |id: &str| current.access.ability_offered(id);
         let allow_tool = |tool: &str| skill_tool_allowed(&current, tool);
         for entry in
             current
@@ -787,8 +784,7 @@ async fn work(app: &App, sid: &str, run_id: &str, name: &str, args: &Value) -> R
         bail!("Unknown bundled skill tool");
     }
     let current = view(app, sid, run_id, name).await?;
-    let allow_ability =
-        |id: &str| current.access.ability_permission(id) != crate::access::Permission::Deny;
+    let allow_ability = |id: &str| current.access.ability_offered(id);
     let allow_tool = |tool: &str| skill_tool_allowed(&current, tool);
     let output = match name {
         "list_skills" => {

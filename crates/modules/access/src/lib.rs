@@ -101,12 +101,29 @@ pub type AbilityTiers = fn(&str, &str, &str) -> bool;
 /// Whether a tool's own `tier_access` admits an owner tier (name, owner tier); a tool
 /// without one inherits its abilities' lists.
 pub type ToolTiers = fn(&str, &str) -> bool;
+/// Whether an ability is in the Administrator group (id).
+pub type AdministratorAbility = fn(&str) -> bool;
 static ABILITY_TIERS: std::sync::OnceLock<AbilityTiers> = std::sync::OnceLock::new();
 static TOOL_TIERS: std::sync::OnceLock<ToolTiers> = std::sync::OnceLock::new();
+static ADMINISTRATOR_ABILITY: std::sync::OnceLock<AdministratorAbility> =
+    std::sync::OnceLock::new();
 /// The app installs these from the ability catalog, once per process.
-pub fn install_tier_access(ability: AbilityTiers, tool: ToolTiers) {
+pub fn install_tier_access(
+    ability: AbilityTiers,
+    tool: ToolTiers,
+    administrator: AdministratorAbility,
+) {
     let _ = ABILITY_TIERS.set(ability);
     let _ = TOOL_TIERS.set(tool);
+    let _ = ADMINISTRATOR_ABILITY.set(administrator);
+}
+/// Administrator abilities stay hidden from everyone else rather than shown as blocked.
+/// Fails closed: without installed manifests every ability counts as one.
+#[must_use]
+pub fn administrator_ability(id: &str) -> bool {
+    ADMINISTRATOR_ABILITY
+        .get()
+        .is_none_or(|administrator| administrator(id))
 }
 /// Fails closed: no installed manifests grant no ability.
 #[must_use]
@@ -338,6 +355,12 @@ impl ToolFactors {
     }
 }
 impl ToolDecision {
+    /// Whether the agent is shown the tool. A tool blocked only by the owner's tier stays
+    /// listed so a call explains the tier; dispatch still refuses it as a Deny.
+    #[must_use]
+    pub fn offered(&self) -> bool {
+        self.permission != Permission::Deny || self.reason == Reason::TierDenied
+    }
     /// Auto waives a human tool checkpoint after every independent denial has
     /// been resolved. Legacy write mode and read-only modes keep Ask semantics.
     pub fn for_execution_mode(self, mode: &Value) -> Self {

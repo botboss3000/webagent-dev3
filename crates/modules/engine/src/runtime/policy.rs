@@ -349,8 +349,12 @@ impl<
         read_only: bool,
     ) -> bool {
         let id = entry["id"].as_str().unwrap_or("");
-        if access.ability_permission(id) == access::Permission::Deny {
+        if !access.ability_offered(id) {
             return false;
+        }
+        if access.tier_ability_permission(id) == access::Permission::Deny {
+            // Tell the agent up front, so it can explain before a call fails.
+            entry["tier_note"] = json!("Unavailable on this agent owner's tier; tool calls fail");
         }
         let Some(tools) = entry["tools"].as_array_mut() else {
             return false;
@@ -376,8 +380,7 @@ impl<
                     read_only && !H::messaging_owns(name),
                     A::is_read(name),
                 )
-                .permission
-                != access::Permission::Deny
+                .offered()
         });
         !tools.is_empty()
     }

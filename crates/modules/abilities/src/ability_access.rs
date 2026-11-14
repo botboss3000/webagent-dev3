@@ -174,6 +174,14 @@ pub fn ability_allows(id: &str, owner_tier: &str, caller_tier: &str) -> bool {
         .is_some_and(|ability| ability.allows(owner_tier, caller_tier))
 }
 
+/// Whether ability `id` is in the Administrator group (installed into the access layer).
+pub fn administrator_ability(id: &str) -> bool {
+    registry()
+        .abilities
+        .get(id)
+        .is_some_and(|ability| ability.administrator)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]

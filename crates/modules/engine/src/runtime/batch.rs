@@ -78,7 +78,10 @@ pub(crate) fn denial_message(reason: access::Reason, invalid_arguments: bool) ->
     }
     let cause = match reason {
         Reason::PolicyDenied => "the installation policy denies this tool",
-        Reason::TierDenied => "the account tier does not allow this tool or its ability",
+        Reason::TierDenied => {
+            "this agent's owner is on a tier that does not include this ability. Tell the \
+             user an upgrade of the owner's tier is needed; do not retry"
+        }
         Reason::AgentDenied => "this tool is disabled for this agent",
         Reason::AbilityDenied => "the ability that provides this tool is denied for this agent",
         Reason::CapabilityDenied => "the member capability level does not allow this tool",

@@ -207,6 +207,7 @@ pub(crate) fn install_tool_defaults() {
     webagent_access::install_tier_access(
         webagent_abilities::ability_access::ability_allows,
         tool_tiers,
+        webagent_abilities::ability_access::administrator_ability,
     );
 }
 

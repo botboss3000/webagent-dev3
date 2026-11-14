@@ -162,6 +162,21 @@ impl LiveAccess {
             .meet(self.tier_ability_permission(ability_id))
             .meet(self.level_ability_permission(ability_id))
     }
+    /// Whether the agent is shown the ability: allowed, or blocked only by the owner's
+    /// tier (its tools then fail with the tier reason). Administrator abilities are never
+    /// shown to anyone they do not serve.
+    pub fn ability_offered(&self, ability_id: &str) -> bool {
+        if self.ability_permission(ability_id) != Permission::Deny {
+            return true;
+        }
+        self.capability_level.ability_enabled(ability_id)
+            && self.tier_ability_permission(ability_id) == Permission::Deny
+            && !access::administrator_ability(ability_id)
+            && self
+                .base_ability_permission(ability_id)
+                .meet(self.level_ability_permission(ability_id))
+                != Permission::Deny
+    }
     /// The owner's tier, from the ability's `tier_access`; Administrator abilities also need
     /// an administrator caller. Paused, not removed: the agent keeps its saved design.
     pub fn tier_ability_permission(&self, ability_id: &str) -> Permission {
@@ -291,9 +306,18 @@ impl LiveAccess {
         // Report the narrowing layer without interpreting visibility as permission.
         if installation != Permission::Deny && self.tier_tool_permission(name) != Permission::Deny {
             if !ability_ids.is_empty() && allowed.is_empty() {
+                // Administrator tools are hidden, not offered with a tier error.
+                let reason = if ability_ids
+                    .iter()
+                    .all(|id| access::administrator_ability(id))
+                {
+                    access::Reason::CallerDenied
+                } else {
+                    access::Reason::TierDenied
+                };
                 return ToolDecision {
                     permission: Permission::Deny,
-                    reason: access::Reason::TierDenied,
+                    reason,
                 };
             }
             if allowed
