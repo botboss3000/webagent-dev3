@@ -2679,7 +2679,9 @@ def job_progress(job, baselines, now):
     elapsed = current["seconds"] if current else 0
     stat = stats.get(current["stage"]) if current else None
     lease = job.get("resource_waiting") or {}
-    verdict = (f"waiting for {lease.get('resource') or 'a shared resource'}" if lease.get("state") == "waiting"
+    blocker = ("" if lease.get("reason") != "unresolved_phase" else
+               ": " + ", ".join(f"job {o['job_id'][:8]} {o['phase']} {o['state']}" for o in lease.get("owners", [])[:3]))
+    verdict = (f"waiting for {lease.get('resource') or 'a shared resource'}{blocker}" if lease.get("state") == "waiting"
                else "no baseline" if stat is None else "on track" if elapsed <= stat["p50"]
                else "on track, slower than median" if elapsed <= stat["p90"] else "slow, past p90")
     low = sum(max(0, (stats.get(r["stage"]) or {}).get("p50", 0) - r["seconds"]) for r in running) + sum((stats.get(u["stage"]) or {}).get("p50", 0) for u in upcoming)
@@ -6813,6 +6815,12 @@ class Broker:
                     if boot_guard is not None:boot_guard.__exit__(None,None,None)
                 finally:
                     if deploy_locked:self.ui_publication.release_locks(None)
+            if job["status"] in ("cancelled", "failed") and hasattr(self, "resources"):
+                # A cancel during container creation leaves a recovery_required phase that blocks all admission.
+                try:
+                    self.resources.reconcile_stopped(job)
+                except Exception as error:
+                    broker_log(f"job {job['job_id']} orphan phase cleanup deferred: {type(error).__name__}")
             with self.lock:
                 self._mirror_batch(job)
                 self.job_cancellations.pop(job["job_id"], None)

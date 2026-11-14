@@ -224,6 +224,9 @@ class Resources:
                     report();raise PermissionError("Build admission cancelled or authorization expired")
                 blockers=[{"job_id":r["job_id"],"phase":r["phase"],"state":r["state"]}for r in self.rows.values()if r.get("component")==component and r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}][:16]
                 waiting={"phase":phase,"resource":component if blockers else"host_headroom","reason":"component_busy"if blockers else"headroom","owners":blockers,"since":wait_since,"elapsed_seconds":round(time.monotonic()-wait_started,1),"estimate_bytes":estimate,"available_bytes":self.host["available"],"reserve_bytes":self.reserve(),"deadline_at":deadline_at,"state":"waiting"}
+                # Unresolved records block every admission (can_admit); name them instead of a bare headroom wait.
+                stuck=[{"job_id":r["job_id"],"phase":r["phase"],"state":r["state"]}for r in self.rows.values()if r["state"]in {"recovery_required","waiting_intervention","memory_recovery_required"}][:16]
+                if stuck and not blockers:waiting.update(resource="phase_recovery",reason="unresolved_phase",owners=stuck)
                 if cpu_wait:
                     waiting.update(resource="host_cpu",reason="deadline_test_cpu_budget",required_cpu_millis=self.cpu_floor(phase),capacity_cpu_millis=self.cpu_capacity(),owners=[{"job_id":r["job_id"],"phase":r["phase"],"state":r["state"]}for r in self.rows.values()if r["state"]in {"admitted","running","parked","waiting_intervention","recovery_required"}][:16])
                 if kind=="ui_test":job["phase"]="waiting_frontend_admission"
@@ -301,6 +304,25 @@ class Resources:
         """Insufficient reclaim never restarts work or releases its source reservations."""
         with self.condition:
             self.rows[name]["state"]="waiting_intervention";self.rows[name]["reason"]=reason;self.rows[name]["revision"]=self.rows[name].get("revision",0)+1;self.persist()
+    def reconcile_stopped(self,job):
+        """After a stopped job without effects, clean its own unconfirmed phases as an explicit reconcile would.
+
+        A phase whose container identity cannot be confirmed stays recovery_required for an operator."""
+        if job.get("status")in {"queued","running"}or job.get("effects_started"):return []
+        with self.lock:names=[n for n,r in self.rows.items()if r["job_id"]==job["job_id"]and r["state"]=="recovery_required"]
+        cleaned=[]
+        for name in names:
+            try:
+                self.runner.cleanup_phase(name)
+                finish=getattr(self.runner,"disk_finish",None)
+                if callable(finish):finish(name)
+            except Exception:continue
+            with self.condition:
+                row=self.rows[name]
+                row.update(state="failed",reason="Automatic orphan cleanup after the job stopped",finished=self.clock(),paused_at=None,revision=row.get("revision",0)+1)
+                self.persist();self.condition.notify_all()
+            cleaned.append(name)
+        return cleaned
     def control(self,job,args):
         """Apply a bounded phase control with live owner authority, CAS and durable retry receipts."""
         import hashlib,re

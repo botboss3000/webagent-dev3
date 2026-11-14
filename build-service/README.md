@@ -130,6 +130,9 @@ advisory: note any divergence, and still release through the broker.
 - Blocked by another task: name it by its owning session (the `session` field),
   not its label; wait or coordinate, never take over its claims.
 - Work dropped: `abandon TASK` releases its claims and queued requests.
+- Waiting for `phase_recovery` (reason `unresolved_phase`): a stopped job left a phase record
+  the automatic cleanup could not confirm; the wait names it. Reconcile it with `schedule --input -`
+  and `{"action":"reconcile","job_id":JOB,"phase_id":sha256(phase name),"request_id":ID,"expected_revision":REV}`.
 
 ## Tuning settings
 

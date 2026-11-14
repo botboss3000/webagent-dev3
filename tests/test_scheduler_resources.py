@@ -198,6 +198,33 @@ class ResourceTests(unittest.TestCase):
         self.phase();self.scheduler.act("one","freeze");self.scheduler.persist()
         second=m.Resources(self.root.name,self.runner,{"mode":"enforce"},lambda:self.time,lambda:dict(self.sample))
         self.assertEqual(second.rows["one"]["state"],"recovery_required");self.assertFalse(second.can_admit(1));self.assertTrue(self.runner.frozen);second.close()
+    def orphan(self):
+        """A cancel during container creation: finish_phase records the phase with no identity."""
+        from types import SimpleNamespace
+        self.scheduler.enter("dep",{"job_id":"cancelled-job","lease_until":time.time()+60},"compile_release","engine-release","plugin",timeout=1)
+        module("executor").Executor.finish_phase(SimpleNamespace(runner=self.runner,resources=self.scheduler),"dep",None,False)
+        self.assertEqual(self.scheduler.rows["dep"]["state"],"recovery_required")
+        return {"job_id":"cancelled-job","status":"cancelled"}
+    def test_cancel_during_container_creation_cleans_up_and_admits_next_job(self):
+        removed=[];self.runner.cleanup_phase=removed.append
+        job=self.orphan()
+        self.assertEqual(self.scheduler.reconcile_stopped({**job,"effects_started":True}),[])
+        self.assertEqual(self.scheduler.reconcile_stopped(job),["dep"]);self.assertEqual(removed,["dep"])
+        self.assertEqual(self.scheduler.rows["dep"]["state"],"failed")
+        self.scheduler.enter("next",{"job_id":"next-job","lease_until":time.time()+60},"compile_release","plugin-other","plugin",timeout=1)
+        self.assertEqual(self.scheduler.rows["next"]["state"],"admitted")
+    def test_unconfirmed_identity_still_blocks_and_is_named(self):
+        def refuse(name):raise PermissionError("Compiler recovery identity unavailable")
+        self.runner.cleanup_phase=refuse;samples=[]
+        self.runner.resource_progress=lambda value:samples.append(dict(value.get("resource_waiting")or{}))
+        job=self.orphan()
+        self.assertEqual(self.scheduler.reconcile_stopped(job),[])
+        self.assertEqual(self.scheduler.rows["dep"]["state"],"recovery_required")
+        with self.assertRaisesRegex(TimeoutError,"unresolved_phase"):
+            self.scheduler.enter("next",{"job_id":"next-job","lease_until":time.time()+60},"compile_release","plugin-other","plugin",timeout=.05)
+        waits=[value for value in samples if value]
+        self.assertEqual(waits[0]["reason"],"unresolved_phase")
+        self.assertEqual(waits[0]["owners"],[{"job_id":"cancelled-job","phase":"compile_release","state":"recovery_required"}])
     def test_cpu_pressure_changes_allocation_without_freezing(self):
         self.phase();self.sample["pressure"]["cpu"]=80;self.scheduler.tick()
         self.assertTrue(any(c["operation"]=="cpu"for c in self.runner.calls));self.assertFalse(self.runner.frozen)
