@@ -165,6 +165,17 @@ impl ChatEffects for Store {
     {
         Store::drop_live_message(self, tx, sid, rid)
     }
+    fn keep_live_message<'a, 'c>(
+        &'a self,
+        tx: &'a mut sqlx::Transaction<'c, sqlx::Sqlite>,
+        sid: &'a str,
+        rid: &'a str,
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 'a
+    where
+        'c: 'a,
+    {
+        Store::keep_live_message(self, tx, sid, rid)
+    }
     fn insert_chat<'a, 'c>(
         &'a self,
         tx: &'a mut sqlx::Transaction<'c, sqlx::Sqlite>,

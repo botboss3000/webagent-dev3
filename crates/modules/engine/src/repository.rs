@@ -517,6 +517,18 @@ impl<
                         }
                     }
                 }
+                // A closer or chat panel ends the agent's turn, so the newest live message,
+                // however many tool calls came between, is its closing word: publish it.
+                let closing = output.iter().any(|item| {
+                    item["type"] == "function_call"
+                        && matches!(
+                            item["name"].as_str(),
+                            Some("set_closer_status" | "present_chat_component")
+                        )
+                });
+                if closing && run["module_silent"] != true {
+                    crate::send_future(self.chat.keep_live_message(&mut tx, sid, rid)).await?;
+                }
                 // Before the terminal reply, whose context boundary must include it.
                 crate::send_future(self.insert_tool_output(&mut tx, run, sid, rid)).await?;
                 if run["status"] == "completed" {

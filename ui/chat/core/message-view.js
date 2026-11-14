@@ -45,7 +45,7 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
   // Background notices (sub-agents, broker builds, background tool calls) show as compact activity rows, not user bubbles.
   const notices=item.message_kind==='agent_message'&&Array.isArray(item.platform_notice?.notices)?item.platform_notice.notices.slice(0,20):null;
   if(notices?.length){
-    const row=document.createElement('article');row.className='v3-message v3-subagent-notices';row.dataset.publicId=item.id;row.dataset.msgId=item.id;row.dataset.seq=String(item.seq);row.dataset.turnId=item.run_id;row.dataset.subagentNotices=String(notices.length);row.dataset.noticeKinds=JSON.stringify(notices.reduce((kinds,n)=>{const kind=n.source==='build'?'build':n.source==='tool'?'background call':'sub-agent';kinds[kind]=(kinds[kind]||0)+1;return kinds;},{}));
+    const row=document.createElement('article');row.className='v3-message v3-subagent-notices';row.dataset.publicId=item.id;row.dataset.msgId=item.id;row.dataset.seq=String(item.seq);row.dataset.created=String(item.created_at);row.dataset.turnId=item.run_id;row.dataset.subagentNotices=String(notices.length);row.dataset.noticeKinds=JSON.stringify(notices.reduce((kinds,n)=>{const kind=n.source==='build'?'build':n.source==='tool'?'background call':'sub-agent';kinds[kind]=(kinds[kind]||0)+1;return kinds;},{}));
     for(const notice of notices){
       const entry=document.createElement('details');entry.className='v3-subagent-row';
       const source=notice.source||(notice.spawn?'sub_agent':'session');
@@ -78,7 +78,7 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
   }
   const profile=currentChatProfile()||{},role=item.role==='user'?'user':'agent';
   let text=typeof item.content==='string'?item.content:JSON.stringify(item.content);
-  const bubble=document.createElement('article');bubble.className='chat-bubble '+role+' published';bubble.dataset.publicId=item.id;bubble.dataset.msgId=item.id;bubble.dataset.seq=String(item.seq);bubble.dataset.turnId=item.run_id;
+  const bubble=document.createElement('article');bubble.className='chat-bubble '+role+' published';bubble.dataset.publicId=item.id;bubble.dataset.msgId=item.id;bubble.dataset.seq=String(item.seq);bubble.dataset.created=String(item.created_at);bubble.dataset.turnId=item.run_id;if(item.id.includes(':kept:'))bubble.dataset.keptText=text;
   const label=document.createElement('span');label.className='label';label.textContent=item.message_kind==='operator'?((item.author?.display_name||item.author?.user_id||item.author_id||'Human')+' (Agent Operator)'):item.message_kind==='agent_message'?(item.author_name||'Message from another agent'):role==='user'?(item.author?.display_name||item.author?.user_id||item.author_name||item.author_id||item.author_display_name||item.author_user_id||'You'):'Agent';bubble.append(label);
   const body=document.createElement('div');
   if(role==='agent'){const section=document.createElement('div');section.className='turn-section llm-section md';section.dataset.sectionIdx='0';section.dataset.msgId=item.id;markdown(body,text);section.append(body);bubble.append(section);}else{body.className='bubble-body';linkify(body,text);bubble.append(body);}

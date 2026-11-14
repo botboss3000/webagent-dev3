@@ -95,6 +95,15 @@ pub trait ChatEffects: Sync {
     ) -> impl Future<Output = Result<()>> + Send + 'a
     where
         'c: 'a;
+    /// Publish a run's open live message in place (a closer or reply panel followed it).
+    fn keep_live_message<'a, 'c>(
+        &'a self,
+        tx: &'a mut Transaction<'c, Sqlite>,
+        sid: &'a str,
+        rid: &'a str,
+    ) -> impl Future<Output = Result<()>> + Send + 'a
+    where
+        'c: 'a;
     fn insert_chat<'a, 'c>(
         &'a self,
         tx: &'a mut Transaction<'c, Sqlite>,

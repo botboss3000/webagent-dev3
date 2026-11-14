@@ -976,6 +976,23 @@ impl Store {
         content: &Value,
     ) -> Result<()> {
         let id = format!("{role}:{run_id}");
+        if role == "assistant" {
+            // A kept closing message repeated word for word by the final reply shows once.
+            let newest = sqlx::query_as::<_, (String, Vec<u8>)>(
+                "SELECT id,content FROM chat WHERE session_id=? AND role!='notice' ORDER BY seq DESC LIMIT 1",
+            )
+            .bind(sid)
+            .fetch_optional(&mut **tx)
+            .await?;
+            if let Some((kept, raw)) = newest {
+                if kept.starts_with(&format!("working:{run_id}:"))
+                    && kept.contains(":kept:")
+                    && self.unseal(&raw)? == *content
+                {
+                    self.remove_chat_row(tx, sid, &kept).await?;
+                }
+            }
+        }
         let terminal = if role == "assistant" {
             Some(run_id)
         } else {
@@ -1054,42 +1071,90 @@ impl Store {
         .fetch_optional(&mut **tx)
         .await?;
         if let Some(id) = newest.filter(|id| id.starts_with(&format!("live:{rid}:"))) {
-            // Activity anchored to the replaced row moves to the row before it, so its group
-            // still shows above the replacement. With no earlier row it falls back to the run.
-            let previous = sqlx::query_scalar::<_, String>(
-                "SELECT id FROM chat WHERE session_id=? AND seq<(SELECT seq FROM chat WHERE id=?) ORDER BY seq DESC LIMIT 1",
-            )
-            .bind(sid)
-            .bind(&id)
-            .fetch_optional(&mut **tx)
-            .await?;
-            match previous {
-                Some(previous) => {
-                    sqlx::query(
-                        "UPDATE activity_boundaries SET boundary_item_id=? WHERE boundary_item_id=?",
-                    )
-                    .bind(previous)
-                    .bind(&id)
-                    .execute(&mut **tx)
-                    .await?;
-                }
-                None => {
-                    sqlx::query("DELETE FROM activity_boundaries WHERE boundary_item_id=?")
-                        .bind(&id)
-                        .execute(&mut **tx)
-                        .await?;
-                }
-            }
-            sqlx::query("DELETE FROM chat_context_boundaries WHERE message_id=?")
-                .bind(&id)
-                .execute(&mut **tx)
-                .await?;
-            sqlx::query("DELETE FROM chat WHERE id=?")
-                .bind(&id)
-                .execute(&mut **tx)
-                .await?;
+            self.remove_chat_row(tx, sid, &id).await?;
         }
         Ok(())
+    }
+    /// Delete a public row; activity anchored to it moves to the row before it, so its group
+    /// still shows above whatever follows. With no earlier row it falls back to the run.
+    async fn remove_chat_row(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        sid: &str,
+        id: &str,
+    ) -> Result<()> {
+        let previous = sqlx::query_scalar::<_, String>(
+            "SELECT id FROM chat WHERE session_id=? AND seq<(SELECT seq FROM chat WHERE id=?) ORDER BY seq DESC LIMIT 1",
+        )
+        .bind(sid)
+        .bind(id)
+        .fetch_optional(&mut **tx)
+        .await?;
+        match previous {
+            Some(previous) => {
+                sqlx::query(
+                    "UPDATE activity_boundaries SET boundary_item_id=? WHERE boundary_item_id=?",
+                )
+                .bind(previous)
+                .bind(id)
+                .execute(&mut **tx)
+                .await?;
+            }
+            None => {
+                sqlx::query("DELETE FROM activity_boundaries WHERE boundary_item_id=?")
+                    .bind(id)
+                    .execute(&mut **tx)
+                    .await?;
+            }
+        }
+        sqlx::query("DELETE FROM chat_context_boundaries WHERE message_id=?")
+            .bind(id)
+            .execute(&mut **tx)
+            .await?;
+        sqlx::query("DELETE FROM chat WHERE id=?")
+            .bind(id)
+            .execute(&mut **tx)
+            .await?;
+
+        Ok(())
+    }
+    /// Publish the run's open live message: it becomes a working row that later messages,
+    /// the terminal reply included, appear below instead of replacing. The new row id
+    /// `working:<run>:<turn>:kept:echo:<ordinal>` still names its model step.
+    async fn keep_live_message(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        sid: &str,
+        rid: &str,
+    ) -> Result<()> {
+        let newest = sqlx::query_as::<_, (String, Vec<u8>)>(
+            "SELECT id,content FROM chat WHERE session_id=? AND role!='notice' ORDER BY seq DESC LIMIT 1",
+        )
+        .bind(sid)
+        .fetch_optional(&mut **tx)
+        .await?;
+        let Some((id, raw)) = newest else {
+            return Ok(());
+        };
+        let Some(step) = id.strip_prefix(&format!("live:{rid}:")) else {
+            return Ok(());
+        };
+        let Some((turn, ordinal)) = step.split_once(':') else {
+            return Err(anyhow!("Invalid live message"));
+        };
+        let text = self.unseal(&raw)?;
+        let text = text
+            .as_str()
+            .ok_or_else(|| anyhow!("Live message has no text"))?;
+        self.drop_live_message(tx, sid, rid).await?;
+        self.insert_working_message(
+            tx,
+            sid,
+            rid,
+            &format!("working:{rid}:{turn}:kept:echo:{ordinal}"),
+            text,
+        )
+        .await
     }
     /// Show a run's latest unpublished message as a new row that replaces its open live
     /// message. A new sequence number lets streaming clients see the replacement.
@@ -2626,6 +2691,85 @@ mod tests {
             .save_run(&mut run, "working_message", &conflict)
             .await
             .is_err());
+    }
+    /// Verify a closer or chat panel publishes the newest live message, even after other tools.
+    #[tokio::test]
+    async fn closing_tool_keeps_the_live_message() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store
+            .put(
+                "session:keep-session",
+                &json!({"id":"keep-session","created_at":1}),
+            )
+            .await
+            .unwrap();
+        let mut run = json!({"id":"keep-run","session_id":"keep-session","status":"running",
+            "generation":"generation","lease_epoch":0,"input":[],"model_turn":1});
+        let say = |text: &str| {
+            json!({"output":[{"type":"message","role":"assistant",
+                "content":[{"type":"output_text","text":text}]}]})
+        };
+        let call = |name: &str| json!({"output":[{"type":"function_call","call_id":name,"name":name,"arguments":"{}"}]});
+        store
+            .save_run(&mut run, "model_output", &say("Answer"))
+            .await
+            .unwrap();
+        // Other tools between the message and the closer do not matter.
+        run["model_turn"] = json!(2);
+        store
+            .save_run(&mut run, "model_output", &call("file_read"))
+            .await
+            .unwrap();
+        run["model_turn"] = json!(3);
+        store
+            .save_run(&mut run, "model_output", &call("present_chat_component"))
+            .await
+            .unwrap();
+        run["model_turn"] = json!(4);
+        run["status"] = json!("completed");
+        let mut terminal = say("Pick one");
+        terminal["terminal_text"] = json!("Pick one");
+        store
+            .save_run(&mut run, "model_output", &terminal)
+            .await
+            .unwrap();
+        let (chat, _) = store.chat_snapshot("keep-session").await.unwrap();
+        let ids = chat
+            .iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            ["working:keep-run:1:kept:echo:0", "assistant:keep-run"]
+        );
+        assert_eq!(chat[0]["content"], "Answer");
+        // A final reply repeating the kept message word for word replaces it.
+        let mut run = json!({"id":"same-run","session_id":"keep-session","status":"running",
+            "generation":"generation","lease_epoch":0,"input":[],"model_turn":1});
+        store
+            .save_run(&mut run, "model_output", &say("Same"))
+            .await
+            .unwrap();
+        run["model_turn"] = json!(2);
+        store
+            .save_run(&mut run, "model_output", &call("set_closer_status"))
+            .await
+            .unwrap();
+        run["model_turn"] = json!(3);
+        run["status"] = json!("completed");
+        let mut terminal = say("Same");
+        terminal["terminal_text"] = json!("Same");
+        store
+            .save_run(&mut run, "model_output", &terminal)
+            .await
+            .unwrap();
+        let (chat, _) = store.chat_snapshot("keep-session").await.unwrap();
+        let ids = chat
+            .iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(ids[2..], ["assistant:same-run"]);
     }
     /// Verify a run's live row follows its newest unpublished message, survives a user message
     /// and run end, and gives way to an agent publication or terminal reply.

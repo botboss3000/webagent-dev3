@@ -284,6 +284,17 @@ impl ChatEffects for Fixture {
     {
         self.effect(tx, "drop_live", &Value::Null).await
     }
+    async fn keep_live_message<'a, 'c>(
+        &'a self,
+        tx: &'a mut Transaction<'c, Sqlite>,
+        _: &'a str,
+        _: &'a str,
+    ) -> Result<()>
+    where
+        'c: 'a,
+    {
+        self.effect(tx, "keep_live", &Value::Null).await
+    }
     async fn insert_chat<'a, 'c>(
         &'a self,
         tx: &'a mut Transaction<'c, Sqlite>,
