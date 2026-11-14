@@ -6,6 +6,8 @@ runs operator_shell.py for release keys) may request and read status. Nothing th
 the host runs without an approved decision or a live allow-all window. Every request,
 decision and result is appended to the log. Host-specific values come from the host profile.
 """
+import difflib
+import fnmatch
 import json
 import os
 import pwd
@@ -23,13 +25,21 @@ PROFILE = Path(os.environ.get("WEBAGENT_HOST_PROFILE", "/etc/webagent/host-profi
 DEFAULTS = {"host_id": socket.gethostname(), "socket": "/home/ar/webagent-dev3/runtime/host/helper.sock",
             "state": "/var/lib/webagent-host", "app_uid": 1100, "operator_account": "ar",
             "request_ttl_seconds": 1800, "allow_default_seconds": 3600, "allow_max_seconds": 86400,
-            "snapshot_days": 30, "units": [], "containers": []}
+            "snapshot_days": 30, "units": [], "containers": [],
+            # file_write may touch only these paths; boot/disk paths also need password step-up.
+            "editable": ["/etc/webagent/*"], "boot_disk_paths": ["/boot/*", "/etc/default/grub", "/etc/fstab", "/etc/crypttab"]}
 # Undo classes: exact, best_effort or none. "read" actions change nothing and need no approval.
 # Allow-all windows never cover "none" or boot/disk actions (step 3 adds the edit actions).
 ACTIONS = {
     "host_status": {"read": True, "undo": "exact", "boot_disk": False},
     "noop": {"read": False, "undo": "exact", "boot_disk": False},
+    "file_write": {"read": False, "undo": "exact", "boot_disk": False},
+    "host_revert": {"read": False, "undo": "exact", "boot_disk": False},
+    "unit_restart": {"read": False, "undo": "best_effort", "boot_disk": False},
+    "container_restart": {"read": False, "undo": "best_effort", "boot_disk": False},
+    "packages_upgrade": {"read": False, "undo": "best_effort", "boot_disk": False},
 }
+MAX_FILE = 1024 * 1024
 MAX_REQUEST = 256 * 1024
 
 
@@ -86,15 +96,122 @@ class Helper:
         return windows.get(session or "", 0) > self.clock()
 
     # Actions ---------------------------------------------------------------------------
+    def matches(self, path, key):
+        return any(fnmatch.fnmatch(path, pattern) for pattern in self.profile[key])
+
+    def check(self, action, args):
+        """Validate arguments against the profile; returns whether the action is a boot/disk change."""
+        expected = {"file_write": {"path", "content"}, "host_revert": {"request_id"}, "unit_restart": {"unit"},
+                    "container_restart": {"container"}}.get(action, set())
+        if set(args) != expected:
+            raise ValueError(action + " takes " + (", ".join(sorted(expected)) or "no arguments"))
+        if action == "file_write":
+            path = args["path"]
+            if not isinstance(path, str) or not path.startswith("/") or os.path.normpath(path) != path or not isinstance(args["content"], str):
+                raise ValueError("file_write needs an absolute normalized path and text content")
+            if len(args["content"].encode()) > MAX_FILE:
+                raise ValueError("file_write content is limited to 1 MiB")
+            boot_disk = self.matches(path, "boot_disk_paths")
+            if not boot_disk and not self.matches(path, "editable"):
+                raise PermissionError("path is not editable under the host profile: " + path)
+            if Path(path).is_symlink():
+                raise PermissionError("file_write never follows a symlink")
+            return boot_disk
+        if action == "host_revert":
+            target = self.load(args["request_id"])
+            if target["action"] != "file_write" or target["state"] != "done" or target.get("reverted_by"):
+                raise ValueError("only a completed, not yet reverted file_write can be reverted")
+            return target["boot_disk"]
+        if action == "unit_restart" and args["unit"] not in self.profile["units"]:
+            raise PermissionError("unit is not listed in the host profile")
+        if action == "container_restart" and args["container"] not in self.profile["containers"]:
+            raise PermissionError("container is not listed in the host profile")
+        return False
+
     def preview(self, action, args):
         """The exact effect shown on the approval card."""
         if action == "noop":
             return "Test request: changes nothing on the host."
+        if action == "file_write":
+            path = Path(args["path"])
+            old = path.read_text(errors="replace") if path.is_file() else ""
+            diff = "".join(difflib.unified_diff(old.splitlines(True), args["content"].splitlines(True),
+                                                str(path) + (" (current)" if path.exists() else " (new file)"), str(path) + " (proposed)"))
+            return diff or "No change: the file already has this content."
+        if action == "host_revert":
+            target = self.load(args["request_id"])
+            return "Restore " + target["args"]["path"] + " to its content before request " + target["id"] + "."
+        if action == "unit_restart":
+            return "Restart systemd unit " + args["unit"] + "."
+        if action == "container_restart":
+            return "Restart container " + args["container"] + " (brief interruption)."
+        if action == "packages_upgrade":
+            return "apt-get update, then apt-get upgrade -y. The installed package list is saved first for a best-effort downgrade."
         return "Read host status: uptime, disk use, listed units and containers."
 
-    def execute(self, action, args):
+    def snapshot(self, request_id, path):
+        """Save the current bytes and mode of path (or its absence) before a write."""
+        folder = self.state / "snapshots" / request_id
+        folder.mkdir(parents=True, mode=0o700)
+        if path.exists():
+            info = path.stat()
+            shutil.copyfile(path, folder / "content")
+            (folder / "meta.json").write_text(json.dumps({"path": str(path), "existed": True, "mode": info.st_mode & 0o7777,
+                                                          "uid": info.st_uid, "gid": info.st_gid}))
+        else:
+            (folder / "meta.json").write_text(json.dumps({"path": str(path), "existed": False}))
+
+    @staticmethod
+    def write(path, data, mode=0o644, uid=None, gid=None):
+        """Atomic replace in the same directory; a new file belongs to the helper (root)."""
+        temporary = path.with_name("." + path.name + ".webagent-host")
+        temporary.write_bytes(data)
+        os.chown(temporary, os.geteuid() if uid is None else uid, os.getegid() if gid is None else gid)
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+
+    def execute(self, action, args, request_id=None):
+        def run(command, timeout=30):
+            result = self.runner(command, capture_output=True, text=True, timeout=timeout)
+            if result.returncode:
+                raise RuntimeError(" ".join(command[:3]) + " failed: " + (result.stderr or result.stdout)[-300:])
+            return result.stdout.strip()
         if action == "noop":
             return {"changed": False}
+        if action == "file_write":
+            path = Path(args["path"])
+            self.snapshot(request_id, path)
+            if path.exists():
+                info = path.stat()
+                self.write(path, args["content"].encode(), info.st_mode & 0o7777, info.st_uid, info.st_gid)
+            else:
+                self.write(path, args["content"].encode())
+            return {"path": str(path), "bytes": len(args["content"].encode()), "snapshot": request_id}
+        if action == "host_revert":
+            target = self.load(args["request_id"])
+            folder = self.state / "snapshots" / target["id"]
+            meta = json.loads((folder / "meta.json").read_text())
+            path = Path(meta["path"])
+            if meta["existed"]:
+                self.write(path, (folder / "content").read_bytes(), meta["mode"], meta["uid"], meta["gid"])
+            else:
+                path.unlink(missing_ok=True)
+            target["reverted_by"] = request_id
+            self.save(target)
+            return {"path": str(path), "restored_from": target["id"]}
+        if action == "unit_restart":
+            run(["systemctl", "restart", args["unit"]], 120)
+            return {"unit": args["unit"], "state": run(["systemctl", "is-active", args["unit"]])}
+        if action == "container_restart":
+            run(["docker", "restart", args["container"]], 180)
+            return {"container": args["container"]}
+        if action == "packages_upgrade":
+            folder = self.state / "snapshots" / request_id
+            folder.mkdir(parents=True, mode=0o700)
+            (folder / "packages.txt").write_text(run(["dpkg-query", "-W", "-f", "${Package}=${Version}\\n"]))
+            run(["apt-get", "update"], 600)
+            output = run(["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "upgrade", "-y"], 3600)
+            return {"upgraded": output[-1500:], "package_list": str(folder / "packages.txt")}
         def run(command):
             result = self.runner(command, capture_output=True, text=True, timeout=30)
             return result.stdout.strip()
@@ -106,8 +223,18 @@ class Helper:
                                for c in self.profile["containers"]}}
 
     def run_approved(self, record):
+        """Run in the background; status reads show running until it settles."""
+        record["state"] = "running"
+        self.save(record)
+        thread = threading.Thread(target=self.settle, args=(record,), daemon=True)
+        thread.start()
+        if record["action"] in ("noop", "host_status"):
+            thread.join()
+            record.update(self.load(record["id"]))
+
+    def settle(self, record):
         try:
-            record.update(state="done", result=self.execute(record["action"], record["args"]))
+            record.update(state="done", result=self.execute(record["action"], record["args"], record["id"]))
         except Exception as error:  # the log keeps the failure; the caller reads it through status
             record.update(state="failed", error=type(error).__name__ + ": " + str(error)[:300])
         record["finished_at"] = self.clock()
@@ -146,9 +273,10 @@ class Helper:
         if not isinstance(requester, dict) or set(requester) - {"identity", "session", "user"}:
             raise ValueError("requester takes identity, session and user")
         spec = ACTIONS[action]
+        boot_disk = spec["boot_disk"] or self.check(action, args)
         now = self.clock()
         record = {"id": secrets.token_hex(16), "action": action, "args": args, "preview": self.preview(action, args),
-                  "undo": spec["undo"], "boot_disk": spec["boot_disk"], "requester": {"channel": channel, **requester},
+                  "undo": spec["undo"], "boot_disk": boot_disk, "requester": {"channel": channel, **requester},
                   "state": "pending", "created_at": now, "expires_at": now + self.profile["request_ttl_seconds"]}
         with self.lock:
             self.save(record)
@@ -156,7 +284,7 @@ class Helper:
             # An app request is covered by its chat session's window, an SSH request by "ssh:<identity>".
             key = requester.get("session") if channel == "app" else "ssh:" + str(requester.get("identity", ""))
             record["allow_key"] = key
-            covered = spec["undo"] != "none" and not spec["boot_disk"] and self.allow_window(key)
+            covered = spec["undo"] != "none" and not boot_disk and self.allow_window(key)
             self.save(record)
             if spec["read"] or covered:
                 record.update(state="approved", decided_at=now, decided_by="read-only" if spec["read"] else "allow-all")
@@ -166,12 +294,16 @@ class Helper:
 
     def decide(self, message):
         decision, admin = message.get("decision"), message.get("admin")
+        stepped_up = message.get("stepped_up") is True
         if decision not in ("approve", "deny") or not isinstance(admin, str) or not admin:
             raise ValueError("decision approve or deny and the deciding admin required")
         with self.lock:
             record = self.load(message.get("id"))
             if record["state"] != "pending":
                 raise ValueError("request is " + record["state"])
+            # The app sets stepped_up only after the administrator re-entered their password.
+            if decision == "approve" and record["boot_disk"] and not stepped_up:
+                raise PermissionError("boot and disk changes need the administrator password on approval")
             record.update(state="approved" if decision == "approve" else "denied", decided_at=self.clock(), decided_by=admin)
             self.save(record)
             self.log({"event": record["state"], "id": record["id"], "by": admin})

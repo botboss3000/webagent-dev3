@@ -67,6 +67,55 @@ class HelperTests(unittest.TestCase):
             self.request("rm_rf")
         self.assertEqual([], self.helper.handle(APP, {"op": "list"})["pending"])
 
+    def wait(self, request_id):
+        import time
+        for _ in range(200):
+            record = self.helper.handle(APP, {"op": "status", "id": request_id})
+            if record["state"] not in ("running", "approved"):
+                return record
+            time.sleep(.01)
+        return record
+
+    def approve(self, record, **more):
+        self.helper.handle(APP, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "admin", **more})
+        return self.wait(record["id"])
+
+    def test_file_write_snapshots_and_reverts_exactly(self):
+        target = Path(self.temp.name) / "etc" / "app.conf"
+        target.parent.mkdir()
+        target.write_text("old\n")
+        self.helper.profile["editable"] = [str(target.parent) + "/*"]
+        write = self.helper.handle(APP, {"op": "request", "action": "file_write", "args": {"path": str(target), "content": "new\n"}, "requester": {"session": "s"}})
+        self.assertIn("-old", write["preview"]); self.assertIn("+new", write["preview"])
+        self.assertEqual("pending", write["state"])
+        self.assertEqual("done", self.approve(write)["state"])
+        self.assertEqual("new\n", target.read_text())
+        revert = self.helper.handle(APP, {"op": "request", "action": "host_revert", "args": {"request_id": write["id"]}, "requester": {"session": "s"}})
+        self.assertEqual("done", self.approve(revert)["state"])
+        self.assertEqual("old\n", target.read_text())
+        with self.assertRaises(ValueError):  # a write is reverted once
+            self.helper.handle(APP, {"op": "request", "action": "host_revert", "args": {"request_id": write["id"]}, "requester": {"session": "s"}})
+
+    def test_paths_outside_the_profile_and_boot_paths(self):
+        with self.assertRaises(PermissionError):
+            self.helper.handle(APP, {"op": "request", "action": "file_write", "args": {"path": "/etc/passwd", "content": "x"}, "requester": {"session": "s"}})
+        boot = Path(self.temp.name) / "boot.cfg"
+        self.helper.profile["boot_disk_paths"] = [str(boot)]
+        self.helper.handle(APP, {"op": "allow", "session": "s", "seconds": 600, "admin": "admin"})
+        record = self.helper.handle(APP, {"op": "request", "action": "file_write", "args": {"path": str(boot), "content": "x"}, "requester": {"session": "s"}})
+        self.assertEqual(("pending", True), (record["state"], record["boot_disk"]))  # allow-all never covers boot/disk
+        with self.assertRaisesRegex(PermissionError, "password"):
+            self.helper.handle(APP, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "admin"})
+        self.assertEqual("done", self.approve(record, stepped_up=True)["state"])
+
+    def test_units_and_containers_come_from_the_profile(self):
+        with self.assertRaises(ValueError):
+            self.request("unit_restart")  # missing args refused first
+
+    def test_unlisted_unit_is_refused(self):
+        with self.assertRaises(PermissionError):
+            self.helper.handle(APP, {"op": "request", "action": "unit_restart", "args": {"unit": "ssh.service"}, "requester": {"session": "s"}})
+
     def test_log_records_every_step(self):
         record = self.request()
         self.helper.handle(APP, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "admin"})
