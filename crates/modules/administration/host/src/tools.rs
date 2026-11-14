@@ -125,7 +125,7 @@ pub const FOUND_BLOCKS: usize = 8;
 #[must_use]
 /// Share of a `find` block's score from its word match; the matcher's meaning score has
 /// the rest. `--find-eval` compares weights.
-pub const FIND_WORDS_WEIGHT: f64 = 0.5;
+pub const FIND_WORDS_WEIGHT: f64 = 0.2;
 
 pub fn find_order(candidates: &[Value], meaning: Option<&[f32]>, words_weight: f64) -> Vec<usize> {
     let best = candidates
@@ -160,7 +160,7 @@ pub fn find_text(candidate: &Value) -> Vec<String> {
 }
 
 /// Finish a `file_search` `find`: the worker scored named blocks on the query's words; the
-/// matcher reranks its best and the two scores are blended equally, so a plain-language
+/// matcher reranks its best and the two scores are blended (see [`FIND_WORDS_WEIGHT`]), so a plain-language
 /// question lands on code even when its words differ from the identifiers. Without the
 /// matcher the word ranking stands.
 pub(crate) async fn ranked_blocks(
