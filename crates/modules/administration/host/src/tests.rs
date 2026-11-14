@@ -477,8 +477,11 @@ async fn find_lists_ranked_blocks_and_refuses_drafts() {
         {"path":"ui/b.js","start":1,"end":20,"name":"function open()","text":"t","score":2.0}]});
     let reply = crate::tools::ranked_blocks(
         &host,
-        &json!({"query":"menu row"}),
+        "s1",
+        &json!({"query":"menu row","path":"ui"}),
         json!({"status":"success","output":found.to_string()}),
+        &webagent_administration::find_ranking::Ranking::default(),
+        std::time::Instant::now(),
     )
     .await;
     let text = reply["output"].as_str().unwrap();
@@ -490,6 +493,19 @@ async fn find_lists_ranked_blocks_and_refuses_drafts() {
         text.contains("2 of 40 blocks shown, ranked by words only"),
         "{text}"
     );
+    // The lookup is logged; a read inside a shown block marks it a hit at that rank.
+    crate::find_log::read(
+        &host,
+        "s1",
+        &json!({"path":"/code/ui/b.js","offset":5,"limit":10}),
+    )
+    .await;
+    let (outcome, rank): (String, Option<i64>) =
+        sqlx::query_as("SELECT outcome,hit_rank FROM find_log WHERE session_id='s1'")
+            .fetch_one(&host.store().review_pool)
+            .await
+            .unwrap();
+    assert_eq!((outcome.as_str(), rank), ("hit", Some(2)));
     let refused = call(
         &host,
         "file_search",

@@ -1,0 +1,11 @@
+{
+  "_instructions": "Live settings for file_search find ranking, read on every find call. Each area of the checkout is scanned on its own, keeps up to candidates_per_area blocks (all areas together up to total_candidates), and the matcher scores those; words_weight is the word match's share of the final score. Validated by webagent_administration::find_ranking.",
+  "schema_version": 1,
+  "words_weight": 0.2,
+  "shown_blocks": 8,
+  "candidates_per_area": 200,
+  "total_candidates": 400,
+  "scan_entries": 10000,
+  "scan_seconds": 6,
+  "log_days": 90
+}

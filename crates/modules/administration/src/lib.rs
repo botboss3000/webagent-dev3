@@ -8,6 +8,7 @@
 //! or a Docker command; the host attaches those.
 pub mod arguments;
 pub mod dashboard;
+pub mod find_ranking;
 pub mod notices;
 pub mod schemas;
 pub mod tools;

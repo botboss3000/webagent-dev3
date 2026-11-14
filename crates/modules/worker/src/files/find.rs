@@ -6,10 +6,53 @@ use super::outline::Block;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 
-/// Most candidates one area hands to the host for reranking.
-pub(super) const CANDIDATES: usize = 200;
-/// Candidates handed to the host in all; the matcher takes at most 1024 texts per request.
-const TOTAL_CANDIDATES: usize = 400;
+/// A lookup's scan and candidate budgets, sent by the host from the live
+/// `find-ranking.json` as `find_limits`; the defaults match that file.
+#[derive(Debug, Clone, Copy)]
+pub struct Limits {
+    /// Most candidates one area hands to the host for reranking.
+    pub per_area: usize,
+    /// Candidates handed to the host in all; the matcher takes at most 1024 texts per request.
+    pub total: usize,
+    /// Files and folders one area's scan may visit.
+    pub entries: i64,
+    /// Seconds one area's scan may take.
+    pub seconds: u64,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            per_area: 200,
+            total: 400,
+            entries: 10_000,
+            seconds: 6,
+        }
+    }
+}
+
+impl Limits {
+    /// The limits in a request's `find_limits`, bounded; the defaults when absent.
+    pub fn from_value(value: Option<&Value>) -> Result<Self, &'static str> {
+        let Some(value) = value else {
+            return Ok(Self::default());
+        };
+        let number = |key: &str, max: u64| {
+            value[key]
+                .as_u64()
+                .filter(|n| (1..=max).contains(n))
+                .ok_or("invalid find limits")
+        };
+        let per_area = usize::try_from(number("candidates_per_area", 1000)?).unwrap_or(1000);
+        let total = usize::try_from(number("total_candidates", 1024)?).unwrap_or(1024);
+        Ok(Self {
+            per_area,
+            total: total.max(per_area).min(1024),
+            entries: i64::try_from(number("scan_entries", 100_000)?).unwrap_or(100_000),
+            seconds: number("scan_seconds", 30)?,
+        })
+    }
+}
 /// Blocks kept from one walk; a larger tree reports a limited scan.
 pub(super) const MAX_BLOCKS: usize = 60_000;
 const DOC_LINES: usize = 4;
@@ -148,10 +191,15 @@ pub(super) fn tokens(text: &str) -> Vec<String> {
 }
 
 /// The best blocks for `query` as JSON text for the host, best first: each area keeps up to
-/// an equal share of [`TOTAL_CANDIDATES`] (at most [`CANDIDATES`]), and slots a small area
+/// an equal share of the total (at most `per_area`), and slots a small area
 /// leaves unused go to the next best blocks anywhere. Blocks sharing no word with the query
 /// are left out.
-pub(super) fn output(areas: &[(String, Vec<Candidate>)], query: &str, limited: bool) -> String {
+pub(super) fn output(
+    areas: &[(String, Vec<Candidate>)],
+    query: &str,
+    limited: bool,
+    limits: Limits,
+) -> String {
     let found: Vec<(&str, &Candidate)> = areas
         .iter()
         .flat_map(|(area, blocks)| blocks.iter().map(move |block| (area.as_str(), block)))
@@ -186,7 +234,7 @@ pub(super) fn output(areas: &[(String, Vec<Candidate>)], query: &str, limited: b
         })
         .collect();
     scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let share = (TOTAL_CANDIDATES / areas.len().max(1)).clamp(1, CANDIDATES);
+    let share = (limits.total / areas.len().max(1)).clamp(1, limits.per_area);
     let mut taken: HashMap<&str, usize> = HashMap::new();
     let mut keep = vec![false; scored.len()];
     for (at, (_, area, _)) in scored.iter().enumerate() {
@@ -196,10 +244,12 @@ pub(super) fn output(areas: &[(String, Vec<Candidate>)], query: &str, limited: b
             keep[at] = true;
         }
     }
-    let mut room = TOTAL_CANDIDATES.saturating_sub(keep.iter().filter(|kept| **kept).count());
+    let mut room = limits
+        .total
+        .saturating_sub(keep.iter().filter(|kept| **kept).count());
     for (at, (_, area, _)) in scored.iter().enumerate() {
         let count = taken.entry(area).or_default();
-        if room > 0 && !keep[at] && *count < CANDIDATES {
+        if room > 0 && !keep[at] && *count < limits.per_area {
             *count += 1;
             keep[at] = true;
             room -= 1;
@@ -249,7 +299,9 @@ mod tests {
             found[0].text
         );
         let areas = [("a.js".to_owned(), found)];
-        let ranked: Value = serde_json::from_str(&output(&areas, "menu body open", false)).unwrap();
+        let ranked: Value =
+            serde_json::from_str(&output(&areas, "menu body open", false, Limits::default()))
+                .unwrap();
         assert_eq!(ranked["candidates"].as_array().unwrap().len(), 1);
         assert_eq!(ranked["candidates"][0]["name"], "function openMenu()");
         assert_eq!(ranked["candidates"][0]["start"], 2);
@@ -270,12 +322,13 @@ mod tests {
         let big: Vec<Candidate> = (0..1500).flat_map(|at| block("big.js", at)).collect();
         let small = block("small.js", 0);
         let areas = [("big".to_owned(), big), ("small".to_owned(), small)];
-        let ranked: Value = serde_json::from_str(&output(&areas, "open menu", false)).unwrap();
+        let ranked: Value =
+            serde_json::from_str(&output(&areas, "open menu", false, Limits::default())).unwrap();
         let listed = ranked["candidates"].as_array().unwrap();
         assert!(listed.iter().any(|c| c["area"] == "small"));
         assert_eq!(
             listed.iter().filter(|c| c["area"] == "big").count(),
-            CANDIDATES
+            Limits::default().per_area
         );
         assert_eq!(ranked["areas"], 2);
     }

@@ -1248,7 +1248,13 @@ fn regex_lines(query: &str, data: &[u8], deadline: Instant) -> Outcome<Option<Ve
 /// A `find` lookup's first stage outside the worker, for `webagent-v3 --find-eval`: scores the
 /// named blocks under `path` (relative to `checkout`) with the live budgets and returns the
 /// worker's candidate JSON. The checkout's runtime folders are skipped as in a live search.
-pub fn find_lookup(checkout: &Path, path: &str, query: &str) -> Result<String, String> {
+pub fn find_lookup(
+    checkout: &Path,
+    path: &str,
+    query: &str,
+    limits: Option<&Value>,
+) -> Result<String, String> {
+    let limits = find::Limits::from_value(limits).map_err(str::to_owned)?;
     let root = openat(
         CWD,
         checkout,
@@ -1266,7 +1272,7 @@ pub fn find_lookup(checkout: &Path, path: &str, query: &str) -> Result<String, S
         )
         .map_err(|failure| failure.to_string())?
     };
-    lookup(target, path, query, path == ".")
+    lookup(target, path, query, path == ".", limits)
         .map(|(text, _)| text)
         .map_err(|failure| failure.to_string())
 }
@@ -1284,7 +1290,7 @@ struct Area {
 
 /// A `find` scan with the lookup budgets: more time than a line search, since it outlines
 /// every source file under its area.
-fn finder(query: &str) -> Search<'_> {
+fn finder(query: &str, limits: find::Limits) -> Search<'_> {
     Search {
         query,
         regex: false,
@@ -1295,9 +1301,9 @@ fn finder(query: &str) -> Search<'_> {
         line_bytes: 0,
         found: Vec::new(),
         size: 0,
-        entries_left: 10_000,
+        entries_left: limits.entries,
         bytes_left: (32 * LIMIT) as i64,
-        deadline: Instant::now() + Duration::from_secs(6),
+        deadline: Instant::now() + Duration::from_secs(limits.seconds),
         limited: false,
         checkout_top: false,
         find: true,
@@ -1363,7 +1369,13 @@ fn find_areas(
 
 /// A plain-language lookup's first stage: each area is scanned on its own thread with its own
 /// budget, then all blocks are scored together and each area keeps its share of candidates.
-fn lookup(target: OwnedFd, raw: &str, query: &str, checkout_top: bool) -> Outcome<(String, bool)> {
+fn lookup(
+    target: OwnedFd,
+    raw: &str,
+    query: &str,
+    checkout_top: bool,
+    limits: find::Limits,
+) -> Outcome<(String, bool)> {
     let mut areas = Vec::new();
     match FileType::from_raw_mode(fstat(&target)?.st_mode) {
         FileType::RegularFile => areas.push(Area {
@@ -1386,7 +1398,7 @@ fn lookup(target: OwnedFd, raw: &str, query: &str, checkout_top: bool) -> Outcom
             .iter()
             .map(|area| {
                 scope.spawn(move || {
-                    let mut search = finder(query);
+                    let mut search = finder(query, limits);
                     for (folder, label) in &area.folders {
                         search.scan_dir(folder, label, 0)?;
                     }
@@ -1413,7 +1425,7 @@ fn lookup(target: OwnedFd, raw: &str, query: &str, checkout_top: bool) -> Outcom
         limited |= cut;
         found.push((name, blocks));
     }
-    Ok((find::output(&found, query, limited), limited))
+    Ok((find::output(&found, query, limited, limits), limited))
 }
 
 impl Search<'_> {
@@ -1643,7 +1655,8 @@ fn search(
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK,
     )?;
     if find {
-        let (text, limited) = lookup(target, raw, query, checkout_top)?;
+        let limits = find::Limits::from_value(args.get("find_limits")).map_err(rejected)?;
+        let (text, limited) = lookup(target, raw, query, checkout_top, limits)?;
         *scan_limited = limited;
         return Ok(Written::Text(text));
     }

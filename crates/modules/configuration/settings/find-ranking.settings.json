@@ -1,0 +1,164 @@
+{
+  "_instructions": "Setting descriptors for the configuration composer (see crates/modules/configuration/settings-catalog.json). Current values are always read live; descriptors hold no defaults.",
+  "settings": [
+    {
+      "id": "find.ranking.words_weight",
+      "description": "Share of a code search (file_search find) result's score that comes from matching words; the meaning matcher gives the rest.",
+      "type": "number",
+      "pointer": "/words_weight",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "rank code search more by exact words",
+        "trust the meaning matcher more in find",
+        "find should care less about identifiers"
+      ],
+      "areas": [
+        "code search",
+        "ranking"
+      ],
+      "min": 0,
+      "max": 1,
+      "bounds": "validator"
+    },
+    {
+      "id": "find.ranking.shown_blocks",
+      "description": "Code blocks one code search (file_search find) shows the agent.",
+      "type": "integer",
+      "pointer": "/shown_blocks",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "show 10 find results",
+        "fewer code search results",
+        "let find list more blocks"
+      ],
+      "areas": [
+        "code search",
+        "results"
+      ],
+      "unit": "blocks",
+      "min": 1,
+      "max": 30,
+      "bounds": "validator"
+    },
+    {
+      "id": "find.ranking.candidates_per_area",
+      "description": "Most candidate blocks one checkout area (such as ui/chat or one crate) passes to the meaning matcher in a code search.",
+      "type": "integer",
+      "pointer": "/candidates_per_area",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "let each folder pass more blocks to find",
+        "fewer candidates per area in code search",
+        "widen find within one module"
+      ],
+      "areas": [
+        "code search",
+        "candidates"
+      ],
+      "unit": "blocks",
+      "min": 1,
+      "max": 1000,
+      "bounds": "validator"
+    },
+    {
+      "id": "find.ranking.total_candidates",
+      "description": "Most candidate blocks a whole code search passes to the meaning matcher; more finds more but each one costs matcher time.",
+      "type": "integer",
+      "pointer": "/total_candidates",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "make code search faster",
+        "let find consider 600 blocks",
+        "fewer candidates so find stops timing out"
+      ],
+      "areas": [
+        "code search",
+        "speed",
+        "candidates"
+      ],
+      "unit": "blocks",
+      "min": 1,
+      "max": 2000,
+      "bounds": "validator"
+    },
+    {
+      "id": "find.ranking.scan_entries",
+      "description": "Files and folders one area's code search scan may visit before it reports a limited scan.",
+      "type": "integer",
+      "pointer": "/scan_entries",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "let find scan more files",
+        "stop code search scans being cut short",
+        "smaller find scans"
+      ],
+      "areas": [
+        "code search",
+        "scan"
+      ],
+      "unit": "entries",
+      "min": 100,
+      "max": 100000,
+      "bounds": "validator"
+    },
+    {
+      "id": "find.ranking.scan_seconds",
+      "description": "Seconds one area's code search scan may take before it reports a limited scan.",
+      "type": "integer",
+      "pointer": "/scan_seconds",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "give find scans more time",
+        "code search scans time out too soon",
+        "shorter find scan time"
+      ],
+      "areas": [
+        "code search",
+        "scan",
+        "speed"
+      ],
+      "unit": "seconds",
+      "min": 1,
+      "max": 30,
+      "bounds": "validator"
+    },
+    {
+      "id": "find.ranking.log_days",
+      "description": "Days the code search (find) hit and miss log keeps each lookup.",
+      "type": "integer",
+      "pointer": "/log_days",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "keep the find log for a year",
+        "forget old code search logs sooner",
+        "how long find results are tracked"
+      ],
+      "areas": [
+        "code search",
+        "log",
+        "retention"
+      ],
+      "unit": "days",
+      "min": 1,
+      "max": 3650,
+      "bounds": "validator"
+    }
+  ],
+  "excluded": {
+    "/schema_version": "File format version."
+  }
+}

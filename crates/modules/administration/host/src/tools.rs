@@ -1,11 +1,13 @@
 //! The Administrator tool handlers. The root has already checked that the run belongs to
 //! the session and routed Source Control adapter calls elsewhere.
+use crate::find_log;
 use crate::{trusted, workspace_host, AdministrationHost};
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use webagent_administration::arguments;
+use webagent_administration::find_ranking::Ranking;
 use webagent_administration::tools::{authority_name, renews};
 use webagent_host_core::{digest, now};
 
@@ -67,10 +69,20 @@ pub async fn execute(
                             "output":format!("Not run; nothing changed. {error}")}))
                     }
                 };
+                // The host sets the lookup budgets from the live settings, never the model.
+                let ranking = lookup.then(Ranking::load);
+                let mut live = live;
+                if let Some(ranking) = &ranking {
+                    live["find_limits"] = ranking.worker_limits();
+                }
+                let started = std::time::Instant::now();
                 let trusted = host.checkout(sid, run, name, codebase_revision(run)).await;
                 let reply = host.worker(name, &live, sid, trusted, cancel).await?;
-                if lookup {
-                    return Ok(ranked_blocks(host, &live, reply).await);
+                if let Some(ranking) = ranking {
+                    return Ok(ranked_blocks(host, sid, &live, reply, &ranking, started).await);
+                }
+                if name == "file_read" && reply["status"] == "success" {
+                    find_log::read(host, sid, &live).await;
                 }
                 Ok(reply)
             }
@@ -116,17 +128,10 @@ pub async fn execute(
     }
 }
 
-/// Blocks a `find` lookup returns.
-pub const FOUND_BLOCKS: usize = 8;
-
 /// The order of a `find` lookup's candidates, best first: the word score (scaled so the
 /// worker's best is 1) and the matcher's score blended equally, or the word score alone
 /// when the matcher gave no scores.
 #[must_use]
-/// Share of a `find` block's score from its word match; the matcher's meaning score has
-/// the rest. `--find-eval` compares weights.
-pub const FIND_WORDS_WEIGHT: f64 = 0.2;
-
 pub fn find_order(candidates: &[Value], meaning: Option<&[f32]>, words_weight: f64) -> Vec<usize> {
     let best = candidates
         .first()
@@ -160,13 +165,16 @@ pub fn find_text(candidate: &Value) -> Vec<String> {
 }
 
 /// Finish a `file_search` `find`: the worker scored named blocks on the query's words; the
-/// matcher reranks its best and the two scores are blended (see [`FIND_WORDS_WEIGHT`]), so a plain-language
+/// matcher reranks its best and the two scores are blended by the live `words_weight` ([`Ranking`]), so a plain-language
 /// question lands on code even when its words differ from the identifiers. Without the
 /// matcher the word ranking stands.
 pub(crate) async fn ranked_blocks(
     host: &dyn AdministrationHost,
+    sid: &str,
     args: &Value,
     reply: Value,
+    ranking: &Ranking,
+    started: std::time::Instant,
 ) -> Value {
     let Some(found) = reply["output"]
         .as_str()
@@ -186,10 +194,13 @@ pub(crate) async fn ranked_blocks(
         .rank(args["query"].as_str().unwrap_or(""), texts)
         .await
         .filter(|scores| scores.len() == candidates.len());
-    let lines: Vec<String> = find_order(&candidates, meaning.as_deref(), FIND_WORDS_WEIGHT)
+    let order: Vec<usize> = find_order(&candidates, meaning.as_deref(), ranking.words_weight)
         .into_iter()
-        .take(FOUND_BLOCKS)
-        .map(|at| {
+        .take(ranking.shown_blocks)
+        .collect();
+    let lines: Vec<String> = order
+        .iter()
+        .map(|&at| {
             let c = &candidates[at];
             let gist = c["gist"].as_str().unwrap_or("");
             let mut line = format!(
@@ -211,6 +222,28 @@ pub(crate) async fn ranked_blocks(
     } else {
         "words only; the matcher is unavailable"
     };
+    find_log::record(
+        host,
+        sid,
+        find_log::Lookup {
+            query: args["query"].as_str().unwrap_or(""),
+            path: args["path"].as_str().unwrap_or("."),
+            ranked_by: if meaning.is_some() {
+                "words_and_meaning"
+            } else {
+                "words"
+            },
+            settings: json!({"words_weight": ranking.words_weight,
+                "shown_blocks": ranking.shown_blocks, "limits": args["find_limits"]}),
+            blocks: found["blocks"].as_u64().unwrap_or(0),
+            candidates: candidates.len(),
+            limited: found["limited"] == true,
+            elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            shown: find_log::shown(&candidates, &order),
+        },
+        ranking.log_days,
+    )
+    .await;
     json!({"status":"success","truncated":found["limited"],"output":format!(
         "{}\n({} of {} blocks shown, ranked by {by}; read the best one or two with file_read offset and limit before searching again)",
         lines.join("\n"), lines.len(), found["blocks"])})

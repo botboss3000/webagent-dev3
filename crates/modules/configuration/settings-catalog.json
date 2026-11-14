@@ -52,6 +52,10 @@
     {
       "config": "crates/modules/notifications/admin-alerts.json",
       "descriptors": "crates/modules/notifications/admin-alerts.settings.json"
+    },
+    {
+      "config": "abilities/Administrator/codebase_admin/tools/file_search/find-ranking.json",
+      "descriptors": "crates/modules/configuration/settings/find-ranking.settings.json"
     }
   ],
   "excluded_files": {

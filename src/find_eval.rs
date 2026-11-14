@@ -6,9 +6,11 @@
 //! case's rank with and without the matcher, then a summary per file.
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
-use webagent_administration_host::tools::{find_order, find_text, FIND_WORDS_WEIGHT, FOUND_BLOCKS};
+use webagent_administration::find_ranking::Ranking;
+use webagent_administration_host::tools::{find_order, find_text};
 
-/// Word-score weights compared against the live one.
+/// Word-score weights compared against the live `words_weight`; the eval reads the live
+/// `find-ranking.json` like the tool.
 const SWEEP: [f64; 5] = [0.5, 0.4, 0.3, 0.2, 0.1];
 
 /// 1-based rank of the expected block in `order`, if present.
@@ -28,6 +30,7 @@ fn rank_of(candidates: &[Value], order: &[usize], expect: &Value) -> Option<usiz
 
 #[derive(Default)]
 struct Totals {
+    shown_blocks: usize,
     cases: usize,
     top1: usize,
     shown: usize,
@@ -38,7 +41,7 @@ impl Totals {
     fn add(&mut self, rank: Option<usize>) {
         self.cases += 1;
         self.top1 += usize::from(rank == Some(1));
-        self.shown += usize::from(rank.is_some_and(|r| r <= FOUND_BLOCKS));
+        self.shown += usize::from(rank.is_some_and(|r| r <= self.shown_blocks));
         self.reciprocal += rank.map_or(0.0, |r| 1.0 / r as f64);
     }
 
@@ -53,10 +56,15 @@ pub fn evaluate(args: &[String]) -> Result<()> {
     let (checkout, files) = args
         .split_first()
         .context("Usage: --find-eval CHECKOUT FILE...")?;
+    let ranking = Ranking::load();
+    let totals = || Totals {
+        shown_blocks: ranking.shown_blocks,
+        ..Totals::default()
+    };
     let mut ranker = webagent_inference::Ranker::new(webagent_inference::load_embedder()?);
     for file in files {
-        let (mut blended, mut words) = (Totals::default(), Totals::default());
-        let mut sweep: Vec<Totals> = SWEEP.iter().map(|_| Totals::default()).collect();
+        let (mut blended, mut words) = (totals(), totals());
+        let mut sweep: Vec<Totals> = SWEEP.iter().map(|_| totals()).collect();
         let text = std::fs::read_to_string(file).with_context(|| format!("Read {file}"))?;
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
             let case: Value = serde_json::from_str(line)?;
@@ -64,14 +72,19 @@ pub fn evaluate(args: &[String]) -> Result<()> {
             let path = case["path"].as_str().unwrap_or(".");
             let started = std::time::Instant::now();
             let found: Value = serde_json::from_str(
-                &webagent_worker::files::find_lookup(checkout.as_ref(), path, query)
-                    .map_err(anyhow::Error::msg)?,
+                &webagent_worker::files::find_lookup(
+                    checkout.as_ref(),
+                    path,
+                    query,
+                    Some(&ranking.worker_limits()),
+                )
+                .map_err(anyhow::Error::msg)?,
             )?;
             let candidates = found["candidates"].as_array().cloned().unwrap_or_default();
             let texts: Vec<Vec<String>> = candidates.iter().map(find_text).collect();
             let meaning = ranker.scores(query, &texts)?;
             let elapsed = started.elapsed().as_millis();
-            let order = find_order(&candidates, Some(&meaning), FIND_WORDS_WEIGHT);
+            let order = find_order(&candidates, Some(&meaning), ranking.words_weight);
             for (weight, totals) in SWEEP.iter().zip(&mut sweep) {
                 totals.add(rank_of(
                     &candidates,

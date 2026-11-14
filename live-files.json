@@ -2,6 +2,7 @@
   "_instructions": "Files edited in place in this checkout, by hand or by the app, and read live. The broker excludes them from release drift and commits their edits automatically. A task may also change them: alone they take the fast plugin_deploy lane, with code the normal release. Paths are relative to this folder; '*' is allowed only in the last segment; only .json and .md files.",
   "version": 1,
   "files": [
+    "abilities/Administrator/codebase_admin/tools/file_search/find-ranking.json",
     "crates/modules/access/access-policy.json",
     "crates/modules/accounts/authentication.json",
     "crates/modules/browser/browser-limits.json",
