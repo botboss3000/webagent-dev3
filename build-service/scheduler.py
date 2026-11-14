@@ -7,12 +7,15 @@ import hashlib,importlib.util,json,os,re,stat,subprocess,time
 from pathlib import Path
 
 # Every caller on the broker's local socket (Claude Code, Codex, OpenCode on the T480) shares this
-# identity; it keys tasks and authorizes operator actions, so it stays fixed. Never display it.
+# identity; it keys tasks and authorizes operator actions. host.py sets it from build-service.json
+# scheduler.local_operator ("codex-local" until it is switched to "t480"). Task keys hash it, so
+# switch only while no local task is open; judging an existing job's owner accepts both names.
 LOCAL_OPERATOR="codex-local"
+LOCAL_OPERATORS={"codex-local","t480"}
 HARNESSES={"claude-code","codex","opencode"}
 def operator_origin(user_id,summary):
     """Display origin: t480[/harness] for the local operator (harness from the summary's origin=), v2 or v3."""
-    if user_id!=LOCAL_OPERATOR:return"v2"if user_id=="python-v2-admin"else"v3"
+    if user_id not in LOCAL_OPERATORS:return"v2"if user_id=="python-v2-admin"else"v3"
     found=re.search(r"\borigin=([a-z-]{1,20})",str(summary or"")[:260])
     return"t480/"+found.group(1)if found and found.group(1)in HARNESSES else"t480"
 def sibling(name):

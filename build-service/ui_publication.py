@@ -466,7 +466,7 @@ class UIPublication:
             # its owner cannot (recovery needs a local caller) and an unresolved uncertain release
             # stops every later deployment. _reconcile still proves the predecessor is active and
             # the runtime and checkout are unchanged before anything is recorded.
-            operator=(args["action"]=="discard_prepared_release"and trusted.get("user_id")=="codex-local"
+            operator=(args["action"]=="discard_prepared_release"and trusted.get("user_id")in("codex-local","t480")
                       and workspace==self.broker.local_workspace)
             item=self.broker.scheduler.item(args,trusted,workspace,administrator=operator)
             job=self.broker.jobs.get(args["job_id"])

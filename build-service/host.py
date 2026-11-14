@@ -45,6 +45,7 @@ _config_spec.loader.exec_module(_config_module)
 CONFIG = _config_module.load()
 _scheduler_spec=importlib.util.spec_from_file_location("build_scheduler",_module_root/"scheduler.py")
 scheduler_module=importlib.util.module_from_spec(_scheduler_spec);_scheduler_spec.loader.exec_module(scheduler_module)
+scheduler_module.LOCAL_OPERATOR=CONFIG.get("scheduler",{}).get("local_operator",scheduler_module.LOCAL_OPERATOR)
 resource_module=scheduler_module.sibling("resources")
 executor_module=scheduler_module.sibling("executor")
 engine_components=scheduler_module.sibling("engine_components")
@@ -3354,7 +3355,7 @@ class Broker:
                 self.runner.ui_hot_swappable())
 
     def _start_parallel_ui(self, job):
-        if not self._maintenance_allowed({"local_caller":job.get("user_id")=="codex-local"},job):return
+        if not self._maintenance_allowed({"local_caller":job.get("user_id") in scheduler_module.LOCAL_OPERATORS},job):return
         try:
             self._lease(job)
             folder = self.state / job["job_id"]
@@ -3423,7 +3424,7 @@ class Broker:
             value.get("operation") not in HOT_OPERATIONS, value["created_at"]))
         for job in pending:
             if job["operation"]=="check"and job["status"]=="queued"and job["job_id"]in self.check_runs:
-                if not self._maintenance_allowed({"local_caller":job.get("user_id")=="codex-local"},job):continue
+                if not self._maintenance_allowed({"local_caller":job.get("user_id") in scheduler_module.LOCAL_OPERATORS},job):continue
                 if controlled and not self.scheduler.execution_eligible(job,[self.jobs[key]for key in self.active_jobs]):continue
                 call=self.check_runs.pop(job["job_id"])
                 self.active_jobs.add(job["job_id"]);self.active=next(iter(self.active_jobs),None)
@@ -3439,7 +3440,7 @@ class Broker:
             if controlled and not self.scheduler.execution_eligible(job,[self.jobs[key]for key in self.active_jobs]):continue
             try:
                 task_id=job.get("task_id") or next((v["task_id"] for v in self.work.values() if v.get("job_id")==job["job_id"]),None)
-                if not self._maintenance_allowed({"local_caller":job.get("user_id")=="codex-local"},{"task_id":task_id}):continue
+                if not self._maintenance_allowed({"local_caller":job.get("user_id") in scheduler_module.LOCAL_OPERATORS},{"task_id":task_id}):continue
                 self._lease(job)
                 folder = self.state / job["job_id"]
                 base = (folder / "base.tar").read_bytes()
@@ -3544,7 +3545,7 @@ class Broker:
                 raise ValueError("UI test failure record is stale")
             if sorted(files) != sorted(failure["files"]):
                 raise ValueError("Accepted files must exactly equal the failing files: " + ", ".join(failure["files"]))
-            job["ui_test_override"] = {"files": sorted(files), "reason": reason, "accepted_at": time.time(), "by": "codex-local",
+            job["ui_test_override"] = {"files": sorted(files), "reason": reason, "accepted_at": time.time(), "by": scheduler_module.LOCAL_OPERATOR,
                                        "inputs_sha256": job["inputs_sha256"], "history": self.ui_publication.history(sorted(files))}
             # Same durable requeue as a synchronization "proceed": the candidate is rebased onto the live
             # base, so any changed input yields a new inputs_sha256 and the override no longer applies.
@@ -3913,7 +3914,7 @@ class Broker:
         full build linking ability crates and needs the root STABLE_FEATURE. A
         completed rebuild commits its released paths and releases its claims."""
         admin = self.administrator(trusted) and workspace == ADMIN_WORKSPACE
-        local = trusted.get("local_caller") is True and trusted["user_id"] == "codex-local" and workspace == LOCAL_WORKSPACE
+        local = trusted.get("local_caller") is True and trusted["user_id"] == scheduler_module.LOCAL_OPERATOR and workspace == LOCAL_WORKSPACE
         if not (admin or local):
             raise PermissionError("Administrator rebuild required")
         if (set(args) != {"mode", "request_id"} or args["mode"] not in ("dev", "stable")
@@ -4008,7 +4009,7 @@ class Broker:
         Local operators close their own releases with their own commit message."""
         return job.get("status") == "completed" and (bool(job.get("rebuild")) or (
             job.get("operation") in {"build_deploy", "ui_deploy", "plugin_deploy", "host_service_deploy"}
-            and job.get("user_id") != "codex-local"))
+            and job.get("user_id") not in scheduler_module.LOCAL_OPERATORS))
 
     def _rebuild_closeout(self, job):
         """Commit a completed release's released checkout paths, then release its claims with that commit."""
@@ -4026,7 +4027,7 @@ class Broker:
             message += f"\n\nReleased files ({len(paths)}):\n" + "\n".join("- " + p for p in listed)
             commit = self.runner.commit_release(paths, message)
             # The broker renews the owner's own identity briefly to close its task; no new authority.
-            local = job["user_id"] == "codex-local"
+            local = job["user_id"] in scheduler_module.LOCAL_OPERATORS
             trusted = {"user_id": job["user_id"], "session_id": job["workspace"], "lease_until": time.time() + (600 if local else 30),
                        "access_fingerprint": job["access_fingerprint"], **({"local_caller": True} if local else {})}
             row = next(r for r in self.scheduler.store.list() if r["id"] == item["key"])
@@ -5382,7 +5383,7 @@ class Broker:
             if name == "v3_build_rebuild_checkout":
                 return self.rebuild_checkout(args, trusted, workspace)
             if name == "v3_build_adopt_release":
-                if (not trusted.get("local_caller") or trusted["user_id"] != "codex-local"
+                if (not trusted.get("local_caller") or trusted["user_id"] != scheduler_module.LOCAL_OPERATOR
                         or workspace != LOCAL_WORKSPACE or set(args) not in ({"job_id"}, {"job_id", "accept_ui_failure", "reason"})):
                     raise PermissionError("local release reconciliation required")
                 if "accept_ui_failure" in args:
@@ -5413,7 +5414,7 @@ class Broker:
             if name == "v3_build_cancel":
                 return self._cancel_job(args, trusted, workspace)
             if name == "v3_build_retention_clearance":
-                if (not trusted.get("local_caller") or trusted["user_id"] != "codex-local"
+                if (not trusted.get("local_caller") or trusted["user_id"] != scheduler_module.LOCAL_OPERATOR
                         or workspace != LOCAL_WORKSPACE):
                     raise PermissionError("local operator reconciliation required")
                 if set(args) != {"notice_id", "unique_work_preserved", "effects_reconciled"} or args["unique_work_preserved"] is not True or args["effects_reconciled"] is not True:
@@ -5978,7 +5979,7 @@ class Broker:
                         # private troubleshooting snapshots, never another task owner.
                         if trusted.get("administrator") is True or (
                                 trusted.get("local_caller") is True and
-                                trusted["user_id"] == "codex-local" and workspace == LOCAL_WORKSPACE):
+                                trusted["user_id"] == scheduler_module.LOCAL_OPERATOR and workspace == LOCAL_WORKSPACE):
                             inspection = release.entries(self.runner.snapshot(inspection=True), context_digest)
                             files.update({name: value for name, value in inspection.items()
                                           if release.inspection_path(name)})
@@ -6545,7 +6546,7 @@ class Broker:
                 job["started_at"] = time.time()
                 self._save(job)
             if job["operation"]=="host_service_deploy":
-                if not self.host_source_only(job["changed_paths"],blob,{"local_caller":job["user_id"]=="codex-local"}):raise PermissionError("Installed host source changed after admission")
+                if not self.host_source_only(job["changed_paths"],blob,{"local_caller":job["user_id"] in scheduler_module.LOCAL_OPERATORS}):raise PermissionError("Installed host source changed after admission")
                 if not self.runner.ui_hot_swappable():raise ValueError("Host source publication requires frozen asset mounts")
                 self._run_ui_hot(job,blob)
                 return
@@ -6961,7 +6962,7 @@ async def serve(broker, listener, bridge_listener=None):
                 if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "build_service_maintenance", "workspace_seed", "source_review", "source_patch", "v3_workspace_status", "v3_workspace_action", "v3_build_adopt_release", "v3_build_rebuild_checkout", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance", "performance_work", "v3_build_progress"):
                     raise ValueError("local caller operation denied")
                 request["workspace"] = LOCAL_WORKSPACE
-                request["trusted"] = {"user_id": "codex-local", "session_id": LOCAL_WORKSPACE,
+                request["trusted"] = {"user_id": scheduler_module.LOCAL_OPERATOR, "session_id": LOCAL_WORKSPACE,
                     "lease_until": time.time() + 4 * 3600,
                     "access_fingerprint": hashlib.sha256(b"local-codex-build").hexdigest(),
                     "local_caller": True}

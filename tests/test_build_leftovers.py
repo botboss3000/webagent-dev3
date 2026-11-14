@@ -98,6 +98,8 @@ class LeftoverTests(unittest.TestCase):
         origin = fixtures.host.scheduler_module.operator_origin
         self.assertEqual(origin("codex-local","Fix [origin=claude-code; session=L]"),"t480/claude-code")
         self.assertEqual(origin("codex-local","Fix [origin=gpt; session=L]"),"t480")
+        # The identity's new name (scheduler.local_operator); older receipts keep codex-local.
+        self.assertEqual(origin("t480","Fix [origin=codex; session=L]"),"t480/codex")
         self.assertEqual(origin("admin","Fix [origin=codex; session=L]"),"v3")
         self.assertIsNone(row["session_id"])
         (self.broker.work_dir/"trees"/self.task_key).mkdir(parents=True)
