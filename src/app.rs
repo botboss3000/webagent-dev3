@@ -789,6 +789,13 @@ async fn run_process() -> Result<()> {
         // Score list_tools/list_skills ranking (crates/modules/inference/eval/tool-match-eval.jsonl).
         return crate::tool_match_eval::evaluate(&std::env::args().skip(2).collect::<Vec<_>>());
     }
+    if std::env::args().nth(1).as_deref() == Some("--find-eval") {
+        // Score file_search find ranking (crates/modules/administration/eval/find-eval.jsonl).
+        #[cfg(all(feature = "local-worker", feature = "administrator"))]
+        return crate::find_eval::evaluate(&std::env::args().skip(2).collect::<Vec<_>>());
+        #[cfg(not(all(feature = "local-worker", feature = "administrator")))]
+        anyhow::bail!("This build has no local tool worker");
+    }
     if std::env::args().nth(1).as_deref() == Some("--tool-worker") {
         // The tool worker, started by the container launcher under the worker identity.
         #[cfg(feature = "local-worker")]

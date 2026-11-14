@@ -1,0 +1,22 @@
+{"id":"f01","query":"header controls scroll sideways like a carousel when they do not fit","path":"ui/chat","expect":{"path":"ui/chat/chat.css","name":"chat-header-zone:not(:has(#session-dropdown))"}}
+{"id":"f02","query":"session menu row reflows and the title stops truncating when the dropdown opens","path":"ui","expect":{"path":"ui/chat/chat.css","name":"chat-header-zone:not(:has(#session-dropdown))"}}
+{"id":"f03","query":"swiping on the composer should scroll the transcript","path":"ui","expect":{"path":"ui/chat/core/footer-gesture-forward.js","name":"forwardFooterGestures"}}
+{"id":"f04","query":"pull to refresh wins over forwarding the drag","path":"ui","expect":{"path":"ui/chat/core/footer-gesture-forward.js","name":"pullRefreshOwnsPull"}}
+{"id":"f05","query":"keep unsent message text when switching conversations","path":"ui","expect":{"path":"ui/chat/core/composer-draft.js","name":"saveDraft"}}
+{"id":"f06","query":"move what I typed before the session existed into the new session","path":"ui","expect":{"path":"ui/chat/core/composer-draft.js","name":"adoptNewDraft"}}
+{"id":"f07","query":"pinch to zoom the chat messages","path":"ui","expect":{"path":"ui/chat/core/chat-zoom.js","name":"mountChatZoom"}}
+{"id":"f08","query":"send another message while the agent is still answering","path":"ui","expect":{"path":"ui/chat/core/followup-queue.js","name":"mountFollowupQueue"}}
+{"id":"f09","query":"split camelCase identifiers into separate words for search","path":"crates","expect":{"path":"crates/modules/worker/src/files/find.rs","name":"fn tokens"}}
+{"id":"f10","query":"one line summary shown under each search result","path":"crates","expect":{"path":"crates/modules/worker/src/files/find.rs","name":"fn gist"}}
+{"id":"f11","query":"blend word score and embedding score for code lookup","path":"crates","expect":{"path":"crates/modules/administration/host/src/tools.rs","name":"fn find_order"}}
+{"id":"f12","query":"warm up the embedding model when the app starts","path":"crates","expect":{"path":"crates/modules/inference/host/service.rs","name":"fn warm"}}
+{"id":"f13","query":"split a source file into functions and css rules with line ranges","path":"crates","expect":{"path":"crates/modules/worker/src/files/outline.rs","name":"fn blocks"}}
+{"id":"f14","query":"title for a new chat when the model cannot name it","path":"crates","expect":{"path":"crates/modules/chat/src/naming.rs","name":"fn fallback"}}
+{"id":"f15","query":"trim a generated chat title to the word and length limits","path":"crates","expect":{"path":"crates/modules/chat/src/naming.rs","name":"fn clean"}}
+{"id":"f16","query":"which tool results can be dropped from context after they go stale","path":"crates","expect":{"path":"crates/modules/context/src/retention.rs","name":"fn perishable_read"}}
+{"id":"f17","query":"reject path traversal when matching a read to a later edit","path":"crates","expect":{"path":"crates/modules/context/src/retention.rs","name":"fn workspace_relative"}}
+{"id":"f18","query":"release a build task's file claims without deleting its source","path":"build-service","expect":{"path":"build-service/ownership.py","name":"release_scopes"}}
+{"id":"f19","query":"header controls scroll sideways like a carousel when they do not fit","path":".","expect":{"path":"ui/chat/chat.css","name":"chat-header-zone:not(:has(#session-dropdown))"}}
+{"id":"f20","query":"keep unsent message text when switching conversations","path":".","expect":{"path":"ui/chat/core/composer-draft.js","name":"saveDraft"}}
+{"id":"f21","query":"split camelCase identifiers into separate words for search","path":".","expect":{"path":"crates/modules/worker/src/files/find.rs","name":"fn tokens"}}
+{"id":"f22","query":"release a build task's file claims without deleting its source","path":".","expect":{"path":"build-service/ownership.py","name":"release_scopes"}}

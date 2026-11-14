@@ -52,6 +52,8 @@ mod engine_runtime;
 mod engine_sandbox;
 #[path = "../crates/modules/extensions/host/plugins.rs"]
 mod extension_plugins;
+#[cfg(all(feature = "local-worker", feature = "administrator"))]
+mod find_eval;
 #[path = "../crates/modules/chat/host/followup_queue.rs"]
 mod followup_queue;
 #[path = "gates/controls.rs"]

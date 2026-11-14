@@ -1245,6 +1245,55 @@ fn regex_lines(query: &str, data: &[u8], deadline: Instant) -> Outcome<Option<Ve
     ))
 }
 
+/// A `find` lookup's first stage outside the worker, for `webagent-v3 --find-eval`: scores the
+/// named blocks under `path` (relative to `checkout`) with the live budgets and returns the
+/// worker's candidate JSON. The checkout's runtime folders are skipped as in a live search.
+pub fn find_lookup(checkout: &Path, path: &str, query: &str) -> Result<String, String> {
+    let root = openat(
+        CWD,
+        checkout,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| error.to_string())?;
+    let target = if path == "." {
+        root
+    } else {
+        open_at(
+            &root,
+            OsStr::new(path),
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        )
+        .map_err(|failure| failure.to_string())?
+    };
+    let mut search = Search {
+        query,
+        regex: false,
+        comments_only: false,
+        file_glob: "",
+        names_only: false,
+        output_bytes: usize::MAX,
+        line_bytes: 0,
+        found: Vec::new(),
+        size: 0,
+        entries_left: 10_000,
+        bytes_left: (32 * LIMIT) as i64,
+        deadline: Instant::now() + Duration::from_secs(6),
+        limited: false,
+        checkout_top: path == ".",
+        find: true,
+        blocks: Vec::new(),
+    };
+    let scanned = match fstat(&target).map_err(|error| error.to_string())?.st_mode {
+        mode if FileType::from_raw_mode(mode) == FileType::Directory => {
+            search.scan_dir(&target, if path == "." { "" } else { path }, 0)
+        }
+        _ => search.scan_file(&target, path),
+    };
+    scanned.map_err(|failure| failure.to_string())?;
+    Ok(find::output(&search.blocks, query, search.limited))
+}
+
 impl Search<'_> {
     fn scan_file(&mut self, file: &OwnedFd, label: &str) -> Outcome<()> {
         if !self.file_glob.is_empty() {

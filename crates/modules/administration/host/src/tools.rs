@@ -117,7 +117,41 @@ pub async fn execute(
 }
 
 /// Blocks a `find` lookup returns.
-const FOUND_BLOCKS: usize = 8;
+pub const FOUND_BLOCKS: usize = 8;
+
+/// The order of a `find` lookup's candidates, best first: the word score (scaled so the
+/// worker's best is 1) and the matcher's score blended equally, or the word score alone
+/// when the matcher gave no scores.
+#[must_use]
+pub fn find_order(candidates: &[Value], meaning: Option<&[f32]>) -> Vec<usize> {
+    let best = candidates
+        .first()
+        .and_then(|c| c["score"].as_f64())
+        .unwrap_or(1.0)
+        .max(1e-9);
+    let mut order: Vec<(f64, usize)> = candidates
+        .iter()
+        .enumerate()
+        .map(|(at, c)| {
+            let words = c["score"].as_f64().unwrap_or(0.0) / best;
+            let score = meaning.map_or(words, |scores| 0.5 * words + 0.5 * f64::from(scores[at]));
+            (score, at)
+        })
+        .collect();
+    order.sort_by(|a, b| b.0.total_cmp(&a.0));
+    order.into_iter().map(|(_, at)| at).collect()
+}
+
+/// The text the matcher scores for one candidate.
+#[must_use]
+pub fn find_text(candidate: &Value) -> Vec<String> {
+    vec![candidate["text"]
+        .as_str()
+        .unwrap_or("")
+        .chars()
+        .take(1900)
+        .collect()]
+}
 
 /// Finish a `file_search` `find`: the worker scored named blocks on the query's words; the
 /// matcher reranks its best and the two scores are blended equally, so a plain-language
@@ -141,38 +175,16 @@ pub(crate) async fn ranked_blocks(
             "No block under this path shares a word with the query ({} blocks scanned). Try other words, a wider path, or a literal search without find.",
             found["blocks"])});
     }
-    let texts = candidates
-        .iter()
-        .map(|c| {
-            vec![c["text"]
-                .as_str()
-                .unwrap_or("")
-                .chars()
-                .take(1900)
-                .collect()]
-        })
-        .collect();
+    let texts = candidates.iter().map(find_text).collect();
     let meaning = host
         .rank(args["query"].as_str().unwrap_or(""), texts)
         .await
         .filter(|scores| scores.len() == candidates.len());
-    let best = candidates[0]["score"].as_f64().unwrap_or(1.0).max(1e-9);
-    let mut order: Vec<(f64, &Value)> = candidates
-        .iter()
-        .enumerate()
-        .map(|(at, c)| {
-            let words = c["score"].as_f64().unwrap_or(0.0) / best;
-            let score = meaning
-                .as_ref()
-                .map_or(words, |scores| 0.5 * words + 0.5 * f64::from(scores[at]));
-            (score, c)
-        })
-        .collect();
-    order.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let lines: Vec<String> = order
-        .iter()
+    let lines: Vec<String> = find_order(&candidates, meaning.as_deref())
+        .into_iter()
         .take(FOUND_BLOCKS)
-        .map(|(_, c)| {
+        .map(|at| {
+            let c = &candidates[at];
             let gist = c["gist"].as_str().unwrap_or("");
             let mut line = format!(
                 "{}:{}-{}  {}",
