@@ -146,5 +146,50 @@ class OperatorAcceptTests(unittest.TestCase):
         self.assertEqual((self.job["status"], self.job.get("ui_test_override")), ("needs_decision", None))
 
 
+
+class MarkNotInstalledTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.broker = fixtures.host.Broker(Path(self.temp.name) / "jobs", fixtures.FakeRunner())
+        self.local = {"user_id": "codex-local", "session_id": fixtures.host.LOCAL_WORKSPACE, "lease_until": time.time() + 60,
+                      "access_fingerprint": "f" * 64, "local_caller": True}
+        self.job = {"job_id": str(uuid.uuid4()), "operation": "ui_deploy", "status": "uncertain", "phase": "installing_prepared_assets",
+                    "inputs_sha256": "1" * 64, "user_id": "admin", "workspace": "w", "isolated": True, "created_at": 1,
+                    "effects_started": True, "changed_paths": ["v3/ui/chat/x.js"], "images": {}}
+        self.broker.jobs[self.job["job_id"]] = self.job
+        self.served = []
+        self.broker.runner.current_asset_id = lambda: "previous"
+        self.broker.runner.verify_ui = self.served.append
+
+    def tearDown(self):
+        self.broker.shutdown(); self.temp.cleanup()
+
+    def mark(self, trusted=None):
+        return self.broker.handle({"id": "x", "name": "v3_build_mark_not_installed", "workspace": fixtures.host.LOCAL_WORKSPACE,
+                                   "trusted": trusted or self.local, "arguments": {"job_id": self.job["job_id"]}})
+
+    def test_unswitched_release_closes_and_resumes_queue(self):
+        with patch.object(self.broker, "_start_next") as start:
+            result = self.mark()
+        start.assert_called_once()
+        self.assertEqual((result["status"], self.job["status"]), ("failed", "failed"))
+        self.assertIn("not installed", self.job["reason"]); self.assertIn("operator_not_installed_at", self.job)
+        self.assertEqual(self.served, [["v3/ui/chat/x.js"]])
+        self.assertFalse(self.broker._has_unresolved_release())
+
+    def test_live_or_mismatched_release_is_refused(self):
+        with patch.object(self.broker, "_start_next"):
+            self.broker.runner.current_asset_id = lambda: self.job["job_id"]
+            with self.assertRaisesRegex(ValueError, "adopt it instead"): self.mark()
+            self.broker.runner.current_asset_id = lambda: "previous"
+            def mismatch(changed): raise RuntimeError("served UI does not match frozen asset release")
+            self.broker.runner.verify_ui = mismatch
+            with self.assertRaisesRegex(RuntimeError, "does not match"): self.mark()
+            self.assertEqual(self.job["status"], "uncertain")
+            app = dict(self.local); app.pop("local_caller")
+            with self.assertRaises(PermissionError): self.mark(trusted=app)
+            self.job["status"] = "completed"
+            with self.assertRaisesRegex(ValueError, "only an uncertain"): self.mark()
+
 if __name__ == "__main__":
     unittest.main()

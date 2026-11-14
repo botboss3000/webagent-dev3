@@ -4126,6 +4126,28 @@ class Broker:
         self._start_next()
         return {"job_id":job["job_id"],"status":"completed","effects_replayed":False,"checkout_promotion":"promoted"}
 
+    def _mark_not_installed(self, job_id):
+        """Close an uncertain hot UI release whose assets never went live, so the queue resumes.
+
+        Only when the active asset snapshot is not this release and every path it changed is
+        still served exactly as the active snapshot holds it; never replays or rolls back."""
+        job = self.jobs.get(job_id) if isinstance(job_id, str) else None
+        if self.active is not None or self.active_ui is not None or not job:
+            raise ValueError("release queue must be idle")
+        if (not job.get("isolated") or job["status"] != "uncertain"
+                or job["operation"] not in HOT_OPERATIONS or job.get("operator_adopted_at")):
+            raise ValueError("only an uncertain hot UI release can be marked not installed")
+        if self.runner.current_asset_id() == job["job_id"]:
+            raise ValueError("release assets are active; adopt it instead")
+        # Raises when any changed path is served differently from the active snapshot.
+        self.runner.verify_ui(job.get("changed_paths", ()))
+        job.update(status="failed", operator_not_installed_at=time.time(),
+                   reason="operator confirmed not installed: active assets and served files "
+                          "are the previous release")
+        self._save(job)
+        self._start_next()
+        return {"job_id": job["job_id"], "status": job["status"], "not_installed": True}
+
     def _runtime_release_matches(self, job):
         # An operator may accept a healthy deployed image while checkout
         # promotion remains conflicted; never replay its external effects.
@@ -5413,6 +5435,11 @@ class Broker:
                 self._start_next()
                 return {"job_id": job["job_id"], "status": job["status"],
                         "operator_adopted": True, "checkout_promotion": "conflicted"}
+            if name == "v3_build_mark_not_installed":
+                if (not trusted.get("local_caller") or trusted["user_id"] != scheduler_module.LOCAL_OPERATOR
+                        or workspace != LOCAL_WORKSPACE or set(args) != {"job_id"}):
+                    raise PermissionError("local release reconciliation required")
+                return self._mark_not_installed(args["job_id"])
             if name == "v3_build_cancel":
                 return self._cancel_job(args, trusted, workspace)
             if name == "v3_build_retention_clearance":
@@ -6967,7 +6994,7 @@ async def serve(broker, listener, bridge_listener=None):
                     "access_fingerprint": hashlib.sha256(b"python-v2-build-bridge").hexdigest(),
                     "bridge_caller": True}
             elif uid == CONFIG["service_uid"]:
-                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "build_service_maintenance", "workspace_seed", "source_review", "source_patch", "v3_workspace_status", "v3_workspace_action", "v3_build_adopt_release", "v3_build_rebuild_checkout", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance", "performance_work", "v3_build_progress"):
+                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "build_service_maintenance", "workspace_seed", "source_review", "source_patch", "v3_workspace_status", "v3_workspace_action", "v3_build_adopt_release", "v3_build_mark_not_installed", "v3_build_rebuild_checkout", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance", "performance_work", "v3_build_progress"):
                     raise ValueError("local caller operation denied")
                 request["workspace"] = LOCAL_WORKSPACE
                 request["trusted"] = {"user_id": scheduler_module.LOCAL_OPERATOR, "session_id": LOCAL_WORKSPACE,

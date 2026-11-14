@@ -602,6 +602,8 @@ def main():
     rebuild.add_argument("--request-id", required=True)
     adopt = commands.add_parser("adopt", help="operator continuation for an uncertain release; never replays effects")
     adopt.add_argument("job_id")
+    not_installed = commands.add_parser("not-installed", help="close an uncertain UI release whose files never went live; never replays effects")
+    not_installed.add_argument("job_id")
     job = commands.add_parser("job")
     job.add_argument("job_id")
     job.add_argument("--log-cursor", type=int, help="Read only retained events after this job cursor")
@@ -709,6 +711,8 @@ def main():
         result = call("v3_build_rebuild_checkout", {"mode": args.mode, "request_id": args.request_id})
     elif args.command == "adopt":
         result = call("v3_build_adopt_release", {"job_id": args.job_id})
+    elif args.command == "not-installed":
+        result = call("v3_build_mark_not_installed", {"job_id": args.job_id})
     elif args.command == "progress":
         result = call("v3_build_progress", {"job_id": args.job_id})
     elif args.command == "job":

@@ -126,7 +126,10 @@ advisory: note any divergence, and still release through the broker.
   UI fixtures that failed twice may be accepted by the local operator with
   `decide JOB --accept-ui-failure FILE ... --reason "..."` (see below).
 - `uncertain` or `interrupted`: reconcile before anything else (`adopt JOB` for an
-  operator continuation); never retry an uncertain deployment blindly.
+  operator continuation); never retry an uncertain deployment blindly. An uncertain
+  UI release blocks every later release; when its files never went live, `not-installed
+  JOB` checks that the active assets are not that release and every changed file is still
+  served as the active release holds it, then records it failed and resumes the queue.
 - Blocked by another task: name it by its owning session (the `session` field),
   not its label; wait or coordinate, never take over its claims.
 - Work dropped: `abandon TASK` releases its claims and queued requests.
