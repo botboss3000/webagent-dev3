@@ -15,7 +15,7 @@ export async function mountPolicies(host){
     const levels=new Map(data.tiers.map(tier=>[tier.id,tier]));const order=data.order;
     const names=Object.fromEntries(data.tiers.map(tier=>[tier.id,title(tier)]));
     const saveOrder=async(next,nextNames=names)=>{try{await request('/admin/access/tiers/order','PUT',{expected_revision:data.revision,order:next,names:nextNames,confirm_expansion:true});await mountPolicies(host);}catch(error){status.textContent=error.message;}};
-    host.append(el('h3','','App account levels'),el('p','ac-hint','Highest to lowest. Each level is capped by the levels above it. App administration does not grant access to someone else’s agent.'));
+    host.append(el('h3','','App account levels'),el('p','ac-hint','Highest to lowest. Each level sets its own pages, models and limits; abilities come from each ability’s tier list. App administration does not grant access to someone else’s agent.'));
     const abilities=catalog.abilities||[];
     for(const [index,id]of order.entries()){
       const tier=levels.get(id),next=structuredClone(tier);delete next.name;
