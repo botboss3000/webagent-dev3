@@ -1,5 +1,6 @@
 """Per-key operator identities: the forced-command shell's allowlist and the broker's identity rule."""
 import asyncio
+import importlib
 import importlib.util
 import json
 import socket
@@ -31,10 +32,32 @@ class ShellTests(unittest.TestCase):
                 shell.command("laptop2", refused)
         self.assertEqual(["schedule", "--input", "-"], shell.command("laptop2", "schedule --input -"))
 
+    def test_export_is_allowed(self):
+        self.assertEqual(["export", "some-task"], shell.command("laptop2", "buildctl export some-task"))
+
     def test_identity_shape(self):
         for bad in ("", "Laptop", "a b", "x;y"):
             with self.assertRaises(ValueError):
                 shell.command(bad, "status")
+
+
+class ExportTests(unittest.TestCase):
+    def test_export_tars_the_own_task_tree_without_caches(self):
+        import io, tarfile
+        client = importlib.import_module("test_buildctl_wait").client
+        with tempfile.TemporaryDirectory() as temp:
+            tree = Path(temp) / "v3"
+            (tree / "src").mkdir(parents=True)
+            (tree / "src" / "a.rs").write_text("fn a() {}\n")
+            (tree / "__pycache__").mkdir()
+            (tree / "__pycache__" / "x.pyc").write_bytes(b"")
+            stream = io.BytesIO()
+            client.export("own-task", stream, lambda name, args: {"own": [{"task_id": "own-task", "workspace_path": str(tree)}]})
+            names = tarfile.open(fileobj=io.BytesIO(stream.getvalue())).getnames()
+        self.assertIn("v3/src/a.rs", names)
+        self.assertFalse(any("__pycache__" in n for n in names))
+        with self.assertRaises(ValueError):
+            client.export("other-task", io.BytesIO(), lambda name, args: {"own": []})
 
 
 class BrokerIdentityTests(unittest.IsolatedAsyncioTestCase):

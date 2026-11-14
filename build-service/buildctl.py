@@ -500,6 +500,16 @@ def workcopy(task_id, folder, request=call):
     return {"task_id": task_id, "folder": str(folder), "tree": str(tree)}
 
 
+def export(task_id, stream, request=call):
+    """Write the caller's task tree (its v3 sources, no caches) to stream as a tar, for local mirrors."""
+    tree = Path(own_task(task_id, request)["workspace_path"]).parent / "v3"
+    def keep(info):
+        parts = Path(info.name).parts
+        return None if any(p in IGNORED for p in parts) or info.name.endswith(".pyc") else info
+    with tarfile.open(fileobj=stream, mode="w|") as archive:
+        archive.add(tree, arcname="v3", filter=keep)
+
+
 def credential_findings(paths, root):
     """Run the broker's credential guard over changed files; returns the flagged paths only."""
     spec = importlib.util.spec_from_file_location("build_client_release", Path(__file__).with_name("release.py"))
@@ -587,6 +597,7 @@ def main():
     copy = commands.add_parser("workcopy", help="copy a task's tree to a private folder to edit on the server")
     copy.add_argument("task_id")
     copy.add_argument("folder")
+    commands.add_parser("export", help="tar of a task's tree on stdout, for a local mirror").add_argument("task_id")
     diff = commands.add_parser("patch", help="credential-guarded unified diff from the task tree to an edited workcopy")
     diff.add_argument("task_id")
     diff.add_argument("folder")
@@ -668,6 +679,8 @@ def main():
         return monitor(args.task, args.job, timeout=args.timeout)
     if args.command == "workcopy":
         print(json.dumps(workcopy(args.task_id, args.folder), sort_keys=True));return 0
+    if args.command == "export":
+        export(args.task_id, sys.stdout.buffer);return 0
     if args.command == "patch":
         print(json.dumps(make_patch(args.task_id, args.folder), sort_keys=True));return 0
     if args.command == "progress" and args.table:
