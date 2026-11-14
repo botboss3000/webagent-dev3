@@ -2308,6 +2308,24 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
     def start(self, name):
         self.command(["docker", "start", name], timeout=30)
 
+    def release_healthy(self):
+        """True when the API, loop and gate containers are healthy and readiness answers 200."""
+        for name in (CONFIG["api_container"], CONFIG["loop_container"], CONFIG["gate_container"]):
+            state = self.inspect(name)["State"]
+            if state.get("Status") != "running" or state.get("Health", {}).get("Status") != "healthy":
+                return False
+        host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(CONFIG["bind_address"], CONFIG["bind_address"])
+        connection = http.client.HTTPConnection(host, CONFIG["port"], timeout=15)
+        try:
+            connection.request("GET", "/health/ready")
+            response = connection.getresponse()
+            response.read(4096)
+            return response.status == 200
+        except OSError:
+            return False
+        finally:
+            connection.close()
+
     def healthy(self, name, expected):
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline:
@@ -4007,11 +4025,9 @@ class Broker:
                 self.scheduler.touch_task({"task_id": job["task_id"]}, trusted, workspace)
 
     def _closes_itself(self, job):
-        """A rebuild, or a release an in-app agent finished, is committed and closed by the broker on success.
-        Local operators close their own releases with their own commit message."""
-        return job.get("status") == "completed" and (bool(job.get("rebuild")) or (
-            job.get("operation") in {"build_deploy", "ui_deploy", "plugin_deploy", "host_service_deploy"}
-            and job.get("user_id") not in scheduler_module.LOCAL_OPERATORS))
+        """A rebuild or a finished release is committed and closed by the broker on success, for every caller."""
+        return job.get("status") == "completed" and (bool(job.get("rebuild")) or
+            job.get("operation") in {"build_deploy", "ui_deploy", "plugin_deploy", "host_service_deploy"})
 
     def _rebuild_closeout(self, job):
         """Commit a completed release's released checkout paths, then release its claims with that commit."""
@@ -4027,17 +4043,38 @@ class Broker:
             # body records what the release actually changed.
             listed = paths[:50] + ([f"... and {len(paths) - 50} more"] if len(paths) > 50 else [])
             message += f"\n\nReleased files ({len(paths)}):\n" + "\n".join("- " + p for p in listed)
+            # Nothing is committed for a release that is unhealthy or whose checkout no longer holds its bytes.
+            if not self.runner.release_healthy():
+                raise ValueError("Deployment not healthy; release left uncommitted")
+            files = self.scheduler_entries((self.state / job["job_id"] / "candidate.tar").read_bytes())
+            for archive in job.get("changed_paths", []):
+                if not archive.startswith("v3/"):
+                    continue
+                path = Path(self.runner.source) / archive.removeprefix("v3/")
+                expected = files.get(archive)
+                actual = None if path.is_symlink() or not path.exists() else path.read_bytes()
+                if actual != (None if expected is None else expected[1]):
+                    raise ValueError("Checkout differs from the released files; release left uncommitted")
             commit = self.runner.commit_release(paths, message)
             # The broker renews the owner's own identity briefly to close its task; no new authority.
             local = job["user_id"] in scheduler_module.LOCAL_OPERATORS
             trusted = {"user_id": job["user_id"], "session_id": job["workspace"], "lease_until": time.time() + (600 if local else 30),
                        "access_fingerprint": job["access_fingerprint"], **({"local_caller": True} if local else {})}
-            row = next(r for r in self.scheduler.store.list() if r["id"] == item["key"])
-            result = self.handle({"id": str(uuid.uuid4()), "name": "build_work", "workspace": job["workspace"], "trusted": trusted,
-                                  "arguments": {"action": "release_claims", "task_id": item["task_id"], "scopes": row["scopes"],
-                                                "reason": "Release " + job["job_id"][:8] + " committed as " + commit[:7],
-                                                "request_id": "rebuild-close-" + job["job_id"], "expected_revision": row["revision"],
-                                                "expected_epoch": row["epoch"], "commit": commit}})
+            # A live heartbeat can move the revision between the read and the release; reread and retry.
+            for attempt in range(5):
+                row = next(r for r in self.scheduler.store.list() if r["id"] == item["key"])
+                try:
+                    result = self.handle({"id": str(uuid.uuid4()), "name": "build_work", "workspace": job["workspace"], "trusted": trusted,
+                                          "arguments": {"action": "release_claims", "task_id": item["task_id"], "scopes": row["scopes"],
+                                                        "reason": "Release " + job["job_id"][:8] + " committed as " + commit[:7],
+                                                        "request_id": "rebuild-close-" + job["job_id"] + ("-" + str(attempt) if attempt else ""),
+                                                        "expected_revision": row["revision"], "expected_epoch": row["epoch"], "commit": commit}})
+                except ValueError as error:
+                    if "Stale ownership revision" not in str(error) or attempt == 4:
+                        raise
+                    continue
+                if result.get("state") == "complete":
+                    break
             job["rebuild_closeout"] = {"status": "complete" if result.get("state") == "complete" else "partial",
                                        "commit": commit, "claims": result.get("state")}
         except Exception as error:

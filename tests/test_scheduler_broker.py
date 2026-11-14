@@ -92,7 +92,7 @@ class SchedulerBrokerTests(unittest.TestCase):
             "inputs_sha256":self.broker.scheduler_digest(blob),"operation":"plugin_deploy","rust_tests":{"status":"not_required"}}
         self.broker.jobs[job_id]=job;item.update(status="closed",job_id=job_id);self.broker._save_work()
         return job,commit
-    def closeout(self,label,**extra):
+    def closeout(self,label,healthy=True,promoted="rebuilt\n",**extra):
         """Close a completed fixture release through the broker's own commit-and-release path."""
         item=self.begin(label);self.write(item,"README.md","rebuilt\n")
         tree=Path(item["workspace_path"]).parent;blob=self.broker.scheduler_task_snapshot(tree)
@@ -100,7 +100,8 @@ class SchedulerBrokerTests(unittest.TestCase):
         def git(*args):return subprocess.run(["git","-C",str(live),*args],stdout=subprocess.PIPE,stderr=subprocess.PIPE,check=True).stdout.decode().strip()
         git("init","-q");git("config","user.email","fixture@example.invalid");git("config","user.name","Fixture")
         git("add","README.md");git("commit","-qm","before rebuild")
-        (live/"README.md").write_text("rebuilt\n")  # promoted checkout bytes, not yet committed
+        (live/"README.md").write_text(promoted)  # promoted checkout bytes, not yet committed
+        self.runner.release_healthy=lambda:healthy
         self.runner.source=live;self.runner.blob=blob
         job_id=str(uuid.uuid4());folder=self.broker.state/job_id;folder.mkdir()
         (folder/"candidate.tar").write_bytes(blob);(folder/"task.tar").write_bytes(blob)
@@ -112,6 +113,10 @@ class SchedulerBrokerTests(unittest.TestCase):
             git("add","--",*paths);git("commit","-qm",message,"--",*paths);return git("rev-parse","HEAD")
         self.runner.commit_release=commit
         with patch.object(self.broker,"_start_next"):self.broker._rebuild_closeout(job)
+        if not healthy or promoted!="rebuilt\n":
+            self.assertEqual(job["rebuild_closeout"]["status"],"failed",job["rebuild_closeout"])
+            self.assertEqual(git("log","-1","--format=%s"),"before rebuild")
+            return job["rebuild_closeout"]["reason"]
         self.assertEqual(job["rebuild_closeout"]["status"],"complete",job["rebuild_closeout"])
         self.assertEqual(git("show","HEAD:README.md"),"rebuilt");self.assertIn(job_id,git("log","-1","--format=%s"))
         self.assertEqual(self.broker.scheduler.store.get(item["key"])["scopes"],[])
@@ -135,10 +140,14 @@ class SchedulerBrokerTests(unittest.TestCase):
             with store.transaction()as db:db.execute("UPDATE tasks SET heartbeat=? WHERE id=?",(store.clock()-600,item["key"]))
             self.call(name,{"job_id":"progress-job"})
             self.assertGreater(store.get(item["key"])["heartbeat"],store.clock()-60,name)
-    def test_in_app_releases_close_themselves_and_local_operator_releases_do_not(self):
+    def test_unhealthy_release_is_not_committed(self):
+        self.assertIn("not healthy",self.closeout("unhealthy-closeout-task",healthy=False))
+    def test_changed_checkout_is_not_committed(self):
+        self.assertIn("differs",self.closeout("drifted-closeout-task",promoted="edited after release\n"))
+    def test_every_callers_release_closes_itself(self):
         job={"status":"completed","operation":"build_deploy","user_id":"admin"}
         self.assertTrue(self.broker._closes_itself(job))
-        self.assertFalse(self.broker._closes_itself(dict(job,user_id="codex-local")))
+        self.assertTrue(self.broker._closes_itself(dict(job,user_id="t480")))
         self.assertTrue(self.broker._closes_itself(dict(job,user_id="codex-local",rebuild={"mode":"dev"})))
         self.assertFalse(self.broker._closes_itself(dict(job,operation="check")))
         self.assertFalse(self.broker._closes_itself(dict(job,status="failed")))
