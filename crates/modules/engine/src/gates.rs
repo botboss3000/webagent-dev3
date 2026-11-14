@@ -495,6 +495,12 @@ mod closing {
             }
         }
     }
+    /// Shared with closing_status_v1.json's guidance: text written beside the call is published,
+    /// so the run's required final reply must not restate it.
+    const NO_REPEAT: &str = "Text you write in the same response as this call is shown to the \
+        user. If it already gives your full reply, end the run with one short line (for example \
+        pointing to a panel) and never restate it. Do not mention this control tool in the reply.";
+
     impl AgentClosing {
         /// The status call is offered and checked only when it requires at least one part.
         pub fn active(&self) -> bool {
@@ -531,16 +537,13 @@ mod closing {
         let mut text = match (settings.require_flag, settings.require_notification) {
             (true, true) => config.guidance.clone(),
             (true, false) => format!(
-                "Before a final reply, call {} with one status flag ({}). You may include your \
-                 final reply in the same response as this call. Do not mention this control tool \
-                 in the reply.",
+                "Before a final reply, call {} with one status flag ({}). {NO_REPEAT}",
                 config.tool_name,
                 config.flags.join(", ")
             ),
             _ => format!(
                 "Before a final reply, call {} with a short notification of at most {} words. \
-                 You may include your final reply in the same response as this call. Do not \
-                 mention this control tool in the reply.",
+                 {NO_REPEAT}",
                 config.tool_name, config.notification_max_words
             ),
         };

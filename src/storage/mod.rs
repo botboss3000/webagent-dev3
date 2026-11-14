@@ -60,6 +60,7 @@ use tokio::sync::RwLock;
 use webagent_accounts_host::AccountsStore;
 pub use webagent_host_core::StoreCore;
 use webagent_storage::recovery::recovery_item_digest;
+
 #[cfg(test)]
 use webagent_storage::{codec::load_or_create_key, recovery::recovery_digest};
 use webagent_storage::{
@@ -78,6 +79,23 @@ const PROMPT_SLOT_NAME_MAX: usize = 128;
 const PROMPT_SLOT_CONTENT_MAX: usize = 16 * 1024;
 const PROMPT_SLOT_COUNT_MAX: usize = 32;
 const PROMPT_SLOT_TOTAL_MAX: usize = 64 * 1024;
+
+/// True when two chat texts share at least 80% of their distinct words (Jaccard), so a final
+/// reply that lightly rewords or extends a kept closing message counts as a repeat.
+/// Mirrors `nearDuplicate` in ui/chat/core/panel.js.
+fn near_duplicate(kept: &Value, reply: &Value) -> bool {
+    let words = |text: &Value| -> std::collections::HashSet<String> {
+        text.as_str()
+            .unwrap_or_default()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .map(str::to_lowercase)
+            .collect()
+    };
+    let (kept, reply) = (words(kept), words(reply));
+    let union = kept.union(&reply).count();
+    union > 0 && kept.intersection(&reply).count() * 5 >= union * 4
+}
 
 /// The root storage handle. Its resources and primitives are the shared
 /// [`StoreCore`], reached through `Deref`; module host crates extend `StoreCore`.
@@ -977,7 +995,7 @@ impl Store {
     ) -> Result<()> {
         let id = format!("{role}:{run_id}");
         if role == "assistant" {
-            // A kept closing message repeated word for word by the final reply shows once.
+            // A kept closing message the final reply repeats (nearly) word for word shows once.
             let newest = sqlx::query_as::<_, (String, Vec<u8>)>(
                 "SELECT id,content FROM chat WHERE session_id=? AND role!='notice' ORDER BY seq DESC LIMIT 1",
             )
@@ -987,7 +1005,7 @@ impl Store {
             if let Some((kept, raw)) = newest {
                 if kept.starts_with(&format!("working:{run_id}:"))
                     && kept.contains(":kept:")
-                    && self.unseal(&raw)? == *content
+                    && near_duplicate(&self.unseal(&raw)?, content)
                 {
                     self.remove_chat_row(tx, sid, &kept).await?;
                 }
@@ -2744,11 +2762,12 @@ mod tests {
             ["working:keep-run:1:kept:echo:0", "assistant:keep-run"]
         );
         assert_eq!(chat[0]["content"], "Answer");
-        // A final reply repeating the kept message word for word replaces it.
+        // A final reply that repeats the kept message with a few words added replaces it.
+        let kept = "The UI tests passed for all four idle page fixes and nothing has been released yet. Release now?";
         let mut run = json!({"id":"same-run","session_id":"keep-session","status":"running",
             "generation":"generation","lease_epoch":0,"input":[],"model_turn":1});
         store
-            .save_run(&mut run, "model_output", &say("Same"))
+            .save_run(&mut run, "model_output", &say(kept))
             .await
             .unwrap();
         run["model_turn"] = json!(2);
@@ -2758,8 +2777,9 @@ mod tests {
             .unwrap();
         run["model_turn"] = json!(3);
         run["status"] = json!("completed");
-        let mut terminal = say("Same");
-        terminal["terminal_text"] = json!("Same");
+        let reply = format!("{kept} Use the panel below.");
+        let mut terminal = say(&reply);
+        terminal["terminal_text"] = json!(reply);
         store
             .save_run(&mut run, "model_output", &terminal)
             .await
