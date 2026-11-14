@@ -138,7 +138,8 @@ export function createMessageRow(item,options){
   const bubble=createMessage(item,options);
   if(!bubble||item.role==='system'||item.role==='notice'||bubble.dataset.subagentNotices)return bubble;
   const row=document.createElement('article');row.className='v3-message message-row '+(item.role==='user'?'user':'agent');
-  for(const key of ['publicId','msgId','seq','turnId'])row.dataset[key]=bubble.dataset[key];
+  // created places chat panels by time; keptText lets an identical final reply replace a kept message.
+  for(const key of ['publicId','msgId','seq','turnId','created','keptText'])if(bubble.dataset[key]!==undefined)row.dataset[key]=bubble.dataset[key];
   // Move the configured gutter outside the painted surface for both roles without replacing its handlers.
   row.append(bubble,bubble.querySelector('.turn-gutter'));
   return row;
