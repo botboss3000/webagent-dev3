@@ -211,8 +211,6 @@ pub fn routes<S: Clone + Send + Sync + 'static>(ui: &Path) -> Router<S> {
         )
         .route_service("/setup.html", ServeFile::new(ui.join("setup.html")))
         .nest_service("/ui", ServeDir::new(ui))
-        // Former prefix: installed apps, embeds on other sites and stored links still use it.
-        .nest_service("/v3-ui", ServeDir::new(ui))
 }
 
 /// Package availability is supplied by Extensions; Webapp validates descriptors and assets.

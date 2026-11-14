@@ -157,7 +157,6 @@ RUN chmod 0755 /opt/v3 /opt/v3/plugins /opt/v3/plugins/gates /opt/v3/plugins/gat
 RUN chmod a+r /opt/v3/*.py
 COPY v3 /opt/v3/source-template
 COPY v3/ui /opt/v3/ui
-COPY v3/ui-baseline.json /opt/v3/ui-baseline.json
 ENV PATH=/opt/rust/bin:$PATH
 # The checkout is mounted at /code. Stored prompts, history and Files page rows still name
 # /live-checkout, so it stays as a link; tool sandboxes never grant the link itself.

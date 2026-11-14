@@ -24,7 +24,7 @@ MAX_CHANGED_PATHS = 1024
 RETIRED_CONTEXT = ("v3/data/config/gates/message_visibility_v1.json",
                    "v3/data/config/gates/closing_status_v1.json",
                    "v3/launch.py", "v3/ability_plugin_worker.py", "v3/worker.py",
-                   "v3/promote.py")
+                   "v3/promote.py", "v3/ui-baseline.json")
 
 
 def retired(name):
@@ -210,26 +210,6 @@ def extract(root, blob, validate):
         list(pool.map(lambda directory: _fsync_path(directory, os.O_RDONLY | os.O_DIRECTORY), directories))
     _fsync_path(root, os.O_RDONLY | os.O_DIRECTORY)
 
-
-def ui_baseline_mismatch(blob):
-    """Pinned shared UI assets whose bytes differ from v3/ui-baseline.json, or [] when they match.
-
-    Checked where a release is planned and admitted, not in context_digest: a pin
-    mismatch there would refuse every later snapshot, including the fix."""
-    with tarfile.open(fileobj=io.BytesIO(blob), mode="r:") as archive:
-        try:
-            baseline = json.load(archive.extractfile("v3/ui-baseline.json"))
-        except KeyError:
-            return []
-        wrong = []
-        for name, expected in baseline["assets"].items():
-            try:
-                body = archive.extractfile(name).read()
-            except KeyError:
-                body = None
-            if body is None or hashlib.sha256(body).hexdigest() != expected:
-                wrong.append(name)
-    return wrong
 
 # Root-installed executable plugin folders inside the source tree; never source inputs.
 INSTALLED_PACKAGES = ("abilities/Core/mcp/package",)

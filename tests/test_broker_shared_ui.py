@@ -1,9 +1,7 @@
-"""Shared UI ships from v3/ui, pins are checked at planning, and failed image pairs are recoverable."""
+"""Shared UI ships from v3/ui, and failed image pairs are recoverable."""
 import ast
-import hashlib
 import importlib.util
 import io
-import json
 from pathlib import Path
 import tarfile
 import tempfile
@@ -61,22 +59,6 @@ class CandidateTests(unittest.TestCase):
         live = blob({CSS: b"old", "ui/shared/css/app1.css": b"old"})
         merged, _ = release.candidate(base, blob({CSS: b"new"}), live, NOOP)
         self.assertEqual(sorted(read(merged)), [CSS])
-
-
-class BaselineTests(unittest.TestCase):
-    def pinned(self, body, pin):
-        return blob({CSS: body, "v3/ui-baseline.json": json.dumps(
-            {"assets": {CSS: hashlib.sha256(pin).hexdigest()}}).encode()})
-
-    def test_matching_pins_pass(self):
-        self.assertEqual(release.ui_baseline_mismatch(self.pinned(b"css", b"css")), [])
-
-    def test_changed_pinned_asset_is_named(self):
-        self.assertEqual(release.ui_baseline_mismatch(self.pinned(b"edited", b"css")), [CSS])
-
-    def test_no_baseline_means_no_pins(self):
-        self.assertEqual(release.ui_baseline_mismatch(blob({CSS: b"css"})), [])
-
 
 class ImageWindowTests(unittest.TestCase):
     def history(self, *names):

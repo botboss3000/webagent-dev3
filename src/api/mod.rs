@@ -505,13 +505,13 @@ pub(super) fn router(app: App) -> Router {
         .layer(middleware::from_fn_with_state(app.clone(), crate::request_limits::per_address))
         .layer(middleware::from_fn(diagnostics::http_errors))
         .layer(middleware::from_fn(|request:Request,next:Next|async move{
-            let public_widget_module=matches!(request.uri().path(),"/ui/chat/widget/window.js"|"/v3-ui/chat/widget/window.js");
+            let public_widget_module=matches!(request.uri().path(),"/ui/chat/widget/window.js");
             // Static UI code is the same for every account: let the browser keep it and
             // revalidate each use (a body-less 304 when unchanged), so a page load stops
             // re-downloading every module while a live UI publish still applies at once.
             // Everything else, including generated JSON and API data, is never stored.
             let path=request.uri().path();
-            let static_code=(path.starts_with("/v3-ui/")||path.starts_with("/ui/"))
+            let static_code=path.starts_with("/ui/")
                 &&[".js",".css",".svg",".png",".woff2"].iter().any(|ext|path.ends_with(ext));
             let mut response=next.run(request).await;
             if public_widget_module {response.headers_mut().insert("access-control-allow-origin",HeaderValue::from_static("*"));}

@@ -67,7 +67,7 @@ BRIDGE_WORKSPACE = "94c353d5-70bd-44b2-9af0-757c4a979fc9"
 CONTEXT = (
     "v3/Dockerfile", "v3/Cargo.toml", "v3/Cargo.lock", "v3/build.rs", "v3/.gitignore",
     "v3/src", "v3/crates", "v3/services/system-monitoring", "v3/ui", "v3/plugins/engine", "v3/abilities", "v3/plugins/gates",
-    "v3/sandbox.py", "v3/ui-baseline.json", "v3/live-files.json", "v3/rustfmt.toml", "v3/tests",
+    "v3/sandbox.py", "v3/live-files.json", "v3/rustfmt.toml", "v3/tests",
     "v3/README.md", "v3/docs", "v3/deploy.sh", "v3/config", "v3/build-service")
 UI_SOURCE_PREFIX = "v3/ui/"
 def checked_git_modes(patch):
@@ -754,6 +754,8 @@ def inspect_source_patch_corrected(root, patch):
             if line.rsplit(" ", 1)[-1] not in ("100644", "100755"):
                 raise ValueError("unsupported source file mode")
     patch = validate_source_hunks(patch)
+    # Deleting a file adds no bytes, so a binary deletion is allowed wherever the path is.
+    deleted = set(re.findall(r"^diff --git a/(\S+) b/\S+\ndeleted file mode ", patch, re.M))
     encoded = patch.encode()
     output = source_git(root, ["apply", "--numstat", "-z", "-"], encoded)
     records = [part for part in output.split(b"\0") if part]
@@ -763,7 +765,7 @@ def inspect_source_patch_corrected(root, patch):
     paths = []
     allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
                      ".gitignore", "README.md", "deploy.sh",
-                     "sandbox.py", "ui-baseline.json", "live-files.json", "rustfmt.toml"}
+                     "sandbox.py", "live-files.json", "rustfmt.toml"}
     allowed_dirs = {"crates", "src", "abilities", "plugins", "tests", "ui", "docs", "config", "build-service"}
     for record in records:
         fields = record.split(b"\t", 2)
@@ -787,9 +789,10 @@ def inspect_source_patch_corrected(root, patch):
                 or any(ord(char) < 32 or ord(char) == 127 for char in name)
                 or any(not part or part in (".", "..") for part in parts)
                 or not (name in allowed_files or parts[0] in allowed_dirs and len(parts) > 1
+                        or name in deleted and release.retired("v3/" + name)
                         or monitoring_component.package_path("v3/"+name))):
             raise ValueError("source patch path denied")
-        if binary and not (parts[0] == "ui" and Path(name).suffix.lower() in BINARY_ASSET_SUFFIXES):
+        if binary and name not in deleted and not (parts[0] == "ui" and Path(name).suffix.lower() in BINARY_ASSET_SUFFIXES):
             raise ValueError("binary source patch limited to ui/ image and font assets")
         cursor = root
         for index, part in enumerate(parts):
@@ -1977,7 +1980,7 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         # Static routes are public and must serve the exact selected bytes; the
         # app shell may carry one bounded server-rendered SEO head block.
         paths = [("v3/ui/index.html", "/app")]
-        paths.extend((name, "/v3-ui/" + name[len(UI_SOURCE_PREFIX):])
+        paths.extend((name, "/ui/" + name[len(UI_SOURCE_PREFIX):])
                      for name in changed if name.startswith(UI_SOURCE_PREFIX) and
                      name != "v3/ui/index.html")
         for name, route in paths:
@@ -3447,8 +3450,6 @@ class Broker:
                     base = (folder / "admitted_base.tar").read_bytes()
                     task = (folder / "candidate.tar").read_bytes()
                 candidate, changed = release.candidate(base, task, live, context_digest, allow_empty=True)
-                if pins := release.ui_baseline_mismatch(candidate):
-                    raise ValueError("Shared UI pinned asset changed without matching v3/ui-baseline.json: " + ", ".join(pins))
                 if not self._sync_job(job, live, candidate, changed):
                     continue
                 members = [self.jobs[jid] for jid in job.get("batch_members", ())] if resuming else []
@@ -4722,7 +4723,6 @@ class Broker:
         broker_paths=[p for p in current_changed if p.startswith("v3/build-service/")]
         refusal=None
         shared_ui=[]
-        pins=release.ui_baseline_mismatch(candidate)
         def malformed(path):
             try:json.loads(files[path][1]);return False
             except (KeyError,ValueError):return path in files
@@ -4731,9 +4731,6 @@ class Broker:
         if broken:
             refusal="Live JSON file does not parse: "+broken[0].removeprefix("v3/")
         leaked=sorted(path for path in changed if path in files and release.possible_credentials(files[path][1]))
-        if pins:
-            refusal=("Shared UI pinned asset changed without matching v3/ui-baseline.json: "+", ".join(pins)
-                     +". Update its sha256 in v3/ui-baseline.json in this task.")
         if not host_only and broker_paths and set(current_changed)<=self.host_source_scope()[1]:
             # A build_deploy would rebuild unchanged app images and still not install the broker.
             refusal=("Broker-only change is not installed: build_deploy would rebuild app images and leave the old broker running. "
@@ -5648,7 +5645,7 @@ class Broker:
                 allowed_dirs = {"crates", "src", "abilities", "plugins", "tests", "ui", "docs", "config", "build-service"}
                 allowed_files = {"Cargo.toml", "Cargo.lock", "build.rs", "Dockerfile",
                                  ".gitignore", "README.md", "deploy.sh",
-                                 "sandbox.py", "ui-baseline.json", "live-files.json", "rustfmt.toml"}
+                                 "sandbox.py", "live-files.json", "rustfmt.toml"}
                 if (name_path and (not re.fullmatch(r"[A-Za-z0-9_./-]+", name_path)
                         or any(part in ("", ".", "..") for part in parts)
                         or (parts[0] not in allowed_dirs and name_path not in {"services","services/system-monitoring"}

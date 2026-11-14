@@ -831,6 +831,25 @@ class BuildTests(unittest.TestCase):
             for name in ("src/og-card.png", "ui/og-card.bin"):
                 with self.assertRaisesRegex(ValueError, "limited to ui/ image and font assets"):
                     host.inspect_source_patch(source, binary_patch(name))
+            # Deleting a binary file adds no bytes, so it is allowed outside ui/.
+            (source / "src").mkdir()
+            (source / "src/old.woff2").write_bytes(data)
+            (scratch / "src").mkdir(exist_ok=True)
+            (scratch / "src/old.woff2").write_bytes(data)
+            gone = subprocess.run(["git", "-C", str(scratch), "diff", "--no-index", "--binary", "--",
+                                   "src/old.woff2", "/dev/null"], capture_output=True, text=True).stdout
+            self.assertIn("deleted file mode", gone)
+            self.assertEqual(["src/old.woff2"], host.inspect_source_patch(source, gone))
+            # A retired top-level input may be deleted, though new edits to it are denied.
+            (source / "ui-baseline.json").write_text("{}\n")
+            (scratch / "ui-baseline.json").write_text("{}\n")
+            retired = subprocess.run(["git", "-C", str(scratch), "diff", "--no-index", "--",
+                                      "ui-baseline.json", "/dev/null"], capture_output=True, text=True).stdout
+            self.assertEqual(["ui-baseline.json"], host.inspect_source_patch(source, retired))
+            with self.assertRaisesRegex(ValueError, "path denied"):
+                host.inspect_source_patch(source, retired.replace("deleted file mode 100644\n", "")
+                                          .replace("+++ /dev/null", "+++ b/ui-baseline.json")
+                                          .replace("-{}", "-{}\n+[]").replace("@@ -1 +0,0 @@", "@@ -1 +1,2 @@"))
             with self.assertRaisesRegex(ValueError, "binary or move patch denied"):
                 host.inspect_source_patch(source, "diff --git a/ui/x.png b/ui/x.png\n"
                                           "new file mode 100644\nBinary files /dev/null and b/ui/x.png differ\n")

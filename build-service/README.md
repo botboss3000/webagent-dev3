@@ -226,10 +226,9 @@ State stays under the configured state root. Sockets, PIDs and supervisor
 diagnostics stay under the runtime root. Receipts and archive names are preserved.
 Retain previous configuration, installed release and stopped application containers.
 Reconcile uncertain effects before rollback. The shared base styles, fonts and icons
-live in ui/ with the rest of the app UI (served at /ui/ and /v3-ui/); no v2
+live in ui/ with the rest of the app UI (served at /ui/); no v2
 checkout or v2 application data is required. The retired ui/ archive namespace
-of older releases is dropped from new candidates. Assets pinned in v3/ui-baseline.json
-need their sha256 updated in the same task; finish and preflight refuse otherwise. Fresh chat
+of older releases is dropped from new candidates. Fresh chat
 configuration comes from the v3 template.
 
 For a new instance, run deploy.py build, build-loop and build-gate with
@@ -469,7 +468,7 @@ claims with that commit through the normal verification; the outcome is
 
 ## Served app shell verification
 
-After a UI switch the broker requests `/app` and each changed `/v3-ui/` asset and
+After a UI switch the broker requests `/app` and each changed `/ui/` asset and
 compares them with the frozen asset release. Assets must match byte for byte. The
 `/app` shell must equal the frozen `index.html`, except that one server-rendered
 SEO block may follow the first `</title>` as `</title>\n` + block: at most 16 KiB,
