@@ -28,5 +28,7 @@
         "trusted": "Operate terminal programs end-to-end without pausing for routine commands; only stop for clearly destructive or irreversible operations. Still read before sending so you answer the right prompt."
       }
     }
-  }
+  },
+  "tier_access": ["administrator"],
+  "tier_access_note": "Hard-coded: Administrator abilities work only for an administrator owner and an administrator caller, whatever this list says."
 }

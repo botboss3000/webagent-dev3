@@ -157,12 +157,9 @@
     "/request_limits/**": "Request rate limits; tuned in access-policy.json, not offered in v1.",
     "/revision": "Internal revision counter.",
     "/tier_order": "Account level order; changed with the account levels themselves.",
-    "/tiers/*/ability_permissions/**": "Ability, tool and model grants act as ceilings (Q8); handled in a later step.",
     "/tiers/*/allowed_models/**": "Ability, tool and model grants act as ceilings (Q8); handled in a later step.",
-    "/tiers/*/entitlements/**": "Ability, tool and model grants act as ceilings (Q8); handled in a later step.",
     "/tiers/*/id": "Internal tier identity.",
     "/tiers/*/model_policy/**": "Ability, tool and model grants act as ceilings (Q8); handled in a later step.",
-    "/tiers/*/revision": "Internal tier identity.",
-    "/tiers/*/tools/**": "Ability, tool and model grants act as ceilings (Q8); handled in a later step."
+    "/tiers/*/revision": "Internal tier identity."
   }
 }

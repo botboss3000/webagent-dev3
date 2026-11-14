@@ -13,6 +13,7 @@
     "member": "ask",
     "visitor": "deny"
   },
+  "tier_access": ["free", "administrator"],
   "config": {
     "settings": [
       {

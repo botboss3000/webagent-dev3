@@ -297,8 +297,8 @@ mod tests {
         assert_eq!(
             pending
                 .tool_decision("file_read", Permission::Auto, true, true, false, true)
-                .reason,
-            Reason::TierDenied
+                .permission,
+            Permission::Deny
         );
         store
             .update_account_access(id, 1, AccountStatus::Active, "free")
@@ -310,7 +310,6 @@ mod tests {
         assert_ne!(pending.revision, active.revision);
         let mut tier = store.entitlement_tier("free").await.unwrap().unwrap();
         tier.allowed_models.push("gpt-6-luna".into());
-        tier.tools.insert("file_read".into(), Permission::Auto);
         store.save_entitlement_tier(tier, 1).await.unwrap();
         let granted = store.live_access(id, "shared_default").await.unwrap();
         assert!(granted.model_allowed("gpt-6-luna"));

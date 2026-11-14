@@ -6,9 +6,7 @@
   "default_access": {
     "operator": "auto"
   },
-  "account_access": {
-    "administrator": "auto"
-  },
+  "tier_access": ["administrator"],
   "parameters": {
     "type": "object",
     "properties": {

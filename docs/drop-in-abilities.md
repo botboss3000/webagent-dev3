@@ -25,22 +25,24 @@ down, then deny. Built-in Base tools are compiled in (`crates/modules/abilities/
 with coded defaults: Operators get them all, Members and Visitors may ask for read tools.
 Abilities not yet moved keep the manifest `tools` list and flat `tools/<tool>.skill.md`.
 
-## Ability access defaults and plan entitlements
+## Ability access defaults and app tiers
 
 An ability's manifest may declare `default_access` per role, like `tool.json`. It is
 shown on the Abilities page ("Default: …") but grants nothing: a level with no saved
 permission for the ability (and no `*`) keeps it off, so a new ability stays off for
 existing agents until an Operator switches it on. Once on, its tools without a saved
-permission use their `tool.json` defaults and its skills their `default_mode`. Account plans (tiers) grant by entitlement group: the
-`entitlement_group` in the group's `_group.json` names it, and a tier's `entitlements`
-map grants it. An ability or tool the tier does not name, and that `*` does not cover,
-inherits its group's grant, so a new ability in a granted group works in that plan at
-once. Failing all three, an ability manifest's or `tool.json`'s `account_access` (tier ID
-to `auto`, `ask` or `deny`) is its template grant for that tier, so an ability ships its
-plan defaults; a tier with no template entry denies. Named grants always win, and an
-upper tier still caps the tiers below it (`crates/modules/abilities/src/ability_access.rs`,
-`crates/modules/access`). Templates are defaults, not a security boundary: a tool that
-must stay administrator-only checks that in its own code.
+permission use their `tool.json` defaults and its skills their `default_mode`.
+
+Every ability manifest must declare `tier_access`, the app tiers whose owners' agents may
+have it (for example `["free", "administrator"]`); a manifest without it is reported and
+the ability works for no one. The agent owner's tier decides: an ability the owner's
+tier lacks is paused on every rung of that agent's ladder (its saved settings are kept
+and return on an upgrade). A `tool.json` may declare its own `tier_access` to narrow its
+ability's list, never to widen it; a tool several abilities provide works through any
+the owner's tier allows. Administrator-group abilities must list exactly
+`["administrator"]` and are hard-coded to need an administrator owner and an
+administrator caller (`crates/modules/abilities/src/ability_access.rs`,
+`crates/modules/access`). A new paid tier gets no abilities until manifests list it.
 
 Administrator native tools (`webagent_administration::tools::TOOLS`) use the same
 folders under `abilities/Administrator/`. Codebase Admin's broker tool `build_work`, the

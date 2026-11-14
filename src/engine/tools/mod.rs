@@ -200,27 +200,24 @@ pub(crate) fn tool_defaults(name: &str, rungs: &[String]) -> Option<webagent_acc
     webagent_abilities::tool_definitions::get(name).map(|definition| definition.default_for(rungs))
 }
 
-/// Let capability levels fall back to tool defaults, and account plans grant by
-/// entitlement group; once per process.
+/// Let capability levels fall back to tool defaults, and owners' tiers gate abilities and
+/// tools by their manifests' `tier_access`; once per process.
 pub(crate) fn install_tool_defaults() {
     webagent_access::capabilities::install_tool_defaults(tool_defaults);
-    webagent_access::install_entitlements(
-        webagent_abilities::ability_access::ability_entitlement,
-        webagent_abilities::ability_access::tool_entitlement,
-    );
-    webagent_access::install_templates(
-        webagent_abilities::ability_access::ability_template,
-        tool_template,
+    webagent_access::install_tier_access(
+        webagent_abilities::ability_access::ability_allows,
+        tool_tiers,
     );
 }
 
-/// A tool's manifest template for account tier `tier`; live checkout edits apply at once.
-fn tool_template(name: &str, tier: &str) -> Option<webagent_access::Permission> {
+/// A tool's own `tier_access` for an owner tier; live checkout edits apply at once.
+fn tool_tiers(name: &str, tier: &str) -> bool {
     let current = crate::ability_drift::current();
     current
         .definition(name)
         .or_else(|| webagent_abilities::tool_definitions::get(name))
-        .and_then(|definition| definition.account_access.get(tier).copied())
+        .and_then(|definition| definition.tier_access.as_ref())
+        .is_none_or(|tiers| tiers.iter().any(|allowed| allowed == tier))
 }
 
 pub fn schemas() -> Vec<Value> {

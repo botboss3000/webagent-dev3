@@ -23,5 +23,6 @@
       "no_vision_model": "An image was attached ({names}) but no vision model is configured, so your Image Vision ability has nothing to look at the image with. Tell the user plainly that image viewing isn't set up and that an admin can add a vision model in App Config → Models (tick In on a vision-capable model). Do NOT guess, invent, or describe the image's contents."
     }
   },
-  "migration_note": "Native V3 implementation. Current schemas, live policy and configured model/module availability determine callable behavior."
+  "migration_note": "Native V3 implementation. Current schemas, live policy and configured model/module availability determine callable behavior.",
+  "tier_access": ["free", "administrator"]
 }

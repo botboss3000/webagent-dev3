@@ -12,11 +12,7 @@
     "member": "auto",
     "visitor": "auto"
   },
-  "account_access": {
-    "administrator": "auto",
-    "free": "auto",
-    "anonymous": "auto"
-  },
+  "tier_access": ["free", "administrator"],
   "config": {},
   "migration_note": "Compiled Rust adapter storing articles and revisions in the application plane. Reads are open to permitted sessions (visitors see published articles only); writes are limited to app administrators in code. Keyword search, widened by caller-supplied synonyms and per-article keywords (no embeddings); automatic recall, a Wiki page and external (GitHub) wikis are not ported yet. Deployment requires rebuilding both API and loop.",
   "skill_summary": "Search, read and cite the shared server Wiki; app administrators can maintain its articles with revision history."

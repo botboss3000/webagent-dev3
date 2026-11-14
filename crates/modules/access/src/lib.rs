@@ -4,7 +4,6 @@ pub mod configuration;
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
 
 pub use webagent_accounts::AccountStatus;
 
@@ -96,36 +95,32 @@ pub struct ModelPolicy {
     pub allow_byo: bool,
     pub max_byo_entries: u32,
 }
-/// The entitlement group of an ability, or of a tool's ability, from its group's
-/// `_group.json`. The app installs these from the ability catalog.
-pub type Entitlement = fn(&str) -> Option<&'static str>;
-static ABILITY_ENTITLEMENT: std::sync::OnceLock<Entitlement> = std::sync::OnceLock::new();
-static TOOL_ENTITLEMENT: std::sync::OnceLock<Entitlement> = std::sync::OnceLock::new();
-pub fn install_entitlements(ability: Entitlement, tool: Entitlement) {
-    let _ = ABILITY_ENTITLEMENT.set(ability);
-    let _ = TOOL_ENTITLEMENT.set(tool);
+/// Whether an ability works on an agent owned on a tier for a caller on a tier
+/// (id, owner tier, caller tier), from the ability manifests' `tier_access`.
+pub type AbilityTiers = fn(&str, &str, &str) -> bool;
+/// Whether a tool's own `tier_access` admits an owner tier (name, owner tier); a tool
+/// without one inherits its abilities' lists.
+pub type ToolTiers = fn(&str, &str) -> bool;
+static ABILITY_TIERS: std::sync::OnceLock<AbilityTiers> = std::sync::OnceLock::new();
+static TOOL_TIERS: std::sync::OnceLock<ToolTiers> = std::sync::OnceLock::new();
+/// The app installs these from the ability catalog, once per process.
+pub fn install_tier_access(ability: AbilityTiers, tool: ToolTiers) {
+    let _ = ABILITY_TIERS.set(ability);
+    let _ = TOOL_TIERS.set(tool);
 }
-/// An ability's or tool's manifest `account_access` grant for a tier (item, tier), used
-/// only when the tier names neither the item, a wildcard nor its entitlement group.
-pub type Template = fn(&str, &str) -> Option<Permission>;
-static ABILITY_TEMPLATE: std::sync::OnceLock<Template> = std::sync::OnceLock::new();
-static TOOL_TEMPLATE: std::sync::OnceLock<Template> = std::sync::OnceLock::new();
-pub fn install_templates(ability: Template, tool: Template) {
-    let _ = ABILITY_TEMPLATE.set(ability);
-    let _ = TOOL_TEMPLATE.set(tool);
+/// Fails closed: no installed manifests grant no ability.
+#[must_use]
+pub fn ability_tier_allowed(id: &str, owner_tier: &str, caller_tier: &str) -> bool {
+    ABILITY_TIERS
+        .get()
+        .is_some_and(|allowed| allowed(id, owner_tier, caller_tier))
 }
-/// The entitlement and template hooks for abilities or tools.
-fn hooks(
-    tool: bool,
-) -> (
-    &'static std::sync::OnceLock<Entitlement>,
-    &'static std::sync::OnceLock<Template>,
-) {
-    if tool {
-        (&TOOL_ENTITLEMENT, &TOOL_TEMPLATE)
-    } else {
-        (&ABILITY_ENTITLEMENT, &ABILITY_TEMPLATE)
-    }
+/// Narrowing only: without installed manifests a tool adds no limit of its own.
+#[must_use]
+pub fn tool_tier_allowed(name: &str, owner_tier: &str) -> bool {
+    TOOL_TIERS
+        .get()
+        .is_none_or(|allowed| allowed(name, owner_tier))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -136,112 +131,10 @@ pub struct Tier {
     pub allowed_models: Vec<String>,
     #[serde(default)]
     pub model_policy: Option<ModelPolicy>,
-    pub tools: BTreeMap<String, Permission>,
-    // Fail closed: a tier without ability_permissions grants no abilities.
-    #[serde(default)]
-    pub ability_permissions: BTreeMap<String, Permission>,
-    /// Grants by entitlement group. An ability or tool the tier does not name inherits its
-    /// group's grant, so a new ability in a granted group works at once.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub entitlements: BTreeMap<String, Permission>,
     pub max_sessions: u32,
     pub max_active_runs: u32,
-    /// Set by `account_ladder::effective`: this tier's own grants, then each tier above it.
-    #[serde(skip)]
-    pub chain: Vec<TierGrants>,
 }
 
-/// One tier's own grants, resolved alone and then met across the account ladder.
-#[derive(Clone, Debug, Default)]
-pub struct TierGrants {
-    tier: String,
-    abilities: BTreeMap<String, Permission>,
-    tools: BTreeMap<String, Permission>,
-    entitlements: BTreeMap<String, Permission>,
-}
-
-impl TierGrants {
-    #[must_use]
-    pub fn of(tier: &Tier) -> Self {
-        Self {
-            tier: tier.id.clone(),
-            abilities: tier.ability_permissions.clone(),
-            tools: tier.tools.clone(),
-            entitlements: tier.entitlements.clone(),
-        }
-    }
-
-    fn named(&self, tool: bool) -> &BTreeMap<String, Permission> {
-        if tool {
-            &self.tools
-        } else {
-            &self.abilities
-        }
-    }
-
-    /// Every name any tier grants, resolved in each tier (named, wildcard, then group) and
-    /// met across `chain`, plus the wildcard met alone, as an effective tier's named grants.
-    pub(crate) fn merge(chain: &[Self], tool: bool) -> BTreeMap<String, Permission> {
-        let hooks = hooks(tool);
-        let names: std::collections::BTreeSet<&String> = chain
-            .iter()
-            .flat_map(|grants| grants.named(tool).keys())
-            .filter(|name| name.as_str() != "*")
-            .collect();
-        let mut merged: BTreeMap<String, Permission> = names
-            .into_iter()
-            .map(|name| {
-                let permission = chain.iter().fold(Permission::Auto, |permission, grants| {
-                    permission.meet(tier_grant(
-                        grants.named(tool),
-                        &grants.entitlements,
-                        name,
-                        &grants.tier,
-                        hooks,
-                    ))
-                });
-                (name.clone(), permission)
-            })
-            .collect();
-        let wildcard = chain.iter().fold(Permission::Auto, |permission, grants| {
-            permission.meet(
-                grants
-                    .named(tool)
-                    .get("*")
-                    .copied()
-                    .unwrap_or(Permission::Deny),
-            )
-        });
-        merged.insert("*".into(), wildcard);
-        merged
-    }
-}
-
-/// A named grant, else the tier's wildcard, else the grant for the item's entitlement group,
-/// else the item's manifest template for `tier`.
-fn tier_grant(
-    named: &BTreeMap<String, Permission>,
-    entitlements: &BTreeMap<String, Permission>,
-    id: &str,
-    tier: &str,
-    (group, template): (
-        &std::sync::OnceLock<Entitlement>,
-        &std::sync::OnceLock<Template>,
-    ),
-) -> Permission {
-    named
-        .get(id)
-        .or_else(|| named.get("*"))
-        .copied()
-        .or_else(|| {
-            group
-                .get()
-                .and_then(|group| group(id))
-                .and_then(|group| entitlements.get(group).copied())
-        })
-        .or_else(|| template.get().and_then(|template| template(id, tier)))
-        .unwrap_or(Permission::Deny)
-}
 impl Tier {
     pub fn validate(&self) -> Result<()> {
         if let Some(policy) = &self.model_policy {
@@ -257,9 +150,6 @@ impl Tier {
         if !valid_id(&self.id)
             || self.revision == 0
             || self.allowed_models.len() > 64
-            || self.tools.len() > 128
-            || self.ability_permissions.len() > 128
-            || self.entitlements.len() > 64
             || self.max_sessions > 10_000
             || self.max_active_runs > 200
         {
@@ -269,12 +159,6 @@ impl Tier {
             .allowed_models
             .iter()
             .any(|model| model != "*" && !valid_model(model))
-            || self.tools.keys().any(|tool| tool != "*" && !valid_id(tool))
-            || self
-                .ability_permissions
-                .keys()
-                .any(|id| id != "*" && !valid_id(id))
-            || self.entitlements.keys().any(|group| !valid_id(group))
         {
             bail!("Invalid entitlement grant");
         }
@@ -300,35 +184,6 @@ impl Tier {
         self.allowed_models
             .iter()
             .any(|item| item == "*" || item == model)
-    }
-    pub fn ability_permission(&self, id: &str) -> Permission {
-        self.grant(&self.ability_permissions, id, false)
-    }
-    pub fn tool_permission(&self, name: &str) -> Permission {
-        self.grant(&self.tools, name, true)
-    }
-    /// Alone: named, wildcard, entitlement group, then manifest template. In a ladder, named grants were met
-    /// across it by `effective` (later edits to them still count); anything unnamed
-    /// resolves in each tier and is met.
-    fn grant(&self, named: &BTreeMap<String, Permission>, id: &str, tool: bool) -> Permission {
-        let hooks = hooks(tool);
-        if self.chain.is_empty() {
-            return tier_grant(named, &self.entitlements, id, &self.id, hooks);
-        }
-        if let Some(permission) = named.get(id) {
-            return *permission;
-        }
-        self.chain
-            .iter()
-            .fold(Permission::Auto, |permission, grants| {
-                permission.meet(tier_grant(
-                    grants.named(tool),
-                    &grants.entitlements,
-                    id,
-                    &grants.tier,
-                    hooks,
-                ))
-            })
     }
 }
 fn valid_model(value: &str) -> bool {
@@ -655,12 +510,8 @@ mod tests {
             revision: 1,
             model_policy: None,
             allowed_models: vec!["*".into()],
-            tools: BTreeMap::new(),
-            ability_permissions: [("web_access".into(), Permission::Auto)].into(),
-            entitlements: BTreeMap::new(),
             max_sessions: 10,
             max_active_runs: 2,
-            chain: Vec::new(),
         };
         assert!(tier.allows_byo_model("deepseek-chat"));
         assert!(tier.allows_byo_growth(0, 1));
@@ -691,31 +542,22 @@ mod tests {
             revision: 1,
             model_policy: None,
             allowed_models: vec!["gpt-6-luna".into()],
-            tools: BTreeMap::new(),
-            ability_permissions: [("web_access".into(), Permission::Auto)].into(),
-            entitlements: BTreeMap::new(),
             max_sessions: 10,
             max_active_runs: 2,
-            chain: Vec::new(),
         };
         tier.validate().unwrap();
         assert!(!tier.allows_model("other"));
-        assert_eq!(tier.tool_permission("file_write"), Permission::Deny);
-        tier.tools.insert("file_write".into(), Permission::Ask);
-        assert_eq!(tier.tool_permission("file_write"), Permission::Ask);
         tier.max_active_runs = 201;
         assert!(tier.validate().is_err());
     }
     #[test]
-    fn tier_without_ability_permissions_grants_no_abilities() {
-        let tier: Tier =
-            serde_json::from_value(json!({"id":"free","revision":1,"allowed_models":["*"],
-            "tools":{"*":"auto"},"max_sessions":10,"max_active_runs":2}))
-            .unwrap();
-        assert!(tier.ability_permissions.is_empty());
-        for id in ["codebase_admin", "web_access", "*"] {
-            assert_eq!(tier.ability_permission(id), Permission::Deny);
-        }
+    fn tiers_hold_no_tool_or_ability_grants() {
+        let tier = json!({"id":"free","revision":1,"allowed_models":["*"],
+            "tools":{"*":"auto"},"max_sessions":10,"max_active_runs":2});
+        assert!(serde_json::from_value::<Tier>(tier).is_err());
+        // Without installed manifests no ability is granted and tools add no limit.
+        assert!(!ability_tier_allowed("web_access", "free", "free"));
+        assert!(tool_tier_allowed("file_write", "free"));
     }
 }
 

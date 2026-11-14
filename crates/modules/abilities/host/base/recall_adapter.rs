@@ -5,19 +5,6 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 async fn recall_fixture() -> (tempfile::TempDir, App, String, String) {
     let (root, app) = crate::runtime_tests::fixture().await;
-    let mut tier = app
-        .store
-        .entitlement_tier("administrator")
-        .await
-        .unwrap()
-        .unwrap();
-    let revision = tier.revision;
-    tier.ability_permissions
-        .insert("base".into(), crate::access::Permission::Auto);
-    app.store
-        .save_entitlement_tier(tier, revision)
-        .await
-        .unwrap();
     let mut level = app
         .store
         .live_access("admin", "shared_default")

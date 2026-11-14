@@ -12,6 +12,7 @@
     "member": "auto",
     "visitor": "auto"
   },
+  "tier_access": ["free", "administrator"],
   "config": {
     "settings": [
       {

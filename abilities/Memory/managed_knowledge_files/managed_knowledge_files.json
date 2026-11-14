@@ -9,5 +9,6 @@
   "readiness": "ready",
   "config": {},
   "migration_note": "Compiled Rust adapter storing text files in the agent plane. Staff (owner or member) save and delete; any permitted session reads. No binary/PDF extraction or automatic recall yet. Deployment requires rebuilding both API and loop.",
-  "skill_summary": "Search and read the agent's staff-maintained knowledge files; staff can save or delete them."
+  "skill_summary": "Search and read the agent's staff-maintained knowledge files; staff can save or delete them.",
+  "tier_access": ["free", "administrator"]
 }

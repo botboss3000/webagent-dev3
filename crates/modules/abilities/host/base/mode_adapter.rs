@@ -8,19 +8,6 @@ mod tests {
     #[tokio::test]
     async fn mode_receipt_and_upgrade_approval_are_run_fenced() {
         let (_root, app) = crate::runtime_tests::fixture().await;
-        let mut tier = app
-            .store
-            .entitlement_tier("administrator")
-            .await
-            .unwrap()
-            .unwrap();
-        tier.ability_permissions
-            .insert("base".into(), crate::access::Permission::Auto);
-        let tier_revision = tier.revision;
-        app.store
-            .save_entitlement_tier(tier, tier_revision)
-            .await
-            .unwrap();
         let before = app
             .store
             .live_access("admin", "shared_default")

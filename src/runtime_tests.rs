@@ -254,6 +254,7 @@ pub(crate) async fn fixture() -> (TempDir, App) {
 /// Unsaved capability levels grant nothing, so fixtures save the two executable
 /// adapters explicitly at every level, as an Operator would.
 pub(crate) async fn grant_fixture_levels(store: &Store, agent: &str) {
+    crate::tools::install_tool_defaults();
     let mut levels = store.capability_levels(agent).await.unwrap();
     for id in ["operator", "member", "visitor"] {
         let mut level = levels.levels[id].clone();
@@ -2707,19 +2708,6 @@ async fn image_generation_stays_off_without_an_image_out_model() {
     use axum::routing::post;
 
     let (_root, mut app) = fixture().await;
-    let mut tier = app
-        .store
-        .entitlement_tier("administrator")
-        .await
-        .unwrap()
-        .unwrap();
-    let tier_revision = tier.revision;
-    tier.ability_permissions
-        .insert("image_generation".into(), access::Permission::Auto);
-    app.store
-        .save_entitlement_tier(tier, tier_revision)
-        .await
-        .unwrap();
     let mut levels = app.store.capability_levels("shared_default").await.unwrap();
     for id in ["operator", "member", "visitor"] {
         let mut level = levels.levels[id].clone();
@@ -6759,59 +6747,37 @@ async fn phase3_http_tier_tools_and_agent_disable_reject_stale_approval() {
         StatusCode::FORBIDDEN
     );
     let granted_model = app.selection().await.unwrap().model;
-    let response=router(app.clone()).oneshot(request(&admin_token,"admin-csrf","PUT",
-        "/api/v3/admin/access/tiers/free",
-        json!({"expected_revision":1,"tier":{"id":"free","revision":1,
-            "allowed_models":[granted_model],"tools":{"file_read":"auto","file_write":"ask","build_work":"auto"},
-            "ability_permissions":{"codebase_admin":"auto"},"max_sessions":10,"max_active_runs":2}}))).await.unwrap();
+    let response = router(app.clone())
+        .oneshot(request(
+            &admin_token,
+            "admin-csrf",
+            "PUT",
+            "/api/v3/admin/access/tiers/free",
+            json!({"expected_revision":1,"tier":{"id":"free","revision":1,
+            "allowed_models":[granted_model],"max_sessions":10,"max_active_runs":2}}),
+        ))
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let access = app
         .store
         .live_access(&user_id, "shared_default")
         .await
         .unwrap();
-    assert_eq!(
-        access
-            .tool_decision_for_abilities(
-                "file_read",
-                &["codebase_admin".into()],
-                access::Permission::Auto,
-                true,
-                true,
-                false,
-                true
-            )
-            .permission,
-        access::Permission::Auto
-    );
-    assert_eq!(
-        access
-            .tool_decision_for_abilities(
-                "file_write",
-                &["codebase_admin".into()],
-                access::Permission::Auto,
-                true,
-                true,
-                false,
-                false
-            )
-            .permission,
-        access::Permission::Ask
-    );
-    assert_eq!(
-        access
-            .tool_decision_for_abilities(
-                "shell",
-                &["codebase_admin".into()],
-                access::Permission::Auto,
-                true,
-                true,
-                false,
-                false
-            )
-            .permission,
-        access::Permission::Deny
-    );
+    // Administrator abilities need an administrator caller, whatever the agent grants.
+    for (name, is_read) in [("file_read", true), ("file_write", false), ("shell", false)] {
+        let decision = access.tool_decision_for_abilities(
+            name,
+            &["codebase_admin".into()],
+            access::Permission::Auto,
+            true,
+            true,
+            false,
+            is_read,
+        );
+        assert_eq!(decision.permission, access::Permission::Deny, "{name}");
+        assert_eq!(decision.reason, access::Reason::TierDenied, "{name}");
+    }
     let host = access.tool_decision(
         "build_work",
         access::Permission::Auto,
@@ -8262,14 +8228,19 @@ async fn tenant_ability_http_levels_effective_views_and_stale_updates() {
         .unwrap();
     assert_eq!(codebase["effective"]["permission"], "deny");
     // The member is no administrator, so the Administrator-role gate refuses first.
-    assert_eq!(codebase["effective"]["reason"], "caller_denied");
+    assert_eq!(
+        codebase["effective"]["reason"], "caller_denied",
+        "{}",
+        codebase["effective"]
+    );
+    // Administrator abilities need an administrator caller, whatever the level saves.
     assert_eq!(
         app.store
             .live_access(&user, "shared_default")
             .await
             .unwrap()
             .ability_permission("codebase_admin"),
-        access::Permission::Auto
+        access::Permission::Deny
     );
     assert_eq!(
         app.store
@@ -10633,19 +10604,6 @@ async fn retained_read_recall_resolves_only_verified_same_session_origin() {
     policy["rules"]["file_read"] = json!("allow");
     policy["rules"]["recall_compacted"] = json!("allow");
     app.store.put("policy", &policy).await.unwrap();
-    let mut tier = app
-        .store
-        .entitlement_tier("administrator")
-        .await
-        .unwrap()
-        .unwrap();
-    let tier_revision = tier.revision;
-    tier.ability_permissions
-        .insert("base".into(), access::Permission::Auto);
-    app.store
-        .save_entitlement_tier(tier, tier_revision)
-        .await
-        .unwrap();
     let mut level = app
         .store
         .live_access("admin", "shared_default")
@@ -11181,19 +11139,6 @@ async fn visibility_fixture_base_access(app: &App) {
 }
 /// Grant one ability to the admin on shared_default and make it and its skills visible.
 async fn visibility_fixture_ability_access(app: &App, id: &str) {
-    let mut tier = app
-        .store
-        .entitlement_tier("administrator")
-        .await
-        .unwrap()
-        .unwrap();
-    let revision = tier.revision;
-    tier.ability_permissions
-        .insert(id.into(), access::Permission::Auto);
-    app.store
-        .save_entitlement_tier(tier, revision)
-        .await
-        .unwrap();
     let mut level = app
         .store
         .live_access("admin", "shared_default")
@@ -11724,19 +11669,6 @@ async fn late_single_tool_case(name: &str, action: &str, mutation: &str, success
         let mut policy = policy_default();
         policy["rules"]["build_work"] = json!("allow");
         app.store.put("policy", &policy).await.unwrap();
-        let mut tier = app
-            .store
-            .entitlement_tier("administrator")
-            .await
-            .unwrap()
-            .unwrap();
-        let revision = tier.revision;
-        tier.ability_permissions
-            .insert("codebase_admin".into(), access::Permission::Auto);
-        app.store
-            .save_entitlement_tier(tier, revision)
-            .await
-            .unwrap();
         let revision = app
             .store
             .capability_levels("shared_default")

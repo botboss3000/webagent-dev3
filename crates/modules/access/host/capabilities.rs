@@ -42,6 +42,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use webagent_accounts_host::AccountsStore;
     #[test]
     fn legacy_projection_is_bounded_and_does_not_grant_new_plugins() {
         let levels = CapabilityLevels::from_metadata(&json!({})).unwrap();
@@ -113,17 +114,22 @@ mod tests {
             decide(&store.live_access("admin", "shared_default").await.unwrap()).permission,
             Permission::Ask
         );
-        let mut tier = store
-            .entitlement_tier("administrator")
+        // Administrator abilities also need an administrator caller.
+        let user = store
+            .create_user_account("member_x", "x".repeat(24).as_str())
             .await
-            .unwrap()
             .unwrap();
-        tier.ability_permissions
-            .insert("codebase_admin".into(), Permission::Deny);
-        let revision = tier.revision;
-        store.save_entitlement_tier(tier, revision).await.unwrap();
+        let id = user["user_id"].as_str().unwrap();
+        store
+            .update_account_access(id, 1, crate::access::AccountStatus::Active, "free")
+            .await
+            .unwrap();
+        store
+            .set_agent_membership(id, "shared_default", crate::access::Relationship::Member, 0)
+            .await
+            .unwrap();
         assert_eq!(
-            decide(&store.live_access("admin", "shared_default").await.unwrap()).reason,
+            decide(&store.live_access(id, "shared_default").await.unwrap()).reason,
             access::Reason::TierDenied
         );
     }

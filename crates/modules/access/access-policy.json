@@ -44,109 +44,34 @@
   ],
   "tiers": {
     "anonymous": {
-      "ability_permissions": {
-        "human_escalation": "auto",
-        "managed_knowledge_files": "auto",
-        "reply_buttons": "auto",
-        "web_access": "auto"
-      },
       "allowed_models": [
         "deepseek-flash"
       ],
-      "entitlements": {
-        "web_read": "auto"
-      },
       "id": "anonymous",
       "max_active_runs": 2,
       "max_sessions": 10,
       "model_policy": null,
-      "revision": 6,
-      "tools": {
-        "get_weather": "auto",
-        "knowledge_file_get": "auto",
-        "knowledge_file_list": "auto",
-        "knowledge_file_search": "auto",
-        "maps_geocode": "auto",
-        "offer_choices": "auto",
-        "request_human": "auto",
-        "staff_message_send": "auto",
-        "web_search": "auto"
-      }
+      "revision": 6
     },
     "free": {
-      "ability_permissions": {
-        "config_controller": "auto",
-        "human_escalation": "auto",
-        "managed_knowledge_files": "auto",
-        "reply_buttons": "auto",
-        "web_access": "auto"
-      },
       "allowed_models": [
         "deepseek-flash"
       ],
-      "entitlements": {
-        "web_read": "auto"
-      },
       "id": "free",
       "max_active_runs": 2,
       "max_sessions": 10,
       "model_policy": null,
-      "revision": 6,
-      "tools": {
-        "get_weather": "auto",
-        "knowledge_file_get": "auto",
-        "knowledge_file_list": "auto",
-        "knowledge_file_search": "auto",
-        "maps_geocode": "auto",
-        "offer_choices": "auto",
-        "request_human": "auto",
-        "staff_message_send": "auto",
-        "web_search": "auto"
-      }
+      "revision": 6
     },
     "administrator": {
-      "ability_permissions": {
-        "agent_management": "auto",
-        "app_control": "auto",
-        "automation": "auto",
-        "base": "auto",
-        "browser_control": "auto",
-        "codebase_admin": "auto",
-        "config_controller": "auto",
-        "decision": "auto",
-        "diagnostics": "auto",
-        "git_control": "auto",
-        "human_escalation": "auto",
-        "image_generation": "auto",
-        "image_vision": "auto",
-        "managed_knowledge_files": "auto",
-        "mcp": "auto",
-        "model_switcher": "auto",
-        "optimization": "auto",
-        "remote_tunnel": "auto",
-        "reply_buttons": "deny",
-        "terminal_control": "deny",
-        "user_files": "auto",
-        "web_access": "auto"
-      },
       "allowed_models": [
         "*"
       ],
-      "entitlements": {
-        "web_read": "auto"
-      },
       "id": "administrator",
       "max_active_runs": 200,
       "max_sessions": 10000,
       "model_policy": null,
-      "revision": 17,
-      "tools": {
-        "*": "auto",
-        "python": "deny",
-        "run_command": "deny",
-        "run_python": "deny",
-        "shell": "deny"
-      }
+      "revision": 17
     }
   }
 }

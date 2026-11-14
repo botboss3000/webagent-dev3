@@ -34,5 +34,7 @@
         "trusted": "Act decisively on the user's intent without pausing to re-confirm routine writes, edits, or shell commands; only stop for clearly irreversible or repo-wide destructive actions (mass delete, force-push)."
       }
     }
-  }
+  },
+  "tier_access": ["administrator"],
+  "tier_access_note": "Hard-coded: Administrator abilities work only for an administrator owner and an administrator caller, whatever this list says."
 }

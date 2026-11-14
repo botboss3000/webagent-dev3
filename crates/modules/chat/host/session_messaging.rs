@@ -1127,17 +1127,9 @@ mod tests {
             .await
             .unwrap();
         access
-            .tier
-            .ability_permissions
-            .insert("agent_management".into(), access::Permission::Auto);
-        access
             .capability_level
             .ability_permissions
             .insert("agent_management".into(), access::Permission::Auto);
-        access
-            .tier
-            .tools
-            .insert("message_session".into(), access::Permission::Auto);
         // message_session is a folder tool now; its level default comes from tool.json roles.
         access
             .capability_level

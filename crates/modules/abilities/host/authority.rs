@@ -26,19 +26,6 @@ mod tests {
     #[tokio::test]
     async fn native_view_request_rechecks_arguments_cancellation_and_live_scope() {
         let (_root, app) = crate::runtime_tests::fixture().await;
-        let mut tier = app
-            .store
-            .entitlement_tier("administrator")
-            .await
-            .unwrap()
-            .unwrap();
-        tier.ability_permissions
-            .insert("app_control".into(), access::Permission::Auto);
-        let revision = tier.revision;
-        app.store
-            .save_entitlement_tier(tier, revision)
-            .await
-            .unwrap();
         let mut level = app
             .store
             .live_access("admin", "shared_default")

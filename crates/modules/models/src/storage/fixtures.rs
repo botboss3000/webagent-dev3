@@ -155,7 +155,7 @@ impl Fixture {
         let repo = f.repo();
         let access = repo.access();
         access.init_access_policy(None).unwrap();
-        let basic = json!({"id":"free","revision":1,"allowed_models":["*"],"tools":{"*":"auto"},"max_sessions":10,"max_active_runs":10});
+        let basic = json!({"id":"free","revision":1,"allowed_models":["*"],"max_sessions":10,"max_active_runs":10});
         let mut operator = basic.clone();
         operator["id"] = json!("administrator");
         access.write_access_policy(&json!({"schema_version":1,"registration":"open","revision":1,"tiers":{"free":basic,"administrator":operator}})).unwrap();

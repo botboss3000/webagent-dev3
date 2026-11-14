@@ -51,10 +51,10 @@ pub struct ToolDefinition {
     /// Access when an agent's capability level saves no explicit tool permission.
     /// A role left out gets the next role down; none at all means Deny.
     pub default_access: BTreeMap<String, Permission>,
-    /// Account-tier template by tier ID, used when a tier names neither the tool, a
-    /// wildcard nor its entitlement group. Not a security boundary; tools enforce their own.
+    /// Tiers whose owners' agents may have this tool; absent inherits its ability's
+    /// `tier_access`, and a list may only narrow it.
     #[serde(default)]
-    pub account_access: BTreeMap<String, Permission>,
+    pub tier_access: Option<Vec<String>>,
     /// Repeat risk; absent means high for a write. Reads are never repeat-guarded.
     #[serde(default)]
     pub retry_risk: Option<RetryRisk>,
@@ -120,11 +120,12 @@ impl ToolDefinition {
             bail!("default_access names an unknown role: {folder}");
         }
         if self
-            .account_access
-            .keys()
+            .tier_access
+            .iter()
+            .flatten()
             .any(|tier| !webagent_access::valid_id(tier))
         {
-            bail!("account_access names an invalid tier: {folder}");
+            bail!("tier_access names an invalid tier: {folder}");
         }
         if self.effect == Effect::Read
             && self.retry_risk.is_some_and(|risk| risk != RetryRisk::None)

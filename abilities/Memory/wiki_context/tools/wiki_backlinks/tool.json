@@ -8,11 +8,6 @@
     "member": "auto",
     "visitor": "auto"
   },
-  "account_access": {
-    "administrator": "auto",
-    "free": "auto",
-    "anonymous": "auto"
-  },
   "parameters": {
     "type": "object",
     "properties": {

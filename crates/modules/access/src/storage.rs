@@ -208,7 +208,7 @@ mod integration_tests {
             };
             let repo = f.repo();
             repo.init_access_policy(None).unwrap();
-            let basic = json!({"id":"free","revision":1,"allowed_models":["*"],"tools":{"*":"auto"},"max_sessions":10,"max_active_runs":10});
+            let basic = json!({"id":"free","revision":1,"allowed_models":["*"],"max_sessions":10,"max_active_runs":10});
             let mut operator = basic.clone();
             operator["id"] = json!("administrator");
             repo.write_access_policy(&json!({"schema_version":1,"registration":"open","revision":1,"tiers":{"free":basic,"administrator":operator},"extension":{"preserve":true}})).unwrap();
@@ -642,14 +642,9 @@ mod integration_tests {
         repo.init_policy_tiers().await.unwrap();
         let policy = repo.read_access_policy().unwrap();
         assert_eq!(policy["revision"], 2);
-        // Fresh-install seeds are explicit: only Operator receives codebase_admin.
-        for (id, codebase) in [
-            ("free", Permission::Deny),
-            ("administrator", Permission::Auto),
-        ] {
+        for id in ["free", "administrator"] {
             let tier: crate::Tier = serde_json::from_value(policy["tiers"][id].clone()).unwrap();
-            assert_eq!(tier.ability_permission("codebase_admin"), codebase);
-            assert_eq!(tier.ability_permission("web_access"), Permission::Auto);
+            tier.validate().unwrap();
         }
         // An existing tier set is never replaced.
         repo.init_policy_tiers().await.unwrap();

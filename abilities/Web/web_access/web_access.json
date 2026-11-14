@@ -9,5 +9,6 @@
   "readiness": "ready",
   "config": {},
   "migration_note": "Compiled Rust public-provider adapter. No v2 runtime, credentials or arbitrary URL access. Provider availability is checked per call; deployment requires rebuilding both API and loop.",
-  "skill_summary": "Current weather, geocoding and great-circle distance with explicit provider errors."
+  "skill_summary": "Current weather, geocoding and great-circle distance with explicit provider errors.",
+  "tier_access": ["free", "administrator"]
 }

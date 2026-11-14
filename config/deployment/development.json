@@ -1936,49 +1936,24 @@
       "revision": 31,
       "tiers": {
         "ability_tier_28666f10386c": {
-          "ability_permissions": {
-            "codebase_admin": "deny",
-            "web_access": "deny"
-          },
           "allowed_models": [
             "*"
           ],
           "id": "ability_tier_28666f10386c",
           "max_active_runs": 2,
           "max_sessions": 10,
-          "revision": 2,
-          "tools": {
-            "state_inspect": "auto"
-          }
+          "revision": 2
         },
         "ability_tier_fc06947be560": {
-          "ability_permissions": {
-            "codebase_admin": "deny",
-            "web_access": "deny"
-          },
           "allowed_models": [
             "*"
           ],
           "id": "ability_tier_fc06947be560",
           "max_active_runs": 2,
           "max_sessions": 10,
-          "revision": 2,
-          "tools": {
-            "state_inspect": "auto"
-          }
+          "revision": 2
         },
         "automation_acceptance_20261012": {
-          "ability_permissions": {
-            "automation": "auto",
-            "base": "auto",
-            "codebase_admin": "auto",
-            "decision": "auto",
-            "diagnostics": "auto",
-            "git_control": "auto",
-            "remote_tunnel": "auto",
-            "terminal_control": "auto",
-            "web_access": "auto"
-          },
           "allowed_models": [
             "*"
           ],
@@ -1986,23 +1961,16 @@
           "max_active_runs": 200,
           "max_sessions": 10000,
           "model_policy": null,
-          "revision": 1,
-          "tools": {
-            "*": "auto"
-          }
+          "revision": 1
         },
         "free": {
           "allowed_models": [],
           "id": "free",
           "max_active_runs": 2,
           "max_sessions": 10,
-          "revision": 1,
-          "tools": {}
+          "revision": 1
         },
         "code_index_accept_20261009": {
-          "ability_permissions": {
-            "decision": "auto"
-          },
           "allowed_models": [
             "*"
           ],
@@ -2010,84 +1978,27 @@
           "max_active_runs": 200,
           "max_sessions": 10000,
           "model_policy": null,
-          "revision": 1,
-          "tools": {
-            "*": "auto"
-          }
+          "revision": 1
         },
         "core_api_63f7c38b1686": {
-          "ability_permissions": {
-            "base": "auto"
-          },
           "allowed_models": [
             "*"
           ],
           "id": "core_api_63f7c38b1686",
           "max_active_runs": 2,
           "max_sessions": 10,
-          "revision": 1,
-          "tools": {
-            "calculate": "auto",
-            "get_date": "auto",
-            "get_time": "auto",
-            "read_attachment": "auto",
-            "search_this_session": "auto"
-          }
+          "revision": 1
         },
         "core_api_e12c46dfbc1f": {
-          "ability_permissions": {
-            "base": "auto",
-            "codebase_admin": "auto",
-            "diagnostics": "auto",
-            "git_control": "auto",
-            "remote_tunnel": "auto",
-            "terminal_control": "auto"
-          },
           "allowed_models": [
             "*"
           ],
           "id": "core_api_e12c46dfbc1f",
           "max_active_runs": 2,
           "max_sessions": 50,
-          "revision": 7,
-          "tools": {
-            "browser_input": "ask",
-            "browser_read": "ask",
-            "browser_record": "ask",
-            "calculate": "auto",
-            "commit_and_push": "ask",
-            "file_list": "ask",
-            "file_read": "ask",
-            "file_write": "ask",
-            "get_date": "auto",
-            "get_time": "auto",
-            "get_tunnel_url": "ask",
-            "git_tool": "ask",
-            "list_skills": "auto",
-            "load_skill": "auto",
-            "python": "ask",
-            "read_attachment": "auto",
-            "read_diagnostics": "ask",
-            "read_own_prompt": "auto",
-            "repository_access": "ask",
-            "resolve_conflict": "ask",
-            "search_this_session": "auto",
-            "shell": "ask",
-            "start_tunnel": "ask",
-            "terminal_close": "ask",
-            "terminal_list": "ask",
-            "terminal_open": "ask",
-            "terminal_read": "ask",
-            "terminal_send": "ask",
-            "terminal_wait": "ask",
-            "workspace_seed": "ask"
-          }
+          "revision": 7
         },
         "decision_probe_4f76367add": {
-          "ability_permissions": {
-            "codebase_admin": "auto",
-            "decision": "deny"
-          },
           "allowed_models": [
             "*"
           ],
@@ -2095,19 +2006,9 @@
           "max_active_runs": 1,
           "max_sessions": 2,
           "model_policy": null,
-          "revision": 2,
-          "tools": {
-            "decide_with_jev": "auto",
-            "file_list": "auto",
-            "score_directory_with_jev": "auto"
-          }
+          "revision": 2
         },
         "decision_probe_b9e2314301": {
-          "ability_permissions": {
-            "base": "auto",
-            "codebase_admin": "auto",
-            "decision": "deny"
-          },
           "allowed_models": [
             "*"
           ],
@@ -2115,25 +2016,9 @@
           "max_active_runs": 1,
           "max_sessions": 2,
           "model_policy": null,
-          "revision": 2,
-          "tools": {
-            "decide_with_jev": "auto",
-            "file_list": "auto",
-            "score_directory_with_jev": "auto"
-          }
+          "revision": 2
         },
         "administrator": {
-          "ability_permissions": {
-            "base": "auto",
-            "codebase_admin": "auto",
-            "decision": "auto",
-            "diagnostics": "auto",
-            "git_control": "auto",
-            "mcp": "auto",
-            "remote_tunnel": "auto",
-            "terminal_control": "auto",
-            "web_access": "auto"
-          },
           "allowed_models": [
             "*"
           ],
@@ -2141,17 +2026,9 @@
           "max_active_runs": 200,
           "max_sessions": 10000,
           "model_policy": null,
-          "revision": 9,
-          "tools": {
-            "*": "auto"
-          }
+          "revision": 9
         },
         "optimization_acceptance_20261011": {
-          "ability_permissions": {
-            "base": "auto",
-            "codebase_admin": "auto",
-            "optimization": "auto"
-          },
           "allowed_models": [
             "*"
           ],
@@ -2159,16 +2036,9 @@
           "max_active_runs": 4,
           "max_sessions": 20,
           "model_policy": null,
-          "revision": 3,
-          "tools": {
-            "*": "auto"
-          }
+          "revision": 3
         },
         "shared_provider_41d53f013c22": {
-          "ability_permissions": {
-            "codebase_admin": "auto",
-            "web_access": "auto"
-          },
           "allowed_models": [
             "gpt-6-luna"
           ],
@@ -2176,8 +2046,7 @@
           "max_active_runs": 2,
           "max_sessions": 10,
           "model_policy": null,
-          "revision": 1,
-          "tools": {}
+          "revision": 1
         }
       }
     },

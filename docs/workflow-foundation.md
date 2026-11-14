@@ -35,11 +35,10 @@ No session database inspection or alternate state access path is introduced.
 
 ## Agent ability authority and migration
 
-The application access-policy tiers add explicit `ability_permissions` keyed by
-ability ID. Missing IDs deny; an explicit `*` opts in to future abilities.
-Missing fields on legacy tier records project only `codebase_admin` and
-`web_access` as Auto, preserving their old tool ceilings. This is a bounded
-read migration; the next tier save persists the projection.
+Application access-policy tiers hold no ability or tool grants. Each ability
+manifest's `tier_access` lists the tiers whose owners' agents may have it; the
+agent owner's tier decides, and Administrator abilities also need an
+administrator caller (see `docs/drop-in-abilities.md`).
 
 Agent metadata owns `capability_levels` (aggregate revision and keyed records)
 and the base `ability_permissions` / `tool_permissions`. A membership in the

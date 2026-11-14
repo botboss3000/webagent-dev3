@@ -13,5 +13,7 @@
     "get_tunnel_url"
   ],
   "readiness": "ready",
-  "config": {}
+  "config": {},
+  "tier_access": ["administrator"],
+  "tier_access_note": "Hard-coded: Administrator abilities work only for an administrator owner and an administrator caller, whatever this list says."
 }

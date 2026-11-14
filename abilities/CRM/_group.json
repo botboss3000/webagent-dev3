@@ -3,7 +3,6 @@
   "icon": "contact",
   "color": "#bb9af7",
   "desc": "Contacts, deals, and email campaigns. Mostly free OAuth; some products need a paid plan.",
-  "entitlement_group": "personal_integrations",
   "risk_class": "write",
   "action_class": "external_action",
   "order": 10

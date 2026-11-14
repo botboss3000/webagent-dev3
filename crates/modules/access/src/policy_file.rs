@@ -1,42 +1,30 @@
 //! Access owns live policy publication, locking, revisions and validation.
 use crate::configuration::{validate_configuration, validate_pages};
 use crate::storage::{RecordCodec, Repository};
-use crate::{Permission, Tier};
+use crate::Tier;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use uuid::Uuid;
 /// The live access policy (`live-files.json`), relative to the checkout.
 pub const LIVE_POLICY: &str = "crates/modules/access/access-policy.json";
 const POLICY_LIMIT: u64 = 4 * 1024 * 1024;
-/// Fresh-install tiers are explicit; only Operator receives codebase_admin.
+/// Fresh-install tiers; which abilities their owners' agents get is in the ability manifests.
 fn fresh_install_tiers() -> [Tier; 2] {
     let operator = Tier {
         id: crate::ADMINISTRATOR_TIER.into(),
         revision: 1,
         model_policy: None,
-        ability_permissions: [
-            ("codebase_admin".into(), Permission::Auto),
-            ("web_access".into(), Permission::Auto),
-        ]
-        .into(),
         allowed_models: vec!["*".into()],
-        tools: [("*".into(), Permission::Auto)].into(),
-        entitlements: Default::default(),
         max_sessions: 10_000,
         max_active_runs: 200,
-        chain: Vec::new(),
     };
     let basic = Tier {
         id: crate::FREE_TIER.into(),
         revision: 1,
         model_policy: None,
-        ability_permissions: [("web_access".into(), Permission::Auto)].into(),
         allowed_models: Vec::new(),
-        tools: Default::default(),
-        entitlements: Default::default(),
         max_sessions: 10,
         max_active_runs: 2,
-        chain: Vec::new(),
     };
     [operator, basic]
 }

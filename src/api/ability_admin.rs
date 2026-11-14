@@ -67,11 +67,22 @@ pub(super) async fn grant_ceiling(
         .await?
         .ok_or_else(denied)?;
     let principal = crate::access::Principal::from_account(&account)?;
-    let tier = app
-        .store
-        .entitlement_tier(&principal.tier_id)
-        .await?
-        .ok_or_else(denied)?;
+    // The editor's own tier caps what they may grant, as it would on their own agent.
+    let tier = principal.tier_id.as_str();
+    let ability_ceiling = |id: &str| {
+        if crate::access::ability_tier_allowed(id, tier, tier) {
+            Permission::Auto
+        } else {
+            Permission::Deny
+        }
+    };
+    let tool_ceiling = |name: &str| {
+        if crate::access::tool_tier_allowed(name, tier) {
+            Permission::Auto
+        } else {
+            Permission::Deny
+        }
+    };
     for (grants, previous, ability) in [
         (abilities, previous_abilities, true),
         (tools, previous_tools, false),
@@ -108,9 +119,9 @@ pub(super) async fn grant_ceiling(
                 continue;
             }
             let ceiling = if ability {
-                tier.ability_permission(&name)
+                ability_ceiling(&name)
             } else {
-                tier.tool_permission(&name)
+                tool_ceiling(&name)
             };
             if next.meet(ceiling) != next {
                 return Err(ApiError(
@@ -132,7 +143,7 @@ pub(super) async fn grant_ceiling(
         }
         let mut next = map_permission(tools, name, Permission::Auto)?;
         let mut before = map_permission(previous_tools, name, Permission::Auto)?;
-        let mut ceiling = tier.tool_permission(name);
+        let mut ceiling = tool_ceiling(name);
         for id in owners {
             let default = if base {
                 Permission::Auto
@@ -141,7 +152,7 @@ pub(super) async fn grant_ceiling(
             };
             next = next.meet(map_permission(abilities, &id, default)?);
             before = before.meet(map_permission(previous_abilities, &id, default)?);
-            ceiling = ceiling.meet(tier.ability_permission(&id));
+            ceiling = ceiling.meet(ability_ceiling(&id));
         }
         if next.meet(before) != next && next.meet(ceiling) != next {
             return Err(ApiError(
@@ -223,7 +234,7 @@ async fn catalog(app: &App, identity: &Value, id: &str, params: &HashMap<String,
         let permission = access.ability_permission(&ability_id);
         let reason = if !ready {
             "pending_port"
-        } else if access.tier.ability_permission(&ability_id) == Permission::Deny {
+        } else if access.tier_ability_permission(&ability_id) == Permission::Deny {
             "tier_denied"
         } else if access.capability_level.ability_permission(&ability_id) == Permission::Deny {
             "capability_denied"
@@ -882,7 +893,7 @@ pub(crate) async fn slot_delete(
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn delegated_ceiling_checks_removed_denials_wildcards_and_ability_tool_interaction() {
+    async fn delegated_ceiling_follows_the_editors_tier_access() {
         let (_root, app) = crate::runtime_tests::fixture().await;
         let user = app
             .store
@@ -896,28 +907,19 @@ mod tests {
             .unwrap();
         let identity = json!({"_user_id":id});
         let unchanged = json!({"codebase_admin":"auto","web_access":"auto"});
+        // A free editor may lift a restriction on an ability their tier has.
         assert!(grant_ceiling(
             &app,
             &identity,
-            &unchanged,
-            &json!({"*":"auto"}),
-            &unchanged,
-            &json!({"*":"auto","file_read":"deny"}),
-            true
+            &json!({"web_access":"auto"}),
+            &json!({}),
+            &json!({"web_access":"deny"}),
+            &json!({}),
+            false
         )
         .await
-        .is_err());
-        assert!(grant_ceiling(
-            &app,
-            &identity,
-            &json!({}),
-            &json!({}),
-            &json!({"base":"deny"}),
-            &json!({}),
-            true
-        )
-        .await
-        .is_err());
+        .is_ok());
+        // Administrator abilities are never theirs to grant, directly or through the base default.
         assert!(grant_ceiling(
             &app,
             &identity,
@@ -926,6 +928,17 @@ mod tests {
             &json!({}),
             &json!({}),
             false
+        )
+        .await
+        .is_err());
+        assert!(grant_ceiling(
+            &app,
+            &identity,
+            &json!({}),
+            &json!({}),
+            &json!({"codebase_admin":"deny"}),
+            &json!({}),
+            true
         )
         .await
         .is_err());

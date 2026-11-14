@@ -527,9 +527,6 @@ mod tests {
     /// The root fixture with Base granted and visible, as an operator's agent has it.
     async fn fixture() -> (tempfile::TempDir, App) {
         let (root, app) = crate::runtime_tests::fixture().await;
-        let mut access_policy = app.store.read_access_policy().unwrap();
-        access_policy["tiers"]["administrator"]["ability_permissions"]["base"] = json!("auto");
-        app.store.write_access_policy(&access_policy).unwrap();
         let levels = app.store.capability_levels("shared_default").await.unwrap();
         let mut level = levels.levels["operator"].clone();
         level
@@ -654,10 +651,16 @@ mod tests {
             {"tool":"file_write","arguments":{"path":"x","content":"y"}}]});
         let result = tool(&app, &sid, "script_save", write).await;
         assert_eq!(result["status"], "denied", "{result}");
-        // In the read-only Ask mode a tool the tier sets to ask would ask, so it is refused.
-        let mut access_policy = app.store.read_access_policy().unwrap();
-        access_policy["tiers"]["administrator"]["tools"]["calculate"] = json!("ask");
-        app.store.write_access_policy(&access_policy).unwrap();
+        // In the read-only Ask mode a tool the level sets to ask would ask, so it is refused.
+        let levels = app.store.capability_levels("shared_default").await.unwrap();
+        let mut level = levels.levels["operator"].clone();
+        level
+            .tool_permissions
+            .insert("calculate".into(), access::Permission::Ask);
+        app.store
+            .save_capability_level("shared_default", level, levels.revision)
+            .await
+            .unwrap();
         app.store
             .put(
                 &format!("session_mode:{sid}"),

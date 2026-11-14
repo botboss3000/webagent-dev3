@@ -85,5 +85,6 @@
     ]
   },
   "migration_note": "Standalone V3 Rust service supports internal events, private webhook inbox events, schedules, reminders and host-admitted runs. The installed package, current permissions and configured model roles determine availability. External event/delivery adapters are not declared by this service.",
-  "required_module": "automation"
+  "required_module": "automation",
+  "tier_access": ["free", "administrator"]
 }

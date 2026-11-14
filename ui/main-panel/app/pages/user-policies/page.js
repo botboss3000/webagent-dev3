@@ -16,12 +16,7 @@ export async function mountPolicies(host){
     const names=Object.fromEntries(data.tiers.map(tier=>[tier.id,title(tier)]));
     const saveOrder=async(next,nextNames=names)=>{try{await request('/admin/access/tiers/order','PUT',{expected_revision:data.revision,order:next,names:nextNames,confirm_expansion:true});await mountPolicies(host);}catch(error){status.textContent=error.message;}};
     host.append(el('h3','','App account levels'),el('p','ac-hint','Highest to lowest. Each level is capped by the levels above it. App administration does not grant access to someone else’s agent.'));
-    const permissionOptions=[['deny','Deny'],['ask','Ask'],['auto','Auto']];
     const abilities=catalog.abilities||[];
-    const tools=[...new Set(abilities.flatMap(ability=>(ability.tools||[]).map(tool=>tool.name)))].sort();
-    // Entitlement groups come from each group's _group.json; several groups may share one.
-    const groupNames=new Map();for(const ability of abilities){if(!ability.entitlement)continue;const set=groupNames.get(ability.entitlement)||new Set();set.add(ability.group_name||ability.entitlement);groupNames.set(ability.entitlement,set);}
-    const groups=[...groupNames].sort(([a],[b])=>a.localeCompare(b)).map(([id,names])=>[id,[...names].sort().join(', ')+' ('+id+')']);
     for(const [index,id]of order.entries()){
       const tier=levels.get(id),next=structuredClone(tier);delete next.name;
       const section=el('details','ac-row');section.append(el('summary','ac-ability-row',title(tier)));const form=el('form','ac-ability-body');section.append(form);host.append(section);
@@ -34,19 +29,18 @@ export async function mountPolicies(host){
           move.disabled=index+step<=0||index+step>=order.length-1;form.append(move);
         }
       }
-      form.append(el('p','ac-hint','These are maximum account permissions across all agents. Lower agent levels may restrict them further. An ability group grant covers every ability in the group and its tools, including ones added later; a named ability or tool grant overrides it.'));
-      for(const [mapKey,heading,entries]of [['entitlements','Ability groups',groups],['ability_permissions','Abilities',[['*','All abilities (including future additions)'],...abilities.map(a=>[a.id,a.name])]],['tools','Tools',[['*','All tools (including future additions)'],...tools.map(name=>[name,name])]]]){
-        const details=el('details');details.append(el('summary','',heading));form.append(details);next[mapKey]||={};
-        for(const [key,label]of entries){const row=el('label','ac-label',label);const input=select(label,permissionOptions,next[mapKey][key]||next[mapKey]['*']||'deny');input.onchange=()=>{next[mapKey][key]=input.value;};row.append(input);details.append(row);}
-      }
+      // Each ability's manifest lists the tiers whose owners' agents may have it (tier_access).
+      const granted=abilities.filter(ability=>(ability.tier_access||[]).includes(id)).map(ability=>ability.name||ability.id).sort();
+      form.append(el('p','ac-hint','Abilities for agents owned on this level come from each ability\u2019s tier_access list, not from here. Administrator abilities work only for administrators. A new level gets no abilities until their manifests list it.'));
+      const owned=el('details');owned.append(el('summary','','Abilities for agents owned on this level ('+granted.length+')'),el('p','ac-hint',granted.join(', ')||'None'));form.append(owned);
       for(const [key,label]of [['max_sessions','Maximum sessions'],['max_active_runs','Maximum active runs']]){const wrap=el('label','ac-label',label),input=el('input','ac-input');input.type='number';input.min='0';input.max=key==='max_sessions'?'10000':'200';input.required=true;input.value=String(next[key]);input.oninput=()=>{next[key]=Number(input.value);};wrap.append(input);form.append(wrap);}
       const models=el('label','ac-label','Allowed BYO model IDs (comma separated)'),modelInput=el('input','ac-input');modelInput.value=next.allowed_models.join(', ');modelInput.oninput=()=>{next.allowed_models=modelInput.value.split(',').map(v=>v.trim()).filter(Boolean);};models.append(modelInput);form.append(models);
       const modelPolicy=el('label','ac-label','Published model catalog / BYO policy (JSON)'),policyInput=el('textarea','ac-input');policyInput.rows=3;policyInput.value=JSON.stringify(next.model_policy??null);modelPolicy.append(policyInput);form.append(modelPolicy);
       const save=el('button','members-btn','Save account level');save.type='submit';form.append(save);form.onsubmit=async event=>{event.preventDefault();save.disabled=true;try{next.model_policy=JSON.parse(policyInput.value);await request('/admin/access/tiers/'+encodeURIComponent(id),'PUT',{expected_revision:tier.revision,tier:next});await mountPolicies(host);}catch(error){status.textContent=error.message;save.disabled=false;}};
     }
-    const create=el('form','members-policy'),name=el('input','ac-input'),before=select('Insert account level above',order.filter(id=>id!=='operator').map(id=>[id,'Above '+names[id]]),'basic'),add=el('button','members-btn','Create account level');
+    const create=el('form','members-policy'),name=el('input','ac-input'),before=select('Insert account level above',order.filter(id=>id!=='administrator').map(id=>[id,'Above '+names[id]]),'free'),add=el('button','members-btn','Create account level');
     name.placeholder='New account level name, e.g. Pro';name.required=true;name.maxLength=100;name.setAttribute('aria-label','New account level name');add.type='submit';create.append(name,before,add);host.append(create);
-    create.onsubmit=async event=>{event.preventDefault();add.disabled=true;try{const id=name.value.trim().toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'');if(!id||levels.has(id)||['admin','base','anonymous'].includes(id))throw Error('Choose a distinct account level name');
+    create.onsubmit=async event=>{event.preventDefault();add.disabled=true;try{const id=name.value.trim().toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'');if(!id||levels.has(id)||['admin','administrator','free','anonymous'].includes(id))throw Error('Choose a distinct account level name');
       const next=structuredClone(levels.get(before.value));delete next.name;next.id=id;next.revision=1;
       await request('/admin/access/tiers/'+encodeURIComponent(id),'PUT',{expected_revision:0,tier:next});
       const fresh=await request('/admin/access/tiers'),nextOrder=fresh.order.filter(key=>key!==id);nextOrder.splice(nextOrder.indexOf(before.value),0,id);

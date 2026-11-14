@@ -2519,20 +2519,6 @@ mod authenticated_caller_namespace_tests {
             .await
             .unwrap();
         // Both ceilings permit Automation; authenticated caller identity still owns its namespace.
-        let mut ceiling = app
-            .store
-            .entitlement_tier("administrator")
-            .await
-            .unwrap()
-            .unwrap();
-        let ceiling_revision = ceiling.revision;
-        ceiling
-            .ability_permissions
-            .insert("automation".into(), crate::access::Permission::Auto);
-        app.store
-            .save_entitlement_tier(ceiling, ceiling_revision)
-            .await
-            .unwrap();
         let ladder = app.store.capability_levels("shared_default").await.unwrap();
         let mut operator = ladder.levels["operator"].clone();
         operator
@@ -2540,14 +2526,6 @@ mod authenticated_caller_namespace_tests {
             .insert("automation".into(), crate::access::Permission::Auto);
         app.store
             .save_capability_level("shared_default", operator, ladder.revision)
-            .await
-            .unwrap();
-        let mut tier = app.store.entitlement_tier("free").await.unwrap().unwrap();
-        let expected = tier.revision;
-        tier.ability_permissions
-            .insert("automation".into(), crate::access::Permission::Auto);
-        app.store
-            .save_entitlement_tier(tier, expected)
             .await
             .unwrap();
         let levels = app.store.capability_levels("shared_default").await.unwrap();

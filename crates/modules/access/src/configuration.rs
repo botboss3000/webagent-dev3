@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn tier_identity_must_match_its_policy_key() {
         let value = json!({"registration":"restricted", "tiers":{"free":{
-            "id":"other", "revision":1, "allowed_models":[], "tools":{},
+            "id":"other", "revision":1, "allowed_models":[],
             "max_sessions":1, "max_active_runs":1}}});
         assert!(validate_configuration(&value).is_err());
     }

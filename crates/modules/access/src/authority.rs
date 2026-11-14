@@ -88,6 +88,8 @@ pub struct LiveAccess {
     pub relationship: Relationship,
     pub agent_enabled: bool,
     pub agent_administrator: bool,
+    /// The agent owner's app tier: it decides which of the agent's abilities work.
+    pub owner_tier_id: String,
     pub revision: AccessRevision,
     pub capability_level: crate::capabilities::CapabilityLevel,
     tool_permissions: Value,
@@ -113,6 +115,7 @@ impl LiveAccess {
             self.agent_enabled,
             self.revision,
             self.agent_administrator,
+            self.owner_tier_id,
             self.capability_level,
             self.tool_permissions,
             self.ability_permissions,
@@ -156,8 +159,25 @@ impl LiveAccess {
             return Permission::Deny;
         }
         self.base_ability_permission(ability_id)
-            .meet(self.tier.ability_permission(ability_id))
+            .meet(self.tier_ability_permission(ability_id))
             .meet(self.level_ability_permission(ability_id))
+    }
+    /// The owner's tier, from the ability's `tier_access`; Administrator abilities also need
+    /// an administrator caller. Paused, not removed: the agent keeps its saved design.
+    pub fn tier_ability_permission(&self, ability_id: &str) -> Permission {
+        if access::ability_tier_allowed(ability_id, &self.owner_tier_id, &self.principal.tier_id) {
+            Permission::Auto
+        } else {
+            Permission::Deny
+        }
+    }
+    /// A tool's own `tier_access` for the owner's tier, narrowing its abilities' lists.
+    pub fn tier_tool_permission(&self, name: &str) -> Permission {
+        if access::tool_tier_allowed(name, &self.owner_tier_id) {
+            Permission::Auto
+        } else {
+            Permission::Deny
+        }
     }
     fn level_ability_permission(&self, ability_id: &str) -> Permission {
         if ability_id == access::BUILT_IN_ABILITY {
@@ -249,30 +269,34 @@ impl LiveAccess {
                 reason: access::Reason::AgentDenied,
             };
         }
+        // A tool several abilities provide works through any the owner's tier allows.
+        let allowed: Vec<&String> = ability_ids
+            .iter()
+            .filter(|id| self.tier_ability_permission(id) != Permission::Deny)
+            .collect();
         let ability = if ability_ids.is_empty() {
             if available {
                 Permission::Deny
             } else {
                 Permission::Auto
             }
+        } else if allowed.is_empty() {
+            Permission::Deny
         } else {
-            ability_ids.iter().fold(Permission::Auto, |permission, id| {
+            allowed.iter().fold(Permission::Auto, |permission, id| {
                 permission.meet(self.ability_permission(id))
             })
         };
         // One calculation drives discovery, guidance, schemas, previews and dispatch.
         // Report the narrowing layer without interpreting visibility as permission.
-        if installation != Permission::Deny && self.tier.tool_permission(name) != Permission::Deny {
-            if ability_ids
-                .iter()
-                .any(|id| self.tier.ability_permission(id) == Permission::Deny)
-            {
+        if installation != Permission::Deny && self.tier_tool_permission(name) != Permission::Deny {
+            if !ability_ids.is_empty() && allowed.is_empty() {
                 return ToolDecision {
                     permission: Permission::Deny,
                     reason: access::Reason::TierDenied,
                 };
             }
-            if ability_ids
+            if allowed
                 .iter()
                 .any(|id| self.level_ability_permission(id) == Permission::Deny)
             {
@@ -312,7 +336,7 @@ impl LiveAccess {
         let level = self.capability_level.tool_permission(name);
         if level == Permission::Deny
             && installation != Permission::Deny
-            && self.tier.tool_permission(name) != Permission::Deny
+            && self.tier_tool_permission(name) != Permission::Deny
             && self.agent_tool_permission(name) != Permission::Deny
         {
             return ToolDecision {
@@ -322,7 +346,7 @@ impl LiveAccess {
         }
         ToolFactors {
             installation,
-            tier: self.tier.tool_permission(name),
+            tier: self.tier_tool_permission(name),
             agent: self.agent_tool_permission(name).meet(level),
             ability,
             account_active: self.principal.active(),
@@ -387,47 +411,63 @@ impl<C: RecordCodec> Repository<'_, C> {
             .bind(agent_id)
             .fetch_optional(agent_view.agent_pool)
             .await?;
-        let (agent_enabled, agent_revision, tool_permissions, ability_permissions, tool_callers) =
-            if let Some(agent) = agent {
-                let metadata = self.unseal_agent(&agent.get::<Vec<u8>, _>("metadata"))?;
-                if !metadata.is_object() {
-                    return Err(anyhow!("Invalid agent metadata"));
-                }
-                let owner: Option<String> =
-                    sqlx::query_scalar("SELECT owner_id FROM agent_directory WHERE id=?")
-                        .bind(agent_id)
-                        .fetch_optional(self.app_pool)
-                        .await?;
-                let owner = owner.ok_or_else(|| anyhow!("Agent directory entry missing"))?;
-                if (agent_id == "shared_default" && owner != "admin")
-                    || metadata["owner_id"].as_str().is_some_and(|id| id != owner)
-                    || (agent_id != "shared_default"
-                        && metadata["owner_id"].as_str() != Some(owner.as_str()))
-                {
-                    return Err(anyhow!("Agent owner conflict"));
-                }
-                let permissions = metadata
-                    .get("tool_permissions")
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                permission_map(&permissions)?;
-                let abilities = metadata
-                    .get("ability_permissions")
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                permission_map(&abilities)?;
-                let callers = metadata.get("tool_callers").cloned().unwrap_or(Value::Null);
-                caller_map(&callers)?;
-                (
-                    agent.get::<String, _>("status") == "active",
-                    agent.get::<i64, _>("revision").max(0) as u64,
-                    permissions,
-                    abilities,
-                    callers,
-                )
-            } else {
-                (false, 0, Value::Null, Value::Null, Value::Null)
-            };
+        let (
+            agent_enabled,
+            agent_revision,
+            tool_permissions,
+            ability_permissions,
+            tool_callers,
+            owner,
+        ) = if let Some(agent) = agent {
+            let metadata = self.unseal_agent(&agent.get::<Vec<u8>, _>("metadata"))?;
+            if !metadata.is_object() {
+                return Err(anyhow!("Invalid agent metadata"));
+            }
+            let owner: Option<String> =
+                sqlx::query_scalar("SELECT owner_id FROM agent_directory WHERE id=?")
+                    .bind(agent_id)
+                    .fetch_optional(self.app_pool)
+                    .await?;
+            let owner = owner.ok_or_else(|| anyhow!("Agent directory entry missing"))?;
+            if (agent_id == "shared_default" && owner != "admin")
+                || metadata["owner_id"].as_str().is_some_and(|id| id != owner)
+                || (agent_id != "shared_default"
+                    && metadata["owner_id"].as_str() != Some(owner.as_str()))
+            {
+                return Err(anyhow!("Agent owner conflict"));
+            }
+            let permissions = metadata
+                .get("tool_permissions")
+                .cloned()
+                .unwrap_or(Value::Null);
+            permission_map(&permissions)?;
+            let abilities = metadata
+                .get("ability_permissions")
+                .cloned()
+                .unwrap_or(Value::Null);
+            permission_map(&abilities)?;
+            let callers = metadata.get("tool_callers").cloned().unwrap_or(Value::Null);
+            caller_map(&callers)?;
+            (
+                agent.get::<String, _>("status") == "active",
+                agent.get::<i64, _>("revision").max(0) as u64,
+                permissions,
+                abilities,
+                callers,
+                Some(owner),
+            )
+        } else {
+            (false, 0, Value::Null, Value::Null, Value::Null, None)
+        };
+        // A missing owner account leaves no tier, so no ability works.
+        let owner_tier_id = match owner {
+            Some(owner) if owner == principal.user_id => principal.tier_id.clone(),
+            Some(owner) => match self.account_by_id(&owner).await? {
+                Some(account) => Principal::from_account(&account)?.tier_id,
+                None => String::new(),
+            },
+            None => String::new(),
+        };
         let agent_administrator =
             self.agent_authority(user_id, agent_id).await?["can_manage"] == true;
         let levels = self.capability_levels(agent_id).await?;
@@ -450,6 +490,7 @@ impl<C: RecordCodec> Repository<'_, C> {
             relationship,
             agent_enabled,
             agent_administrator,
+            owner_tier_id,
             revision,
             capability_level,
             tool_permissions,

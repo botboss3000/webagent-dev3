@@ -540,13 +540,9 @@ mod tests {
                     id: "team".into(),
                     revision: 0,
                     model_policy: None,
-                    ability_permissions: Default::default(),
                     allowed_models: vec!["gpt-6-luna".into()],
-                    tools: Default::default(),
-                    entitlements: Default::default(),
                     max_sessions: 4,
                     max_active_runs: 1,
-                    chain: Vec::new(),
                 },
                 0,
             )
