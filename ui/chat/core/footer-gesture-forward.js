@@ -1,5 +1,5 @@
 'use strict';
-// @code-index {"version":1,"feature":"chat-footer-gesture-forward","aliases":["footer scroll","header scroll","composer scroll forwarding"],"purpose":"Routes wheel and touch gestures that begin over the chat footer, chat header, or mobile app header to the transcript scroller and marks reader scroll intent.","span_lines":80,"configuration":{"status":"not_applicable","rationale":"Gesture forwarding owns no tunable configuration; pull-to-refresh priority is read from the live refresh indicator and the transcript anchor's scroll_intent_ms governs intent duration."}}
+// Routes wheel and touch gestures that begin over the chat footer, chat header or mobile app header to the transcript scroller and marks reader scroll intent.
 // Ported from v2 ui/chat/js/footer-gesture-forward.js. The footer (composer pill
 // and control rows) and the headers have no scrollable ancestor — #chat-panel,
 // #stage and <body> are all overflow:hidden — so a gesture that starts there
