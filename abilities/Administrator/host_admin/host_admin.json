@@ -1,0 +1,15 @@
+{
+  "display_name": "Host Admin",
+  "kind": "ability",
+  "icon": "server",
+  "color": "#e0af68",
+  "description": "Change the server itself (host files, services, containers, OS updates) through the root host helper. Every change waits for an administrator's approval on the Host Admin page. Not for app code: use Codebase Admin.",
+  "skill_summary": "Request host changes with host_admin; each waits for approval on the Host Admin page and a background notice wakes the chat when it is decided and finished.",
+  "migration_note": "Root host helper (webagent-host-helper.service): requests, approvals, snapshots and the log live on the host; the app only forwards.",
+  "order": 7,
+  "placeholder": false,
+  "tools": ["host_admin"],
+  "readiness": "ready",
+  "tier_access": ["administrator"],
+  "tier_access_note": "Hard-coded: Administrator abilities work only for an administrator owner and an administrator caller, whatever this list says."
+}

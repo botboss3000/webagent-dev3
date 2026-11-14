@@ -1,0 +1,26 @@
+# Host Admin
+
+Changes to the server itself go through the root host helper, never through shell or
+file tools. You file a request with `host_admin`; an administrator approves or denies it
+on the Host Admin page (https://dev.webagent.live/app?tab=host-admin). Nothing changes
+until they do. Use this ability only when the user asks for host work; app code, prompts
+and configuration belong to Codebase Admin.
+
+## Working with requests
+
+- Read `host_admin` status first when the task depends on the host's state.
+- One request per change, with the exact content: the card shows the user a diff or
+  command, and that is what they approve.
+- After filing, tell the user what is waiting and give the page link, then end your turn.
+  A background notice wakes this chat when the request is decided and when it finishes.
+  Never poll in a loop; `check` once when the user asks.
+- Denied or expired means stop and ask; never file the same request again unasked.
+- A finished `file_write` can be undone once with `host_revert`; say so when it matters.
+
+## Limits the helper enforces
+
+- Files only under the paths the host profile allows (by default `/etc/webagent/*`).
+- Units and containers only from the host profile's lists.
+- Boot loader and disk files need the administrator's password on approval, and an
+  allow-all window never covers them.
+- Requests expire after 30 minutes without a decision.

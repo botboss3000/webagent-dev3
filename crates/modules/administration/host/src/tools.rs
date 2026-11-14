@@ -42,6 +42,10 @@ pub async fn execute(
         policy_version: _,
     } = call;
     match name {
+        "host_admin" => {
+            // Writes still wait for an administrator's decision in the helper.
+            crate::host_tool::call(args, sid, host.actor()).await
+        }
         "file_list" | "file_read" | "file_search" | "file_edit" | "file_write" => {
             let lookup = name == "file_search" && args["find"] == true;
             if lookup && !(args["broker_id"].is_null() && args["task_id"].is_null()) {

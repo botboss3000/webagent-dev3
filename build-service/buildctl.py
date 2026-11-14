@@ -612,8 +612,9 @@ def main():
     copy.add_argument("task_id")
     copy.add_argument("folder")
     host = commands.add_parser("host", help="ask the root host helper for an action (approved in the app) or read a request")
-    host.add_argument("op", choices=("request", "status"))
-    host.add_argument("value", help="the action name for request, the request id for status")
+    host.add_argument("op", choices=("request", "status", "wait"))
+    host.add_argument("value", help="the action name for request, the request id for status and wait")
+    host.add_argument("--timeout", type=int, default=1800, help="wait: seconds before giving up (exit 2)")
     commands.add_parser("export", help="tar of a task's tree on stdout, for a local mirror").add_argument("task_id")
     diff = commands.add_parser("patch", help="credential-guarded unified diff from the task tree to an edited workcopy")
     diff.add_argument("task_id")
@@ -697,6 +698,16 @@ def main():
     if args.command == "workcopy":
         print(json.dumps(workcopy(args.task_id, args.folder), sort_keys=True));return 0
     if args.command == "host":
+        if args.op == "wait":
+            # Quiet server-side wait: returns once the request is decided and settled.
+            deadline = time.monotonic() + args.timeout
+            while True:
+                record = host_call({"op": "status", "id": args.value})
+                if record["state"] not in ("pending", "approved", "running"):
+                    print(json.dumps(record, sort_keys=True));return 0
+                if time.monotonic() >= deadline:
+                    print(json.dumps(record, sort_keys=True));return 2
+                time.sleep(3)
         message = ({"op": "request", "action": args.value, "args": {},
                     "requester": {"identity": os.environ.get("WEBAGENT_OPERATOR", "ar")}}
                    if args.op == "request" else {"op": "status", "id": args.value})

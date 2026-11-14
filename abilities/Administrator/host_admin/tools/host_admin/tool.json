@@ -1,0 +1,45 @@
+{
+  "name": "host_admin",
+  "description": "Request a change to the server through the root host helper, or read host status. Every change waits for an administrator's approval on the Host Admin page; a background notice wakes this chat when it is decided and finished.",
+  "effect": "write",
+  "policy_ceiling": "auto",
+  "default_access": {
+    "operator": "auto",
+    "member": "deny",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["status", "request", "check"],
+        "description": "status reads host status now; request files host_action with host_args for approval; check reads one request by request_id."
+      },
+      "host_action": {
+        "type": "string",
+        "enum": ["file_write", "host_revert", "unit_restart", "container_restart", "packages_upgrade", "noop"],
+        "description": "request only: the change to ask for."
+      },
+      "host_args": {
+        "type": "object",
+        "description": "request only: file_write {path, content}; host_revert {request_id}; unit_restart {unit}; container_restart {container}; packages_upgrade and noop {}."
+      },
+      "request_id": {
+        "type": "string",
+        "description": "check only: the request id a request returned."
+      }
+    },
+    "required": ["action"],
+    "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "restart the build service",
+      "edit the server config file",
+      "upgrade the server packages",
+      "what is the server status"
+    ],
+    "keywords": ["host", "server", "systemd", "container", "packages"]
+  }
+}

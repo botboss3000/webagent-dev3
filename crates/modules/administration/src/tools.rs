@@ -4,7 +4,7 @@
 //! Tools no ability owns a folder for live under `Administrator/native_tools/`.
 
 /// Every Administrator native tool.
-pub const TOOLS: [&str; 24] = [
+pub const TOOLS: [&str; 25] = [
     "git_tool",
     "resolve_conflict",
     "commit_and_push",
@@ -29,6 +29,7 @@ pub const TOOLS: [&str; 24] = [
     "get_tunnel_url",
     "build_work",
     "performance_work",
+    "host_admin",
 ];
 
 /// Codebase Admin package tools whose live-checkout fallback this module also routes.

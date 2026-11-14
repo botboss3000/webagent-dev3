@@ -41,6 +41,8 @@ async fn helper(message: Value) -> Result<Value, crate::ApiError> {
 /// Notifications page (and later its push channels) shows it; polls the helper every 15 s.
 pub(crate) async fn watch(app: App) {
     let mut seen = std::collections::HashSet::new();
+    // Settled app requests already reported (or settled before this process started).
+    let mut settled: Option<std::collections::HashSet<String>> = None;
     loop {
         if app.stop.is_cancelled() {
             break;
@@ -70,12 +72,75 @@ pub(crate) async fn watch(app: App) {
                 }
             }
             seen = pending;
+            let finals: Vec<&Value> = page["recent"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|r| r["requester"]["channel"] == "app")
+                .filter(|r| {
+                    matches!(
+                        r["state"].as_str(),
+                        Some("done" | "failed" | "denied" | "expired")
+                    )
+                })
+                .collect();
+            let known = settled.get_or_insert_with(|| {
+                finals
+                    .iter()
+                    .filter_map(|r| r["id"].as_str().map(str::to_owned))
+                    .collect()
+            });
+            for request in finals {
+                let id = request["id"].as_str().unwrap_or_default();
+                if known.insert(id.to_owned()) && wake(&app, request).await.is_err() {
+                    tracing::error!("Host request notice deferred");
+                    known.remove(id);
+                }
+            }
         }
         tokio::select! {
             () = app.stop.cancelled() => break,
             () = tokio::time::sleep(std::time::Duration::from_secs(15)) => {}
         }
     }
+}
+
+/// Wake the chat that filed `request` with a background notice of its outcome, the same
+/// delivery that reports a finished build or background tool call.
+async fn wake(app: &App, request: &Value) -> anyhow::Result<()> {
+    let (Some(user), Some(sid), Some(id)) = (
+        request["requester"]["user"].as_str(),
+        request["requester"]["session"].as_str(),
+        request["id"].as_str(),
+    ) else {
+        return Ok(());
+    };
+    let state = request["state"].as_str().unwrap_or("settled");
+    let event = format!("host:{id}:{state}");
+    let key = format!("background_notice:{sid}:{event}");
+    let store = app.store.for_user(user).await?;
+    if store.get(&key).await?.is_some() {
+        return Ok(());
+    }
+    let reply = match state {
+        "done" => format!("Result: {}", request["result"]),
+        "failed" => format!("Error: {}", request["error"].as_str().unwrap_or("unknown")),
+        "denied" => format!(
+            "Denied by {}. Ask the user before trying again.",
+            request["decided_by"].as_str().unwrap_or("an administrator")
+        ),
+        _ => "Expired without a decision. Ask the user before filing it again.".into(),
+    };
+    store
+        .put(
+            &key,
+            &json!({"source":"tool","title":format!("host_admin {}", request["action"].as_str().unwrap_or("")),
+            "status":state,"task_id":id,"reply":reply,"key":key,"event_key":event,
+            "session_id":sid,"created_at":crate::now()}),
+        )
+        .await?;
+    crate::wake::notify(app).await;
+    Ok(())
 }
 
 /// Pending requests (with their exact effect and undo class) and the recent decided ones.
