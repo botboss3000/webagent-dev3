@@ -1,0 +1,7 @@
+{
+  "id": "host-admin",
+  "label": "Host Admin",
+  "order": 4,
+  "css": ["host-admin.css"],
+  "entry": "host-admin-page.js"
+}

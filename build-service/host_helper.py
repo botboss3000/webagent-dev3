@@ -153,7 +153,11 @@ class Helper:
         with self.lock:
             self.save(record)
             self.log({"event": "requested", "id": record["id"], "action": action, "requester": record["requester"]})
-            covered = spec["undo"] != "none" and not spec["boot_disk"] and self.allow_window(requester.get("session"))
+            # An app request is covered by its chat session's window, an SSH request by "ssh:<identity>".
+            key = requester.get("session") if channel == "app" else "ssh:" + str(requester.get("identity", ""))
+            record["allow_key"] = key
+            covered = spec["undo"] != "none" and not spec["boot_disk"] and self.allow_window(key)
+            self.save(record)
             if spec["read"] or covered:
                 record.update(state="approved", decided_at=now, decided_by="read-only" if spec["read"] else "allow-all")
                 self.log({"event": "approved", "id": record["id"], "by": record["decided_by"]})

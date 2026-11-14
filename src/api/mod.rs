@@ -65,6 +65,8 @@ mod engine_components;
 mod file_manager;
 #[path = "../../crates/modules/chat/host/api/followup_queue.rs"]
 pub(crate) mod followup_queue;
+#[path = "../../crates/modules/administration/host/api/host_admin.rs"]
+mod host_admin;
 #[path = "../../crates/modules/inference/host/service.rs"]
 pub(crate) mod inference;
 #[path = "../../crates/modules/configuration/host/api.rs"]
@@ -173,6 +175,12 @@ pub(super) fn router(app: App) -> Router {
         .route("/admin/events/stream", get(notifications::stream))
         .route("/admin/alerts", get(notifications::alerts))
         .route("/admin/alerts/read", post(notifications::read_alerts))
+        .route("/admin/host/requests", get(host_admin::requests))
+        .route(
+            "/admin/host/requests/{id}/decision",
+            post(host_admin::decide),
+        )
+        .route("/admin/host/allow", post(host_admin::allow))
         .route("/admin/modules", get(crate::modules::admin_list))
         .route("/admin/modules/{id}", post(crate::modules::lifecycle))
         .route("/status", get(overview))

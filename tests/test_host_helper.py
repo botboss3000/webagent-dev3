@@ -48,10 +48,13 @@ class HelperTests(unittest.TestCase):
     def test_reads_run_at_once_and_allow_all_covers_a_session_until_it_ends(self):
         self.assertEqual("done", self.request("host_status")["state"])
         self.helper.handle(APP, {"op": "allow", "session": "s1", "seconds": 600, "admin": "admin"})
-        self.assertEqual("done", self.request(session="s1")["state"])
-        self.assertEqual("pending", self.request(session="s2")["state"])
+        self.helper.handle(APP, {"op": "allow", "session": "ssh:t480", "seconds": 600, "admin": "admin"})
+        app = lambda session: self.helper.handle(APP, {"op": "request", "action": "noop", "requester": {"session": session}})
+        self.assertEqual("done", app("s1")["state"])
+        self.assertEqual("pending", app("s2")["state"])
+        self.assertEqual("done", self.request()["state"])  # SSH identity t480
         self.now += 601
-        self.assertEqual("pending", self.request(session="s1")["state"])
+        self.assertEqual("pending", app("s1")["state"])
         with self.assertRaises(ValueError):
             self.helper.handle(APP, {"op": "allow", "session": "s1", "seconds": 86401, "admin": "admin"})
 
