@@ -96,7 +96,7 @@ const chatActions=mountChatActionPanel({root,guard,request,note});
 const {messagingRoutes}=chatActions;
 const anchor=mountTranscriptAnchor({scroller:$('chat-messages'),inner:$('chat-messages-inner'),header:$('chat-header'),getProfile:currentChatProfile});
 // Draws a bounded slice of the transcript; rows in a batch skip the per-row activity repaint.
-const transcriptWindow=mountTranscriptWindow({scroller:$('chat-messages'),inner:$('chat-messages-inner'),getProfile:currentChatProfile,render:item=>message(item,false),paint:()=>paintActivity()});
+const transcriptWindow=mountTranscriptWindow({scroller:$('chat-messages'),inner:$('chat-messages-inner'),getProfile:currentChatProfile,render:item=>message(item,false),paint:()=>{paintActivity();placeCards();}});
 // A gesture that begins over the footer has no scrollable ancestor; forward it to the transcript.
 const disposeFooterGestures=forwardFooterGestures({targets:[$('chat-input-area'),$('chat-footer-row')],scroller:$('chat-messages'),markIntent:anchor.intent});
 // Header drags scroll too. The app header is mobile-only, and a downward pull that the
@@ -260,7 +260,8 @@ function message(item,repaint=true){historyLastSeq=Math.max(historyLastSeq,item.
 // The server already deleted that row; remove its copy here too.
 function dropReplacedLive(target,item){const run=item.run_id;if(typeof run!=='string')return;const working='working:'+run+':';if(!(item.id==='assistant:'+run||item.id.startsWith('live:'+run+':')||(item.id.startsWith(working)&&/^\d+:/.test(item.id.slice(working.length)))))return;const rows=[...target.children].filter(row=>row.dataset.publicId&&!row.dataset.noticeRunId);const newest=rows[rows.length-1];if(newest&&Number(newest.dataset.seq)<item.seq&&newest.dataset.publicId.startsWith('live:'+run+':')){readObserver.unobserve(newest);visibleRows.delete(newest);newest.remove();paintActivity();}}
 /** Keeps each component card right after the last message of the run that wrote it, so later turns follow it. */
-function placeCards(){const target=$('chat-messages-inner');const anchors=new Map();for(const card of [...target.children].filter(node=>node.dataset.componentRun).sort((a,b)=>Number(a.dataset.componentCreated||0)-Number(b.dataset.componentCreated||0))){const run=card.dataset.componentRun;let after=anchors.get(run);if(!after){const rows=[...target.children].filter(node=>node.dataset.turnId===run&&!node.dataset.componentId);after=rows[rows.length-1];}if(!after)continue;if(after.nextElementSibling!==card)after.after(card);anchors.set(run,card);}}
+function placeCards(){const target=$('chat-messages-inner');const anchors=new Map();for(const card of [...target.children].filter(node=>node.dataset.componentRun).sort((a,b)=>Number(a.dataset.componentCreated||0)-Number(b.dataset.componentCreated||0))){const run=card.dataset.componentRun;let after=anchors.get(run);if(!after){const rows=[...target.children].filter(node=>node.dataset.turnId===run&&!node.dataset.componentId);after=rows[rows.length-1];}// A panel whose turn is not drawn yet waits hidden while older rows are still undrawn, instead of piling up at the end.
+if(!after){card.hidden=transcriptWindow.hasEarlier();continue;}card.hidden=false;if(after.nextElementSibling!==card)after.after(card);anchors.set(run,card);}}
 // Base presentation is display-only. Never turn model-supplied choice or
 // approval descriptions into an action or an authorization control. The one
 // exception is a user_reply choice: a click only sends its label as the user's

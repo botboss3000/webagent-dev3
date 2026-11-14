@@ -70,6 +70,8 @@ export function mountTranscriptWindow({scroller,inner,getProfile,render,paint,st
   for(const type of ['wheel','touchstart','pointerdown','keydown'])scroller.addEventListener(type,stopLanding,{passive:true,signal:abort.signal});
   scroller.addEventListener('scroll',()=>{update();clearTimeout(saveTimer);saveTimer=setTimeout(save,250);},{passive:true,signal:abort.signal});
   return {open,accept,update,
+    /** Whether older messages exist above the drawn window. */
+    hasEarlier:()=>start>0,
     /** Lands a restored row at the top and re-lands it while late layout (images, activity groups) settles, until the reader scrolls. */
     land(row){stopLanding();landing=row;const go=()=>{if(landing===row&&row.isConnected)row.scrollIntoView({block:'start'});};go();landTimers=[100,300,700,1200].map(ms=>setTimeout(go,ms));landTimers.push(setTimeout(stopLanding,1300));},
     /** Forgets the session; the next open starts a fresh window. */
