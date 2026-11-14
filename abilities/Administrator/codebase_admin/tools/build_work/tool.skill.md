@@ -106,7 +106,19 @@ Never abandon another writer's task unless the user asks you to clear it: then,
 as administrator, call `takeover_preview` with its `task_id`, check its jobs show
 no live or effect-started release, and call `abandon` with `task_id`, `task_key`
 (the preview's `task.id`) and a `reason`. It drops the task's claims and queued
-requests; a live or uncertain release is refused until cancelled or reconciled. Artifact pruning is automatic: never run
+requests; a live or uncertain release is refused until cancelled or reconciled.
+
+To free claims but keep the work (the user pauses it, or someone needs the
+files), call `suspend` with your `broker_id`: it drops the task's claims and
+queued requests, keeps the task open with its edits, and your next edit or
+apply requests them again. Cancel a queued or running job first. As
+administrator you may suspend any caller's task with `task_key` and `reason`,
+exactly as for abandon. `pause` and `resume` act on a running build phase,
+never on a task.
+
+Administrators also control the broker queue: `maintenance` with `mode` status,
+drain or resume. Drain only when the user asks (for example before broker
+work); it stops new jobs from starting until resume. Artifact pruning is automatic: never run
 cleanup or Docker prune. Broker reminders about retained work never justify
 resubmitting a finish.
 
