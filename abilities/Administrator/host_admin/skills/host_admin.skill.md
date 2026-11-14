@@ -17,6 +17,9 @@ and configuration belong to Codebase Admin.
 - Denied or expired means stop and ask; never file the same request again unasked.
 - A finished `file_write` can be undone once with `host_revert`; say so when it matters.
 
+For SSH access rules (keys only, Tailscale only) and how to undo them, read the
+`host_security` skill.
+
 ## Limits the helper enforces
 
 - Files only under the paths the host profile allows (by default `/etc/webagent/*`).
