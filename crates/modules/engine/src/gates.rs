@@ -166,6 +166,10 @@ pub fn visibility_config() -> Result<VisibilityConfig> {
 pub fn closing_config() -> Result<ClosingConfig> {
     Ok(serde_json::from_value(manifest(CLOSING_STATUS)?.config)?)
 }
+/// The live near-duplicate threshold for kept closing messages; an unreadable config keeps 0.8.
+pub fn repeat_similarity() -> f64 {
+    closing_config().map_or(0.8, |config| config.repeat_similarity)
+}
 
 pub fn parse_selection(checkpoint: Checkpoint, configured: &str) -> Result<Selection> {
     let (optional, id) = match configured.strip_prefix("optional:") {
@@ -473,6 +477,13 @@ mod closing {
         pub notification_max_words: usize,
         pub fallback_status: String,
         pub fallback_notification: String,
+        /// Share of distinct words a final reply must have in common with the kept closing
+        /// message before it replaces it; 0 turns the check off. Missing means 0.8.
+        #[serde(default = "default_repeat_similarity")]
+        pub repeat_similarity: f64,
+    }
+    fn default_repeat_similarity() -> f64 {
+        0.8
     }
 
     /// Agent preferences: whether the closing status runs, which parts it requires, and

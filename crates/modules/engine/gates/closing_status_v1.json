@@ -16,6 +16,7 @@
     "notification_max_words": 5,
     "fallback_status": "unverified",
     "fallback_notification": "Reply status remains unverified.",
+    "repeat_similarity": 0.8,
     "guidance": "Before a final reply, call set_closer_status with one status flag and a short notification of at most five words. The status records whether the response is complete, partial, needs input, has an error, or remains unverified. Text you write in the same response as this call is shown to the user. If it already gives your full reply, end the run with one short line (for example pointing to a panel) and never restate it. Do not mention this control tool in the reply."
   }
 }

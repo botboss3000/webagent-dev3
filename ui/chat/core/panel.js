@@ -149,6 +149,7 @@ function syncSnapshot(data){
     if(document.getElementById('chat-input')?.value?.trim()){note('Your draft was preserved. Request navigation again when ready.');return;}
     const url=appViewUrl(detail.destination,detail.agent_id,location.href,detail.target_session_id);if(url)location.assign(url);
   });
+  if(typeof data.repeat_similarity==='number')repeatSimilarity=data.repeat_similarity;
   privacyNotice(data.conversation_privacy,data.tools_notice);if(data.access){sharedAccess=sessionAccess=data.access;canManageQueue=data.access.can_manage_queue!==false;}
   if((data.session?.history_revision||0)!==historyRevision){historyChanged(data.session);return false;}
   historyLastSeq=Math.max(historyLastSeq,data.last_seq||0);
@@ -190,6 +191,8 @@ async function historyAction(kind,item){
 // The conversation endpoint decides send/control rights; the sharing poll only adds sharing fields.
 // Letting the poll overwrite can_send flipped the focused composer readonly, which closes Android keyboards.
 let sharedAccess=null,sessionAccess=null;
+// Near-duplicate threshold from the session snapshot (closing_status_v1.json); 0 = off.
+let repeatSimilarity=0.8;
 // Sharing state polls every few seconds; only a change since the last poll needs a fresh snapshot.
 let sharingKey='';
 const sharing=mountSharedChat({root,client,guard,note,issues,ensureSession,/* Refresh panel access and session projections after sharing changes. */onState:data=>{sharedAccess=data?.access?{...data.access,...sessionAccess}:sessionAccess;if(sharedAccess?.can_send===false)media?.setAvailable(false);runs(activityRuns);const key=data?JSON.stringify(data):'',changed=sharingKey!==''&&key!==sharingKey;sharingKey=key;if(data&&session&&changed){const sid=session,epoch=sessionGeneration;client.snapshot(sid).then(snapshot=>{if(session!==sid||sessionGeneration!==epoch||!historyReady)return;issues?.resolve('shared_snapshot',sid);if((snapshot.session.history_revision||0)!==historyRevision){if(historyBusy)historyDeferredRevision=Math.max(historyDeferredRevision,snapshot.session.history_revision||0);else void reopenHistory(sid);return;}if(snapshot.access){sharedAccess=sessionAccess=snapshot.access;canManageQueue=snapshot.access.can_manage_queue!==false;}for(const item of snapshot.messages||[])if(transcriptWindow.accept(item))message(item,false);paintActivity();followups.update(snapshot);runs(snapshot.runs||[],true);}).catch(error=>{if(session!==sid||sessionGeneration!==epoch)return;if(issues)issues.fail('shared_snapshot',error,sid);else note(error.message);});}}});
@@ -260,8 +263,8 @@ function message(item,repaint=true){historyLastSeq=Math.max(historyLastSeq,item.
 // The server already deleted that row; remove its copy here too.
 function dropReplacedLive(target,item){const run=item.run_id;if(typeof run!=='string')return;const working='working:'+run+':';if(!(item.id==='assistant:'+run||item.id.startsWith('live:'+run+':')||(item.id.startsWith(working)&&/^\d+:/.test(item.id.slice(working.length)))))return;const rows=[...target.children].filter(row=>row.dataset.publicId&&!row.dataset.noticeRunId);const newest=rows[rows.length-1];// A kept closing message the final reply repeats (nearly) word for word shows once (the server drops it too).
 const repeated=item.id==='assistant:'+run&&newest?.dataset.publicId.startsWith(working)&&newest.dataset.keptText!==undefined&&nearDuplicate(newest.dataset.keptText,item.content);if(newest&&Number(newest.dataset.seq)<item.seq&&(repeated||newest.dataset.publicId.startsWith('live:'+run+':'))){readObserver.unobserve(newest);visibleRows.delete(newest);newest.remove();paintActivity();}}
-/** True when two texts share at least 80% of their distinct words; mirrors near_duplicate in src/storage/mod.rs. */
-function nearDuplicate(kept,reply){const words=text=>new Set(String(text||'').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean));const a=words(kept),b=words(reply);const union=new Set([...a,...b]).size;let shared=0;for(const word of a)if(b.has(word))shared++;return union>0&&shared*5>=union*4;}
+/** True when two texts share at least the configured share of their distinct words (0 = off); mirrors near_duplicate in src/storage/mod.rs. */
+function nearDuplicate(kept,reply){const threshold=repeatSimilarity;if(!(threshold>0))return false;const words=text=>new Set(String(text||'').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean));const a=words(kept),b=words(reply);const union=new Set([...a,...b]).size;let shared=0;for(const word of a)if(b.has(word))shared++;return union>0&&shared>=threshold*union;}
 /** Places each component card among its run's rows where it was created: after the last row at
  * or before its stored chat position, else the last row written no later than it, else the run's
  * last row. A stored position far from the time-based one is distrusted and logged. */

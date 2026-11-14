@@ -80,10 +80,10 @@ const PROMPT_SLOT_CONTENT_MAX: usize = 16 * 1024;
 const PROMPT_SLOT_COUNT_MAX: usize = 32;
 const PROMPT_SLOT_TOTAL_MAX: usize = 64 * 1024;
 
-/// True when two chat texts share at least 80% of their distinct words (Jaccard), so a final
-/// reply that lightly rewords or extends a kept closing message counts as a repeat.
-/// Mirrors `nearDuplicate` in ui/chat/core/panel.js.
-fn near_duplicate(kept: &Value, reply: &Value) -> bool {
+/// True when two chat texts share at least `threshold` of their distinct words (Jaccard), so a
+/// final reply that lightly rewords or extends a kept closing message counts as a repeat. A
+/// threshold of 0 or less turns the check off. Mirrors `nearDuplicate` in ui/chat/core/panel.js.
+fn near_duplicate(kept: &Value, reply: &Value, threshold: f64) -> bool {
     let words = |text: &Value| -> std::collections::HashSet<String> {
         text.as_str()
             .unwrap_or_default()
@@ -94,7 +94,9 @@ fn near_duplicate(kept: &Value, reply: &Value) -> bool {
     };
     let (kept, reply) = (words(kept), words(reply));
     let union = kept.union(&reply).count();
-    union > 0 && kept.intersection(&reply).count() * 5 >= union * 4
+    threshold > 0.0
+        && union > 0
+        && kept.intersection(&reply).count() as f64 >= threshold * union as f64
 }
 
 /// The root storage handle. Its resources and primitives are the shared
@@ -1005,7 +1007,11 @@ impl Store {
             if let Some((kept, raw)) = newest {
                 if kept.starts_with(&format!("working:{run_id}:"))
                     && kept.contains(":kept:")
-                    && near_duplicate(&self.unseal(&raw)?, content)
+                    && near_duplicate(
+                        &self.unseal(&raw)?,
+                        content,
+                        webagent_engine::gates::repeat_similarity(),
+                    )
                 {
                     self.remove_chat_row(tx, sid, &kept).await?;
                 }
@@ -2790,6 +2796,20 @@ mod tests {
             .map(|m| m["id"].as_str().unwrap())
             .collect::<Vec<_>>();
         assert_eq!(ids[2..], ["assistant:same-run"]);
+    }
+    /// Verify the near-duplicate threshold: 0 turns it off, 1 needs the same set of words.
+    #[test]
+    fn near_duplicate_follows_its_threshold() {
+        let kept = json!("Tests passed. Release now?");
+        let reply = json!("Tests passed. Release now? Use the panel.");
+        assert!(super::near_duplicate(&kept, &reply, 0.5));
+        assert!(!super::near_duplicate(&kept, &reply, 0.8));
+        assert!(!super::near_duplicate(&kept, &kept, 0.0));
+        assert!(super::near_duplicate(
+            &kept,
+            &json!("tests passed release now"),
+            1.0
+        ));
     }
     /// Verify a run's live row follows its newest unpublished message, survives a user message
     /// and run end, and gives way to an agent publication or terminal reply.

@@ -408,7 +408,7 @@ pub(crate) async fn snapshot(State(app): State<App>, Path(id): Path<String>) -> 
     Ok(Json(
         json!({"access":{"observer":crate::shared_projection::observer(&app),"operator_reply":crate::shared_projection::observer(&app)&&_session["conversation_privacy"]=="operator_reviewable"&&_session["operator_joined"][crate::shared_chat::actor(&app)]==true,
         "can_send":!crate::shared_projection::observer(&app)||(_session["conversation_privacy"]=="operator_reviewable"&&_session["operator_joined"][crate::shared_chat::actor(&app)]==true),"can_control":!crate::shared_projection::observer(&app),"can_manage_queue":crate::shared_chat::actor(&app)==app.store.current_user_id()},"usage":usage,"session":app.store.shared_read_summary(&id,crate::shared_chat::actor(&app)).await?,
-        "conversation_privacy":_session["conversation_privacy"],"messages":messages,"runs":runs,"components":components,"component_revision":component_revision,"app_view":app_view,"last_seq":last_seq,"queue":queue["queue"],"queue_state":queue["queue_state"],"tools_notice":tools_notice}),
+        "conversation_privacy":_session["conversation_privacy"],"messages":messages,"runs":runs,"components":components,"component_revision":component_revision,"app_view":app_view,"last_seq":last_seq,"queue":queue["queue"],"queue_state":queue["queue_state"],"tools_notice":tools_notice,"repeat_similarity":webagent_engine::gates::repeat_similarity()}),
     ))
 }
 #[derive(Deserialize)]
