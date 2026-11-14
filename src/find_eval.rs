@@ -58,6 +58,7 @@ pub fn evaluate(args: &[String]) -> Result<()> {
             let case: Value = serde_json::from_str(line)?;
             let query = case["query"].as_str().context("Case query required")?;
             let path = case["path"].as_str().unwrap_or(".");
+            let started = std::time::Instant::now();
             let found: Value = serde_json::from_str(
                 &webagent_worker::files::find_lookup(checkout.as_ref(), path, query)
                     .map_err(anyhow::Error::msg)?,
@@ -65,6 +66,7 @@ pub fn evaluate(args: &[String]) -> Result<()> {
             let candidates = found["candidates"].as_array().cloned().unwrap_or_default();
             let texts: Vec<Vec<String>> = candidates.iter().map(find_text).collect();
             let meaning = ranker.scores(query, &texts)?;
+            let elapsed = started.elapsed().as_millis();
             let order = find_order(&candidates, Some(&meaning));
             let rank = rank_of(&candidates, &order, &case["expect"]);
             let word_rank = rank_of(&candidates, &find_order(&candidates, None), &case["expect"]);
@@ -83,7 +85,8 @@ pub fn evaluate(args: &[String]) -> Result<()> {
             println!(
                 "{}",
                 json!({"id": case["id"], "rank": rank, "words_rank": word_rank, "top": top,
-                    "blocks": found["blocks"], "limited": found["limited"]})
+                    "blocks": found["blocks"], "areas": found["areas"],
+                    "candidates": candidates.len(), "ms": elapsed, "limited": found["limited"]})
             );
             blended.add(rank);
             words.add(word_rank);

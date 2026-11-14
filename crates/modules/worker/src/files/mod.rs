@@ -1266,7 +1266,26 @@ pub fn find_lookup(checkout: &Path, path: &str, query: &str) -> Result<String, S
         )
         .map_err(|failure| failure.to_string())?
     };
-    let mut search = Search {
+    lookup(target, path, query, path == ".")
+        .map(|(text, _)| text)
+        .map_err(|failure| failure.to_string())
+}
+
+/// Folders whose children a `find` lookup scans as separate areas, so one large folder can
+/// neither use up the scan budget nor fill the candidate list.
+const FIND_AREA_PARENTS: [&str; 4] = ["abilities", "crates", "crates/modules", "ui"];
+
+/// One area of a `find` lookup: whole folders, or the loose files of a parent folder.
+struct Area {
+    name: String,
+    folders: Vec<(OwnedFd, String)>,
+    files: Vec<(OwnedFd, String)>,
+}
+
+/// A `find` scan with the lookup budgets: more time than a line search, since it outlines
+/// every source file under its area.
+fn finder(query: &str) -> Search<'_> {
+    Search {
         query,
         regex: false,
         comments_only: false,
@@ -1280,18 +1299,121 @@ pub fn find_lookup(checkout: &Path, path: &str, query: &str) -> Result<String, S
         bytes_left: (32 * LIMIT) as i64,
         deadline: Instant::now() + Duration::from_secs(6),
         limited: false,
-        checkout_top: path == ".",
+        checkout_top: false,
         find: true,
         blocks: Vec::new(),
+    }
+}
+
+/// Split `folder` into areas: a folder in [`FIND_AREA_PARENTS`] (or the checkout top) is
+/// opened up, each other folder is one area, and a parent's loose files form one more.
+fn find_areas(
+    folder: OwnedFd,
+    prefix: &str,
+    checkout_top: bool,
+    areas: &mut Vec<Area>,
+) -> Outcome<()> {
+    if !checkout_top && !FIND_AREA_PARENTS.contains(&prefix) {
+        areas.push(Area {
+            name: prefix.to_owned(),
+            folders: vec![(folder, prefix.to_owned())],
+            files: Vec::new(),
+        });
+        return Ok(());
+    }
+    let (mut names, _) = entries(&folder, 10_000)?;
+    names.sort();
+    let mut loose = Area {
+        name: if prefix.is_empty() { "." } else { prefix }.to_owned(),
+        folders: Vec::new(),
+        files: Vec::new(),
     };
-    let scanned = match fstat(&target).map_err(|error| error.to_string())?.st_mode {
-        mode if FileType::from_raw_mode(mode) == FileType::Directory => {
-            search.scan_dir(&target, if path == "." { "" } else { path }, 0)
+    for name in names {
+        let entry = String::from_utf8_lossy(&name).into_owned();
+        if checkout_top
+            && (SEARCH_SKIPPED.contains(&entry.as_str())
+                || CHECKOUT_HIDDEN.contains(&entry.as_str()))
+        {
+            continue;
         }
-        _ => search.scan_file(&target, path),
-    };
-    scanned.map_err(|failure| failure.to_string())?;
-    Ok(find::output(&search.blocks, query, search.limited))
+        let Ok(child) = openat(
+            &folder,
+            OsStr::from_bytes(&name),
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) else {
+            continue;
+        };
+        let label = if prefix.is_empty() {
+            entry
+        } else {
+            format!("{prefix}/{entry}")
+        };
+        match FileType::from_raw_mode(fstat(&child)?.st_mode) {
+            FileType::Directory => find_areas(child, &label, false, areas)?,
+            FileType::RegularFile => loose.files.push((child, label)),
+            _ => {}
+        }
+    }
+    if !loose.files.is_empty() {
+        areas.push(loose);
+    }
+    Ok(())
+}
+
+/// A plain-language lookup's first stage: each area is scanned on its own thread with its own
+/// budget, then all blocks are scored together and each area keeps its share of candidates.
+fn lookup(target: OwnedFd, raw: &str, query: &str, checkout_top: bool) -> Outcome<(String, bool)> {
+    let mut areas = Vec::new();
+    match FileType::from_raw_mode(fstat(&target)?.st_mode) {
+        FileType::RegularFile => areas.push(Area {
+            name: raw.to_owned(),
+            folders: Vec::new(),
+            files: vec![(target, raw.to_owned())],
+        }),
+        FileType::Directory => {
+            find_areas(
+                target,
+                if raw == "." { "" } else { raw },
+                checkout_top,
+                &mut areas,
+            )?;
+        }
+        _ => return Err(rejected("search path must be a regular file or directory")),
+    }
+    let scanned: Vec<Outcome<(String, Vec<find::Candidate>, bool)>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = areas
+            .iter()
+            .map(|area| {
+                scope.spawn(move || {
+                    let mut search = finder(query);
+                    for (folder, label) in &area.folders {
+                        search.scan_dir(folder, label, 0)?;
+                    }
+                    for (file, label) in &area.files {
+                        search.scan_file(file, label)?;
+                    }
+                    Ok((area.name.clone(), search.blocks, search.limited))
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|_| Err(rejected_kind("io_error", "a find scan failed")))
+            })
+            .collect()
+    });
+    let mut limited = false;
+    let mut found = Vec::with_capacity(scanned.len());
+    for area in scanned {
+        let (name, blocks, cut) = area?;
+        limited |= cut;
+        found.push((name, blocks));
+    }
+    Ok((find::output(&found, query, limited), limited))
 }
 
 impl Search<'_> {
@@ -1520,6 +1642,11 @@ fn search(
         leaf,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK,
     )?;
+    if find {
+        let (text, limited) = lookup(target, raw, query, checkout_top)?;
+        *scan_limited = limited;
+        return Ok(Written::Text(text));
+    }
     let (output_bytes, line_bytes) = search_limits(&roots.context_config)?;
     let mut search = Search {
         query,
@@ -1533,11 +1660,10 @@ fn search(
         size: 0,
         entries_left: 10_000,
         bytes_left: (32 * LIMIT) as i64,
-        // A lookup outlines every source file under the path, so it gets more time.
-        deadline: Instant::now() + Duration::from_secs(if find { 6 } else { 2 }),
+        deadline: Instant::now() + Duration::from_secs(2),
         limited: false,
         checkout_top,
-        find,
+        find: false,
         blocks: Vec::new(),
     };
     match FileType::from_raw_mode(fstat(&target)?.st_mode) {
@@ -1552,13 +1678,6 @@ fn search(
         _ => return Err(rejected("search path must be a regular file or directory")),
     }
     *scan_limited = search.limited;
-    if find {
-        return Ok(Written::Text(find::output(
-            &search.blocks,
-            query,
-            search.limited,
-        )));
-    }
     if search.found.is_empty() && search.limited {
         // An empty page alone reads as "no matches"; say the scan stopped before covering the path.
         return Ok(Written::Text(format!(

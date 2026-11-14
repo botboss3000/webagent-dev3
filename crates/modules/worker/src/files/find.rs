@@ -6,8 +6,10 @@ use super::outline::Block;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 
-/// Blocks handed to the host for reranking.
+/// Most candidates one area hands to the host for reranking.
 pub(super) const CANDIDATES: usize = 200;
+/// Candidates handed to the host in all; the matcher takes at most 1024 texts per request.
+const TOTAL_CANDIDATES: usize = 1000;
 /// Blocks kept from one walk; a larger tree reports a limited scan.
 pub(super) const MAX_BLOCKS: usize = 60_000;
 const DOC_LINES: usize = 4;
@@ -127,22 +129,28 @@ pub(super) fn tokens(text: &str) -> Vec<String> {
     words
 }
 
-/// The best [`CANDIDATES`] blocks for `query` as JSON text for the host, best first;
-/// blocks sharing no word with the query are left out.
-pub(super) fn output(found: &[Candidate], query: &str, limited: bool) -> String {
+/// The best blocks for `query` as JSON text for the host, best first: each area keeps up to
+/// an equal share of [`TOTAL_CANDIDATES`] (at most [`CANDIDATES`]), and slots a small area
+/// leaves unused go to the next best blocks anywhere. Blocks sharing no word with the query
+/// are left out.
+pub(super) fn output(areas: &[(String, Vec<Candidate>)], query: &str, limited: bool) -> String {
+    let found: Vec<(&str, &Candidate)> = areas
+        .iter()
+        .flat_map(|(area, blocks)| blocks.iter().map(move |block| (area.as_str(), block)))
+        .collect();
     let wanted: HashSet<String> = tokens(query).into_iter().collect();
     let total = found.len().max(1) as f64;
-    let average = found.iter().map(|c| c.words.len()).sum::<usize>() as f64 / total;
+    let average = found.iter().map(|(_, c)| c.words.len()).sum::<usize>() as f64 / total;
     let mut documents: HashMap<&str, f64> = HashMap::new();
-    for candidate in found {
+    for (_, candidate) in &found {
         let seen: HashSet<&str> = candidate.words.iter().map(String::as_str).collect();
         for word in seen.into_iter().filter(|word| wanted.contains(*word)) {
             *documents.entry(word).or_default() += 1.0;
         }
     }
-    let mut scored: Vec<(f64, &Candidate)> = found
+    let mut scored: Vec<(f64, &str, &Candidate)> = found
         .iter()
-        .filter_map(|candidate| {
+        .filter_map(|&(area, candidate)| {
             let mut counts: HashMap<&str, f64> = HashMap::new();
             for word in &candidate.words {
                 *counts.entry(word.as_str()).or_default() += 1.0;
@@ -156,18 +164,39 @@ pub(super) fn output(found: &[Candidate], query: &str, limited: bool) -> String 
                     rarity * count * 2.2 / (count + 1.2 * (0.25 + 0.75 * length))
                 })
                 .sum();
-            (score > 0.0).then_some((score, candidate))
+            (score > 0.0).then_some((score, area, candidate))
         })
         .collect();
     scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let share = (TOTAL_CANDIDATES / areas.len().max(1)).clamp(1, CANDIDATES);
+    let mut taken: HashMap<&str, usize> = HashMap::new();
+    let mut keep = vec![false; scored.len()];
+    for (at, (_, area, _)) in scored.iter().enumerate() {
+        let count = taken.entry(area).or_default();
+        if *count < share {
+            *count += 1;
+            keep[at] = true;
+        }
+    }
+    let mut room = TOTAL_CANDIDATES.saturating_sub(keep.iter().filter(|kept| **kept).count());
+    for (at, (_, area, _)) in scored.iter().enumerate() {
+        let count = taken.entry(area).or_default();
+        if room > 0 && !keep[at] && *count < CANDIDATES {
+            *count += 1;
+            keep[at] = true;
+            room -= 1;
+        }
+    }
     let candidates: Vec<Value> = scored
         .into_iter()
-        .take(CANDIDATES)
-        .map(|(score, c)| {
-            json!({"path":c.label,"start":c.start,"end":c.end,"name":c.name,"gist":c.gist,"text":c.text,"score":score})
+        .zip(keep)
+        .filter(|(_, kept)| *kept)
+        .map(|((score, area, c), _)| {
+            json!({"path":c.label,"start":c.start,"end":c.end,"name":c.name,"gist":c.gist,
+                "text":c.text,"score":score,"area":area})
         })
         .collect();
-    json!({"find":true,"blocks":found.len(),"limited":limited,"candidates":candidates}).to_string()
+    json!({"find":true,"blocks":found.len(),"areas":areas.len(),"limited":limited,"candidates":candidates}).to_string()
 }
 
 #[cfg(test)]
@@ -201,7 +230,8 @@ mod tests {
             "{}",
             found[0].text
         );
-        let ranked: Value = serde_json::from_str(&output(&found, "menu body open", false)).unwrap();
+        let areas = [("a.js".to_owned(), found)];
+        let ranked: Value = serde_json::from_str(&output(&areas, "menu body open", false)).unwrap();
         assert_eq!(ranked["candidates"].as_array().unwrap().len(), 1);
         assert_eq!(ranked["candidates"][0]["name"], "function openMenu()");
         assert_eq!(ranked["candidates"][0]["start"], 2);
@@ -209,5 +239,26 @@ mod tests {
             ranked["candidates"][0]["gist"],
             "Moves the menu to the body while open."
         );
+    }
+
+    #[test]
+    fn every_area_keeps_its_candidates_when_one_area_has_many() {
+        let block = |label: &str, at: usize| {
+            let text = format!("// Opens the menu.\nfunction menu{at}() {{\n  open();\n}}\n");
+            let lines: Vec<&str> = text.lines().collect();
+            let blocks = super::super::outline::blocks(label, &text);
+            candidates(label, &lines, &blocks)
+        };
+        let big: Vec<Candidate> = (0..1500).flat_map(|at| block("big.js", at)).collect();
+        let small = block("small.js", 0);
+        let areas = [("big".to_owned(), big), ("small".to_owned(), small)];
+        let ranked: Value = serde_json::from_str(&output(&areas, "open menu", false)).unwrap();
+        let listed = ranked["candidates"].as_array().unwrap();
+        assert!(listed.iter().any(|c| c["area"] == "small"));
+        assert_eq!(
+            listed.iter().filter(|c| c["area"] == "big").count(),
+            CANDIDATES
+        );
+        assert_eq!(ranked["areas"], 2);
     }
 }
