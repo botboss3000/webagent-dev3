@@ -40,6 +40,7 @@ pub mod knowledge_files;
 pub mod mode;
 #[path = "../../../../../abilities/Core/model_switcher/native/model_switcher.rs"]
 pub mod model_switcher;
+#[path = "../../../../../abilities/Core/agent_management/native/orchestration.rs"]
 pub mod orchestration;
 #[path = "../../../../../abilities/Core/base/native/prompt.rs"]
 pub mod prompt;
