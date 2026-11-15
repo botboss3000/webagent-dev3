@@ -335,6 +335,8 @@ function shouldFocusComposer(kind){const value=currentChatProfile()?.composer?.k
 /** Loads session options and synchronizes both the native select and dropdown list. */
 let sessionsGeneration=0;
 async function sessions(){const turn=++sessionsGeneration;let data;try{data=await client.sessions();if(turn===sessionsGeneration)issues?.resolve('sessions_list');}catch(error){if(issues&&turn===sessionsGeneration)issues.fail('sessions_list',error);throw error;}if(turn!==sessionsGeneration)return data.sessions;$('sessions').replaceChildren();for(const item of data.sessions){const option=document.createElement('option');option.value=item.id;option.textContent=(item.title||'Conversation')+' — '+(item.agent_id||'shared_default');$('sessions').append(option);}$('sessions').value=session;sessionItems=data.sessions;sessionList.update(sessionItems,session,data.flags);return data.sessions;}
+// One list load at start fills the dropdown rows and the flag catalog; later changes arrive by push or on menu open.
+void sessions().catch(error=>{if(!issues)note(error.message);});
 /**
  * Switches the selected session, resets session-scoped views, then renders its snapshot and live events.
  * Route mode controls push/replace history; composer focus is restored only if the user did not move it.
