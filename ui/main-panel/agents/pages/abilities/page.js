@@ -258,7 +258,8 @@ export async function renderAbilities(host, request, options) {
       levelId, status,
       // A settings save re-renders the page; keep this ability open, like the tool rows do.
       rerender: options => { expandedAbility = ability.id; return rerender(options); } });
-    if (administrator) {
+    // Web Search's provider settings stay below its tools; other abilities lead with theirs.
+    if (administrator && ability.id !== 'web_search') {
       for (const setting of administrator.querySelectorAll(':scope > .ac-ability-row')) tools.append(setting);
     }
     // Every user sees their own saved sign-ins, whoever manages the agent.
