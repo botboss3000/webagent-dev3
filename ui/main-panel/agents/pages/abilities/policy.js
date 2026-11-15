@@ -3,8 +3,6 @@ import { _markSaving, _flashSaveCheck } from '../../../../shared/models/dom-util
 const node = (tag, cls = '', text = '') => {
   const el = document.createElement(tag); el.className = cls; el.textContent = text; return el;
 };
-const permissions = ['deny', 'require_approval', 'allow'];
-const clone = value => structuredClone(value || {});
 const title = mode => ({ deny: 'Deny', require_approval: 'Require approval', allow: 'Allow' })[mode] || mode;
 const select = (label, choices, current) => {
   const el = node('select', 'ac-input ac-config-sel'); el.setAttribute('aria-label', label);
@@ -49,52 +47,6 @@ export function effectiveLabel(record) {
   const reason = effective.reason || record.reason;
   return [permission ? title(permission) : '', reason || (record.available === false ? 'Unavailable' : '')]
     .filter(Boolean).join(' · ');
-}
-export function permissionControl({ data, request, scope, levelId, previewUser, kind, id, status, rerender }) {
-  // Members receive a sanitized effective projection, not private configuration.
-  // Do not fabricate configured Deny values from the omitted manager-only maps.
-  if (!data.authority?.can_manage) {
-    const empty = node('span'); empty.hidden = true; return empty;
-  }
-  const level = data.capability_levels?.levels?.[levelId];
-  const policy = level || data.permissions || {};
-  const key = kind === 'ability' ? 'ability_permissions' : 'tool_permissions';
-  // Base policy and level tool omissions inherit the existing ceilings. A missing
-  // level ability grant denies access, so omission is never shown as an allowance.
-  const inherits = !level || kind === 'tool';
-  const explicit = Object.hasOwn(policy[key] || {}, id);
-  const current = explicit ? policy[key][id] : inherits ? '' : (policy[key]?.['*'] || 'deny');
-  const choices = permissions.map(mode => [mode, title(mode)]);
-  if (inherits) choices.unshift(['', 'Inherit ceiling']);
-  const control = select(kind + ' ' + id + ' configured permission', choices, current);
-  control.dataset.savedValue = current;
-  control.title = explicit ? 'Explicit configured permission' :
-    Object.hasOwn(policy[key] || {}, '*') ? 'Inherited from this layer’s wildcard permission' :
-      inherits ? 'Inherit the account tier and agent policy ceilings' : 'No ability grant: deny';
-  control.disabled = !data.authority?.can_manage || !!previewUser || (!!levelId && !level);
-  control.onclick = event => event.stopPropagation();
-  control.onchange = () => saving(control, status, async () => {
-    // Other controls may have saved since this one was drawn: start from the page's
-    // current copy, then keep the response so the next save has the new revision.
-    const live = data.capability_levels?.levels?.[levelId];
-    const next = clone(live || data.permissions); next[key] ||= {};
-    if (control.value) next[key][id] = control.value;
-    else delete next[key][id];
-    if (live) {
-      const saved = await request(scope + '/capability-levels/' + encodeURIComponent(levelId), 'PUT',
-        { expected_revision: data.capability_levels.revision, level: next });
-      data.capability_levels = saved.capability_levels;
-    } else {
-      const saved = await request(scope + '/ability-permissions', 'PUT', {
-        expected_revision: data.permissions.revision,
-        ability_permissions: next.ability_permissions || {},
-        tool_permissions: next.tool_permissions || {},
-      });
-      data.permissions = { ...data.permissions, ...saved };
-    }
-    control.dataset.savedValue = control.value;
-  });
-  return savable(control);
 }
 export async function buildPolicyControls({data,request,scope,levelId,previewUser,rerender,status}) {
   const canManage=data.authority?.can_manage===true;

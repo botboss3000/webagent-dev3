@@ -6,7 +6,7 @@ import { buildBrowserSites } from './browser-sites.js';
 import { buildMcpControls } from './mcp.js';
 import { buildPromptsGroup } from './prompts.js';
 import { buildGroup, setGroupStatus } from './table.js';
-import { buildPolicyControls, permissionControl, effectiveLabel, readinessLabel } from './policy.js';
+import { buildPolicyControls, effectiveLabel, readinessLabel } from './policy.js';
 
 import { _buildMoreButton, _buildToolRow, _buildAbilitySettingsList, closeFloatingMenu } from '../../../../shared/ability-row-controls.js';
 import { buildSkillRow } from './rows.js';
@@ -272,7 +272,9 @@ export async function renderAbilities(host, request, options) {
         const level = data.capability_levels?.levels?.[levelId];
         const policy = structuredClone(level || data.permissions || {});
         policy.tool_permissions ||= {};
-        policy.tool_permissions[tool.name] = mode;
+        // Choosing the tool.json default clears this level's override.
+        if (mode === effectiveTool.default) delete policy.tool_permissions[tool.name];
+        else policy.tool_permissions[tool.name] = mode;
         try {
           // Update this page's copy from the response instead of re-reading the whole
           // page: the toggle already shows the choice, and the next save needs the new revision.
@@ -302,12 +304,11 @@ export async function renderAbilities(host, request, options) {
         // The control edits the agent's configured layer (the selected level when
         // one exists, as saveToolPermission writes). Effective access can still be
         // Deny because of the account tier, visibility or port status.
-        permMode: toolPolicy()?.tool_permissions?.[tool.name] ||
-          toolPolicy()?.tool_permissions?.['*'] || effectiveTool.default || 'allow',
+        permMode: toolPolicy()?.tool_permissions?.[tool.name] || effectiveTool.default || 'require_approval',
         role_blocked: tool.role_blocked === true || effectiveTool.role_blocked === true,
         tierBlocked: effectiveTool.effective?.reason === 'tier_denied',
       }, {
-        canEdit: canManage && !previewUser && levelId==='operator',
+        canEdit: canManage && !previewUser,
         showPerm: true,
         abilityId: ability.id,
         hasToolSkill: tool.has_tool_skill === true,
@@ -349,15 +350,6 @@ export async function renderAbilities(host, request, options) {
       tools.append(toolRow);
     }
     detail.append(tools);
-    // V3-specific access layering stays available outside the reference row title.
-    if (canManage) {
-      const access = node('details', 'v3-ability-access');
-      access.append(node('summary', 'ac-hint', 'V3 access policy'));
-      access.append(permissionControl({ data, request, scope, levelId, previewUser,
-        kind: 'ability', id: ability.id, status, rerender }));
-      access.append(node('p', 'ac-hint', [readinessLabel(ability), effectiveLabel(projection(ability))].join(' · ')));
-      detail.append(access);
-    }
     if (administrator) detail.append(administrator);
     if (ability.migration_note) detail.append(node('p', 'v3-ability-note', ability.migration_note));
   };

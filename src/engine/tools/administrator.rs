@@ -529,9 +529,11 @@ mod tests {
         // Narrow from the bottom up: a save never leaves a lower level above a higher one.
         for id in ["visitor", "member", "operator"] {
             let mut level = levels.levels[id].clone();
-            level
-                .ability_permissions
-                .insert("codebase_admin".into(), access::Permission::Deny);
+            // A level narrows an ability by switching it off.
+            level.ability_exposure.insert(
+                "codebase_admin".into(),
+                crate::access::capabilities::Exposure::Off,
+            );
             levels = app
                 .store
                 .save_capability_level("shared_default", level, levels.revision)

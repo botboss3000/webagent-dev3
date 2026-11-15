@@ -36,14 +36,10 @@ pub struct CapabilityLevel {
     #[serde(skip)]
     pub ability_chain: Vec<(Vec<String>, BTreeMap<String, Permission>)>,
 }
-/// A level's saved ability permission; an ability it does not name stays off, whatever
-/// its manifest declares, until an Operator switches it on.
+/// A level's saved ability permission; an ability it does not name follows its
+/// tool.json (`owner_tier`, `role_access`, `default_policy`).
 fn level_ability_permission(saved: &BTreeMap<String, Permission>, id: &str) -> Permission {
-    saved
-        .get(id)
-        .or_else(|| saved.get("*"))
-        .copied()
-        .unwrap_or(Permission::Deny)
+    saved.get(id).copied().unwrap_or(Permission::Auto)
 }
 /// Default access for a tool with a definition, given a level's rungs; `None` for a
 /// tool without one. The app installs it from the tool definitions.
@@ -61,7 +57,6 @@ fn level_tool_permission(
 ) -> Permission {
     saved
         .get(id)
-        .or_else(|| saved.get("*"))
         .copied()
         .or_else(|| TOOL_DEFAULTS.get().and_then(|defaults| defaults(id, rungs)))
         .unwrap_or(Permission::Auto)
@@ -204,8 +199,7 @@ fn meet_exposure(target: &mut BTreeMap<String, Exposure>, upper: &BTreeMap<Strin
 }
 impl Default for CapabilityLevels {
     fn default() -> Self {
-        // Unsaved levels (revision 0) fail closed: they grant no abilities, so the
-        // agent has no tools until an Operator saves explicit levels.
+        // Unsaved levels (revision 0) hold no overrides: tool.json decides access.
         Self {
             revision: 0,
             order: vec!["operator".into(), "member".into(), "visitor".into()],
@@ -238,16 +232,10 @@ impl Default for CapabilityLevels {
         }
     }
 }
-/// Shown in chat and the effective-abilities response for agents without saved levels.
-pub const NO_TOOLS_NOTICE: &str =
-    "No tools are available: this agent's capability levels aren't configured.";
 impl CapabilityLevels {
     /// Levels were never saved for this agent, so they grant nothing.
     pub fn unset(&self) -> bool {
         self.revision == 0
-    }
-    pub fn tools_notice(&self) -> Option<&'static str> {
-        self.unset().then_some(NO_TOOLS_NOTICE)
     }
     pub fn from_metadata(metadata: &Value) -> Result<Self> {
         let mut value = match metadata.get("capability_levels") {
@@ -297,6 +285,12 @@ impl CapabilityLevels {
                     },
                 );
             }
+        }
+        // Retired: per-level ability grants and the tool wildcard overrode tool.json.
+        // Specific tool overrides stay; the rest is dropped on read and on the next save.
+        for level in value.levels.values_mut() {
+            level.ability_permissions.clear();
+            level.tool_permissions.remove("*");
         }
         value.validate()?;
         for (id, level) in &value.levels {
@@ -453,7 +447,7 @@ impl CapabilityLevels {
             meet_permissions(
                 &mut result.ability_permissions,
                 &upper.ability_permissions,
-                Permission::Deny,
+                Permission::Auto,
             );
             meet_permissions(
                 &mut result.tool_permissions,
@@ -508,6 +502,9 @@ impl<C: RecordCodec> Repository<'_, C> {
         expected: u64,
     ) -> Result<CapabilityLevels> {
         level.validate()?;
+        // Retired fields, as `from_metadata` drops them on read.
+        level.ability_permissions.clear();
+        level.tool_permissions.remove("*");
         let view = self.for_agent(agent).await?;
         let mut tx = view.agent_pool.begin().await?;
         // Take the writer lock before reading either the catalog or record revision.

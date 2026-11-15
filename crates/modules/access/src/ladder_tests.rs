@@ -50,7 +50,7 @@ fn intermediate_ceiling_limits_every_lower_level_without_rewriting_configuration
 }
 
 #[test]
-fn wildcard_and_exact_entries_intersect_across_the_ladder() {
+fn wildcard_is_ignored_and_exact_entries_intersect_across_the_ladder() {
     let mut levels = CapabilityLevels::default();
     levels
         .levels
@@ -65,7 +65,8 @@ fn wildcard_and_exact_entries_intersect_across_the_ladder() {
         .tool_permissions
         .insert("file_write".into(), Permission::Deny);
     let result = levels.effective("visitor").unwrap();
-    assert_eq!(result.tool_permission("file_read"), Permission::Ask);
+    // The retired wildcard no longer overrides tool defaults.
+    assert_eq!(result.tool_permission("file_read"), Permission::Auto);
     assert_eq!(result.tool_permission("file_write"), Permission::Deny);
 }
 
@@ -123,7 +124,7 @@ fn raising_an_ancestor_keeps_explicit_lower_restrictions() {
         .get_mut("operator")
         .unwrap()
         .tool_permissions
-        .insert("*".into(), Permission::Deny);
+        .insert("file_write".into(), Permission::Deny);
     levels
         .levels
         .get_mut("member")
@@ -142,7 +143,7 @@ fn raising_an_ancestor_keeps_explicit_lower_restrictions() {
         .get_mut("operator")
         .unwrap()
         .tool_permissions
-        .insert("*".into(), Permission::Auto);
+        .insert("file_write".into(), Permission::Auto);
     assert_eq!(
         levels
             .effective("visitor")
@@ -153,33 +154,51 @@ fn raising_an_ancestor_keeps_explicit_lower_restrictions() {
 }
 
 #[test]
-fn unsaved_levels_grant_no_abilities_and_never_fall_back_to_codebase_admin() {
-    // No saved levels, and a legacy base map that once granted codebase_admin.
+fn abilities_follow_tool_json_and_legacy_grants_are_dropped() {
+    // Unsaved levels, a legacy base map, and saved grants with a tool wildcard.
+    let saved = json!({"capability_levels":{"revision":2,"order":["operator","member","visitor"],"levels":{
+        "operator":{"id":"operator","name":"Operator","revision":1,"ability_permissions":{"web_access":"auto","terminal_control":"deny"},"tool_permissions":{"*":"auto","shell":"deny"}},
+        "member":{"id":"member","name":"Member","revision":1,"ability_permissions":{"web_access":"auto"},"tool_permissions":{}},
+        "visitor":{"id":"visitor","name":"Visitor","revision":1,"ability_permissions":{},"tool_permissions":{}}}}});
     for metadata in [
         json!({}),
         json!({"ability_permissions":{"codebase_admin":"auto","*":"auto"}}),
+        saved,
     ] {
         let levels = CapabilityLevels::from_metadata(&metadata).unwrap();
-        assert!(levels.unset());
-        assert_eq!(
-            levels.tools_notice(),
-            Some(crate::capabilities::NO_TOOLS_NOTICE)
-        );
         for id in ["operator", "member", "visitor"] {
+            assert!(levels.levels[id].ability_permissions.is_empty(), "{id}");
+            assert!(
+                !levels.levels[id].tool_permissions.contains_key("*"),
+                "{id}"
+            );
             let level = levels.effective(id).unwrap();
-            for ability in ["codebase_admin", "web_access", "new_plugin"] {
+            for ability in [
+                "codebase_admin",
+                "web_access",
+                "new_plugin",
+                "terminal_control",
+            ] {
                 assert_eq!(
                     level.ability_permission(ability),
-                    Permission::Deny,
+                    Permission::Auto,
                     "{id} {ability}"
                 );
             }
         }
     }
-    let mut saved = CapabilityLevels::default();
-    saved.revision = 1;
-    assert!(!saved.unset());
-    assert_eq!(saved.tools_notice(), None);
+    // Specific tool overrides stay.
+    let levels = CapabilityLevels::from_metadata(&json!({"capability_levels":{"revision":2,"order":["operator","member","visitor"],"levels":{
+        "operator":{"id":"operator","name":"Operator","revision":1,"ability_permissions":{},"tool_permissions":{"*":"auto","shell":"deny"}},
+        "member":{"id":"member","name":"Member","revision":1,"ability_permissions":{},"tool_permissions":{}},
+        "visitor":{"id":"visitor","name":"Visitor","revision":1,"ability_permissions":{},"tool_permissions":{}}}}})).unwrap();
+    assert_eq!(
+        levels
+            .effective("operator")
+            .unwrap()
+            .tool_permission("shell"),
+        Permission::Deny
+    );
 }
 
 #[test]
@@ -259,76 +278,6 @@ fn defined_tools_fall_back_to_role_defaults_then_deny() {
 }
 
 #[test]
-fn abilities_a_level_does_not_name_stay_off() {
-    let unset = CapabilityLevels::default();
-    assert_eq!(
-        unset
-            .effective("operator")
-            .unwrap()
-            .ability_permission("web_search"),
-        Permission::Deny
-    );
-    // A saved ladder no longer falls back to manifest defaults: a new ability is off
-    // until an Operator switches it on.
-    let mut levels = CapabilityLevels::default();
-    levels.revision = 1;
-    assert_eq!(
-        levels
-            .effective("operator")
-            .unwrap()
-            .ability_permission("web_search"),
-        Permission::Deny
-    );
-    levels
-        .levels
-        .get_mut("operator")
-        .unwrap()
-        .ability_permissions
-        .insert("web_search".into(), Permission::Auto);
-    levels
-        .levels
-        .get_mut("member")
-        .unwrap()
-        .ability_permissions
-        .insert("web_search".into(), Permission::Ask);
-    assert_eq!(
-        levels
-            .effective("operator")
-            .unwrap()
-            .ability_permission("web_search"),
-        Permission::Auto
-    );
-    assert_eq!(
-        levels
-            .effective("member")
-            .unwrap()
-            .ability_permission("web_search"),
-        Permission::Ask
-    );
-    assert_eq!(
-        levels
-            .effective("visitor")
-            .unwrap()
-            .ability_permission("web_search"),
-        Permission::Deny
-    );
-    // An upper level's grant still caps the levels below it.
-    levels
-        .levels
-        .get_mut("operator")
-        .unwrap()
-        .ability_permissions
-        .insert("web_search".into(), Permission::Deny);
-    assert_eq!(
-        levels
-            .effective("member")
-            .unwrap()
-            .ability_permission("web_search"),
-        Permission::Deny
-    );
-}
-
-#[test]
 fn saves_refuse_only_new_out_of_order_cases() {
     let mut levels = CapabilityLevels::default();
     for level in levels.levels.values_mut() {
@@ -372,7 +321,7 @@ fn saves_refuse_only_new_out_of_order_cases() {
     fixed.check_order(&legacy).unwrap();
     // A new case is still refused.
     let mut worse = legacy.clone();
-    raise(&mut worse, "visitor", "browser", Permission::Auto);
+    raise(&mut worse, "operator", "browser", Permission::Deny);
     assert!(worse.check_order(&legacy).is_err());
     levels
         .levels

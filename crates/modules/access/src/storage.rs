@@ -382,18 +382,31 @@ mod integration_tests {
         let f = Fixture::new().await;
         let repo = f.repo();
         let before = repo.live_access("alice", "shared_default").await.unwrap();
-        let mut level = before.capability_level.clone();
-        level
-            .ability_permissions
-            .insert("codebase_admin".into(), Permission::Deny);
-        let saved = repo
-            .save_capability_level("shared_default", level, 0)
+        // Saves keep the ladder in order, so the level below is narrowed first.
+        let mut below = repo
+            .capability_levels("shared_default")
+            .await
+            .unwrap()
+            .levels["visitor"]
+            .clone();
+        below
+            .tool_permissions
+            .insert("file_write".into(), Permission::Deny);
+        repo.save_capability_level("shared_default", below, 0)
             .await
             .unwrap();
-        assert_eq!(saved.revision, 1);
+        let mut level = before.capability_level.clone();
+        level
+            .tool_permissions
+            .insert("file_write".into(), Permission::Deny);
+        let saved = repo
+            .save_capability_level("shared_default", level, 1)
+            .await
+            .unwrap();
+        assert_eq!(saved.revision, 2);
         let after = repo.live_access("alice", "shared_default").await.unwrap();
         assert_eq!(
-            after.capability_level.ability_permission("codebase_admin"),
+            after.capability_level.tool_permission("file_write"),
             Permission::Deny
         );
         assert_ne!(before.context_fingerprint(), after.context_fingerprint());
@@ -404,7 +417,7 @@ mod integration_tests {
                 .unwrap();
         sqlx::raw_sql("CREATE TRIGGER reject_capability_receipt BEFORE INSERT ON docs BEGIN SELECT RAISE(ABORT,'test late receipt failure'); END;").execute(&f.agent).await.unwrap();
         assert!(repo
-            .save_capability_level("shared_default", after.capability_level, 1)
+            .save_capability_level("shared_default", after.capability_level, 2)
             .await
             .is_err());
         let unchanged: Vec<u8> =
@@ -417,7 +430,7 @@ mod integration_tests {
             .fetch_one(&f.agent)
             .await
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, 2);
     }
 
     #[tokio::test]

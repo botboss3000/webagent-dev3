@@ -44,13 +44,13 @@ mod tests {
     use super::*;
     use webagent_accounts_host::AccountsStore;
     #[test]
-    fn legacy_projection_is_bounded_and_does_not_grant_new_plugins() {
+    fn unsaved_levels_are_bounded_and_follow_tool_json() {
         let levels = CapabilityLevels::from_metadata(&json!({})).unwrap();
         assert_eq!(levels.levels.len(), 3);
         for level in levels.levels.values() {
-            assert_eq!(level.ability_permission("codebase_admin"), Permission::Deny);
-            assert_eq!(level.ability_permission("web_access"), Permission::Deny);
-            assert_eq!(level.ability_permission("new_plugin"), Permission::Deny);
+            assert_eq!(level.ability_permission("codebase_admin"), Permission::Auto);
+            assert_eq!(level.ability_permission("web_access"), Permission::Auto);
+            assert_eq!(level.ability_permission("new_plugin"), Permission::Auto);
         }
         assert!(CapabilityLevels::from_metadata(
             &json!({"capability_levels":{"revision":1,"levels":{}}})
@@ -71,9 +71,11 @@ mod tests {
         let mut saved = store.capability_levels("shared_default").await.unwrap();
         for id in ["visitor", "member", "operator"] {
             let mut level = saved.levels[id].clone();
-            level
-                .ability_permissions
-                .insert("codebase_admin".into(), Permission::Deny);
+            // A level narrows an ability by switching it off.
+            level.ability_exposure.insert(
+                "codebase_admin".into(),
+                crate::access::capabilities::Exposure::Off,
+            );
             saved = store
                 .save_capability_level("shared_default", level, saved.revision)
                 .await
@@ -86,7 +88,7 @@ mod tests {
             access.tool_decision_for_abilities("file_read", &["codebase_admin".into()], true, true)
         };
         assert_eq!(decide(&before).permission, Permission::Auto);
-        assert_eq!(decide(&after).reason, access::Reason::CapabilityDenied);
+        assert_eq!(decide(&after).permission, Permission::Deny);
         let reopened = Store::open(root.path()).await.unwrap();
         assert_eq!(
             decide(
@@ -97,18 +99,6 @@ mod tests {
             )
             .permission,
             Permission::Deny
-        );
-        let mut level = after.capability_level.clone();
-        level
-            .ability_permissions
-            .insert("codebase_admin".into(), Permission::Ask);
-        store
-            .save_capability_level("shared_default", level, saved.revision)
-            .await
-            .unwrap();
-        assert_eq!(
-            decide(&store.live_access("admin", "shared_default").await.unwrap()).permission,
-            Permission::Ask
         );
         // Administrator abilities also need an administrator caller.
         let user = store

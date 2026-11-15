@@ -331,10 +331,6 @@ async fn catalog(app: &App, identity: &Value, id: &str, params: &HashMap<String,
         if ready {
             ability["effective"] = serde_json::to_value(effective).map_err(anyhow::Error::from)?;
         }
-        // Unsaved levels deny every ability; report that cause, not a generic denial.
-        if ready && levels.unset() && ability["effective"]["permission"] == "deny" {
-            ability["effective"]["reason"] = json!("capability_levels_unset");
-        }
     }
     // Administrator abilities are hidden unless both the owner and the viewer are
     // administrators; other abilities blocked by the owner's tier stay listed to upgrade.
@@ -358,9 +354,8 @@ async fn catalog(app: &App, identity: &Value, id: &str, params: &HashMap<String,
     let mut permissions = app.store.agent_ability_permissions(id).await?;
     permissions["tool_permissions"] =
         app.store.agent_tool_permissions(id).await?["tool_permissions"].clone();
-    let notice = levels.tools_notice();
     Ok(Json(
-        json!({"agent_id":id,"catalog_version":app.abilities.version(),"revision":visibility["revision"],"notice":notice,
+        json!({"agent_id":id,"catalog_version":app.abilities.version(),"revision":visibility["revision"],
         "visibility":visibility["visibility"],"skill_visibility":visibility["skill_visibility"],"tool_modes":visibility["tool_modes"],"settings":if rights["can_manage"]==true {visibility["settings"].clone()} else {json!({})},
         "authority":{"can_manage":rights["can_manage"],"is_installation_admin":rights["installation_administrator"],"owner_id":rights["owner_id"]},
         "capability_levels":if rights["can_manage"]==true {serde_json::to_value(levels).map_err(anyhow::Error::from)?} else {json!({})},

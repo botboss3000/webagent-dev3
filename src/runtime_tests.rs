@@ -7921,44 +7921,13 @@ async fn tenant_ability_http_levels_effective_views_and_stale_updates() {
     let (status, view) = call(&app, &token, "a", "GET", path, Value::Null).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(view["authority"]["can_manage"], true);
-    // Unsaved levels fail closed: every ready ability reports the distinct cause and notice.
-    assert_eq!(view["notice"], json!(crate::capabilities::NO_TOOLS_NOTICE));
-    let ready: Vec<_> = view["abilities"]
+    // Unsaved levels hold no overrides: tool.json decides, so nothing is denied for them.
+    assert!(view["abilities"]
         .as_array()
         .unwrap()
         .iter()
-        .filter(|a| a["ready"] == true)
-        .collect();
-    // Base also holds the always-available loaders, so it is not judged as a whole here.
-    let ready: Vec<_> = ready.into_iter().filter(|a| a["id"] != "base").collect();
-    assert!(
-        !ready.is_empty()
-            && ready.iter().all(|a| a["effective"]["permission"] == "deny"
-                && a["effective"]["reason"] == "capability_levels_unset")
-    );
-    let (_, summary) = call(
-        &app,
-        &token,
-        "a",
-        "GET",
-        "/api/v3/agents/agent-a/access-summary",
-        Value::Null,
-    )
-    .await;
-    assert_eq!(summary["tools_notice"], view["notice"]);
+        .all(|a| a["effective"]["reason"] != "capability_denied"));
     crate::runtime_tests::grant_fixture_levels(&app.store, "agent-a").await;
-    let (_, view) = call(&app, &token, "a", "GET", path, Value::Null).await;
-    assert!(view["notice"].is_null());
-    let (_, summary) = call(
-        &app,
-        &token,
-        "a",
-        "GET",
-        "/api/v3/agents/agent-a/access-summary",
-        Value::Null,
-    )
-    .await;
-    assert!(summary["tools_notice"].is_null());
     // The Abilities page is operator-only.
     assert_eq!(
         call(&app, &member_token, "m", "GET", path, Value::Null)

@@ -335,8 +335,7 @@ async fn summary(
     }
     let store = app.store.for_agent(&id).await?;
     Ok(Json(
-        json!({"conversation_privacy":store.access_repository().member_access(&id).await?.conversation_privacy,
-        "tools_notice":app.store.capability_levels(&id).await?.tools_notice()}),
+        json!({"conversation_privacy":store.access_repository().member_access(&id).await?.conversation_privacy}),
     ))
 }
 /// This agent's public sessions (active and archived) for the user `view` belongs to.

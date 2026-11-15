@@ -112,18 +112,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn new_ability_is_not_granted_by_legacy_tier_or_membership() {
+    async fn new_ability_follows_tool_json_without_a_level_grant() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         store
             .create_admin_account("admin", "hash", "generation")
             .await
             .unwrap();
-        // Unsaved capability levels grant nothing, even to the original administrator.
+        // Unsaved capability levels hold no overrides: tool.json decides.
         let unset = store.live_access("admin", "shared_default").await.unwrap();
-        for id in ["codebase_admin", "web_access", "new_plugin"] {
-            assert_eq!(unset.ability_permission(id), Permission::Deny);
+        for id in ["codebase_admin", "web_access"] {
+            assert_eq!(unset.ability_permission(id), Permission::Auto, "{id}");
         }
+        // An ability without a manifest has no tiers, so it stays closed.
+        assert_eq!(unset.ability_permission("new_plugin"), Permission::Deny);
         crate::runtime_tests::grant_fixture_levels(&store, "shared_default").await;
         let access = store.live_access("admin", "shared_default").await.unwrap();
         assert_eq!(
@@ -247,8 +249,8 @@ mod tests {
                     true,
                     true
                 )
-                .reason,
-            Reason::CapabilityDenied
+                .permission,
+            Permission::Deny
         );
         store
             .set_agent_ability_permissions(
