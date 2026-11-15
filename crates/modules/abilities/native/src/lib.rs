@@ -18,32 +18,58 @@ use webagent_host_core::StoreCore;
 use webagent_models::account_catalog::PlatformPin;
 use webagent_models::model_selection::{Catalog, ModelRole, SelectionPlan};
 
+#[path = "../../../../../abilities/Core/app_control/native/app_control.rs"]
 pub mod app_control;
+#[path = "../../../../../abilities/Core/base/native/base_extras.rs"]
 pub mod base_extras;
+#[path = "../../../../../abilities/Core/base/native/compaction.rs"]
 pub mod compaction;
+#[path = "../../../../../abilities/Core/base/native/context_assets.rs"]
 pub mod context_assets;
+#[path = "../../../../../abilities/Core/decision/native/decision.rs"]
 pub mod decision;
+#[path = "../../../../../abilities/Core/decision/native/directory_decision.rs"]
 pub mod directory_decision;
+#[path = "../../../../../abilities/Core/human_escalation/native/human_escalation.rs"]
 pub mod human_escalation;
+#[path = "../../../../../abilities/Core/image_vision/native/image_vision.rs"]
 pub mod image_vision;
+#[path = "../../../../../abilities/Memory/managed_knowledge_files/native/knowledge_files.rs"]
 pub mod knowledge_files;
+#[path = "../../../../../abilities/Core/base/native/mode.rs"]
 pub mod mode;
+#[path = "../../../../../abilities/Core/model_switcher/native/model_switcher.rs"]
 pub mod model_switcher;
 pub mod orchestration;
+#[path = "../../../../../abilities/Core/base/native/prompt.rs"]
 pub mod prompt;
+#[path = "../../../../../abilities/Core/base/native/recall.rs"]
 pub mod recall;
+#[path = "../../../../../abilities/Core/reply_buttons/native/reply_buttons.rs"]
 pub mod reply_buttons;
+#[path = "../../../../../abilities/Core/base/native/self_edit.rs"]
 pub mod self_edit;
+#[path = "../../../../../abilities/Core/base/native/session.rs"]
 pub mod session;
+#[path = "../../../../../abilities/Core/base/native/task.rs"]
 pub mod task;
+#[path = "../../../../../abilities/Core/base/native/text_search.rs"]
 pub mod text_search;
+#[path = "../../../../../abilities/Core/base/native/tool_search.rs"]
 pub mod tool_search;
+#[path = "../../../../../abilities/Core/user_files/native/user_files.rs"]
 pub mod user_files;
+#[path = "../../../../../abilities/Core/base/native/utilities.rs"]
 pub mod utilities;
+#[path = "../../../../../abilities/Core/base/native/vault.rs"]
 pub mod vault;
+#[path = "../../../../../abilities/Web/web_access/native/web_access.rs"]
 pub mod web_access;
+#[path = "../../../../../abilities/Core/base/native/webhooks.rs"]
 pub mod webhooks;
+#[path = "../../../../../abilities/Memory/wiki_context/native/wiki.rs"]
 pub mod wiki;
+#[path = "../../../../../abilities/Memory/wiki_context/native/wiki_markdown.rs"]
 pub mod wiki_markdown;
 
 /// A boxed `Send` future borrowed from the host.
