@@ -388,8 +388,8 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 .v3-reply-option:has(input:disabled){cursor:default}
 @media (hover:hover){.v3-reply-option:not(:has(input:disabled)):hover{background:color-mix(in oklab,var(--fg-1) 8%,transparent)}}
 .v3-reply-input{display:flex;align-items:flex-start;gap:8px;min-width:0}
-/* Reply panel fields and the attach button are frosted glass: a faint text-colour tint with a light blur, so any chat background shows through. */
-.v3-reply-form :is(input:not([type=radio],[type=checkbox],[type=file]),select,textarea),.v3-reply-form .v3-reply-attach{background:color-mix(in oklab,var(--fg-1) 6%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+/* Reply panel fields are frosted glass: a faint text-colour tint with a light blur, so any chat background shows through. */
+.v3-reply-form :is(input:not([type=radio],[type=checkbox],[type=file]),select,textarea){background:color-mix(in oklab,var(--fg-1) 6%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
 .v3-reply-form :is(input:not([type=radio],[type=checkbox],[type=file]),select,textarea){font:inherit;color:var(--fg-1);border:var(--border-width) solid var(--border);border-radius:8px;padding:10px 12px;min-height:44px;box-sizing:border-box;width:100%;min-width:0}
 .v3-reply-form textarea{resize:vertical;min-height:88px;line-height:1.4}
 .v3-reply-form .v3-reply-options input.v3-reply-other{width:auto;margin:0 14px 12px}
@@ -397,8 +397,29 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 .v3-reply-attach{flex:none;width:44px;height:44px;border-radius:50%;border:var(--border-width) solid var(--border);color:var(--fg-1);font:inherit;font-size:22px;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent}
 .v3-reply-files{color:var(--fg-2);font-size:13px}
 .v3-reply-error{margin:0;color:var(--danger);font-size:13px}
-.v3-reply-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;padding-top:12px;border-top:var(--border-width) solid var(--border-soft)}
-.v3-reply-step{margin-right:auto;color:var(--fg-3);font-size:13px}
+/* A text field with + is one box in two rows: full-width text on top, then + at left and the resize grip at right. */
+.v3-reply-form .v3-reply-input:has(.v3-reply-attach){flex-direction:column;align-items:stretch;gap:0;border:var(--border-width) solid var(--border);border-radius:8px;background:color-mix(in oklab,var(--fg-1) 6%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);overflow:hidden}
+.v3-reply-form .v3-reply-input:has(.v3-reply-attach):has(textarea){resize:vertical;min-height:132px}
+.v3-reply-form .v3-reply-input:has(.v3-reply-attach):focus-within{outline:2px solid var(--accent);outline-offset:-1px}
+.v3-reply-form .v3-reply-input:has(.v3-reply-attach) :is(input,textarea),.v3-reply-form .v3-reply-input:has(.v3-reply-attach) :is(input,textarea):focus{flex:1 1 auto;border:none;border-radius:0;background:none;-webkit-backdrop-filter:none;backdrop-filter:none;outline:none;resize:none;min-height:44px}
+.v3-reply-form .v3-reply-input .v3-reply-attach{align-self:flex-start;border:none;border-radius:8px;background:none;color:var(--fg-2)}
+@media (hover:hover){.v3-reply-form .v3-reply-attach:hover:not(:disabled){color:var(--fg-1)}}
+/* Dismiss is a small chip at the panel's top right, away from the answer buttons; its tap area extends past the chip. */
+.v3-reply-panel .message-content{position:relative}
+.v3-reply-panel .message-content>strong{display:block;padding-right:96px}
+.v3-reply-form .v3-reply-dismiss{position:absolute;top:8px;right:8px;min-height:0;height:28px;padding:0 12px;font-size:13px;line-height:1;border:var(--border-width) solid var(--border);border-radius:999px;background:color-mix(in oklab,var(--fg-1) 6%,transparent);color:var(--fg-2)}
+.v3-reply-form .v3-reply-dismiss::after{content:'';position:absolute;inset:-8px -4px}
+@media (hover:hover){.v3-reply-form .v3-reply-dismiss:hover:not(:disabled){color:var(--fg-1);background:color-mix(in oklab,var(--fg-1) 10%,transparent)}}
+.v3-reply-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;padding-top:12px}
+/* Paged panels step with back/forward chevrons around "N of M"; a chevron at either end is hidden. */
+.v3-reply-nav{display:flex;align-items:center;margin-right:auto}
+.v3-reply-nav[hidden]{display:none}
+.v3-reply-chev{width:44px;height:44px;display:grid;place-items:center;padding:0;border:none;border-radius:50%;background:none;color:var(--fg-2);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.v3-reply-chev.is-off{visibility:hidden}
+.v3-reply-chev svg{width:22px;height:22px}
+@media (hover:hover){.v3-reply-chev:hover:not(:disabled){color:var(--fg-1);background:color-mix(in oklab,var(--fg-1) 8%,transparent)}}
+.v3-reply-chev:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.v3-reply-step{min-width:3.6em;text-align:center;font-variant-numeric:tabular-nums;color:var(--fg-3);font-size:13px}
 .v3-reply-btn{font:inherit;min-height:44px;padding:0 18px;border-radius:999px;border:var(--border-width) solid var(--border);background:transparent;color:var(--fg-1);cursor:pointer;-webkit-tap-highlight-color:transparent}
 .v3-reply-btn.is-primary{background:var(--fg-1);border-color:var(--fg-1);color:var(--bg-0);font-weight:600}
 .v3-reply-btn.is-quiet{border-color:transparent;color:var(--fg-2)}

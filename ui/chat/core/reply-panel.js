@@ -1,13 +1,17 @@
 // Builds an agent's reply panel (present_chat_component choice or form) as a card form: round
-// single-choice rows, checkbox rows, an optional "Something else…" row, text and free-text fields
-// whose + stages files on the answer, and an optional one-question-per-page flow with a step
-// counter, Back, Skip and Continue. Every open panel ends with Submit and Dismiss. The answer only
-// ever goes out as the user's own message; a panel never authorizes anything.
+// single-choice rows (tap a chosen row again to clear it), checkbox rows, an optional "Something
+// else…" row, text and free-text fields with + inside the box to stage files on the answer, and an
+// optional one-question-per-page flow with "N of M" between back/forward chevrons. Dismiss sits at
+// the card's top right; the main button reads Continue, Skip (optional page left empty) or Submit.
+// The answer only ever goes out as the user's own message; a panel never authorizes anything.
 
 const OTHER='\u0000other';
 
 /** Makes an element with a class name and optional text. */
 function el(tag,className,text){const node=document.createElement(tag);if(className)node.className=className;if(text!=null)node.textContent=text;return node;}
+
+/** Draws a chevron icon pointing left or right. */
+function chevron(left){const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('aria-hidden','true');const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d',left?'M15 18l-6-6 6-6':'M9 18l6-6-6-6');path.setAttribute('fill','none');path.setAttribute('stroke','currentColor');path.setAttribute('stroke-width','2');path.setAttribute('stroke-linecap','round');path.setAttribute('stroke-linejoin','round');svg.append(path);return svg;}
 
 /** Formats one answer for the user's message: lists join with commas and an empty answer reads "skipped". */
 export function shownAnswer(value){if(Array.isArray(value))return value.length?value.join(', '):'skipped';return value===''||value==null?'skipped':String(value);}
@@ -40,6 +44,11 @@ function question(field,saved,locked,addFiles,key){
       other.hidden=!otherBox.checked;list.append(other);
       for(const box of boxes)box.addEventListener('change',()=>{other.hidden=!otherBox.checked;if(box===otherBox&&otherBox.checked)other.focus();});
     }
+    if(single){
+      // Tapping the chosen round option again clears it, so a question can be left undecided.
+      let chosen=boxes.find(box=>box.checked)||null;
+      for(const box of boxes)box.addEventListener('click',()=>{if(box===chosen){box.checked=false;chosen=null;box.dispatchEvent(new Event('change',{bubbles:true}));}else chosen=box;});
+    }
     page.append(list);
     read=()=>{const values=boxes.filter(box=>box.checked).map(box=>box===otherBox?other.value.trim():box.value).filter(Boolean);return single?values[0]||'':values;};
     check=()=>{if(otherBox?.checked&&!other.value.trim())return 'Type your answer or pick another option.';if(field.required===true&&!boxes.some(box=>box.checked))return single?'Choose one option.':'Choose at least one option.';return '';};
@@ -47,18 +56,18 @@ function question(field,saved,locked,addFiles,key){
   }else{
     const wrap=el('div','v3-reply-input');
     let input;
-    if(field.type==='select'){input=document.createElement('select');for(const value of Array.isArray(field.options)?field.options:[])input.append(new Option(value,value));}
+    if(field.type==='select'){input=document.createElement('select');input.append(new Option('Choose…',''));for(const value of Array.isArray(field.options)?field.options:[])input.append(new Option(value,value));}
     else if(field.type==='textarea'){input=document.createElement('textarea');input.rows=3;input.maxLength=2000;}
     else{input=document.createElement('input');input.type=['email','number'].includes(field.type)?field.type:'text';}
     input.setAttribute('aria-label',label||'Answer');input.disabled=locked;if(typeof saved==='string'||typeof saved==='number')input.value=String(saved);
     wrap.append(input);page.append(wrap);
     if(field.attach===true&&!locked&&addFiles){
-      // + stages files exactly like the composer's picker; they go out with the answer message.
+      // + sits inside the box and stages files exactly like the composer's picker; they go out with the answer message.
       const plus=el('button','v3-reply-attach','+');plus.type='button';plus.setAttribute('aria-label','Attach files');
       const picker=document.createElement('input');picker.type='file';picker.multiple=true;picker.hidden=true;
       const files=el('small','v3-reply-files');files.hidden=true;files.setAttribute('aria-live','polite');
       plus.onclick=()=>picker.click();
-      picker.onchange=async()=>{const chosen=[...picker.files];picker.value='';if(!chosen.length)return;plus.disabled=true;try{const count=await addFiles(chosen);files.textContent=count===1?'1 file will be sent with your answer':count+' files will be sent with your answer';files.hidden=!count;}finally{plus.disabled=false;}};
+      picker.onchange=async()=>{const chosen=[...picker.files];picker.value='';if(!chosen.length)return;plus.disabled=true;try{const count=await addFiles(chosen);files.textContent=count===1?'1 file will be sent with your answer':count+' files will be sent with your answer';files.hidden=!count;page.dispatchEvent(new Event('input',{bubbles:true}));}finally{plus.disabled=false;}};
       wrap.append(plus,picker);page.append(files);
     }
     read=()=>String(input.value).trim();
@@ -66,7 +75,8 @@ function question(field,saved,locked,addFiles,key){
     clear=()=>{input.value='';};
   }
   page.append(error);
-  return {field,label:label||field.name,page,read,clear,valid(){const message=check();error.textContent=message;error.hidden=!message;return !message;}};
+  const filled=()=>{const value=read();return Array.isArray(value)?value.length>0:value!=='';};
+  return {field,label:label||field.name,page,read,clear,filled,valid(){const message=check();error.textContent=message;error.hidden=!message;return !message;}};
 }
 
 /**
@@ -81,24 +91,33 @@ export function buildReplyForm({fields,paged=false,state='',values={},dismiss,ad
   const items=fields.map((field,index)=>question(field,values[field.name],locked,addFiles,key+'-'+index));
   for(const item of items)form.append(item.page);
   if(locked)return form;
-  const button=(text,kind)=>{const node=el('button','v3-reply-btn '+kind,text);node.type='button';return node;};
-  const foot=el('div','v3-reply-foot'),step=el('span','v3-reply-step');
-  const back=button('Back','is-quiet'),skip=button('Skip','is-quiet'),next=button('Continue','is-primary'),done=button('Submit','is-primary');done.type='submit';
-  dismiss.className='v3-reply-btn is-quiet v3-reply-dismiss';
-  foot.append(step,back,dismiss,skip,next,done);form.append(foot);
+  // Dismiss sits at the card's top right, away from the answer buttons.
+  dismiss.className='v3-reply-btn is-quiet v3-reply-dismiss';form.prepend(dismiss);
+  const foot=el('div','v3-reply-foot');
+  const nav=el('div','v3-reply-nav'),step=el('span','v3-reply-step');
+  const prev=el('button','v3-reply-chev');prev.type='button';prev.setAttribute('aria-label','Previous question');prev.append(chevron(true));
+  const fwd=el('button','v3-reply-chev');fwd.type='button';fwd.setAttribute('aria-label','Next question');fwd.append(chevron(false));
+  nav.append(prev,step,fwd);
+  const main=el('button','v3-reply-btn');main.type='button';
+  const done=el('button','v3-reply-btn is-primary','Submit');done.type='submit';
+  foot.append(nav,main,done);form.append(foot);
   const pages=paged&&items.length>1;let index=0;
-  const show=()=>{const last=!pages||index===items.length-1;items.forEach((item,i)=>{item.page.hidden=pages&&i!==index;});step.hidden=!pages;step.textContent='Step '+(index+1)+' of '+items.length;back.hidden=!pages||index===0;skip.hidden=!pages||last||items[index].field.required===true;next.hidden=last;done.hidden=!last;};
-  next.onclick=()=>{if(!items[index].valid())return;index++;show();};
-  back.onclick=()=>{index--;show();};
-  // Skip leaves the question unanswered and moves on.
-  skip.onclick=()=>{items[index].clear();items[index].valid();index++;show();};
+  // The main button reads Skip while an optional page is empty, otherwise Continue.
+  const label=()=>{const item=items[index],skip=!item.filled()&&item.field.required!==true;main.textContent=skip?'Skip':'Continue';main.className='v3-reply-btn'+(skip?'':' is-primary');};
+  const show=()=>{const last=!pages||index===items.length-1;items.forEach((item,i)=>{item.page.hidden=pages&&i!==index;});nav.hidden=!pages;step.textContent=(index+1)+' of '+items.length;prev.classList.toggle('is-off',index===0);prev.disabled=index===0;fwd.classList.toggle('is-off',last);fwd.disabled=last;main.hidden=last;done.hidden=!last;if(!last)label();};
+  // Moving forward checks the page; an empty optional page counts as skipped.
+  const advance=()=>{const item=items[index];if(!item.filled()&&item.field.required!==true){item.clear();item.valid();}else if(!item.valid())return;index++;show();};
+  main.onclick=advance;fwd.onclick=advance;
+  prev.onclick=()=>{if(index>0){index--;show();}};
+  form.addEventListener('change',()=>{if(pages&&index<items.length-1)label();});
+  form.addEventListener('input',()=>{if(pages&&index<items.length-1)label();});
   form.onsubmit=async event=>{event.preventDefault();
     // Enter in a one-line field on an earlier page continues instead of sending.
-    if(pages&&index<items.length-1){next.click();return;}
+    if(pages&&index<items.length-1){advance();return;}
     const bad=items.findIndex(item=>!item.valid());if(bad>=0){if(pages){index=bad;show();}return;}
-    const controls=[back,skip,next,done,dismiss];for(const node of controls)node.disabled=true;
+    const controls=[prev,fwd,main,done,dismiss];for(const node of controls)node.disabled=true;
     try{await send(items.map(item=>({name:item.field.name,label:item.label,value:item.read()})));}
-    catch{for(const node of controls)node.disabled=false;}
+    catch{for(const node of controls)node.disabled=false;show();}
   };
   show();return form;
 }
