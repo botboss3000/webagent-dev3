@@ -615,6 +615,7 @@ def main():
     host.add_argument("op", choices=("request", "status", "wait"))
     host.add_argument("value", help="the action name for request, the request id for status and wait")
     host.add_argument("--timeout", type=int, default=1800, help="wait: seconds before giving up (exit 2)")
+    host.add_argument("--args", default="{}", help="request: the action's arguments as a JSON object")
     commands.add_parser("export", help="tar of a task's tree on stdout, for a local mirror").add_argument("task_id")
     diff = commands.add_parser("patch", help="credential-guarded unified diff from the task tree to an edited workcopy")
     diff.add_argument("task_id")
@@ -708,7 +709,7 @@ def main():
                 if time.monotonic() >= deadline:
                     print(json.dumps(record, sort_keys=True));return 2
                 time.sleep(3)
-        message = ({"op": "request", "action": args.value, "args": {},
+        message = ({"op": "request", "action": args.value, "args": json.loads(args.args),
                     "requester": {"identity": os.environ.get("WEBAGENT_OPERATOR", "ar")}}
                    if args.op == "request" else {"op": "status", "id": args.value})
         print(json.dumps(host_call(message), sort_keys=True));return 0

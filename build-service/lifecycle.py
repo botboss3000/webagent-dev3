@@ -170,8 +170,8 @@ def install(args):
  if unit.is_symlink():raise PermissionError("Unit symlink")
  unit.write_text(text);unit.chmod(0o644);subprocess.run(["systemctl","daemon-reload"],check=True)
  # Release keys run a root-owned copy of the operator shell (sudoers pins its path); keep it current.
- # The root host helper runs a root-owned copy too; restart it only when its code changed.
- for folder,name,unit in (("/usr/local/lib/webagent-ops","operator_shell.py",None),("/usr/local/lib/webagent-host","host_helper.py","webagent-host-helper.service")):
+ # The root host helper is not copied here: its supervisor_update action replaces it after approval.
+ for folder,name,unit in (("/usr/local/lib/webagent-ops","operator_shell.py",None),):
   folder=Path(folder)
   if not folder.is_dir() or folder.is_symlink():continue
   body=(Path(value["service_dir"])/name).read_bytes();target=folder/name

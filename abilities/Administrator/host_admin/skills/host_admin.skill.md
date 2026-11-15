@@ -15,7 +15,8 @@ and configuration belong to Codebase Admin.
   A background notice wakes this chat when the request is decided and when it finishes.
   Never poll in a loop; `check` once when the user asks.
 - Denied or expired means stop and ask; never file the same request again unasked.
-- A finished `file_write` can be undone once with `host_revert`; say so when it matters.
+- A finished `file_write` or `broker_install` can be undone once with `host_revert`; say so
+  when it matters. Broker installs go through `broker_install`, never a shell.
 
 For SSH access rules (keys only, Tailscale only) and how to undo them, read the
 `host_security` skill.
@@ -26,4 +27,4 @@ For SSH access rules (keys only, Tailscale only) and how to undo them, read the
 - Units and containers only from the host profile's lists.
 - Boot loader and disk files need the administrator's password on approval, and an
   allow-all window never covers them.
-- Requests expire after 30 minutes without a decision.
+- A request waits for a decision without a time limit; the user may decide it later.

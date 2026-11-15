@@ -39,6 +39,10 @@ class HelperTests(unittest.TestCase):
     def test_denied_and_expired_requests_never_run(self):
         denied = self.request()
         self.assertEqual("denied", self.helper.handle(APP, {"op": "decide", "id": denied["id"], "decision": "deny", "admin": "admin"})["state"])
+        waiting = self.request()
+        self.now += 10 ** 6
+        self.assertEqual("pending", self.helper.handle(APP, {"op": "status", "id": waiting["id"]})["state"])  # no expiry by default
+        self.helper.profile["request_ttl_seconds"] = 1800
         late = self.request()
         self.now += 1801
         self.assertEqual("expired", self.helper.handle(APP, {"op": "status", "id": late["id"]})["state"])
@@ -136,6 +140,77 @@ class HelperTests(unittest.TestCase):
         self.helper.handle(APP, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "admin"})
         events = [line for line in (Path(self.temp.name) / "log.jsonl").read_text().splitlines()]
         self.assertEqual(3, len(events))
+
+
+
+class SupervisorTests(unittest.TestCase):
+    """broker_install keeps the last-known-good release and restores it when the health test fails."""
+    TREE = "ab" * 32
+
+    def setUp(self):
+        import json, pwd
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name)
+        self.state_root = root / "jobs"
+        (self.state_root / "coordination/trees" / self.TREE / "v3/build-service").mkdir(parents=True)
+        (self.state_root / "job1.json").write_text(json.dumps({"status": "completed"}))
+        self.config = root / "build-service.json"
+        self.config.write_text(json.dumps({"service_dir": "/releases/old", "state_root": str(self.state_root), "instance": "development"}))
+        (root / "units").mkdir()
+        self.unit = root / "units" / "webagent-build-development.service"
+        self.unit.write_text("ExecStart=/releases/old/bootstrap.py\n")
+        self.commands, self.healthy = [], True
+        profile = {**helper_module.DEFAULTS, "state": str(root / "host"), "app_uid": APP, "health_seconds": 120,
+                   "operator_account": pwd.getpwuid(OPERATOR).pw_name, "build_config": str(self.config), "unit_dir": str(root / "units")}
+        self.helper = helper_module.Helper(profile, clock=lambda: 1000.0, runner=self.fake)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def fake(self, command, **_):
+        import json
+        self.commands.append(command)
+        out = ""
+        if "install" in command:  # the installer repoints config and unit at the new release
+            self.config.write_text(self.config.read_text().replace("/releases/old", "/releases/new"))
+            self.unit.write_text("ExecStart=/releases/new/bootstrap.py\n")
+            out = json.dumps({"installed": True, "version": "new"})
+        if command[:2] == ["systemctl", "is-active"]:
+            out = "active" if self.healthy else "failed"
+        return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+
+    def install(self):
+        request = self.helper.handle(APP, {"op": "request", "action": "broker_install", "requester": {"session": "s"},
+                                           "args": {"task_id": "t-1", "tree_hash": self.TREE}})
+        self.assertIn("old", request["preview"])
+        run = lambda command, timeout=30: self.fake(command).stdout
+        return request, lambda: self.helper.install_broker(request["args"], request["id"], run)
+
+    def test_healthy_install_keeps_the_new_release(self):
+        request, install = self.install()
+        result = install()
+        self.assertEqual(("new", "/releases/old", True), (result["installed_release"], result["previous_release"], result["health"]["healthy"]))
+        self.assertIn("/releases/new", self.config.read_text())
+
+    def test_failed_health_test_restores_the_previous_release(self):
+        self.healthy = False
+        self.helper.profile["health_seconds"] = 0
+        request, install = self.install()
+        with self.assertRaisesRegex(RuntimeError, "restored release"):
+            install()
+        self.assertIn("/releases/old", self.config.read_text())
+        self.assertIn("/releases/old", self.unit.read_text())
+        self.assertIn(["systemctl", "restart", "webagent-build-development.service"], self.commands)
+
+    def test_busy_broker_and_bad_trees_are_refused(self):
+        import json
+        with self.assertRaisesRegex(ValueError, "tree"):
+            self.helper.handle(APP, {"op": "request", "action": "broker_install", "requester": {"session": "s"},
+                                     "args": {"task_id": "t-1", "tree_hash": "cd" * 32}})
+        (self.state_root / "job2.json").write_text(json.dumps({"status": "running"}))
+        request, install = self.install()
+        with self.assertRaisesRegex(RuntimeError, "busy"):
+            install()
 
 
 if __name__ == "__main__":

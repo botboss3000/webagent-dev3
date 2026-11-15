@@ -65,7 +65,7 @@ export function start(mount) {
     top.append(el('strong', 'host-action', request.action), el('span', 'host-pill', pending ? UNDO[request.undo] || request.undo : request.state));
     const preview = el('pre', 'host-preview', request.preview);
     const meta = el('span', 'host-meta', who(request.requester) + ' · ' + when(request.created_at)
-      + (pending ? ' · expires ' + when(request.expires_at) : request.decided_by ? ' · by ' + request.decided_by : ''));
+      + (pending ? (request.expires_at ? ' · expires ' + when(request.expires_at) : '') : request.decided_by ? ' · by ' + request.decided_by : ''));
     item.append(top, preview, meta);
     if (pending && request.boot_disk) item.append(el('span', 'host-error', 'Boot or disk change: a mistake can stop the server booting.'));
     if (request.error) item.append(el('span', 'host-error', request.error));

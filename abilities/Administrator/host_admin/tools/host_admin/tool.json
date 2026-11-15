@@ -27,13 +27,15 @@
           "unit_restart",
           "container_restart",
           "packages_upgrade",
+          "broker_install",
+          "supervisor_update",
           "noop"
         ],
         "description": "request only: the change to ask for."
       },
       "host_args": {
         "type": "object",
-        "description": "request only: file_write {path, content}; host_revert {request_id}; unit_restart {unit}; container_restart {container}; packages_upgrade and noop {}."
+        "description": "request only: file_write {path, content}; host_revert {request_id}; unit_restart {unit}; container_restart {container}; broker_install {task_id, tree_hash, allow_stale_tree?}; packages_upgrade, supervisor_update and noop {}."
       },
       "request_id": {
         "type": "string",
