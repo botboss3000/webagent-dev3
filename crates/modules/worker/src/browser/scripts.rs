@@ -74,11 +74,14 @@ return {missing:false,count:list.length,animations:list.slice(0,arguments[1]).ma
 /// One poll of a `wait_for` condition.
 pub const CHECK: &str = r#"
 /* V3_CHECK */
-// One poll of a wait condition; the first call starts the page-change clock.
+// One poll of a wait condition; the first call starts the page-change clock and keeps a
+// bounded list of recent change times and targets, so a selector can scope the quiet check.
 if (!window.__v3Quiet) {
- window.__v3Quiet={last:performance.now()};
- new MutationObserver(()=>{window.__v3Quiet.last=performance.now();}).observe(document.documentElement,
-  {subtree:true,childList:true,attributes:true,characterData:true});
+ const q=window.__v3Quiet={start:performance.now(),last:performance.now(),changes:[],trimmed:0};
+ new MutationObserver(list=>{const t=performance.now();q.last=t;
+  for(const m of list)q.changes.push([t,m.target]);
+  if(q.changes.length>4000){q.trimmed=q.changes[q.changes.length-2001][0];q.changes.splice(0,q.changes.length-2000);}
+ }).observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true});
 }
 const condition=arguments[0],selector=arguments[1],text=arguments[2],quiet=arguments[3],now=performance.now();
 const pick=()=>[...document.querySelectorAll(selector||'body')];
@@ -86,7 +89,16 @@ const shown=n=>n.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});
 if (condition==='visible') return pick().some(shown);
 if (condition==='hidden') return !pick().some(shown);
 if (condition==='text') return pick().some(n=>shown(n)&&n.innerText.includes(text));
-if (condition==='quiet') return now-window.__v3Quiet.last>=quiet;
+if (condition==='quiet') {
+ const q=window.__v3Quiet;
+ if (!selector) return now-q.last>=quiet;
+ const roots=pick();
+ // A missing target, or dropped history inside the window, cannot prove quiet.
+ if (!roots.length||q.trimmed>now-quiet) return false;
+ let last=q.start;
+ for (const [t,target] of q.changes) if (t>last&&roots.some(r=>r.contains(target))) last=t;
+ return now-last>=quiet;
+}
 // Endless animations such as spinners never finish, so only finite running ones count.
 if (condition==='animations_done') return (selector?pick().flatMap(n=>n.getAnimations({subtree:true})):document.getAnimations())
  .every(a=>a.playState!=='running'||(a.effect&&a.effect.getTiming().iterations===Infinity));
@@ -191,6 +203,44 @@ return true;
 pub const GESTURE_READ: &str = r#"
 /* V3_GESTURE_READ */
 return window.__v3Gesture?window.__v3Gesture.stop():null;
+"#;
+
+/// Starts counting DOM changes on the page or under a selector's outermost matches: kinds,
+/// attribute names and the most changed elements, never text or attribute values.
+pub const MUTATIONS_START: &str = r#"
+/* V3_MUTATIONS_START */
+if (window.__v3Mutations) window.__v3Mutations.observer.disconnect();
+const sel=arguments[0];
+const roots=sel?[...document.querySelectorAll(sel)].filter((node,i,all)=>!all.some(other=>other!==node&&other.contains(node)))
+ :[document.documentElement];
+if (!roots.length) {delete window.__v3Mutations;return {missing:true,matches:0};}
+const name=n=>{if(n&&n.nodeType!==1)n=n.parentElement;if(!n)return '';
+ return n.tagName.toLowerCase()+(n.id?'#'+n.id:'')+(typeof n.className==='string'&&n.className.trim()?'.'+n.className.trim().split(/\s+/).slice(0,2).join('.'):'');};
+const w={t0:performance.now(),matches:roots.length,counts:{records:0,added_nodes:0,removed_nodes:0,attributes:0,text:0},
+ attrs:new Map(),els:new Map(),elements_truncated:false};
+w.take=list=>{const t=Math.round(performance.now()-w.t0);for(const m of list){w.counts.records++;
+ if(m.type==='childList'){w.counts.added_nodes+=m.addedNodes.length;w.counts.removed_nodes+=m.removedNodes.length;}
+ else if(m.type==='attributes'){w.counts.attributes++;if(w.attrs.size<200||w.attrs.has(m.attributeName))w.attrs.set(m.attributeName,(w.attrs.get(m.attributeName)||0)+1);}
+ else w.counts.text++;
+ const key=name(m.target);let e=w.els.get(key);
+ if(!e){if(w.els.size>=500){w.elements_truncated=true;continue;}e={element:key,count:0,first_ms:t,last_ms:t};w.els.set(key,e);}
+ e.count++;e.last_ms=t;}};
+w.observer=new MutationObserver(w.take);
+for (const r of roots) w.observer.observe(r,{subtree:true,childList:true,attributes:true,characterData:true});
+window.__v3Mutations=w;
+return {missing:false,matches:roots.length};
+"#;
+
+/// Stops the DOM-change count and returns it, most changed elements first.
+pub const MUTATIONS_READ: &str = r#"
+/* V3_MUTATIONS_READ */
+const w=window.__v3Mutations,limit=arguments[0];
+if (!w) return null;
+w.take(w.observer.takeRecords());w.observer.disconnect();delete window.__v3Mutations;
+const top=(rows,key)=>rows.sort((a,b)=>b[key]-a[key]).slice(0,limit);
+return {watched_ms:Math.round(performance.now()-w.t0),matches:w.matches,...w.counts,
+ attributes_changed:top([...w.attrs].map(([name,count])=>({name,count})),'count'),
+ elements:top([...w.els.values()],'count'),distinct_elements:w.els.size,elements_truncated:w.elements_truncated};
 "#;
 
 /// Re-checks an input target at dispatch against the region last read.

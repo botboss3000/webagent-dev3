@@ -1193,6 +1193,45 @@ impl Service {
         )
     }
 
+    /// Counts DOM changes on the page or under `selector` for `duration_ms`: change kinds,
+    /// changed attribute names and the most changed elements, never text or values.
+    async fn mutations(
+        state: &State,
+        args: &Map<String, Value>,
+        selector: Option<&str>,
+    ) -> Result<Value, Fault> {
+        let duration = args
+            .get("duration_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(3000);
+        let started = wd::execute(
+            state.driver(),
+            scripts::MUTATIONS_START,
+            vec![Value::from(selector.unwrap_or(""))],
+        )
+        .await?;
+        if !started.is_object() {
+            return Err(Fault::rejected("Invalid bounded mutation result"));
+        }
+        if truthy(started.get("missing")) {
+            return Err(Fault::rejected("Mutation target does not exist"));
+        }
+        tokio::time::sleep(Duration::from_millis(duration)).await;
+        let result = wd::execute(
+            state.driver(),
+            scripts::MUTATIONS_READ,
+            vec![json!(MAX_ELEMENTS)],
+        )
+        .await?;
+        // A reload or navigation while watching discards the page's counter.
+        if !result.is_object() || !result["elements"].is_array() {
+            return Err(Fault::rejected(
+                "The page was replaced while watching; watch again once it has loaded",
+            ));
+        }
+        Ok(result)
+    }
+
     /// Waits for the app's boot to finish signed in, or says where it stopped.
     async fn app_ready(&self, state: &State) -> Result<Value, Fault> {
         let started = Instant::now();
@@ -1773,6 +1812,7 @@ impl Service {
                 result
             }
             "wait_for" => Self::wait_for(state, args).await?,
+            "mutations" => Self::mutations(state, args, selector).await?,
             "scroll" => {
                 let result = wd::execute(
                     state.driver(),
@@ -1991,6 +2031,13 @@ impl Service {
         self.call_one(name, args, base, trusted).await
     }
 
+    /// How long a script of `steps` steps may run before it stops between steps: 10 s a
+    /// step, from 25 s to 120 s.
+    pub(crate) fn script_budget(steps: usize) -> Duration {
+        let steps = u64::try_from(steps).unwrap_or(u64::MAX);
+        Duration::from_secs(steps.saturating_mul(10).clamp(25, 120))
+    }
+
     /// Runs `steps` in order, each as its own call with its own time bound and checks.
     /// Only steps marked `screenshot` return an image (taken after the step's action); a
     /// failed step stops the script and returns a screenshot of that moment. Input steps
@@ -2013,9 +2060,19 @@ impl Service {
         else {
             return rejected(format!("a script needs 1 to {MAX_SCRIPT_STEPS} steps"));
         };
+        let budget = Self::script_budget(steps.len());
+        let deadline = Instant::now() + budget;
         let mut results = Vec::new();
         let mut artifacts: Vec<Value> = Vec::new();
         for (index, step) in steps.iter().enumerate() {
+            // Stopping here, not mid-step, returns every finished step to the caller.
+            if index > 0 && Instant::now() >= deadline {
+                return json!({"status":"error","error_kind":"browser_script_time_limit",
+                    "output":format!("Script stopped before step {index}: its {} s time limit ran \
+                        out. The finished steps are in `steps`; run the rest as another script",
+                        budget.as_secs()),
+                    "failed_step":index,"steps":results,"artifacts":artifacts});
+            }
             let Some(mut step) = step.as_object().cloned() else {
                 return rejected(format!("step {index} must be an object"));
             };

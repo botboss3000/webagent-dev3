@@ -19,6 +19,7 @@
           "pixels",
           "performance",
           "wait_for",
+          "mutations",
           "animations",
           "scroll",
           "viewport",
@@ -39,7 +40,7 @@
       },
       "selector": {
         "type": "string",
-        "description": "CSS selector. read/measure/animations/wait_for: every match. scroll: element to bring into view or whose scroll container to scroll. pixels: sample the centre of the first rendered match"
+        "description": "CSS selector. read/measure/animations/wait_for: every match; wait_for quiet and mutations watch only changes inside the matches. scroll: element to bring into view or whose scroll container to scroll. pixels: sample the centre of the first rendered match"
       },
       "offset": {
         "type": "integer",
@@ -72,8 +73,14 @@
       "quiet_ms": {
         "type": "integer",
         "minimum": 100,
-        "maximum": 3000,
+        "maximum": 10000,
         "description": "wait_for quiet/network_idle: how long it must stay still (default 500)"
+      },
+      "duration_ms": {
+        "type": "integer",
+        "minimum": 100,
+        "maximum": 10000,
+        "description": "mutations only: how long to watch for DOM changes (default 3000)"
       },
       "dx": {
         "type": "integer",

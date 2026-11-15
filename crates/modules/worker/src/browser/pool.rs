@@ -63,9 +63,12 @@ impl Item {
         }
     }
 
+    /// Whether the lease has expired, or the browser sat idle past `idle`; a browser busy
+    /// with a call is never idle, but its lease still expires.
     fn stale(&self, idle: Duration) -> bool {
+        let busy = self.io.try_lock().is_err();
         let lease = self.lease.lock().unwrap_or_else(PoisonError::into_inner);
-        now() >= lease.0 || lease.1.elapsed() > idle
+        now() >= lease.0 || (!busy && lease.1.elapsed() > idle)
     }
 
     /// SIGTERM to the process group, SIGKILL after five seconds, then SIGKILL to whatever
@@ -486,13 +489,21 @@ impl Browsers {
         // long as it.
         *item.lease.lock().unwrap_or_else(PoisonError::into_inner) =
             (expires.unwrap_or(0.0), Instant::now());
-        let limit = if trusted["site"].is_object() {
+        let mut limit = if trusted["site"].is_object() {
             SITE_CALL_TIMEOUT
         } else {
             CALL_TIMEOUT
         };
+        // A script stops itself between steps at its budget; waiting for one more step's
+        // read, action and screenshot past it means its finished steps always come back.
+        if args["action"] == "script" {
+            let steps = args["steps"].as_array().map_or(0, Vec::len);
+            limit = super::service::Service::script_budget(steps) + limit * 3;
+        }
         let exchanged =
             tokio::time::timeout(limit, exchange(&mut io, name, args, base, trusted)).await;
+        // Idle time counts from the end of a call, so a long call is not reaped right after.
+        item.lease.lock().unwrap_or_else(PoisonError::into_inner).1 = Instant::now();
         drop(io);
         self.recount(&sid).await;
         match exchanged {

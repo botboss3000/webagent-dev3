@@ -104,6 +104,11 @@ impl Mock {
             json!(CREDENTIAL_FIELDS.contains(&id))
         } else if source.contains("V3_CHECK") {
             json!(true)
+        } else if source.contains("V3_MUTATIONS_START") {
+            json!({"missing":arg(0) == "#none"})
+        } else if source.contains("V3_MUTATIONS_READ") {
+            json!({"total":3,"kinds":{"attributes":2,"childList":1},"attributes":{"class":2},
+                "elements":[{"tag":"span","changes":3}],"elements_truncated":false})
         } else if source.contains("V3_MASK") {
             page.masked = Some(args.to_vec());
             json!(1)
@@ -401,13 +406,24 @@ fn pair(left: &Value, right: &Value) -> (Value, Value) {
 }
 
 #[test]
-fn page_scripts_are_byte_identical_to_the_python_adapter() {
+fn script_budget_grows_with_steps_within_bounds() {
+    assert_eq!(Service::script_budget(1).as_secs(), 25);
+    assert_eq!(Service::script_budget(5).as_secs(), 50);
+    assert_eq!(Service::script_budget(20).as_secs(), 120);
+}
+
+/// Pins the page scripts' bytes. They began as the Python adapter's; CHECK has since
+/// gained selector-scoped quiet waits and MUTATIONS_* are new.
+#[test]
+fn page_scripts_are_pinned() {
     let mut digest = Sha256::new();
     for script in [
         scripts::READ,
         scripts::MEASURE,
         scripts::ANIMATIONS,
         scripts::CHECK,
+        scripts::MUTATIONS_START,
+        scripts::MUTATIONS_READ,
         scripts::READY,
         scripts::SCROLL,
         scripts::FOCUS,
@@ -423,7 +439,7 @@ fn page_scripts_are_byte_identical_to_the_python_adapter() {
     }
     assert_eq!(
         hex::encode(digest.finalize()),
-        "7bc30a0cfbcb09f75d08d84bdc17e18f9e8b03ed5827f184d9a2ccc9af0beec4"
+        "ea5dcb3b74caa9e529719b36b2cca0dd403ede3ea33a40d305764806376a1aa9"
     );
     // The page sees a JavaScript newline escape, not a raw newline in a string literal.
     assert!(scripts::READ.contains("text+=chunk+'\\n';"));
@@ -895,6 +911,27 @@ async fn measure_wait_animations_scroll_press_pixels_and_emulate() {
         lock(&polls)[0],
         vec![json!("quiet"), json!(""), json!(""), json!(200)]
     );
+    let longest = f
+        .call(json!({"action":"wait_for","condition":"quiet","quiet_ms":10000,"timeout_ms":10000}))
+        .await;
+    assert_eq!(longest["met"], true, "{longest}");
+    let too_quiet = f
+        .call(json!({"action":"wait_for","condition":"quiet","quiet_ms":10001}))
+        .await;
+    assert!(output(&too_quiet).contains("quiet_ms"));
+    let counted = f
+        .call(json!({"action":"mutations","selector":"#chat","duration_ms":100}))
+        .await;
+    assert_eq!(counted["total"], 3, "{counted}");
+    assert_eq!(counted["elements"][0]["tag"], "span");
+    let absent = f
+        .call(json!({"action":"mutations","selector":"#none","duration_ms":100}))
+        .await;
+    assert!(output(&absent).contains("does not exist"));
+    let endless = f
+        .call(json!({"action":"mutations","duration_ms":10001}))
+        .await;
+    assert!(output(&endless).contains("duration_ms"));
     let none = f.call(json!({"action":"scroll","selector":"#none"})).await;
     assert!(output(&none).contains("does not exist"));
     let still = f.call(json!({"action":"scroll"})).await;

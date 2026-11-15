@@ -25,12 +25,13 @@ const APP_PARAMS: [&str; 12] = [
     "ui_sample",
     "window",
 ];
-pub(crate) const READ_ACTIONS: [&str; 13] = [
+pub(crate) const READ_ACTIONS: [&str; 14] = [
     "animations",
     "close",
     "emulate",
     "keyboard",
     "measure",
+    "mutations",
     "navigate",
     "performance",
     "pixels",
@@ -695,6 +696,7 @@ fn permitted(action: &str) -> &'static [&'static str] {
         "pixels" => &["points", "selector"],
         "wait_for" => &["condition", "selector", "text", "timeout_ms", "quiet_ms"],
         "animations" => &["selector"],
+        "mutations" => &["selector", "duration_ms"],
         "scroll" => &["selector", "dx", "dy"],
         "press" => &["key", "selector"],
         "touch" => &["selector", "dx", "dy"],
@@ -730,6 +732,7 @@ pub fn validate_args(name: &str, args: &mut Map<String, Value>) -> Result<&'stat
                     "text",
                     "timeout_ms",
                     "quiet_ms",
+                    "duration_ms",
                     "dx",
                     "dy",
                     "preset",
@@ -913,13 +916,22 @@ pub fn validate_args(name: &str, args: &mut Map<String, Value>) -> Result<&'stat
         if condition == Some("text") && !truthy(args.get("text")) {
             return Err(Fault::rejected("A text wait requires the text to wait for"));
         }
-        for (key, low, high) in [("timeout_ms", 100, 10000), ("quiet_ms", 100, 3000)] {
+        for (key, low, high) in [("timeout_ms", 100, 10000), ("quiet_ms", 100, 10000)] {
             if let Some(value) = args.get(key) {
                 if !(is_int(value) && int_in(value, low, high)) {
                     return Err(Fault::rejected(format!(
                         "{key} must be a whole number from {low} to {high}"
                     )));
                 }
+            }
+        }
+    }
+    if action == "mutations" {
+        if let Some(value) = args.get("duration_ms") {
+            if !(is_int(value) && int_in(value, 100, 10000)) {
+                return Err(Fault::rejected(
+                    "duration_ms must be a whole number from 100 to 10000",
+                ));
             }
         }
     }
