@@ -105,17 +105,17 @@ mod preview {
     };
 
     pub(super) const COOKIE: &str = "v3_ui_preview";
-    const LIFETIME: u64 = 3600;
+    /// The browser's longest cookie life (400 days): a preview lasts until the off link.
+    const COOKIE_MAX_AGE: u64 = 400 * 24 * 3600;
 
     #[derive(Clone)]
     struct Grant {
         user_id: String,
         session_id: String,
         variant: String,
-        expires: u64,
     }
 
-    /// Grants by random cookie token; a restart clears them, ending every preview.
+    /// Grants by random cookie token, one per user; `off` or a restart ends a preview.
     static GRANTS: LazyLock<Mutex<HashMap<String, Grant>>> = LazyLock::new(Default::default);
 
     pub(super) fn variant_ok(variant: &str) -> bool {
@@ -165,12 +165,7 @@ mod preview {
     /// The variant folder this request may see: a live grant whose user is the signed-in user.
     pub(super) async fn root_for(app: &crate::App, headers: &HeaderMap) -> Option<PathBuf> {
         let token = cookie_value(headers, COOKIE)?;
-        let grant = {
-            let mut grants = GRANTS.lock().ok()?;
-            let now = webagent_host_core::now();
-            grants.retain(|_, grant| grant.expires > now);
-            grants.get(token)?.clone()
-        };
+        let grant = GRANTS.lock().ok()?.get(token)?.clone();
         let candidate = app
             .store
             .accounts_repository()
@@ -199,12 +194,16 @@ mod preview {
         axum::Extension(app): axum::Extension<crate::App>,
         axum::Extension(identity): axum::Extension<Value>,
         RoutePath((sid, variant)): RoutePath<(String, String)>,
+        headers: HeaderMap,
     ) -> Response {
         if let Err(error) = crate::phase3_api::administrator(&app, &identity).await {
             return error.into_response();
         }
         let clear = format!("{COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax");
         if variant == "off" {
+            if let (Some(token), Ok(mut grants)) = (cookie_value(&headers, COOKIE), GRANTS.lock()) {
+                grants.remove(token);
+            }
             // Drop any draft copies the browser kept so the live UI shows at once.
             return (
                 [
@@ -235,16 +234,18 @@ mod preview {
             user_id: identity["_user_id"].as_str().unwrap_or_default().to_owned(),
             session_id: sid,
             variant,
-            expires: webagent_host_core::now() + LIFETIME,
         };
         if grant.user_id.is_empty() {
             return (StatusCode::UNAUTHORIZED, "Sign in required").into_response();
         }
         if let Ok(mut grants) = GRANTS.lock() {
+            // A new preview replaces the user's previous one, so grants stay bounded.
+            grants.retain(|_, old| old.user_id != grant.user_id);
             grants.insert(token.clone(), grant);
         }
-        let cookie =
-            format!("{COOKIE}={token}; Path=/; Max-Age={LIFETIME}; HttpOnly; Secure; SameSite=Lax");
+        let cookie = format!(
+            "{COOKIE}={token}; Path=/; Max-Age={COOKIE_MAX_AGE}; HttpOnly; Secure; SameSite=Lax"
+        );
         ([(header::SET_COOKIE, cookie)], Redirect::to("/app")).into_response()
     }
 
