@@ -44,7 +44,7 @@ impl Store {
         webagent_chat::session::touch_session_activity(self, tx, sid).await
     }
 
-    /// Read public metadata and unread counts from one user-owned snapshot.
+    /// Read one session's public metadata.
     pub async fn session_read_summary(&self, sid: &str) -> Result<Value> {
         let mut tx = self.pool.begin().await?;
         let raw: Vec<u8> = sqlx::query_scalar("SELECT value FROM docs WHERE key=?")
@@ -52,84 +52,14 @@ impl Store {
             .fetch_one(&mut *tx)
             .await?;
         let session = self.unseal(&raw)?;
-        let result = self.read_summary_in(&mut tx, sid, &session).await?;
+        let result = self.summary_in(&session)?;
         tx.commit().await?;
         Ok(result)
     }
 
-    /// Count unread assistant bubbles against the supplied session read cursor in the caller transaction.
-    pub(super) async fn read_summary_in(
-        &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-        sid: &str,
-        session: &Value,
-    ) -> Result<Value> {
-        webagent_chat::session::read_summary_in(tx, sid, session).await
-    }
-
-    /// Explicit rendered-message acknowledgment. Natural max semantics make
-    /// retries and older tabs harmless without mutating metadata revisions.
-    pub async fn acknowledge_session_read(
-        &self,
-        sid: &str,
-        through: u64,
-    ) -> Result<SessionPatchOutcome> {
-        let Ok(seq) = i64::try_from(through) else {
-            return Ok(SessionPatchOutcome::Invalid("Invalid read cursor"));
-        };
-        let key = format!("session:{sid}");
-        let _guard = self.context_gate.write().await;
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE docs SET key=key WHERE key=?")
-            .bind(&key)
-            .execute(&mut *tx)
-            .await?;
-        let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
-            .bind(&key)
-            .fetch_optional(&mut *tx)
-            .await?
-        else {
-            return Ok(SessionPatchOutcome::NotFound);
-        };
-        let mut session = self.unseal(&raw)?;
-        if session["status"] != "active" {
-            return Ok(SessionPatchOutcome::Conflict("Session is archived"));
-        }
-        if seq != 0 {
-            let exists: i64 =
-                sqlx::query_scalar("SELECT COUNT(*) FROM chat WHERE session_id=? AND seq=?")
-                    .bind(sid)
-                    .bind(seq)
-                    .fetch_one(&mut *tx)
-                    .await?;
-            if exists != 1 {
-                return Ok(SessionPatchOutcome::Invalid(
-                    "Read cursor is not a message in this session",
-                ));
-            }
-        }
-        let previous = session["read_through_seq"]
-            .as_u64()
-            .ok_or_else(|| anyhow!("Invalid stored read cursor"))?;
-        if through > previous {
-            session["read_through_seq"] = json!(through);
-            sqlx::query("UPDATE docs SET value=? WHERE key=?")
-                .bind(self.encode_user_record(&session)?)
-                .bind(&key)
-                .execute(&mut *tx)
-                .await?;
-        }
-        let result = json!({"session":self.read_summary_in(&mut tx,sid,&session).await?});
-        if through > previous {
-            sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,'session_read',?)")
-                .bind(sid)
-                .bind(self.encode_user_record(&result)?)
-                .execute(&mut *tx)
-                .await?;
-        }
-        tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[key]);
-        Ok(SessionPatchOutcome::Saved(result))
+    /// The public summary of one session document.
+    pub(super) fn summary_in(&self, session: &Value) -> Result<Value> {
+        webagent_chat::session::public_session(session)
     }
 
     /// List active public sessions using the canonical pin/activity ordering.
@@ -336,7 +266,7 @@ impl Store {
             session["metadata_revision"] = json!(revision);
             self.write_document(&mut tx, &session_key, &session).await?;
         }
-        let summary = self.read_summary_in(&mut tx, sid, &session).await?;
+        let summary = self.summary_in(&session)?;
         let result = json!({"session":summary});
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
             .bind(&receipt_key)
@@ -578,7 +508,7 @@ impl Store {
             session["metadata_revision"] = json!(revision);
             self.write_document(&mut tx, &key, &session).await?;
         }
-        let result = json!({"session":self.read_summary_in(&mut tx,sid,&session).await?});
+        let result = json!({"session":self.summary_in(&session)?});
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
             .bind(&receipt_key)
             .bind(self.encode_user_record(&json!({"digest":fingerprint,"result":result}))?)
@@ -1229,13 +1159,7 @@ mod tests {
         };
         assert_eq!(unarchived["session"]["status"], "active");
         assert!(unarchived["session"]["archived_at"].is_null());
-        for field in [
-            "title",
-            "pinned",
-            "last_active_at",
-            "read_through_seq",
-            "created_at",
-        ] {
+        for field in ["title", "pinned", "last_active_at", "created_at"] {
             assert_eq!(unarchived["session"][field], stale[field]);
         }
         let saved = resumed.get("session:s").await.unwrap().unwrap();
@@ -1757,9 +1681,9 @@ mod tests {
         }
     }
 
-    /// Verify public publication advances activity and read acknowledgments survive stale session snapshots.
+    /// Verify public publication advances activity that survives stale session snapshots.
     #[tokio::test]
-    async fn publication_activity_read_cursor_and_checkpoint_preservation() {
+    async fn publication_activity_and_checkpoint_preservation() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         store
@@ -1788,129 +1712,21 @@ mod tests {
             .await
             .unwrap();
         tx.commit().await.unwrap();
-        let (messages, cursor) = store.chat_snapshot("s").await.unwrap();
+        let (messages, _) = store.chat_snapshot("s").await.unwrap();
         let summary = store.session_read_summary("s").await.unwrap();
-        assert_eq!(summary["unread_count"], 1);
-        assert_eq!(summary["is_unread"], true);
         assert_eq!(summary["last_active_at"], messages[1]["created_at"]);
         assert_eq!(summary["metadata_revision"], 0);
-        assert!(matches!(
-            store
-                .acknowledge_session_read("s", cursor as u64 + 1)
-                .await
-                .unwrap(),
-            SessionPatchOutcome::Invalid(_)
-        ));
-        assert!(matches!(
-            store.acknowledge_session_read("s", u64::MAX).await.unwrap(),
-            SessionPatchOutcome::Invalid(_)
-        ));
-        assert!(matches!(
-            store.acknowledge_session_read("missing", 0).await.unwrap(),
-            SessionPatchOutcome::NotFound
-        ));
-        let SessionPatchOutcome::Saved(read) = store
-            .acknowledge_session_read("s", cursor as u64)
-            .await
-            .unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(read["session"]["unread_count"], 0);
-        store
-            .acknowledge_session_read("s", messages[0]["seq"].as_u64().unwrap())
-            .await
-            .unwrap();
-        store
-            .acknowledge_session_read("s", cursor as u64)
-            .await
-            .unwrap();
         store.put("session:s", &stale).await.unwrap();
         let after = store.session_read_summary("s").await.unwrap();
-        assert_eq!(after["read_through_seq"], cursor);
         assert_eq!(after["last_active_at"], summary["last_active_at"]);
         assert_eq!(after["metadata_revision"], 0);
-        let mut tx = store.pool.begin().await.unwrap();
-        store
-            .insert_chat(&mut tx, "s", "r1", "assistant", &json!("reply"))
-            .await
-            .unwrap();
-        tx.commit().await.unwrap();
-        assert_eq!(store.chat_snapshot("s").await.unwrap().0.len(), 2);
-        assert_eq!(store.session_read_summary("s").await.unwrap(), after);
-        let events: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE kind='session_read'")
-                .fetch_one(&store.pool)
-                .await
-                .unwrap();
-        assert_eq!(events, 1);
         let reopened = Store::open(root.path()).await.unwrap();
         assert_eq!(reopened.session_read_summary("s").await.unwrap(), after);
     }
 
-    /// Race read acknowledgments across Stores and verify monotonic cursors leave later publications unread.
+    /// Verify publication activity rolls back with its failed transaction.
     #[tokio::test]
-    async fn read_ack_cross_store_race_preserves_maximum_and_new_unread() {
-        let root = tempfile::tempdir().unwrap();
-        let first = Store::open(root.path()).await.unwrap();
-        first
-            .put("session:s", &json!({"id":"s","created_at":1}))
-            .await
-            .unwrap();
-        let mut tx = first.pool.begin().await.unwrap();
-        first
-            .insert_chat(&mut tx, "s", "r1", "assistant", &json!("one"))
-            .await
-            .unwrap();
-        first
-            .insert_chat(&mut tx, "s", "r2", "assistant", &json!("two"))
-            .await
-            .unwrap();
-        tx.commit().await.unwrap();
-        let (messages, cursor) = first.chat_snapshot("s").await.unwrap();
-        let second = Store::open(root.path()).await.unwrap();
-        let (a, b) = tokio::join!(
-            first.acknowledge_session_read("s", cursor as u64),
-            second.acknowledge_session_read("s", messages[0]["seq"].as_u64().unwrap())
-        );
-        assert!(matches!(a.unwrap(), SessionPatchOutcome::Saved(_)));
-        assert!(matches!(b.unwrap(), SessionPatchOutcome::Saved(_)));
-        assert_eq!(
-            first.session_read_summary("s").await.unwrap()["read_through_seq"],
-            cursor
-        );
-        let mut tx = first.pool.begin().await.unwrap();
-        first
-            .insert_chat(&mut tx, "s", "r3", "assistant", &json!("three"))
-            .await
-            .unwrap();
-        tx.commit().await.unwrap();
-        first
-            .acknowledge_session_read("s", cursor as u64)
-            .await
-            .unwrap();
-        let summary = first.session_read_summary("s").await.unwrap();
-        assert_eq!(summary["unread_count"], 1);
-        assert_eq!(summary["is_unread"], true);
-        assert_eq!(summary["read_through_seq"], cursor);
-        let SessionPatchOutcome::Saved(patched) = first
-            .patch_session("s", &patch("rename", 0, Some("renamed"), Some(true)))
-            .await
-            .unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(patched["session"]["unread_count"], 1);
-        assert_eq!(
-            patched["session"]["last_active_at"],
-            summary["last_active_at"]
-        );
-        assert_eq!(patched["session"]["read_through_seq"], cursor);
-    }
-
-    /// Verify publication activity and read acknowledgment roll back with their failed transactions.
-    #[tokio::test]
-    async fn activity_and_read_event_failures_roll_back() {
+    async fn activity_failure_rolls_back() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         store
@@ -1927,22 +1743,6 @@ mod tests {
         assert_eq!(
             store.session_read_summary("s").await.unwrap()["last_active_at"],
             1
-        );
-        let mut tx = store.pool.begin().await.unwrap();
-        store
-            .insert_chat(&mut tx, "s", "r", "assistant", &json!("reply"))
-            .await
-            .unwrap();
-        tx.commit().await.unwrap();
-        let cursor = store.chat_snapshot("s").await.unwrap().1;
-        sqlx::query("CREATE TRIGGER fail_read BEFORE INSERT ON events WHEN NEW.kind='session_read' BEGIN SELECT RAISE(ABORT,'test failure'); END").execute(&store.pool).await.unwrap();
-        assert!(store
-            .acknowledge_session_read("s", cursor as u64)
-            .await
-            .is_err());
-        assert_eq!(
-            store.session_read_summary("s").await.unwrap()["read_through_seq"],
-            0
         );
     }
 
@@ -2027,7 +1827,7 @@ mod tests {
             .put(
                 "session:s",
                 &json!({"id":"s","title":"Old","created_at":100,
-            "last_active_at":150,"read_through_seq":7,"checkpoint_through":42}),
+            "last_active_at":150,"checkpoint_through":42}),
             )
             .await
             .unwrap();
@@ -2040,7 +1840,6 @@ mod tests {
         assert_eq!(result["session"]["title"], "Private renamed title");
         assert_eq!(result["session"]["metadata_revision"], 1);
         assert_eq!(result["session"]["last_active_at"], 150);
-        assert_eq!(result["session"]["read_through_seq"], 7);
         assert!(result["session"].get("checkpoint_through").is_none());
         let SessionPatchOutcome::Saved(retry) = store.patch_session("s", &request).await.unwrap()
         else {
@@ -2230,7 +2029,6 @@ mod tests {
         assert_eq!(upgraded["last_active_at"], 150);
         assert_eq!(upgraded["pinned"], false);
         assert_eq!(upgraded["status"], "active");
-        assert_eq!(upgraded["read_through_seq"], 0);
         for key in [
             "id",
             "agent_id",
@@ -2249,7 +2047,6 @@ mod tests {
         edited["pinned"] = json!(true);
         edited["status"] = json!("archived");
         edited["archived_at"] = json!(200);
-        edited["read_through_seq"] = json!(17);
         edited["metadata_revision"] = json!(3);
         assert_eq!(with_session_metadata(&edited, None).unwrap(), edited);
         assert_eq!(
@@ -2268,7 +2065,7 @@ mod tests {
         let store = Store::open(root.path()).await.unwrap();
         let original = json!({"id":"s", "title":"Keep title", "created_at":100,
             "pinned":true, "status":"archived", "archived_at":160,
-            "last_active_at":150, "read_through_seq":17, "metadata_revision":3});
+            "last_active_at":150, "metadata_revision":3});
         store.put("session:s", &original).await.unwrap();
         store.put("session:s", &json!({"id":"s", "checkpoint_input":[{"text":"updated"}], "checkpoint_through":42}))
             .await.unwrap();
@@ -2280,7 +2077,6 @@ mod tests {
             "status",
             "archived_at",
             "last_active_at",
-            "read_through_seq",
             "metadata_revision",
         ] {
             assert_eq!(saved[field], original[field]);

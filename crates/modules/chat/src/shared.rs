@@ -107,7 +107,7 @@ impl<'a, C: RecordCodec> DirectoryRepository<'a, C> {
     pub async fn schema(&self) -> Result<()> {
         sqlx::raw_sql(
             "CREATE TABLE IF NOT EXISTS shared_sessions(session_id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,agent_id TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS shared_participants(session_id TEXT NOT NULL,user_id TEXT NOT NULL,joined_at INTEGER NOT NULL,read_through_seq INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(session_id,user_id));
+ CREATE TABLE IF NOT EXISTS shared_participants(session_id TEXT NOT NULL,user_id TEXT NOT NULL,joined_at INTEGER NOT NULL,PRIMARY KEY(session_id,user_id));
  CREATE TABLE IF NOT EXISTS shared_invitations(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,token_hash TEXT NOT NULL UNIQUE,issuer_id TEXT NOT NULL,request_id TEXT NOT NULL,expires_at INTEGER NOT NULL,requested_ttl INTEGER NOT NULL,redeemed_by TEXT,revoked INTEGER NOT NULL DEFAULT 0,UNIQUE(session_id,issuer_id,request_id));
  CREATE TABLE IF NOT EXISTS shared_observation_audit(session_id TEXT NOT NULL,actor_id TEXT NOT NULL,observed_at INTEGER NOT NULL);",
         )
@@ -208,7 +208,7 @@ impl<'a, C: RecordCodec> DirectoryRepository<'a, C> {
             .await?
             .ok_or_else(|| anyhow!("Session not found"))?;
         let mut members = vec![json!({"user_id":dir["owner_id"],"role":"owner"})];
-        for r in sqlx::query("SELECT user_id,joined_at,read_through_seq FROM shared_participants WHERE session_id=? ORDER BY joined_at,user_id")
+        for r in sqlx::query("SELECT user_id,joined_at FROM shared_participants WHERE session_id=? ORDER BY joined_at,user_id")
             .bind(sid)
             .fetch_all(self.app_pool)
             .await?
@@ -216,7 +216,6 @@ impl<'a, C: RecordCodec> DirectoryRepository<'a, C> {
             members.push(json!({
                 "user_id": r.get::<String, _>("user_id"),
                 "joined_at": r.get::<i64, _>("joined_at"),
-                "read_through_seq": r.get::<i64, _>("read_through_seq"),
                 "role": "participant"
             }));
         }
@@ -452,17 +451,6 @@ impl<'a, C: RecordCodec> DirectoryRepository<'a, C> {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        Ok(())
-    }
-
-    pub async fn acknowledge_read(&self, sid: &str, user: &str, through: u64) -> Result<()> {
-        self.schema().await?;
-        sqlx::query("UPDATE shared_participants SET read_through_seq=MAX(read_through_seq,?) WHERE session_id=? AND user_id=?")
-            .bind(through as i64)
-            .bind(sid)
-            .bind(user)
-            .execute(self.app_pool)
-            .await?;
         Ok(())
     }
 }

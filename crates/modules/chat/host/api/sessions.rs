@@ -107,7 +107,7 @@ pub(crate) async fn sessions(State(app): State<App>, Query(args): Query<SessionL
         {
             continue;
         }
-        let mut summary = scoped.store.shared_read_summary(sid, actor).await?;
+        let mut summary = scoped.store.session_read_summary(sid).await?;
         if (summary["status"] == "archived") != archived {
             continue;
         }
@@ -430,7 +430,7 @@ pub(crate) async fn snapshot(State(app): State<App>, Path(id): Path<String>) -> 
     let queue = crate::followup_queue::public(&app.store.followup_queue(&id).await?);
     Ok(Json(
         json!({"access":{"observer":crate::shared_projection::observer(&app),"operator_reply":crate::shared_projection::observer(&app)&&_session["conversation_privacy"]=="operator_reviewable"&&_session["operator_joined"][crate::shared_chat::actor(&app)]==true,
-        "can_send":!crate::shared_projection::observer(&app)||(_session["conversation_privacy"]=="operator_reviewable"&&_session["operator_joined"][crate::shared_chat::actor(&app)]==true),"can_control":!crate::shared_projection::observer(&app),"can_manage_queue":crate::shared_chat::actor(&app)==app.store.current_user_id()},"usage":usage,"session":app.store.shared_read_summary(&id,crate::shared_chat::actor(&app)).await?,
+        "can_send":!crate::shared_projection::observer(&app)||(_session["conversation_privacy"]=="operator_reviewable"&&_session["operator_joined"][crate::shared_chat::actor(&app)]==true),"can_control":!crate::shared_projection::observer(&app),"can_manage_queue":crate::shared_chat::actor(&app)==app.store.current_user_id()},"usage":usage,"session":app.store.session_read_summary(&id).await?,
         "conversation_privacy":_session["conversation_privacy"],"messages":messages,"runs":runs,"components":components,"component_revision":component_revision,"app_view":app_view,"last_seq":last_seq,"queue":queue["queue"],"queue_state":queue["queue_state"],"repeat_similarity":webagent_engine::gates::repeat_similarity()}),
     ))
 }
@@ -608,31 +608,6 @@ async fn change_session_mode_authorized(
     phase3_api::stop_session_runs(&app, &id).await?;
     Ok(Json(next))
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SessionReadBody {
-    pub through_seq: u64,
-}
-pub(crate) async fn session_read_api(
-    State(app): State<App>,
-    Path(id): Path<String>,
-    Json(body): Json<SessionReadBody>,
-) -> Api {
-    use crate::store::session::SessionPatchOutcome;
-    match app
-        .store
-        .acknowledge_session_read(&id, body.through_seq)
-        .await?
-    {
-        SessionPatchOutcome::Saved(value) => Ok(Json(value)),
-        SessionPatchOutcome::NotFound => {
-            Err(ApiError(StatusCode::NOT_FOUND, "Session not found".into()))
-        }
-        SessionPatchOutcome::Invalid(message) => Err(bad(message)),
-        SessionPatchOutcome::Conflict(message) => Err(conflict(message)),
-    }
-}
-
 pub(crate) async fn archive_session_api(
     State(app): State<App>,
     Path(id): Path<String>,

@@ -268,38 +268,6 @@ async fn direct_message(Extension(app): Extension<App>, Json(body): Json<Value>)
 }
 path_arg!(snapshot => snapshot, String);
 path_arg!(background_task_metadata => background_task_metadata_api, (String,String));
-async fn session_read(
-    Extension(app): Extension<App>,
-    Path(id): Path<String>,
-    Json(body): Json<crate::SessionReadBody>,
-) -> Response {
-    let app = match session_app(app, &id).await {
-        Ok(app) => app,
-        Err(error) => return error.into_response(),
-    };
-    if let Err(error) = guard_access(&app, true, false) {
-        return error.into_response();
-    }
-    let outcome = app
-        .store
-        .shared_ack_read(&id, crate::shared_chat::actor(&app), body.through_seq)
-        .await;
-    match outcome {
-        Ok(crate::store::session::SessionPatchOutcome::Saved(value)) => Json(value).into_response(),
-        Ok(crate::store::session::SessionPatchOutcome::NotFound) => crate::ApiError(
-            axum::http::StatusCode::NOT_FOUND,
-            "Session not found".into(),
-        )
-        .into_response(),
-        Ok(crate::store::session::SessionPatchOutcome::Conflict(message)) => {
-            crate::conflict(message).into_response()
-        }
-        Ok(crate::store::session::SessionPatchOutcome::Invalid(message)) => {
-            crate::bad(message).into_response()
-        }
-        Err(error) => crate::ApiError::from(error).into_response(),
-    }
-}
 path_json!(session_undo => undo_session_api, String, crate::store::conversation_history::HistoryRequest);
 path_json!(session_fork => fork_session_api, String, crate::store::conversation_history::HistoryRequest);
 async fn session_lifecycle(
@@ -840,7 +808,6 @@ pub(crate) fn router() -> Router<App> {
         .route("/sessions/{id}/unarchive", post(session_unarchive))
         .route("/sessions/{id}/undo", post(session_undo))
         .route("/sessions/{id}/fork", post(session_fork))
-        .route("/sessions/{id}/read", axum::routing::put(session_read))
         .route("/sessions/{id}/controls", get(chat_controls))
         .route("/sessions/{id}/usage", get(chat_usage))
         .route("/sessions/{id}/model", axum::routing::put(chat_model))

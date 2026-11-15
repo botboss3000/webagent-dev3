@@ -24,7 +24,7 @@
     "tooltip": "Ask WebAgent or search agents and abilities"
   },
   "chat_common": {
-    "_instructions": "content_max_width: Maximum transcript content width as a CSS length or percentage. show_tool_calls: Show tool-call activity entries where supported. show_activity_groups: Group activity entries where supported. show_activity_preview: Show compact activity previews where supported. classify_main_messages: Classify main-message presentation where supported. fold_main_messages: Fold main-message presentation where supported. mirror_activity_in_transcript: Also display activity in the transcript where supported. mark_read_on_visit: Acknowledge rendered/visited conversation messages as read where supported.",
+    "_instructions": "content_max_width: Maximum transcript content width as a CSS length or percentage. show_tool_calls: Show tool-call activity entries where supported. show_activity_groups: Group activity entries where supported. show_activity_preview: Show compact activity previews where supported. classify_main_messages: Classify main-message presentation where supported. fold_main_messages: Fold main-message presentation where supported. mirror_activity_in_transcript: Also display activity in the transcript where supported.",
     "active_footer": {
       "_instructions": "margin_bottom: Footer distance from the bottom as a CSS length.",
       "above_pill": {
@@ -288,9 +288,9 @@
         "primary": {
           "_instructions": "container_size: Control container size as a CSS length; auto allows natural sizing. element_size: Icon/element size as a CSS length. font_size: Text size as a CSS length. border_radius: Control corner radius as a CSS length; pill uses half the control height where supported.",
           "border_radius": "pill",
-          "container_size": "40px",
+          "container_size": "44px",
           "element_size": "28px",
-          "font_size": "18px"
+          "font_size": "15px"
         }
       },
       "rows": []
@@ -548,7 +548,6 @@
       "enabled": true,
       "interval_ms": 2000
     },
-    "mark_read_on_visit": false,
     "message_bubbles": {
       "_instructions": "font_size_px: Text size in pixels for this surface. padding_y_px: Bubble internal top/bottom padding in pixels. padding_x_px: Bubble internal left/right padding in pixels. agent_padding_left_px: Agent-bubble text inset from its left edge, in pixels.",
       "agent": {

@@ -133,7 +133,7 @@ export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSessi
   return bubble;
 }
 
-/** Composes the shared transcript row; bubble identity owns actions while row metadata owns ordering/read tracking. */
+/** Composes the shared transcript row; bubble identity owns actions while row metadata owns ordering. */
 export function createMessageRow(item,options){
   const bubble=createMessage(item,options);
   if(!bubble||item.role==='system'||item.role==='notice'||bubble.dataset.subagentNotices)return bubble;

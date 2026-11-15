@@ -36,11 +36,6 @@
     ["auto mode", "auto"]
    ]
   },
-  "chat.mark_read_on_visit": {
-   "phrases": [
-    ["unread", false]
-   ]
-  },
   "agent.voice_output": {
    "phrases": [
     ["different voice", {"needs": "voice"}],

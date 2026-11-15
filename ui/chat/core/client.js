@@ -188,7 +188,6 @@ export function createChatClient({request, note, issues, clearNoticeFrom = () =>
     /** Permanently deletes an archived session through the same revision fence. */
     delete: (id, body) => request('/sessions/' + encodeURIComponent(id), 'DELETE', body),
     /** Acknowledges messages through a durable sequence cursor. */
-    read: (id, through_seq) => request('/sessions/' + encodeURIComponent(id) + '/read', 'PUT', {through_seq}),
     /** Creates a session from the supplied agent and request identity. */
     create: body => request('/sessions', 'POST', {...body, reuse_draft: true}),
     /** Submits one user message and its attachment IDs to a session. */

@@ -165,26 +165,6 @@
       "bounds": "proposed"
     },
     {
-      "id": "chat.mark_read_on_visit",
-      "description": "Mark a chat as read as soon as it is opened.",
-      "type": "boolean",
-      "pointer": "/chat_common/mark_read_on_visit",
-      "layers": [
-        "app",
-        "user"
-      ],
-      "examples": [
-        "mark chats read when I open them",
-        "keep the unread badge until I scroll"
-      ],
-      "areas": [
-        "chat",
-        "notifications",
-        "unread"
-      ],
-      "bounds": "validator"
-    },
-    {
       "id": "chat.main_notes.enabled",
       "description": "Show the Main Notes panel below the chat header in Main Chat.",
       "type": "boolean",

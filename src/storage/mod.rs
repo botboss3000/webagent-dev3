@@ -43,8 +43,6 @@ mod review;
 mod scan;
 #[path = "../../crates/modules/chat/host/storage/shared_chat.rs"]
 pub(crate) mod shared_chat;
-#[path = "../../crates/modules/chat/host/storage/shared_read.rs"]
-mod shared_read;
 
 use crate::access;
 use anyhow::{anyhow, bail, Context, Result};
@@ -2695,7 +2693,6 @@ mod tests {
             .unwrap();
         let summary = store.session_read_summary("working-session").await.unwrap();
         assert!(summary["last_active_at"].as_i64().unwrap() > 1);
-        assert_eq!(summary["unread_count"], 1);
         let rows = sqlx::query("SELECT id,terminal_run_id,content FROM chat WHERE run_id=?")
             .bind("working-run")
             .fetch_all(&store.pool)

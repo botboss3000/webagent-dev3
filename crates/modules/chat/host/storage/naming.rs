@@ -31,7 +31,7 @@ impl Store {
         self.write_document(tx, &format!("session:{sid}"), session)
             .await?;
         if event {
-            let summary = self.read_summary_in(tx, sid, session).await?;
+            let summary = self.summary_in(session)?;
             sqlx::query(
                 "INSERT INTO events(session_id,kind,payload) VALUES(?,'session_updated',?)",
             )
@@ -52,7 +52,11 @@ impl Store {
         let Some(mut session) = self.naming_session(tx, sid).await? else {
             return Ok(());
         };
-        if !matches!(session["auto_naming"]["stage"].as_str(),Some("awaiting_message"|"cancelled")) || session["participation"]["active"]==false {
+        if !matches!(
+            session["auto_naming"]["stage"].as_str(),
+            Some("awaiting_message" | "cancelled")
+        ) || session["participation"]["active"] == false
+        {
             return Ok(());
         }
         let text = message["content"].as_str().unwrap_or("");
@@ -102,8 +106,11 @@ impl Store {
         };
         let plan = if settings.model_role == crate::model_selection::ModelRole::System {
             first["system_selection_plan"].clone()
-        } else { Value::Null };
-        let skipped = settings.model_role == crate::model_selection::ModelRole::System && plan.is_null();
+        } else {
+            Value::Null
+        };
+        let skipped =
+            settings.model_role == crate::model_selection::ModelRole::System && plan.is_null();
         session["auto_naming"]["config"] = json!(settings);
         session["auto_naming"]["stage"] = json!(if skipped { "skipped" } else { "queued" });
         session["auto_naming"]["system_plan"] = plan;
@@ -167,9 +174,13 @@ impl Store {
             let settings = match crate::session_naming::config::load(&self.root) {
                 Ok(settings) => settings,
                 Err(_) => {
-                    self.skip_naming_configuration(&mut tx, sid, &mut session).await?;
+                    self.skip_naming_configuration(&mut tx, sid, &mut session)
+                        .await?;
                     tx.commit().await?;
-                    self.cache.lock().unwrap().invalidate(&[format!("session:{sid}")]);
+                    self.cache
+                        .lock()
+                        .unwrap()
+                        .invalidate(&[format!("session:{sid}")]);
                     return Ok(None);
                 }
             };
@@ -181,11 +192,16 @@ impl Store {
             session["auto_naming"]["claim"] = Value::Null;
             session["auto_naming"]["lease_until"] = json!(0);
             session["auto_naming"]["last_error"] = json!("Title generation unavailable");
-            sqlx::query("DELETE FROM docs WHERE key=?").bind(format!("session_naming:{sid}"))
-                .execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM docs WHERE key=?")
+                .bind(format!("session_naming:{sid}"))
+                .execute(&mut *tx)
+                .await?;
             self.naming_save(&mut tx, sid, &mut session, true).await?;
             tx.commit().await?;
-            self.cache.lock().unwrap().invalidate(&[format!("session:{sid}")]);
+            self.cache
+                .lock()
+                .unwrap()
+                .invalidate(&[format!("session:{sid}")]);
             return Ok(None);
         }
         let attempts = session["auto_naming"]["attempts"]
@@ -205,20 +221,34 @@ impl Store {
             .invalidate(&[format!("session:{sid}")]);
         Ok(Some(session))
     }
-    pub(crate) async fn naming_pin_plan(&self, sid: &str, claim: &str, plan: &Value) -> Result<bool> {
+    pub(crate) async fn naming_pin_plan(
+        &self,
+        sid: &str,
+        claim: &str,
+        plan: &Value,
+    ) -> Result<bool> {
         let _guard = self.context_gate.write().await;
         let mut tx = self.pool.begin().await?;
-        let Some(mut session) = self.naming_session(&mut tx, sid).await? else { return Ok(false); };
-        if !naming_owned(&session, claim) { return Ok(false); }
+        let Some(mut session) = self.naming_session(&mut tx, sid).await? else {
+            return Ok(false);
+        };
+        if !naming_owned(&session, claim) {
+            return Ok(false);
+        }
         let selected: crate::model_selection::SelectionPlan = serde_json::from_value(plan.clone())?;
         let settings = crate::session_naming::config::for_session(&session)?;
-        if selected.role != settings.model_role || selected.agent_id != session["agent_id"].as_str().unwrap_or("") {
+        if selected.role != settings.model_role
+            || selected.agent_id != session["agent_id"].as_str().unwrap_or("")
+        {
             return Err(anyhow!("Invalid naming plan"));
         }
         session["auto_naming"]["system_plan"] = plan.clone();
         self.naming_save(&mut tx, sid, &mut session, false).await?;
         tx.commit().await?;
-        self.cache.lock().unwrap().invalidate(&[format!("session:{sid}")]);
+        self.cache
+            .lock()
+            .unwrap()
+            .invalidate(&[format!("session:{sid}")]);
         Ok(true)
     }
     pub(crate) async fn naming_owned(&self, sid: &str, claim: &str) -> Result<bool> {
@@ -266,7 +296,8 @@ impl Store {
         }
         let settings = crate::session_naming::config::for_session(&session)?;
         let exhausted = title.is_none()
-            && session["auto_naming"]["attempts"].as_u64().unwrap_or(0) >= settings.max_job_attempts;
+            && session["auto_naming"]["attempts"].as_u64().unwrap_or(0)
+                >= settings.max_job_attempts;
         session["auto_naming"]["stage"] = json!(if title.is_some() {
             "completed"
         } else if exhausted {
@@ -287,11 +318,14 @@ impl Store {
         } else {
             // Fixed diagnostic label only; never provider payloads or input.
             session["auto_naming"]["last_error"] = json!("Title generation unavailable");
-            session["auto_naming"]["retry_at"] = json!(crate::now() + settings.recovery_retry_delay_seconds);
+            session["auto_naming"]["retry_at"] =
+                json!(crate::now() + settings.recovery_retry_delay_seconds);
         }
         if exhausted {
-            sqlx::query("DELETE FROM docs WHERE key=?").bind(format!("session_naming:{sid}"))
-                .execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM docs WHERE key=?")
+                .bind(format!("session_naming:{sid}"))
+                .execute(&mut *tx)
+                .await?;
         }
         self.naming_save(&mut tx, sid, &mut session, true).await?;
         tx.commit().await?;
@@ -313,22 +347,57 @@ fn naming_owned(session: &Value, claim: &str) -> bool {
 
 #[cfg(test)]
 mod participation_tests {
- use super::*;
- #[tokio::test]
- async fn naming_binds_trusted_admitted_author_instead_of_storage_owner() {
-  let (_root,app)=crate::runtime_tests::fixture().await;
-  let sid=crate::runtime_tests::conversation(&app).await;
-  let actor=app.store.create_user_account("naming-participant","long-hash-placeholder").await.unwrap()["user_id"].as_str().unwrap().to_owned();
-  let mut session=app.store.get(&format!("session:{sid}")).await.unwrap().unwrap();
-  session["auto_naming"]=json!({"stage":"awaiting_message"});
-  app.store.put(&format!("session:{sid}"),&session).await.unwrap();
-  let mut tx=app.store.pool.begin().await.unwrap();
-  app.store.begin_session_naming(&mut tx,&sid,"participant-run",&json!({"author_id":actor,"content":"Participant title"})).await.unwrap();
-  tx.commit().await.unwrap();
-  app.store.cache.lock().unwrap().invalidate(&[format!("session:{sid}")]);
-  let saved=app.store.get(&format!("session:{sid}")).await.unwrap().unwrap();
-  assert_eq!(saved["auto_naming"]["requester_user_id"],actor);
-  assert_ne!(saved["auto_naming"]["requester_user_id"],app.store.current_user_id());
-  assert_eq!(saved["auto_naming"]["participation_generation"],0);
- }
+    use super::*;
+    #[tokio::test]
+    async fn naming_binds_trusted_admitted_author_instead_of_storage_owner() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let sid = crate::runtime_tests::conversation(&app).await;
+        let actor = app
+            .store
+            .create_user_account("naming-participant", "long-hash-placeholder")
+            .await
+            .unwrap()["user_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mut session = app
+            .store
+            .get(&format!("session:{sid}"))
+            .await
+            .unwrap()
+            .unwrap();
+        session["auto_naming"] = json!({"stage":"awaiting_message"});
+        app.store
+            .put(&format!("session:{sid}"), &session)
+            .await
+            .unwrap();
+        let mut tx = app.store.pool.begin().await.unwrap();
+        app.store
+            .begin_session_naming(
+                &mut tx,
+                &sid,
+                "participant-run",
+                &json!({"author_id":actor,"content":"Participant title"}),
+            )
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        app.store
+            .cache
+            .lock()
+            .unwrap()
+            .invalidate(&[format!("session:{sid}")]);
+        let saved = app
+            .store
+            .get(&format!("session:{sid}"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved["auto_naming"]["requester_user_id"], actor);
+        assert_ne!(
+            saved["auto_naming"]["requester_user_id"],
+            app.store.current_user_id()
+        );
+        assert_eq!(saved["auto_naming"]["participation_generation"], 0);
+    }
 }

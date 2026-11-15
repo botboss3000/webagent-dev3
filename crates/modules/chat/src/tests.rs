@@ -429,13 +429,8 @@ mod shared {
             .is_err());
         assert!(repo.join("chat-one", "alice", 20).await.unwrap());
         assert!(!repo.join("chat-one", "admin", 20).await.unwrap());
-        repo.acknowledge_read("chat-one", "alice", 9).await.unwrap();
-        repo.acknowledge_read("chat-one", "alice", 3).await.unwrap();
         let members = repo.participants("chat-one").await.unwrap();
-        assert_eq!(
-            members.iter().find(|m| m["user_id"] == "alice").unwrap()["read_through_seq"],
-            9
-        );
+        assert!(members.iter().any(|m| m["user_id"] == "alice"));
     }
 
     #[tokio::test]
@@ -502,7 +497,7 @@ mod session {
         let dir = tempfile::tempdir().unwrap();
         let pool = pool(dir.path()).await;
         put(&pool, "session:s", &json!({"id":"s","title":"Renamed","metadata_revision":3,"status":"active",
-            "participation":{"active":false,"revision":4,"generation":1},"read_through_seq":9,"main_chat":true,"parent_session_id":"p"})).await;
+            "participation":{"active":false,"revision":4,"generation":1},"main_chat":true,"parent_session_id":"p"})).await;
         let mut tx = pool.begin().await.unwrap();
         let stale = json!({"id":"s","title":"Old","metadata_revision":1,"status":"active",
             "participation":{"active":true,"revision":0,"generation":0},"checkpoint_through":7});
@@ -511,7 +506,6 @@ mod session {
             .unwrap();
         assert_eq!(merged["title"], "Renamed");
         assert_eq!(merged["participation"]["revision"], 4);
-        assert_eq!(merged["read_through_seq"], 9);
         assert_eq!(merged["checkpoint_through"], 7);
         assert_eq!(merged["main_chat"], true);
         assert_eq!(merged["parent_session_id"], "p");
@@ -588,7 +582,6 @@ mod session {
             .unwrap();
         let ids: Vec<_> = listed.iter().map(|s| s["id"].as_str().unwrap()).collect();
         assert_eq!(ids, ["b", "a", "c"]);
-        assert_eq!(listed[1]["unread_count"], 1);
         assert_eq!(listed[1]["last_active_at"], 40);
         assert!(ordered_sessions_status(&pool, &TaggedCodec, true)
             .await

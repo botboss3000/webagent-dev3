@@ -134,9 +134,9 @@ after a browser refresh; backend catalog code changes require a v3 rebuild.
 `src/storage/session.rs` defines the typed metadata stored inside each encrypted,
 user-owned `session:<id>` document. It follows v2's title, pinned flag, lifecycle
 status and timestamps, without copying v2's plaintext schema or importing v2 data.
-V3 adds `metadata_revision`, `metadata_schema_version`, `last_active_at`,
-`read_through_seq`, and nullable `archived_at`; status is `active` or `archived`.
-The read marker is a durable sequence cursor, not v2's wall-clock `read_at`.
+V3 adds `metadata_revision`, `metadata_schema_version`, `last_active_at`, and
+nullable `archived_at`; status is `active` or `archived`. There is no read
+marker: a session's settled flag (below) and its dismissal take that role.
 
 On first use of each user database, an atomic, idempotent migration fills only
 missing fields, using the latest public chat timestamp for last activity, with
@@ -154,7 +154,9 @@ tie-breaker, plus `server_time` (Unix seconds). Snapshots expose the same metada
 checkpoint input and runtime state are not included in session summaries.
 
 `PATCH /api/v3/sessions/{id}` accepts `client_request_id` (1-128 bytes),
-`expected_revision` (the current `metadata_revision`), and `title` and/or `pinned`.
+`expected_revision` (the current `metadata_revision`), and `title`, `pinned`
+and/or `flag_dismissed` with the `flag_run_id` it applies to (Mark Dismissed /
+Mark Active; a run ID that is no longer the session's flag run returns 409).
 For example: `{"client_request_id":"rename-1","expected_revision":0,"title":"Work","pinned":true}`.
 Titles are trimmed, nonempty, at most 200 UTF-8 bytes, and contain no control
 characters. Unknown fields and malformed types are rejected. The route retains
@@ -174,24 +176,13 @@ replies. Duplicate publication retries do not advance activity. Non-public run
 updates, opening, renaming, and pinning do not count as activity. Activity uses
 server epoch seconds and never decreases; it does not change metadata revisions.
 
-`PUT /api/v3/sessions/{id}/read` accepts `{"through_seq":<u64>}` with browser
-authentication, CSRF, user ownership and live agent-access checks. Zero is a
-no-op; any nonzero cursor must identify an existing public chat message in that
-session (not a global sequence gap or another session's message). Invalid
-cursors return 400, missing/inaccessible sessions 404, and archived sessions 409.
-The cursor advances by maximum, making identical retries and older tabs harmless
-without request IDs or metadata revision changes. Cursor writes and encrypted
-`session_read` events commit atomically. Reading a snapshot does not acknowledge
-anything; the browser must explicitly acknowledge rendered visible messages in
-the later dropdown integration phase. A retry returns current state, not a
-historical receipt.
-
-Lists, snapshots and metadata/read mutations expose `unread_count` and
-`is_unread`, counting assistant chat rows beyond the durable cursor, not global
-sequence gaps or user messages. Lists project counts and metadata in one database
-snapshot. Stale checkpoint writes preserve activity and read cursors even when
-metadata revisions are equal. The elapsed "last active" counter remains a later
-browser feature derived from these timestamps and server time.
+Each settled run writes the session's `flag`, `flag_source` (`agent` or
+`system`), `notification`, `flag_run_id`, `flag_set_at` and `flag_dismissed`
+(see the closing gate below). Lists add the newest run's `run_status`, and for a
+live run its `run_started_at` and latest activity-group `activity_counts`; the
+list and statistics responses also return the `flags` catalog (label, colour
+role, tooltip) from `crates/modules/engine/gates/closing_status.json`. Stale
+checkpoint writes preserve activity even when metadata revisions are equal.
 
 Session lifecycle: browser `POST /api/v3/sessions/{id}/archive` archives and
 `POST /api/v3/sessions/{id}/unarchive` unarchives (reversible);

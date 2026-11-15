@@ -22,7 +22,6 @@ pub struct SessionMetadata {
     pub status: SessionStatus,
     pub created_at: i64,
     pub last_active_at: i64,
-    pub read_through_seq: u64,
     pub archived_at: Option<i64>,
     pub metadata_revision: u64,
     pub metadata_schema_version: u32,
@@ -44,7 +43,7 @@ pub fn with_session_metadata(value: &Value, activity: Option<i64>) -> Result<Val
     let defaults = json!({
         "title":"New chat", "pinned":false, "status":"active",
         "last_active_at":activity.unwrap_or(created).max(created),
-        "read_through_seq":0, "archived_at":null, "metadata_revision":0,
+        "archived_at":null, "metadata_revision":0,
         "metadata_schema_version":1
     });
     for (key, default) in defaults.as_object().unwrap() {
@@ -154,28 +153,6 @@ pub fn public_session(value: &Value) -> Result<Value> {
         summary[field] = value[field].clone();
     }
     summary["flag_dismissed"] = json!(value["flag_dismissed"] == true);
-    Ok(summary)
-}
-
-/// Count unread assistant bubbles against the supplied session read cursor in the caller transaction.
-pub async fn read_summary_in(
-    tx: &mut Transaction<'_, Sqlite>,
-    sid: &str,
-    session: &Value,
-) -> Result<Value> {
-    let mut summary = public_session(session)?;
-    let cursor = session["read_through_seq"]
-        .as_u64()
-        .ok_or_else(|| anyhow!("Invalid read cursor"))?;
-    let unread: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM chat WHERE session_id=? AND role='assistant' AND seq>?",
-    )
-    .bind(sid)
-    .bind(i64::try_from(cursor)?)
-    .fetch_one(&mut **tx)
-    .await?;
-    summary["unread_count"] = json!(unread);
-    summary["is_unread"] = json!(unread > 0);
     Ok(summary)
 }
 
@@ -307,22 +284,6 @@ pub async fn prepare_session_document<C: RecordCodec>(
                 }
             }
         }
-        let mut reads = previous["participant_reads"]
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
-        if let Some(incoming) = object.get("participant_reads").and_then(Value::as_object) {
-            for (actor, cursor) in incoming {
-                let value = cursor
-                    .as_u64()
-                    .ok_or_else(|| anyhow!("Invalid personal read cursor"))?;
-                let old = reads.get(actor).and_then(Value::as_u64).unwrap_or(0);
-                reads.insert(actor.clone(), json!(old.max(value)));
-            }
-        }
-        if !reads.is_empty() {
-            object.insert("participant_reads".into(), Value::Object(reads));
-        }
         // A runner may carry a full session snapshot from before a metadata
         // edit. Preserve the newer metadata while accepting its checkpoint.
         let stale = previous["metadata_revision"].as_u64().unwrap_or(0)
@@ -336,7 +297,6 @@ pub async fn prepare_session_document<C: RecordCodec>(
             "pinned",
             "status",
             "last_active_at",
-            "read_through_seq",
             "archived_at",
             "metadata_revision",
             "metadata_schema_version",
@@ -360,18 +320,7 @@ pub async fn prepare_session_document<C: RecordCodec>(
         .await?
     {
         let previous = codec.unseal(&raw)?;
-        for field in [
-            "last_active_at",
-            "read_through_seq",
-            "execution_epoch",
-            "history_revision",
-        ] {
-            if field == "read_through_seq"
-                && next["history_revision"].as_u64().unwrap_or(0)
-                    > previous["history_revision"].as_u64().unwrap_or(0)
-            {
-                continue;
-            }
+        for field in ["last_active_at", "execution_epoch", "history_revision"] {
             let maximum = previous[field]
                 .as_u64()
                 .unwrap_or(0)
@@ -382,7 +331,6 @@ pub async fn prepare_session_document<C: RecordCodec>(
     with_session_metadata(&next, None)
 }
 
-/// Project active or archived public sessions and order pins, activity and identities deterministically.
 /// The newest run's status, with an approval pause reported as `waiting_approval`.
 pub async fn latest_run_status(
     tx: &mut Transaction<'_, Sqlite>,
@@ -392,6 +340,7 @@ pub async fn latest_run_status(
         .bind(sid).fetch_optional(&mut **tx).await?)
 }
 
+/// Project active or archived public sessions and order pins, activity and identities deterministically.
 pub async fn ordered_sessions_status<C: RecordCodec>(
     pool: &SqlitePool,
     codec: &C,
@@ -410,7 +359,7 @@ pub async fn ordered_sessions_status<C: RecordCodec>(
             let sid = session["id"]
                 .as_str()
                 .ok_or_else(|| anyhow!("Invalid session ID"))?;
-            let mut summary = read_summary_in(&mut tx, sid, &session).await?;
+            let mut summary = public_session(&session)?;
             summary["run_status"] = json!(latest_run_status(&mut tx, sid).await?);
             summaries.push(summary);
         }

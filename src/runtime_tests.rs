@@ -8296,124 +8296,6 @@ async fn bundle_withdrawal_during_credentials_rebuilds_before_provider_dispatch(
 }
 
 #[tokio::test]
-async fn session_read_routes_enforce_auth_csrf_ownership_and_monotonicity() {
-    use axum::http::Method;
-    let (_root, app) = fixture().await;
-    let sid = conversation(&app).await;
-    let other = conversation(&app).await;
-    app.store
-        .atomic_docs_event(
-            vec![],
-            &sid,
-            "message",
-            &json!({"role":"user","run_id":"read-run","content":"hello"}),
-        )
-        .await
-        .unwrap();
-    app.store
-        .atomic_docs_event(
-            vec![],
-            &other,
-            "message",
-            &json!({"role":"user","run_id":"foreign-read-run","content":"other"}),
-        )
-        .await
-        .unwrap();
-    let cursor = app.store.chat_snapshot(&sid).await.unwrap().1;
-    let foreign = app.store.chat_snapshot(&other).await.unwrap().1;
-    let cookie = ability_auth(&app).await;
-    let uri = format!("/api/v3/sessions/{sid}/read");
-    let body = json!({"through_seq":cursor});
-    assert_eq!(
-        ability_request(&app, Method::PUT, &uri, Some(body.clone()), None, None)
-            .await
-            .0,
-        StatusCode::UNAUTHORIZED
-    );
-    assert_eq!(
-        ability_request(
-            &app,
-            Method::PUT,
-            &uri,
-            Some(body.clone()),
-            Some(&cookie),
-            None
-        )
-        .await
-        .0,
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        ability_request(
-            &app,
-            Method::PUT,
-            &uri,
-            Some(json!({"through_seq":foreign})),
-            Some(&cookie),
-            Some("ability-fixture")
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
-    let (status, result) = ability_request(
-        &app,
-        Method::PUT,
-        &uri,
-        Some(body.clone()),
-        Some(&cookie),
-        Some("ability-fixture"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(result["session"]["read_through_seq"], cursor);
-    assert_eq!(result["session"]["metadata_revision"], 0);
-    let (_, retry) = ability_request(
-        &app,
-        Method::PUT,
-        &uri,
-        Some(body),
-        Some(&cookie),
-        Some("ability-fixture"),
-    )
-    .await;
-    assert_eq!(result, retry);
-    let (_, older) = ability_request(
-        &app,
-        Method::PUT,
-        &uri,
-        Some(json!({"through_seq":0})),
-        Some(&cookie),
-        Some("ability-fixture"),
-    )
-    .await;
-    assert_eq!(older["session"]["read_through_seq"], cursor);
-    assert_eq!(
-        ability_request(
-            &app,
-            Method::PUT,
-            "/api/v3/sessions/missing/read",
-            Some(json!({"through_seq":0})),
-            Some(&cookie),
-            Some("ability-fixture")
-        )
-        .await
-        .0,
-        StatusCode::NOT_FOUND
-    );
-    let (_, snapshot) = ability_request(
-        &app,
-        Method::GET,
-        &format!("/api/v3/sessions/{sid}"),
-        None,
-        Some(&cookie),
-        None,
-    )
-    .await;
-    assert_eq!(snapshot["session"], result["session"]);
-}
-
-#[tokio::test]
 async fn session_search_routes_are_private_authenticated_and_access_filtered() {
     use axum::http::Method;
     let (_root, app) = fixture().await;
@@ -10791,9 +10673,14 @@ async fn closing_reminder_runs_once_then_publishes_with_flag_or_fallback() {
         let sid = conversation(&app).await;
         let id = queued(&app, &sid).await;
         running(&app, &id, attempt).await;
-        execute_run(app.clone(), id.clone(), attempt.into(), CancellationToken::new())
-            .await
-            .unwrap();
+        execute_run(
+            app.clone(),
+            id.clone(),
+            attempt.into(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
         assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
         sessions.push(sid);
     }
@@ -10811,7 +10698,12 @@ async fn closing_reminder_runs_once_then_publishes_with_flag_or_fallback() {
     let first_replies = replies(&first_chat);
     assert_eq!(first_replies.len(), 1);
     assert!(first_replies[0].contains("Final answer"));
-    let first = app.store.get(&format!("session:{}", sessions[0])).await.unwrap().unwrap();
+    let first = app
+        .store
+        .get(&format!("session:{}", sessions[0]))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(first["flag"], "complete");
     assert_eq!(first["flag_source"], "agent");
     assert_eq!(first["notification"], "All done");
@@ -10820,7 +10712,12 @@ async fn closing_reminder_runs_once_then_publishes_with_flag_or_fallback() {
     let second_replies = replies(&second_chat);
     assert_eq!(second_replies.len(), 1);
     assert!(second_replies[0].contains("Second answer again"));
-    let second = app.store.get(&format!("session:{}", sessions[1])).await.unwrap().unwrap();
+    let second = app
+        .store
+        .get(&format!("session:{}", sessions[1]))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(second["flag"], "unflagged");
     assert_eq!(second["flag_source"], "system");
     server.abort();

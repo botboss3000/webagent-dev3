@@ -537,15 +537,6 @@ impl Store {
             session["checkpoint_through"] = json!(0);
             session["tool_context_state"] = Value::Null;
             session["tool_result_projection"] = Value::Null;
-            let retained: i64 =
-                sqlx::query_scalar("SELECT COALESCE(MAX(seq),0) FROM chat WHERE session_id=?")
-                    .bind(sid)
-                    .fetch_one(&mut *tx)
-                    .await?;
-            session["read_through_seq"] = json!(session["read_through_seq"]
-                .as_u64()
-                .unwrap_or(0)
-                .min(retained as u64));
             session["history_revision"] = json!(session["history_revision"]
                 .as_u64()
                 .unwrap_or(0)
@@ -901,14 +892,13 @@ mod tests {
         }
     }
 
-    /// Verify Undo revision fences prevent stale checkpoint restoration and clamp the public read cursor.
+    /// Verify Undo revision fences prevent stale checkpoint restoration.
     #[tokio::test]
-    async fn undo_fences_stale_session_checkpoints_and_clamps_read_cursor() {
+    async fn undo_fences_stale_session_checkpoints() {
         let (_root, store) = fixture().await;
         let mut stale = store.get("session:s").await.unwrap().unwrap();
         stale["checkpoint_input"] = json!([{"role":"user","content":"discarded r2 checkpoint"}]);
         stale["checkpoint_through"] = json!(999);
-        stale["read_through_seq"] = json!(999);
         store.put("session:s", &stale).await.unwrap();
         let selected = request(&store, "user:r2", "undo-stale-checkpoint").await;
         saved(
@@ -917,9 +907,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let last = store.chat_snapshot("s").await.unwrap().1;
         let session = store.get("session:s").await.unwrap().unwrap();
-        assert_eq!(session["read_through_seq"], last);
         assert_eq!(session["history_revision"], 1);
         store.put("session:s", &stale).await.unwrap();
         let session = store.get("session:s").await.unwrap().unwrap();

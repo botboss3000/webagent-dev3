@@ -10,7 +10,9 @@ impl Store {
         self.directory_repository().schema().await
     }
     pub async fn register_shared_session(&self, owner: &str, sid: &str, agent: &str) -> Result<()> {
-        self.directory_repository().register_session(owner, sid, agent).await
+        self.directory_repository()
+            .register_session(owner, sid, agent)
+            .await
     }
     pub async fn shared_directory(&self, sid: &str) -> Result<Option<Value>> {
         self.directory_repository().directory(sid).await
@@ -28,28 +30,41 @@ impl Store {
         self.directory_repository().participants(sid).await
     }
     pub async fn shared_join(&self, sid: &str, user: &str) -> Result<bool> {
-        self.directory_repository().join(sid, user, crate::now()).await
+        self.directory_repository()
+            .join(sid, user, crate::now())
+            .await
     }
-    pub async fn shared_invite_issue(&self, sid: &str, issuer: &str, request: &str, ttl: u64) -> Result<Value> {
-        self.directory_repository().invite_issue(sid, issuer, request, ttl, crate::now()).await
+    pub async fn shared_invite_issue(
+        &self,
+        sid: &str,
+        issuer: &str,
+        request: &str,
+        ttl: u64,
+    ) -> Result<Value> {
+        self.directory_repository()
+            .invite_issue(sid, issuer, request, ttl, crate::now())
+            .await
     }
     pub async fn shared_invites(&self, sid: &str) -> Result<Vec<Value>> {
         self.directory_repository().invites(sid).await
     }
     pub async fn shared_invite_session(&self, token: &str) -> Result<Option<String>> {
-        self.directory_repository().invite_session(token, crate::now()).await
+        self.directory_repository()
+            .invite_session(token, crate::now())
+            .await
     }
     pub async fn shared_invite_redeem(&self, token: &str, user: &str) -> Result<(String, bool)> {
-        self.directory_repository().invite_redeem(token, user, crate::now()).await
+        self.directory_repository()
+            .invite_redeem(token, user, crate::now())
+            .await
     }
     pub async fn shared_invite_revoke(&self, sid: &str, id: &str) -> Result<()> {
         self.directory_repository().invite_revoke(sid, id).await
     }
     pub async fn shared_observe_audit(&self, sid: &str, user: &str) -> Result<()> {
-        self.directory_repository().observe_audit(sid, user, crate::now()).await
-    }
-    pub async fn shared_acknowledge_read(&self, sid: &str, user: &str, through: u64) -> Result<()> {
-        self.directory_repository().acknowledge_read(sid, user, through).await
+        self.directory_repository()
+            .observe_audit(sid, user, crate::now())
+            .await
     }
 }
 
@@ -234,8 +249,14 @@ impl Store {
 }
 
 impl Store {
-    pub async fn shared_invite_session_for(&self, token: &str, user: &str) -> Result<Option<String>> {
-        self.directory_repository().invite_session_for(token, user, crate::now()).await
+    pub async fn shared_invite_session_for(
+        &self,
+        token: &str,
+        user: &str,
+    ) -> Result<Option<String>> {
+        self.directory_repository()
+            .invite_session_for(token, user, crate::now())
+            .await
     }
 }
 
@@ -282,34 +303,6 @@ mod retry_tests {
             .unwrap()
             .is_none());
         assert!(store.shared_invite_redeem(token, "bob").await.is_err());
-    }
-    #[tokio::test]
-    async fn read_markers_are_personal_and_monotonic() {
-        let root = tempfile::tempdir().unwrap();
-        let store = Store::open(root.path()).await.unwrap();
-        store
-            .register_shared_session("admin", "read-chat", "shared_default")
-            .await
-            .unwrap();
-        store.shared_join("read-chat", "alice").await.unwrap();
-        store.shared_join("read-chat", "bob").await.unwrap();
-        store
-            .shared_acknowledge_read("read-chat", "alice", 9)
-            .await
-            .unwrap();
-        store
-            .shared_acknowledge_read("read-chat", "alice", 3)
-            .await
-            .unwrap();
-        let members = store.shared_participants("read-chat").await.unwrap();
-        assert_eq!(
-            members.iter().find(|v| v["user_id"] == "alice").unwrap()["read_through_seq"],
-            9
-        );
-        assert_eq!(
-            members.iter().find(|v| v["user_id"] == "bob").unwrap()["read_through_seq"],
-            0
-        );
     }
 }
 

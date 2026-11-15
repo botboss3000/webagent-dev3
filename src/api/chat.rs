@@ -882,7 +882,7 @@ pub(crate) async fn events(
                 };
                 if queue.is_empty() && now() > metadata_checked {
                     metadata_checked = now();
-                    let summary = app.store.shared_read_summary(&id, &user_id).await.ok()?;
+                    let summary = app.store.session_read_summary(&id).await.ok()?;
                     let participation = app.store.participation_state(&id).await.ok()?;
                     let queue_state =
                         crate::followup_queue::public(&app.store.followup_queue(&id).await.ok()?);
