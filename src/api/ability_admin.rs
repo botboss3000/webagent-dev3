@@ -352,7 +352,7 @@ async fn catalog(app: &App, identity: &Value, id: &str, params: &HashMap<String,
     Ok(Json(
         json!({"agent_id":id,"catalog_version":app.abilities.version(),"revision":visibility["revision"],
         "visibility":visibility["visibility"],"skill_visibility":visibility["skill_visibility"],"tool_modes":visibility["tool_modes"],"settings":if rights["can_manage"]==true {visibility["settings"].clone()} else {json!({})},
-        "authority":{"can_manage":rights["can_manage"],"is_installation_admin":rights["installation_administrator"],"owner_id":rights["owner_id"]},
+        "authority":{"can_manage":rights["can_manage"],"owner_id":rights["owner_id"]},
         "capability_levels":if rights["can_manage"]==true {serde_json::to_value(levels).map_err(anyhow::Error::from)?} else {json!({})},
         "capability_level_id":access.capability_level.id,"permissions":if rights["can_manage"]==true {permissions} else {json!({})},"abilities":abilities}),
     ))

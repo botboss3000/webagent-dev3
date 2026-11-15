@@ -32,7 +32,7 @@ const abilityRows = () => [
      default:'allow',has_tool_skill:false}]},
 ];
 const data = () => ({
-  authority:{can_manage:true,is_installation_admin:false},
+  authority:{can_manage:true},
   agent_id:'a',
   revision,
   permissions:{revision:1,ability_permissions:{},tool_permissions:{}},

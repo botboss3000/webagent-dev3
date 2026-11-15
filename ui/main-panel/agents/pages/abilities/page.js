@@ -137,9 +137,9 @@ export async function renderAbilities(host, request, options) {
   const list = node('div', 'conn-grid ac-list v3-abilities-list');
   const prompts = canManage ? await buildPromptsGroup(request, agentId) : null;
   if (prompts) list.append(prompts);
-  const controls = await buildPolicyControls({ data, request, scope, levelId, rerender, status });
+  const levelSelector = buildPolicyControls({ data, levelId, rerender, status });
   if (host._abilityGeneration !== generation) return;
-  overview.querySelector('[data-tier-selector]').replaceChildren(controls.selector);
+  overview.querySelector('[data-tier-selector]').replaceChildren(levelSelector);
 
   // The spinner covers the control until the save returns, then a check; the page
   // keeps the returned revision instead of re-reading everything. A failure leaves
@@ -462,7 +462,7 @@ export async function renderAbilities(host, request, options) {
         String(value || '').toLowerCase().includes(searchText)));
   };
   search.addEventListener('input', filter);
-  page.append(overview, controls.panel, search, list, status);
+  page.append(overview, search, list, status);
   const reload = node('button', 'ac-btn ac-btn-sm', 'Reload abilities');
   reload.type = 'button';
   reload.onclick = () => rerender({ administratorNotice: '' }).catch(error => { status.textContent = error.message; });
