@@ -305,7 +305,7 @@
     "composer": {
       "_instructions": "placeholder: Composer placeholder override; null falls back to messages.pill_placeholder. enter_behavior: newline (default) inserts a line break on Enter and sends with Ctrl/Cmd+Enter; send submits on Enter; auto sends on desktop and inserts a newline on touch devices. Shift+Enter always inserts a newline.",
       "description": "Shared input behavior; textarea geometry remains under active_footer/idle_footer.chat_pill.controls.textarea. placeholder null uses messages.pill_placeholder. enter_behavior: newline (default), send, or auto (desktop send, touch newline); Shift+Enter always inserts a newline; Ctrl/Cmd+Enter always sends.",
-      "enter_behavior": "newline",
+      "enter_behavior": "auto",
       "keyboard_focus": {
         "_instructions": "new_session: Focus the composer after opening a new conversation if keyboard focus has not moved. existing_session: Focus the composer after opening an existing conversation if keyboard focus has not moved.",
         "description": "Focus the composer after a session opens only if keyboard focus has not moved since opening began. Surface profiles can override either value.",
