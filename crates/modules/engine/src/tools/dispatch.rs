@@ -85,6 +85,20 @@ impl<
             if let Some(object) = args.as_object_mut() {
                 object.remove(tools::retry_guard::REPEAT_ARG);
             }
+            // Every path (single calls, batches, background) checks arguments here; the
+            // run loop also checks before asking for approval.
+            if let Some(definition) = webagent_abilities::tool_definitions::get(&name) {
+                if let Err(message) = tools::arguments::check(
+                    &name,
+                    &definition.parameters,
+                    &args,
+                    definition.usage_hint.as_deref(),
+                ) {
+                    return Ok(
+                        json!({"status":"rejected","error_kind":"invalid_arguments","output":message}),
+                    );
+                }
+            }
             let mode = match (
                 settings.mode.as_str(),
                 requested.as_ref().and_then(Value::as_str),

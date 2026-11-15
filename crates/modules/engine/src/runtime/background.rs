@@ -639,7 +639,9 @@ impl<
                     .scheduler
                     .background_rescan_interval_ms;
                 let mut retry_ms = rescan_interval_ms;
-                if let Some(delay) = crate::components::background_failure_retry_ms() {
+                if let Some(delay) = crate::components::background_failure_retry_ms(
+                    crate::ports::AgentMetadata::root(app.store.records()),
+                ) {
                     retry_ms = retry_ms.min(delay);
                 }
                 if crate::components::component_available(
@@ -753,7 +755,9 @@ impl<
                         }
                     }
                 }
-                if let Some(delay) = crate::components::background_failure_retry_ms() {
+                if let Some(delay) = crate::components::background_failure_retry_ms(
+                    crate::ports::AgentMetadata::root(app.store.records()),
+                ) {
                     retry_ms = retry_ms.min(delay);
                 }
                 tokio::select! {_=app.stop.cancelled()=>break,

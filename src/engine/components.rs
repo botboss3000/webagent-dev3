@@ -203,7 +203,10 @@ mod background_retry_tests {
             .execute(&app.store.pool)
             .await
             .unwrap();
-        webagent_engine::components::fixture_background_failure_for(Duration::from_millis(200));
+        webagent_engine::components::fixture_background_failure_for(
+            webagent_engine::ports::AgentMetadata::root(&app.store),
+            Duration::from_millis(200),
+        );
         let service = tokio::spawn(crate::background_tasks::service(app.clone()));
         let exists = || async {
             sqlx::query_scalar::<_, i64>(

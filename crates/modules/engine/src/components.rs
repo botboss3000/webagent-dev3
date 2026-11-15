@@ -581,7 +581,19 @@ pub fn controls(root: &std::path::Path) -> Result<Controls> {
     }
 }
 /// Admission and dispatch both read current controls; there is no built-in fallback on removal.
-static BACKGROUND_FAILURE_UNTIL: OnceLock<StdMutex<Option<std::time::Instant>>> = OnceLock::new();
+/// Background-service failure fences, by state root: one app's failure never pauses
+/// another's runs (each test fixture is its own root).
+static BACKGROUND_FAILURE_UNTIL: OnceLock<StdMutex<BTreeMap<PathBuf, std::time::Instant>>> =
+    OnceLock::new();
+fn background_failures() -> std::sync::MutexGuard<'static, BTreeMap<PathBuf, std::time::Instant>> {
+    let mut failures = BACKGROUND_FAILURE_UNTIL
+        .get_or_init(|| StdMutex::new(BTreeMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let now = std::time::Instant::now();
+    failures.retain(|_, deadline| *deadline > now);
+    failures
+}
 static FAILURE_UNTIL: OnceLock<StdMutex<Option<std::time::Instant>>> = OnceLock::new();
 /// New pure-engine failures are isolated by state root and registered component.
 /// Expired entries are pruned and at most 256 live roots/components are retained.
@@ -644,13 +656,7 @@ fn component_cooling(root: &std::path::Path, id: &str) -> bool {
     {
         return true;
     }
-    if id == BACKGROUND
-        && BACKGROUND_FAILURE_UNTIL
-            .get_or_init(|| StdMutex::new(None))
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_some_and(|deadline| deadline > now)
-    {
+    if id == BACKGROUND && background_failures().contains_key(root) {
         return true;
     }
     let mut failures = PURE_FAILURE_UNTIL
@@ -1940,11 +1946,10 @@ pub async fn background_plan(
             Err(error) => {
                 note_failure(BACKGROUND, &error);
                 *service.connection.lock().await = None;
-                *BACKGROUND_FAILURE_UNTIL
-                    .get_or_init(|| StdMutex::new(None))
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) =
-                    Some(std::time::Instant::now() + Duration::from_secs(5));
+                background_failures().insert(
+                    root.to_owned(),
+                    std::time::Instant::now() + Duration::from_secs(5),
+                );
                 return Err(error);
             }
         }
@@ -2746,12 +2751,9 @@ mod tests {
 }
 
 /// Preserve the existing service-health recovery deadline independently of idle configuration.
-pub fn background_failure_retry_ms() -> Option<u64> {
-    let guard = BACKGROUND_FAILURE_UNTIL
-        .get_or_init(|| StdMutex::new(None))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    guard
+pub fn background_failure_retry_ms(root: &std::path::Path) -> Option<u64> {
+    background_failures()
+        .get(root)
         .and_then(|deadline| deadline.checked_duration_since(std::time::Instant::now()))
         .map(|remaining| remaining.as_millis().max(1).min(u64::MAX as u128) as u64)
 }
@@ -2807,9 +2809,6 @@ fn offline_smoke_uses_frozen_descriptor_versions() {
 
 /// Existing root integration fixture only; unavailable in ordinary linked/live production builds.
 #[cfg(any(test, feature = "test-support"))]
-pub fn fixture_background_failure_for(duration: Duration) {
-    *BACKGROUND_FAILURE_UNTIL
-        .get_or_init(|| StdMutex::new(None))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now() + duration);
+pub fn fixture_background_failure_for(root: &std::path::Path, duration: Duration) {
+    background_failures().insert(root.to_owned(), std::time::Instant::now() + duration);
 }
