@@ -4,7 +4,7 @@ title: UI design and controls
 when_to_use: Use before building or changing any WebAgent UI — layout, buttons and controls, theming and palette, option lists and config pages — and when investigating how an element looks or lays out.
 default_mode: discoverable
 examples: add a button to the page; change the app's colours; build a list of options with toggles; fix the layout on mobile; the keyboard hides when I touch the row below the composer; check the chat panel on phone width in the browser
-keywords: ui, button, theme, layout, toggle list, mobile, keyboard, composer
+keywords: ui, button, theme, layout, toggle list, mobile, keyboard, composer, live updates, push, polling
 minimum_access: registered
 ---
 
@@ -156,6 +156,28 @@ through the existing iframe bridge; never forward vibration requests across it.
 Browser references:
 [Tap highlight](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Properties/-webkit-tap-highlight-color),
 [Vibration API](https://developer.mozilla.org/en-US/docs/Web/API/Navigator/vibrate).
+
+## Live updates: push, then patch only what changed
+Every live element (session lists and dropdowns, run progress, chips, counters,
+notification badges, panels) follows one strategy:
+- **Push over polling.** Get changes from a stream the app already has (the open
+  session's event stream, its `session_updated` event, server-sent run updates) or
+  add the field to that stream's change digest. Poll only when no push source can
+  carry the change, and then bound it: one request on a clear trigger (opening a
+  menu, the page or the browser tab becoming visible), never a timer that reloads
+  whole lists. Reuse data another part of the page already fetched (for example
+  the transcript's activity counts) instead of requesting it again.
+- **Draw from memory first.** Show the data already held in the page at once,
+  then refresh in the background; never block opening a menu or page on a fetch
+  when cached rows exist.
+- **Patch, never rebuild.** Apply an update to the elements it changes, keyed by
+  ID: keep unchanged nodes, replace only changed ones, add new and remove deleted
+  ones. Never re-render a container that holds user state (scroll position, focus,
+  an open rename or editor, an open menu or panel, search text) to apply data.
+  Reference: `reconcile()` in `ui/chat/controls/session-dropdown/list.js` and
+  `_patchRows()` in the Agents → Sessions page.
+- A write that returns the updated record (rename, pin, dismiss) patches that
+  record in place; it does not trigger a list reload.
 
 ## Theming and surfaces
 

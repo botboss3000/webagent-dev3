@@ -117,6 +117,9 @@ async function refresh() {
   } finally {if(epoch===generation)busy=false;}
   // An idle poll with no new summaries, messages, error or progress change leaves the DOM untouched.
   if(changed || error!==before || (document.querySelector('#chat-above-pill.visible')!==null)!==paintedProgress)paint();
+  // Share the newest group's counts so the session dropdown shows them without its own request.
+  const latest=changed&&[...summaries.values()].find(summary=>summary.latest);
+  if(latest)document.dispatchEvent(new CustomEvent('v3:activity-latest',{detail:{session_id:id,run_id:latest.run_id,counts:latest.counts}}));
 }
 function schedule(){clearTimeout(timer);if(enabled)timer=setTimeout(()=>{void refresh().finally(schedule);},2000);}
 // Progress-pill state at the last paint, so a poll repaints when the pill toggles.

@@ -1,7 +1,7 @@
 // Session dropdown presentation and interactions.
 // Adapted from running v2 session-dropdown/controller.js. V3 owns data/actions.
 /** Mounts menu positioning, keyboard/focus behavior, animation, and teardown around V3-owned data callbacks. */
-export function mountSessionDropdown(root, {refresh, select, guard, resetSearch = () => {}}) {
+export function mountSessionDropdown(root, {refresh, select, guard, resetSearch = () => {}, paintCached = () => false}) {
  const dropdown=root, menu=root.querySelector('.session-dropdown-menu');
  const app={currentUserId:true};
  let _openRequestId=0,_keyboardDismissRequested=false,_closeAnimationTimer=0,_openAnimationTimer=0;
@@ -175,8 +175,10 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
   }
 
   /** Chooses the loading skeleton or anonymous empty state before revealing the menu. */
+  /** Paint the cached rows (true) or a loading skeleton (false) before the menu is shown. */
   function _prepareSessionMenuContent() {
     if (app.currentUserId) {
+      if (paintCached()) return true;
       _renderSessionMenuSkeleton();
     } else {
       menu.replaceChildren();
@@ -271,8 +273,10 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
     }
     // Do this before revealing the menu. The following measurement can now
     // never observe an empty list while the async session fetch is pending.
-    _prepareSessionMenuContent();
+    // Cached rows open at once and refresh in the background, updating only rows that changed.
+    const cached = _prepareSessionMenuContent();
     _positionAndShowMenu();
+    if (cached) void _loadSessionList();
     requestAnimationFrame(() => {
       if (requestId !== _openRequestId || menu.dataset.state !== 'opening') return;
       const availableHeight = Math.min(menu._availableHeight || menu.scrollHeight, parseFloat(getComputedStyle(menu).maxHeight) || Infinity);
@@ -299,8 +303,8 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
           menu.classList.remove('opening');
           rows.forEach(row => { row.style.animationDelay = ''; });
           _openAnimationTimer = 0;
-          // Defer the V3 refresh callback until the opening animation has settled.
-          if (requestId === _openRequestId && menu.dataset.state === 'open') _loadSessionList();
+          // Without cached rows, load after the opening animation has settled.
+          if (!cached && requestId === _openRequestId && menu.dataset.state === 'open') _loadSessionList();
         }, totalMs);
       });
     });

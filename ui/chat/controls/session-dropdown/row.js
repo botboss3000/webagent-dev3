@@ -9,7 +9,7 @@ export function setFlagCatalog(flags) {
   if (Array.isArray(flags) && flags.length) catalog = new Map(flags.map(flag => [flag.key, flag]));
 }
 // Run states that keep a run going; while one holds, the row shows live activity.
-const LIVE = ['running', 'queued', 'waiting_approval', 'waiting_external', 'recovery', 'ready', 'resuming'];
+const LIVE = ['running', 'queued', 'waiting_approval', 'waiting_gate', 'waiting_external', 'recovery', 'ready', 'resuming'];
 /** Whether the session's newest run is still live. */
 export const isLive = item => LIVE.includes(item?.run_status);
 /** The flag key a row's chip shows: a queued or approval-waiting run, else the undismissed settled flag. */

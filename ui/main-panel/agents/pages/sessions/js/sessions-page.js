@@ -198,7 +198,6 @@ let _sessionsDataViewId = '';
 let _sessionsDataAgentId = null; // which agent the _sessionsData buffer belongs to (null = account-wide / Sessions)
 let _agentFilterId = null; // null = the Sessions catalog
 let _nativeCodexContext = null; // agent metadata when its card owns the native Codex catalog
-let _refreshTimer = null;
 let _sourceAccessDenied = false;
 let _tickTimer = null;   // 1s interval that re-renders the live time-ago labels
 let _onKsChanged = null; // kill-switch-changed listener while the tab is active
@@ -390,7 +389,6 @@ try {
 // tab now, so migrate any stored value back into the sessions scope.
 if (!['sessions', 'archived', 'both'].includes(_viewId)) _viewId = 'sessions';
 _searchMode = _stored.searchMode || 'content';
-const _REFRESH_INTERVAL_MS = 30000;
 // Which parent rows are currently expanded in the tree. Persists across the
 // 30s auto-refresh so an open group stays open. Mirrors the chat session list's
 // _expandedGroups (ui/chat/js/session-list.js).
@@ -935,8 +933,8 @@ function _renderTable(rows) {
   }
   let html = '';
   for (const row of topLevel) html += _renderRow(row, { childrenOf, depth: 0 });
-  tbody.innerHTML = html;
-  tbody.querySelectorAll('tr[data-session-id]').forEach(row=>row.tabIndex=0);
+  const fresh = _patchRows(tbody, html);
+  fresh.forEach(row=>{if(row.dataset.sessionId)row.tabIndex=0;});
   if (checkedSessionIds.size) {
     tbody.querySelectorAll('.sessions-check-cell').forEach(cell => {
       if (!checkedSessionIds.has(cell.dataset.sessionId)) return;
@@ -944,9 +942,27 @@ function _renderTable(rows) {
       cell.closest('tr')?.classList.add('selected');
     });
   }
-  if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons({ nodes: [tbody] });
+  if (window.lucide && typeof window.lucide.createIcons === 'function' && fresh.length) window.lucide.createIcons({ nodes: fresh });
   _updateSortArrows();
   _updateResponsiveColumns();
+}
+
+// Replace only the table rows whose markup changed, keyed by session; unchanged rows keep
+// their nodes, so scrolling, focus and an open rename survive a refresh. Returns new rows.
+function _patchRows(tbody, html) {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const next = [...template.content.children];
+  const existing = new Map([...tbody.children].filter(row => row.dataset.sessionId).map(row => [row.dataset.sessionId, row]));
+  const fresh = [];
+  const nodes = next.map(row => {
+    const source = row.outerHTML, old = existing.get(row.dataset.sessionId);
+    if (old && (old._source === source || old.querySelector('.session-row-title-label input'))) return old;
+    row._source = source; fresh.push(row);
+    return row;
+  });
+  tbody.replaceChildren(...nodes);
+  return fresh;
 }
 
 // Build one table row. `childrenOf` (the tree map) drives recursive rendering
@@ -2261,6 +2277,13 @@ function _wireDom() {
     });
   }
 
+  // No timer: rows refresh when this page opens, when the browser tab becomes visible again
+  // and on session-change events; each refresh updates only the rows that changed.
+  _listen(document, 'visibilitychange', () => {
+    const tab = document.getElementById('tab-agents');
+    if (document.visibilityState === 'visible' && _initialized && tab?.classList.contains('active')) _loadAndRender('background');
+  });
+
   // Refresh when a session is mutated anywhere else (e.g. deleted from the chat
   // header / a session-row menu). Only reload while this tab is on screen;
   // startSessions() reloads on activation, so background fetches are wasteful.
@@ -2709,12 +2732,6 @@ function startSessions() {
   // at activation time).
   if (_narrowUpdater) _narrowUpdater();
 
-  // Start auto-refresh. SESSIONS-LOAD-INTENT: this passes 'background' so the
-  // passive 30s pass never resets the view — it keeps the resolved title and
-  // rows on screen and repaints only when the data actually changed.
-  if (!_refreshTimer) {
-    _refreshTimer = setInterval(() => _loadAndRender('background'), _REFRESH_INTERVAL_MS);
-  }
   // Start the 1s live ticker for the relative time-ago labels. Runs only while
   // this tab is initialized — stopSessions() clears it.
   if (!_tickTimer) {
@@ -2723,10 +2740,6 @@ function startSessions() {
 }
 
 function stopSessions() {
-  if (_refreshTimer) {
-    clearInterval(_refreshTimer);
-    _refreshTimer = null;
-  }
   if (_tickTimer) {
     clearInterval(_tickTimer);
     _tickTimer = null;

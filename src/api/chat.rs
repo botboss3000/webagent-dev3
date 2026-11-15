@@ -902,10 +902,16 @@ pub(crate) async fn events(
                     let component_revision = app.store.base_component_revision(&id).await.ok()?;
                     let app_view = tools::core_app_control::projection(&app, &id).await.ok()?;
                     let app_view_revision = app_view["revision"].as_u64().unwrap_or(0);
+                    // Flag fields are part of the digest so a settled run or a dismissal is
+                    // pushed to the open session's dropdown row.
                     let revision = digest(&json!([
                         component_revision,
                         app_view_revision,
                         summary["metadata_revision"],
+                        summary["flag"],
+                        summary["flag_run_id"],
+                        summary["flag_dismissed"],
+                        summary["notification"],
                         participation["revision"],
                         participation["generation"],
                         queue_state["queue_state"]["revision"],

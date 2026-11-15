@@ -111,10 +111,13 @@ export function createSessionList(root, {guard, refresh, select, client, archive
       receipts.delete(receiptKey);
       if (destroyed) return;
       if (['archive','delete'].includes(action) && selected === item.id) archived(item.id);
-      if (result.session) items = items.map(s => s.id === item.id ? result.session : s);
+      // The reply carries the updated metadata; live run fields stay from the list row.
+      if (result.session) items = items.map(s => s.id === item.id ? {...s,...result.session} : s);
       if (!deferred && !destroyed) {
         root._sessionDropdownController.setPopup(null);
-        await refresh(); await loadScope();
+        // A rename, pin or flag change updates its row in place; archive and delete change the list.
+        if (action === 'patch' && result.session) { label(); reconcile(); }
+        else { await refresh(); if (status !== 'active') await loadScope(); }
       }
     } catch (error) {
       // Keep the exact receipt/body available for an uncertain-response retry.
@@ -311,18 +314,11 @@ export function createSessionList(root, {guard, refresh, select, client, archive
     setFlagCatalog(data.flags);
     if (scope === 'active') items = data.sessions;
     else archivedItems = data.sessions;
-    if (query.trim()) await search(); else render();
+    if (query.trim()) await search(); else reconcile();
   }
   let archivedItems = [];
-  /** Rebuilds visible rows and controls while preserving search focus/selection. */
-  function render() {
-    if (menu.hidden || editing || destroyed) return;
-    const focused = menu.querySelector('.session-manage-search-input');
-    const focus = focused === document.activeElement, position = focused?.selectionStart;
-    cancelHold();
-    menu.replaceChildren();
-    const rowList = document.createElement('div'); rowList.className = 'session-dropdown-rows';
-    menu.append(rowList);
+  /** The visible rows in order: Main Chats first, sub-agent sessions nested under expanded parents. */
+  function visibleTree() {
     const source = status === 'active' ? items : archivedItems;
     const rows = query.trim() ? hits.map(hit => ({item:source.find(s => s.id === hit.session_id),hit})).filter(r => r.item) : source.map(item => ({item}));
     // Rank Main Chats by activity; preserve supplied pinned/ordinary and search order below them.
@@ -336,40 +332,85 @@ export function createSessionList(root, {guard, refresh, select, client, archive
     const nested = new Set([...kids.values()].flat().map(item => item.id));
     const tree = [], add = (entry,depth) => { tree.push({...entry,depth}); if (expanded.has(entry.item.id)) for (const item of kids.get(entry.item.id) || []) add({item},depth+1); };
     for (const entry of rows) if (!nested.has(entry.item.id)) add(entry,0);
-    for (const {item,hit,depth} of tree) {
-      const row = document.createElement('div'); row.className = 'session-row' + (depth ? ' session-child-row' : '') + (item.id === selected ? ' selected' : '') + (item.pinned ? ' pinned' : '') + (status === 'archived' ? ' archived' : '');
-      if (depth > 1) row.style.paddingLeft = (22 * depth) + 'px';
-      row.dataset.id = item.id; row.dataset.agent = item.agent_id; row.tabIndex = 0;
-      if (checkboxMode && status === 'active') {
-        const b = button('Select ' + (item.title || 'New Session'),checked.has(item.id) ? 'check-square' : 'square',() => toggleChecked(item.id),'session-row-checkbox');
-        b.dataset.checked = checked.has(item.id) ? '1' : '0'; b.setAttribute('aria-pressed',String(checked.has(item.id))); b.disabled = batchBusy||protectedSession(item);
-        row.append(b);
-      }
-      const title = document.createElement('span'); title.className = 'session-row-title';
-      if (depth) { const branch = document.createElement('span'); branch.className = 'session-row-child-icon'; branch.innerHTML = icon('git-branch'); title.append(branch); }
-      const children = kids.get(item.id)?.length || 0;
-      if (config.menu?.agent_icons !== false) {
-        // A parent's avatar is its family disclosure control, as in v2.
-        const open = expanded.has(item.id);
-        const avatar = children ? button(`${open ? 'Hide' : 'Show'} ${children} sub-agent session${children === 1 ? '' : 's'}`,'bot',() => { if (open) expanded.delete(item.id); else expanded.add(item.id); render(); }) : document.createElement('span');
-        avatar.className = 'session-row-agent-icon' + (children ? ' sess-title-agent-toggle' : '') + (item.main_chat === true ? ' session-row-agent-main' : item.pinned ? ' session-row-agent-warning' : '');
-        if (children) avatar.setAttribute('aria-expanded',String(open)); else avatar.innerHTML = icon('bot');
-        title.append(avatar);
-      }
-      title.querySelector('.session-row-agent-icon')?.classList.toggle('session-row-agent-running', isLive(item));
-      const block = fillBlock(createBlock(), item, (item.title || 'New Session') + (children ? ` (${children})` : ''));
-      block.querySelector('.session-row-title-label').hidden = config.menu?.session_name === false;
-      block.querySelector('.srow-time').hidden = config.menu?.status === false;
-      title.append(block); row.append(title);
-      if (hit) { const snippet = document.createElement('span'); snippet.className = 'session-row-msg-hit'; snippet.textContent = hit.snippet; snippet.title = hit.snippet; row.append(snippet); }
-      if (status === 'archived') {
-        const b = button('Unarchive session','archive-restore',null,'session-row-archived'); b.textContent = 'archived';
-        confirmButton(b,'Unarchive?',() => mutate(item,'unarchive')); if (config.menu?.unarchive !== false) row.append(b);
-        const remove = button('Delete session','trash-2',null,'session-row-action danger');
-        confirmButton(remove,'Delete permanently?',() => mutate(item,'delete')); if (config.menu?.delete !== false) row.append(remove);
-      } else if (!checkboxMode && config.menu?.row_actions === true) row.append(button('More…','more-vertical',() => actions(item,row.querySelector('.session-row-kebab')),'session-row-kebab'));
-      rowList.append(row);
+    return {tree, kids};
+  }
+  /** What a row shows; a row is rebuilt only when this changes. */
+  function rowSignature({item,hit,depth}, kids) {
+    return JSON.stringify([item.title, item.pinned, item.main_chat, item.agent_id, item.status, item.flag, item.flag_dismissed,
+      item.notification, item.flag_set_at, item.last_active_at, item.run_status, item.run_started_at, item.activity_counts,
+      hit?.snippet, depth, item.id === selected, kids.get(item.id)?.length || 0, expanded.has(item.id),
+      checkboxMode, checked.has(item.id), batchBusy, status]);
+  }
+  /** Build one session row. */
+  function buildRow({item,hit,depth}, kids) {
+    const row = document.createElement('div'); row.className = 'session-row' + (depth ? ' session-child-row' : '') + (item.id === selected ? ' selected' : '') + (item.pinned ? ' pinned' : '') + (status === 'archived' ? ' archived' : '');
+    if (depth > 1) row.style.paddingLeft = (22 * depth) + 'px';
+    row.dataset.id = item.id; row.dataset.agent = item.agent_id; row.tabIndex = 0;
+    if (checkboxMode && status === 'active') {
+      const b = button('Select ' + (item.title || 'New Session'),checked.has(item.id) ? 'check-square' : 'square',() => toggleChecked(item.id),'session-row-checkbox');
+      b.dataset.checked = checked.has(item.id) ? '1' : '0'; b.setAttribute('aria-pressed',String(checked.has(item.id))); b.disabled = batchBusy||protectedSession(item);
+      row.append(b);
     }
+    const title = document.createElement('span'); title.className = 'session-row-title';
+    if (depth) { const branch = document.createElement('span'); branch.className = 'session-row-child-icon'; branch.innerHTML = icon('git-branch'); title.append(branch); }
+    const children = kids.get(item.id)?.length || 0;
+    if (config.menu?.agent_icons !== false) {
+      // A parent's avatar is its family disclosure control, as in v2.
+      const open = expanded.has(item.id);
+      const avatar = children ? button(`${open ? 'Hide' : 'Show'} ${children} sub-agent session${children === 1 ? '' : 's'}`,'bot',() => { if (open) expanded.delete(item.id); else expanded.add(item.id); render(); }) : document.createElement('span');
+      avatar.className = 'session-row-agent-icon' + (children ? ' sess-title-agent-toggle' : '') + (item.main_chat === true ? ' session-row-agent-main' : item.pinned ? ' session-row-agent-warning' : '');
+      if (children) avatar.setAttribute('aria-expanded',String(open)); else avatar.innerHTML = icon('bot');
+      title.append(avatar);
+    }
+    title.querySelector('.session-row-agent-icon')?.classList.toggle('session-row-agent-running', isLive(item));
+    const block = fillBlock(createBlock(), item, (item.title || 'New Session') + (children ? ` (${children})` : ''));
+    block.querySelector('.session-row-title-label').hidden = config.menu?.session_name === false;
+    block.querySelector('.srow-time').hidden = config.menu?.status === false;
+    title.append(block); row.append(title);
+    if (hit) { const snippet = document.createElement('span'); snippet.className = 'session-row-msg-hit'; snippet.textContent = hit.snippet; snippet.title = hit.snippet; row.append(snippet); }
+    if (status === 'archived') {
+      const b = button('Unarchive session','archive-restore',null,'session-row-archived'); b.textContent = 'archived';
+      confirmButton(b,'Unarchive?',() => mutate(item,'unarchive')); if (config.menu?.unarchive !== false) row.append(b);
+      const remove = button('Delete session','trash-2',null,'session-row-action danger');
+      confirmButton(remove,'Delete permanently?',() => mutate(item,'delete')); if (config.menu?.delete !== false) row.append(remove);
+    } else if (!checkboxMode && config.menu?.row_actions === true) row.append(button('More…','more-vertical',() => actions(item,row.querySelector('.session-row-kebab')),'session-row-kebab'));
+    row.dataset.signature = rowSignature({item,hit,depth}, kids);
+    return row;
+  }
+  /** Update rows in place: keep unchanged rows (and an open rename), rebuild changed ones,
+   *  add new ones and drop removed ones, so scrolling and open editors survive a refresh. */
+  function reconcile() {
+    const rowList = menu.querySelector('.session-dropdown-rows');
+    if (menu.hidden || destroyed || !rowList || query.trim()) return render();
+    const {tree, kids} = visibleTree();
+    if (!tree.length) return render();
+    const existing = new Map([...rowList.children].map(node => [node.dataset.id, node]));
+    const nodes = tree.map(entry => {
+      const node = existing.get(entry.item.id);
+      if (node && (node.contains(editing) || node.dataset.signature === rowSignature(entry, kids))) {
+        fillBlock(node.querySelector('.srow-block'), entry.item, node.querySelector('.session-row-title-label')?.textContent);
+        return node;
+      }
+      const row = buildRow(entry, kids);
+      if (node) node.replaceWith(row);
+      return row;
+    });
+    for (const [id, node] of existing) if (!tree.some(entry => entry.item.id === id)) node.remove();
+    nodes.forEach((node, index) => { if (rowList.children[index] !== node) rowList.insertBefore(node, rowList.children[index] || null); });
+    window.lucide?.createIcons();
+  }
+  /** Rebuilds visible rows and controls while preserving search focus/selection; `force`
+   *  paints a menu that is about to open. */
+  function render(force = false) {
+    if ((menu.hidden && !force) || editing || destroyed) return;
+    const focused = menu.querySelector('.session-manage-search-input');
+    const focus = focused === document.activeElement, position = focused?.selectionStart;
+    cancelHold();
+    menu.replaceChildren();
+    const rowList = document.createElement('div'); rowList.className = 'session-dropdown-rows';
+    menu.append(rowList);
+    const {tree, kids} = visibleTree();
+    for (const entry of tree) rowList.append(buildRow(entry, kids));
     if (!tree.length) { const empty = document.createElement('div'); empty.className = 'session-dropdown-empty'; empty.textContent = searching ? 'Searching…' : searchInfo.startsWith('Search failed:') ? 'Search unavailable; no results verified' : query ? 'No matches in this page' : status === 'archived' ? 'No archived sessions' : 'No sessions yet'; menu.append(empty); }
     if (searchInfo) { const info = document.createElement('div'); info.className = 'session-dropdown-sync'; info.setAttribute('role','status'); info.textContent = searchInfo; menu.append(info); }
     if (continuation) { const more = button('Continue private search','search',() => search(true),'session-row-action'); more.textContent = 'Continue search'; more.disabled = searching; menu.append(more); }
@@ -404,20 +445,18 @@ export function createSessionList(root, {guard, refresh, select, client, archive
   root.querySelector('#session-dropdown-kebab').onclick = e => { e.stopPropagation(); const item = items.find(s => s.id === selected); if (item) actions(item,e.currentTarget); };
   confirmButton(root.querySelector('#session-dropdown-delete'),'Archive?',() => { const item = items.find(s => s.id === selected); return item ? mutate(item,'archive') : undefined; });
   bindNotes(menu, abort.signal); bindNotes(root.querySelector('.session-dropdown-trigger'), abort.signal);
-  // Refresh times each second; while a shown session's run is live, reload rows every 5 s
-  // so its activity counts stay current.
-  let pollAt = 0;
-  const tick = setInterval(() => {
-    tickTimes(menu); tickTimes(root);
-    const shown = isLive(items.find(s => s.id === selected)) || (!menu.hidden && items.some(isLive));
-    if (shown && Date.now() >= pollAt && !editing && !destroyed) { pollAt = Date.now() + 5000; refresh().catch(() => {}); }
-  },1000);
+  // Refresh the shown times each second; row data arrives by push or on menu open.
+  const tick = setInterval(() => { tickTimes(menu); tickTimes(root); },1000);
   // Public lifecycle API keeps selected rows, configuration, search state and timers in sync.
   return {
     /** Loaded sub-agent sessions under `id`, as [{id, label: 'Spawn n'}], for the Broker chip. */
     family(id) { const kids = childrenOf(), out = [], walk = parent => { for (const child of kids.get(parent) || []) { out.push({id:child.id,label:'Spawn ' + (out.length + 1)}); walk(child.id); } }; walk(id); return out; },
     // Replace authoritative rows/selection and drop checkbox IDs no longer present.
-    update(rows,id,flags) { setFlagCatalog(flags); items = rows; if (id !== selected) for (const parent of ancestors(id)) expanded.add(parent); selected = id; for (const id of checked) if (!items.some(item => item.id === id)) checked.delete(id); label(); renderTabs(); render(); },
+    update(rows,id,flags) { setFlagCatalog(flags); items = rows; if (id !== selected) for (const parent of ancestors(id)) expanded.add(parent); selected = id; for (const id of checked) if (!items.some(item => item.id === id)) checked.delete(id); label(); renderTabs(); reconcile(); },
+    /** Merge pushed fields into one session and update only its trigger and row. */
+    patch(id,fields) { const index = items.findIndex(item => item.id === id); if (index < 0 || destroyed) return; items[index] = {...items[index],...fields}; if (id === selected) label(); if (!menu.hidden) reconcile(); },
+    /** Paint the cached rows into a menu that is opening; false when nothing is cached. */
+    paintCached() { if (!items.length || status !== 'active' || query.trim() || destroyed) return false; render(true); return true; },
     // Reapply menu options; disabling batch delete also clears its transient selection.
     configure(cfg) { cancelHold(); config = cfg || {}; root._sessionDropdownController.setPopup(null); if (config.footer?.enabled === false || config.footer?.batch_archive === false) { checkboxMode = false; checked.clear(); } if (config.footer?.enabled === false || config.footer?.archived === false) status = 'active'; if (config.footer?.enabled === false || config.footer?.search === false) { ++epoch; clearTimeout(timer); query = ''; hits = []; continuation = null; searching = false; searchInfo = ''; } menu.style.setProperty('--session-dropdown-max-height',config.menu?.max_height || 'none'); label(); render(); },
     // Invalidate in-flight search and restore the default active, unfiltered list.
