@@ -34,7 +34,9 @@ DEFAULTS = {"host_id": socket.gethostname(), "socket": "/home/ar/webagent-dev3/r
             "editable": ["/etc/webagent/*"], "boot_disk_paths": ["/boot/*", "/etc/default/grub", "/etc/fstab", "/etc/crypttab"],
             "build_config": "/etc/webagent/development/build-service.json",
             "helper_unit": "webagent-host-helper.service", "helper_dir": "/usr/local/lib/webagent-host",
-            "unit_dir": "/etc/systemd/system", "health_seconds": 120}
+            "unit_dir": "/etc/systemd/system", "health_seconds": 120,
+            # broker_install drains after approval, then waits this long for running jobs to end.
+            "drain_seconds": 3600}
 # Undo classes: exact, best_effort or none. "read" actions change nothing and need no approval.
 # Allow-all windows never cover "none" or boot/disk actions (step 3 adds the edit actions).
 ACTIONS = {
@@ -171,7 +173,7 @@ class Helper:
             current = Path(self.build_config()["service_dir"]).name
             return ("Install broker tree " + args["tree_hash"][:12] + " for task " + args["task_id"]
                     + (" (stale-tree override)" if args.get("allow_stale_tree") else "")
-                    + ". Needs a drained, idle broker; stops and restarts it. Saves the current release "
+                    + ". Drains the broker once approved, waits for running jobs, stops and restarts it, then resumes. Saves the current release "
                     + current[:12] + " and restores it automatically if the health test fails.")
         if action == "supervisor_update":
             old, new = self.helper_path(), Path(self.build_config()["service_dir"]) / "host_helper.py"
@@ -322,8 +324,34 @@ class Helper:
         self.runner(["systemctl", "daemon-reload"], check=True, timeout=60)
         self.runner(["systemctl", "restart", meta["unit_name"]], check=True, timeout=120)
 
+    def maintenance(self, action, task_id):
+        """Drain or resume the broker through its CLI as the operator; the broker socket admits only that uid."""
+        command = ["runuser", "-u", self.profile["operator_account"], "--", "env",
+                   "WEBAGENT_BUILD_CONFIG=" + self.profile["build_config"], "python3", "-B",
+                   str(Path(self.build_config()["service_dir"]) / "buildctl.py"), "maintenance", action, "--task-id", task_id]
+        result = self.runner(command, capture_output=True, text=True, timeout=60)
+        if result.returncode:
+            raise RuntimeError("maintenance " + action + " failed: " + (result.stderr or result.stdout)[-300:])
+
     def install_broker(self, args, request_id, run):
-        self.require_idle()
+        """Drain only once approved, so the broker keeps building while the request waits for a decision."""
+        self.maintenance("drain", args["task_id"])
+        try:
+            deadline = self.clock() + self.profile["drain_seconds"]
+            while True:
+                try:
+                    self.require_idle()
+                    break
+                except RuntimeError:
+                    if self.clock() >= deadline:
+                        raise
+                    time.sleep(5)
+            return self.install_drained(args, request_id, run)
+        finally:
+            # The installed (or restored) broker reads the same maintenance file; resume it either way.
+            self.maintenance("resume", args["task_id"])
+
+    def install_drained(self, args, request_id, run):
         config_path, unit_name = Path(self.profile["build_config"]), self.broker_unit()
         unit = Path(self.profile["unit_dir"]) / unit_name
         previous = self.build_config()["service_dir"]

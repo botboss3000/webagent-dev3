@@ -3,6 +3,7 @@ import importlib.util
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location("host_helper", Path(__file__).resolve().parents[1] / "build-service" / "host_helper.py")
@@ -193,6 +194,10 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn("/releases/new", self.config.read_text())
         # lifecycle.py install leaves the unit stopped; the helper starts it before the health test.
         self.assertIn(["systemctl", "start", "webagent-build-development.service"], self.commands)
+        # Drained only once approved, resumed after the install.
+        maintenance = [c[c.index("maintenance") + 1] for c in self.commands if "maintenance" in c]
+        self.assertEqual(["drain", "resume"], maintenance)
+        self.assertEqual("runuser", self.commands[0][0])
 
     def test_failed_health_test_restores_the_previous_release(self):
         self.healthy = False
@@ -205,6 +210,8 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn(["systemctl", "restart", "webagent-build-development.service"], self.commands)
         # The broker and buildctl read the restored config as non-root users.
         self.assertEqual(0o644, self.config.stat().st_mode & 0o777)
+        # A failed install still resumes the broker.
+        self.assertIn("resume", self.commands[-1])
 
     def test_busy_broker_and_bad_trees_are_refused(self):
         import json
@@ -212,9 +219,27 @@ class SupervisorTests(unittest.TestCase):
             self.helper.handle(APP, {"op": "request", "action": "broker_install", "requester": {"session": "s"},
                                      "args": {"task_id": "t-1", "tree_hash": "cd" * 32}})
         (self.state_root / "job2.json").write_text(json.dumps({"status": "running"}))
+        self.helper.profile["drain_seconds"] = 0
         request, install = self.install()
         with self.assertRaisesRegex(RuntimeError, "busy"):
             install()
+        self.assertEqual("resume", self.commands[-1][self.commands[-1].index("maintenance") + 1])
+        self.assertFalse(any("install" in c for c in self.commands))
+
+    def test_install_waits_for_a_running_job_to_end(self):
+        import json
+        job = self.state_root / "job2.json"
+        job.write_text(json.dumps({"status": "running"}))
+        ticks = iter(range(1000, 10**6, 5))
+        self.helper.clock = lambda: next(ticks)
+        sleeps = []
+        def sleep(_):
+            sleeps.append(1)
+            job.write_text(json.dumps({"status": "completed"}))
+        request, install = self.install()
+        with mock.patch.object(helper_module.time, "sleep", sleep):
+            result = install()
+        self.assertEqual((1, "new"), (len(sleeps), result["installed_release"]))
 
 
 if __name__ == "__main__":

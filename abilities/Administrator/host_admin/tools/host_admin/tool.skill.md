@@ -9,8 +9,9 @@
   profile; a restart of the app's own containers interrupts this chat briefly.
 - `packages_upgrade {}`: apt upgrade; saves the package list first (best-effort undo).
 - `broker_install {"task_id","tree_hash"}`: install a broker task's reviewed tree (the
-  `tree_hash` its build_work task reports). Drain the broker first (build_work
-  `maintenance` drain) and file it only while idle. The supervisor saves the running
+  `tree_hash` its build_work task reports). Do not drain first: once approved, the
+  supervisor drains the broker, waits up to an hour for running jobs to end, and resumes
+  it when done (also on failure). It saves the running
   release, stops, installs, restarts and health-tests the broker, and restores the saved
   release itself if the test fails. `host_revert {"request_id"}` of a finished install
   restores the release it replaced. Add `"allow_stale_tree": true` only for a deliberate
