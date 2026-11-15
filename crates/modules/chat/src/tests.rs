@@ -35,7 +35,7 @@ async fn pool(dir: &Path) -> SqlitePool {
         "CREATE TABLE docs(key TEXT PRIMARY KEY,value BLOB NOT NULL);
          CREATE TABLE events(id INTEGER PRIMARY KEY,session_id TEXT,kind TEXT,payload BLOB);
          CREATE TABLE chat(seq INTEGER PRIMARY KEY,session_id TEXT,role TEXT,created_at INTEGER);
-         CREATE TABLE run_index(id TEXT,session_id TEXT,status TEXT);",
+         CREATE TABLE run_index(id TEXT,session_id TEXT,status TEXT,updated_at INTEGER NOT NULL DEFAULT 0);",
     )
     .execute(&pool)
     .await
@@ -673,7 +673,7 @@ mod messaging {
             &json!({"result":{"session_created":true,"session_id":"child"}}),
         )
         .await;
-        sqlx::query("INSERT INTO run_index VALUES('r','child','running')")
+        sqlx::query("INSERT INTO run_index(id,session_id,status) VALUES('r','child','running')")
             .execute(&pool)
             .await
             .unwrap();

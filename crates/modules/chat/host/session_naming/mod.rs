@@ -843,6 +843,8 @@ mod acceptance_tests {
             expected_revision: claimed["metadata_revision"].as_u64().unwrap(),
             title: Some("My Garden".into()),
             pinned: None,
+            flag_dismissed: None,
+            flag_run_id: None,
         };
         app.store.patch_session(&sid, &patch).await.unwrap();
         assert!(!app
@@ -1117,6 +1119,8 @@ mod route_tests {
             expected_revision: 0,
             title: None,
             pinned: Some(true),
+            flag_dismissed: None,
+            flag_run_id: None,
         };
         app.store.patch_session(sid, &patch).await.unwrap();
         assert_eq!(
@@ -1132,6 +1136,8 @@ mod route_tests {
             expected_revision: 1,
             title: Some("New chat".into()),
             pinned: None,
+            flag_dismissed: None,
+            flag_run_id: None,
         };
         app.store.patch_session(sid, &patch).await.unwrap();
         let session = app
@@ -1196,6 +1202,8 @@ mod metadata_event_tests {
             expected_revision: 0,
             title: Some("Saved Name".into()),
             pinned: None,
+            flag_dismissed: None,
+            flag_run_id: None,
         };
         app.store.patch_session(sid, &patch).await.unwrap();
         let update = tokio::time::timeout(Duration::from_secs(3), stream.next())

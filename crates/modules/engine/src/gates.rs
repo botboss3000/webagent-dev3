@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 
 pub const MESSAGE_VISIBILITY: &str = "message_visibility_v1";
-pub const CLOSING_STATUS: &str = "closing_status_v1";
+pub const CLOSING_STATUS: &str = "closing_status";
 /// Checkout folder of the integral gate configuration files.
 pub const GATE_FOLDER: &str = "crates/modules/engine/gates";
 pub const PUBLICATION_SIZE: &str = "publication_size_guard_v1";
@@ -120,22 +120,7 @@ pub fn validate_manifest(id: &str, item: &Manifest) -> Result<()> {
             if item.checkpoint != Checkpoint::Publication || item.runtime != Runtime::Rust {
                 bail!("Invalid closing-status gate binding");
             }
-            let config: ClosingConfig = serde_json::from_value(item.config.clone())?;
-            let expected = ["needs_input", "complete", "error", "partial", "unverified"];
-            if config.tool_name != "set_closer_status"
-                || config.flags.iter().map(String::as_str).collect::<Vec<_>>() != expected
-                || config.fallback_status != "unverified"
-                || !(1..=240).contains(&config.notification_max_chars)
-                || !(1..=50).contains(&config.notification_max_words)
-                || config.guidance.is_empty()
-                || config.guidance.len() > 4096
-                || config.fallback_notification.is_empty()
-                || config.fallback_notification.chars().count() > config.notification_max_chars
-                || config.fallback_notification.split_whitespace().count()
-                    > config.notification_max_words
-            {
-                bail!("Invalid closing-status gate config");
-            }
+            serde_json::from_value::<ClosingConfig>(item.config.clone())?.validate()?;
         }
         PUBLICATION_SIZE => {
             if item.checkpoint != Checkpoint::Publication || item.runtime != Runtime::PythonGate {
@@ -220,21 +205,21 @@ mod tests {
         assert_eq!(visibility.tool_name, "publish_main_message");
         assert!(visibility.guidance.contains("publish_main_message"));
         let closer = closing_config().unwrap();
-        assert_eq!(closer.fallback_status, "unverified");
-        assert!(closer.notification_max_chars <= 240);
+        assert_eq!(closer.fallback_flag.as_deref(), Some("unflagged"));
+        assert!(closer.notification.max_chars <= 1000);
         assert_eq!(
             manifest(PUBLICATION_SIZE).unwrap().runtime,
             Runtime::PythonGate
         );
-        assert!(closer.notification_max_words <= 50);
+        assert!(closer.notification.target_words <= 50);
     }
     #[test]
     fn malformed_integral_and_plugin_configs_fail_closed() {
         let mut close = manifest(CLOSING_STATUS).unwrap();
-        close.config["notification_max_words"] = json!(0);
+        close.config["notification"]["target_words"] = json!(0);
         assert!(validate_manifest(CLOSING_STATUS, &close).is_err());
-        close.config["notification_max_words"] = json!(5);
-        close.config["fallback_status"] = json!("complete");
+        close.config["notification"]["target_words"] = json!(5);
+        close.config["fallback_flag"] = json!("complete");
         assert!(validate_manifest(CLOSING_STATUS, &close).is_err());
         let mut visibility = manifest(MESSAGE_VISIBILITY).unwrap();
         visibility.config["guidance"] = json!("");
@@ -269,7 +254,8 @@ pub mod controls {
     //! The loop calls gate behavior through these two integral modules.
     pub use super::closing::{
         agent_closing, closing_schema, closing_status, fallback_status,
-        guidance as closing_guidance, AgentClosing, ClosingConfig,
+        guidance as closing_guidance, reminder as closing_reminder, AgentClosing, ClosingConfig,
+        FlagSource, FlagSpec, SYSTEM_FLAGS,
     };
     pub use super::initial::{
         agent_visibility, working_schema, working_text, AgentVisibility, PromotionMode,
@@ -461,29 +447,143 @@ mod initial {
     }
 }
 mod closing {
-    //! The closing gate records status and a short notification intent before publication.
+    //! The closing gate records the agent's status flag and short notification before
+    //! publication. `closing_status.json` defines every session flag, agent and system.
     use crate::ports::AgentMetadata;
     use anyhow::{anyhow, bail, Result};
     use serde::{Deserialize, Serialize};
     use serde_json::{json, Value};
     use webagent_access::storage::RecordCodec;
+
+    /// Flags the runtime sets from run state; the config must define each of them.
+    pub const SYSTEM_FLAGS: [&str; 5] =
+        ["running", "queued", "awaiting_approval", "stopped", "error"];
+    const TONES: [&str; 5] = ["success", "warning", "danger", "info", "neutral"];
+
+    /// Who sets a flag: the agent through the closing call, or the runtime.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum FlagSource {
+        Agent,
+        System,
+    }
+
+    /// One session flag: its key, display label and colour role, and for agent flags the
+    /// meaning the agent is given.
+    #[derive(Debug, Clone, Deserialize, Serialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct FlagSpec {
+        pub key: String,
+        pub source: FlagSource,
+        pub label: String,
+        pub tone: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub meaning: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub tooltip: Option<String>,
+    }
+
+    /// Notification length: the agent is asked for about `target_words`; the stored text
+    /// is cut at `max_chars` only to stop a runaway message.
+    #[derive(Debug, Clone, Deserialize, Serialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct NotificationLimits {
+        pub target_words: usize,
+        pub max_chars: usize,
+    }
+
     #[derive(Debug, Clone, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct ClosingConfig {
         pub tool_name: String,
-        pub guidance: String,
-        pub flags: Vec<String>,
-        pub notification_max_chars: usize,
-        pub notification_max_words: usize,
-        pub fallback_status: String,
-        pub fallback_notification: String,
+        pub notification: NotificationLimits,
+        /// Flag shown when the agent still sets no valid flag after its reminder; `null`
+        /// shows none.
+        pub fallback_flag: Option<String>,
         /// Share of distinct words a final reply must have in common with the kept closing
         /// message before it replaces it; 0 turns the check off. Missing means 0.8.
         #[serde(default = "default_repeat_similarity")]
         pub repeat_similarity: f64,
+        pub flags: Vec<FlagSpec>,
     }
     fn default_repeat_similarity() -> f64 {
         0.8
+    }
+
+    impl ClosingConfig {
+        /// Keys the agent may choose, in configured order.
+        pub fn agent_flags(&self) -> Vec<&str> {
+            self.flags
+                .iter()
+                .filter(|flag| flag.source == FlagSource::Agent)
+                .map(|flag| flag.key.as_str())
+                .collect()
+        }
+
+        /// Reject a config the runtime or the session list could misread.
+        pub fn validate(&self) -> Result<()> {
+            if self.tool_name != "set_closer_status" {
+                bail!("closing tool must be set_closer_status");
+            }
+            if !(1..=50).contains(&self.notification.target_words)
+                || !(20..=1000).contains(&self.notification.max_chars)
+                || !(0.0..=1.0).contains(&self.repeat_similarity)
+            {
+                bail!("closing notification limits are out of range");
+            }
+            if self.flags.is_empty() || self.flags.len() > 32 {
+                bail!("closing config needs 1 to 32 flags");
+            }
+            let mut keys = std::collections::BTreeSet::new();
+            for flag in &self.flags {
+                let key_ok = !flag.key.is_empty()
+                    && flag.key.len() <= 32
+                    && flag.key.chars().all(|c| c.is_ascii_lowercase() || c == '_');
+                let label_ok = !flag.label.trim().is_empty()
+                    && flag.label.chars().count() <= 32
+                    && !flag.label.chars().any(char::is_control);
+                let meaning_ok = match (&flag.meaning, flag.source) {
+                    (Some(text), FlagSource::Agent) => {
+                        !text.trim().is_empty() && text.chars().count() <= 300
+                    }
+                    (None, FlagSource::System) => true,
+                    _ => false,
+                };
+                let tooltip_ok = flag
+                    .tooltip
+                    .as_ref()
+                    .is_none_or(|text| !text.trim().is_empty() && text.chars().count() <= 200);
+                if !key_ok
+                    || !label_ok
+                    || !meaning_ok
+                    || !tooltip_ok
+                    || !TONES.contains(&flag.tone.as_str())
+                    || !keys.insert(flag.key.as_str())
+                {
+                    bail!("closing flag '{}' is invalid", flag.key);
+                }
+            }
+            if self.agent_flags().is_empty() {
+                bail!("closing config needs at least one agent flag");
+            }
+            for key in SYSTEM_FLAGS {
+                if self.system_flag(key).is_none() {
+                    bail!("closing config must define system flag '{key}'");
+                }
+            }
+            if let Some(key) = &self.fallback_flag {
+                if self.system_flag(key).is_none() || SYSTEM_FLAGS.contains(&key.as_str()) {
+                    bail!("fallback_flag must name a system flag other than the run states, or be null");
+                }
+            }
+            Ok(())
+        }
+
+        fn system_flag(&self, key: &str) -> Option<&FlagSpec> {
+            self.flags
+                .iter()
+                .find(|flag| flag.key == key && flag.source == FlagSource::System)
+        }
     }
 
     /// Agent preferences: whether the closing status runs, which parts it requires, and
@@ -506,8 +606,7 @@ mod closing {
             }
         }
     }
-    /// Shared with closing_status_v1.json's guidance: text written beside the call is published,
-    /// so the run's required final reply must not restate it.
+    /// Text written beside the call is published, so the run's final reply must not restate it.
     const NO_REPEAT: &str = "Text you write in the same response as this call is shown to the \
         user. If it already gives your full reply, end the run with one short line (for example \
         pointing to a panel) and never restate it. Do not mention this control tool in the reply.";
@@ -544,20 +643,34 @@ mod closing {
         Ok(settings)
     }
 
+    /// The call's instruction, built from the configured agent flags and notification target.
     pub fn guidance(config: &ClosingConfig, settings: &AgentClosing) -> String {
-        let mut text = match (settings.require_flag, settings.require_notification) {
-            (true, true) => config.guidance.clone(),
-            (true, false) => format!(
-                "Before a final reply, call {} with one status flag ({}). {NO_REPEAT}",
-                config.tool_name,
-                config.flags.join(", ")
-            ),
-            _ => format!(
-                "Before a final reply, call {} with a short notification of at most {} words. \
-                 {NO_REPEAT}",
-                config.tool_name, config.notification_max_words
-            ),
+        let flags = config
+            .flags
+            .iter()
+            .filter(|flag| flag.source == FlagSource::Agent)
+            .map(|flag| format!("{} = {}", flag.key, flag.meaning.as_deref().unwrap_or("")))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let note = format!(
+            "a notification of about {} words: a glance-sized status or next step shown in the \
+             session list",
+            config.notification.target_words
+        );
+        let parts = match (settings.require_flag, settings.require_notification) {
+            (true, true) => format!("one status flag and {note}"),
+            (true, false) => "one status flag".to_owned(),
+            _ => note.clone(),
         };
+        let mut text = format!(
+            "Before a final reply, call {} with {parts}.",
+            config.tool_name
+        );
+        if settings.require_flag {
+            text.push_str(&format!(" Flags: {flags}."));
+        }
+        text.push(' ');
+        text.push_str(NO_REPEAT);
         if settings.require_notification && !settings.notification_guidance.trim().is_empty() {
             text.push_str(
                 "\nFor the private closing notification only, follow this agent guidance:\n",
@@ -566,15 +679,28 @@ mod closing {
         }
         text
     }
+
+    /// The private one-time reminder after a final reply that recorded no valid status.
+    pub fn reminder(config: &ClosingConfig) -> String {
+        format!(
+            "Your reply above recorded no valid closing status. Call {} now. Your reply stands \
+             as written; add text only if it must change, and never repeat it.",
+            config.tool_name
+        )
+    }
+
     pub fn closing_schema(config: &ClosingConfig, settings: &AgentClosing) -> Value {
         let mut properties = serde_json::Map::new();
         let mut required = Vec::new();
         if settings.require_flag {
-            properties.insert("flag".into(), json!({"type":"string","enum":config.flags}));
+            properties.insert(
+                "flag".into(),
+                json!({"type":"string","enum":config.agent_flags()}),
+            );
             required.push("flag");
         }
         if settings.require_notification {
-            let description = format!("At most {} words", config.notification_max_words);
+            let description = format!("About {} words", config.notification.target_words);
             properties.insert(
                 "notification".into(),
                 json!({"type":"string","description":description}),
@@ -582,12 +708,13 @@ mod closing {
             required.push("notification");
         }
         json!({"type":"function","name":config.tool_name,
-        "description":"Record the final reply status and a short notification intent before finishing.",
+        "description":"Record the final reply status and a short notification before finishing.",
         "parameters":{"type":"object","additionalProperties":false,
             "properties":properties,"required":required}})
     }
 
     /// Validate exactly the parts this agent requires; parts it does not require are absent.
+    /// A long notification is kept, cut at the configured character cap.
     pub fn closing_status(
         args: &Value,
         config: &ClosingConfig,
@@ -612,10 +739,11 @@ mod closing {
                 .get("flag")
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow!("flag is missing"))?;
-            if !config.flags.iter().any(|item| item == flag) {
+            let agent_flags = config.agent_flags();
+            if !agent_flags.contains(&flag) {
                 bail!(
                     "flag '{flag}' is unsupported; use one of {}",
-                    config.flags.join(", ")
+                    agent_flags.join(", ")
                 );
             }
             status["flag"] = json!(flag);
@@ -626,38 +754,38 @@ mod closing {
         let notification = object
             .get("notification")
             .and_then(Value::as_str)
+            .map(str::trim)
             .ok_or_else(|| anyhow!("notification is missing"))?;
-        if notification.trim().is_empty() {
+        if notification.is_empty() {
             bail!("notification is empty");
         }
-        let words = notification.split_whitespace().count();
-        if words > config.notification_max_words {
-            bail!(
-                "notification has {words} words; the maximum is {}",
-                config.notification_max_words
-            );
-        }
-        let chars = notification.chars().count();
-        if chars > config.notification_max_chars {
-            bail!(
-                "notification has {chars} characters; the maximum is {}",
-                config.notification_max_chars
-            );
-        }
-        status["notification"] = json!(notification);
+        let kept: String = notification
+            .chars()
+            .take(config.notification.max_chars)
+            .collect();
+        status["notification"] = json!(kept.trim_end());
         Ok(status)
     }
 
-    pub fn fallback_status(config: &ClosingConfig) -> Value {
-        json!({"flag":config.fallback_status,
-        "notification":config.fallback_notification,"fallback":true})
+    /// The status recorded when the agent sets none: the configured fallback flag, only for
+    /// agents that require a flag.
+    pub fn fallback_status(config: &ClosingConfig, settings: &AgentClosing) -> Value {
+        let mut status = json!({"fallback":true});
+        if let Some(flag) = config
+            .fallback_flag
+            .as_ref()
+            .filter(|_| settings.require_flag)
+        {
+            status["flag"] = json!(flag);
+        }
+        status
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
         #[test]
-        fn closer_rejects_unknown_or_long_status() {
+        fn closer_accepts_agent_flags_and_keeps_long_notifications() {
             let config = crate::gates::closing_config().unwrap();
             let all = AgentClosing::default();
             assert_eq!(
@@ -669,27 +797,68 @@ mod closing {
                 .unwrap()["flag"],
                 "complete"
             );
-            assert!(closing_status(
-                &json!({"flag":"unknown","notification":"Done"}),
-                &config,
-                &all
-            )
-            .is_err());
-            let six = closing_status(
-                &json!({"flag":"complete","notification":"one two three four five six"}),
+            for flag in ["unknown", "error", "unflagged", "running"] {
+                assert!(
+                    closing_status(&json!({"flag":flag,"notification":"Done"}), &config, &all)
+                        .is_err()
+                );
+            }
+            let long = "word ".repeat(30);
+            let kept = closing_status(
+                &json!({"flag":"waiting","notification":long}),
                 &config,
                 &all,
-            );
+            )
+            .unwrap();
             assert_eq!(
-                six.unwrap_err().to_string(),
-                "notification has 6 words; the maximum is 5"
+                kept["notification"],
+                long.trim(),
+                "a long notification is kept, not refused"
+            );
+            let runaway = "x".repeat(config.notification.max_chars + 50);
+            let cut = closing_status(
+                &json!({"flag":"waiting","notification":runaway}),
+                &config,
+                &all,
+            )
+            .unwrap();
+            assert_eq!(
+                cut["notification"].as_str().unwrap().chars().count(),
+                config.notification.max_chars
             );
             let flag = closing_status(&json!({"flag":"done","notification":"Done"}), &config, &all);
             assert!(flag
                 .unwrap_err()
                 .to_string()
-                .starts_with("flag 'done' is unsupported; use one of needs_input"));
-            assert_eq!(fallback_status(&config)["flag"], "unverified");
+                .starts_with("flag 'done' is unsupported; use one of complete"));
+            assert_eq!(fallback_status(&config, &all)["flag"], "unflagged");
+            let note_only = AgentClosing {
+                require_flag: false,
+                ..AgentClosing::default()
+            };
+            assert!(fallback_status(&config, &note_only).get("flag").is_none());
+        }
+        #[test]
+        fn config_rejects_missing_system_flags_and_bad_fallbacks() {
+            let config = crate::gates::closing_config().unwrap();
+            config.validate().unwrap();
+            let mut missing = config.clone();
+            missing.flags.retain(|flag| flag.key != "awaiting_approval");
+            assert!(missing.validate().is_err());
+            for fallback in ["", "complete", "running", "nope"] {
+                let mut bad = config.clone();
+                bad.fallback_flag = Some(fallback.into());
+                assert!(bad.validate().is_err(), "{fallback}");
+            }
+            let mut off = config.clone();
+            off.fallback_flag = None;
+            off.validate().unwrap();
+            let mut tone = config.clone();
+            tone.flags[0].tone = "#00ff00".into();
+            assert!(tone.validate().is_err());
+            let mut no_meaning = config;
+            no_meaning.flags[0].meaning = None;
+            assert!(no_meaning.validate().is_err());
         }
         #[test]
         fn agent_toggles_select_the_required_closing_parts() {
@@ -700,6 +869,10 @@ mod closing {
             };
             let schema = closing_schema(&config, &flag_only);
             assert_eq!(schema["parameters"]["required"], json!(["flag"]));
+            assert_eq!(
+                schema["parameters"]["properties"]["flag"]["enum"],
+                json!(["complete", "needs_input", "waiting", "unverified", "failed"])
+            );
             let status = closing_status(&json!({"flag":"complete"}), &config, &flag_only).unwrap();
             assert_eq!(status["flag"], "complete");
             assert!(status.get("notification").is_none());
@@ -717,6 +890,7 @@ mod closing {
             let status =
                 closing_status(&json!({"notification":"Done"}), &config, &note_only).unwrap();
             assert!(status.get("flag").is_none());
+            assert!(!guidance(&config, &note_only).contains("Flags:"));
             assert!(!AgentClosing {
                 enabled: false,
                 ..AgentClosing::default()
@@ -733,7 +907,7 @@ mod closing {
             assert!(saved.active() && saved.require_flag && saved.require_notification);
         }
         #[test]
-        fn agent_guidance_is_bounded_and_keeps_the_fixed_protocol() {
+        fn agent_guidance_lists_flag_meanings_and_appends_agent_text() {
             let config = crate::gates::closing_config().unwrap();
             let settings = AgentClosing {
                 notification_guidance: "Name the next step".into(),
@@ -741,7 +915,10 @@ mod closing {
             };
             settings.validate().unwrap();
             let combined = guidance(&config, &settings);
-            assert!(combined.starts_with(&config.guidance));
+            assert!(combined.starts_with("Before a final reply, call set_closer_status"));
+            assert!(combined.contains("about 5 words"));
+            assert!(combined.contains("waiting = you are waiting on background work"));
+            assert!(!combined.contains("unflagged"));
             assert!(combined.contains("Name the next step"));
             assert!(AgentClosing {
                 notification_guidance: "x".repeat(4097),

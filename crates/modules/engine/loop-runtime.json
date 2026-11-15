@@ -42,7 +42,7 @@
         "message_visibility_v1"
       ],
       "publication": [
-        "closing_status_v1"
+        "closing_status"
       ]
     }
   }

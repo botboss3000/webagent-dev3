@@ -3732,7 +3732,11 @@ async fn session_metadata_routes_enforce_auth_csrf_ownership_and_retries() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(list["server_time"].as_i64().is_some());
-    assert_eq!(list["sessions"][0], result["session"]);
+    // List rows add the newest run's live status to the session summary.
+    let mut listed = list["sessions"][0].clone();
+    assert!(listed["run_status"].is_null());
+    listed.as_object_mut().unwrap().remove("run_status");
+    assert_eq!(listed, result["session"]);
     assert!(list["sessions"][0].get("checkpoint_input").is_none());
     // A session in another user's database is indistinguishable from missing.
     sqlx::query("INSERT INTO user_accounts(user_id,username,value) VALUES('other','other',?)")
@@ -10741,6 +10745,84 @@ async fn provider_recovery_retries_stream_failure_and_publishes_one_final_reply(
         chat.iter().filter(|row| row["role"] == "assistant").count(),
         1
     );
+    server.abort();
+}
+
+/// A final reply without a closing status gets one private reminder. A status-only answer
+/// publishes the reminded reply with the agent's flag; a second miss uses the fallback flag.
+#[tokio::test]
+async fn closing_reminder_runs_once_then_publishes_with_flag_or_fallback() {
+    use axum::{routing::post, Router};
+    use std::sync::atomic::AtomicUsize;
+    let (_root, mut app) = fixture().await;
+    let mut runtime: Value =
+        serde_json::from_slice(&std::fs::read(&app.runtime_path).unwrap()).unwrap();
+    runtime["workflow"]["modules"] = json!({"publication":["closing_status"]});
+    std::fs::write(&app.runtime_path, serde_json::to_vec(&runtime).unwrap()).unwrap();
+    let count = Arc::new(AtomicUsize::new(0));
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let (seen, kept) = (count.clone(), bodies.clone());
+    let mock = Router::new().route("/responses", post(move |body: String| {
+        let (seen, kept) = (seen.clone(), kept.clone());
+        async move {
+            kept.lock().unwrap().push(body);
+            let text = |text: &str| json!({"type":"message","role":"assistant",
+                "content":[{"type":"output_text","text":text}]});
+            let output = match seen.fetch_add(1, Ordering::SeqCst) {
+                0 => text("Final answer"),
+                1 => json!({"type":"function_call","call_id":"close-1","name":"set_closer_status",
+                    "arguments":"{\"flag\":\"complete\",\"notification\":\"All done\"}"}),
+                2 => text("Second answer"),
+                _ => text("Second answer again"),
+            };
+            let event = json!({"type":"response.completed",
+                "response":{"status":"completed","output":[output]}});
+            ([("content-type","text/event-stream")], format!("data: {event}\n\n"))
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, mock).await.unwrap();
+    });
+    app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+    let mut sessions = Vec::new();
+    for attempt in ["first", "second"] {
+        let sid = conversation(&app).await;
+        let id = queued(&app, &sid).await;
+        running(&app, &id, attempt).await;
+        execute_run(app.clone(), id.clone(), attempt.into(), CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
+        sessions.push(sid);
+    }
+    assert_eq!(count.load(Ordering::SeqCst), 4, "one reminder call per run");
+    let bodies = bodies.lock().unwrap();
+    assert!(bodies[1].contains("recorded no valid closing status"));
+    assert!(!bodies[0].contains("recorded no valid closing status"));
+    let replies = |rows: &[Value]| {
+        rows.iter()
+            .filter(|row| row["role"] == "assistant")
+            .map(|row| row["content"].to_string())
+            .collect::<Vec<_>>()
+    };
+    let (first_chat, _) = app.store.chat_snapshot(&sessions[0]).await.unwrap();
+    let first_replies = replies(&first_chat);
+    assert_eq!(first_replies.len(), 1);
+    assert!(first_replies[0].contains("Final answer"));
+    let first = app.store.get(&format!("session:{}", sessions[0])).await.unwrap().unwrap();
+    assert_eq!(first["flag"], "complete");
+    assert_eq!(first["flag_source"], "agent");
+    assert_eq!(first["notification"], "All done");
+    assert_eq!(first["flag_dismissed"], false);
+    let (second_chat, _) = app.store.chat_snapshot(&sessions[1]).await.unwrap();
+    let second_replies = replies(&second_chat);
+    assert_eq!(second_replies.len(), 1);
+    assert!(second_replies[0].contains("Second answer again"));
+    let second = app.store.get(&format!("session:{}", sessions[1])).await.unwrap().unwrap();
+    assert_eq!(second["flag"], "unflagged");
+    assert_eq!(second["flag_source"], "system");
     server.abort();
 }
 

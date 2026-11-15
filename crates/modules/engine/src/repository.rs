@@ -20,6 +20,98 @@ fn index_status(run: &Value) -> &str {
         status
     }
 }
+/// Notification shown when an external effect may have happened before the run ended.
+const UNCERTAIN_NOTE: &str = "May have partly run; check before retrying";
+
+/// The session flag a settled run leaves: the closing status after a normal finish,
+/// `error` or `stopped` otherwise. Live and approval states return `None`; the session
+/// lists read those from the run itself.
+fn session_flag(run: &Value) -> Option<Value> {
+    let status = run["status"].as_str()?;
+    let system = |flag: &str, note: Value| json!({"flag":flag,"flag_source":"system","notification":note,"flag_run_id":run["id"]});
+    let error = || {
+        run["error"]
+            .as_str()
+            .filter(|text| !text.is_empty())
+            .map_or(Value::Null, |text| {
+                json!(text.chars().take(200).collect::<String>())
+            })
+    };
+    Some(match status {
+        "completed" => {
+            let flag = &run["closing"]["flag"];
+            let source = if flag.is_null() {
+                Value::Null
+            } else if run["closing"]["fallback"] == true {
+                json!("system")
+            } else {
+                json!("agent")
+            };
+            json!({"flag":flag,"flag_source":source,
+                "notification":run["closing"]["notification"],"flag_run_id":run["id"]})
+        }
+        "failed" | "paused" | "rejected" | "unavailable" | "stopped" | "cancelled"
+            if run["uncertain"] == true =>
+        {
+            system("error", json!(UNCERTAIN_NOTE))
+        }
+        "failed" | "paused" | "rejected" | "unavailable" => system("error", error()),
+        // A stop keeps its reason (user interrupt, access change) as the notification.
+        "stopped" | "cancelled" => system("stopped", error()),
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod session_flag_tests {
+    use super::*;
+    #[test]
+    fn settled_runs_map_to_agent_or_system_flags() {
+        let done = json!({"id":"r","status":"completed",
+            "closing":{"flag":"waiting","notification":"Build running","fallback":false}});
+        let flag = session_flag(&done).unwrap();
+        assert_eq!(flag["flag"], "waiting");
+        assert_eq!(flag["flag_source"], "agent");
+        assert_eq!(flag["notification"], "Build running");
+        assert_eq!(flag["flag_run_id"], "r");
+        let fallback = json!({"id":"r","status":"completed",
+            "closing":{"flag":"unflagged","fallback":true}});
+        assert_eq!(session_flag(&fallback).unwrap()["flag_source"], "system");
+        let plain = session_flag(&json!({"id":"r","status":"completed"})).unwrap();
+        assert!(plain["flag"].is_null() && plain["flag_source"].is_null());
+        let failed = session_flag(&json!({"id":"r","status":"failed","error":"Boom"})).unwrap();
+        assert_eq!(
+            (failed["flag"].as_str(), failed["notification"].as_str()),
+            (Some("error"), Some("Boom"))
+        );
+        let stop = session_flag(&json!({"id":"r","status":"stopped",
+            "error":"Provider request interrupted"}))
+        .unwrap();
+        assert_eq!(stop["flag"], "stopped");
+        let uncertain =
+            session_flag(&json!({"id":"r","status":"stopped","uncertain":true})).unwrap();
+        assert_eq!(
+            (
+                uncertain["flag"].as_str(),
+                uncertain["notification"].as_str()
+            ),
+            (Some("error"), Some(UNCERTAIN_NOTE))
+        );
+        for live in [
+            "running",
+            "queued",
+            "waiting_approval",
+            "recovery",
+            "waiting_external",
+        ] {
+            assert!(
+                session_flag(&json!({"id":"r","status":live})).is_none(),
+                "{live}"
+            );
+        }
+    }
+}
+
 pub struct Repository<'a, R, H, Q, N, U> {
     pub(crate) root: &'a std::path::Path,
     pub(crate) pool: &'a SqlitePool,
@@ -92,6 +184,7 @@ impl<
             .bind(run["id"].as_str().ok_or_else(||anyhow!("Invalid run"))?).bind(run["session_id"].as_str().unwrap_or(""))
             .bind(index_status(run)).bind(run["updated_at"].as_i64().unwrap_or(0)).execute(&mut **tx)).await?;
             crate::send_future(self.sync_run_notice(tx, run)).await?;
+            crate::send_future(self.sync_session_flag(tx, run)).await?;
             // Session totals advance in the same transaction as the run. Re-saving
             // a run contributes only its delta, so retries and recovery cannot double-count.
             let new_usage = crate::send_future(self.usage.stage_run_usage_in(tx, run)).await?;
@@ -137,6 +230,54 @@ impl<
                 )
                 .await?;
             }
+            Ok(())
+        }
+    }
+
+    /// When a run settles, write its session flag, notification and run ID on the session
+    /// record the session lists read. A changed flag arrives undismissed; an unchanged one
+    /// (the same run saved again) keeps its dismissal.
+    fn sync_session_flag<'s, 'tx>(
+        &'s self,
+        tx: &'s mut sqlx::Transaction<'tx, sqlx::Sqlite>,
+        run: &'s Value,
+    ) -> impl std::future::Future<Output = Result<()>> + Send + 's + use<'s, 'tx, R, H, Q, N, U>
+    where
+        'tx: 's,
+    {
+        async move {
+            let Some(flag) = session_flag(run) else {
+                return Ok(());
+            };
+            let key = format!("session:{}", run["session_id"].as_str().unwrap_or(""));
+            let Some(raw) = crate::send_future(
+                sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+                    .bind(&key)
+                    .fetch_optional(&mut **tx),
+            )
+            .await?
+            else {
+                return Ok(());
+            };
+            let mut session = self.records.unseal(&raw)?;
+            let unchanged = ["flag", "flag_source", "notification", "flag_run_id"]
+                .iter()
+                .all(|field| session[*field] == flag[*field]);
+            if unchanged {
+                return Ok(());
+            }
+            for (field, value) in flag.as_object().into_iter().flatten() {
+                session[field] = value.clone();
+            }
+            session["flag_set_at"] = json!(crate::now());
+            session["flag_dismissed"] = json!(false);
+            crate::send_future(
+                sqlx::query("UPDATE docs SET value=? WHERE key=?")
+                    .bind(self.records.encode_user_record(&session)?)
+                    .bind(&key)
+                    .execute(&mut **tx),
+            )
+            .await?;
             Ok(())
         }
     }
@@ -557,12 +698,13 @@ impl<
                     }
                 }
             }
-            // Activity-only rows (compaction call/result, scheduled retries, preloads); context assembly skips their steps.
+            // Activity-only rows (compaction call/result, scheduled retries, preloads, closing
+            // reminders); context assembly skips their steps.
             for entry in run["_activity_items"].as_array().into_iter().flatten() {
                 let step = entry["step"]
                     .as_str()
                     .filter(|step| {
-                        ["compaction:", "retry:", "preload:"]
+                        ["compaction:", "retry:", "preload:", "closing:"]
                             .iter()
                             .any(|prefix| step.starts_with(prefix))
                     })

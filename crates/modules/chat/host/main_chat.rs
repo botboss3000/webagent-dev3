@@ -733,6 +733,8 @@ mod api_tests {
             expected_revision: 0,
             title: Some("Renamed".into()),
             pinned: Some(true),
+            flag_dismissed: None,
+            flag_run_id: None,
         };
         assert!(matches!(
             app.store.patch_session(sid, &patch).await.unwrap(),

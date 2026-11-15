@@ -674,14 +674,14 @@ application data or backup authority.
 Gate activation and order live in the live file `crates/modules/engine/loop-runtime.json` under
 `workflow.modules`. The default is empty. For the first two native modules and
 the optional size plugin, use:
-`{"model_dispatch":["message_visibility_v1"],"publication":["closing_status_v1","optional:publication_size_guard_v1"]}`.
+`{"model_dispatch":["message_visibility_v1"],"publication":["closing_status","optional:publication_size_guard_v1"]}`.
 The fixed Rust checkpoints run in their normal order; each list orders modules
 within that checkpoint. Unknown, duplicate, or wrong-checkpoint modules fail
 validation. Only the isolated Python size plugin accepts the `optional:` prefix.
 
 The integral module definitions and settings are single live JSON files at
 `crates/modules/engine/gates/message_visibility_v1.json` and
-`crates/modules/engine/gates/closing_status_v1.json`, read through the shared
+`crates/modules/engine/gates/closing_status.json`, read through the shared
 live-file reader; no runtime data enters the build. The visibility module adds the v2
 message-visibility guidance and private `publish_main_message` control before
 a model call. A validated call commits a nonterminal working chat row while
@@ -690,9 +690,14 @@ before the call in the same reply, so the model never retypes it. Its chat ID
 names the repeated reply messages (`:echo:<ordinals>`; automatic promotion uses
 `:auto:<turn>:<ordinal>`), and the activity log hides those messages, each
 completed run's final reply and the control call. The closing module offers private `set_closer_status`
-with a configured flag and short notification. Rust stores this intent with
-the final reply; missing or invalid status becomes the configured
-`unverified` fallback without a repair turn. Its status does not itself
+with one of the agent flags `closing_status.json` defines and a notification
+of about its `target_words` (cut silently at `max_chars`). The same file defines
+the system flags, each flag's label and colour role, and `fallback_flag`. A
+final reply without a valid status gets one private reminder turn; after that
+the run publishes with the fallback flag (or none when it is `null`). When a run
+ends, Rust writes the session's `flag`, `flag_source`, `notification`,
+`flag_run_id`, `flag_set_at` and `flag_dismissed`: the agent's status after a
+normal finish, otherwise `error` or `stopped`. Its status does not itself
 publish a reply.
 
 The optional `publication_size_guard_v1` descriptor and handler live in

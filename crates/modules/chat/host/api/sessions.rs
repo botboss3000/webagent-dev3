@@ -129,7 +129,12 @@ pub(crate) async fn sessions(State(app): State<App>, Query(args): Query<SessionL
             })
             .then_with(|| a["id"].as_str().cmp(&b["id"].as_str()))
     });
-    Ok(Json(json!({"sessions":list,"server_time":now()})))
+    // Each flag's label, colour role and tooltip, from closing_status.json, for the list chips.
+    let flags =
+        crate::gate_registry::closing_config().map_or(json!([]), |config| json!(config.flags));
+    Ok(Json(
+        json!({"sessions":list,"flags":flags,"server_time":now()}),
+    ))
 }
 pub(crate) async fn patch_session_api(
     State(app): State<App>,
@@ -702,6 +707,8 @@ async fn delete_one(app: App, id: String, body: crate::store::session::SessionLi
         expected_revision: body.expected_revision,
         title: None,
         pinned: Some(false),
+        flag_dismissed: None,
+        flag_run_id: None,
     };
     validation.validate().map_err(bad)?;
     if let Some(session) = app

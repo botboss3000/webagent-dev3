@@ -194,6 +194,21 @@ fn history_shape(history: &[Value]) -> String {
         .join(",")
 }
 
+/// Whether the run's one closing reminder is due on the next model call.
+fn closing_reminder_pending(run: &Value) -> bool {
+    run["closing_reminder"]["text"].is_string() && run["closing_reminder"]["done"] != true
+}
+
+/// Queue an activity row saying the run reminded the agent to set its closing status.
+fn closing_reminder_activity(run: &mut Value) {
+    let entry = json!({"step":format!("closing:reminder:{}", model_turn(run)),
+        "item":{"type":"closing_reminder"}});
+    match run["_activity_items"].as_array_mut() {
+        Some(items) => items.push(entry),
+        None => run["_activity_items"] = json!([entry]),
+    }
+}
+
 fn closer_repeats(run: &Value, status: &Value) -> u64 {
     if run["closing"] == *status {
         run["closing_repeats"].as_u64().unwrap_or(0) + 1
@@ -743,9 +758,9 @@ impl<
                                 else {"Closing status already recorded; reply to the user now in plain text without tool calls"}})
                     }
                     Err(error) => {
-                        run["closing"] = gate_controls::fallback_status(&config);
+                        run["closing"] = gate_controls::fallback_status(&config, &closing);
                         json!({"status":"denied","output":format!(
-                                "Invalid closing status: {error}. Unverified fallback recorded; call again with a valid status")})
+                                "Invalid closing status: {error}. No status recorded; call again with a valid status")})
                     }
                 }
             };
@@ -2216,6 +2231,16 @@ impl<
                             turn: run["turns"].as_u64().unwrap_or(0),
                             call: call_number,
                         });
+                        if closing_reminder_pending(&run) {
+                            contributions.push(context_input::Contribution {
+                                id: "gate_closing_reminder".into(),
+                                source: "native_gate_config".into(),
+                                lifetime: context_input::Lifetime::Call,
+                                content: gate_controls::closing_reminder(&config),
+                                turn: run["turns"].as_u64().unwrap_or(0),
+                                call: call_number,
+                            });
+                        }
                     }
                 }
                 // COMPACTION CONFIG: reread the single external JSON at each call boundary.
@@ -3357,7 +3382,7 @@ impl<
                                 .expect("run input is an array")
                                 .push(item.clone());
                         }
-                        let text = engine_output::text(output);
+                        let mut text = engine_output::text(output);
                         let publication_policy = app.current_workflow_policy().await?;
                         workflow::record(
                             &mut run,
@@ -3382,13 +3407,19 @@ impl<
                             )?
                             .iter()
                             .any(|item| item.id == gate_registry::CLOSING_STATUS);
+                        // This output answers the one closing reminder; it is never sent again.
+                        let reminded = closing_reminder_pending(&run);
+                        if reminded {
+                            run["closing_reminder"]["done"] = json!(true);
+                        }
                         // CLOSING-SAME-RESPONSE: the private status tool may accompany
                         // the final prose. Validate it here, then let the existing
-                        // terminal transaction publish that prose exactly once.
+                        // terminal transaction publish that prose exactly once. After a
+                        // reminder the call may come alone: the reminded reply stands.
                         if closing_enabled
                             && calls.len() == 1
                             && calls[0]["name"] == "set_closer_status"
-                            && !text.trim().is_empty()
+                            && (!text.trim().is_empty() || reminded)
                         {
                             let config = gate_registry::closing_config()?;
                             let call_id = calls[0]["call_id"].as_str().filter(|value| {
@@ -3409,14 +3440,14 @@ impl<
                                 });
                             let rejection = checked.as_ref().err().map(ToString::to_string);
                             let accepted = call_id.and(checked.ok());
-                            run["closing"] = accepted
-                                .clone()
-                                .unwrap_or_else(|| gate_controls::fallback_status(&config));
+                            run["closing"] = accepted.clone().unwrap_or_else(|| {
+                                gate_controls::fallback_status(&config, &closing)
+                            });
                             if let Some(call_id) = call_id {
                                 let result = json!({"status":if accepted.is_some() {"ok"} else {"denied"},
                                 "output":match rejection {
                                     None=>"Closing status recorded".to_owned(),
-                                    Some(error)=>format!("Invalid closing status: {error}. Unverified fallback recorded"),
+                                    Some(error)=>format!("Invalid closing status: {error}"),
                                 }});
                                 run["input"]
                                     .as_array_mut()
@@ -3427,6 +3458,13 @@ impl<
                             }
                             calls.clear();
                             run["calls"] = json!([]);
+                        }
+                        // A reminder answered with no new text publishes the reminded reply.
+                        if reminded && calls.is_empty() && text.trim().is_empty() {
+                            text = run["closing_reminder"]["text"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .to_owned();
                         }
                         if calls.is_empty() {
                             if text.trim().is_empty() {
@@ -3466,8 +3504,9 @@ impl<
                                 return Ok(());
                             }
                             if closing_enabled {
-                                // CLOSING-FALLBACK: missing or malformed model status
-                                // never blocks a valid final reply or starts a repair turn.
+                                // CLOSING-REMINDER: a reply without a valid status gets one
+                                // private reminder turn; after that it publishes with the
+                                // configured fallback, never blocking a valid final reply.
                                 let config = gate_registry::closing_config()?;
                                 let valid = run["closing"]["fallback"] == false
                                     && gate_controls::closing_status(
@@ -3487,8 +3526,22 @@ impl<
                                         &closing,
                                     )
                                     .is_ok();
+                                if !valid && run["closing_reminder"].is_null() {
+                                    run["closing_reminder"] = json!({"text":text,"done":false});
+                                    closing_reminder_activity(&mut run);
+                                    run["phase"] = json!("model");
+                                    app.store
+                                        .save_run_observed(
+                                            &mut run,
+                                            "model_output",
+                                            &json!({"output":output}),
+                                        )
+                                        .await?;
+                                    continue;
+                                }
                                 if !valid {
-                                    run["closing"] = gate_controls::fallback_status(&config);
+                                    run["closing"] =
+                                        gate_controls::fallback_status(&config, &closing);
                                 }
                             }
                             if text.len() > publication_policy.max_publication_bytes {

@@ -192,7 +192,7 @@ async function historyAction(kind,item){
 // The conversation endpoint decides send/control rights; the sharing poll only adds sharing fields.
 // Letting the poll overwrite can_send flipped the focused composer readonly, which closes Android keyboards.
 let sharedAccess=null,sessionAccess=null;
-// Near-duplicate threshold from the session snapshot (closing_status_v1.json); 0 = off.
+// Near-duplicate threshold from the session snapshot (closing_status.json); 0 = off.
 let repeatSimilarity=0.8;
 // Sharing state polls every few seconds; only a change since the last poll needs a fresh snapshot.
 let sharingKey='';

@@ -22,7 +22,7 @@ export function renderClosing(content, agent, persist) {
     return {label, input};
   };
   const flag = requirement('require_flag', 'Require completion flag (one of ' + flags + ')');
-  const note = requirement('require_notification', 'Require notification / next step (at most ' + (protocol.notification_max_words || 5) + ' words)');
+  const note = requirement('require_notification', 'Require notification / next step (aim for about ' + (protocol.notification_target_words || 5) + ' words)');
   const guidanceLabel = document.createElement('label');
   guidanceLabel.className = 'agent-closing-message-guidance';
   const guidanceName = document.createElement('span');

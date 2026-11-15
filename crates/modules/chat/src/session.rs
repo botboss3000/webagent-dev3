@@ -68,6 +68,10 @@ pub struct SessionPatch {
     pub expected_revision: u64,
     pub title: Option<String>,
     pub pinned: Option<bool>,
+    /// Mark Dismissed (`true`) or Mark Active (`false`); names the flag's run so a stale
+    /// view cannot dismiss a newer flag.
+    pub flag_dismissed: Option<bool>,
+    pub flag_run_id: Option<String>,
 }
 
 impl SessionPatch {
@@ -80,8 +84,16 @@ impl SessionPatch {
         {
             return Err("Invalid request identifier");
         }
-        if self.title.is_none() && self.pinned.is_none() {
+        if self.title.is_none() && self.pinned.is_none() && self.flag_dismissed.is_none() {
             return Err("Empty session patch");
+        }
+        let run_ok = self.flag_run_id.as_ref().is_some_and(|id| {
+            !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control)
+        });
+        if self.flag_dismissed.is_some() != self.flag_run_id.is_some()
+            || (self.flag_run_id.is_some() && !run_ok)
+        {
+            return Err("Invalid session flag change");
         }
         if let Some(title) = &self.title {
             let title = title.trim();
@@ -131,6 +143,17 @@ pub fn public_session(value: &Value) -> Result<Value> {
     if let Some(parent) = value["parent_session_id"].as_str() {
         summary["parent_session_id"] = json!(parent);
     }
+    // The latest settled run's flag (written by the engine) and whether it was dismissed.
+    for field in [
+        "flag",
+        "flag_source",
+        "notification",
+        "flag_run_id",
+        "flag_set_at",
+    ] {
+        summary[field] = value[field].clone();
+    }
+    summary["flag_dismissed"] = json!(value["flag_dismissed"] == true);
     Ok(summary)
 }
 
@@ -360,6 +383,15 @@ pub async fn prepare_session_document<C: RecordCodec>(
 }
 
 /// Project active or archived public sessions and order pins, activity and identities deterministically.
+/// The newest run's status, with an approval pause reported as `waiting_approval`.
+pub async fn latest_run_status(
+    tx: &mut Transaction<'_, Sqlite>,
+    sid: &str,
+) -> Result<Option<String>> {
+    Ok(sqlx::query_scalar("SELECT CASE status WHEN 'parked' THEN 'waiting_approval' ELSE status END FROM run_index WHERE session_id=? ORDER BY updated_at DESC,id DESC LIMIT 1")
+        .bind(sid).fetch_optional(&mut **tx).await?)
+}
+
 pub async fn ordered_sessions_status<C: RecordCodec>(
     pool: &SqlitePool,
     codec: &C,
@@ -378,7 +410,9 @@ pub async fn ordered_sessions_status<C: RecordCodec>(
             let sid = session["id"]
                 .as_str()
                 .ok_or_else(|| anyhow!("Invalid session ID"))?;
-            summaries.push(read_summary_in(&mut tx, sid, &session).await?);
+            let mut summary = read_summary_in(&mut tx, sid, &session).await?;
+            summary["run_status"] = json!(latest_run_status(&mut tx, sid).await?);
+            summaries.push(summary);
         }
     }
     tx.commit().await?;

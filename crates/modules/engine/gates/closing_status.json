@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "id": "closing_status",
+  "checkpoint": "publication",
+  "runtime": "rust",
+  "config": {
+    "tool_name": "set_closer_status",
+    "notification": {
+      "target_words": 5,
+      "max_chars": 200
+    },
+    "fallback_flag": "unflagged",
+    "repeat_similarity": 0.8,
+    "flags": [
+      {
+        "key": "complete",
+        "source": "agent",
+        "label": "Complete",
+        "tone": "success",
+        "meaning": "all the requested work is done and checked"
+      },
+      {
+        "key": "needs_input",
+        "source": "agent",
+        "label": "Needs input",
+        "tone": "warning",
+        "meaning": "you are waiting on the user for a decision or an answer"
+      },
+      {
+        "key": "waiting",
+        "source": "agent",
+        "label": "Waiting",
+        "tone": "info",
+        "meaning": "you are waiting on background work (a spawned session, a build) and will continue when it finishes"
+      },
+      {
+        "key": "unverified",
+        "source": "agent",
+        "label": "Unverified",
+        "tone": "warning",
+        "meaning": "the work is done, but not everything could be checked"
+      },
+      {
+        "key": "failed",
+        "source": "agent",
+        "label": "Failed",
+        "tone": "danger",
+        "meaning": "you could not do the work; give the reason"
+      },
+      {
+        "key": "unflagged",
+        "source": "system",
+        "label": "Unflagged",
+        "tone": "neutral",
+        "tooltip": "Agent didn't set a status"
+      },
+      {
+        "key": "running",
+        "source": "system",
+        "label": "Running",
+        "tone": "info"
+      },
+      {
+        "key": "queued",
+        "source": "system",
+        "label": "Queued",
+        "tone": "neutral"
+      },
+      {
+        "key": "awaiting_approval",
+        "source": "system",
+        "label": "Approval",
+        "tone": "warning",
+        "tooltip": "Waiting for you to approve a tool"
+      },
+      {
+        "key": "stopped",
+        "source": "system",
+        "label": "Stopped",
+        "tone": "neutral"
+      },
+      {
+        "key": "error",
+        "source": "system",
+        "label": "Error",
+        "tone": "danger"
+      }
+    ]
+  }
+}

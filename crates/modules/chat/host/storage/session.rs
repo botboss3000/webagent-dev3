@@ -232,12 +232,9 @@ impl Store {
                 Some(raw) => crate::usage::public(&self.unseal(&raw)?),
                 None => Value::Null,
             };
-            let status: Option<String> = sqlx::query_scalar("SELECT CASE status WHEN 'parked' THEN 'waiting_approval' ELSE status END FROM run_index WHERE session_id=? ORDER BY updated_at DESC,id DESC LIMIT 1")
-                .bind(sid).fetch_optional(&mut *tx).await?;
             summary["message_count"] = json!(count);
             summary["last_public_seq"] = json!(last_seq);
             summary["usage"] = usage;
-            summary["run_status"] = json!(status);
             page.push(summary);
         }
         tx.commit().await?;
@@ -320,6 +317,14 @@ impl Store {
         if let Some(pinned) = patch.pinned {
             changed |= metadata.pinned != pinned;
             session["pinned"] = json!(pinned);
+        }
+        if let Some(dismissed) = patch.flag_dismissed {
+            if session["flag_run_id"].as_str() != patch.flag_run_id.as_deref() {
+                tx.rollback().await?;
+                return Ok(SessionPatchOutcome::Conflict("Session flag changed"));
+            }
+            changed |= (session["flag_dismissed"] == true) != dismissed;
+            session["flag_dismissed"] = json!(dismissed);
         }
         if changed {
             let Some(revision) = metadata.metadata_revision.checked_add(1) else {
@@ -492,6 +497,8 @@ impl Store {
             expected_revision: body.expected_revision,
             title: None,
             pinned: Some(false),
+            flag_dismissed: None,
+            flag_run_id: None,
         };
         if let Err(message) = validation.validate() {
             return Ok(SessionPatchOutcome::Invalid(message));
@@ -635,6 +642,8 @@ impl Store {
             expected_revision: body.expected_revision,
             title: None,
             pinned: Some(false),
+            flag_dismissed: None,
+            flag_run_id: None,
         };
         if let Err(message) = validation.validate() {
             return Ok(SessionPatchOutcome::Invalid(message));
@@ -1045,6 +1054,8 @@ mod tests {
             expected_revision: revision,
             title: title.map(str::to_owned),
             pinned,
+            flag_dismissed: None,
+            flag_run_id: None,
         }
     }
 
@@ -1952,6 +1963,59 @@ mod tests {
             "expected_revision":0,"pinned":true,"agent_id":"other"}))
             .is_err()
         );
+    }
+
+    /// Mark Dismissed / Mark Active toggle only the named run's flag; a stale run is refused.
+    #[tokio::test]
+    async fn session_flag_dismissal_names_its_run() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        store
+            .put(
+                "session:s",
+                &json!({"id":"s","title":"T","created_at":100,"flag":"needs_input",
+                "flag_source":"agent","notification":"Pick a plan","flag_run_id":"r2",
+                "flag_set_at":120,"flag_dismissed":false}),
+            )
+            .await
+            .unwrap();
+        let flag = |request: &str, revision: u64, run: &str, dismissed: bool| SessionPatch {
+            flag_dismissed: Some(dismissed),
+            flag_run_id: Some(run.into()),
+            ..patch(request, revision, None, None)
+        };
+        assert!(flag("a", 0, "r2", true).validate().is_ok());
+        let missing_run = SessionPatch {
+            flag_dismissed: Some(true),
+            ..patch("b", 0, None, None)
+        };
+        assert!(missing_run.validate().is_err());
+        assert!(matches!(
+            store
+                .patch_session("s", &flag("stale", 0, "r1", true))
+                .await
+                .unwrap(),
+            SessionPatchOutcome::Conflict("Session flag changed")
+        ));
+        let SessionPatchOutcome::Saved(dismissed) = store
+            .patch_session("s", &flag("dismiss", 0, "r2", true))
+            .await
+            .unwrap()
+        else {
+            panic!("dismiss failed")
+        };
+        assert_eq!(dismissed["session"]["flag_dismissed"], true);
+        assert_eq!(dismissed["session"]["flag"], "needs_input");
+        assert_eq!(dismissed["session"]["notification"], "Pick a plan");
+        let SessionPatchOutcome::Saved(active) = store
+            .patch_session("s", &flag("active", 1, "r2", false))
+            .await
+            .unwrap()
+        else {
+            panic!("mark active failed")
+        };
+        assert_eq!(active["session"]["flag_dismissed"], false);
+        assert_eq!(active["session"]["metadata_revision"], 2);
     }
 
     /// Verify metadata patch receipt replay and stale-checkpoint writes preserve newer user metadata.

@@ -140,6 +140,7 @@ fn event(
             "preload",
             json!({"preloaded":item["preloaded"],"suggested":item["suggested"],"skipped":item["skipped"]}),
         ),
+        "closing_reminder" => ("closing_reminder", json!({})),
         "retry_scheduled" => (
             "retry_scheduled",
             json!({"attempt":item["attempt"],"of":item["of"],"wait_seconds":item["wait_seconds"],

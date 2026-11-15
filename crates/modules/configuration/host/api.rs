@@ -30,7 +30,7 @@ pub(crate) fn live(id: &str) -> Option<&'static str> {
         "context_compaction" => "crates/modules/context/context-compaction.json",
         "tool_output_retention" => crate::tool_output::LIVE_POLICY,
         "message_visibility" => "crates/modules/engine/gates/message_visibility_v1.json",
-        "closing_status" => "crates/modules/engine/gates/closing_status_v1.json",
+        "closing_status" => "crates/modules/engine/gates/closing_status.json",
         "voice" => webagent_media::settings::LIVE_VOICE,
         "storage_policy" => webagent_files::storage_policy::LIVE_POLICY,
         "browser_limits" => webagent_browser::limits::LIVE_LIMITS,
