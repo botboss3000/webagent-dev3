@@ -84,3 +84,266 @@ body.v3-build-active:has(#tab-builds.active) #mobile-back-main-btn::after{conten
 @media(prefers-reduced-motion:reduce){#tab-builds .build-loading-spinner{animation:none}}
 #tab-builds .build-card-top h3{overflow-wrap:anywhere}
 #tab-builds .build-card-about{margin:4px 0 10px;color:var(--fg-2,var(--muted));overflow-wrap:anywhere}
+
+/* ===== Option B · Queue strip + stacked task panels ===== */
+
+/* The queue heading row puts the task count on the left and the status counts on the right. */
+#tab-builds .bq-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 12px;min-width:0}
+/* The queue heading uses compact card-sized type rather than a page title. */
+#tab-builds .bq-head h2{margin:0;font-size:1rem;font-weight:700}
+/* The status counts read as a muted aside. */
+#tab-builds .bq-counts{font-size:.8rem;color:var(--fg-3);font-variant-numeric:tabular-nums}
+/* The sentence about the first active task sits right under the heading. */
+#tab-builds .bq-ahead{margin:-8px 0 0;font-size:.82rem;color:var(--fg-2);overflow-wrap:anywhere}
+
+/* The strip wrapper anchors the overlay chevrons without letting them take width. */
+#tab-builds .qstrip-wrap{position:relative;min-width:0}
+/* The queue strip is one horizontally scrolling row of chips. */
+#tab-builds .qstrip{display:flex;gap:6px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;padding:2px 0}
+/* Hides the strip's native scrollbar; the chevrons and fades show that more exists. */
+#tab-builds .qstrip::-webkit-scrollbar{display:none}
+/* Fades the left edge only while there is content to the left. */
+#tab-builds .qstrip.fade-left{-webkit-mask-image:linear-gradient(to right,transparent 0,#000 32px);mask-image:linear-gradient(to right,transparent 0,#000 32px)}
+/* Fades the right edge only while there is content to the right. */
+#tab-builds .qstrip.fade-right{-webkit-mask-image:linear-gradient(to left,transparent 0,#000 32px);mask-image:linear-gradient(to left,transparent 0,#000 32px)}
+/* Fades both edges when the strip can scroll either way. */
+#tab-builds .qstrip.fade-left.fade-right{-webkit-mask-image:linear-gradient(to right,transparent 0,#000 32px,#000 calc(100% - 32px),transparent 100%);mask-image:linear-gradient(to right,transparent 0,#000 32px,#000 calc(100% - 32px),transparent 100%)}
+/* One queue chip shows its place, status dot, short name and elapsed time on a single line. */
+#tab-builds .qchip{display:inline-flex;align-items:center;gap:6px;flex:none;max-width:240px;height:30px;padding:0 10px;font:inherit;font-size:.78rem;line-height:1;border:var(--border-width) solid var(--border-soft);border-radius:999px;background:var(--bg-elev);color:var(--fg-1);cursor:pointer;-webkit-tap-highlight-color:transparent}
+/* Hovering a chip tints it with the accent wash. */
+#tab-builds .qchip:hover{background:var(--accent-soft)}
+/* Keyboard focus on a chip keeps a visible accent ring. */
+#tab-builds .qchip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* The chip's queue number is muted with steady digits. */
+#tab-builds .qchip-num{color:var(--fg-3);font-variant-numeric:tabular-nums}
+/* The chip's task name truncates rather than widening the chip. */
+#tab-builds .qchip-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+/* The chip's elapsed time is muted with steady digits. */
+#tab-builds .qchip-time{color:var(--fg-3);font-variant-numeric:tabular-nums;white-space:nowrap}
+/* The status dot is a small neutral circle by default. */
+#tab-builds .qdot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--fg-4)}
+/* A running or queued task's dot is amber. */
+#tab-builds .qchip[data-tone=progress] .qdot{background:var(--warning)}
+/* A finished task's dot is green. */
+#tab-builds .qchip[data-tone=success] .qdot{background:var(--success)}
+/* A failed task's dot is red. */
+#tab-builds .qchip[data-tone=danger] .qdot{background:var(--danger)}
+/* The strip chevrons are transparent chip-height arrows laid over the faded edge. */
+#tab-builds .qchev{position:absolute;top:50%;z-index:1;display:none;align-items:center;justify-content:center;width:30px;height:30px;padding:0;margin-top:-15px;font:inherit;font-size:24px;line-height:1;border:none;background:none;color:var(--fg-2);cursor:pointer;-webkit-tap-highlight-color:transparent}
+/* A chevron shows only while its side can still scroll. */
+#tab-builds .qchev.visible{display:inline-flex}
+/* Hovering a chevron brightens its glyph. */
+#tab-builds .qchev:hover{color:var(--fg-1)}
+/* Keyboard focus on a chevron keeps a visible accent ring. */
+#tab-builds .qchev:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:var(--r-sm)}
+/* The left chevron sits on the strip's left edge. */
+#tab-builds .qchev-left{left:0}
+/* The right chevron sits on the strip's right edge. */
+#tab-builds .qchev-right{right:0}
+
+/* A task panel is a calm compact card with the task-progress card's small type. */
+#tab-builds .build-card.task-panel{position:relative;display:grid;gap:8px;padding:14px 16px;font-size:.8rem;border-color:var(--border-soft);scroll-margin-top:16px}
+/* Live task panels keep the themed elevated surface in light mode too. */
+body.light-mode #tab-builds .build-card.task-panel[data-active="true"]{background:var(--bg-elev)}
+/* Finished task panels recede onto a quieter mixed surface. */
+#tab-builds .build-card.task-panel[data-active="false"]{background:color-mix(in srgb,var(--bg-elev) 55%,transparent)}
+/* The building or next task gets an accent edge on its left. */
+#tab-builds .build-card.task-panel.tp-accent{box-shadow:inset 3px 0 0 var(--accent)}
+/* A panel reached from the strip briefly flashes an accent outline. */
+#tab-builds .build-card.task-panel.qflash{animation:qflash 1.4s ease-out}
+/* The flash fades the accent outline away. */
+@keyframes qflash{0%{outline:2px solid var(--accent);outline-offset:2px}100%{outline:2px solid transparent;outline-offset:6px}}
+/* Reduced motion keeps the flash as a plain outline without the fade. */
+@media(prefers-reduced-motion:reduce){#tab-builds .build-card.task-panel.qflash{animation:none;outline:2px solid var(--accent);outline-offset:2px}}
+
+/* The panel header lines up the status glyph, task titles and queue position. */
+#tab-builds .tp-head{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;gap:10px}
+/* The status glyph is a small coloured mark. */
+#tab-builds .tp-glyph{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;font-size:.85rem;font-weight:700;line-height:1;color:var(--fg-3)}
+/* A finished task's glyph is green. */
+#tab-builds .task-panel[data-status=success] .tp-glyph{color:var(--success)}
+/* A failed task's glyph is red. */
+#tab-builds .task-panel[data-status=danger] .tp-glyph{color:var(--danger)}
+/* A live task's glyph is amber. */
+#tab-builds .task-panel[data-status=progress] .tp-glyph{color:var(--warning)}
+/* A running task's glyph pulses gently. */
+#tab-builds .tp-spin{animation:tp-pulse 1.4s ease-in-out infinite}
+/* The pulse dims and restores the running glyph. */
+@keyframes tp-pulse{50%{opacity:.35}}
+/* Reduced motion keeps the running glyph still. */
+@media(prefers-reduced-motion:reduce){#tab-builds .tp-spin{animation:none}}
+/* The titles column stacks the task name over its id and owner. */
+#tab-builds .tp-titles{display:grid;gap:2px;min-width:0}
+/* The task name is clamped to two lines. */
+#tab-builds .tp-name{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;font-size:.92rem;line-height:1.3;overflow-wrap:anywhere}
+/* The task id and owner line is muted and may wrap. */
+#tab-builds .tp-meta{font-size:.74rem;color:var(--fg-3);overflow-wrap:anywhere}
+/* The side column shows the queue position over the ahead and behind counts. */
+#tab-builds .tp-side{display:grid;gap:2px;justify-items:end;text-align:right;font-size:.74rem;color:var(--fg-3);font-variant-numeric:tabular-nums}
+/* The queue position reads stronger than the ahead line. */
+#tab-builds .tp-pos{font-weight:700;color:var(--fg-2)}
+/* The ahead and behind line may wrap on narrow screens. */
+#tab-builds .tp-ab{max-width:220px;overflow-wrap:anywhere}
+/* The sequence line holds the state label and current phase. */
+#tab-builds .tp-seq{display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:var(--fg-2)}
+/* The "Building now" or "Next" label is a small accent pill. */
+#tab-builds .tp-label{padding:2px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-size:.72rem;font-weight:700}
+/* The counter line shows elapsed, normal and remaining time in steady digits. */
+#tab-builds .tp-counter{margin:0;color:var(--fg-2);font-variant-numeric:tabular-nums}
+/* An empty counter line takes no space. */
+#tab-builds .tp-counter:empty,#tab-builds .tp-stale:empty{display:none}
+
+/* The stage table is a hairline-divided list of rows. */
+#tab-builds .tp-stages{display:grid;min-width:0;border-top:var(--border-width) solid var(--border-soft)}
+/* Each stage row is a five-column grid of number, stage, time, normal and status. */
+#tab-builds .tp-stage{display:grid;grid-template-columns:2.2em minmax(0,1fr) 5.5em 6.5em 6.5em;gap:8px;align-items:baseline;padding:4px 0;border-bottom:var(--border-width) solid var(--border-soft);font-variant-numeric:tabular-nums}
+/* The stage table heading is small and muted. */
+#tab-builds .tp-stage-head{font-size:.7rem;color:var(--fg-3);text-transform:uppercase;letter-spacing:.03em}
+/* The stage number is muted. */
+#tab-builds .tp-sid{color:var(--fg-3)}
+/* The stage name may wrap rather than overflow. */
+#tab-builds .tp-sname{min-width:0;overflow-wrap:anywhere}
+/* The time and normal columns align right. */
+#tab-builds .tp-time,#tab-builds .tp-normal{text-align:right}
+/* The normal range is muted. */
+#tab-builds .tp-normal{color:var(--fg-3)}
+/* The status column aligns right. */
+#tab-builds .tp-state{text-align:right}
+/* Finished stages show their status in green. */
+#tab-builds .tp-stage-done .tp-state{color:var(--success)}
+/* The running stage is emphasised with the accent colour. */
+#tab-builds .tp-stage-running{color:var(--fg-1);font-weight:600}
+/* The running stage's status uses the accent colour. */
+#tab-builds .tp-stage-running .tp-state{color:var(--accent)}
+/* A running stage beyond its normal time turns amber. */
+#tab-builds .tp-stage.tp-slow .tp-state,#tab-builds .tp-stage.tp-slow .tp-time{color:var(--warning)}
+/* The stage where a failed job stopped is red. */
+#tab-builds .tp-stage-failed,#tab-builds .tp-stage-failed .tp-state{color:var(--danger);font-weight:600}
+/* Upcoming stages are muted. */
+#tab-builds .tp-stage-upcoming{color:var(--fg-3)}
+/* The loading note for stage timings is muted. */
+#tab-builds .tp-pending{margin:0;color:var(--fg-3)}
+/* Background work is a small muted list under the stages. */
+#tab-builds .tp-background{display:grid;gap:2px;color:var(--fg-2);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+/* The stale-data note is amber. */
+#tab-builds .tp-stale{margin:0;color:var(--warning)}
+
+/* Advanced details sit behind a quiet disclosure row. */
+#tab-builds .build-card .tp-advanced{margin-top:2px;border-top:var(--border-width) solid var(--border-soft);padding-top:8px}
+/* The Advanced summary is small and muted. */
+#tab-builds .tp-advanced>summary{font-size:.78rem;color:var(--fg-3)}
+/* Keyboard focus on the Advanced summary keeps a visible ring. */
+#tab-builds .tp-advanced>summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:var(--r-sm)}
+/* Facts inside Advanced use tighter spacing. */
+#tab-builds .tp-advanced .build-facts{gap:8px 18px;margin:12px 0}
+/* The sanitized log stays inside a bounded scrolling block. */
+#tab-builds .tp-log{max-height:220px;overflow:auto;margin:0;padding:8px 10px;border-radius:var(--r-sm);background:var(--bg-1);font-size:.74rem;white-space:pre-wrap;overflow-wrap:anywhere}
+/* Stop controls and their messages wrap in one row. */
+#tab-builds .tp-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:12px}
+/* The stop button matches the page's small bordered buttons. */
+#tab-builds .tp-actions button{font:inherit;padding:5px 10px;border:var(--border-width) solid var(--border);border-radius:var(--r-md);background:var(--bg-elev);color:var(--fg-1);cursor:pointer}
+/* Hovering the stop button tints it with the danger wash. */
+#tab-builds .tp-actions button:hover{background:rgba(var(--danger-rgb),.12)}
+/* A disabled stop button looks inactive. */
+#tab-builds .tp-actions button:disabled{opacity:.55;cursor:default}
+/* The stop message is plain muted text. */
+#tab-builds .tp-actions p{margin:0;color:var(--fg-2)}
+/* The preflight report stays compact and wraps long names. */
+#tab-builds .tp-preflight{margin-top:12px;overflow-wrap:anywhere}
+/* Other jobs of a task form a hairline list. */
+#tab-builds .tp-jobs{display:grid;margin-top:12px;border-top:var(--border-width) solid var(--border-soft)}
+/* Each other job is one row of kind, id, state and time. */
+#tab-builds .tp-job{display:grid;grid-template-columns:6em minmax(0,1fr) auto auto;gap:8px;padding:4px 0;border-bottom:var(--border-width) solid var(--border-soft);font-variant-numeric:tabular-nums}
+/* The job kind is muted. */
+#tab-builds .tp-job-kind{color:var(--fg-3)}
+/* The job id truncates rather than overflowing. */
+#tab-builds .tp-job-id{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* A succeeded older job's state is green. */
+#tab-builds .tp-job[data-tone=success] .tp-job-state{color:var(--success)}
+/* A failed older job's state is red. */
+#tab-builds .tp-job[data-tone=danger] .tp-job-state{color:var(--danger)}
+/* The job time is muted. */
+#tab-builds .tp-job-time{color:var(--fg-3)}
+
+/* The toolbar wraps onto more lines instead of widening the page. */
+#tab-builds .build-toolbar{flex-wrap:wrap;overflow-x:visible}
+/* The status filter chips wrap to the next line when they do not fit. */
+#tab-builds .build-filters{flex:1 1 0;flex-wrap:wrap;min-width:0;white-space:normal}
+/* The clear controls wrap too and stay at the end of the toolbar. */
+#tab-builds .build-clear-controls{flex-wrap:wrap}
+
+/* Host resources sit at the top of the page as a row of small tiles that wraps on phones. */
+#tab-builds .bq-resources{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,104px),1fr));gap:8px;max-width:1200px;margin:0 auto 14px}
+/* One resource tile shows a small label over its value. */
+#tab-builds .bq-res{display:grid;gap:2px;min-width:0;padding:8px 10px;border:var(--border-width) solid var(--border-soft);border-radius:var(--r-md);background:var(--bg-elev)}
+/* The resource label is small, muted and uppercase like the stage table heading. */
+#tab-builds .bq-res-label{font-size:.68rem;color:var(--fg-3);text-transform:uppercase;letter-spacing:.03em;overflow-wrap:anywhere}
+/* The resource value is a steady-digit figure. */
+#tab-builds .bq-res-value{font-size:.9rem;font-weight:600;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+/* Low pressure reads green. */
+#tab-builds .bq-res[data-tone=success] .bq-res-value{color:var(--success)}
+/* Moderate pressure reads amber. */
+#tab-builds .bq-res[data-tone=warning] .bq-res-value{color:var(--warning)}
+/* High pressure reads red. */
+#tab-builds .bq-res[data-tone=danger] .bq-res-value{color:var(--danger)}
+
+/* The scheduler section now only carries its action messages, so it takes no space when empty. */
+#tab-builds .build-scheduler{margin:0 auto}
+/* An empty scheduler message is not shown. */
+#tab-builds .build-scheduler>p:empty{display:none}
+
+/* The secondary sections share one bordered list under the panels. */
+#tab-builds .bq-more{box-sizing:border-box;width:100%;max-width:1200px;margin:16px auto 0;border:var(--border-width) solid var(--border-soft);border-radius:var(--r-lg);background:var(--bg-elev);overflow:hidden}
+/* Each secondary section is a flush row of that list, not its own card. */
+#tab-builds .bq-more>.build-retained{display:block;margin:0;padding:0;max-width:none;border:0;border-radius:0;background:none;font-size:.8rem}
+/* Hairlines divide the rows of the list. */
+#tab-builds .bq-more>.build-retained+.build-retained{border-top:var(--border-width) solid var(--border-soft)}
+/* A row's header lines up the title, its count and a chevron at the right edge. */
+#tab-builds .bq-more .build-retained-summary{gap:10px;min-height:44px;padding:8px 16px;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+/* Hovering a row's header tints it lightly. */
+#tab-builds .bq-more .build-retained-summary:hover{background:var(--bg-tint)}
+/* Keyboard focus on a row's header keeps a visible ring inside the list. */
+#tab-builds .bq-more .build-retained-summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:0}
+/* The row title fills the line at card-sized type. */
+#tab-builds .bq-more .build-retained-summary h3{flex:1 1 auto;min-width:0;margin:0;font-size:.88rem;font-weight:600;overflow-wrap:anywhere}
+/* The row count is a quiet pill with steady digits. */
+#tab-builds .bq-more .build-retained-count{min-width:1.8em;padding:2px 8px;background:var(--bg-1);color:var(--fg-2);font-size:.74rem;font-variant-numeric:tabular-nums}
+/* The row chevron is muted and turns when the row opens. */
+#tab-builds .bq-more .build-retained-chevron{width:1em;text-align:center;font-size:1rem;color:var(--fg-3);transition:transform .15s ease}
+/* An open row's header is separated from its content by a hairline. */
+#tab-builds .bq-more>.build-retained[open]>.build-retained-summary{border-bottom:var(--border-width) solid var(--border-soft)}
+/* An open row's content is a compact stack inside the list. */
+#tab-builds .bq-more .build-retained-list{gap:8px;min-width:0;margin:0;padding:12px 16px 14px;overflow-wrap:anywhere}
+/* Long reserved paths and job ids wrap inside an entry instead of widening the list. */
+#tab-builds .bq-more .build-retained-list>*{min-width:0;max-width:100%}
+/* Action buttons in an entry wrap onto more lines on narrow screens. */
+#tab-builds .bq-more .build-scheduler-controls{display:flex;flex-wrap:wrap;gap:8px;min-width:0}
+/* Explanatory text inside an open row is muted. */
+#tab-builds .bq-more .build-retained-list>p{margin:0;color:var(--fg-3)}
+/* Entries inside an open row are small inset boxes with the same look in every section. */
+#tab-builds .bq-more .build-retained-list>article{padding:10px 12px;border:var(--border-width) solid var(--border-soft);border-radius:var(--r-md);background:var(--bg-1);font-size:.78rem}
+/* An entry's title is compact. */
+#tab-builds .bq-more .build-retained-list>article h4{margin:0 0 4px;font-size:.82rem;overflow-wrap:anywhere;word-break:break-word}
+/* An entry's lines sit close together. */
+#tab-builds .bq-more .build-retained-list>article p{margin:2px 0;color:var(--fg-2)}
+/* Paging controls inside an open row wrap with their count text. */
+#tab-builds .bq-more .build-retained-list>.build-scheduler-controls p{margin:0;color:var(--fg-3)}
+/* Buttons inside the rows use the page's small bordered style. */
+#tab-builds .bq-more button{font:inherit;font-size:.78rem;padding:5px 9px;border:var(--border-width) solid var(--border);border-radius:var(--r-md);background:var(--bg-elev);color:var(--fg-1);cursor:pointer}
+/* Hovering a row button tints it with the accent wash. */
+#tab-builds .bq-more button:hover{background:var(--accent-soft)}
+/* A disabled row button looks inactive. */
+#tab-builds .bq-more button:disabled{opacity:.55;cursor:default}
+/* Reduced motion keeps the chevron from animating. */
+@media(prefers-reduced-motion:reduce){#tab-builds .bq-more .build-retained-chevron{transition:none}}
+
+/* On phones the panel header stacks the position under the titles and the stage table drops the normal column. */
+@media(max-width:600px){
+  #tab-builds .tp-head{grid-template-columns:auto minmax(0,1fr)}
+  #tab-builds .tp-side{grid-column:2;justify-items:start;text-align:left}
+  #tab-builds .tp-stage{grid-template-columns:1.8em minmax(0,1fr) 4.6em 5.4em}
+  #tab-builds .tp-normal{display:none}
+  #tab-builds .tp-job{grid-template-columns:minmax(0,1fr) auto}
+  #tab-builds .tp-job-kind,#tab-builds .tp-job-time{display:none}
+  #tab-builds .build-card.task-panel{padding:12px}
+}
