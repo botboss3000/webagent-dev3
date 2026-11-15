@@ -230,7 +230,7 @@ export async function renderAbilities(host, request, options) {
   // ability is switched on (a new ability stays off for existing agents).
   const markDefault = (row, value) => {
     if (!value) return;
-    const label = { deny: 'Off', ask: 'Ask unless Auto', auto: 'Never ask', visible: 'Visible', discoverable: 'Discoverable', off: 'Off', on: 'On' }[value] || value;
+    const label = { deny: 'Deny', require_approval: 'Require approval', allow: 'Allow', visible: 'Visible', discoverable: 'Discoverable', off: 'Off', on: 'On' }[value] || value;
     const anchor = row.querySelector('.ac-ability-desc') || row.querySelector('.ac-ability-name');
     const mark = node('div', 'ac-hint v3-default-mark', 'Default: ' + label);
     mark.style.whiteSpace = 'nowrap'; // Keep "Default: Auto" on one line on phones.
@@ -303,9 +303,8 @@ export async function renderAbilities(host, request, options) {
         // one exists, as saveToolPermission writes). Effective access can still be
         // Deny because of the account tier, visibility or port status.
         permMode: toolPolicy()?.tool_permissions?.[tool.name] ||
-          toolPolicy()?.tool_permissions?.['*'] || effectiveTool.default || 'auto',
-        // The tool.json policy_ceiling: picks looser than it are shown but disabled.
-        ceiling: { allow: 'auto', require_approval: 'ask', deny: 'deny' }[tool.policy],
+          toolPolicy()?.tool_permissions?.['*'] || effectiveTool.default || 'allow',
+        role_blocked: tool.role_blocked === true || effectiveTool.role_blocked === true,
         tierBlocked: effectiveTool.effective?.reason === 'tier_denied',
       }, {
         canEdit: canManage && !previewUser && levelId==='operator',
@@ -398,13 +397,19 @@ export async function renderAbilities(host, request, options) {
         availability.textContent = 'Unavailable on the agent owner’s tier';
         availability.style.color = 'var(--danger)';
       }
+      const roleBlocked = ability.role_blocked === true || projected.role_blocked === true;
+      if (roleBlocked) {
+        // role_access excludes the viewed level: show it locked with a muted note.
+        availability.textContent = 'Not available to this level';
+        availability.classList.add('v3-role-note');
+      }
       availability.title = ['Declared: ' + !!ability.declared, 'Installed: ' + !!ability.installed,
         'Configured: ' + !!ability.configured, readinessLabel(ability)].join(' · ');
       const toggleWrap = node('label', 'conn-toggle-wrap ac-ability-toggle-wrap');
       const toggle = node('input', 'conn-toggle');
       toggle.type = 'checkbox';
       // Base holds the loaders and core tools, so it is always on.
-      toggle.disabled = !canManage || !!previewUser || ability.id === 'base';
+      toggle.disabled = !canManage || !!previewUser || ability.id === 'base' || roleBlocked;
       toggle.checked = ability.visibility !== 'off';
       toggle.setAttribute('aria-label', ability.name + ' on or off');
       // An ability is only a group: On lets its tools and skills follow their own settings.

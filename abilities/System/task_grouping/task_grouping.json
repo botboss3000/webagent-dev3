@@ -46,5 +46,8 @@
     "notes": "Task Grouping draws boundaries between user turns with a fast text rule, plus an optional AI tie-breaker for ambiguous cases. The same boundaries power off-task tool-output hiding: results of closed tasks are replaced by placeholders in the model context to cut provider cost."
   },
   "migration_note": "Catalog metadata only. V3 adapter, configuration and credential lifecycle remain pending; v2 runtime and skills are not imported.",
-  "tier_access": ["free", "administrator"]
+  "owner_tier": [
+    "free",
+    "administrator"
+  ]
 }

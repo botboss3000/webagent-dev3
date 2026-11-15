@@ -2,9 +2,8 @@
   "name": "terminal_close",
   "description": "Close a PTY and its descendant processes; policy-gated",
   "effect": "write",
-  "policy_ceiling": "ask",
-  "default_access": {
-    "operator": "auto",
+  "default_policy": {
+    "operator": "require_approval",
     "member": "deny",
     "visitor": "deny"
   },

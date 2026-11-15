@@ -63,15 +63,13 @@ mod tests {
             )
             .await
             .unwrap();
-        let mut policy = policy_default();
-        policy["rules"]["set_app_view"] = json!("allow");
-        app.store.put("policy", &policy).await.unwrap();
+        crate::runtime_tests::set_tool_permission(&app, "set_app_view", access::Permission::Auto)
+            .await;
         let sid = crate::runtime_tests::conversation(&app).await;
-        // Session creation defaults to Ask; this write test explicitly selects a write-capable fixture mode.
         app.store
             .put(
                 &format!("session_mode:{sid}"),
-                &json!({"mode":"write","revision":1}),
+                &json!({"execution_mode":"ask","revision":1}),
             )
             .await
             .unwrap();
@@ -87,7 +85,7 @@ mod tests {
         let args = json!({"view":"files"});
         let mut run = json!({"id":rid,"session_id":sid,"agent_id":"shared_default","status":"running","generation":"fixture","loaded_abilities":["app_control"],"pending":{"id":pending,"name":"set_app_view","state":"executing","arguments":args,"human_approved":true}});
         app.store.put(&key("run", &rid), &run).await.unwrap();
-        let (policy, _, visibility, state) = ability_controls(&app, &sid).await.unwrap();
+        let (_, visibility, state) = ability_controls(&app, &sid).await.unwrap();
         let access = shared_chat::live_access(&app.store, "admin", &sid, "shared_default")
             .await
             .unwrap();
@@ -95,11 +93,9 @@ mod tests {
             &app,
             &access,
             "set_app_view",
-            &policy,
             &visibility,
             &state,
             &run["loaded_abilities"],
-            false,
         );
         assert_ne!(
             decision.permission,

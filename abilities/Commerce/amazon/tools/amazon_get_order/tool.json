@@ -1,0 +1,11 @@
+{
+  "name": "amazon_get_order",
+  "description": "Amazon get order (amazon ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

@@ -148,7 +148,7 @@ async fn work(host: &dyn NativeHost, sid: &str, name: &str, args: &Value) -> Res
             let settings = host
                 .ability_controls(sid)
                 .await
-                .map(|(_, _, visibility, _)| visibility["settings"]["agent_management"].clone())
+                .map(|(_, visibility, _)| visibility["settings"]["agent_management"].clone())
                 .unwrap_or_default();
             let mut limits = text_search::Limits::from_settings(&settings);
             if let Some(limit) = query.limit {

@@ -1,0 +1,11 @@
+{
+  "name": "ebay_list_my_active_listings",
+  "description": "Ebay list my active listings (ebay ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

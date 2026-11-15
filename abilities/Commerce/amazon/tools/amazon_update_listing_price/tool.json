@@ -1,0 +1,11 @@
+{
+  "name": "amazon_update_listing_price",
+  "description": "Amazon update listing price (amazon ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "write"
+}

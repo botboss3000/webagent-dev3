@@ -549,41 +549,27 @@ mod system_budget_tests {
         assert!(system_summary_input(&context, &standard, "small".into(), 8).is_err());
     }
 }
-/// Seed installation tool permissions; live account, agent and session gates still constrain execution.
-fn policy_default() -> Value {
-    webagent_engine::runtime::policy::default_policy::<
-        tool_execution::NativeActions,
-        engine_runtime::policy::NativePolicy,
-    >()
-}
-fn policy_decision<'a>(policy: &'a Value, name: &str) -> &'a str {
-    webagent_engine::runtime::policy::policy_decision(policy, name)
-}
 fn live_tool_decision(
     app: &App,
     access: &access_policy::LiveAccess,
     name: &str,
-    policy: &Value,
     visibility: &Value,
     state: &Value,
     loaded: &Value,
-    read_only: bool,
 ) -> access::ToolDecision {
     app.engine()
-        .live_tool_decision(access, name, policy, visibility, state, loaded, read_only)
+        .live_tool_decision(access, name, visibility, state, loaded)
 }
 fn filter_ability_entry(
     app: &App,
     access: &access_policy::LiveAccess,
     entry: &mut Value,
-    policy: &Value,
     visibility: &Value,
     state: &Value,
     loaded: &Value,
-    read_only: bool,
 ) -> bool {
     app.engine()
-        .filter_ability_entry(access, entry, policy, visibility, state, loaded, read_only)
+        .filter_ability_entry(access, entry, visibility, state, loaded)
 }
 fn default_session_mode() -> Value {
     webagent_engine::runtime::policy::default_session_mode()
@@ -603,7 +589,7 @@ fn default_session_abilities() -> Value {
 async fn session_ability_state(app: &App, sid: &str) -> Result<Value> {
     app.engine().session_ability_state(sid).await
 }
-async fn ability_controls(app: &App, sid: &str) -> Result<(Value, u64, Value, Value)> {
+async fn ability_controls(app: &App, sid: &str) -> Result<(u64, Value, Value)> {
     app.engine().ability_controls(sid).await
 }
 fn invalidate_waiting_run(mut run: Value) -> Value {
@@ -615,12 +601,6 @@ fn invalidate_waiting_run(mut run: Value) -> Value {
 }
 async fn session_mode(app: &App, sid: &str) -> Result<Value> {
     app.engine().session_mode(sid).await
-}
-async fn effective_policy(app: &App, sid: &str) -> Result<(Value, u64)> {
-    app.engine().effective_policy(sid).await
-}
-async fn effective_policy_for_mode(app: &App, mode: &Value) -> Result<(Value, u64)> {
-    app.engine().effective_policy_for_mode(mode).await
 }
 fn marker(app: &App, shutoff: bool) -> Result<()> {
     let lock = File::open(app.control_dir.join("dispatch.lock"))?;
@@ -953,7 +933,6 @@ async fn run_process() -> Result<()> {
         store.delete("admin").await?;
     }
     for (k, v) in [
-        ("policy", policy_default()),
         ("settings", json!({"model":DEFAULT_AGENT_MODEL})),
         ("control", json!({"shutoff":false})),
     ] {
@@ -966,7 +945,6 @@ async fn run_process() -> Result<()> {
     migrate_provider_selection(&store).await?;
     // Catalog roles become authoritative once; later clears never restore legacy defaults.
     model_selection_api::migrate_legacy_default(&store).await?;
-    migrate_tool_policy_defaults(&store).await?;
     crate::tools::install_tool_defaults();
     let abilities_root = std::env::var("V3_ABILITIES_ROOT").unwrap_or_else(|_| {
         webagent_configuration::paths::app()

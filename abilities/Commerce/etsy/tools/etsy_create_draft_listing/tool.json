@@ -1,0 +1,11 @@
+{
+  "name": "etsy_create_draft_listing",
+  "description": "Etsy create draft listing (etsy ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "write"
+}

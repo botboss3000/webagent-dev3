@@ -202,7 +202,7 @@ fn unconfigured_optional_metadata_edits_refresh_without_loading_empty_fallback()
     let next = cache.current(&fallback).unwrap();
     assert_ne!(next.version(), fallback.version());
     assert_eq!(
-        next.configuration_catalog(&json!({}), &json!({}))
+        next.configuration_catalog(&json!({}))
             .iter()
             .find(|entry| entry["id"] == "optimization")
             .unwrap()["name"],
@@ -218,7 +218,7 @@ fn unconfigured_optional_metadata_edits_refresh_without_loading_empty_fallback()
     OPTIONAL.with(|s| *s.borrow_mut() = None);
     let removed = cache.current(&fallback).unwrap();
     assert!(!removed
-        .configuration_catalog(&json!({}), &json!({}))
+        .configuration_catalog(&json!({}))
         .iter()
         .any(|entry| entry["id"] == "optimization"));
     OPTIONAL.with(|s| *s.borrow_mut() = Some(optional.path().to_owned()));

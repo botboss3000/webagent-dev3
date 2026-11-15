@@ -206,14 +206,7 @@ async fn catalog(app: &App, identity: &Value, id: &str, params: &HashMap<String,
     let scoped = admin_agent_view(app, id).await?;
     let mut visibility = agent_abilities(&scoped).await?;
     access.capability_level.decorate_visibility(&mut visibility);
-    let policy = crate::session_messaging::policy_defaults(
-        scoped
-            .store
-            .get("policy")
-            .await?
-            .unwrap_or_else(policy_default),
-    );
-    let mut abilities = app.abilities.configuration_catalog(&policy, &visibility);
+    let mut abilities = app.abilities.configuration_catalog(&visibility);
     let call_counts = app
         .store
         .for_user(caller)
@@ -251,6 +244,9 @@ async fn catalog(app: &App, identity: &Value, id: &str, params: &HashMap<String,
             "allowed"
         };
         ability["declared"] = json!(true);
+        if !access.ability_role_allowed(&ability_id) {
+            ability["role_blocked"] = json!(true);
+        }
         ability["ready"] = json!(ready && ability["readiness"] == "ready");
         ability["installed"] = json!(ability["tools"]
             .as_array()
@@ -294,16 +290,19 @@ async fn catalog(app: &App, identity: &Value, id: &str, params: &HashMap<String,
                     json!(crate::tool_execution::background_capable(&name));
                 tool["max_supported_concurrency"] =
                     json!(crate::tool_execution::max_supported_concurrency(&name));
-                let decision = live_tool_decision(
-                    &scoped,
-                    &access,
-                    &name,
-                    &policy,
-                    &visibility,
-                    &active,
-                    &loaded,
-                    false,
-                );
+                let decision =
+                    live_tool_decision(&scoped, &access, &name, &visibility, &active, &loaded);
+                // The tool's or ability's role_access excludes the viewed level.
+                let owners = app
+                    .abilities
+                    .tool_abilities(&name, &visibility, &active, &loaded);
+                if access
+                    .tool_decision_for_abilities(&name, &owners, true, true)
+                    .reason
+                    == crate::access::Reason::RoleDenied
+                {
+                    tool["role_blocked"] = json!(true);
+                }
                 if first
                     || (decision.permission != Permission::Deny
                         && (effective.permission == Permission::Deny

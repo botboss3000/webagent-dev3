@@ -2,11 +2,10 @@
   "name": "web_search",
   "description": "Search the web through this agent's enabled providers (Tavily, Brave Search, Wikipedia, DuckDuckGo) in its configured order; returns titles, URLs and snippets",
   "effect": "read",
-  "policy_ceiling": "auto",
-  "default_access": {
-    "operator": "auto",
-    "member": "auto",
-    "visitor": "auto"
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "allow"
   },
   "parameters": {
     "type": "object",

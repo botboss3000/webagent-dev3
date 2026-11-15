@@ -77,7 +77,6 @@ pub(crate) fn denial_message(reason: access::Reason, invalid_arguments: bool) ->
             .to_owned();
     }
     let cause = match reason {
-        Reason::PolicyDenied => "the installation policy denies this tool",
         Reason::TierDenied => {
             "this agent's owner is on a tier that does not include this ability. Tell the \
              user an upgrade of the owner's tier is needed; do not retry"
@@ -90,7 +89,7 @@ pub(crate) fn denial_message(reason: access::Reason, invalid_arguments: bool) ->
         Reason::AgentDisabled => "the agent is disabled",
         Reason::Unavailable => "no installed ability provides this tool",
         Reason::Hidden => "this tool is not loaded in this conversation; load it with load_tool",
-        Reason::ReadOnly => "the session is read-only and this tool writes",
+        Reason::RoleDenied => "this tool is not available to your role on this agent",
         Reason::Allowed | Reason::ApprovalRequired => "the call was not permitted",
     };
     format!("Tool invocation denied: {cause}")
@@ -348,7 +347,7 @@ impl<
             .as_str()
             .unwrap_or("shared_default")
             .to_owned();
-        let (policy, mode_revision, visibility, ability_state) = app
+        let (mode_revision, visibility, ability_state) = app
             .ability_controls_for(
                 &sid,
                 run["requester_user_id"]
@@ -357,7 +356,6 @@ impl<
             )
             .await?;
         let execution_mode = app.session_mode(&sid).await?;
-        let read_only = execution_mode["mode"] == "read_only";
         let saved_index = run["call_index"].as_u64().unwrap_or(0);
         // Calls admitted earlier in this turn: an identical later call is held, not run twice.
         let mut admitted = std::collections::HashMap::new();
@@ -380,7 +378,7 @@ impl<
                 &workflow::Input::PreTool(workflow::PreToolInput {
                     name: name.clone(),
                     arguments_digest: digest(&args),
-                    policy_version: policy["version"].as_u64().unwrap_or(0),
+                    policy_version: 0,
                     mode_revision,
                     visibility_revision: visibility["revision"].as_u64().unwrap_or(0),
                     ability_state_revision: ability_state["revision"].as_u64().unwrap_or(0),
@@ -389,7 +387,7 @@ impl<
             )?;
             let receipt = run["workflow"]["receipts"]["pre_tool"].clone();
             let mut pending = json!({"id":uuid(),"name":name,"arguments":args,"call_id":model_call["call_id"],
-            "digest":digest(&args),"policy_version":policy["version"],"mode_revision":mode_revision,
+            "digest":digest(&args),"mode_revision":mode_revision,
             "visibility_revision":visibility["revision"],"ability_state_revision":ability_state["revision"],
             "access_revision":access.revision.clone(),"state":"requested","decision":null});
             tool_execution::resolve::<A>(&visibility, &name)?;
@@ -397,11 +395,9 @@ impl<
                 .live_tool_decision(
                     access,
                     &name,
-                    &policy,
                     &visibility,
                     &ability_state,
                     &run["loaded_abilities"],
-                    read_only,
                 )
                 .for_execution_mode(&execution_mode);
             let mut result = if args.get("invalid_arguments").is_some()
@@ -491,7 +487,7 @@ impl<
         // A mode switch revokes the old approval and queues this run. Convert only
         // calls that had not dispatched; their other policy revisions are checked
         // again below before any worker sees them.
-        if execution_mode["mode"] == "write" && execution_mode["execution_mode"] == "auto" {
+        if execution_mode["execution_mode"] == "auto" {
             for item in run["batch"]
                 .as_array_mut()
                 .expect("batch checkpoint is an array")
@@ -558,15 +554,12 @@ impl<
                 .live_tool_decision(
                     &fresh_access,
                     &name,
-                    &policy,
                     &visibility,
                     &ability_state,
                     &run["loaded_abilities"],
-                    read_only,
                 )
                 .for_execution_mode(&execution_mode);
-            let fresh = pending["policy_version"] == policy["version"]
-                && pending["access_revision"] == json!(fresh_access.revision.clone())
+            let fresh = pending["access_revision"] == json!(fresh_access.revision.clone())
                 && pending["mode_revision"] == json!(mode_revision)
                 && pending["visibility_revision"] == visibility["revision"]
                 && pending["ability_state_revision"] == ability_state["revision"];
@@ -590,7 +583,7 @@ impl<
                 &workflow::Input::PreTool(workflow::PreToolInput {
                     name: name.clone(),
                     arguments_digest: digest(&args),
-                    policy_version: policy["version"].as_u64().unwrap_or(0),
+                    policy_version: 0,
                     mode_revision,
                     visibility_revision: visibility["revision"].as_u64().unwrap_or(0),
                     ability_state_revision: ability_state["revision"].as_u64().unwrap_or(0),
@@ -981,10 +974,10 @@ mod denial_tests {
         assert_eq!(denial_message(access::Reason::Hidden,false),
             "Tool invocation denied: this tool is not loaded in this conversation; load it with load_tool");
         assert_eq!(
-            denial_message(access::Reason::PolicyDenied, false),
-            "Tool invocation denied: the installation policy denies this tool"
+            denial_message(access::Reason::RoleDenied, false),
+            "Tool invocation denied: this tool is not available to your role on this agent"
         );
-        assert!(denial_message(access::Reason::PolicyDenied, true)
+        assert!(denial_message(access::Reason::RoleDenied, true)
             .contains("arguments must be a JSON object"));
     }
 }

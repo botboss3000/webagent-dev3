@@ -1,0 +1,11 @@
+{
+  "name": "btcpay_create_invoice",
+  "description": "Btcpay create invoice (btcpay ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "write"
+}

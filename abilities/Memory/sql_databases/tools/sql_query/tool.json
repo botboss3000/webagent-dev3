@@ -1,0 +1,11 @@
+{
+  "name": "sql_query",
+  "description": "Sql query (sql_databases ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "write"
+}

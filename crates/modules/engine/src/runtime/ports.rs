@@ -77,7 +77,6 @@ pub trait ChatAuthority<S>: Clone + Send + Sync + 'static {
         sid: &'a str,
     ) -> impl Future<Output = Result<String>> + Send + 'a;
     fn messaging_owns(name: &str) -> bool;
-    fn messaging_policy_defaults(policy: Value) -> Value;
 
     fn participation_allows_run<'a>(
         &'a self,
@@ -113,10 +112,8 @@ pub trait AgentPolicy<S>: Clone + Send + Sync + 'static {
         roles: &'a [String],
     ) -> impl Future<Output = Result<Vec<String>>> + Send + 'a;
 }
-/// Existing native owners enumerate their supported policy defaults; Engine composes enforcement.
-pub trait NativePolicy: Clone + Send + Sync + 'static {
-    fn default_policy_schemas() -> Vec<Value>;
-}
+/// Native owner handle Engine composes with its other policy ports.
+pub trait NativePolicy: Clone + Send + Sync + 'static {}
 
 /// Modules retains its current admission and package lease authority.
 pub trait ModuleBindings<S>: Clone + Send + Sync + 'static {

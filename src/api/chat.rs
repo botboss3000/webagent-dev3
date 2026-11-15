@@ -1,11 +1,11 @@
 //! HTTP handlers for chat operations.
 use super::{
     access, anyhow, append_tool, assembled_agent_instructions, attachments, bad, conflict, digest,
-    effective_policy, json, key, loop_runtime, marker, memory, model_selection, now,
-    parallel_batch, provider, public_run, required, session_ability_state, session_agent_abilities,
-    session_agent_id, status, terminal, tools, uploads, user_apps, uuid, workflow, Api, ApiError,
-    App, Duration, Event, HashMap, HeaderMap, Infallible, Json, KeepAlive, Path, Query, Result,
-    Sse, State, StatusCode, SystemTime, Uuid, Value, UNIX_EPOCH,
+    json, key, loop_runtime, marker, memory, model_selection, now, parallel_batch, provider,
+    public_run, required, session_ability_state, session_agent_abilities, session_agent_id,
+    session_mode, status, terminal, tools, uploads, user_apps, uuid, workflow, Api, ApiError, App,
+    Duration, Event, HashMap, HeaderMap, Infallible, Json, KeepAlive, Path, Query, Result, Sse,
+    State, StatusCode, SystemTime, Uuid, Value, UNIX_EPOCH,
 };
 use webagent_accounts_host::AccountsStore;
 pub(crate) async fn workflow_policy_get(State(app): State<App>) -> Api {
@@ -1425,11 +1425,12 @@ pub(crate) async fn approval(
         app.save(&mut run).await?;
         return Err(conflict("Access changed; approval is invalid"));
     }
-    let (policy, mode_revision) = effective_policy(&app, sid).await?;
+    let mode_revision = session_mode(&app, sid).await?["revision"]
+        .as_u64()
+        .unwrap_or(0);
     let visibility = session_agent_abilities(&app, sid).await?;
     let ability_state = session_ability_state(&app, sid).await?;
-    if run["pending"]["policy_version"] != policy["version"]
-        || run["pending"]["access_revision"] != json!(access.revision)
+    if run["pending"]["access_revision"] != json!(access.revision)
         || run["pending"]["mode_revision"].as_u64().unwrap_or(0) != mode_revision
         || run["pending"]["visibility_revision"].as_u64().unwrap_or(0)
             != visibility["revision"].as_u64().unwrap_or(0)

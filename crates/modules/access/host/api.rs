@@ -985,7 +985,7 @@ mod tests {
             State(app.clone()),
             Path(sid.clone()),
             Json(crate::api::SessionModeBody {
-                mode: "read_only".into(),
+                mode: "plan".into(),
                 expected_revision: None,
                 confirm_write: false,
             }),
@@ -996,8 +996,8 @@ mod tests {
             Err(ApiError(StatusCode::SERVICE_UNAVAILABLE, _))
         ));
         assert_eq!(
-            crate::session_mode(&app, &sid).await.unwrap()["mode"],
-            "read_only"
+            crate::session_mode(&app, &sid).await.unwrap()["execution_mode"],
+            "plan"
         );
         assert!(app.store.get(&auth).await.unwrap().is_none());
         assert!(app
@@ -1011,7 +1011,7 @@ mod tests {
             State(app.clone()),
             Path(sid.clone()),
             Json(crate::api::SessionModeBody {
-                mode: "read_only".into(),
+                mode: "plan".into(),
                 expected_revision: None,
                 confirm_write: false,
             }),

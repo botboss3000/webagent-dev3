@@ -128,10 +128,6 @@ pub trait AdministrationHost: Sync {
     ) -> Pending<'a, Result<Value>>;
     /// Whether the global shutoff is active.
     fn shutoff(&self) -> Pending<'_, Result<bool>>;
-    /// The installation tool policy.
-    fn policy(&self) -> Pending<'_, Result<Value>>;
-    /// One tool's rule in `policy`: `allow`, `require_approval` or `deny`.
-    fn rule(&self, policy: &Value, name: &str) -> String;
     /// Write `docs` and one `kind` event for session `sid` in one transaction, in
     /// `agent`'s storage view when given.
     fn record<'a>(

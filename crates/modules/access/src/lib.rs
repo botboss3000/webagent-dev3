@@ -56,11 +56,15 @@ pub enum Relationship {
     Caller,
 }
 
+/// Stored and shown as `allow`, `require_approval` and `deny`; the older `auto` and `ask`
+/// are still read so records saved before the rename keep their meaning.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum Permission {
+    #[serde(rename = "deny")]
     Deny,
+    #[serde(rename = "require_approval", alias = "ask")]
     Ask,
+    #[serde(rename = "allow", alias = "auto")]
     Auto,
 }
 
@@ -96,9 +100,9 @@ pub struct ModelPolicy {
     pub max_byo_entries: u32,
 }
 /// Whether an ability works on an agent owned on a tier for a caller on a tier
-/// (id, owner tier, caller tier), from the ability manifests' `tier_access`.
+/// (id, owner tier, caller tier), from the ability manifests' `owner_tier`.
 pub type AbilityTiers = fn(&str, &str, &str) -> bool;
-/// Whether a tool's own `tier_access` admits an owner tier (name, owner tier); a tool
+/// Whether a tool's own `owner_tier` admits an owner tier (name, owner tier); a tool
 /// without one inherits its abilities' lists.
 pub type ToolTiers = fn(&str, &str) -> bool;
 /// Whether an ability is in the Administrator group (id).
@@ -116,6 +120,26 @@ pub fn install_tier_access(
     let _ = ABILITY_TIERS.set(ability);
     let _ = TOOL_TIERS.set(tool);
     let _ = ADMINISTRATOR_ABILITY.set(administrator);
+}
+/// Whether an ability's `role_access` admits a capability level (id, level rungs).
+pub type AbilityRoles = fn(&str, &[String]) -> bool;
+/// A tool's own `role_access` for a level (name, rungs); `None` defers to its abilities.
+pub type ToolRoles = fn(&str, &[String]) -> Option<bool>;
+static ABILITY_ROLES: std::sync::OnceLock<AbilityRoles> = std::sync::OnceLock::new();
+static TOOL_ROLES: std::sync::OnceLock<ToolRoles> = std::sync::OnceLock::new();
+/// The app installs these from the ability catalog, once per process.
+pub fn install_role_access(ability: AbilityRoles, tool: ToolRoles) {
+    let _ = ABILITY_ROLES.set(ability);
+    let _ = TOOL_ROLES.set(tool);
+}
+/// Without installed manifests no role limit applies; tiers still fail closed.
+#[must_use]
+pub fn ability_role_allowed(id: &str, rungs: &[String]) -> bool {
+    ABILITY_ROLES.get().is_none_or(|allowed| allowed(id, rungs))
+}
+#[must_use]
+pub fn tool_role_allowed(name: &str, rungs: &[String]) -> Option<bool> {
+    TOOL_ROLES.get().and_then(|allowed| allowed(name, rungs))
 }
 /// Administrator abilities stay hidden from everyone else rather than shown as blocked.
 /// Fails closed: without installed manifests every ability counts as one.
@@ -273,7 +297,6 @@ impl Principal {
 
 #[derive(Clone, Copy, Debug)]
 pub struct ToolFactors {
-    pub installation: Permission,
     pub tier: Permission,
     pub agent: Permission,
     pub ability: Permission,
@@ -282,15 +305,12 @@ pub struct ToolFactors {
     pub agent_enabled: bool,
     pub available: bool,
     pub visible: bool,
-    pub read_only: bool,
-    pub is_read: bool,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reason {
     Allowed,
     ApprovalRequired,
-    PolicyDenied,
     TierDenied,
     AgentDenied,
     AbilityDenied,
@@ -300,7 +320,8 @@ pub enum Reason {
     CapabilityDenied,
     Unavailable,
     Hidden,
-    ReadOnly,
+    /// The tool's or ability's `role_access` excludes the caller's level: hidden.
+    RoleDenied,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct ToolDecision {
@@ -310,9 +331,7 @@ pub struct ToolDecision {
 impl ToolFactors {
     pub fn resolve(self) -> ToolDecision {
         use Permission::*;
-        let denial = if self.installation == Deny {
-            Some(Reason::PolicyDenied)
-        } else if self.tier == Deny {
+        let denial = if self.tier == Deny {
             Some(Reason::TierDenied)
         } else if self.agent == Deny {
             Some(Reason::AgentDenied)
@@ -328,8 +347,6 @@ impl ToolFactors {
             Some(Reason::Unavailable)
         } else if !self.visible {
             Some(Reason::Hidden)
-        } else if self.read_only && !self.is_read {
-            Some(Reason::ReadOnly)
         } else {
             None
         };
@@ -339,11 +356,7 @@ impl ToolFactors {
                 reason,
             };
         }
-        let permission = self
-            .installation
-            .meet(self.tier)
-            .meet(self.agent)
-            .meet(self.ability);
+        let permission = self.tier.meet(self.agent).meet(self.ability);
         ToolDecision {
             permission,
             reason: if permission == Ask {
@@ -362,12 +375,9 @@ impl ToolDecision {
         self.permission != Permission::Deny || self.reason == Reason::TierDenied
     }
     /// Auto waives a human tool checkpoint after every independent denial has
-    /// been resolved. Legacy write mode and read-only modes keep Ask semantics.
+    /// been resolved. Ask, Plan and custom modes keep it.
     pub fn for_execution_mode(self, mode: &Value) -> Self {
-        if mode["mode"] == "write"
-            && mode["execution_mode"] == "auto"
-            && self.permission == Permission::Ask
-        {
+        if mode["execution_mode"] == "auto" && self.permission == Permission::Ask {
             Self {
                 permission: Permission::Auto,
                 reason: Reason::Allowed,
@@ -397,7 +407,6 @@ mod tests {
     #[test]
     fn strictest_permission_and_independent_denials_win() {
         let base = ToolFactors {
-            installation: Permission::Auto,
             tier: Permission::Auto,
             agent: Permission::Auto,
             ability: Permission::Auto,
@@ -406,8 +415,6 @@ mod tests {
             agent_enabled: true,
             available: true,
             visible: true,
-            read_only: false,
-            is_read: false,
         };
         assert_eq!(base.resolve().permission, Permission::Auto);
         assert_eq!(
@@ -482,25 +489,6 @@ mod tests {
             .reason,
             Reason::Hidden
         );
-        assert_eq!(
-            ToolFactors {
-                read_only: true,
-                ..base
-            }
-            .resolve()
-            .reason,
-            Reason::ReadOnly
-        );
-        assert_eq!(
-            ToolFactors {
-                read_only: true,
-                is_read: true,
-                ..base
-            }
-            .resolve()
-            .permission,
-            Permission::Auto
-        );
     }
     #[test]
     fn auto_mode_skips_only_approval_and_keeps_denials() {
@@ -512,19 +500,19 @@ mod tests {
             permission: Permission::Deny,
             reason: Reason::TierDenied,
         };
-        let auto = json!({"mode":"write","execution_mode":"auto"});
+        let auto = json!({"execution_mode":"auto"});
         assert_eq!(ask.for_execution_mode(&auto).permission, Permission::Auto);
         assert_eq!(ask.for_execution_mode(&auto).reason, Reason::Allowed);
         assert_eq!(denied.for_execution_mode(&auto), denied);
         assert_eq!(
-            ask.for_execution_mode(&json!({"mode":"read_only","execution_mode":"ask"})),
+            ask.for_execution_mode(&json!({"execution_mode":"ask"})),
             ask
         );
         assert_eq!(
-            ask.for_execution_mode(&json!({"mode":"read_only","execution_mode":"auto"})),
+            ask.for_execution_mode(&json!({"execution_mode":"plan"})),
             ask
         );
-        assert_eq!(ask.for_execution_mode(&json!({"mode":"write"})), ask);
+        assert_eq!(ask.for_execution_mode(&json!({})), ask);
     }
     #[test]
     fn byo_downgrade_blocks_use_and_growth_but_allows_reduction() {

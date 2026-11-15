@@ -35,6 +35,20 @@ pub enum RetryRisk {
     High,
 }
 
+/// Repeat-call safety for one tool: how risky a repeat is, what the agent should verify
+/// before repeating, and what the user is told when asked to approve a repeat.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RepeatGuard {
+    /// Absent means high for a write. Reads are never repeat-guarded.
+    #[serde(default)]
+    pub risk: Option<RetryRisk>,
+    #[serde(default)]
+    pub hint: Option<String>,
+    #[serde(default)]
+    pub warning: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ToolDefinition {
@@ -44,26 +58,27 @@ pub struct ToolDefinition {
     #[serde(default)]
     pub strict: Option<bool>,
     pub parameters: Value,
+    /// Whether the tool changes anything. Drives recovery (an interrupted write is
+    /// uncertain, never rerun), batches, background work and the repeat guard; never access.
     pub effect: Effect,
-    /// Installation-wide upper limit for every agent: saved permissions and role defaults
-    /// can only be stricter. The only place a tool's ceiling is set; applies on release.
-    pub policy_ceiling: Permission,
-    /// Access when an agent's capability level saves no explicit tool permission.
-    /// A role left out gets the next role down; none at all means Deny.
-    pub default_access: BTreeMap<String, Permission>,
+    /// Access when an agent's capability level saves no explicit tool permission. A role
+    /// left out gets the next role down; with none named, a read allows and a write
+    /// requires approval.
+    #[serde(default)]
+    pub default_policy: BTreeMap<String, Permission>,
     /// Tiers whose owners' agents may have this tool; absent inherits its ability's
-    /// `tier_access`, and a list may only narrow it.
+    /// `owner_tier`, and a list may only narrow it.
     #[serde(default)]
-    pub tier_access: Option<Vec<String>>,
-    /// Repeat risk; absent means high for a write. Reads are never repeat-guarded.
+    pub owner_tier: Option<Vec<String>>,
+    /// Built-in roles that may ever have this tool; absent inherits its ability's
+    /// `role_access` (every role when that has none). No level setting widens it.
     #[serde(default)]
-    pub retry_risk: Option<RetryRisk>,
-    /// What the agent should verify before repeating this tool's call.
+    pub role_access: Option<Vec<String>>,
     #[serde(default)]
-    pub retry_hint: Option<String>,
-    /// What the user is told when asked to approve a repeat.
+    pub repeat_guard: RepeatGuard,
+    /// One line added to argument errors to guide the agent's next call.
     #[serde(default)]
-    pub repeat_warning: Option<String>,
+    pub usage_hint: Option<String>,
     /// Example requests and exact keywords that `list_tools` ranks this tool by.
     #[serde(default, rename = "match")]
     pub match_data: Option<ToolMatch>,
@@ -113,31 +128,43 @@ impl ToolDefinition {
             bail!("Invalid tool parameters: {folder}");
         }
         if self
-            .default_access
+            .default_policy
             .keys()
             .any(|role| !ROLES.contains(&role.as_str()))
         {
-            bail!("default_access names an unknown role: {folder}");
+            bail!("default_policy names an unknown role: {folder}");
         }
         if self
-            .tier_access
+            .owner_tier
             .iter()
             .flatten()
             .any(|tier| !webagent_access::valid_id(tier))
         {
-            bail!("tier_access names an invalid tier: {folder}");
+            bail!("owner_tier names an invalid tier: {folder}");
+        }
+        if self.role_access.as_ref().is_some_and(|roles| {
+            roles.is_empty() || roles.iter().any(|role| !ROLES.contains(&role.as_str()))
+        }) {
+            bail!("role_access must list known roles: {folder}");
         }
         if self.effect == Effect::Read
-            && self.retry_risk.is_some_and(|risk| risk != RetryRisk::None)
+            && self
+                .repeat_guard
+                .risk
+                .is_some_and(|risk| risk != RetryRisk::None)
         {
-            bail!("A read tool cannot set a retry risk: {folder}");
+            bail!("A read tool cannot set a repeat risk: {folder}");
         }
-        if [&self.retry_hint, &self.repeat_warning]
-            .into_iter()
-            .flatten()
-            .any(|text| text.trim().is_empty() || text.len() > 1000)
+        if [
+            &self.repeat_guard.hint,
+            &self.repeat_guard.warning,
+            &self.usage_hint,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|text| text.trim().is_empty() || text.len() > 1000)
         {
-            bail!("Invalid retry_hint or repeat_warning: {folder}");
+            bail!("Invalid repeat_guard hint/warning or usage_hint: {folder}");
         }
         if let Some(hints) = &self.match_data {
             if hints.examples.len() > 8
@@ -171,14 +198,17 @@ impl ToolDefinition {
         schema
     }
 
-    /// Default access for the first of `rungs` (a level, then the levels below it) this
-    /// definition names; Deny when it names none.
+    /// Default policy for the first of `rungs` (a level, then the levels below it) this
+    /// definition names; with none named, a read allows and a write requires approval.
     pub fn default_for(&self, rungs: &[String]) -> Permission {
         rungs
             .iter()
-            .find_map(|rung| self.default_access.get(rung))
+            .find_map(|rung| self.default_policy.get(rung))
             .copied()
-            .unwrap_or(Permission::Deny)
+            .unwrap_or(match self.effect {
+                Effect::Read => Permission::Auto,
+                Effect::Write => Permission::Ask,
+            })
     }
 }
 
@@ -378,7 +408,7 @@ mod tests {
     fn body(name: &str) -> Value {
         json!({"name":name,"description":"Look something up","effect":"read",
             "parameters":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"],"additionalProperties":false},
-            "policy_ceiling":"auto","default_access":{"operator":"auto","member":"ask"}})
+            "default_policy":{"operator":"allow","member":"require_approval"}})
     }
 
     #[test]
@@ -407,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn default_access_falls_to_the_next_role_down_then_deny() {
+    fn default_policy_falls_to_the_next_role_down_then_the_effect() {
         let definition =
             ToolDefinition::parse(&serde_json::to_vec(&body("lookup")).unwrap(), "lookup").unwrap();
         let rungs = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
@@ -421,8 +451,13 @@ mod tests {
         );
         assert_eq!(
             definition.default_for(&rungs(&["visitor"])),
-            Permission::Deny
+            Permission::Auto
         );
+        let mut write = body("lookup");
+        write["effect"] = json!("write");
+        write.as_object_mut().unwrap().remove("default_policy");
+        let write = ToolDefinition::parse(&serde_json::to_vec(&write).unwrap(), "lookup").unwrap();
+        assert_eq!(write.default_for(&rungs(&["operator"])), Permission::Ask);
     }
 
     #[test]
@@ -435,29 +470,34 @@ mod tests {
         write(&legacy, "lookup", &body("lookup"));
         assert!(read_folder(&legacy).is_err());
         let mut unknown = body("lookup");
-        unknown["default_access"]["admin"] = json!("auto");
+        unknown["default_policy"]["admin"] = json!("allow");
         assert!(ToolDefinition::parse(&serde_json::to_vec(&unknown).unwrap(), "lookup").is_err());
-        let mut uncapped = body("lookup");
-        uncapped.as_object_mut().unwrap().remove("policy_ceiling");
-        assert!(ToolDefinition::parse(&serde_json::to_vec(&uncapped).unwrap(), "lookup").is_err());
+        let mut retired = body("lookup");
+        retired["policy_ceiling"] = json!("auto");
+        assert!(ToolDefinition::parse(&serde_json::to_vec(&retired).unwrap(), "lookup").is_err());
+        let mut roles = body("lookup");
+        roles["role_access"] = json!(["operator", "admin"]);
+        assert!(ToolDefinition::parse(&serde_json::to_vec(&roles).unwrap(), "lookup").is_err());
     }
 
     #[test]
-    fn retry_fields_are_validated_and_exempt_is_not_configurable() {
+    fn repeat_guard_is_validated_and_exempt_is_not_configurable() {
         let mut low = body("lookup");
         low["effect"] = json!("write");
-        low["retry_risk"] = json!("low");
-        low["retry_hint"] = json!("read it again first");
+        low["repeat_guard"] = json!({"risk":"low","hint":"read it again first"});
         let parsed = ToolDefinition::parse(&serde_json::to_vec(&low).unwrap(), "lookup").unwrap();
-        assert_eq!(parsed.retry_risk, Some(RetryRisk::Low));
+        assert_eq!(parsed.repeat_guard.risk, Some(RetryRisk::Low));
         let mut exempt = low.clone();
-        exempt["retry_risk"] = json!("exempt");
+        exempt["repeat_guard"]["risk"] = json!("exempt");
         assert!(ToolDefinition::parse(&serde_json::to_vec(&exempt).unwrap(), "lookup").is_err());
         let mut read = body("lookup");
         read["effect"] = json!("read");
-        read["retry_risk"] = json!("high");
+        read["repeat_guard"] = json!({"risk":"high"});
         assert!(ToolDefinition::parse(&serde_json::to_vec(&read).unwrap(), "lookup").is_err());
-        low["repeat_warning"] = json!(" ");
+        low["repeat_guard"]["warning"] = json!(" ");
         assert!(ToolDefinition::parse(&serde_json::to_vec(&low).unwrap(), "lookup").is_err());
+        let mut hint = body("lookup");
+        hint["usage_hint"] = json!(" ");
+        assert!(ToolDefinition::parse(&serde_json::to_vec(&hint).unwrap(), "lookup").is_err());
     }
 }

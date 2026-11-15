@@ -2,11 +2,10 @@
   "name": "decide_with_jev",
   "description": "Ask the assigned TypeSafe Jev Decision model typed questions about supplied state; it cannot read files or call tools",
   "effect": "read",
-  "policy_ceiling": "auto",
-  "default_access": {
-    "operator": "auto",
-    "member": "auto",
-    "visitor": "auto"
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "allow"
   },
   "parameters": {
     "type": "object",

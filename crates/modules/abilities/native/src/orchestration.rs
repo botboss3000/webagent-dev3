@@ -122,7 +122,7 @@ fn owner_required(host: &dyn NativeHost) -> Result<()> {
 
 /// Session `sid`'s Agent Management settings and agent.
 async fn settings(host: &dyn NativeHost, sid: &str) -> Result<(Value, String)> {
-    let (_, _, visibility, _) = host.ability_controls(sid).await?;
+    let (_, visibility, _) = host.ability_controls(sid).await?;
     let agent = host
         .store()
         .get(&key("session", sid))

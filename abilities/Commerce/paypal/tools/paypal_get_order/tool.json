@@ -1,0 +1,11 @@
+{
+  "name": "paypal_get_order",
+  "description": "Paypal get order (paypal ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

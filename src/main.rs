@@ -231,66 +231,6 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn missing_tool_policy_is_denied() {
-        assert_eq!(policy_decision(&policy_default(), "unknown"), "deny");
-    }
-    #[test]
-    fn policy_defaults_gate_all_side_effects() {
-        let p = policy_default();
-        for name in [
-            "file_write",
-            "file_edit",
-            "prompt_slot_write",
-            "workspace_seed",
-            "save_file",
-            "generate_image",
-            "create_agent",
-            "edit_agent_prompt",
-            "register_webhook",
-            "request_credential",
-            "delegate_to_agent",
-            "promote_spawn",
-            "source_patch",
-            "shell",
-            "python",
-        ] {
-            assert_eq!(policy_decision(&p, name), "require_approval");
-        }
-        assert_eq!(policy_decision(&p, "file_read"), "allow");
-        assert_eq!(policy_decision(&p, "prompt_slot_read"), "allow");
-    }
-    #[tokio::test]
-    async fn existing_policy_keeps_new_tools_denied_and_existing_decisions() {
-        let root = tempfile::tempdir().unwrap();
-        let store = Store::open(root.path()).await.unwrap();
-        let mut policy = policy_default();
-        policy["rules"]
-            .as_object_mut()
-            .unwrap()
-            .remove("source_patch");
-        policy["rules"]
-            .as_object_mut()
-            .unwrap()
-            .remove("workspace_seed");
-        policy["rules"]["source_review"] = json!("deny");
-        // A tool folder's policy ceiling is its installation rule and replaces a saved one.
-        policy["rules"]["calculate"] = json!("deny");
-        policy["rules"]["file_read"] = json!("deny");
-        policy["rules"].as_object_mut().unwrap().remove("file_edit");
-        store.put("policy", &policy).await.unwrap();
-        migrate_tool_policy_defaults(&store).await.unwrap();
-        migrate_tool_policy_defaults(&store).await.unwrap();
-        let migrated = store.get("policy").await.unwrap().unwrap();
-        assert_eq!(migrated["rules"]["source_patch"], "deny");
-        assert_eq!(migrated["rules"]["workspace_seed"], "deny");
-        assert_eq!(migrated["rules"]["source_review"], "deny");
-        assert_eq!(migrated["rules"]["calculate"], "allow");
-        assert_eq!(migrated["rules"]["file_read"], "allow");
-        assert_eq!(migrated["rules"]["file_edit"], "require_approval");
-        assert_eq!(migrated["rules"]["get_time"], "allow");
-        assert_eq!(migrated["version"], 2);
-    }
     // DISPATCH-DIGEST-PARITY: streaming must retain the historical buffered
     // JSON fingerprint, including Unicode, escaping, nested data and empty arrays.
     #[test]

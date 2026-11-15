@@ -1,0 +1,11 @@
+{
+  "name": "document_list_sources",
+  "description": "Document list sources (document_libraries ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

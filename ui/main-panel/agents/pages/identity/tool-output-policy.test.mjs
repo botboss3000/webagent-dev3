@@ -83,7 +83,7 @@ function toolFixture(onChange,canEdit=true,metadata={result_deduplication:true})
   }};
   toolModule.clearMenu();
   const calls=[];
-  const tri=toolModule._buildToolStateControl({name:'file_read',permMode:'auto',mode:'visible',...metadata,
+  const tri=toolModule._buildToolStateControl({name:'file_read',permMode:'allow',mode:'visible',...metadata,
     execution:{mode:'foreground',max_concurrency:1,on_run_end:'stop'}},{canEdit,
     onResultDeduplicationChange:onChange,onPermissionChange:()=>calls.push('permission'),
     onVisibilityChange:()=>calls.push('visibility'),onExecutionChange:()=>calls.push('execution')});

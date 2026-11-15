@@ -1,0 +1,11 @@
+{
+  "name": "sql_list_connections",
+  "description": "Sql list connections (sql_databases ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

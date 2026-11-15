@@ -2,11 +2,10 @@
   "name": "list_my_agents",
   "description": "List agents currently visible to this caller, including whether this caller can manage them.",
   "effect": "read",
-  "policy_ceiling": "auto",
-  "default_access": {
-    "operator": "auto",
-    "member": "auto",
-    "visitor": "auto"
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "allow"
   },
   "parameters": {
     "type": "object",

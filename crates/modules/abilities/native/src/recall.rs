@@ -85,7 +85,7 @@ async fn view(host: &dyn NativeHost, sid: &str, run_id: &str) -> Result<View> {
     if run["session_id"] != sid || run["agent_id"].as_str().unwrap_or("shared_default") != agent {
         bail!("Run does not belong to current session and agent");
     }
-    let (policy, revision, visibility, state) = host.scoped_ability_controls(&scoped, sid).await?;
+    let (revision, visibility, state) = host.scoped_ability_controls(&scoped, sid).await?;
     let mode = host.scoped_session_mode(&scoped, sid).await?;
     let access = host
         .scoped_live_access(&scoped, host.actor(), sid, &agent)
@@ -95,11 +95,9 @@ async fn view(host: &dyn NativeHost, sid: &str, run_id: &str) -> Result<View> {
             .live_tool_decision(
                 &access,
                 "recall_compacted",
-                &policy,
                 &visibility,
                 &state,
                 &run["loaded_abilities"],
-                mode["mode"] == "read_only",
             )
             .permission
             == Permission::Deny
@@ -108,7 +106,6 @@ async fn view(host: &dyn NativeHost, sid: &str, run_id: &str) -> Result<View> {
     }
     let fingerprint = digest(&json!([
         agent,
-        policy,
         revision,
         visibility,
         state,
@@ -322,22 +319,12 @@ async fn work(host: &dyn NativeHost, sid: &str, run_id: &str, args: &Value) -> R
         let result = if permitted {
             let name = name.as_deref().unwrap();
             let agent = host.scoped_session_agent_id(&current.store, sid).await?;
-            let (policy, _, visibility, state) =
-                host.scoped_ability_controls(&current.store, sid).await?;
-            let mode = host.scoped_session_mode(&current.store, sid).await?;
+            let (_, visibility, state) = host.scoped_ability_controls(&current.store, sid).await?;
             let access = host
                 .scoped_live_access(&current.store, host.actor(), sid, &agent)
                 .await?;
             if host
-                .live_tool_decision(
-                    &access,
-                    name,
-                    &policy,
-                    &visibility,
-                    &state,
-                    &run["loaded_abilities"],
-                    mode["mode"] == "read_only",
-                )
+                .live_tool_decision(&access, name, &visibility, &state, &run["loaded_abilities"])
                 .permission
                 != Permission::Deny
             {

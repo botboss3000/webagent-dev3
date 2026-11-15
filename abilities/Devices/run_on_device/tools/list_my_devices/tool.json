@@ -1,0 +1,11 @@
+{
+  "name": "list_my_devices",
+  "description": "List my devices (run_on_device ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

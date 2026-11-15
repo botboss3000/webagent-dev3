@@ -2,11 +2,10 @@
   "name": "knowledge_file_delete",
   "description": "Staff only. Delete a knowledge file using its current revision.",
   "effect": "write",
-  "policy_ceiling": "ask",
-  "default_access": {
-    "operator": "auto",
-    "member": "auto",
-    "visitor": "ask"
+  "default_policy": {
+    "operator": "require_approval",
+    "member": "require_approval",
+    "visitor": "require_approval"
   },
   "parameters": {
     "type": "object",

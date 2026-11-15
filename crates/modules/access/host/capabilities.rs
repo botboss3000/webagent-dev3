@@ -83,15 +83,7 @@ mod tests {
         assert_ne!(before.context_fingerprint(), after.context_fingerprint());
         assert_eq!(after.revision.capability_level, saved.revision);
         let decide = |access: &crate::access_policy::LiveAccess| {
-            access.tool_decision_for_abilities(
-                "file_read",
-                &["codebase_admin".into()],
-                Permission::Auto,
-                true,
-                true,
-                false,
-                true,
-            )
+            access.tool_decision_for_abilities("file_read", &["codebase_admin".into()], true, true)
         };
         assert_eq!(decide(&before).permission, Permission::Auto);
         assert_eq!(decide(&after).reason, access::Reason::CapabilityDenied);
@@ -174,15 +166,7 @@ mod tests {
         assert_eq!(access.ability_permission("codebase_admin"), Permission::Ask);
         assert_eq!(
             access
-                .tool_decision_for_abilities(
-                    "file_read",
-                    &["codebase_admin".into()],
-                    Permission::Auto,
-                    true,
-                    true,
-                    false,
-                    true
-                )
+                .tool_decision_for_abilities("file_read", &["codebase_admin".into()], true, true)
                 .reason,
             access::Reason::AgentDenied
         );

@@ -2,11 +2,10 @@
   "name": "generate_image",
   "description": "Generate one image using this agent's assigned Image Out role. Returns an authenticated image URL. Interrupted requests are not silently repeated.",
   "effect": "write",
-  "policy_ceiling": "ask",
-  "default_access": {
-    "operator": "auto",
-    "member": "auto",
-    "visitor": "ask"
+  "default_policy": {
+    "operator": "require_approval",
+    "member": "require_approval",
+    "visitor": "require_approval"
   },
   "parameters": {
     "type": "object",

@@ -2,11 +2,12 @@
   "name": "wiki_update",
   "description": "App administrators only. Edit an article; only the fields you pass change and the slug stays. wiki_get it first and pass its revision. The previous version stays in history.",
   "effect": "write",
-  "policy_ceiling": "auto",
-  "default_access": {
-    "operator": "auto"
+  "default_policy": {
+    "operator": "allow"
   },
-  "tier_access": ["administrator"],
+  "owner_tier": [
+    "administrator"
+  ],
   "parameters": {
     "type": "object",
     "properties": {

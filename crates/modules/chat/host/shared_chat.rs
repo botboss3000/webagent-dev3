@@ -348,9 +348,6 @@ impl webagent_engine::runtime::ports::ChatAuthority<Store> for EngineChat {
     fn messaging_owns(name: &str) -> bool {
         crate::session_messaging::owns(name)
     }
-    fn messaging_policy_defaults(policy: Value) -> Value {
-        crate::session_messaging::policy_defaults(policy)
-    }
 
     fn participation_allows_run<'a>(
         &'a self,

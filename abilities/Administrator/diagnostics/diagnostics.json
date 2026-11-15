@@ -14,6 +14,8 @@
   ],
   "readiness": "ready",
   "config": {},
-  "tier_access": ["administrator"],
-  "tier_access_note": "Hard-coded: Administrator abilities work only for an administrator owner and an administrator caller, whatever this list says."
+  "owner_tier": [
+    "administrator"
+  ],
+  "owner_tier_note": "Hard-coded: Administrator abilities work only for an administrator owner and an administrator caller, whatever this list says."
 }

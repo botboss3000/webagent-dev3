@@ -1,0 +1,11 @@
+{
+  "name": "stripe_get_checkout_session",
+  "description": "Stripe get checkout session (stripe ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

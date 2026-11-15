@@ -2,11 +2,10 @@
   "name": "get_weather",
   "description": "Current Open-Meteo weather by city or lat,lon; no API key required",
   "effect": "read",
-  "policy_ceiling": "auto",
-  "default_access": {
-    "operator": "auto",
-    "member": "auto",
-    "visitor": "auto"
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "allow"
   },
   "parameters": {
     "type": "object",

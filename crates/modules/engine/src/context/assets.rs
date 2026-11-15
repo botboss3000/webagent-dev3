@@ -115,8 +115,7 @@ impl<
             .chat
             .live_access(app.store.records(), requester, sid, agent_id)
             .await?;
-        let (policy, mode_revision, visibility, state) =
-            app.ability_controls_for(sid, requester).await?;
+        let (mode_revision, visibility, state) = app.ability_controls_for(sid, requester).await?;
         let mode = app.session_mode(sid).await?;
         let scoped = app.store.for_agent(agent_id).await?;
         let ledger = scoped.context_assets(sid, agent_id, requester).await?;
@@ -138,7 +137,6 @@ impl<
         Ok(crate::digest(&json!([
             fresh.version(),
             fresh.live_version(),
-            policy,
             mode_revision,
             visibility,
             state,

@@ -6968,6 +6968,10 @@ body:has(#tab-app.active) #main-panel:has(.inst-settings-host) > #settings-page-
 .files-tab-menu-info.v3-tier-note {
   color: var(--danger);
 }
+/* role_access excludes the viewed level: muted, not an error. */
+.v3-role-note, .files-tab-menu-info.v3-role-note {
+  color: var(--fg-3);
+}
 .files-tab-menu-info.ac-tool-state-head {
   min-width: 0;
   padding: 6px 10px 2px;

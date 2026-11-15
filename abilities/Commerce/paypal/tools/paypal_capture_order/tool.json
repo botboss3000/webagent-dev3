@@ -1,0 +1,11 @@
+{
+  "name": "paypal_capture_order",
+  "description": "Paypal capture order (paypal ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "write"
+}

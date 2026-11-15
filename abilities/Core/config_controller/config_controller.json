@@ -9,5 +9,8 @@
   "readiness": "ready",
   "config": {},
   "migration_note": "Native V3 implementation over the configuration composer (POST /api/v3/config/propose and /apply).",
-  "tier_access": ["free", "administrator"]
+  "owner_tier": [
+    "free",
+    "administrator"
+  ]
 }

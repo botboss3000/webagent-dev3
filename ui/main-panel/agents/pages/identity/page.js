@@ -98,28 +98,27 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
     modes.forEach(mode=>{
       const card=document.createElement('details');card.dataset.modeId=mode.id;card.style.cssText='border:var(--border-width) solid var(--border);border-radius:8px;padding:8px 10px;background:var(--bg-1)';
       const summary=document.createElement('summary');summary.style.cssText='cursor:pointer;display:flex;gap:8px;font-size:12px;font-weight:650';
-      const nameText=document.createElement('span'),badge=document.createElement('span');badge.style.cssText='font-size:10px;color:var(--fg-3)';summary.append(nameText,badge);card.append(summary);
+      const nameText=document.createElement('span');summary.append(nameText);card.append(summary);
       const fields=document.createElement('div');fields.style.cssText='display:flex;flex-direction:column;gap:8px;margin-top:10px';card.append(fields);
       const save=document.createElement('button');save.type='button';save.className='ac-btn ac-btn-ghost';save.textContent='SAVE CHANGES';save.disabled=!mode._new;save.dataset.modeCardSave='';
       const status=document.createElement('span');status.setAttribute('role','status');
-      const updateSummary=()=>{nameText.textContent=(mode.label||mode.id)+(mode._deleted?' (will be removed)':'');badge.textContent=mode.permission_policy==='write'?'Write-capable':'Read-only';};updateSummary();
-      for(const [key,label] of [['label','Name'],['permission_policy','Permission policy'],['description','Footer description'],['prompt','Prompt injection']]){
+      const updateSummary=()=>{nameText.textContent=(mode.label||mode.id)+(mode._deleted?' (will be removed)':'');};updateSummary();
+      for(const [key,label] of [['label','Name'],['description','Footer description'],['prompt','Prompt injection']]){
         const wrap=document.createElement('label');wrap.className='ac-label';wrap.textContent=label;
-        const input=document.createElement(key==='prompt'?'textarea':key==='permission_policy'?'select':'input');input.className='ac-input';input.dataset.modeField=key;
-        if(key==='permission_policy')for(const [value,text] of [['read_only','Read-only'],['write','Write-capable']]){const option=document.createElement('option');option.value=value;option.textContent=text;input.append(option);}
+        const input=document.createElement(key==='prompt'?'textarea':'input');input.className='ac-input';input.dataset.modeField=key;
         if(key==='prompt')input.rows=6;input.value=mode[key]||'';input.disabled=!agent.can_manage;
-        input.addEventListener(key==='permission_policy'?'change':'input',()=>{mode[key]=input.value;save.disabled=false;status.textContent='Unsaved changes';updateSummary();});wrap.append(input);fields.append(wrap);
+        input.addEventListener('input',()=>{mode[key]=input.value;save.disabled=false;status.textContent='Unsaved changes';updateSummary();});wrap.append(input);fields.append(wrap);
       }
       if(!mode.builtin&&agent.can_manage){const remove=document.createElement('button');remove.type='button';remove.className='ac-btn ac-btn-ghost';remove.textContent='Remove mode';remove.addEventListener('click',()=>{mode._deleted=true;fields.querySelectorAll('input,textarea,select').forEach(el=>el.disabled=true);save.disabled=false;remove.disabled=true;updateSummary();});fields.append(remove);}
       if(agent.can_manage){fields.append(save,status);save.addEventListener('click',async()=>{
         save.disabled=true;status.textContent='Saving…';
-        const payload=modes.filter(m=>!m._deleted).map(({_deleted,_new,...m})=>m);
+        const payload=modes.filter(m=>!m._deleted).map(({_deleted,_new,permission_policy,...m})=>m);
         try {await persist({execution_modes:payload});modes=structuredClone(agent.execution_modes);fill();renderModes();notice.textContent='Mode configurations saved';}
         catch(error){status.textContent='Save failed: '+error.message;save.disabled=false;}
       });}
       editor.append(card);
     });
-    if(agent.can_manage){const add=document.createElement('button');add.type='button';add.className='ac-btn ac-btn-ghost';add.textContent='Add mode';add.addEventListener('click',()=>{let n=1;while(modes.some(m=>m.id==='custom-'+n))n++;modes.push({id:'custom-'+n,label:'New mode',description:'',permission_policy:'read_only',prompt:'',builtin:false,_new:true});renderModes();});editor.append(add);}
+    if(agent.can_manage){const add=document.createElement('button');add.type='button';add.className='ac-btn ac-btn-ghost';add.textContent='Add mode';add.addEventListener('click',()=>{let n=1;while(modes.some(m=>m.id==='custom-'+n))n++;modes.push({id:'custom-'+n,label:'New mode',description:'',prompt:'',builtin:false,_new:true});renderModes();});editor.append(add);}
   };renderModes();
   renderManager(content, agent, persist);
   renderVisibility(content, agent, persist);

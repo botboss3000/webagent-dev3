@@ -153,6 +153,11 @@ fn core_catalog_loads_without_the_administrator_pack() {
     }
 }
 
+/// Held by a test that injects a process-wide engine component failure, and by tests
+/// whose runs must not see one: the injected cooldown would pause their runs.
+pub(crate) static COMPONENT_FAILURE_FENCE: tokio::sync::Mutex<()> =
+    tokio::sync::Mutex::const_new(());
+
 pub(crate) async fn fixture_uninitialized() -> (TempDir, App) {
     let root = tempfile::tempdir().unwrap();
     let control_dir = root.path().join("control");
@@ -161,7 +166,6 @@ pub(crate) async fn fixture_uninitialized() -> (TempDir, App) {
     std::fs::write(control_dir.join("shutoff"), b"0").unwrap();
     let store = Store::open(root.path()).await.unwrap();
     std::fs::create_dir_all(root.path().join("config")).unwrap();
-    store.put("policy", &policy_default()).await.unwrap();
     store
         .put("settings", &json!({"model":"fixture"}))
         .await
@@ -361,6 +365,31 @@ async fn chat_ui_config_reads_data_config_on_each_request_and_requires_auth() {
     }
 }
 
+/// Set tool `name`'s permission on the operator level of the default agent.
+/// Each level stays within the one above it, so the levels are retried until all three hold
+/// `permission`, whichever direction it moves.
+pub(crate) async fn set_tool_permission(app: &App, name: &str, permission: access::Permission) {
+    for _ in 0..3 {
+        for id in ["visitor", "member", "operator"] {
+            let levels = app.store.capability_levels("shared_default").await.unwrap();
+            let mut level = levels.levels[id].clone();
+            if level.tool_permissions.get(name) == Some(&permission) {
+                continue;
+            }
+            level.tool_permissions.insert(name.into(), permission);
+            let _ = app
+                .store
+                .save_capability_level("shared_default", level, levels.revision)
+                .await;
+        }
+    }
+    let levels = app.store.capability_levels("shared_default").await.unwrap();
+    assert_eq!(
+        levels.levels["operator"].tool_permissions.get(name),
+        Some(&permission)
+    );
+}
+
 pub(crate) async fn activate_codebase(app: &App, sid: &str) {
     let state = session_ability_set(
         State(app.clone()),
@@ -436,7 +465,6 @@ async fn agent_tool_off_revokes_schema_and_survives_reopen() {
     .0;
     assert_eq!(result["tool_modes"]["file_read"], "off");
     let state = json!({"active":["codebase_admin"],"suppressed":[]});
-    let policy = policy_default();
     assert!(!app.abilities.tool_available(
         "file_read",
         &result,
@@ -445,7 +473,7 @@ async fn agent_tool_off_revokes_schema_and_survives_reopen() {
     ));
     assert!(!app
         .abilities
-        .schemas_with(&policy, &json!(["codebase_admin"]), &result, &state)
+        .schemas_with(&json!(["codebase_admin"]), &result, &state)
         .iter()
         .any(|schema| schema["name"] == "file_read"));
     assert_eq!(
@@ -823,25 +851,20 @@ async fn source_review_route_requires_auth_policy_and_existing_session() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-
-    let mut policy = policy_default();
-    policy["rules"]["source_review"] = json!("deny");
-    app.store.put("policy", &policy).await.unwrap();
+    set_tool_permission(&app, "source_review", access::Permission::Deny).await;
     let response = router(app.clone())
         .oneshot(request(&uri, Some(&cookie)))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
-    policy["rules"]["source_review"] = json!("require_approval");
-    app.store.put("policy", &policy).await.unwrap();
+    set_tool_permission(&app, "source_review", access::Permission::Ask).await;
     let response = router(app.clone())
         .oneshot(request(&uri, Some(&cookie)))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-
-    app.store.put("policy", &policy_default()).await.unwrap();
+    set_tool_permission(&app, "source_review", access::Permission::Auto).await;
     app.store
         .put("control", &json!({"shutoff":true}))
         .await
@@ -966,34 +989,6 @@ async fn authentication_and_csrf_protect_control_routes() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert!(app.shutoff().await.unwrap());
-}
-
-#[tokio::test]
-async fn changed_policy_invalidates_pending_action_approval() {
-    let (_root, app) = fixture().await;
-    let sid = conversation(&app).await;
-    let id = queued(&app, &sid).await;
-    let args = json!({"command":"printf hello"});
-    let mut run = app.run(&id).await.unwrap();
-    run["status"] = json!("waiting_approval");
-    run["pending"] = json!({"id":"approval","name":"shell","arguments":args,"digest":digest(&args),
-        "policy_version":1,"state":"waiting","decision":null,"call_id":"call"});
-    app.save(&mut run).await.unwrap();
-    let mut policy = policy_default();
-    policy["version"] = json!(2);
-    app.store.put("policy", &policy).await.unwrap();
-    let error = approval(
-        State(app.clone()),
-        Path("approval".into()),
-        Json(json!({"client_request_id":"decision","decision":"approve"})),
-    )
-    .await
-    .unwrap_err();
-    assert_eq!(error.0, StatusCode::CONFLICT);
-    let run = app.run(&id).await.unwrap();
-    assert_eq!(run["status"], "queued");
-    assert!(run["pending"]["decision"].is_null());
-    assert_eq!(run["pending"]["digest"], digest(&args));
 }
 
 #[tokio::test]
@@ -1672,7 +1667,7 @@ async fn agent_loop_gates_tool_and_denial_continues_without_worker() {
         State(app.clone()),
         Path(sid.clone()),
         Json(SessionModeBody {
-            mode: "write".into(),
+            mode: "ask".into(),
             expected_revision: Some(
                 session_mode(&app, &sid).await.unwrap()["revision"]
                     .as_u64()
@@ -1828,7 +1823,7 @@ fn native_call_suffix(request: &Value) -> &str {
     let last = request["input"].as_array().unwrap().last().unwrap();
     assert_eq!(last["role"], "developer");
     let body = last["content"].as_str().unwrap();
-    assert!(body.contains("Current session capability mode:"));
+    assert!(body.contains("Current session mode revision:"));
     body
 }
 
@@ -1969,11 +1964,11 @@ async fn long_run_compacts_before_model_and_keeps_full_message_history() {
     assert_eq!(report["transport"], "responses");
     assert_eq!(report["overlays"][0]["id"], "session_mode");
     assert_eq!(report["overlays"][0]["disposition"], "included");
-    assert!(native_call_suffix(request).contains("Current session capability mode:"));
+    assert!(native_call_suffix(request).contains("Current session mode revision:"));
     assert!(!request["instructions"]
         .as_str()
         .unwrap()
-        .contains("Current session capability mode:"));
+        .contains("Current session mode revision:"));
     assert!(!report.to_string().contains("Earlier conversation summary"));
     let summaries: Vec<_> = request["input"]
         .as_array()
@@ -1990,13 +1985,13 @@ async fn long_run_compacts_before_model_and_keeps_full_message_history() {
     assert!(!summaries[0]["content"]
         .as_str()
         .unwrap()
-        .contains("Current session capability mode:"));
+        .contains("Current session mode revision:"));
     assert!(!finished["input"]
         .to_string()
-        .contains("Current session capability mode:"));
+        .contains("Current session mode revision:"));
     assert!(!json!(context)
         .to_string()
-        .contains("Current session capability mode:"));
+        .contains("Current session mode revision:"));
     server.abort();
 }
 
@@ -2692,10 +2687,7 @@ async fn state_inspection_is_authenticated_policy_controlled_and_session_bounded
         returned["messages"][0]["content_preview"]["truncated"],
         true
     );
-
-    let mut policy = policy_default();
-    policy["rules"]["state_inspect"] = json!("deny");
-    app.store.put("policy", &policy).await.unwrap();
+    set_tool_permission(&app, "state_inspect", access::Permission::Deny).await;
     let response = router(app.clone())
         .oneshot(request(Some(&cookie)))
         .await
@@ -2720,9 +2712,7 @@ async fn image_generation_stays_off_without_an_image_out_model() {
             .await
             .unwrap();
     }
-    let mut policy = policy_default();
-    policy["rules"]["generate_image"] = json!("allow");
-    app.store.put("policy", &policy).await.unwrap();
+    set_tool_permission(&app, "generate_image", access::Permission::Auto).await;
     let mock = Router::new().route(
         "/responses",
         post(move |Json(body): Json<Value>| async move {
@@ -3313,10 +3303,10 @@ async fn agent_discovers_ability_then_inspects_only_its_current_session() {
     assert_eq!(messages[0]["content_preview"]["truncated"], true);
     assert!(messages[0].get("content").is_none());
     assert!(!inspected.to_string().contains(private_other_text));
-    assert_eq!(
-        result_for(&requests[4], "cross-session")["status"],
-        "denied"
-    );
+    // `session_id` is not in the schema, so the argument check refuses it before dispatch.
+    let cross = result_for(&requests[4], "cross-session");
+    assert_eq!(cross["status"], "rejected", "{cross}");
+    assert_eq!(cross["error_kind"], "invalid_arguments", "{cross}");
     server.abort();
 }
 
@@ -3955,16 +3945,16 @@ async fn ability_management_routes_enforce_auth_revisions_and_session_boundaries
         StatusCode::NOT_FOUND
     );
 
-    let (policy, _, visibility, state) = ability_controls(&app, &second).await.unwrap();
+    let (_, visibility, state) = ability_controls(&app, &second).await.unwrap();
     // Tools are discoverable by default: exposed once selected.
     assert!(app
         .abilities
-        .schemas_with(&policy, &json!(["tool:file_read"]), &visibility, &state)
+        .schemas_with(&json!(["tool:file_read"]), &visibility, &state)
         .iter()
         .any(|tool| tool["name"] == "file_read"));
     assert!(!app
         .abilities
-        .visible_guidance(&policy, &visibility, &state)
+        .visible_guidance(&visibility, &state)
         .is_empty());
 
     let (status, activated) = ability_request(
@@ -4062,31 +4052,21 @@ async fn ability_management_routes_enforce_auth_revisions_and_session_boundaries
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(suppressed["revision"], 2);
-    let (policy, _, visibility, first_state) = ability_controls(&app, &first).await.unwrap();
+    let (_, visibility, first_state) = ability_controls(&app, &first).await.unwrap();
     assert!(!app
         .abilities
-        .schemas_with(
-            &policy,
-            &json!(["codebase_admin"]),
-            &visibility,
-            &first_state
-        )
+        .schemas_with(&json!(["codebase_admin"]), &visibility, &first_state,)
         .iter()
         .any(|tool| tool["name"] == "file_read"));
     // Other On groups may still contribute; the suppressed group never does.
     assert!(!app
         .abilities
-        .visible_guidance(&policy, &visibility, &first_state)
+        .visible_guidance(&visibility, &first_state)
         .contains("Visible ability codebase_admin"));
-    let (_, _, visibility, second_state) = ability_controls(&app, &second).await.unwrap();
+    let (_, visibility, second_state) = ability_controls(&app, &second).await.unwrap();
     assert!(app
         .abilities
-        .schemas_with(
-            &policy,
-            &json!(["tool:file_read"]),
-            &visibility,
-            &second_state
-        )
+        .schemas_with(&json!(["tool:file_read"]), &visibility, &second_state,)
         .iter()
         .any(|tool| tool["name"] == "file_read"));
 
@@ -4101,16 +4081,16 @@ async fn ability_management_routes_enforce_auth_revisions_and_session_boundaries
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(changed["revision"], 2);
-    let (policy, _, visibility, second_state) = ability_controls(&app, &second).await.unwrap();
+    let (_, visibility, second_state) = ability_controls(&app, &second).await.unwrap();
     assert!(!app
         .abilities
-        .schemas_with(&policy, &json!([]), &visibility, &second_state)
+        .schemas_with(&json!([]), &visibility, &second_state)
         .iter()
         .any(|tool| tool["name"] == "file_read"));
     // Discoverable now means On: the group's guidance still follows its tools.
     assert!(app
         .abilities
-        .visible_guidance(&policy, &visibility, &second_state)
+        .visible_guidance(&visibility, &second_state)
         .contains("Visible ability codebase_admin"));
     let (status, second_active) = ability_request(
         &app,
@@ -4123,26 +4103,21 @@ async fn ability_management_routes_enforce_auth_revisions_and_session_boundaries
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(second_active["revision"], 1);
-    let (policy, _, visibility, second_state) = ability_controls(&app, &second).await.unwrap();
+    let (_, visibility, second_state) = ability_controls(&app, &second).await.unwrap();
     // Session activation supplies the group's discoverable tools, as a selection does.
     assert!(app
         .abilities
-        .schemas_with(&policy, &json!([]), &visibility, &second_state)
+        .schemas_with(&json!([]), &visibility, &second_state)
         .iter()
         .any(|tool| tool["name"] == "file_read"));
     assert!(app
         .abilities
-        .schemas_with(
-            &policy,
-            &json!(["tool:file_read"]),
-            &visibility,
-            &second_state
-        )
+        .schemas_with(&json!(["tool:file_read"]), &visibility, &second_state,)
         .iter()
         .any(|tool| tool["name"] == "file_read"));
     assert!(!app
         .abilities
-        .visible_guidance(&policy, &visibility, &second_state)
+        .visible_guidance(&visibility, &second_state)
         .is_empty());
 }
 
@@ -4173,7 +4148,7 @@ async fn ability_changes_revoke_waiting_approvals_for_both_scopes() {
         "name":"file_write","arguments":args.to_string()}]);
     run["pending"] = json!({"id":"old-visibility-approval","name":"file_write",
         "arguments":args,"call_id":"test-call","digest":digest(&args),
-        "policy_version":1,"mode_revision":0,"visibility_revision":1,
+        "mode_revision":0,"visibility_revision":1,
         "ability_state_revision":0,"state":"waiting","decision":null});
     app.save(&mut run).await.unwrap();
     let (status, _) = ability_request(
@@ -4266,13 +4241,13 @@ async fn session_mode_api_requires_auth_and_csrf_and_is_session_scoped() {
             request = request.header("x-csrf-token", csrf);
         }
         request
-            .body(Body::from(json!({"mode":mode,"expected_revision":if mode=="write"{Some(1)}else{None},"confirm_write":mode=="write"}).to_string()))
+            .body(Body::from(json!({"mode":mode,"expected_revision":if mode=="auto"{Some(2)}else{None},"confirm_write":mode=="auto"}).to_string()))
             .unwrap()
     };
     let response = router(app.clone()).oneshot(get(None, &uri)).await.unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     let response = router(app.clone())
-        .oneshot(put(None, None, "read_only"))
+        .oneshot(put(None, None, "plan"))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -4287,7 +4262,7 @@ async fn session_mode_api_requires_auth_and_csrf_and_is_session_scoped() {
         .unwrap();
     let cookie = format!("v3_session={token}");
     let response = router(app.clone())
-        .oneshot(put(Some(&cookie), None, "read_only"))
+        .oneshot(put(Some(&cookie), None, "plan"))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -4302,11 +4277,10 @@ async fn session_mode_api_requires_auth_and_csrf_and_is_session_scoped() {
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(body["mode"], "read_only");
     assert_eq!(body["execution_mode"], "ask");
     assert_eq!(body["revision"], 0);
 
-    for (mode, revision) in [("read_only", 1), ("read_only", 1), ("write", 2)] {
+    for (mode, revision) in [("plan", 1), ("ask", 2), ("auto", 3)] {
         let response = router(app.clone())
             .oneshot(put(Some(&cookie), Some("fixture"), mode))
             .await
@@ -4318,7 +4292,7 @@ async fn session_mode_api_requires_auth_and_csrf_and_is_session_scoped() {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(body, json!({"mode":mode,"revision":revision}));
+        assert_eq!(body, json!({"execution_mode":mode,"revision":revision}));
         let other_uri = format!("/api/v3/sessions/{other}/mode");
         let other_response = router(app.clone())
             .oneshot(get(Some(&cookie), &other_uri))
@@ -4330,7 +4304,6 @@ async fn session_mode_api_requires_auth_and_csrf_and_is_session_scoped() {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(other_body["mode"], "read_only");
         assert_eq!(other_body["execution_mode"], "ask");
     }
     let response = router(app)
@@ -4341,103 +4314,6 @@ async fn session_mode_api_requires_auth_and_csrf_and_is_session_scoped() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-/// Verify switching to read-only invalidates prior write approval and denies the queued write at execution.
-async fn read_only_revokes_old_approval_and_denies_write_at_execution() {
-    use axum::routing::post;
-
-    let (_root, mut app) = fixture().await;
-    let sid = conversation(&app).await;
-    activate_codebase(&app, &sid).await;
-    let id = queued(&app, &sid).await;
-    let args = json!({"command":"printf forbidden"});
-    let mut run = app.run(&id).await.unwrap();
-    run["loaded_abilities"] = json!(["codebase_admin"]);
-    run["status"] = json!("waiting_approval");
-    run["phase"] = json!("tools");
-    run["calls"] = json!([{"type":"function_call","call_id":"old-call",
-        "name":"shell","arguments":args.to_string()}]);
-    let calls = run["calls"].as_array().unwrap().clone();
-    run["input"].as_array_mut().unwrap().extend(calls);
-    run["pending"] = json!({"id":"old-approval","name":"shell","arguments":args,
-        "call_id":"old-call","digest":digest(&args),"policy_version":1,
-        "mode_revision":0,"state":"waiting","decision":null});
-    app.save(&mut run).await.unwrap();
-
-    let mode = session_mode_set(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(SessionModeBody {
-            mode: "read_only".into(),
-            expected_revision: None,
-            confirm_write: false,
-        }),
-    )
-    .await
-    .unwrap()
-    .0;
-    assert_eq!(mode, json!({"mode":"read_only","revision":1}));
-    let run = app.run(&id).await.unwrap();
-    assert_eq!(run["status"], "queued");
-    assert!(run["pending"]["decision"].is_null());
-    assert_eq!(
-        approval(
-            State(app.clone()),
-            Path("old-approval".into()),
-            Json(json!({"client_request_id":"old-decision","decision":"approve"})),
-        )
-        .await
-        .unwrap_err()
-        .0,
-        StatusCode::CONFLICT
-    );
-    let (policy, revision) = effective_policy(&app, &sid).await.unwrap();
-    assert_eq!(revision, 1);
-    assert_eq!(policy_decision(&policy, "shell"), "deny");
-    assert_eq!(policy_decision(&policy, "state_inspect"), "allow");
-    let schemas = app.abilities.schemas(&policy, &json!(["codebase_admin"]));
-    assert!(!schemas.iter().any(|schema| schema["name"] == "shell"));
-    assert!(schemas
-        .iter()
-        .any(|schema| schema["name"] == "state_inspect"));
-
-    let mock = Router::new().route(
-        "/responses",
-        post(|| async {
-            let event = json!({"type":"response.completed","response":{"status":"completed",
-            "output":[{"type":"message","role":"assistant",
-                "content":[{"type":"output_text","text":"Denied."}]}]}});
-            (
-                [("content-type", "text/event-stream")],
-                format!("data: {event}\n\n"),
-            )
-        }),
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
-    app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
-    running(&app, &id, "read-only-retry").await;
-    execute_run(
-        app.clone(),
-        id.clone(),
-        "read-only-retry".into(),
-        CancellationToken::new(),
-    )
-    .await
-    .unwrap();
-    let finished = app.run(&id).await.unwrap();
-    assert_eq!(finished["status"], "completed", "{}", finished["error"]);
-    let output = finished["input"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|item| item["type"] == "function_call_output")
-        .unwrap();
-    assert!(output["output"].as_str().unwrap().contains("denied"));
-    server.abort();
 }
 
 #[test]
@@ -4907,10 +4783,10 @@ async fn current_mode_contribution_changes_per_call_without_entering_history() {
     assert_eq!(requests.len(), 2);
     let first_suffix = native_call_suffix(&requests[0]);
     let second_suffix = native_call_suffix(&requests[1]);
-    assert!(first_suffix.contains("Current session capability mode: read_only (revision 0)"));
-    assert!(!first_suffix.contains("Current session capability mode: read_only (revision 1)"));
-    assert!(second_suffix.contains("Current session capability mode: read_only (revision 1)"));
-    assert!(!second_suffix.contains("Current session capability mode: read_only (revision 0)"));
+    assert!(first_suffix.contains("Current session mode revision: 0."));
+    assert!(!first_suffix.contains("Current session mode revision: 1."));
+    assert!(second_suffix.contains("Current session mode revision: 1."));
+    assert!(!second_suffix.contains("Current session mode revision: 0."));
     assert!(first_suffix.contains("Execution mode: Ask"));
     assert!(!first_suffix.contains("Execution mode: Plan"));
     assert!(second_suffix.contains("Execution mode: Plan"));
@@ -4919,17 +4795,17 @@ async fn current_mode_contribution_changes_per_call_without_entering_history() {
         assert!(!request["instructions"]
             .as_str()
             .unwrap()
-            .contains("Current session capability mode:"));
+            .contains("Current session mode revision:"));
     }
     for id in [&first, &second] {
         let durable = app.run(id).await.unwrap();
         assert!(!durable["input"]
             .to_string()
-            .contains("Current session capability mode:"));
+            .contains("Current session mode revision:"));
     }
     assert!(!json!(app.store.context(&sid).await.unwrap())
         .to_string()
-        .contains("Current session capability mode:"));
+        .contains("Current session mode revision:"));
     server.abort();
 }
 
@@ -5762,8 +5638,6 @@ async fn model_selection_admission_pins_agent_model_prompt_and_credentials() {
                 app.tokens_for(&selection, &run).await.unwrap()["access_token"],
                 "token-two"
             );
-            let (policy, _) = effective_policy(&app, &sid).await.unwrap();
-            assert_eq!(policy_decision(&policy, "prompt_slot_read"), "allow");
         }
     }
     assert_eq!(
@@ -6766,42 +6640,19 @@ async fn phase3_http_tier_tools_and_agent_disable_reject_stale_approval() {
         .unwrap();
     // Administrator abilities need an administrator caller, whatever the agent grants.
     for (name, is_read) in [("file_read", true), ("file_write", false), ("shell", false)] {
-        let decision = access.tool_decision_for_abilities(
-            name,
-            &["codebase_admin".into()],
-            access::Permission::Auto,
-            true,
-            true,
-            false,
-            is_read,
-        );
+        let decision =
+            access.tool_decision_for_abilities(name, &["codebase_admin".into()], true, true);
         assert_eq!(decision.permission, access::Permission::Deny, "{name}");
         // Hidden from non-administrators rather than offered with a tier error.
         assert_eq!(decision.reason, access::Reason::CallerDenied, "{name}");
     }
-    let host = access.tool_decision(
-        "build_work",
-        access::Permission::Auto,
-        true,
-        true,
-        false,
-        true,
-    );
+    let host = access.tool_decision("build_work", true, true);
     assert_eq!(host.permission, access::Permission::Deny);
     assert_eq!(host.reason, access::Reason::CallerDenied);
     // The runtime refuses every Administrator tool to a non-administrator, whatever the
     // tier grants above.
     for name in ["file_read", "file_write", "shell", "terminal_open"] {
-        let decision = live_tool_decision(
-            &app,
-            &access,
-            name,
-            &json!({}),
-            &json!({}),
-            &json!({}),
-            &json!({}),
-            false,
-        );
+        let decision = live_tool_decision(&app, &access, name, &json!({}), &json!({}), &json!({}));
         assert_eq!(decision.permission, access::Permission::Deny, "{name}");
         assert_eq!(decision.reason, access::Reason::CallerDenied, "{name}");
     }
@@ -6843,7 +6694,7 @@ async fn phase3_http_tier_tools_and_agent_disable_reject_stale_approval() {
         "name":"file_write","arguments":args.to_string()}]);
     run["pending"] = json!({"id":"tier-stale-approval","name":"file_write","arguments":args,
         "digest":digest(&args),"call_id":"c","state":"waiting","decision":null,
-        "access_revision":access.revision,"policy_version":1,"mode_revision":0,
+        "access_revision":access.revision,"mode_revision":0,
         "visibility_revision":0,"ability_state_revision":0});
     user_app.save(&mut run).await.unwrap();
     let status = crate::agents_api::status_value(&app.store, "shared_default")
@@ -7023,9 +6874,7 @@ async fn parallel_batch_overlaps_reads_denies_write_by_policy_and_preserves_resu
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixListener;
     let (_root, app) = fixture().await;
-    let mut policy = policy_default();
-    policy["rules"]["file_write"] = json!("deny");
-    app.store.put("policy", &policy).await.unwrap();
+    set_tool_permission(&app, "file_write", access::Permission::Deny).await;
     let mut visibility = app.store.agent_abilities().await.unwrap();
     let revision = visibility["revision"].as_u64().unwrap();
     visibility["tool_execution"] = json!({"file_list":{
@@ -7190,7 +7039,7 @@ async fn parallel_writes_need_independent_approvals_and_return_uncertain_call_to
         State(app.clone()),
         Path(sid.clone()),
         Json(SessionModeBody {
-            mode: "write".into(),
+            mode: "ask".into(),
             expected_revision: Some(
                 session_mode(&app, &sid).await.unwrap()["revision"]
                     .as_u64()
@@ -7483,7 +7332,7 @@ async fn switching_waiting_parallel_writes_to_auto_runs_without_approval() {
         State(app.clone()),
         Path(sid.clone()),
         Json(SessionModeBody {
-            mode: "write".into(),
+            mode: "ask".into(),
             expected_revision: Some(0),
             confirm_write: true,
         }),
@@ -7731,7 +7580,7 @@ async fn parallel_batch_read_completes_before_independent_write_approval() {
         State(app.clone()),
         Path(sid.clone()),
         Json(SessionModeBody {
-            mode: "write".into(),
+            mode: "ask".into(),
             expected_revision: Some(0),
             confirm_write: true,
         }),
@@ -7956,54 +7805,6 @@ async fn web_access_api_support_auth_csrf_revision_and_persistence() {
         reopened.agent_abilities().await.unwrap()["tool_modes"]["maps_geocode"],
         "off"
     );
-}
-
-#[tokio::test]
-async fn renamed_background_controls_drop_old_rules_and_follow_their_ceilings() {
-    let (_root, app) = fixture().await;
-    let mut p = policy_default();
-    p["rules"]["task_cancel"] = json!("allow");
-    p["rules"]["task_status"] = json!("require_approval");
-    p["rules"]["task_wait"] = json!("allow");
-    p["rules"]["background_cancel"] = json!("deny");
-    p["rules"]
-        .as_object_mut()
-        .unwrap()
-        .remove("background_status");
-    app.store.put("policy", &p).await.unwrap();
-    migrate_tool_policy_defaults(&app.store).await.unwrap();
-    migrate_tool_policy_defaults(&app.store).await.unwrap();
-    let migrated = app.store.get("policy").await.unwrap().unwrap();
-    // Both are Base tool folders, so their policy ceilings are the installation rule.
-    assert_eq!(migrated["rules"]["background_cancel"], "allow");
-    assert_eq!(migrated["rules"]["background_status"], "allow");
-    for old in ["task_cancel", "task_status", "task_wait"] {
-        assert!(migrated["rules"].get(old).is_none(), "{old}");
-    }
-}
-
-#[tokio::test]
-async fn tool_policy_ceilings_replace_saved_rules() {
-    let (_root, app) = fixture().await;
-    let mut p = policy_default();
-    p["rules"]["web_search"] = json!("deny");
-    p["rules"]["get_weather"] = json!("require_approval");
-    p["rules"].as_object_mut().unwrap().remove("maps_geocode");
-    app.store.put("policy", &p).await.unwrap();
-    migrate_tool_policy_defaults(&app.store).await.unwrap();
-    migrate_tool_policy_defaults(&app.store).await.unwrap();
-    let migrated = app.store.get("policy").await.unwrap().unwrap();
-    // Each tool folder's policy_ceiling wins over the saved rule, missing or not.
-    for name in ["web_search", "get_weather", "maps_geocode"] {
-        let ceiling = webagent_abilities::tool_definitions::get(name)
-            .unwrap()
-            .policy_ceiling;
-        assert_eq!(
-            access::Permission::from_policy(policy_decision(&migrated, name)).unwrap(),
-            ceiling
-        );
-    }
-    assert_eq!(migrated["version"], 2);
 }
 
 #[tokio::test]
@@ -9294,7 +9095,7 @@ async fn auto_batch_keeps_an_approved_repeat_confirmation() {
     app.store
         .put(
             &key("session_mode", &sid),
-            &json!({"mode":"write","execution_mode":"auto","revision":1}),
+            &json!({"execution_mode":"auto","revision":1}),
         )
         .await
         .unwrap();
@@ -9304,7 +9105,7 @@ async fn auto_batch_keeps_an_approved_repeat_confirmation() {
     let mut run = app.run(&id).await.unwrap();
     run["phase"] = json!("tools");
     run["loaded_abilities"] = json!(["codebase_admin"]);
-    let (policy, mode_revision, visibility, state) = ability_controls(&app, &sid).await.unwrap();
+    let (mode_revision, visibility, state) = ability_controls(&app, &sid).await.unwrap();
     let access = app
         .store
         .live_access(app.store.current_user_id(), "shared_default")
@@ -9326,7 +9127,7 @@ async fn auto_batch_keeps_an_approved_repeat_confirmation() {
     // The user approved a repeat confirmation; Auto mode never converts one.
     let pending = json!({
         "id":"repeat-pending","name":"file_read","call_id":"repeat-read-0","arguments":args,
-        "digest":digest(&args),"policy_version":policy["version"],"mode_revision":mode_revision,
+        "digest":digest(&args),"mode_revision":mode_revision,
         "visibility_revision":visibility["revision"],"ability_state_revision":state["revision"],
         "access_revision":access.revision,"state":"waiting","decision":null,
         "new_intent_confirmation":true,"repeat_of":"earlier-call"
@@ -9363,15 +9164,12 @@ async fn background_approved_reads_pin_authority_and_claim_identity() {
         let (_root, app) = fixture().await;
         let sid = conversation(&app).await;
         activate_codebase(&app, &sid).await;
-        let mut policy = policy_default();
-        policy["rules"]["file_read"] = json!("require_approval");
-        app.store.put("policy", &policy).await.unwrap();
+        set_tool_permission(&app, "file_read", access::Permission::Ask).await;
         let rid = queued(&app, &sid).await;
         running(&app, &rid, "background-origin").await;
         let mut run = app.run(&rid).await.unwrap();
         run["loaded_abilities"] = json!(["codebase_admin"]);
-        let (policy, mode_revision, visibility, state) =
-            ability_controls(&app, &sid).await.unwrap();
+        let (mode_revision, visibility, state) = ability_controls(&app, &sid).await.unwrap();
         let access = app
             .store
             .live_access(app.store.current_user_id(), "shared_default")
@@ -9380,7 +9178,7 @@ async fn background_approved_reads_pin_authority_and_claim_identity() {
         let args = json!({"path":"fixture"});
         let mut pending = json!({
             "id":"background-pending","name":"file_read","call_id":"background-call",
-            "arguments":args,"digest":digest(&args),"policy_version":policy["version"],
+            "arguments":args,"digest":digest(&args),
             "mode_revision":mode_revision,"visibility_revision":visibility["revision"],
             "ability_state_revision":state["revision"],"access_revision":access.revision,
             "state":"executing","decision":"consumed","human_approved":false
@@ -9393,7 +9191,7 @@ async fn background_approved_reads_pin_authority_and_claim_identity() {
         }
         app.save(&mut run).await.unwrap();
         let settings = tool_execution::resolve(&visibility, "file_read").unwrap();
-        let version = policy["version"].as_u64().unwrap_or(0);
+        let version = 0;
         assert!(background_tasks::submit(
             &app,
             &sid,
@@ -9451,7 +9249,6 @@ async fn background_approved_reads_pin_authority_and_claim_identity() {
         let mut task = app.store.background_get(task_id).await.unwrap().unwrap();
         assert!(background_tasks::permitted(&app, &task).await.unwrap());
         for field in [
-            "policy_version",
             "mode_revision",
             "visibility_revision",
             "ability_state_revision",
@@ -9575,10 +9372,7 @@ async fn background_approved_reads_pin_authority_and_claim_identity() {
         );
         recovered["status"] = json!("running");
         app.store.put(&key("run", &rid), &recovered).await.unwrap();
-        let mut revoked = policy.clone();
-        revoked["version"] = json!(version + 1);
-        revoked["rules"]["file_read"] = json!("deny");
-        app.store.put("policy", &revoked).await.unwrap();
+        set_tool_permission(&app, "file_read", access::Permission::Deny).await;
         assert!(!background_tasks::permitted(&app, &task).await.unwrap());
     }
 }
@@ -9603,7 +9397,7 @@ async fn foreground_queue_revocation_denies_before_worker_dispatch() {
     let mut run = app.run(&rid).await.unwrap();
     run["loaded_abilities"] = json!(["codebase_admin"]);
     let args = json!({"path":"fixture"});
-    let (policy, mode_revision, visibility, state) = ability_controls(&app, &sid).await.unwrap();
+    let (mode_revision, visibility, state) = ability_controls(&app, &sid).await.unwrap();
     let access = app
         .store
         .live_access(app.store.current_user_id(), "shared_default")
@@ -9611,7 +9405,7 @@ async fn foreground_queue_revocation_denies_before_worker_dispatch() {
         .unwrap();
     run["pending"] = json!({
         "id":"queued-revocation-pending","name":"file_list","call_id":"queued-revocation-call",
-        "arguments":args,"digest":digest(&args),"policy_version":policy["version"],
+        "arguments":args,"digest":digest(&args),
         "mode_revision":mode_revision,"visibility_revision":visibility["revision"],
         "ability_state_revision":state["revision"],"access_revision":access.revision,
         "state":"executing","decision":"consumed","human_approved":false
@@ -9641,7 +9435,7 @@ async fn foreground_queue_revocation_denies_before_worker_dispatch() {
         "file_list".into(),
         args,
         "queued-revocation-pending".into(),
-        policy["version"].as_u64().unwrap_or(0),
+        0,
         cancel,
     );
     tokio::pin!(operation);
@@ -9650,10 +9444,7 @@ async fn foreground_queue_revocation_denies_before_worker_dispatch() {
             .await
             .is_err()
     );
-    let mut revoked = policy.clone();
-    revoked["version"] = json!(policy["version"].as_u64().unwrap_or(0) + 1);
-    revoked["rules"]["file_list"] = json!("deny");
-    app.store.put("policy", &revoked).await.unwrap();
+    set_tool_permission(&app, "file_list", access::Permission::Deny).await;
     drop(blocker);
     let result = tokio::time::timeout(TEST_TIMEOUT, &mut operation)
         .await
@@ -9676,7 +9467,7 @@ async fn background_auto_reads_reauthorize_live_grants_without_inheriting_approv
     running(&app, &rid, "auto-background").await;
     let mut run = app.run(&rid).await.unwrap();
     run["loaded_abilities"] = json!(["codebase_admin"]);
-    let (policy, mode_revision, visibility, state) = ability_controls(&app, &sid).await.unwrap();
+    let (mode_revision, visibility, state) = ability_controls(&app, &sid).await.unwrap();
     let access = app
         .store
         .live_access(app.store.current_user_id(), "shared_default")
@@ -9685,7 +9476,7 @@ async fn background_auto_reads_reauthorize_live_grants_without_inheriting_approv
     let args = json!({"path":"fixture"});
     run["pending"] = json!({
         "id":"auto-background-pending","name":"file_read","call_id":"auto-background-call",
-        "arguments":args,"digest":digest(&args),"policy_version":policy["version"],
+        "arguments":args,"digest":digest(&args),
         "mode_revision":mode_revision,"visibility_revision":visibility["revision"],
         "ability_state_revision":state["revision"],"access_revision":access.revision,
         "state":"executing","decision":"consumed","human_approved":false
@@ -9700,7 +9491,7 @@ async fn background_auto_reads_reauthorize_live_grants_without_inheriting_approv
         "file_read",
         &args,
         "auto-background-pending",
-        policy["version"].as_u64().unwrap_or(0),
+        0,
         &settings,
     )
     .await
@@ -9717,10 +9508,7 @@ async fn background_auto_reads_reauthorize_live_grants_without_inheriting_approv
         .put(&key("session_ability_state", &sid), &changed_state)
         .await
         .unwrap();
-    let mut current_policy = policy.clone();
-    current_policy["version"] = json!(policy["version"].as_u64().unwrap_or(0) + 1);
-    current_policy["rules"]["file_read"] = json!("allow");
-    app.store.put("policy", &current_policy).await.unwrap();
+    set_tool_permission(&app, "file_read", access::Permission::Auto).await;
     assert!(background_tasks::permitted(&app, &task).await.unwrap());
     let mut approved = task.clone();
     approved["authorization"]["human_approved"] = json!(true);
@@ -9730,14 +9518,11 @@ async fn background_auto_reads_reauthorize_live_grants_without_inheriting_approv
     assert!(!background_tasks::permitted(&app, &changed_args)
         .await
         .unwrap());
-    current_policy["rules"]["file_read"] = json!("require_approval");
-    app.store.put("policy", &current_policy).await.unwrap();
+    set_tool_permission(&app, "file_read", access::Permission::Ask).await;
     assert!(!background_tasks::permitted(&app, &task).await.unwrap());
-    current_policy["rules"]["file_read"] = json!("deny");
-    app.store.put("policy", &current_policy).await.unwrap();
+    set_tool_permission(&app, "file_read", access::Permission::Deny).await;
     assert!(!background_tasks::permitted(&app, &task).await.unwrap());
-    current_policy["rules"]["file_read"] = json!("allow");
-    app.store.put("policy", &current_policy).await.unwrap();
+    set_tool_permission(&app, "file_read", access::Permission::Auto).await;
     changed_state["suppressed"] = json!(["codebase_admin"]);
     app.store
         .put(&key("session_ability_state", &sid), &changed_state)
@@ -10113,8 +9898,7 @@ async fn background_reclaimed_submission_preserves_original_task_and_receipt() {
         let mut run = app.run(&rid).await.unwrap();
         run["loaded_abilities"] = json!(["codebase_admin"]);
         let args = json!({"path":"fixture"});
-        let (policy, mode_revision, visibility, state) =
-            ability_controls(&app, &sid).await.unwrap();
+        let (mode_revision, visibility, state) = ability_controls(&app, &sid).await.unwrap();
         let access = app
             .store
             .live_access(app.store.current_user_id(), "shared_default")
@@ -10122,7 +9906,7 @@ async fn background_reclaimed_submission_preserves_original_task_and_receipt() {
             .unwrap();
         let pending = json!({
             "id":"first-pending","name":"file_read","call_id":"stable-background-call",
-            "arguments":args,"digest":digest(&args),"policy_version":policy["version"],
+            "arguments":args,"digest":digest(&args),
             "mode_revision":mode_revision,"visibility_revision":visibility["revision"],
             "ability_state_revision":state["revision"],"access_revision":access.revision,
             "state":"executing","decision":"consumed","human_approved":false
@@ -10143,17 +9927,14 @@ async fn background_reclaimed_submission_preserves_original_task_and_receipt() {
             "file_read",
             &args,
             "first-pending",
-            policy["version"].as_u64().unwrap_or(0),
+            0,
             &settings,
         )
         .await
         .unwrap();
         let task_id = handle["task_id"].as_str().unwrap();
         let original = app.store.background_get(task_id).await.unwrap().unwrap();
-        let mut current_policy = policy.clone();
-        current_policy["version"] = json!(policy["version"].as_u64().unwrap_or(0) + 1);
-        current_policy["rules"]["file_read"] = json!("require_approval");
-        app.store.put("policy", &current_policy).await.unwrap();
+        set_tool_permission(&app, "file_read", access::Permission::Ask).await;
         let mut visibility = app.store.agent_abilities().await.unwrap();
         let revision = visibility["revision"].as_u64().unwrap();
         visibility["revision"] = json!(revision + 1);
@@ -10164,8 +9945,7 @@ async fn background_reclaimed_submission_preserves_original_task_and_receipt() {
             .save_agent_abilities(&visibility, revision)
             .await
             .unwrap();
-        let (policy, mode_revision, visibility, state) =
-            ability_controls(&app, &sid).await.unwrap();
+        let (mode_revision, visibility, state) = ability_controls(&app, &sid).await.unwrap();
         let access = app
             .store
             .live_access(app.store.current_user_id(), "shared_default")
@@ -10175,7 +9955,7 @@ async fn background_reclaimed_submission_preserves_original_task_and_receipt() {
         run["loaded_abilities"] = json!(["codebase_admin", "later-activation"]);
         let mut pending = json!({
             "id":"reclaimed-pending","name":"file_read","call_id":"stable-background-call",
-            "arguments":args,"digest":digest(&args),"policy_version":policy["version"],
+            "arguments":args,"digest":digest(&args),
             "mode_revision":mode_revision,"visibility_revision":visibility["revision"],
             "ability_state_revision":state["revision"],"access_revision":access.revision,
             "state":"executing","decision":"consumed","human_approved":true
@@ -10187,7 +9967,7 @@ async fn background_reclaimed_submission_preserves_original_task_and_receipt() {
         }
         app.store.put(&key("run", &rid), &run).await.unwrap();
         let settings = tool_execution::resolve(&visibility, "file_read").unwrap();
-        let version = policy["version"].as_u64().unwrap_or(0);
+        let version = 0;
         assert_eq!(
             background_tasks::submit(
                 &app,
@@ -10268,8 +10048,7 @@ async fn background_reclaimed_submission_preserves_original_task_and_receipt() {
             run["pending"]["digest"] = json!(digest(&args));
         }
         app.store.put(&key("run", &rid), &run).await.unwrap();
-        current_policy["rules"]["file_read"] = json!("deny");
-        app.store.put("policy", &current_policy).await.unwrap();
+        set_tool_permission(&app, "file_read", access::Permission::Deny).await;
         assert!(background_tasks::submit(
             &app,
             &sid,
@@ -10592,10 +10371,8 @@ async fn retained_read_recall_resolves_only_verified_same_session_origin() {
     let origin_id = queued(&app, &sid).await;
     let foreign_sid = conversation(&app).await;
     let foreign_origin = queued(&app, &foreign_sid).await;
-    let mut policy = app.store.get("policy").await.unwrap().unwrap();
-    policy["rules"]["file_read"] = json!("allow");
-    policy["rules"]["recall_compacted"] = json!("allow");
-    app.store.put("policy", &policy).await.unwrap();
+    set_tool_permission(&app, "file_read", access::Permission::Auto).await;
+    set_tool_permission(&app, "recall_compacted", access::Permission::Auto).await;
     let mut level = app
         .store
         .live_access("admin", "shared_default")
@@ -11347,14 +11124,7 @@ async fn native_skill_catalog_marks_supplied_guidance_and_rebuilds_selected_afte
         .unwrap();
     assert!(!guidance.contains(sentinel) && guidance.contains("REPLACEMENT"));
     // Base itself is always on; denying load_skill withdraws loaded guidance.
-    let mut policy = app
-        .store
-        .get("policy")
-        .await
-        .unwrap()
-        .unwrap_or_else(policy_default);
-    policy["rules"]["load_skill"] = json!("deny");
-    app.store.put("policy", &policy).await.unwrap();
+    set_tool_permission(&app, "load_skill", access::Permission::Deny).await;
     assert!(tools::core_skills::active_guidance(&app, &sid, &id)
         .await
         .unwrap()
@@ -11370,7 +11140,7 @@ async fn exact_native_tool_selection_obeys_visibility_mode_denial_and_suppressio
     app.store
         .put(
             &key("session_mode", &sid),
-            &json!({"mode":"read_only","revision":1}),
+            &json!({"execution_mode":"ask","revision":1}),
         )
         .await
         .unwrap();
@@ -11479,9 +11249,7 @@ async fn exact_native_tool_selection_obeys_visibility_mode_denial_and_suppressio
         .save_agent_abilities(&visibility, revision)
         .await
         .unwrap();
-    let mut policy = app.store.get("policy").await.unwrap().unwrap();
-    policy["rules"]["state_inspect"] = json!("deny");
-    app.store.put("policy", &policy).await.unwrap();
+    set_tool_permission(&app, "state_inspect", access::Permission::Deny).await;
     let denied = visibility_native_call(
         &app,
         &sid,
@@ -11491,8 +11259,7 @@ async fn exact_native_tool_selection_obeys_visibility_mode_denial_and_suppressio
     )
     .await;
     assert_eq!(denied["status"], "denied", "{denied}");
-    policy["rules"]["state_inspect"] = json!("allow");
-    app.store.put("policy", &policy).await.unwrap();
+    set_tool_permission(&app, "state_inspect", access::Permission::Auto).await;
     app.store
         .put(
             &key("session_ability_state", &sid),
@@ -11658,9 +11425,7 @@ async fn late_single_tool_case(name: &str, action: &str, mutation: &str, success
     .unwrap();
     activate_codebase(&app, &sid).await;
     if name == "build_work" {
-        let mut policy = policy_default();
-        policy["rules"]["build_work"] = json!("allow");
-        app.store.put("policy", &policy).await.unwrap();
+        set_tool_permission(&app, "build_work", access::Permission::Auto).await;
         let revision = app
             .store
             .capability_levels("shared_default")

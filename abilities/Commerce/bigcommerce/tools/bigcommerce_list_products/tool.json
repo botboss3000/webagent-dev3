@@ -1,0 +1,11 @@
+{
+  "name": "bigcommerce_list_products",
+  "description": "Bigcommerce list products (bigcommerce ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

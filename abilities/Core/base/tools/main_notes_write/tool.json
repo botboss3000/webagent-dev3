@@ -154,8 +154,7 @@
     "additionalProperties": false
   },
   "effect": "write",
-  "policy_ceiling": "auto",
-  "default_access": {
-    "operator": "auto"
+  "default_policy": {
+    "operator": "allow"
   }
 }

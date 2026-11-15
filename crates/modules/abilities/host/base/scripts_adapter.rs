@@ -71,7 +71,7 @@ async fn load_saved(app: &App, sid: &str) -> Result<Value> {
 
 /// Whether `tool` would run now without approval for this session and run.
 async fn runs_without_approval(app: &App, sid: &str, run: &Value, tool: &str) -> Result<bool> {
-    let (policy, _, visibility, state) = ability_controls(app, sid).await?;
+    let (_, visibility, state) = ability_controls(app, sid).await?;
     let mode = session_mode(app, sid).await?;
     let agent = session_agent_id(app, sid).await?;
     let access = shared_chat::live_access(&app.store, shared_chat::actor(app), sid, &agent).await?;
@@ -79,11 +79,9 @@ async fn runs_without_approval(app: &App, sid: &str, run: &Value, tool: &str) ->
         app,
         &access,
         tool,
-        &policy,
         &visibility,
         &state,
         &run["loaded_abilities"],
-        mode["mode"] == "read_only",
     )
     .for_execution_mode(&mode);
     Ok(access.admitted() && decision.permission == access::Permission::Auto)
@@ -487,14 +485,14 @@ mod tests {
             .claim_run(&mut run, "scripts-test", &generation)
             .await
             .unwrap());
-        let (policy, mode_revision, visibility, state) = ability_controls(app, sid).await.unwrap();
+        let (mode_revision, visibility, state) = ability_controls(app, sid).await.unwrap();
         let agent = session_agent_id(app, sid).await.unwrap();
         let access = shared_chat::live_access(&app.store, shared_chat::actor(app), sid, &agent)
             .await
             .unwrap();
         let pending = uuid();
         run["pending"] = json!({"id":pending,"name":name,"arguments":args,"state":"executing",
-            "human_approved":true,"policy_version":policy["version"],"mode_revision":mode_revision,
+            "human_approved":true,"mode_revision":mode_revision,
             "visibility_revision":visibility["revision"],"ability_state_revision":state["revision"],
             "access_revision":access.revision});
         app.store.put(&key("run", &rid), &run).await.unwrap();
@@ -562,7 +560,7 @@ mod tests {
         app.store
             .put(
                 &format!("session_mode:{sid}"),
-                &json!({"mode":"write","execution_mode":"auto","revision":0}),
+                &json!({"execution_mode":"auto","revision":0}),
             )
             .await
             .unwrap();
@@ -651,7 +649,7 @@ mod tests {
             {"tool":"file_write","arguments":{"path":"x","content":"y"}}]});
         let result = tool(&app, &sid, "script_save", write).await;
         assert_eq!(result["status"], "denied", "{result}");
-        // In the read-only Ask mode a tool the level sets to ask would ask, so it is refused.
+        // In Ask mode a tool the level sets to ask would ask, so it is refused.
         let levels = app.store.capability_levels("shared_default").await.unwrap();
         let mut level = levels.levels["operator"].clone();
         level
@@ -664,7 +662,7 @@ mod tests {
         app.store
             .put(
                 &format!("session_mode:{sid}"),
-                &json!({"mode":"read_only","execution_mode":"ask","revision":1}),
+                &json!({"execution_mode":"ask","revision":1}),
             )
             .await
             .unwrap();

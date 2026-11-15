@@ -1,0 +1,11 @@
+{
+  "name": "stripe_list_products",
+  "description": "Stripe list products (stripe ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

@@ -115,9 +115,8 @@ impl<
                 || access.as_ref().map_or(true, |access| !access.admitted());
             for pending in restricted {
                 let revisions_valid = match (&controls, &access) {
-                    (Ok((policy, mode, visibility, state)), Ok(access)) => {
-                        pending["policy_version"] == policy["version"]
-                            && pending["mode_revision"].as_u64().unwrap_or(0) == *mode
+                    (Ok((mode, visibility, state)), Ok(access)) => {
+                        pending["mode_revision"].as_u64().unwrap_or(0) == *mode
                             && pending["visibility_revision"] == visibility["revision"]
                             && pending["ability_state_revision"] == state["revision"]
                             && pending["access_revision"] == json!(access.revision)
@@ -162,7 +161,7 @@ impl<
             || !app
                 .session_mode(&sid)
                 .await
-                .is_ok_and(|mode| mode["mode"] == "write" && mode["execution_mode"] == "auto")
+                .is_ok_and(|mode| mode["execution_mode"] == "auto")
         {
             return Ok(());
         }

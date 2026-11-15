@@ -1,0 +1,11 @@
+{
+  "name": "woocommerce_get_product",
+  "description": "Woocommerce get product (woocommerce ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

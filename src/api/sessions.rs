@@ -309,6 +309,15 @@ pub(crate) async fn prompt_slot_delete_api(
         .map_err(prompt_slot_error)?;
     Ok(Json(json!({"deleted":deleted})))
 }
+/// A person's direct call runs only when the live decision allows `name` without approval.
+async fn direct_tool_allowed(app: &App, sid: &str, name: &str) -> Result<bool> {
+    let agent_id = session_agent_id(app, sid).await?;
+    let access =
+        crate::shared_chat::live_access(&app.store, crate::shared_chat::actor(app), sid, &agent_id)
+            .await?;
+    Ok(access.admitted()
+        && app.engine().direct_tool_decision(&access, name).permission == access::Permission::Auto)
+}
 pub(crate) async fn state_inspect_api(
     State(app): State<App>,
     Path(id): Path<String>,
@@ -318,15 +327,10 @@ pub(crate) async fn state_inspect_api(
     if app.store.get(&key("session", &id)).await?.is_none() {
         return Err(ApiError(StatusCode::NOT_FOUND, "Session not found".into()));
     }
-    let policy = app
-        .store
-        .get("policy")
-        .await?
-        .unwrap_or_else(policy_default);
-    if policy_decision(&policy, "state_inspect") != "allow" {
+    if !direct_tool_allowed(&app, &id, "state_inspect").await? {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
-            "State inspection is unavailable under current policy".into(),
+            "State inspection is unavailable under current access".into(),
         ));
     }
     Ok(Json(inspect_state(&app, &id, &args).await?))
@@ -428,7 +432,6 @@ pub(crate) async fn session_abilities(State(app): State<App>, Path(id): Path<Str
     if app.store.get(&key("session", &id)).await?.is_none() {
         return Err(ApiError(StatusCode::NOT_FOUND, "Session not found".into()));
     }
-    let (policy, _) = effective_policy(&app, &id).await?;
     let visibility = session_agent_abilities(&app, &id).await?;
     let state = session_ability_state(&app, &id).await?;
     let mode = session_mode(&app, &id).await?;
@@ -440,18 +443,9 @@ pub(crate) async fn session_abilities(State(app): State<App>, Path(id): Path<Str
         &agent_id,
     )
     .await?;
-    let mut abilities = app.abilities.catalog_with(&policy, &visibility, &state);
+    let mut abilities = app.abilities.catalog_with(&visibility, &state);
     abilities.retain_mut(|entry| {
-        filter_ability_entry(
-            &app,
-            &access,
-            entry,
-            &policy,
-            &visibility,
-            &state,
-            &json!([]),
-            mode["mode"] == "read_only",
-        )
+        filter_ability_entry(&app, &access, entry, &visibility, &state, &json!([]))
     });
     Ok(Json(json!({"mode":mode,
         "catalog_version":app.abilities.version(),
@@ -469,15 +463,10 @@ pub(crate) async fn source_review(State(app): State<App>, Path(id): Path<String>
     if app.store.get(&key("session", &id)).await?.is_none() {
         return Err(ApiError(StatusCode::NOT_FOUND, "Session not found".into()));
     }
-    let policy = app
-        .store
-        .get("policy")
-        .await?
-        .unwrap_or_else(policy_default);
-    if policy_decision(&policy, "source_review") != "allow" {
+    if !direct_tool_allowed(&app, &id, "source_review").await? {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
-            "Source review is unavailable under current policy".into(),
+            "Source review is unavailable under current access".into(),
         ));
     }
     if app.shutoff().await? {

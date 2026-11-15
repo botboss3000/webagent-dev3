@@ -70,9 +70,12 @@ mod tests {
             .save_capability_level("shared_default", level, levels.revision)
             .await
             .unwrap();
-        let mut policy = app.store.get("policy").await.unwrap().unwrap();
-        policy["rules"]["test_owner_purchase"] = json!("require_approval");
-        app.store.put("policy", &policy).await.unwrap();
+        crate::runtime_tests::set_tool_permission(
+            &app,
+            "test_owner_purchase",
+            crate::access::Permission::Ask,
+        )
+        .await;
         // The fixture tool must be visible through the ordinary ability gate.
         // Owner approval does not activate a hidden ability.
         let mut visibility = app.store.agent_abilities().await.unwrap();
@@ -88,7 +91,7 @@ mod tests {
         app.store
             .put(
                 &format!("session_mode:{sid}"),
-                &json!({"mode":"write","execution_mode":"auto","revision":0}),
+                &json!({"execution_mode":"auto","revision":0}),
             )
             .await
             .unwrap();
@@ -109,8 +112,7 @@ mod tests {
             .claim_run(&mut run, "owner-adapter-test", &generation)
             .await
             .unwrap());
-        let (policy, mode_revision, visibility, state) =
-            ability_controls(&app, &sid).await.unwrap();
+        let (mode_revision, visibility, state) = ability_controls(&app, &sid).await.unwrap();
         let agent = run["agent_id"].as_str().unwrap_or("shared_default");
         let access = crate::shared_chat::live_access(&app.store, &owner, &sid, agent)
             .await
@@ -120,11 +122,9 @@ mod tests {
             &app,
             &access,
             "test_owner_purchase",
-            &policy,
             &visibility,
             &state,
             &run["loaded_abilities"],
-            mode["mode"] == "read_only",
         )
         .for_execution_mode(&mode);
         assert_ne!(
@@ -137,7 +137,7 @@ mod tests {
             "fixture model authority"
         );
         run["pending"] = json!({"id":"owner-dispatch","name":"test_owner_purchase","arguments":{},"call_id":"test-call","state":"executing","human_approved":false,
-            "policy_version":policy["version"],"mode_revision":mode_revision,"visibility_revision":visibility["revision"],"ability_state_revision":state["revision"],"access_revision":access.revision});
+            "mode_revision":mode_revision,"visibility_revision":visibility["revision"],"ability_state_revision":state["revision"],"access_revision":access.revision});
         run["pending"]["authorization"] =
             resolve(&app.store, &run, "test_owner_purchase", &json!({}))
                 .await

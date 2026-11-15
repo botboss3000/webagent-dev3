@@ -324,7 +324,7 @@ export function mountChatActionPanel({root,guard,request,note}) {
     const node=card({title:approval.messaging_binding?'Approve agent message':approval.repeat_of ? 'Repeat an action the agent already ran?' : approval.new_intent_confirmation ? 'Confirm a separate action after '+approval.separate_from+':' : 'Need approval:',details:{toggle,body:details},actions});
     // The tool's repeat warning tells the user what approving may duplicate.
     if(approval.repeat_of&&typeof approval.repeat_warning==='string'){const text=document.createElement('p');text.textContent=approval.repeat_warning;node.insertBefore(text,node.lastChild);}
-    if(approval.messaging_binding){const text=document.createElement('p');const b=approval.messaging_binding;text.textContent='From '+(b.source_title||b.source_session_id)+' to '+(b.target_title||b.target_session_id)+' · '+b.target_agent_id+' · '+b.delivery+' · recipient '+(b.target_mode?.mode==='write'?'write-capable':'read-only');node.insertBefore(text,node.lastChild);}
+    if(approval.messaging_binding){const text=document.createElement('p');const b=approval.messaging_binding;text.textContent='From '+(b.source_title||b.source_session_id)+' to '+(b.target_title||b.target_session_id)+' · '+b.target_agent_id+' · '+b.delivery;node.insertBefore(text,node.lastChild);}
     if(approval.messaging_can_remember)node.insertBefore(rememberLabel,node.lastChild);
     return node;
   }

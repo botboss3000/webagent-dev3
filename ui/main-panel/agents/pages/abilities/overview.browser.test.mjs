@@ -23,13 +23,13 @@ const abilityRows = () => [
    has_skill:true,skill_visibility:'visible',default:'on',default_mode:'visible',
    general_skills:[{skill_id:'core',title:'Skill',when_to_use:'',mode:'visible'}],
    tools:[{name:'shell',description:'Run commands',policy:'allow',mode:'visible',supported:true,
-     default:'auto',has_tool_skill:false}]},
+     default:'allow',has_tool_skill:false}]},
   {id:'web_access',name:'Web Access',description:'Weather and places',group:'web',group_name:'Web',
    visibility:'visible',readiness:'ready',installed:true,declared:true,configured:true,
    has_skill:true,skill_visibility:'visible',default:'on',default_mode:'visible',
    general_skills:[{skill_id:'core',title:'Skill',when_to_use:'',mode:'visible'}],
    tools:[{name:'get_weather',description:'Forecast',policy:'allow',mode:'visible',supported:true,
-     default:'auto',has_tool_skill:false}]},
+     default:'allow',has_tool_skill:false}]},
 ];
 const data = () => ({
   authority:{can_manage:true,is_installation_admin:false},

@@ -2,11 +2,10 @@
   "name": "wiki_history",
   "description": "Staff only. List an article's saved versions, newest first, with revision IDs.",
   "effect": "read",
-  "policy_ceiling": "auto",
-  "default_access": {
-    "operator": "auto",
-    "member": "auto",
-    "visitor": "auto"
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "allow"
   },
   "parameters": {
     "type": "object",

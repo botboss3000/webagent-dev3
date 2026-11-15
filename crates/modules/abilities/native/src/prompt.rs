@@ -57,23 +57,14 @@ async fn view(host: &dyn NativeHost, sid: &str, run_id: &str) -> Result<View> {
         bail!("Run does not belong to current session and agent");
     }
     let loaded = run["loaded_abilities"].clone();
-    let (policy, mode_revision, visibility, state) =
-        host.scoped_ability_controls(&scoped, sid).await?;
+    let (mode_revision, visibility, state) = host.scoped_ability_controls(&scoped, sid).await?;
     let mode = host.scoped_session_mode(&scoped, sid).await?;
     let access = host
         .scoped_live_access(&scoped, host.actor(), sid, &agent)
         .await?;
     if !access.admitted()
         || host
-            .live_tool_decision(
-                &access,
-                "read_own_prompt",
-                &policy,
-                &visibility,
-                &state,
-                &loaded,
-                mode["mode"] == "read_only",
-            )
+            .live_tool_decision(&access, "read_own_prompt", &visibility, &state, &loaded)
             .permission
             == Permission::Deny
     {
@@ -83,7 +74,6 @@ async fn view(host: &dyn NativeHost, sid: &str, run_id: &str) -> Result<View> {
     let manager = authority["can_manage"].as_bool().unwrap_or(false);
     let fingerprint = digest(&json!([
         agent,
-        policy,
         mode_revision,
         visibility,
         state,

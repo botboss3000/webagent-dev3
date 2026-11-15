@@ -183,11 +183,9 @@ mod tests {
         assert_eq!(admin.revision, changed.revision);
         assert!(admin.admitted());
         assert!(admin.model_allowed("gpt-6-luna"));
-        assert_eq!(
-            admin
-                .tool_decision("file_write", Permission::Ask, true, true, false, false)
-                .permission,
-            Permission::Ask
+        assert_ne!(
+            admin.tool_decision("file_write", true, true).permission,
+            Permission::Deny
         );
         let original = store
             .agent_tool_permissions("shared_default")
@@ -202,9 +200,7 @@ mod tests {
         let tightened = store.live_access("admin", "shared_default").await.unwrap();
         assert_ne!(admin.revision, tightened.revision);
         assert_eq!(
-            tightened
-                .tool_decision("file_write", Permission::Ask, true, true, false, false)
-                .reason,
+            tightened.tool_decision("file_write", true, true).reason,
             Reason::AgentDenied
         );
         assert!(store
@@ -248,10 +244,7 @@ mod tests {
                 .tool_decision_for_abilities(
                     "file_read",
                     &["codebase_admin".to_owned()],
-                    Permission::Auto,
                     true,
-                    true,
-                    false,
                     true
                 )
                 .reason,
@@ -270,10 +263,7 @@ mod tests {
             ask.tool_decision_for_abilities(
                 "file_read",
                 &["codebase_admin".to_owned()],
-                Permission::Auto,
                 true,
-                true,
-                false,
                 true
             )
             .reason,
@@ -295,9 +285,7 @@ mod tests {
         let pending = store.live_access(id, "shared_default").await.unwrap();
         assert!(!pending.admitted());
         assert_eq!(
-            pending
-                .tool_decision("file_read", Permission::Auto, true, true, false, true)
-                .permission,
+            pending.tool_decision("file_read", true, true).permission,
             Permission::Deny
         );
         store
@@ -314,9 +302,7 @@ mod tests {
         let granted = store.live_access(id, "shared_default").await.unwrap();
         assert!(granted.model_allowed("gpt-6-luna"));
         assert_eq!(
-            granted
-                .tool_decision("file_read", Permission::Auto, true, true, false, true)
-                .permission,
+            granted.tool_decision("file_read", true, true).permission,
             Permission::Auto
         );
         assert_ne!(active.revision, granted.revision);
@@ -333,9 +319,7 @@ mod tests {
             .unwrap();
         let caller = store.live_access(id, "shared_default").await.unwrap();
         assert_eq!(
-            caller
-                .tool_decision("file_read", Permission::Auto, true, true, false, true)
-                .reason,
+            caller.tool_decision("file_read", true, true).reason,
             Reason::CallerDenied
         );
         store
@@ -344,9 +328,7 @@ mod tests {
             .unwrap();
         let member = store.live_access(id, "shared_default").await.unwrap();
         assert_eq!(
-            member
-                .tool_decision("file_read", Permission::Auto, true, true, false, true)
-                .permission,
+            member.tool_decision("file_read", true, true).permission,
             Permission::Auto
         );
         store
@@ -357,9 +339,7 @@ mod tests {
         assert!(!revoked.admitted());
         assert_ne!(granted.revision, revoked.revision);
         assert_eq!(
-            revoked
-                .tool_decision("file_read", Permission::Auto, true, true, false, true)
-                .reason,
+            revoked.tool_decision("file_read", true, true).reason,
             Reason::CallerDenied
         );
     }

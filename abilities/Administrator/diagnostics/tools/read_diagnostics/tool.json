@@ -2,11 +2,10 @@
   "name": "read_diagnostics",
   "description": "Read bounded content-free diagnostics for the current session run, or with issues=true the grouped tool-failure issues of this conversation tree",
   "effect": "read",
-  "policy_ceiling": "auto",
-  "default_access": {
-    "operator": "auto",
-    "member": "ask",
-    "visitor": "ask"
+  "default_policy": {
+    "operator": "allow",
+    "member": "require_approval",
+    "visitor": "require_approval"
   },
   "parameters": {
     "type": "object",
@@ -17,7 +16,7 @@
       },
       "issues": {
         "type": "boolean",
-        "description": "true: return grouped tool-failure issues instead \u2014 per group tool, error kind, message template, failed calls, retries, recoveries \u2014 plus the agent notes and agent-opened issues, and the artifact counts. Scope defaults to this conversation tree; an administrator may read the whole shared log."
+        "description": "true: return grouped tool-failure issues instead — per group tool, error kind, message template, failed calls, retries, recoveries — plus the agent notes and agent-opened issues, and the artifact counts. Scope defaults to this conversation tree; an administrator may read the whole shared log."
       },
       "scope": {
         "type": "string",

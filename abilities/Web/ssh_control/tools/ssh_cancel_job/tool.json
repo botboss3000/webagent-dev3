@@ -1,0 +1,11 @@
+{
+  "name": "ssh_cancel_job",
+  "description": "Ssh cancel job (ssh_control ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "write"
+}

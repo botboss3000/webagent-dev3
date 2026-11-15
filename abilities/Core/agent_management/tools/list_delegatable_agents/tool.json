@@ -2,11 +2,10 @@
   "name": "list_delegatable_agents",
   "description": "List accessible private agents you can delegate to with start_session or delegate_to_agent; reports whether a Standard model is assigned.",
   "effect": "read",
-  "policy_ceiling": "auto",
-  "default_access": {
-    "operator": "auto",
-    "member": "auto",
-    "visitor": "auto"
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "allow"
   },
   "parameters": {
     "type": "object",

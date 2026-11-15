@@ -2,11 +2,10 @@
   "name": "get_tunnel_url",
   "description": "Read this session active preview lease",
   "effect": "read",
-  "policy_ceiling": "auto",
-  "default_access": {
-    "operator": "auto",
-    "member": "ask",
-    "visitor": "ask"
+  "default_policy": {
+    "operator": "allow",
+    "member": "require_approval",
+    "visitor": "require_approval"
   },
   "parameters": {
     "type": "object",

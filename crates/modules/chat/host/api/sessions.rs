@@ -360,7 +360,7 @@ pub(crate) async fn prepare_session_id(
             .unwrap_or(config["default_execution_mode"].as_str().unwrap());
         let entry = webagent_agents::modes::resolve(&config, default)
             .map_err(|_| bad("Unknown chat default execution mode"))?;
-        json!({"mode":entry["permission_policy"],"execution_mode":entry["id"],"revision":0})
+        json!({"execution_mode":entry["id"],"revision":0})
     };
     Ok(PreparedSession {
         docs: vec![
@@ -472,36 +472,23 @@ async fn change_session_mode_authorized(
     let current = session_mode(&app, &id).await?;
     let agent = session_agent_id(app, id).await?;
     let config = crate::agents_api::modes_config(&app.store, &agent).await?;
-    let named = if matches!(mode, "write" | "read_only") {
-        None
-    } else {
-        Some(
-            webagent_agents::modes::resolve(&config, mode)
-                .map_err(|_| bad("Unknown execution mode"))?,
-        )
-    };
-    let target_policy = named
-        .as_ref()
-        .map(|m| m["permission_policy"].as_str().unwrap())
-        .unwrap_or(mode);
-    // The agent's effective chat.json may waive only the browser confirmation for Auto.
-    // Revision fencing and model-call authorization remain mandatory.
-    let confirm_auto =
-        if tool.is_none() && named.as_ref().is_some_and(|entry| entry["id"] == "auto") {
-            crate::chat_config::preferences(app, &agent)
+    let named = webagent_agents::modes::resolve(&config, mode)
+        .map_err(|_| bad("Unknown execution mode"))?;
+    // Entering Auto skips approvals, so it crosses a human checkpoint unless the
+    // agent's effective chat.json waives the browser confirmation. Revision fencing
+    // and model-call authorization remain mandatory.
+    let entering_auto = named["id"] == "auto" && current["execution_mode"] != "auto";
+    if tool.is_none()
+        && entering_auto
+        && (expected_revision.is_none()
+            || (crate::chat_config::preferences(app, &agent)
                 .await?
                 .confirm_auto_mode
-        } else {
-            true
-        };
-    if tool.is_none()
-        && current["mode"] == "read_only"
-        && target_policy == "write"
-        && (expected_revision.is_none() || (confirm_auto && !human_confirmed))
+                && !human_confirmed))
     {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
-            "Confirm write-capable mode with the current revision".into(),
+            "Confirm Auto mode with the current revision".into(),
         ));
     }
     let receipt = tool.map(|call| {
@@ -521,9 +508,6 @@ async fn change_session_mode_authorized(
             if saved["request_hash"] != *hash {
                 return Err(conflict("Mode call receipt mismatch"));
             }
-            if mode == "read_only" {
-                phase3_api::stop_session_runs(app, id).await?;
-            }
             return Ok(Json(saved["result"].clone()));
         }
     }
@@ -537,7 +521,7 @@ async fn change_session_mode_authorized(
         }
         let agent = session_agent_id(app, id).await?;
         let run = app.run(call.run_id).await?;
-        let (policy, mode_revision, visibility, state) = ability_controls(app, id).await?;
+        let (mode_revision, visibility, state) = ability_controls(app, id).await?;
         let access =
             crate::shared_chat::live_access(&app.store, crate::shared_chat::actor(app), id, &agent)
                 .await?;
@@ -549,7 +533,6 @@ async fn change_session_mode_authorized(
             || run["pending"]["id"] != call.pending_id
             || run["pending"]["name"] != "set_execution_mode"
             || run["pending"]["state"] != "executing"
-            || run["pending"]["policy_version"] != policy["version"]
             || run["pending"]["mode_revision"] != json!(mode_revision)
             || run["pending"]["visibility_revision"] != visibility["revision"]
             || run["pending"]["ability_state_revision"] != state["revision"]
@@ -559,40 +542,27 @@ async fn change_session_mode_authorized(
                 app,
                 &access,
                 "set_execution_mode",
-                &policy,
                 &visibility,
                 &state,
                 &run["loaded_abilities"],
-                current["mode"] == "read_only",
             )
             .permission
                 == access::Permission::Deny
         {
             return Err(conflict("Mode call authorization changed"));
         }
-        if current["mode"] == "read_only"
-            && target_policy == "write"
-            && run["pending"]["human_approved"] != true
-        {
+        if entering_auto && run["pending"]["human_approved"] != true {
             return Err(ApiError(
                 StatusCode::FORBIDDEN,
-                "Write mode requires approval".into(),
+                "Auto mode requires approval".into(),
             ));
         }
     }
     if expected_revision.is_some_and(|revision| current["revision"].as_u64() != Some(revision)) {
         return Err(conflict("Session mode revision changed"));
     }
-    if current["mode"] == mode && named.is_none() && current["execution_mode"].is_null() {
-        if mode == "read_only" {
-            phase3_api::stop_session_runs(&app, &id).await?;
-        }
-        return Ok(Json(current));
-    }
-    let mut next = json!({"mode":target_policy,"revision":current["revision"].as_u64().unwrap()+1});
-    if let Some(entry) = named {
-        next["execution_mode"] = entry["id"].clone();
-    }
+    let next =
+        json!({"execution_mode":named["id"],"revision":current["revision"].as_u64().unwrap()+1});
     let mut docs = vec![(key("session_mode", &id), next.clone())];
     if let Some((receipt_key, hash)) = receipt {
         docs.push((receipt_key, json!({"request_hash":hash,"result":next})));

@@ -1,0 +1,11 @@
+{
+  "name": "ebay_get_item",
+  "description": "Ebay get item (ebay ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

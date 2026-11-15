@@ -1,0 +1,11 @@
+{
+  "name": "web_scrape_search",
+  "description": "Web scrape search (web_scraper ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

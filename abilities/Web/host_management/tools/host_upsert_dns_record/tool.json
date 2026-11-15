@@ -1,0 +1,11 @@
+{
+  "name": "host_upsert_dns_record",
+  "description": "Host upsert dns record (host_management ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "write"
+}

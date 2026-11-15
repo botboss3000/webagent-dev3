@@ -7,12 +7,15 @@
   "order": 3,
   "placeholder": false,
   "readiness": "ready",
-  "default_access": {
-    "operator": "auto",
-    "member": "auto",
-    "visitor": "auto"
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "allow"
   },
-  "tier_access": ["free", "administrator"],
+  "owner_tier": [
+    "free",
+    "administrator"
+  ],
   "config": {
     "settings": [
       {

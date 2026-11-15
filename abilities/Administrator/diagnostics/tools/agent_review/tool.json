@@ -2,11 +2,12 @@
   "name": "agent_review",
   "description": "Explain a grouped tool issue, open an issue no failed call produced, or mark one resolved by a release. Administrator only. One record per group or title: a later call replaces the earlier one",
   "effect": "write",
-  "retry_risk": "none",
-  "retry_hint": "a repeated note for the same group replaces the earlier one, so a retry is harmless",
-  "policy_ceiling": "auto",
-  "default_access": {
-    "operator": "auto",
+  "repeat_guard": {
+    "risk": "none",
+    "hint": "a repeated note for the same group replaces the earlier one, so a retry is harmless"
+  },
+  "default_policy": {
+    "operator": "allow",
     "member": "deny",
     "visitor": "deny"
   },

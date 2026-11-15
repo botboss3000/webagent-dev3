@@ -372,7 +372,7 @@ impl<
                     {
                         return Ok(false);
                     }
-                    let (policy, mode_revision, visibility, state) = app
+                    let (mode_revision, visibility, state) = app
                         .ability_controls_for(
                             sid,
                             run["requester_user_id"]
@@ -396,11 +396,9 @@ impl<
                         .live_tool_decision(
                             &access,
                             name,
-                            &policy,
                             &visibility,
                             &state,
                             &run["loaded_abilities"],
-                            mode["mode"] == "read_only",
                         )
                         .for_execution_mode(&mode);
                     let mut expected_args = pending["arguments"].clone();
@@ -413,7 +411,6 @@ impl<
                         && run["status"] == "running"
                         && pending["state"] == "executing"
                         && expected_args == *args
-                        && pending["policy_version"] == policy["version"]
                         && pending["mode_revision"] == json!(mode_revision)
                         && pending["visibility_revision"] == visibility["revision"]
                         && pending["ability_state_revision"] == state["revision"]

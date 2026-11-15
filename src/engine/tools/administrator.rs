@@ -5,8 +5,8 @@
 //! origin or a Docker command.
 use super::failure::{boundary, request, Code, Delivery, Failure, Stage};
 use crate::{
-    ability_controls, access, live_tool_decision, policy_decision, policy_default,
-    session_agent_id, session_mode, task_progress, tools, App,
+    ability_controls, access, live_tool_decision, session_agent_id, session_mode, task_progress,
+    tools, App,
 };
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
@@ -89,7 +89,7 @@ async fn codebase_admin_supplies(app: &App, sid: &str, run: &Value, name: &str) 
     let agent = session_agent_id(app, sid).await?;
     let mut scoped = app.clone();
     scoped.store = app.store.for_agent(&agent).await?;
-    let (_, _, visibility, state) = ability_controls(&scoped, sid).await?;
+    let (_, visibility, state) = ability_controls(&scoped, sid).await?;
     let loaded = &run["loaded_abilities"];
     if !scoped
         .abilities
@@ -116,7 +116,7 @@ fn refused(code: Code) -> anyhow::Error {
 }
 
 /// The authority fingerprint for Administrator call `name` in run `run_id`: the caller,
-/// session, agent, live access, policy, ability controls, mode and loaded abilities. An
+/// session, agent, live access, ability controls, mode and loaded abilities. An
 /// error means the caller may not run it now; a changed fingerprint revokes a running
 /// job's lease.
 pub(crate) async fn host_fingerprint(
@@ -139,29 +139,20 @@ pub(crate) async fn host_fingerprint(
     if performance && !webagent_administration::arguments::performance_run_live(&run) {
         return Err(refused(Code::AuthorityStopped));
     }
-    let (policy, revision, visibility, state) = ability_controls(&scoped, sid).await?;
+    let (revision, visibility, state) = ability_controls(&scoped, sid).await?;
     let mode = session_mode(&scoped, sid).await?;
     let actor = crate::shared_chat::actor(&scoped);
     let access = crate::shared_chat::live_access(&scoped.store, actor, sid, &agent).await?;
     if performance && !crate::optimization::available() {
         return Err(refused(Code::AuthorityStopped));
     }
-    let read_only = mode["mode"] == "read_only";
     let work_finish = name == "build_work_finish";
     let policy_name = if work_finish { "build_work" } else { name };
     let loaded = &run["loaded_abilities"];
-    let work_permission = live_tool_decision(
-        &scoped,
-        &access,
-        policy_name,
-        &policy,
-        &visibility,
-        &state,
-        loaded,
-        read_only,
-    )
-    .for_execution_mode(&mode)
-    .permission;
+    let work_permission =
+        live_tool_decision(&scoped, &access, policy_name, &visibility, &state, loaded)
+            .for_execution_mode(&mode)
+            .permission;
     if !access.principal.administrator()
         || !access.admitted()
         || work_permission == access::Permission::Deny
@@ -170,18 +161,15 @@ pub(crate) async fn host_fingerprint(
     }
     // A deploy (finish or decide) asks first unless the session runs in Auto mode, even
     // when build_work itself is allowed: this gate is fixed, not a policy rule.
-    let deploy_gate = access
-        .tool_decision_for_abilities(
-            "build_work",
-            &["codebase_admin".into()],
-            access::Permission::Ask,
-            true,
-            true,
-            read_only,
-            false,
-        )
-        .for_execution_mode(&mode)
-        .permission;
+    let mut deploy =
+        access.tool_decision_for_abilities("build_work", &["codebase_admin".into()], true, true);
+    if deploy.permission == access::Permission::Auto {
+        deploy = access::ToolDecision {
+            permission: access::Permission::Ask,
+            reason: access::Reason::ApprovalRequired,
+        };
+    }
+    let deploy_gate = deploy.for_execution_mode(&mode).permission;
     if work_finish
         && (deploy_gate == access::Permission::Deny
             || (deploy_gate == access::Permission::Ask
@@ -224,7 +212,6 @@ pub(crate) async fn host_fingerprint(
         sid,
         agent,
         access.context_fingerprint(),
-        policy,
         revision,
         visibility,
         state,
@@ -282,25 +269,16 @@ impl AdministrationHost for Host<'_> {
                 .to_owned();
             let mut scoped = app.clone();
             scoped.store = app.store.for_agent(&agent).await?;
-            let (policy, revision, visibility, state) = ability_controls(&scoped, sid).await?;
+            let (revision, visibility, state) = ability_controls(&scoped, sid).await?;
             let mode = session_mode(&scoped, sid).await?;
             let user = scoped.store.current_user_id();
             let access = scoped.store.live_access(user, &agent).await?;
-            let read_only = mode["mode"] == "read_only";
             let permissions = tools
                 .iter()
                 .map(|(tool, ability)| {
                     let loaded = json!([ability]);
-                    let decision = live_tool_decision(
-                        &scoped,
-                        &access,
-                        tool,
-                        &policy,
-                        &visibility,
-                        &state,
-                        &loaded,
-                        read_only,
-                    );
+                    let decision =
+                        live_tool_decision(&scoped, &access, tool, &visibility, &state, &loaded);
                     decision.permission
                 })
                 .collect();
@@ -308,7 +286,6 @@ impl AdministrationHost for Host<'_> {
                 app.store.current_user_id(),
                 sid,
                 agent,
-                policy,
                 revision,
                 visibility,
                 state,
@@ -402,19 +379,6 @@ impl AdministrationHost for Host<'_> {
     }
     fn shutoff(&self) -> Pending<'_, Result<bool>> {
         Box::pin(self.0.shutoff())
-    }
-    fn policy(&self) -> Pending<'_, Result<Value>> {
-        Box::pin(async move {
-            Ok(self
-                .0
-                .store
-                .get("policy")
-                .await?
-                .unwrap_or_else(policy_default))
-        })
-    }
-    fn rule(&self, policy: &Value, name: &str) -> String {
-        policy_decision(policy, name).to_owned()
     }
     fn record<'a>(
         &'a self,

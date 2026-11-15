@@ -3,9 +3,9 @@ use anyhow::{bail, Result};
 use serde_json::{json, Value};
 pub fn defaults() -> Value {
     json!([
-     {"id":"ask","label":"Ask","description":"Investigate, answer, and recommend without making changes.","permission_policy":"read_only","prompt":"Investigate with read-only tools and deliver an answer or proposal. Do not execute changes.","builtin":true},
-     {"id":"plan","label":"Plan","description":"Investigate deeply and deliver an execution-ready plan.","permission_policy":"read_only","prompt":"Research with read-only tools and deliver an execution-ready plan. Maintain Plan Overview and canonical Task Progress; implementation stays pending. Do not execute changes.","builtin":true},
-     {"id":"auto","label":"Auto","description":"Work autonomously with write-capable permissions; tool calls do not ask for approval.","permission_policy":"write","prompt":"Execute the requested work autonomously. Denied tools and access limits still apply; tool calls that would otherwise ask for approval proceed automatically. Verify results before claiming completion.","builtin":true}
+     {"id":"ask","label":"Ask","description":"Investigate, answer and recommend; tools that need approval ask first.","prompt":"Investigate, answer, and recommend; tools that require approval ask first.","builtin":true},
+     {"id":"plan","label":"Plan","description":"Investigate deeply and deliver an execution-ready plan.","prompt":"Research and deliver an execution-ready plan. Maintain Plan Overview and canonical Task Progress. Then ask the user to approve it or to switch to Auto before executing changes.","builtin":true},
+     {"id":"auto","label":"Auto","description":"Work autonomously; tool calls do not ask for approval.","prompt":"Execute the requested work autonomously. Denied tools and access limits still apply; tool calls that would otherwise ask for approval proceed automatically. Verify results before claiming completion.","builtin":true}
     ])
 }
 pub fn normalize(raw: &Value) -> Result<Value> {
@@ -35,17 +35,15 @@ pub fn normalize(raw: &Value) -> Result<Value> {
         let label = entry["label"].as_str().unwrap_or(id).trim();
         let description = entry["description"].as_str().unwrap_or("");
         let prompt = entry["prompt"].as_str().unwrap_or("");
-        let policy = entry["permission_policy"].as_str().unwrap_or("read_only");
         if label.is_empty()
             || label.chars().count() > 40
             || description.chars().count() > 240
             || prompt.chars().count() > 30000
-            || !matches!(policy, "read_only" | "write")
         {
             bail!("Invalid mode fields");
         }
         let builtin = matches!(id, "ask" | "plan" | "auto");
-        let value = json!({"id":id,"label":label,"description":description,"prompt":prompt,"permission_policy":policy,"builtin":builtin});
+        let value = json!({"id":id,"label":label,"description":description,"prompt":prompt,"builtin":builtin});
         if let Some(i) = modes.iter().position(|m| m["id"] == id) {
             modes[i] = value;
         } else {

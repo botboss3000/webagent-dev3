@@ -295,7 +295,7 @@ impl Host<'_> {
             Kind::Skills(action) => self.skills(action, &request.params, &request.body).await,
             Kind::Settings => ability_controls(self.call.app, self.call.sid)
                 .await
-                .map(|(_, _, visibility, _)| visibility["settings"][self.ability].clone()),
+                .map(|(_, visibility, _)| visibility["settings"][self.ability].clone()),
             Kind::Watch => self.watch(&request.params, &request.body).await,
             Kind::ProviderRequest => self.provider_request(&request.params, &request.body).await,
             Kind::Review(action) => Ok(self.review(action, &request.params, &request.body).await),

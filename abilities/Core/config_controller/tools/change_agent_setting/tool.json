@@ -2,12 +2,13 @@
   "name": "change_agent_setting",
   "description": "Save one setting of an agent the signed-in user manages (this conversation's agent unless `agent` names another one they manage), using the revision find_setting returned for the agent layer. The agent's owner checks apply.",
   "effect": "write",
-  "retry_risk": "none",
-  "retry_hint": "call find_setting again: its current value shows whether the earlier change was saved, and a repeat with the old revision is refused",
-  "policy_ceiling": "auto",
-  "default_access": {
-    "operator": "auto",
-    "member": "auto",
+  "repeat_guard": {
+    "risk": "none",
+    "hint": "call find_setting again: its current value shows whether the earlier change was saved, and a repeat with the old revision is refused"
+  },
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
     "visitor": "deny"
   },
   "parameters": {

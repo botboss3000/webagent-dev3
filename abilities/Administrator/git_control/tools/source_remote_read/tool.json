@@ -2,11 +2,10 @@
   "name": "source_remote_read",
   "description": "Read untrusted source directly from GitHub at an exact commit. No checkout or server-side build.",
   "effect": "read",
-  "policy_ceiling": "ask",
-  "default_access": {
-    "operator": "auto",
-    "member": "ask",
-    "visitor": "ask"
+  "default_policy": {
+    "operator": "require_approval",
+    "member": "require_approval",
+    "visitor": "require_approval"
   },
   "parameters": {
     "type": "object",

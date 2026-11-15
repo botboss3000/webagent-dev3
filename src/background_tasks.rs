@@ -206,15 +206,14 @@ mod tests {
             .unwrap());
         run["loaded_abilities"] = json!(["codebase_admin"]);
         let args = json!({"path":"fixture"});
-        let (policy, mode_revision, visibility, state) =
-            ability_controls(&app, &sid).await.unwrap();
+        let (mode_revision, visibility, state) = ability_controls(&app, &sid).await.unwrap();
         let access = app
             .store
             .live_access(app.store.current_user_id(), "shared_default")
             .await
             .unwrap();
         run["pending"] = json!({"id":"background-pending","name":"file_read","call_id":"background-call",
-  "arguments":args,"digest":digest(&args),"policy_version":policy["version"],"mode_revision":mode_revision,
+  "arguments":args,"digest":digest(&args),"mode_revision":mode_revision,
   "visibility_revision":visibility["revision"],"ability_state_revision":state["revision"],
   "access_revision":access.revision,"state":"executing","decision":"consumed","human_approved":false});
         app.save(&mut run).await.unwrap();
@@ -227,7 +226,7 @@ mod tests {
             "file_read",
             &args,
             "background-pending",
-            policy["version"].as_u64().unwrap_or(0),
+            0,
             &settings,
         )
         .await

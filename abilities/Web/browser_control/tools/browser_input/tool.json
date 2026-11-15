@@ -2,12 +2,13 @@
   "name": "browser_input",
   "description": "Click, type or press a key in the private server browser, or save the site's sign-in. Each click, type or press needs a browser_read read under 120 seconds old whose region contains the target. Sign-in fields take a vault entry (vault), never literal passwords; save_login keeps the signed-in site for later visits",
   "effect": "write",
-  "retry_risk": "none",
-  "retry_hint": "read the page again to see whether the earlier click or typing already took effect; every input needs its own fresh read, so input cannot repeat blindly",
-  "policy_ceiling": "ask",
-  "default_access": {
-    "operator": "ask",
-    "member": "ask",
+  "repeat_guard": {
+    "risk": "none",
+    "hint": "read the page again to see whether the earlier click or typing already took effect; every input needs its own fresh read, so input cannot repeat blindly"
+  },
+  "default_policy": {
+    "operator": "require_approval",
+    "member": "require_approval",
     "visitor": "deny"
   },
   "parameters": {

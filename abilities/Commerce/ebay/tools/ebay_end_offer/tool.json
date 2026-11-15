@@ -1,0 +1,11 @@
+{
+  "name": "ebay_end_offer",
+  "description": "Ebay end offer (ebay ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "write"
+}

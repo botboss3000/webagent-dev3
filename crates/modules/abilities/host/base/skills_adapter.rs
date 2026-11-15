@@ -132,11 +132,9 @@ fn validate_load(args: &LoadArgs) -> Result<()> {
 struct View {
     app: App,
     access: crate::access_policy::LiveAccess,
-    policy: Value,
     visibility: Value,
     state: Value,
     loaded: Value,
-    read_only: bool,
     own: Value,
     loaded_skills: Value,
     version: String,
@@ -158,14 +156,13 @@ async fn view(app: &App, sid: &str, run_id: &str, name: &str) -> Result<View> {
     }
     let loaded = run["loaded_abilities"].clone();
     let loaded_skills = run["loaded_skills"].clone();
-    let (policy, mode_revision, visibility, state) = ability_controls(&scoped, sid).await?;
+    let (mode_revision, visibility, state) = ability_controls(&scoped, sid).await?;
     // Conversation selectors activate only this read's projection, never saved
     // session state. Current Off, suppression and access checks still decide.
     let state = scoped
         .abilities
         .selected_state(&visibility, &state, &loaded);
     let mode = session_mode(&scoped, sid).await?;
-    let read_only = mode["mode"] == "read_only";
     let access = crate::shared_chat::live_access(
         &scoped.store,
         crate::shared_chat::actor(&scoped),
@@ -174,17 +171,7 @@ async fn view(app: &App, sid: &str, run_id: &str, name: &str) -> Result<View> {
     )
     .await?;
     if !access.admitted()
-        || live_tool_decision(
-            &scoped,
-            &access,
-            name,
-            &policy,
-            &visibility,
-            &state,
-            &loaded,
-            read_only,
-        )
-        .permission
+        || live_tool_decision(&scoped, &access, name, &visibility, &state, &loaded).permission
             == crate::access::Permission::Deny
     {
         bail!("Bundled skill tool unavailable under current access");
@@ -196,7 +183,6 @@ async fn view(app: &App, sid: &str, run_id: &str, name: &str) -> Result<View> {
     let version = crate::digest(&json!([bundle_version, own["revision"]]));
     let fingerprint = crate::digest(&json!([
         version,
-        policy,
         mode_revision,
         visibility,
         state,
@@ -208,11 +194,9 @@ async fn view(app: &App, sid: &str, run_id: &str, name: &str) -> Result<View> {
     Ok(View {
         app: scoped,
         access,
-        policy,
         visibility,
         state,
         loaded,
-        read_only,
         own,
         loaded_skills,
         version,
@@ -275,11 +259,9 @@ fn skill_tool_allowed(current: &View, tool: &str) -> bool {
         &current.app,
         &current.access,
         tool,
-        &current.policy,
         &current.visibility,
         &current.state,
         &json!(loaded),
-        current.read_only,
     )
     .offered()
 }
@@ -375,7 +357,7 @@ pub(crate) fn apply_selection(run: &mut Value, result: &Value) {
 /// Preload the tools and skills a new user message clearly needs and keep the next few as
 /// call-scoped suggestions. Best effort: any failure preloads nothing and never stops the run.
 /// The engine stages `preload.selectors` as ordinary activation selectors, so preloads persist
-/// like `load_tool` and `load_skill`; live policy, approval and read-only checks still decide.
+/// like `load_tool` and `load_skill`; live policy and approval checks still decide.
 pub(crate) async fn preload(app: &App, sid: &str, run: &mut Value) {
     if run["preload_checked"] == true
         || !webagent_abilities::tool_match::PRELOAD_ENABLED
@@ -522,11 +504,10 @@ async fn preload_candidates(
     {
         let allow_ability = |id: &str| current.access.ability_offered(id);
         let allow_tool = |tool: &str| skill_tool_allowed(&current, tool);
-        for entry in
-            current
-                .app
-                .abilities
-                .catalog_with(&current.policy, &current.visibility, &current.state)
+        for entry in current
+            .app
+            .abilities
+            .catalog_with(&current.visibility, &current.state)
         {
             let Some(id) = entry["id"].as_str() else {
                 continue;
@@ -668,21 +649,18 @@ fn skill_acknowledgment(asset: &Value, catalog_version: &str) -> Value {
 }
 /// Rehydrate guidance under current authority at every model boundary.
 pub(crate) async fn active_guidance(app: &App, sid: &str, run_id: &str) -> Result<String> {
-    Ok(context_guidance(app, sid, run_id, false).await?.0)
+    Ok(context_guidance(app, sid, run_id).await?.0)
 }
-/// Return the exact included selectors beside their rebuilt guidance. Follow-up
-/// calls apply their read-only ceiling even if the session normally permits writes.
+/// Return the exact included selectors beside their rebuilt guidance.
 pub(crate) async fn context_guidance(
     app: &App,
     sid: &str,
     run_id: &str,
-    read_only: bool,
 ) -> Result<(String, Vec<Value>)> {
-    let mut current = match view(app, sid, run_id, "load_skill").await {
+    let current = match view(app, sid, run_id, "load_skill").await {
         Ok(view) => view,
         Err(_) => return Ok((String::new(), Vec::new())),
     };
-    current.read_only |= read_only;
     let mut guidance = String::new();
     let mut included = Vec::new();
     for selected in current.loaded_skills.as_array().into_iter().flatten() {
@@ -729,14 +707,12 @@ pub(crate) async fn own_capability_guidance(
     app: &App,
     sid: &str,
     run_id: &str,
-    read_only: bool,
 ) -> Result<Vec<webagent_capability_contracts::Guidance>> {
     use webagent_capability_contracts::{Guidance, GuidanceKind};
-    let mut current = match view(app, sid, run_id, "load_skill").await {
+    let current = match view(app, sid, run_id, "load_skill").await {
         Ok(view) => view,
         Err(_) => return Ok(Vec::new()),
     };
-    current.read_only |= read_only;
     let mut guidance = Vec::new();
     for selected in current.loaded_skills.as_array().into_iter().flatten() {
         if selected["kind"] != "own" {

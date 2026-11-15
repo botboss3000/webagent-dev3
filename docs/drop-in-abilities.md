@@ -10,81 +10,56 @@ The first general-loader migration requires an engine release.
 A compiled ability declares each tool in its own folder,
 `abilities/<Group>/<ability_id>/tools/<tool>/`, and leaves `tools` out of
 its manifest; a packaged ability whose package contract checks the manifest list keeps
-it, naming exactly its tool folders. `tool.json` holds `name` (the folder name),
-`description`, JSON-schema `parameters`, optional `strict`, `effect` (`read` or
-`write`), `policy_ceiling` and `default_access` per role (`operator`, `member`,
-`visitor`: `auto`, `ask` or `deny`); `tool.skill.md` is its optional guidance.
-`policy_ceiling` (`auto`, `ask` or `deny`) is the tool's installation-wide limit for
-every agent and the only place it is set: startup writes it into the installation
-policy, so a change applies with the next release. The Abilities page disables
-permission choices looser than it. The handler stays compiled Rust and lists the tool in its adapter's
-`TOOLS`. At startup every listed handler must have a valid folder and every folder a
-handler; a missing or invalid folder disables only that tool. A capability level with
-no saved permission for a tool uses `default_access` for its role, then the next role
-down, then deny. Built-in Base tools are compiled in (`crates/modules/abilities/src/base.rs`)
-with coded defaults: Operators get them all, Members and Visitors may ask for read tools.
+it, naming exactly its tool folders. `tool.json` holds:
+
+- `name` (the folder name), `description`, JSON-schema `parameters`, optional `strict`.
+- `effect`: `read` or `write`. It says whether the tool changes anything and drives
+  recovery (an interrupted write is uncertain and never rerun), batches, background work
+  and the repeat guard. It never decides access.
+- `default_policy` per role (`operator`, `member`, `visitor`): `allow`,
+  `require_approval` or `deny`. A level with no saved permission for the tool uses its
+  role's value, then the next role down. With no role named, a read allows and a write
+  requires approval. Agent operators can change it on the Abilities page.
+- `owner_tier` (optional): the tiers whose owners' agents may have the tool. It overrides
+  the ability's list.
+- `role_access` (optional): the built-in roles that may ever have the tool, for example
+  `["operator"]`. A hard limit: no level setting widens it, and the tool is hidden from
+  other roles. Without it the ability's list applies, then every role. A custom level
+  counts as the built-in role it starts from.
+- `repeat_guard` (optional): `risk` (`none`, `low`, `high`; a write defaults to high),
+  `hint` (what the agent verifies before repeating) and `warning` (what the user is told).
+- `usage_hint` (optional): one line added to argument errors to guide the next call.
+
+`tool.skill.md` is its optional guidance. The handler stays compiled Rust and lists the
+tool in its adapter's `TOOLS`. At startup every listed handler must have a valid folder
+and every folder a handler; a missing or invalid folder disables only that tool. Every
+tool an ability lists has a `tool.json`; a tool not built yet keeps a skeleton (empty
+`parameters`, no handler) so its access is declared.
 Abilities not yet moved keep the manifest `tools` list and flat `tools/<tool>.skill.md`.
 
 ## Ability access defaults and app tiers
 
-An ability's manifest may declare `default_access` per role, like `tool.json`. It is
+An ability's manifest may declare `default_policy` per role, like `tool.json`. It is
 shown on the Abilities page ("Default: …") but grants nothing: a level with no saved
 permission for the ability (and no `*`) keeps it off, so a new ability stays off for
 existing agents until an Operator switches it on. Once on, its tools without a saved
 permission use their `tool.json` defaults and its skills their `default_mode`.
 
-Every ability manifest must declare `tier_access`, the app tiers whose owners' agents may
+Every ability manifest must declare `owner_tier`, the app tiers whose owners' agents may
 have it (for example `["free", "administrator"]`); a manifest without it is reported and
 the ability works for no one. The agent owner's tier decides: an ability the owner's
-tier lacks is paused on every rung of that agent's ladder (its saved settings are kept
-and return on an upgrade). A `tool.json` may declare its own `tier_access` to narrow its
-ability's list, never to widen it; a tool several abilities provide works through any
-the owner's tier allows. Administrator-group abilities must list exactly
+tier lacks stays offered but its tools fail with the tier reason (its saved settings are
+kept and return on an upgrade). A `tool.json` may declare its own `owner_tier`, which
+overrides its ability's list; a tool several abilities provide works through any the
+owner's tier allows. A manifest may also declare `role_access`, a hard limit on which
+built-in roles may have the ability. Administrator-group abilities must list exactly
 `["administrator"]` and are hard-coded to need an administrator owner and an
 administrator caller (`crates/modules/abilities/src/ability_access.rs`,
 `crates/modules/access`). A new paid tier gets no abilities until manifests list it.
 
-Administrator native tools (`webagent_administration::tools::TOOLS`) use the same
-folders under `abilities/Administrator/`. Codebase Admin's broker tool `build_work`, the
-Optimization tool `performance_work` and the older `v3_*` build and source names it keeps as
-permission ceilings live in `Administrator/native_tools/`, which the catalog does not list as an ability. Each catalog snapshot reads these schemas from its own folders, so a published
-description edit needs no Rust build; release validation refuses a missing or invalid
-Administrator folder.
-
-Automation, a packaged ability, keeps its manifest `tools` list and also defines each
-tool in a folder; its `plugin.json` lists every `tools/<tool>/tool.json` as an asset, so
-a definition edit changes the package's runtime identity but not its build key.
-
-## Plugins that call the app (`requests_v1`)
-
-A Rust ability plugin can ask the app to act for it. Its `plugin.json` sets
-`"host_interface": "requests_v1"`, `"protocol": 2`, the tools it serves (a subset of its
-tool folders) and `requests`, the host requests it uses, chosen from the offered set in
-`crates/modules/extensions/src/requests.rs` (fixed user-API routes, the caller's own
-skills, the ability's settings and session watches). Every request runs as the chatting
-user with that user's permissions, after the app re-authorizes the tool call; a request
-the plugin did not declare is refused, and route parameters cannot leave their path
-segment. Agent Management (`abilities/Core/agent_management`) is the first.
-
-A plugin that needs external services declares them in `providers` with
-`web.provider_request` (`crates/modules/extensions/src/providers.rs`): each provider has
-a fixed HTTPS origin, fixed endpoint methods and paths, and optionally a vault
-credential the app adds to a declared header. The sandboxed plugin has no network; the
-app makes each call as the chatting user, never returns the key, and counts each user's
-monthly use against a cap the plugin passes. Web Search (`abilities/Web/web_search`)
-is the first.
-
-The plugin is one standalone crate with no workspace dependencies (the root workspace
-excludes its folder). Dev releases build it in the broker's plugin lane and run each call
-in its own sandboxed process over JSON lines (`crates/modules/extensions/src/plugin.rs`,
-runner in `crates/modules/extensions/host/plugins.rs`). Stable releases link it into the
-binary through the root Cargo feature `stable-abilities`.
-
-## Checkout edits
-
 The running app compares `/code/abilities` with the published release
 it runs (`crates/modules/abilities/src/drift.rs`, rechecked at most every five seconds).
-Edits to a tool's description or `default_access`, and changed guidance text
+Edits to a tool's description or `default_policy`, and changed guidance text
 (`tool.skill.md`, `<id>.skill.md`, `skills/*.skill.md`), apply at once with no notice.
 A removed tool or ability, an invalid `tool.json`, or a `tool.json` whose name,
 parameters, effect or `strict` changed turns that tool off at once. Added abilities and

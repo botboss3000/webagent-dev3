@@ -93,12 +93,11 @@ pub async fn eligible(
     if !access.admitted() {
         bail!("Agent access unavailable");
     }
-    let (policy, _, visibility, state) = host.discovery_controls(sid, agent).await?;
+    let (_, visibility, state) = host.discovery_controls(sid, agent).await?;
     // Native catalog reads share the model call's conversation activation view.
     let state = host.selected_state(&visibility, &state, loaded);
-    let read_only = host.session_mode(sid).await?["mode"] == "read_only";
     let mut tools = BTreeMap::new();
-    for entry in host.catalog_with(&policy, &visibility, &state) {
+    for entry in host.catalog_with(&visibility, &state) {
         if access.ability_permission(entry["id"].as_str().unwrap_or("")) == Permission::Deny {
             continue;
         }
@@ -107,15 +106,8 @@ pub async fn eligible(
             if owns(name) {
                 continue;
             }
-            let decision = host.live_tool_decision(
-                &access,
-                name,
-                &policy,
-                &visibility,
-                &state,
-                &json!([marker(name)]),
-                read_only,
-            );
+            let decision =
+                host.live_tool_decision(&access, name, &visibility, &state, &json!([marker(name)]));
             if !decision.offered() {
                 continue;
             }
@@ -278,19 +270,10 @@ async fn exact(
         bail!("Run unavailable");
     }
     let access = host.session_access(sid, &agent).await?;
-    let (policy, _, visibility, state) = host.discovery_controls(sid, &agent).await?;
+    let (_, visibility, state) = host.discovery_controls(sid, &agent).await?;
     let state = host.selected_state(&visibility, &state, &run["loaded_abilities"]);
-    let read_only = host.session_mode(sid).await?["mode"] == "read_only";
     if host
-        .live_tool_decision(
-            &access,
-            name,
-            &policy,
-            &visibility,
-            &state,
-            &run["loaded_abilities"],
-            read_only,
-        )
+        .live_tool_decision(&access, name, &visibility, &state, &run["loaded_abilities"])
         .permission
         == Permission::Deny
     {
@@ -333,10 +316,6 @@ async fn exact(
         }
     }
     if selected.is_empty() && available.is_empty() {
-        // Read-only mode hides tools that change things; say so instead of a bare refusal.
-        if read_only {
-            bail!("Tool unavailable: {}. This conversation is in read-only mode, which withholds tools that change things; ask the user to switch it to a write mode if the task needs them", refused.join(", "));
-        }
         bail!("Tool unavailable: {}", refused.join(", "));
     }
     let status = if selected.is_empty() {

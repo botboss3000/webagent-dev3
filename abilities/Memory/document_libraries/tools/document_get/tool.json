@@ -1,0 +1,11 @@
+{
+  "name": "document_get",
+  "description": "Document get (document_libraries ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

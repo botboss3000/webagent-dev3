@@ -1,7 +1,13 @@
 //! Actual journal and live authority remain scoped by the Engine consumer.
 use crate::*;
-pub async fn restore(app:&App,sid:&str,agent:&str,run:&mut Value,policy:&tool_output::Policy)->Result<bool> {
- app.engine().restore_retained(sid,agent,run,policy).await
+pub async fn restore(
+    app: &App,
+    sid: &str,
+    agent: &str,
+    run: &mut Value,
+    policy: &tool_output::Policy,
+) -> Result<bool> {
+    app.engine().restore_retained(sid, agent, run, policy).await
 }
 #[cfg(test)]
 mod tests {
@@ -19,13 +25,12 @@ mod tests {
     }
 
     async fn allow_file_read(app: &App, sid: &str) {
-        app.store
-            .put(
-                "policy",
-                &json!({"version":1,"rules":{"file_read":"allow"}}),
-            )
-            .await
-            .unwrap();
+        crate::runtime_tests::set_tool_permission(
+            app,
+            "file_read",
+            crate::access::Permission::Auto,
+        )
+        .await;
         crate::runtime_tests::activate_codebase(app, sid).await;
     }
 

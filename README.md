@@ -17,8 +17,8 @@ and declarative presentation components. The 2026-10-03 pinned Rust suite passed
 Authenticated API acceptance confirmed Base tool checkpoints, one persisted
 assistant reply per run, and caller-owned cross-session search through the
 model tool. Other new tools have focused Rust coverage but were not each
-exercised in a live model run. A read-only to write mode request requires
-approval and a fresh revision.
+exercised in a live model run. Entering Auto mode needs a fresh revision and, unless
+the agent waives it, the user's confirmation.
 
 
 Independent Rust agent runtime, subscription provider adapter, and isolated Python tool worker.
@@ -383,14 +383,14 @@ and revoke existing sign-ins.
 
 ## Session capability mode
 
-Each conversation starts in `write` mode. The authenticated
-`GET/PUT /api/v3/sessions/{id}/mode` route reads or changes it with a
-CSRF-protected `PUT {"mode":"read_only"|"write"}`. A mode change has a
-monotonic revision and invalidates approvals waiting under the previous mode.
-`read_only` hides mutating tool schemas and denies mutating calls at dispatch;
-read tools and normal chat remain available. `write` retains the global
-per-tool allow/deny/approval policy. The session-specific effective catalog is
-available at `GET /api/v3/sessions/{id}/abilities`. The persistent global
+Each conversation has an execution mode: Ask, Plan, Auto or an agent's custom mode,
+read or changed through the authenticated `GET/PUT /api/v3/sessions/{id}/mode` route.
+A mode change has a monotonic revision and invalidates approvals waiting under the
+previous mode. Every mode follows the agent's tool policy (owner tier, role limits and
+the capability level's allow / require approval / deny); Auto alone skips
+require-approval prompts, never a denial. Plan differs only in its instructions. The
+session-specific effective catalog is available at
+`GET /api/v3/sessions/{id}/abilities`. The persistent global
 shutoff still stops all runs independently of mode.
 
 ## Ability visibility and session activation
@@ -421,8 +421,8 @@ session. An administrator can set a known ability to `active`,
 `suppressed`, or `default` (clear the session override) with CSRF-protected
 `PUT /api/v3/sessions/{id}/abilities/{ability_id}` and
 `{"state":"...","expected_revision":n}`; stale revisions return 409.
-Suppression wins over visibility and activation. Global tool policy and
-session read-only mode still filter schemas and deny calls at dispatch.
+Suppression wins over visibility and activation. Tool policy still filters
+schemas and denies calls at dispatch.
 Changes increment a revision and revoke approvals waiting under old
 settings. Agent visibility and session activation are encrypted in their
 respective databases.

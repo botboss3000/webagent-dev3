@@ -1,0 +1,11 @@
+{
+  "name": "bigcommerce_create_checkout",
+  "description": "Bigcommerce create checkout (bigcommerce ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "write"
+}

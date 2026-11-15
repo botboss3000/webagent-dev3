@@ -243,25 +243,21 @@ impl NativeHost for Host<'_> {
             agent,
         ))
     }
-    fn ability_controls<'a>(
-        &'a self,
-        sid: &'a str,
-    ) -> Pending<'a, Result<(Value, u64, Value, Value)>> {
+    fn ability_controls<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<(u64, Value, Value)>> {
         Box::pin(crate::ability_controls(self.0, sid))
     }
     fn discovery_controls<'a>(
         &'a self,
         sid: &'a str,
         agent: &'a str,
-    ) -> Pending<'a, Result<(Value, u64, Value, Value)>> {
+    ) -> Pending<'a, Result<(u64, Value, Value)>> {
         Box::pin(async move {
-            let (policy, revision, mut visibility, state) =
-                crate::ability_controls(self.0, sid).await?;
+            let (revision, mut visibility, state) = crate::ability_controls(self.0, sid).await?;
             self.0
                 .engine()
-                .hide_without_model_role(agent, &policy, &mut visibility, &state)
+                .hide_without_model_role(agent, &mut visibility, &state)
                 .await?;
-            Ok((policy, revision, visibility, state))
+            Ok((revision, visibility, state))
         })
     }
     fn rank_scores<'a>(
@@ -284,15 +280,11 @@ impl NativeHost for Host<'_> {
         &self,
         access: &LiveAccess,
         name: &str,
-        policy: &Value,
         visibility: &Value,
         state: &Value,
         loaded: &Value,
-        read_only: bool,
     ) -> ToolDecision {
-        crate::live_tool_decision(
-            self.0, access, name, policy, visibility, state, loaded, read_only,
-        )
+        crate::live_tool_decision(self.0, access, name, visibility, state, loaded)
     }
     fn default_agent_model(&self) -> &'static str {
         crate::DEFAULT_AGENT_MODEL
@@ -309,8 +301,8 @@ impl NativeHost for Host<'_> {
     fn selected_state(&self, visibility: &Value, state: &Value, loaded: &Value) -> Value {
         self.0.abilities.selected_state(visibility, state, loaded)
     }
-    fn catalog_with(&self, policy: &Value, visibility: &Value, state: &Value) -> Vec<Value> {
-        self.0.abilities.catalog_with(policy, visibility, state)
+    fn catalog_with(&self, visibility: &Value, state: &Value) -> Vec<Value> {
+        self.0.abilities.catalog_with(visibility, state)
     }
     fn all_schemas(&self) -> Vec<Value> {
         self.0.abilities.all_schemas()
@@ -370,7 +362,7 @@ impl NativeHost for Host<'_> {
         &'a self,
         store: &'a StoreCore,
         sid: &'a str,
-    ) -> Pending<'a, Result<(Value, u64, Value, Value)>> {
+    ) -> Pending<'a, Result<(u64, Value, Value)>> {
         Box::pin(async move { crate::ability_controls(&on(self.0, store), sid).await })
     }
     fn scoped_session_mode<'a>(

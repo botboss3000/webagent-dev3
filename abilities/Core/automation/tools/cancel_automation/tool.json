@@ -2,11 +2,10 @@
   "name": "cancel_automation",
   "description": "cancel automation through the optional Automation service. Changes use revision checks; external adapters are unavailable.",
   "effect": "write",
-  "policy_ceiling": "ask",
-  "default_access": {
-    "operator": "auto",
-    "member": "auto",
-    "visitor": "ask"
+  "default_policy": {
+    "operator": "require_approval",
+    "member": "require_approval",
+    "visitor": "require_approval"
   },
   "parameters": {
     "type": "object",

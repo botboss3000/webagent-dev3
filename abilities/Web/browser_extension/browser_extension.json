@@ -20,5 +20,8 @@
     ]
   },
   "skill_summary": "Operate the chatting user's own browser on the agent's allowed sites; check browser_extension_status first.",
-  "tier_access": ["free", "administrator"]
+  "owner_tier": [
+    "free",
+    "administrator"
+  ]
 }

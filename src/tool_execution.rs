@@ -130,7 +130,6 @@ mod tests {
             if !policies.is_null() {
                 assert_eq!(policies["applies_in_auto"], true);
                 assert_eq!(policies["retry"], "repeat_guard");
-                assert_eq!(policies["read_only_session"], "blocked");
             }
         }
         assert!(advanced_policies("file_read").is_null());

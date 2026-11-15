@@ -1,0 +1,11 @@
+{
+  "name": "shopify_update_variant_inventory",
+  "description": "Shopify update variant inventory (shopify ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "write"
+}

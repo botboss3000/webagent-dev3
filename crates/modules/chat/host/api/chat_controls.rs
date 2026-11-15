@@ -63,16 +63,15 @@ async fn choices(app: &App, sid: &str) -> Result<Value, ApiError> {
         .as_array()
         .into_iter()
         .flatten()
-        .map(|mode| {
-            json!({"id":mode["id"],"label":mode["label"],"description":mode["description"],
-            "permission_policy":mode["permission_policy"]})
-        })
+        .map(
+            |mode| json!({"id":mode["id"],"label":mode["label"],"description":mode["description"]}),
+        )
         .collect();
     let mode = session_mode(app, sid).await?;
     let chat = crate::chat_config::preferences(app, &agent).await?;
     let attachment_limits = uploads::limits(app, sid).await?;
     Ok(
-        json!({"composer":{"attachments":true,"voice":true,"attachment_limits":{"max_file_size_mb":attachment_limits.max_file_size_mb,"max_per_message":attachment_limits.max_per_message}},"agent_id":agent,"model":saved,"models":models,"mode":{"mode":mode["mode"],"execution_mode":mode["execution_mode"],"revision":mode["revision"]},
+        json!({"composer":{"attachments":true,"voice":true,"attachment_limits":{"max_file_size_mb":attachment_limits.max_file_size_mb,"max_per_message":attachment_limits.max_per_message}},"agent_id":agent,"model":saved,"models":models,"mode":{"execution_mode":mode["execution_mode"],"revision":mode["revision"]},
         "execution_modes":modes,"confirm_auto_mode":chat.confirm_auto_mode}),
     )
 }
@@ -506,6 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn active_run_picks_up_composer_model_and_mode_on_next_call() {
+        let _fence = crate::runtime_tests::COMPONENT_FAILURE_FENCE.lock().await;
         use axum::{routing::post, Router};
         use std::sync::Arc;
         use tokio::sync::{Mutex, Notify};
@@ -603,7 +603,20 @@ mod tests {
             .unwrap()
             .unwrap();
         let calls = shared.calls.lock().await;
-        assert_eq!(calls.len(), 2);
+        let ended = app.run(&rid).await.unwrap();
+        assert_eq!(
+            calls.len(),
+            2,
+            "status={} error={} pending={} output={}",
+            ended["status"],
+            ended["error"],
+            ended["pending"],
+            ended["input"]
+                .as_array()
+                .and_then(|input| input.last())
+                .cloned()
+                .unwrap_or_default()
+        );
         assert_eq!(calls[0]["model"], "model-one");
         assert_eq!(calls[1]["model"], "model-two");
         let mut run = app.run(&rid).await.unwrap();
@@ -691,7 +704,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(session_mode(&app, &sid).await.unwrap()["mode"], "write");
+        assert_eq!(
+            session_mode(&app, &sid).await.unwrap()["execution_mode"],
+            "auto"
+        );
     }
 
     #[tokio::test]
@@ -718,7 +734,6 @@ mod tests {
         let sid = session["id"].as_str().unwrap().to_owned();
         let mode = session_mode(&app, &sid).await.unwrap();
         assert_eq!(mode["execution_mode"], "auto");
-        assert_eq!(mode["mode"], "write");
         let Json(controls) = chat_controls_get(State(app.clone()), Path(sid.clone()))
             .await
             .unwrap();
@@ -804,6 +819,5 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(next_mode["execution_mode"], "ask");
-        assert_eq!(next_mode["mode"], "read_only");
     }
 }

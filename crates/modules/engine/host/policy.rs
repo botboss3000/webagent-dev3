@@ -71,64 +71,7 @@ impl webagent_engine::runtime::ports::AgentPolicy<Store> for NativePolicy {
         }
     }
 }
-impl webagent_engine::runtime::ports::NativePolicy for NativePolicy {
-    fn default_policy_schemas() -> Vec<Value> {
-        tools::administrator::schemas()
-            .into_iter()
-            // Base tools with a default installation rule, from their tool folders.
-            .chain(tools::native::schemas(&[
-                "set_execution_mode",
-                "compact_context",
-                "recall_compacted",
-                "edit_own_prompt",
-                "save_own_skill",
-                "remove_own_skill",
-                "main_notes_read",
-                "main_notes_write",
-                "get_task_checkpoint",
-                "update_task_checkpoint",
-                "present_plan",
-                "present_chat_component",
-                "list_tools",
-                "load_tool",
-                "register_user",
-                "manage_agent_profiles",
-                "rate_skill",
-                "request_agent_login",
-                "register_webhook",
-                "list_webhooks",
-                "delete_webhook",
-                "get_webhook_log",
-                "request_credential",
-                "check_credential",
-                "list_vault_keys",
-            ]))
-            .chain(tools::native::schemas(tools::native::decision::TOOLS))
-            .chain(tools::native::schemas(
-                tools::native::directory_decision::TOOLS,
-            ))
-            .chain(tools::native::schemas(tools::native::user_files::TOOLS))
-            .chain(tools::native::schemas(tools::native::model_switcher::TOOLS))
-            .chain(tools::core_agent_management::schemas())
-            .chain(tools::native::schemas(tools::native::image_vision::TOOLS))
-            .chain(tools::core_image_generation::schemas())
-            .chain(tools::core_config_controller::schemas())
-            .chain(tools::native::schemas(tools::native::app_control::TOOLS))
-            .chain(tools::native::schemas(tools::native::orchestration::TOOLS))
-            .chain(tools::native::schemas(webagent_browser::TOOLS))
-            .chain(tools::native::schemas(
-                tools::native::human_escalation::TOOLS,
-            ))
-            .chain(tools::native::schemas(tools::native::reply_buttons::TOOLS))
-            .chain(tools::native::schemas(
-                tools::native::knowledge_files::TOOLS,
-            ))
-            .chain(tools::native::schemas(tools::native::wiki::TOOLS))
-            .chain(modules::schemas())
-            .chain(mcp::all_schemas())
-            .collect()
-    }
-}
+impl webagent_engine::runtime::ports::NativePolicy for NativePolicy {}
 
 impl webagent_engine::runtime::ports::CredentialBindings<Store> for NativePolicy {
     fn declares(name: &str) -> bool {

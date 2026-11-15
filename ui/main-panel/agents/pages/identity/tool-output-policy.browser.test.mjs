@@ -99,7 +99,7 @@ try {
   await page.evaluate(async()=>{
    const {_buildToolRow}=await import('/ui/shared/ability-row-controls.js');
    const host=document.querySelector('#tools');host.replaceChildren();fixture.inclusions=[];
-   host.append(_buildToolRow({name:'file_read',permMode:'auto',mode:'visible',result_deduplication:true},
+   host.append(_buildToolRow({name:'file_read',permMode:'allow',mode:'visible',result_deduplication:true},
     {canEdit:true,showPerm:true,onResultDeduplicationChange:async(name,included)=>{fixture.inclusions.push({name,included});}}));
   });
   await page.locator('#tools .ac-tri').click();

@@ -86,14 +86,8 @@ mod tests {
     }
     #[test]
     fn connection_management_and_remote_calls_are_independent_mutations() {
-        let policy = crate::policy_default();
         assert!(!crate::tools::is_read("mcp_add_connection"));
         assert!(!crate::tools::is_read("mcp_call_tool"));
-        assert_eq!(policy["rules"]["mcp_add_connection"], "require_approval");
-        assert_eq!(policy["rules"]["mcp_call_tool"], "require_approval");
         assert!(!crate::tool_execution::background_capable("mcp_call_tool"));
-        let mut restricted = policy;
-        restricted["rules"]["mcp_add_connection"] = serde_json::json!("deny");
-        assert_eq!(restricted["rules"]["mcp_call_tool"], "require_approval");
     }
 }

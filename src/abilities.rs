@@ -184,8 +184,8 @@ mod tests {
         webagent_abilities::catalog_testing::tests::installed_tool_ownership_and_identifiers_fail_closed::<crate::abilities::NativeHost>();
     }
     #[test]
-    fn unsupported_allow_rule_does_not_expose_catalog_or_skill() {
-        webagent_abilities::catalog_testing::tests::unsupported_allow_rule_does_not_expose_catalog_or_skill::<crate::abilities::NativeHost>();
+    fn unsupported_tool_does_not_expose_catalog_or_skill() {
+        webagent_abilities::catalog_testing::tests::unsupported_tool_does_not_expose_catalog_or_skill::<crate::abilities::NativeHost>();
     }
     #[test]
     fn malformed_and_oversized_assets_fail_closed() {
@@ -215,8 +215,8 @@ mod tests {
         >();
     }
     #[test]
-    fn web_access_loading_policy_and_visibility_gates() {
-        webagent_abilities::catalog_testing::tests::web_access_loading_policy_and_visibility_gates::<
+    fn web_access_loading_and_visibility_gates() {
+        webagent_abilities::catalog_testing::tests::web_access_loading_and_visibility_gates::<
             crate::abilities::NativeHost,
         >();
     }
@@ -256,8 +256,5 @@ mod optional_settings_schema_tests {
 impl webagent_abilities::TestHost for NativeHost {
     fn native_fixture() -> Catalog {
         crate::runtime_tests::native_catalog()
-    }
-    fn policy_fixture() -> Value {
-        crate::policy_default()
     }
 }

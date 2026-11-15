@@ -1,0 +1,11 @@
+{
+  "name": "workspace_search",
+  "description": "Workspace search (workspaces_wikis ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

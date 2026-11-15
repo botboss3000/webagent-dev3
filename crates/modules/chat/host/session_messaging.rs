@@ -5,7 +5,7 @@ use anyhow::bail;
 use webagent_chat::messaging::{
     authority_changed, checked_text, stable_id, AuthorityChanged, MessageArgs, StartArgs,
 };
-pub(crate) use webagent_chat::messaging::{owns, policy_defaults, starts};
+pub(crate) use webagent_chat::messaging::{owns, starts};
 /// Directory repair follows committed owner-plane admission and cannot change its outcome.
 async fn reconcile_directory(app: &App, sid: &str, agent: &str) -> Result<()> {
     if let Some(directory) = app.store.shared_directory(sid).await? {
@@ -62,7 +62,7 @@ async fn recipient_capabilities(
     mode: &Value,
     is_new: bool,
 ) -> Result<Value> {
-    let (policy, mode_revision) = effective_policy_for_mode(app, mode).await?;
+    let mode_revision = mode["revision"].as_u64().unwrap_or(0);
     let visibility = app
         .store
         .for_agent(agent)
@@ -75,7 +75,7 @@ async fn recipient_capabilities(
         session_ability_state(app, sid).await?
     };
     Ok(
-        json!({"policy_version":policy["version"],"mode_revision":mode_revision,"visibility_revision":visibility["revision"],"ability_state_revision":state["revision"],"policy_digest":digest(&policy),"visibility_digest":digest(&visibility),"state_digest":digest(&state),"catalog_digest":digest(&app.abilities.catalog_with(&policy,&visibility,&state))}),
+        json!({"mode_revision":mode_revision,"visibility_revision":visibility["revision"],"ability_state_revision":state["revision"],"visibility_digest":digest(&visibility),"state_digest":digest(&state),"catalog_digest":digest(&app.abilities.catalog_with(&visibility,&state))}),
     )
 }
 /// Resolve an approval binding without any mutation or provider call.
@@ -817,14 +817,6 @@ pub(crate) async fn routes(app: &App, sid: &str) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn legacy_policy_defaults_preserve_explicit_denials() {
-        let policy =
-            policy_defaults(json!({"rules":{"message_session":"deny","file_write":"deny"}}));
-        assert_eq!(policy["rules"]["message_session"], "deny");
-        assert_eq!(policy["rules"]["start_session"], "allow");
-        assert_eq!(policy["rules"]["file_write"], "deny");
-    }
     async fn prepared(
         app: &App,
         name: &str,
@@ -1116,81 +1108,6 @@ mod tests {
             .unwrap()
             .iter()
             .all(|e| e["status"] == "delivered"));
-    }
-    #[tokio::test]
-    async fn dedicated_read_only_exception_does_not_grant_other_writes_or_override_denial() {
-        let (_root, app) = crate::runtime_tests::fixture().await;
-        let sid = crate::runtime_tests::conversation(&app).await;
-        let mut access = app
-            .store
-            .live_access(app.store.current_user_id(), "shared_default")
-            .await
-            .unwrap();
-        access
-            .capability_level
-            .ability_permissions
-            .insert("agent_management".into(), access::Permission::Auto);
-        // message_session is a folder tool now; its level default comes from tool.json roles.
-        access
-            .capability_level
-            .tool_permissions
-            .insert("message_session".into(), access::Permission::Auto);
-        for (_, saved) in &mut access.capability_level.chain {
-            saved.insert("message_session".into(), access::Permission::Auto);
-        }
-        for (_, saved) in &mut access.capability_level.ability_chain {
-            saved.insert("agent_management".into(), access::Permission::Auto);
-        }
-        let (mut policy, _) = effective_policy(&app, &sid).await.unwrap();
-        let visibility = session_agent_abilities(&app, &sid).await.unwrap();
-        let state = session_ability_state(&app, &sid).await.unwrap();
-        let loaded = json!([tools::native::tool_search::marker("message_session")]);
-        let decision = live_tool_decision(
-            &app,
-            &access,
-            "message_session",
-            &policy,
-            &visibility,
-            &state,
-            &loaded,
-            true,
-        );
-        assert_ne!(
-            decision.permission,
-            access::Permission::Deny,
-            "{:?}",
-            decision.reason
-        );
-        assert_eq!(
-            live_tool_decision(
-                &app,
-                &access,
-                "file_write",
-                &policy,
-                &visibility,
-                &state,
-                &json!([]),
-                true
-            )
-            .permission,
-            access::Permission::Deny
-        );
-        policy["rules"]["message_session"] = json!("deny");
-        assert_eq!(
-            live_tool_decision(
-                &app,
-                &access,
-                "message_session",
-                &policy,
-                &visibility,
-                &state,
-                &json!([]),
-                true
-            )
-            .permission,
-            access::Permission::Deny
-        );
-        assert!(!tools::is_read("message_session"));
     }
     #[tokio::test]
     async fn route_management_requires_browser_authentication_and_csrf() {

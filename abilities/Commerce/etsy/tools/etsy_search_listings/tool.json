@@ -1,0 +1,11 @@
+{
+  "name": "etsy_search_listings",
+  "description": "Etsy search listings (etsy ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

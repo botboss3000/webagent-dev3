@@ -10,5 +10,8 @@
   "readiness": "pending",
   "config": {},
   "migration_note": "Catalog metadata only. V3 adapter, configuration and credential lifecycle remain pending; v2 runtime and skills are not imported.",
-  "tier_access": ["free", "administrator"]
+  "owner_tier": [
+    "free",
+    "administrator"
+  ]
 }

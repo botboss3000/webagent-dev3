@@ -1,0 +1,11 @@
+{
+  "name": "ssh_test_connection",
+  "description": "Ssh test connection (ssh_control ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

@@ -266,7 +266,6 @@ async fn automation_lifecycle(app: &App, action: &str) -> Result<Value> {
         app.store.put("module_install:automation",&json!({"installed":true,"enabled":false,"generation":epoch,"installed_generation":epoch,"source":"ability"})).await?;
         return Err(anyhow!("Module health probe failed"));
     }
-    crate::migrate_tool_policy_defaults(&app.store).await?;
     wake::notify(app).await;
     Ok(json!({"available":available("automation"),"retained_data":true,"installed":true}))
 }
@@ -2058,8 +2057,6 @@ async fn lifecycle_inner(app: App, id: String, body: Value) -> Result<Value> {
         )
         .await?;
     mark_health(&app, &id, &gen, true)?;
-    // Register installation defaults only; existing Deny and tenant grants stay authoritative.
-    crate::migrate_tool_policy_defaults(&app.store).await?;
     wake::notify(&app).await;
     Ok(json!({"available":available(&id),"retained_data":true}))
 }

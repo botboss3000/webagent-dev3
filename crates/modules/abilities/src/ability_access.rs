@@ -1,8 +1,9 @@
-//! What each ability declares about access: its manifest's `default_access` by capability
-//! level, as tools declare theirs in `tool.json`, and `tier_access`, the app tiers whose
-//! owners' agents may have it. Read once per process from the same abilities folder as the
-//! tool definitions. The default is shown, not applied: an ability stays closed until a
-//! level grants it. A manifest without `tier_access` grants no tier and is reported.
+//! What each ability declares about access, as tools declare theirs in `tool.json`: its
+//! manifest's `default_policy` by capability level, `owner_tier` (the app tiers whose
+//! owners' agents may have it) and `role_access` (the built-in roles that may ever have
+//! it). Read once per process from the same abilities folder as the tool definitions. The
+//! default is shown, not applied: an ability stays closed until a level grants it. A
+//! manifest without `owner_tier` grants no tier and is reported.
 use crate::tool_definitions::ROLES;
 use serde_json::Value;
 use std::{collections::BTreeMap, fs, path::Path, sync::OnceLock};
@@ -11,17 +12,19 @@ use webagent_access::{Permission, ADMINISTRATOR_TIER};
 /// The group whose abilities only an administrator owner and caller may use.
 pub const ADMINISTRATOR_GROUP: &str = "Administrator";
 
-/// The tiers built-in Base works for, as a manifest's `tier_access` would list them.
 /// Tiers whose owners' agents get the built-in Base ability, which has no manifest.
 pub const BUILT_IN_TIERS: [&str; 2] = [webagent_access::FREE_TIER, ADMINISTRATOR_TIER];
 
 /// One ability's declared access.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AbilityAccess {
-    pub default_access: BTreeMap<String, Permission>,
+    pub default_policy: BTreeMap<String, Permission>,
     /// Tiers whose owners' agents may have this ability; empty grants none.
-    pub tier_access: Vec<String>,
-    /// In the Administrator group: hard-coded to administrators, whatever `tier_access` says.
+    pub owner_tier: Vec<String>,
+    /// Built-in roles that may ever have this ability; `None` means every role. A hard
+    /// limit: no level setting widens it.
+    pub role_access: Option<Vec<String>>,
+    /// In the Administrator group: hard-coded to administrators, whatever `owner_tier` says.
     pub administrator: bool,
 }
 
@@ -32,7 +35,7 @@ impl AbilityAccess {
     pub fn default_for(&self, rungs: &[String]) -> Option<Permission> {
         rungs
             .iter()
-            .find_map(|rung| self.default_access.get(rung))
+            .find_map(|rung| self.default_policy.get(rung))
             .copied()
     }
 
@@ -43,7 +46,7 @@ impl AbilityAccess {
         if self.administrator {
             owner_tier == ADMINISTRATOR_TIER && caller_tier == ADMINISTRATOR_TIER
         } else {
-            self.tier_access.iter().any(|tier| tier == owner_tier)
+            self.owner_tier.iter().any(|tier| tier == owner_tier)
         }
     }
 }
@@ -78,27 +81,29 @@ pub fn load_all(root: &Path) -> Registry {
                 .map_err(|_| "unreadable manifest".to_owned())
                 .and_then(|manifest| {
                     Ok((
-                        defaults(&manifest["default_access"])?,
-                        tiers(&manifest["tier_access"])?,
+                        defaults(&manifest["default_policy"])?,
+                        tiers(&manifest["owner_tier"])?,
+                        roles(&manifest["role_access"])?,
                     ))
                 });
-            let (default_access, tier_access) = match declared {
+            let (default_policy, owner_tier, role_access) = match declared {
                 Ok(declared) => declared,
                 Err(reason) => {
                     registry.problems.push(format!("{id}: {reason}"));
                     continue;
                 }
             };
-            if administrator && tier_access != [ADMINISTRATOR_TIER] {
+            if administrator && owner_tier != [ADMINISTRATOR_TIER] {
                 registry.problems.push(format!(
-                    "{id}: tier_access must be [\"{ADMINISTRATOR_TIER}\"]"
+                    "{id}: owner_tier must be [\"{ADMINISTRATOR_TIER}\"]"
                 ));
             }
             registry.abilities.insert(
                 id,
                 AbilityAccess {
-                    default_access,
-                    tier_access,
+                    default_policy,
+                    owner_tier,
+                    role_access,
                     administrator,
                 },
             );
@@ -107,42 +112,63 @@ pub fn load_all(root: &Path) -> Registry {
     registry
 }
 
-/// `default_access`: absent, or an object of known roles to permissions.
+/// `default_policy`: absent, or an object of known roles to permissions.
 fn defaults(value: &Value) -> Result<BTreeMap<String, Permission>, String> {
     if value.is_null() {
         return Ok(BTreeMap::new());
     }
     let roles = value
         .as_object()
-        .ok_or("default_access must be an object")?;
+        .ok_or("default_policy must be an object")?;
     let mut defaults = BTreeMap::new();
     for (role, permission) in roles {
         if !ROLES.contains(&role.as_str()) {
-            return Err(format!("default_access names an unknown role: {role}"));
+            return Err(format!("default_policy names an unknown role: {role}"));
         }
         let permission = permission
             .as_str()
             .and_then(|permission| Permission::from_policy(permission).ok())
-            .ok_or("default_access permissions are auto, ask or deny")?;
+            .ok_or("default_policy values are allow, require_approval or deny")?;
         defaults.insert(role.clone(), permission);
     }
     Ok(defaults)
 }
 
-/// `tier_access`: a required list of tier IDs.
+/// `owner_tier`: a required list of tier IDs.
 pub fn tiers(value: &Value) -> Result<Vec<String>, String> {
     let tiers = value
         .as_array()
-        .ok_or("tier_access must list the tiers that may have it")?;
+        .ok_or("owner_tier must list the tiers that may have it")?;
     tiers
         .iter()
         .map(|tier| {
             tier.as_str()
                 .filter(|tier| webagent_access::valid_id(tier))
                 .map(str::to_owned)
-                .ok_or_else(|| format!("tier_access names an invalid tier: {tier}"))
+                .ok_or_else(|| format!("owner_tier names an invalid tier: {tier}"))
         })
         .collect()
+}
+
+/// `role_access`: absent (every role), or a non-empty list of built-in roles.
+pub fn roles(value: &Value) -> Result<Option<Vec<String>>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let roles = value
+        .as_array()
+        .filter(|roles| !roles.is_empty())
+        .ok_or("role_access must list at least one role")?;
+    roles
+        .iter()
+        .map(|role| {
+            role.as_str()
+                .filter(|role| ROLES.contains(role))
+                .map(str::to_owned)
+                .ok_or_else(|| format!("role_access names an unknown role: {role}"))
+        })
+        .collect::<Result<_, _>>()
+        .map(Some)
 }
 
 static LOADED: OnceLock<Registry> = OnceLock::new();
@@ -174,6 +200,28 @@ pub fn ability_allows(id: &str, owner_tier: &str, caller_tier: &str) -> bool {
         .is_some_and(|ability| ability.allows(owner_tier, caller_tier))
 }
 
+/// The built-in role a capability level counts as: the first built-in role among its
+/// rungs (it, then the levels below it); a level below every built-in role is a visitor.
+#[must_use]
+pub fn built_in_role(rungs: &[String]) -> &'static str {
+    rungs
+        .iter()
+        .find_map(|rung| ROLES.iter().find(|role| **role == rung.as_str()))
+        .copied()
+        .unwrap_or("visitor")
+}
+
+/// Whether ability `id`'s `role_access` admits a level with these rungs. Abilities
+/// without a manifest (built-in Base) and without a list admit every role.
+pub fn ability_role_allows(id: &str, rungs: &[String]) -> bool {
+    let role = built_in_role(rungs);
+    registry()
+        .abilities
+        .get(id)
+        .and_then(|ability| ability.role_access.as_ref())
+        .is_none_or(|roles| roles.iter().any(|allowed| allowed == role))
+}
+
 /// Whether ability `id` is in the Administrator group (installed into the access layer).
 pub fn administrator_ability(id: &str) -> bool {
     registry()
@@ -200,18 +248,18 @@ mod tests {
         write(
             root,
             "Web/web_search/web_search.json",
-            r#"{"default_access":{"operator":"auto","member":"ask"},"tier_access":["free"]}"#,
+            r#"{"default_policy":{"operator":"allow","member":"require_approval"},"owner_tier":["free"]}"#,
         );
         write(root, "Core/plain/plain.json", "{}");
         write(
             root,
             "Core/broken/broken.json",
-            r#"{"default_access":{"admin":"auto"},"tier_access":[]}"#,
+            r#"{"default_policy":{"admin":"allow"},"owner_tier":[]}"#,
         );
         write(
             root,
             "Administrator/shell/shell.json",
-            r#"{"tier_access":["free","administrator"]}"#,
+            r#"{"owner_tier":["free","administrator"]}"#,
         );
         let registry = load_all(root);
         let search = &registry.abilities["web_search"];
@@ -241,7 +289,7 @@ mod tests {
     /// Release check: every shipped ability declares its tiers, and Administrator
     /// abilities exactly `["administrator"]`.
     #[test]
-    fn shipped_manifests_declare_tier_access() {
+    fn shipped_manifests_declare_owner_tier() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../abilities");
         let registry = load_all(&root);
         assert!(registry.abilities.len() > 10);
@@ -255,13 +303,13 @@ mod tests {
                         continue;
                     };
                     let manifest: Value = serde_json::from_slice(&bytes).unwrap();
-                    if manifest["tier_access"].is_null() {
+                    if manifest["owner_tier"].is_null() {
                         continue;
                     }
-                    let own = tiers(&manifest["tier_access"]).unwrap();
+                    let own = tiers(&manifest["owner_tier"]).unwrap();
                     assert!(
-                        own.iter().all(|tier| ability.tier_access.contains(tier)),
-                        "{id}/{:?} widens tier_access",
+                        own.iter().all(|tier| ability.owner_tier.contains(tier)),
+                        "{id}/{:?} widens owner_tier",
                         tool.file_name()
                     );
                 }

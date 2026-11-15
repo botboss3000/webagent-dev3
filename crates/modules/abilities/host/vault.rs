@@ -50,17 +50,15 @@ pub async fn save(
         .ok_or_else(|| bad("Credential request unavailable"))?;
     let agent = session_agent_id(&caller, &sid).await?;
     let access = caller.store.live_access(actor, &agent).await?;
-    let (policy, _, visibility, state) = ability_controls(&caller, &sid).await?;
+    let (_, visibility, state) = ability_controls(&caller, &sid).await?;
     let mode = session_mode(&caller, &sid).await?;
     let decision = live_tool_decision(
         &caller,
         &access,
         "request_credential",
-        &policy,
         &visibility,
         &state,
         &run["loaded_abilities"],
-        mode["mode"] == "read_only",
     )
     .for_execution_mode(&mode);
     if !access.admitted() || decision.permission == access::Permission::Deny {

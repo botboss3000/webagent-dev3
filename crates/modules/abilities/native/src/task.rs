@@ -427,9 +427,7 @@ async fn authorize(
     {
         bail!("Task run unavailable for current session");
     }
-    let (policy, mode_revision, visibility, state) =
-        host.scoped_ability_controls(&scoped, sid).await?;
-    let mode = host.scoped_session_mode(&scoped, sid).await?;
+    let (mode_revision, visibility, state) = host.scoped_ability_controls(&scoped, sid).await?;
     let access = host
         .scoped_live_access(&scoped, host.actor(), sid, &agent)
         .await?;
@@ -446,8 +444,7 @@ async fn authorize(
             .map(|item| &item["pending"])
     }
     .ok_or_else(|| anyhow!("Task call is no longer executing"))?;
-    if pending["policy_version"] != policy["version"]
-        || pending["mode_revision"] != json!(mode_revision)
+    if pending["mode_revision"] != json!(mode_revision)
         || pending["visibility_revision"] != visibility["revision"]
         || pending["ability_state_revision"] != state["revision"]
         || pending["access_revision"] != json!(access.revision.clone())
@@ -456,15 +453,7 @@ async fn authorize(
     }
     if !access.admitted()
         || host
-            .live_tool_decision(
-                &access,
-                name,
-                &policy,
-                &visibility,
-                &state,
-                &run["loaded_abilities"],
-                mode["mode"] == "read_only",
-            )
+            .live_tool_decision(&access, name, &visibility, &state, &run["loaded_abilities"])
             .permission
             == Permission::Deny
     {

@@ -1,0 +1,11 @@
+{
+  "name": "workspace_list_sources",
+  "description": "Workspace list sources (workspaces_wikis ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

@@ -24,8 +24,8 @@ export function mountSessionControls({root,client,guard,note,issues,ensureSessio
   function paint(){
     const modes=state?.execution_modes||[];
     const definition=modes.find(item=>item.id===state?.mode.execution_mode);
-    mode.textContent=definition?.label||(state?.mode.mode==='write'?'Write':'Ask');
-    mode.title=definition?definition.description+' · '+(state.mode.mode==='write'?'Write-capable':'Read-only'):'Choose execution mode';
+    mode.textContent=definition?.label||'Ask';
+    mode.title=definition?definition.description:'Choose execution mode';
     mode.disabled=busy||!state||!canWrite();model.disabled=busy||!state||!canWrite();
     const selected=state?.models.find(item=>item.entry_id===state.model.entry_id);
     const running=active?.model?.model;
@@ -53,7 +53,7 @@ export function mountSessionControls({root,client,guard,note,issues,ensureSessio
     await load();
     if(!state)throw Error('Conversation controls are not ready');
   }
-    // Advance through server-permitted modes; widening read-only access can require confirmation, and the revision-fenced write is followed by a refresh.
+    // Advance through server-permitted modes; entering Auto mode can require confirmation, and the revision-fenced write is followed by a refresh.
   async function cycleMode(){
     if(busy)return;
     await ready();
@@ -62,11 +62,10 @@ export function mountSessionControls({root,client,guard,note,issues,ensureSessio
     if(!modes.length)return;
     const index=modes.findIndex(item=>item.id===snapshot.execution_mode);
     const next=modes[(index+1)%modes.length];
-    const widening=snapshot.mode==='read_only'&&next.permission_policy==='write';
-    const confirmationRequired=widening&&(next.id!=='auto'||state.confirm_auto_mode!==false);
+    const confirmationRequired=next.id==='auto'&&state.confirm_auto_mode!==false;
     if(confirmationRequired&&!await notifications.confirmMode(next.label))return;
     if(sid!==session||epoch!==generation)return;
-    state={...state,mode:{...snapshot,execution_mode:next.id,mode:next.permission_policy}};
+    state={...state,mode:{...snapshot,execution_mode:next.id}};
     busy=true;paint();
     try{
       await client.mode(sid,{mode:next.id,expected_revision:snapshot.revision,confirm_write:confirmationRequired});

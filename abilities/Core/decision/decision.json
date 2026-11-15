@@ -9,5 +9,8 @@
   "config": {},
   "skill_summary": "Use JSON for open-ended decisions, or filter and score directory files without listing them first. Optional source excerpts need automatic file_read permission.",
   "migration_note": "Native Rust adapter uses the agent's explicit Decision model role and its current V3 credential. TypeSafe is the supported transport. No V2 secret or code is used.",
-  "tier_access": ["free", "administrator"]
+  "owner_tier": [
+    "free",
+    "administrator"
+  ]
 }

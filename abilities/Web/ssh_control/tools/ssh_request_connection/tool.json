@@ -1,0 +1,11 @@
+{
+  "name": "ssh_request_connection",
+  "description": "Ssh request connection (ssh_control ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "write"
+}

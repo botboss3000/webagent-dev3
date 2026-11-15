@@ -1622,10 +1622,32 @@ mod tests {
         )
         .await
         .unwrap();
-        let Json(saved)=identity_put(State(app.clone()),Extension(identity.clone()),Path("shared_default".into()),Json(IdentityUpdate { member_access:None, tool_result_deduplication:None, shared_chat:None,
-            revision:before["revision"].as_i64().unwrap(),name:None,description:None,
-            execution_modes:Some(json!([{"id":"review","label":"Review","permission_policy":"read_only","prompt":"Inspect only"}])),
-            default_execution_mode:Some("review".into()),message_visibility:None,closing_message:None,voice_output:None,manager_incoming_message:None,compaction_thresholds:None, tool_output_policy:None,reset_tool_output_policy:None})).await.unwrap();
+        let Json(saved) = identity_put(
+            State(app.clone()),
+            Extension(identity.clone()),
+            Path("shared_default".into()),
+            Json(IdentityUpdate {
+                member_access: None,
+                tool_result_deduplication: None,
+                shared_chat: None,
+                revision: before["revision"].as_i64().unwrap(),
+                name: None,
+                description: None,
+                execution_modes: Some(
+                    json!([{"id":"review","label":"Review","prompt":"Inspect only"}]),
+                ),
+                default_execution_mode: Some("review".into()),
+                message_visibility: None,
+                closing_message: None,
+                voice_output: None,
+                manager_incoming_message: None,
+                compaction_thresholds: None,
+                tool_output_policy: None,
+                reset_tool_output_policy: None,
+            }),
+        )
+        .await
+        .unwrap();
         let Json(reloaded) = identity_get(
             State(app.clone()),
             Extension(identity.clone()),
@@ -1643,10 +1665,10 @@ mod tests {
         let sid = session["id"].as_str().unwrap();
         let mode = crate::session_mode(&app, sid).await.unwrap();
         assert_eq!(mode["execution_mode"], "review");
-        assert_eq!(mode["mode"], "read_only");
+        assert!(mode.get("mode").is_none());
         assert_eq!(mode["definition"]["prompt"], "Inspect only");
         let mut modes = saved["execution_modes"].clone();
-        modes.as_array_mut().unwrap().last_mut().unwrap()["permission_policy"] = json!("write");
+        modes.as_array_mut().unwrap().last_mut().unwrap()["prompt"] = json!("Inspect again");
         identity_put(
             State(app.clone()),
             Extension(identity.clone()),
@@ -1672,13 +1694,13 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            crate::session_mode(&app, sid).await.unwrap()["mode"],
-            "read_only"
+            crate::session_mode(&app, sid).await.unwrap()["definition"]["prompt"],
+            "Inspect again"
         );
         let Json(next) = crate::api::change_session_mode(&app, sid, "review", Some(0), None)
             .await
             .unwrap();
-        assert_eq!(next["mode"], "write");
+        assert_eq!(next["execution_mode"], "review");
         assert!(
             crate::api::change_session_mode(&app, sid, "unknown", None, None)
                 .await

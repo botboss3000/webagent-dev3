@@ -54,7 +54,6 @@ pub fn advanced_policies<C: ActionCatalog>(name: &str) -> Value {
         "uncertain_outcome": "returned_to_agent",
         "retry": "repeat_guard",
         "applies_in_auto": true,
-        "read_only_session": "blocked",
         "classification": "tool_name",
         "build_finish": if matches!(name, "build_work" | "v3_build_work") {
             Some("reconcile_existing_job")

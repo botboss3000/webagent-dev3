@@ -30,10 +30,12 @@
         "label": "Notify me about repo changes",
         "type": "boolean",
         "default": false,
-        "hint": "OFF (default) does nothing. ON quietly watches the project in the background and drops a passive heads-up into this agent's chat whenever the saved files stop matching the latest commit (uncommitted edits) or there are local commits that haven't been pushed yet. It only pings when something NEWLY diverges \u2014 not the same notice over and over \u2014 and the agent takes no action on its own; it's an FYI you can act on or ignore. The notice lands wherever you're chatting with this agent, so you'll see it when that chat is open."
+        "hint": "OFF (default) does nothing. ON quietly watches the project in the background and drops a passive heads-up into this agent's chat whenever the saved files stop matching the latest commit (uncommitted edits) or there are local commits that haven't been pushed yet. It only pings when something NEWLY diverges — not the same notice over and over — and the agent takes no action on its own; it's an FYI you can act on or ignore. The notice lands wherever you're chatting with this agent, so you'll see it when that chat is open."
       }
     ]
   },
-  "tier_access": ["administrator"],
-  "tier_access_note": "Hard-coded: Administrator abilities work only for an administrator owner and an administrator caller, whatever this list says."
+  "owner_tier": [
+    "administrator"
+  ],
+  "owner_tier_note": "Hard-coded: Administrator abilities work only for an administrator owner and an administrator caller, whatever this list says."
 }

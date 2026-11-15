@@ -340,7 +340,7 @@ pub(crate) fn owns(name: &str) -> bool {
 /// The agent's allowlisted sites for session `sid`.
 async fn agent_sites(host: &tools::native_host::Host<'_>, sid: &str) -> Result<Vec<String>> {
     use tools::native::NativeHost;
-    let (_, _, visibility, _) = host.ability_controls(sid).await?;
+    let (_, visibility, _) = host.ability_controls(sid).await?;
     let setting = visibility["settings"][rules::ABILITY]["sites"]
         .as_str()
         .unwrap_or("");
@@ -417,7 +417,7 @@ async fn server_authority(
         .account_by_id(&user)
         .await?
         .ok_or_else(|| anyhow!("Caller unavailable"))?;
-    let (_, _, visibility, _) = host.ability_controls(sid).await?;
+    let (_, visibility, _) = host.ability_controls(sid).await?;
     let settings = &visibility["settings"][rules::SERVER_ABILITY];
     let origin = webagent_webapp::pages::public_origin();
     // A script signs in, or out, as its first navigate step would on its own.

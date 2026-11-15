@@ -19,7 +19,7 @@ pub trait Catalog: Clone + Send + Sync + 'static {
         loaded: &Value,
         loaded_skills: &Value,
     ) -> Vec<webagent_capability_contracts::Guidance>;
-    fn catalog_with(&self, policy: &Value, visibility: &Value, state: &Value) -> Vec<Value>;
+    fn catalog_with(&self, visibility: &Value, state: &Value) -> Vec<Value>;
     fn context_inclusion(
         &self,
         entries: &[Value],
@@ -34,20 +34,13 @@ pub trait Catalog: Clone + Send + Sync + 'static {
         name: &str,
         args: &Value,
         run: &mut Value,
-        policy: &Value,
         visibility: &Value,
         state: &Value,
     ) -> Value;
     fn live_version(&self) -> String;
     fn plugin_binding(&self, name: &str) -> Option<Value>;
     fn published(&self) -> bool;
-    fn schemas_with(
-        &self,
-        policy: &Value,
-        loaded: &Value,
-        visibility: &Value,
-        state: &Value,
-    ) -> Vec<Value>;
+    fn schemas_with(&self, loaded: &Value, visibility: &Value, state: &Value) -> Vec<Value>;
     fn selected_state(&self, visibility: &Value, state: &Value, loaded: &Value) -> Value;
     fn snapshot_root(&self) -> &Path;
     fn source_root(&self) -> Option<&Path>;
@@ -102,8 +95,8 @@ impl<H: webagent_abilities::Host> Catalog for webagent_abilities::Catalog<H> {
             loaded_skills,
         )
     }
-    fn catalog_with(&self, policy: &Value, visibility: &Value, state: &Value) -> Vec<Value> {
-        webagent_abilities::Catalog::<H>::catalog_with(self, policy, visibility, state)
+    fn catalog_with(&self, visibility: &Value, state: &Value) -> Vec<Value> {
+        webagent_abilities::Catalog::<H>::catalog_with(self, visibility, state)
     }
     fn context_inclusion(
         &self,
@@ -129,13 +122,10 @@ impl<H: webagent_abilities::Host> Catalog for webagent_abilities::Catalog<H> {
         name: &str,
         args: &Value,
         run: &mut Value,
-        policy: &Value,
         visibility: &Value,
         state: &Value,
     ) -> Value {
-        webagent_abilities::Catalog::<H>::discover_with(
-            self, name, args, run, policy, visibility, state,
-        )
+        webagent_abilities::Catalog::<H>::discover_with(self, name, args, run, visibility, state)
     }
     fn live_version(&self) -> String {
         webagent_abilities::Catalog::<H>::live_version(self)
@@ -146,14 +136,8 @@ impl<H: webagent_abilities::Host> Catalog for webagent_abilities::Catalog<H> {
     fn published(&self) -> bool {
         webagent_abilities::Catalog::<H>::published(self)
     }
-    fn schemas_with(
-        &self,
-        policy: &Value,
-        loaded: &Value,
-        visibility: &Value,
-        state: &Value,
-    ) -> Vec<Value> {
-        webagent_abilities::Catalog::<H>::schemas_with(self, policy, loaded, visibility, state)
+    fn schemas_with(&self, loaded: &Value, visibility: &Value, state: &Value) -> Vec<Value> {
+        webagent_abilities::Catalog::<H>::schemas_with(self, loaded, visibility, state)
     }
     fn selected_state(&self, visibility: &Value, state: &Value, loaded: &Value) -> Value {
         webagent_abilities::Catalog::<H>::selected_state(self, visibility, state, loaded)

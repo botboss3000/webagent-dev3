@@ -2,11 +2,10 @@
   "name": "edit_agent_prompt",
   "description": "Edit one unlocked prompt slot for an agent the caller manages. Request: content, expected_revision, optional order_index, lock, merge_mode.",
   "effect": "write",
-  "policy_ceiling": "ask",
-  "default_access": {
-    "operator": "auto",
-    "member": "auto",
-    "visitor": "ask"
+  "default_policy": {
+    "operator": "require_approval",
+    "member": "require_approval",
+    "visitor": "require_approval"
   },
   "parameters": {
     "type": "object",

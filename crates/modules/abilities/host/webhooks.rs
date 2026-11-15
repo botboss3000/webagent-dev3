@@ -96,7 +96,7 @@ pub async fn receive(
         ))
         .await?
         .ok_or_else(unavailable)?;
-    let (policy, _, visibility, state) = ability_controls(&app, sid)
+    let (_, visibility, state) = ability_controls(&app, sid)
         .await
         .map_err(|_| unavailable())?;
     let mode = session_mode(&app, sid).await.map_err(|_| unavailable())?;
@@ -104,11 +104,9 @@ pub async fn receive(
         &app,
         &access,
         "register_webhook",
-        &policy,
         &visibility,
         &state,
         &run["loaded_abilities"],
-        mode["mode"] == "read_only",
     )
     .for_execution_mode(&mode);
     if !access.admitted() || decision.permission == access::Permission::Deny {

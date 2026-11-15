@@ -45,8 +45,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let (policy, mode_revision, visibility, state) =
-            crate::ability_controls(&app, &sid).await.unwrap();
+        let (mode_revision, visibility, state) = crate::ability_controls(&app, &sid).await.unwrap();
         let access = app
             .store
             .live_access("admin", "shared_default")
@@ -58,7 +57,7 @@ mod tests {
             "status":"running","phase":"tools","generation":"generation-one",
             "loaded_abilities":["base"],"pending":{"id":pending_id,
                 "name":"set_execution_mode","state":"executing",
-                "policy_version":policy["version"],"mode_revision":mode_revision,
+                "mode_revision":mode_revision,
                 "visibility_revision":visibility["revision"],
                 "ability_state_revision":state["revision"],
                 "access_revision":access.revision,"human_approved":false}});
@@ -68,13 +67,13 @@ mod tests {
             generation: "generation-one",
             pending_id: &pending_id,
         };
-        let first = api::change_session_mode(&app, &sid, "read_only", Some(0), Some(call))
+        let first = api::change_session_mode(&app, &sid, "plan", Some(0), Some(call))
             .await
             .unwrap()
             .0;
         assert_eq!(first["revision"], 1);
         assert_eq!(
-            api::change_session_mode(&app, &sid, "read_only", Some(0), Some(call))
+            api::change_session_mode(&app, &sid, "plan", Some(0), Some(call))
                 .await
                 .unwrap()
                 .0,
@@ -86,7 +85,7 @@ mod tests {
             pending_id: &pending_id,
         };
         assert!(
-            api::change_session_mode(&app, &sid, "read_only", Some(0), Some(forged))
+            api::change_session_mode(&app, &sid, "plan", Some(0), Some(forged))
                 .await
                 .is_err()
         );
@@ -100,21 +99,21 @@ mod tests {
             pending_id: &next_id,
         };
         assert!(
-            api::change_session_mode(&app, &sid, "write", Some(1), Some(next))
+            api::change_session_mode(&app, &sid, "auto", Some(1), Some(next))
                 .await
                 .is_err()
         );
         run["pending"]["human_approved"] = json!(true);
         app.store.put(&format!("run:{rid}"), &run).await.unwrap();
         assert_eq!(
-            api::change_session_mode(&app, &sid, "write", Some(1), Some(next))
+            api::change_session_mode(&app, &sid, "auto", Some(1), Some(next))
                 .await
                 .unwrap()
                 .0["revision"],
             2
         );
         assert!(
-            api::change_session_mode(&app, &sid, "write", Some(1), Some(next))
+            api::change_session_mode(&app, &sid, "auto", Some(1), Some(next))
                 .await
                 .is_ok()
         );

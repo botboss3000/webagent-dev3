@@ -7,12 +7,15 @@
   "order": 2,
   "placeholder": false,
   "readiness": "ready",
-  "default_access": {
-    "operator": "auto",
-    "member": "auto",
-    "visitor": "auto"
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "allow"
   },
-  "tier_access": ["free", "administrator"],
+  "owner_tier": [
+    "free",
+    "administrator"
+  ],
   "config": {},
   "migration_note": "Compiled Rust adapter storing articles and revisions in the application plane. Reads are open to permitted sessions (visitors see published articles only); writes are limited to app administrators in code. Keyword search, widened by caller-supplied synonyms and per-article keywords (no embeddings); automatic recall, a Wiki page and external (GitHub) wikis are not ported yet. Deployment requires rebuilding both API and loop.",
   "skill_summary": "Search, read and cite the shared server Wiki; app administrators can maintain its articles with revision history."

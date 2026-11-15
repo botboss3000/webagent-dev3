@@ -2,11 +2,10 @@
   "name": "knowledge_file_list",
   "description": "List this agent's knowledge files with names, sizes and revisions.",
   "effect": "read",
-  "policy_ceiling": "auto",
-  "default_access": {
-    "operator": "auto",
-    "member": "auto",
-    "visitor": "auto"
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "allow"
   },
   "parameters": {
     "type": "object",

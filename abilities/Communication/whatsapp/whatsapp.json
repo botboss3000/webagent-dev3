@@ -10,5 +10,8 @@
   "readiness": "placeholder",
   "config": {},
   "migration_note": "Placeholder only; no executable implementation.",
-  "tier_access": ["free", "administrator"]
+  "owner_tier": [
+    "free",
+    "administrator"
+  ]
 }

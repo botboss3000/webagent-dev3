@@ -2,11 +2,10 @@
   "name": "create_agent",
   "description": "Create a caller-owned agent with safe platform defaults. Request fields: name, optional description. Model assignment and tool grants remain separate.",
   "effect": "write",
-  "policy_ceiling": "ask",
-  "default_access": {
-    "operator": "auto",
-    "member": "auto",
-    "visitor": "ask"
+  "default_policy": {
+    "operator": "require_approval",
+    "member": "require_approval",
+    "visitor": "require_approval"
   },
   "parameters": {
     "type": "object",

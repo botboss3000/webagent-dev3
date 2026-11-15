@@ -8,12 +8,15 @@
   "order": 2,
   "placeholder": false,
   "readiness": "ready",
-  "default_access": {
-    "operator": "auto",
-    "member": "ask",
+  "default_policy": {
+    "operator": "allow",
+    "member": "require_approval",
     "visitor": "deny"
   },
-  "tier_access": ["free", "administrator"],
+  "owner_tier": [
+    "free",
+    "administrator"
+  ],
   "config": {
     "settings": [
       {

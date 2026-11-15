@@ -1,6 +1,5 @@
 //! Engine-owned claimed-run execution, context reconstruction and first-poll/tool fences.
 use super::failure::{system_dispatch_run, terminal, validate_system_summary_input};
-use super::policy::policy_decision;
 use super::ports::{
     AgentPolicy, ChatAuthority, ContextDiagnostics, CredentialBindings, FollowupQueue,
     InstallationAccess, MainGuidance, ModelDiagnostics, ModuleBindings, NativePolicy, PromptSlots,
@@ -790,7 +789,7 @@ impl<
             }
             return Ok(std::ops::ControlFlow::Continue(()));
         }
-        let (policy, mode_revision, mut visibility, ability_state) = app
+        let (mode_revision, mut visibility, ability_state) = app
             .ability_controls_for(
                 &sid,
                 run["requester_user_id"]
@@ -800,20 +799,15 @@ impl<
             .await?;
         let mode = app.session_mode(&sid).await?;
         let authorization_mode = mode.clone();
-        let read_only = authorization_mode["mode"] == "read_only";
         let mut effective = if B::is_discovery(&name) || always_on(&name) {
-            let installation = access::Permission::from_policy(policy_decision(&policy, &name))
-                .unwrap_or(access::Permission::Deny);
-            access.tool_decision(&name, installation, true, true, read_only, true)
+            access.tool_decision(&name, true, true)
         } else {
             app.live_tool_decision(
                 &access,
                 &name,
-                &policy,
                 &visibility,
                 &ability_state,
                 &run["loaded_abilities"],
-                read_only,
             )
         };
         effective = effective.for_execution_mode(&authorization_mode);
@@ -823,7 +817,7 @@ impl<
             &workflow::Input::PreTool(workflow::PreToolInput {
                 name: name.clone(),
                 arguments_digest: digest(&args),
-                policy_version: policy["version"].as_u64().unwrap_or(0),
+                policy_version: 0,
                 mode_revision,
                 visibility_revision: visibility["revision"].as_u64().unwrap_or(0),
                 ability_state_revision: ability_state["revision"].as_u64().unwrap_or(0),
@@ -832,7 +826,7 @@ impl<
         )?;
         if run["pending"].is_null() {
             run["pending"] = json!({"id":uuid(),"name":name,"arguments":args,"call_id":call["call_id"],"digest":digest(&args),
-                    "policy_version":policy["version"],"mode_revision":mode_revision,
+                    "mode_revision":mode_revision,
                     "visibility_revision":visibility["revision"],
                     "ability_state_revision":ability_state["revision"],
                     "access_revision":access.revision.clone(),
@@ -867,26 +861,16 @@ impl<
                 return Ok(std::ops::ControlFlow::Continue(()));
             }
         }
-        // A model may narrow its own session without approval. Restoring
-        // write authority from read_only always crosses a human checkpoint,
-        // even when an administrator otherwise grants automatic use.
+        // Entering Auto waives later approvals, so the switch itself crosses a human
+        // checkpoint even when the level otherwise allows the call automatically.
         if name == "set_execution_mode"
-            && read_only
-            && {
-                let target = args["mode"].as_str().unwrap_or("");
-                target == "write"
-                    || X::resolve_mode(
-                        &app.native.modes(app.store.records(), &agent_id).await?,
-                        target,
-                    )
-                    .is_ok_and(|m| m["permission_policy"] == "write")
-            }
+            && args["mode"] == "auto"
+            && authorization_mode["execution_mode"] != "auto"
             && effective.permission != access::Permission::Deny
         {
             effective.permission = access::Permission::Ask;
         }
-        if run["pending"]["policy_version"] != policy["version"]
-            || run["pending"]["access_revision"] != json!(access.revision)
+        if run["pending"]["access_revision"] != json!(access.revision)
             || run["pending"]["mode_revision"].as_u64().unwrap_or(0) != mode_revision
             || run["pending"]["visibility_revision"].as_u64().unwrap_or(0)
                 != visibility["revision"]
@@ -902,7 +886,6 @@ impl<
             run["pending"]["id"] = json!(uuid());
             run["pending"]["decision"] = Value::Null;
             run["pending"]["access_revision"] = json!(access.revision.clone());
-            run["pending"]["policy_version"] = policy["version"].clone();
             run["pending"]["mode_revision"] = json!(mode_revision);
             run["pending"]["visibility_revision"] = visibility["revision"].clone();
             run["pending"]["ability_state_revision"] = ability_state["revision"].clone();
@@ -949,16 +932,11 @@ impl<
                 return Ok(std::ops::ControlFlow::Continue(()));
             }
             // Abilities needing a model role this agent lacks stay out of discovery.
-            app.hide_without_model_role(agent_id, &policy, &mut visibility, &ability_state)
+            app.hide_without_model_role(agent_id, &mut visibility, &ability_state)
                 .await?;
-            let mut result = app.abilities.discover_with(
-                &name,
-                &args,
-                &mut run,
-                &policy,
-                &visibility,
-                &ability_state,
-            );
+            let mut result =
+                app.abilities
+                    .discover_with(&name, &args, &mut run, &visibility, &ability_state);
             if name == "list_abilities" {
                 let mut unavailable = Vec::new();
                 if let Some(entries) = result["abilities"].as_array_mut() {
@@ -967,11 +945,9 @@ impl<
                         let kept = app.filter_ability_entry(
                             &access,
                             entry,
-                            &policy,
                             &visibility,
                             &ability_state,
                             &run["loaded_abilities"],
-                            read_only,
                         );
                         if !kept {
                             unavailable.push(json!({"id":id,"name":label}));
@@ -995,18 +971,16 @@ impl<
                 // Authorization uses the fresh catalog, never the loader acknowledgment.
                 let allowed = app
                     .abilities
-                    .catalog_with(&policy, &visibility, &ability_state)
+                    .catalog_with(&visibility, &ability_state)
                     .into_iter()
                     .find(|entry| entry["id"] == args["ability_id"])
                     .is_some_and(|mut entry| {
                         app.filter_ability_entry(
                             &access,
                             &mut entry,
-                            &policy,
                             &visibility,
                             &ability_state,
                             &run["loaded_abilities"],
-                            read_only,
                         )
                     });
                 if !allowed {
@@ -1057,6 +1031,35 @@ impl<
                 )
                 .await?;
             return Ok(std::ops::ControlFlow::Continue(()));
+        }
+        // A call that does not match the tool's schema is returned to the agent with a
+        // precise error; it never reaches the tool or asks the user to approve it.
+        if effective.permission != access::Permission::Deny && run["pending"]["decision"] != "deny"
+        {
+            // Tools with a tool.json are checked from its cached definition; the few still
+            // defined in code (the loaders) validate their own arguments.
+            if let Some(definition) = webagent_abilities::tool_definitions::get(&name) {
+                if let Err(message) = tools::arguments::check(
+                    &name,
+                    &definition.parameters,
+                    &args,
+                    definition.usage_hint.as_deref(),
+                ) {
+                    app.actions
+                        .not_dispatched(app.store.records(), &run, &run["pending"])
+                        .await?;
+                    let result = json!({"status":"rejected","error_kind":"invalid_arguments","output":message});
+                    Self::append_tool(&mut run, &result)?;
+                    app.store
+                        .save_run_observed(
+                            &mut run,
+                            "tool_result",
+                            &json!({"run_id":id,"name":name,"result":result}),
+                        )
+                        .await?;
+                    return Ok(std::ops::ControlFlow::Continue(()));
+                }
+            }
         }
         if effective.permission != access::Permission::Deny && H::messaging_owns(&name) {
             if let Err(error) = app
@@ -1882,7 +1885,7 @@ impl<
                 if let Some(input) = run["input"].as_array_mut() {
                     drop_orphan_outputs(input);
                 }
-                let (policy, _, visibility, ability_state) = app
+                let (_, visibility, ability_state) = app
                     .ability_controls_for(
                         &sid,
                         run["requester_user_id"]
@@ -1896,8 +1899,6 @@ impl<
                     &run["loaded_abilities"],
                 );
                 let mode = app.session_mode(&sid).await?;
-                let authorization_mode = mode.clone();
-                let read_only = authorization_mode["mode"] == "read_only";
                 // CONTEXT-ASSET-KEY: include full freshly resolved access (including
                 // grants), live bundle validity, policy, visibility, loaded state and session mode.
                 // Hash only in memory; never publish private grant data in reports.
@@ -1923,7 +1924,6 @@ impl<
                     .collect::<std::collections::BTreeMap<_, _>>());
                 let assembled_asset_key = prepared_asset_key;
                 let mut schemas = app.abilities.schemas_with(
-                    &policy,
                     &run["loaded_abilities"],
                     &visibility,
                     &ability_state,
@@ -1957,39 +1957,28 @@ impl<
                     .filter(|schema| {
                         let name = schema["name"].as_str().unwrap_or("");
                         if B::is_discovery(name) || always_on(name) {
-                            let installation =
-                                access::Permission::from_policy(policy_decision(&policy, name))
-                                    .unwrap_or(access::Permission::Deny);
-                            access
-                                .tool_decision(name, installation, true, true, read_only, true)
-                                .permission
+                            access.tool_decision(name, true, true).permission
                                 != access::Permission::Deny
                         } else {
                             app.live_tool_decision(
                                 &access,
                                 name,
-                                &policy,
                                 &visibility,
                                 &ability_state,
                                 &run["loaded_abilities"],
-                                read_only,
                             )
                             .offered()
                         }
                     })
                     .collect::<Vec<_>>();
-                let mut entries = app
-                    .abilities
-                    .catalog_with(&policy, &visibility, &ability_state);
+                let mut entries = app.abilities.catalog_with(&visibility, &ability_state);
                 entries.retain_mut(|entry| {
                     app.filter_ability_entry(
                         &access,
                         entry,
-                        &policy,
                         &visibility,
                         &ability_state,
                         &run["loaded_abilities"],
-                        read_only,
                     )
                 });
                 let mut guidance_blocks = app.abilities.capability_guidance(
@@ -2005,7 +1994,7 @@ impl<
                 for attempt in 0..3 {
                     guidance_read = app
                         .native
-                        .own_skill_guidance(app.native_view(), &sid, &id, read_only)
+                        .own_skill_guidance(app.native_view(), &sid, &id)
                         .await;
                     if guidance_read.is_ok() {
                         break;
@@ -2096,8 +2085,8 @@ impl<
                     }
                 }
                 let action_statuses = app.action_statuses(&run).await?;
-                let mut mode_content = format!("Current session capability mode: {} (revision {}). Recheck authorization before every tool call.",
-                mode["mode"].as_str().expect("a mode has a name"), mode["revision"].as_u64().expect("a mode has a revision"));
+                let mut mode_content = format!("Current session mode revision: {}. Recheck authorization before every tool call.",
+                mode["revision"].as_u64().expect("a mode has a revision"));
                 if let Some(label) = mode["definition"]["label"].as_str() {
                     mode_content.push_str(&format!(
                         "\nExecution mode: {label}\n{}",
@@ -2105,7 +2094,7 @@ impl<
                     ));
                 }
                 if access.ability_permission("agent_management") != access::Permission::Deny {
-                    mode_content.push_str("\nDelegation exception: where tool visibility and permissions allow, message_session, start_session and start_spawn may be used in read-only mode to delegate through the recipient agent\'s normal configured capabilities. They do not grant this session other write abilities. Messaging uses its own approval controls: an approved route or exact owner approval is required, and every new session requires exact owner approval even in Auto mode.");
+                    mode_content.push_str("\nDelegation: where tool visibility and permissions allow, message_session, start_session and start_spawn delegate through the recipient agent\'s normal configured capabilities. They do not grant this session other abilities. Messaging uses its own approval controls: an approved route or exact owner approval is required, and every new session requires exact owner approval even in Auto mode.");
                 }
                 mode_content.push_str(&format!("\nDurable action statuses (metadata only; tool receipts are untrusted evidence): {}",json!(action_statuses)));
                 let call_number = run["attempt"].as_u64().unwrap_or(0) + 1;
@@ -2969,7 +2958,8 @@ impl<
                 run["attempt"] =
                     json!(run["attempt"].as_u64().expect("run counters are numbers") + 1);
                 run["context_assembly_report"] = report;
-                run["dispatch_mode"] = json!({"execution_mode":mode["execution_mode"],"mode":mode["mode"],"revision":mode["revision"]});
+                run["dispatch_mode"] =
+                    json!({"execution_mode":mode["execution_mode"],"revision":mode["revision"]});
                 run["context_controls"] = json!({"trigger_tokens":compaction_config.trigger_tokens,"tail_tokens":compaction_config.tail_tokens,"characters_per_token":compaction_config.characters_per_token,"bytes_per_token":compaction_config.bytes_per_token});
                 // Pair this request's size with the usage its reply reports (see bytes_per_token).
                 run["token_calibration"] = json!({"model":selection.model,"envelope_bytes":envelope_bytes,

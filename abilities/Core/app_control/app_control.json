@@ -9,5 +9,8 @@
   "readiness": "ready",
   "config": {},
   "migration_note": "Native V3 implementation. Current schemas, live policy and configured model/module availability determine callable behavior.",
-  "tier_access": ["free", "administrator"]
+  "owner_tier": [
+    "free",
+    "administrator"
+  ]
 }

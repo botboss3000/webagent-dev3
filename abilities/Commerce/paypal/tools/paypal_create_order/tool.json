@@ -1,0 +1,11 @@
+{
+  "name": "paypal_create_order",
+  "description": "Paypal create order (paypal ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "write"
+}

@@ -43,10 +43,9 @@
     "additionalProperties": false
   },
   "effect": "write",
-  "policy_ceiling": "ask",
-  "default_access": {
-    "operator": "ask",
-    "member": "ask",
-    "visitor": "ask"
+  "default_policy": {
+    "operator": "require_approval",
+    "member": "require_approval",
+    "visitor": "require_approval"
   }
 }

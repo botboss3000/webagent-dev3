@@ -2,9 +2,8 @@
   "name": "terminal_send",
   "description": "Send text or a named key after a fresh observation; policy-gated",
   "effect": "write",
-  "policy_ceiling": "ask",
-  "default_access": {
-    "operator": "auto",
+  "default_policy": {
+    "operator": "require_approval",
     "member": "deny",
     "visitor": "deny"
   },

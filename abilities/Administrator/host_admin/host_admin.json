@@ -8,8 +8,12 @@
   "migration_note": "Root host helper (webagent-host-helper.service): requests, approvals, snapshots and the log live on the host; the app only forwards.",
   "order": 7,
   "placeholder": false,
-  "tools": ["host_admin"],
+  "tools": [
+    "host_admin"
+  ],
   "readiness": "ready",
-  "tier_access": ["administrator"],
-  "tier_access_note": "Hard-coded: Administrator abilities work only for an administrator owner and an administrator caller, whatever this list says."
+  "owner_tier": [
+    "administrator"
+  ],
+  "owner_tier_note": "Hard-coded: Administrator abilities work only for an administrator owner and an administrator caller, whatever this list says."
 }

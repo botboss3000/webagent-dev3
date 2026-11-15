@@ -1,5 +1,5 @@
 //! A model can change only the authenticated run's own session mode.
-//! Elevating read_only to write always needs a fresh human approval.
+//! Entering Auto always needs a fresh human approval.
 use crate::{Call, NativeHost};
 use anyhow::{bail, Result};
 use serde::Deserialize;
@@ -60,7 +60,7 @@ mod tests {
     use super::*;
     #[test]
     fn schema_cannot_select_another_session() {
-        assert!(serde_json::from_value::<Args>(json!({"mode":"write",
+        assert!(serde_json::from_value::<Args>(json!({"mode":"auto",
             "expected_revision":0,"session_id":"other"}))
         .is_err());
     }

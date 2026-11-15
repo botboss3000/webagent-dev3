@@ -58,65 +58,21 @@ impl<
         let agent = self.session_agent_id(sid).await?;
         let config = self.native.modes(self.store.records(), &agent).await?;
         if let Some(id) = value["execution_mode"].as_str() {
-            // Removed custom modes fail closed to Ask; never inherit write authority.
+            // Removed custom modes fail closed to Ask.
             let entry = X::resolve_mode(&config, id).unwrap_or_else(|_| X::removed_mode());
-            // A configuration edit cannot elevate an already read-only conversation.
-            // Explicit mode selection must cross the existing approval boundary.
-            if value["mode"] != "read_only" || entry["permission_policy"] == "read_only" {
-                value["mode"] = entry["permission_policy"].clone();
-            }
             value["execution_mode"] = entry["id"].clone();
             value["definition"] = entry;
         }
-        if !matches!(value["mode"].as_str(), Some("write" | "read_only"))
-            || value["revision"].as_u64().is_none()
-        {
+        // Older records may still carry a "mode" field; it no longer has any meaning.
+        if let Some(fields) = value.as_object_mut() {
+            fields.remove("mode");
+        }
+        if value["revision"].as_u64().is_none() {
             return Err(anyhow!("Invalid session capability mode"));
         }
         Ok(value)
     }
-    pub async fn effective_policy(&self, sid: &str) -> Result<(Value, u64)> {
-        self.effective_policy_for_mode(&self.session_mode(sid).await?)
-            .await
-    }
-    pub async fn effective_policy_for_mode(&self, mode: &Value) -> Result<(Value, u64)> {
-        let mut policy = self
-            .store
-            .get("policy")
-            .await?
-            .unwrap_or_else(|| self.policy_default());
-        // New Base discovery is available by default; an explicit saved denial wins.
-        for name in ["search_tools", "list_tools", "load_tool"] {
-            if policy["rules"].get(name).is_none() {
-                policy["rules"][name] = json!("allow");
-            }
-        }
-        policy = H::messaging_policy_defaults(policy);
-        // A tool the saved policy does not name takes its template rule, never an implicit
-        // deny; every saved rule, including deny, wins.
-        let template = self.policy_default();
-        for schema in C::schemas()? {
-            let Some(name) = schema["name"].as_str() else {
-                continue;
-            };
-            if policy["rules"].get(name).is_none() {
-                policy["rules"][name] = template_rule::<A>(&template, name);
-            }
-        }
-        if mode["mode"] == "read_only" {
-            for schema in C::schemas()? {
-                let name = schema["name"].as_str().unwrap_or("");
-                if !A::is_read(name) && !H::messaging_owns(name) {
-                    policy["rules"][name] = json!("deny");
-                }
-            }
-        }
-        let revision = mode["revision"]
-            .as_u64()
-            .expect("session_mode validates a numeric revision");
-        Ok((policy, revision))
-    }
-    pub async fn ability_controls(&self, sid: &str) -> Result<(Value, u64, Value, Value)> {
+    pub async fn ability_controls(&self, sid: &str) -> Result<(u64, Value, Value)> {
         self.ability_controls_for(sid, self.store.current_user_id())
             .await
     }
@@ -124,8 +80,10 @@ impl<
         &self,
         sid: &str,
         requester: &str,
-    ) -> Result<(Value, u64, Value, Value)> {
-        let (policy, mode_revision) = self.effective_policy(sid).await?;
+    ) -> Result<(u64, Value, Value)> {
+        let mode_revision = self.session_mode(sid).await?["revision"]
+            .as_u64()
+            .expect("session_mode validates a numeric revision");
         let mut visibility = self.session_agent_abilities(sid).await?;
         let agent = self.session_agent_id(sid).await?;
         let access = self
@@ -134,7 +92,7 @@ impl<
             .await?;
         access.capability_level.decorate_visibility(&mut visibility);
         let state = self.session_ability_state(sid).await?;
-        Ok((policy, mode_revision, visibility, state))
+        Ok((mode_revision, visibility, state))
     }
     /// An ability whose manifest names `config.required_model_role` stays off for an agent whose
     /// roster cannot resolve that role. Discovery applies it, so the model cannot load a tool it
@@ -142,13 +100,12 @@ impl<
     pub async fn hide_without_model_role(
         &self,
         agent: &str,
-        policy: &Value,
         visibility: &mut Value,
         state: &Value,
     ) -> Result<()> {
         let required: Vec<(String, String)> = self
             .abilities
-            .catalog_with(policy, visibility, state)
+            .catalog_with(visibility, state)
             .into_iter()
             .filter_map(|entry| {
                 Some((
@@ -245,7 +202,7 @@ impl<
         run: &Value,
         pending: &Value,
     ) -> Result<bool> {
-        let (policy, _, visibility, state) = self.ability_controls(sid).await?;
+        let (_, visibility, state) = self.ability_controls(sid).await?;
         let mode = self.session_mode(sid).await?;
         let actor = self
             .chat_actor
@@ -256,15 +213,7 @@ impl<
             .live_access(self.store.records(), actor, sid, agent)
             .await?;
         let decision = self
-            .live_tool_decision(
-                &access,
-                name,
-                &policy,
-                &visibility,
-                &state,
-                &run["loaded_abilities"],
-                mode["mode"] == "read_only",
-            )
+            .live_tool_decision(&access, name, &visibility, &state, &run["loaded_abilities"])
             .for_execution_mode(&mode);
         Ok(access.admitted()
             && decision.permission != access::Permission::Deny
@@ -275,16 +224,12 @@ impl<
         &self,
         access: &LiveAccess,
         name: &str,
-        policy: &Value,
         visibility: &Value,
         state: &Value,
         loaded: &Value,
-        read_only: bool,
     ) -> access::ToolDecision {
-        let installation = access::Permission::from_policy(policy_decision(policy, name))
-            .unwrap_or(access::Permission::Deny);
         // Administrator tools serve only Administrator-role accounts, whatever the agent,
-        // tier or policy grants.
+        // tier or level grants.
         if self.abilities.administrator_tool(name) && !access.principal.administrator() {
             return access::ToolDecision {
                 permission: access::Permission::Deny,
@@ -295,13 +240,14 @@ impl<
         // former ability loaders they skip ability and tier gating; each listed tool is
         // still decided here on its own.
         if webagent_abilities::BOOTSTRAP_TOOLS.contains(&name) {
-            return access.tool_decision(name, installation, true, true, read_only, true);
+            return access.tool_decision(name, true, true);
         }
         let (available, visible) = self.abilities.tool_gate(name, visibility, state, loaded);
         let ability_ids = self
             .abilities
             .tool_abilities(name, visibility, state, loaded);
-        let caution = if !A::is_read(name)
+        // An ability's "cautious" setting makes its writes ask, whatever the level allows.
+        let cautious = !A::is_read(name)
             && ability_ids.iter().any(|id| {
                 let key = match id.as_str() {
                     "terminal_control" => "terminal_caution",
@@ -309,20 +255,15 @@ impl<
                     _ => return false,
                 };
                 visibility["settings"][id][key] == "cautious"
-            }) {
-            access::Permission::Ask
-        } else {
-            access::Permission::Auto
-        };
-        let decision = access.tool_decision_for_abilities(
-            name,
-            &ability_ids,
-            installation.meet(caution),
-            available,
-            visible,
-            read_only && !H::messaging_owns(name),
-            A::is_read(name),
-        );
+            });
+        let mut decision =
+            access.tool_decision_for_abilities(name, &ability_ids, available, visible);
+        if cautious && decision.permission == access::Permission::Auto {
+            decision = access::ToolDecision {
+                permission: access::Permission::Ask,
+                reason: access::Reason::ApprovalRequired,
+            };
+        }
         // A tool switched off for this agent is denied as if it did not exist, so no
         // denial reason confirms a hidden capability. Only the reason changes.
         if decision.permission == access::Permission::Deny
@@ -335,18 +276,24 @@ impl<
         }
         decision
     }
-    pub fn policy_default(&self) -> Value {
-        default_policy::<A, X>()
+    /// The live decision for a person calling `name` directly (not the model): ability
+    /// visibility and loading do not apply; the caller, tier, role and level layers do.
+    pub fn direct_tool_decision(&self, access: &LiveAccess, name: &str) -> access::ToolDecision {
+        if self.abilities.administrator_tool(name) && !access.principal.administrator() {
+            return access::ToolDecision {
+                permission: access::Permission::Deny,
+                reason: access::Reason::CallerDenied,
+            };
+        }
+        access.tool_decision(name, true, true)
     }
     pub fn filter_ability_entry(
         &self,
         access: &LiveAccess,
         entry: &mut Value,
-        policy: &Value,
         visibility: &Value,
         state: &Value,
         loaded: &Value,
-        read_only: bool,
     ) -> bool {
         let id = entry["id"].as_str().unwrap_or("");
         if !access.ability_offered(id) {
@@ -364,22 +311,12 @@ impl<
             if self.abilities.administrator_tool(name) && !access.principal.administrator() {
                 return false;
             }
-            let installation = access::Permission::from_policy(policy_decision(policy, name))
-                .unwrap_or(access::Permission::Deny);
             let (available, _) = self.abilities.tool_gate(name, visibility, state, loaded);
             let ability_ids = self
                 .abilities
                 .tool_abilities(name, visibility, state, loaded);
             access
-                .tool_decision_for_abilities(
-                    name,
-                    &ability_ids,
-                    installation,
-                    available,
-                    true,
-                    read_only && !H::messaging_owns(name),
-                    A::is_read(name),
-                )
+                .tool_decision_for_abilities(name, &ability_ids, available, true)
                 .offered()
         });
         !tools.is_empty()
@@ -391,7 +328,7 @@ impl<
         let sid = run["session_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing action session"))?;
-        let (policy, _, visibility, state) = self.ability_controls(sid).await?;
+        let (_, visibility, state) = self.ability_controls(sid).await?;
         let access = self
             .chat
             .live_access(self.store.records(), ledger.current_user_id(), sid, agent)
@@ -404,11 +341,9 @@ impl<
                     .live_tool_decision(
                         &access,
                         name,
-                        &policy,
                         &visibility,
                         &state,
                         &run["loaded_abilities"],
-                        false,
                     )
                     .permission
                     != access::Permission::Deny
@@ -420,58 +355,8 @@ impl<
     }
 }
 pub fn default_session_mode() -> Value {
-    json!({"mode":"write","revision":0})
+    json!({"revision":0})
 }
 pub fn default_session_abilities() -> Value {
     json!({"revision":0,"active":[],"suppressed":[]})
-}
-/// Tool `name`'s rule in the `template` policy, or allow for a read and require approval
-/// for a write when the template does not name it.
-pub fn template_rule<A: crate::tools::execution::ActionCatalog>(
-    template: &Value,
-    name: &str,
-) -> Value {
-    template["rules"].get(name).cloned().unwrap_or_else(|| {
-        json!(if A::is_read(name) {
-            "allow"
-        } else {
-            "require_approval"
-        })
-    })
-}
-
-pub fn policy_decision<'a>(policy: &'a Value, name: &str) -> &'a str {
-    policy["rules"][name].as_str().unwrap_or("deny")
-}
-
-pub fn default_policy<A: crate::tools::execution::ActionCatalog, X: NativePolicy>() -> Value {
-    let mut policy = json!({"version":1,"rules":{"list_abilities":"allow","load_ability":"allow","list_skills":"allow","load_skill":"allow","context_assets":"allow","get_time":"allow","get_date":"allow","calculate":"allow","read_attachment":"allow","search_this_session":"allow","read_own_prompt":"allow","web_search":"allow","web_read":"allow","get_weather":"allow","maps_geocode":"allow","file_list":"allow","file_read":"allow","file_search":"allow","state_inspect":"allow","prompt_slot_read":"allow","prompt_slot_write":"require_approval","file_write":"require_approval","checkout_edit":"require_approval","file_edit":"require_approval","workspace_seed":"require_approval","source_review":"allow","source_patch":"require_approval","shell":"require_approval","python":"require_approval"}});
-    for name in ["background_status", "background_cancel"] {
-        policy["rules"][name] = json!("allow");
-    }
-    for schema in X::default_policy_schemas() {
-        let Some(name) = schema["name"].as_str() else {
-            continue;
-        };
-        policy["rules"][name] = json!(if A::is_read(name) {
-            "allow"
-        } else {
-            "require_approval"
-        });
-    }
-    for name in ["message_session", "start_session", "start_spawn"] {
-        policy["rules"][name] = json!("allow");
-    }
-    // Visitor escalation actions only store a staff message, notify staff or show reply
-    // buttons; staff-side writes keep the require_approval default above.
-    for name in ["staff_message_send", "request_human", "offer_choices"] {
-        if policy["rules"].get(name).is_some() {
-            policy["rules"][name] = json!("allow");
-        }
-    }
-    #[cfg(any(test, feature = "test-support"))]
-    {
-        policy["rules"]["test_owner_purchase"] = json!("require_approval");
-    }
-    policy
 }

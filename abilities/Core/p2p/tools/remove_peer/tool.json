@@ -1,0 +1,11 @@
+{
+  "name": "remove_peer",
+  "description": "Remove peer (p2p ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "write"
+}

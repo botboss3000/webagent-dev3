@@ -59,7 +59,7 @@ pub(crate) async fn lookup(app: &App, run: &Value, id: &str) -> Result<Value> {
     let sid = run["session_id"]
         .as_str()
         .ok_or_else(|| anyhow!("Missing session"))?;
-    let (policy, _, visibility, state) = crate::ability_controls(app, sid).await?;
+    let (_, visibility, state) = crate::ability_controls(app, sid).await?;
     let access =
         crate::shared_chat::live_access(&app.store, store.current_user_id(), sid, agent).await?;
     let name = action["tool"].as_str().unwrap_or("");
@@ -68,11 +68,9 @@ pub(crate) async fn lookup(app: &App, run: &Value, id: &str) -> Result<Value> {
             app,
             &access,
             name,
-            &policy,
             &visibility,
             &state,
             &run["loaded_abilities"],
-            false,
         )
         .permission
             == access::Permission::Deny

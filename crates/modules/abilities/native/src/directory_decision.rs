@@ -77,8 +77,7 @@ async fn require_source_permissions(
     if !access.admitted() {
         bail!("Agent access unavailable");
     }
-    let (policy, _, visibility, state) = host.ability_controls(sid).await?;
-    let read_only = host.session_mode(sid).await?["mode"] == "read_only";
+    let (_, visibility, state) = host.ability_controls(sid).await?;
     // Rust owns both grants. The worker may enumerate names and may read
     // excerpts only after the corresponding ordinary file tool is Auto.
     for name in if include_content {
@@ -87,15 +86,7 @@ async fn require_source_permissions(
         &["file_list"][..]
     } {
         let permission = host
-            .live_tool_decision(
-                &access,
-                name,
-                &policy,
-                &visibility,
-                &state,
-                &run["loaded_abilities"],
-                read_only,
-            )
+            .live_tool_decision(&access, name, &visibility, &state, &run["loaded_abilities"])
             .permission;
         if permission != Permission::Auto {
             bail!("Directory scoring requires automatic {name} permission");

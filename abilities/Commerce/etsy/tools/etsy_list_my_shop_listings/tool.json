@@ -1,0 +1,11 @@
+{
+  "name": "etsy_list_my_shop_listings",
+  "description": "Etsy list my shop listings (etsy ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

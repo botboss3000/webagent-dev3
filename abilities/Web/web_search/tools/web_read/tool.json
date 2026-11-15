@@ -2,11 +2,10 @@
   "name": "web_read",
   "description": "Read one public web page as plain text (Wikipedia articles directly, other pages through Tavily)",
   "effect": "read",
-  "policy_ceiling": "auto",
-  "default_access": {
-    "operator": "auto",
-    "member": "auto",
-    "visitor": "auto"
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "allow"
   },
   "parameters": {
     "type": "object",

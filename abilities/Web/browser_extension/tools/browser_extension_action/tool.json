@@ -2,20 +2,31 @@
   "name": "browser_extension_action",
   "description": "Act in the chatting user's own browser, in the agent's own WebAgent window, on allowed sites only. open: new tab at url. navigate: current agent tab to url. read: the page's text and controls, each control with a ref. click/type/press need a ref from your latest read. scroll: dy pixels. tabs: list agent tabs. close: close the current agent tab. The user watches and can take over at any time.",
   "effect": "write",
-  "retry_risk": "none",
-  "retry_hint": "read the page again to see whether the earlier click or typing already took effect; each click or type needs a ref from a fresh read",
-  "policy_ceiling": "ask",
-  "default_access": {
-    "operator": "auto",
-    "member": "ask",
-    "visitor": "ask"
+  "repeat_guard": {
+    "risk": "none",
+    "hint": "read the page again to see whether the earlier click or typing already took effect; each click or type needs a ref from a fresh read"
+  },
+  "default_policy": {
+    "operator": "require_approval",
+    "member": "require_approval",
+    "visitor": "require_approval"
   },
   "parameters": {
     "type": "object",
     "properties": {
       "action": {
         "type": "string",
-        "enum": ["open", "navigate", "read", "click", "type", "press", "scroll", "tabs", "close"]
+        "enum": [
+          "open",
+          "navigate",
+          "read",
+          "click",
+          "type",
+          "press",
+          "scroll",
+          "tabs",
+          "close"
+        ]
       },
       "url": {
         "type": "string",
@@ -42,7 +53,21 @@
       },
       "key": {
         "type": "string",
-        "enum": ["Enter", "Tab", "Escape", "Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End", "Backspace"],
+        "enum": [
+          "Enter",
+          "Tab",
+          "Escape",
+          "Space",
+          "ArrowUp",
+          "ArrowDown",
+          "ArrowLeft",
+          "ArrowRight",
+          "PageUp",
+          "PageDown",
+          "Home",
+          "End",
+          "Backspace"
+        ],
         "description": "press: key sent to ref, or to the focused element"
       },
       "dy": {
@@ -62,7 +87,9 @@
         "description": "Act on this agent tab (from tabs) instead of the current one"
       }
     },
-    "required": ["action"],
+    "required": [
+      "action"
+    ],
     "additionalProperties": false
   },
   "match": {

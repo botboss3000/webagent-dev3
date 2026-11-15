@@ -1,0 +1,11 @@
+{
+  "name": "shopify_create_product",
+  "description": "Shopify create product (shopify ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "write"
+}

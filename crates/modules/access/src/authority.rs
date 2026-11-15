@@ -155,7 +155,9 @@ impl LiveAccess {
     }
 
     pub fn ability_permission(&self, ability_id: &str) -> Permission {
-        if !self.capability_level.ability_enabled(ability_id) {
+        if !self.capability_level.ability_enabled(ability_id)
+            || !self.ability_role_allowed(ability_id)
+        {
             return Permission::Deny;
         }
         self.base_ability_permission(ability_id)
@@ -170,6 +172,7 @@ impl LiveAccess {
             return true;
         }
         self.capability_level.ability_enabled(ability_id)
+            && self.ability_role_allowed(ability_id)
             && self.tier_ability_permission(ability_id) == Permission::Deny
             && !access::administrator_ability(ability_id)
             && self
@@ -177,7 +180,7 @@ impl LiveAccess {
                 .meet(self.level_ability_permission(ability_id))
                 != Permission::Deny
     }
-    /// The owner's tier, from the ability's `tier_access`; Administrator abilities also need
+    /// The owner's tier, from the ability's `owner_tier`; Administrator abilities also need
     /// an administrator caller. Paused, not removed: the agent keeps its saved design.
     pub fn tier_ability_permission(&self, ability_id: &str) -> Permission {
         if access::ability_tier_allowed(ability_id, &self.owner_tier_id, &self.principal.tier_id) {
@@ -186,7 +189,7 @@ impl LiveAccess {
             Permission::Deny
         }
     }
-    /// A tool's own `tier_access` for the owner's tier, narrowing its abilities' lists.
+    /// A tool's own `owner_tier` for the owner's tier, narrowing its abilities' lists.
     pub fn tier_tool_permission(&self, name: &str) -> Permission {
         if access::tool_tier_allowed(name, &self.owner_tier_id) {
             Permission::Auto
@@ -235,38 +238,48 @@ impl LiveAccess {
         }
     }
 
+    /// The rungs of the caller's level: it, then the levels below it.
+    fn rungs(&self) -> Vec<String> {
+        self.capability_level
+            .chain
+            .first()
+            .map(|(rungs, _)| rungs.clone())
+            .unwrap_or_else(|| vec![self.capability_level.id.clone()])
+    }
+    /// Whether the caller's level may ever have the ability, by its `role_access`.
+    pub fn ability_role_allowed(&self, ability_id: &str) -> bool {
+        access::ability_role_allowed(ability_id, &self.rungs())
+    }
+    /// A tool's own `role_access`, else any of its abilities' (every role without one).
+    fn tool_role_allowed(&self, name: &str, ability_ids: &[String]) -> bool {
+        let rungs = self.rungs();
+        access::tool_role_allowed(name, &rungs).unwrap_or_else(|| {
+            ability_ids.is_empty()
+                || ability_ids
+                    .iter()
+                    .any(|id| access::ability_role_allowed(id, &rungs))
+        })
+    }
+
     /// `available` must come from the installed tool catalog; `visible`
     /// must come from the agent and session visibility state. Neither grants
-    /// access over a Deny in the operator, tier, or agent permission plane.
-    pub fn tool_decision(
-        &self,
-        name: &str,
-        installation: Permission,
-        available: bool,
-        visible: bool,
-        read_only: bool,
-        is_read: bool,
-    ) -> ToolDecision {
-        self.resolve_tool(
-            name,
-            installation,
-            Permission::Auto,
-            available,
-            visible,
-            read_only,
-            is_read,
-        )
+    /// access over a Deny in the tier, role or agent permission plane.
+    pub fn tool_decision(&self, name: &str, available: bool, visible: bool) -> ToolDecision {
+        if !self.tool_role_allowed(name, &[]) {
+            return ToolDecision {
+                permission: Permission::Deny,
+                reason: access::Reason::RoleDenied,
+            };
+        }
+        self.resolve_tool(name, Permission::Auto, available, visible)
     }
 
     pub fn tool_decision_for_abilities(
         &self,
         name: &str,
         ability_ids: &[String],
-        installation: Permission,
         available: bool,
         visible: bool,
-        read_only: bool,
-        is_read: bool,
     ) -> ToolDecision {
         if matches!(
             name,
@@ -282,6 +295,13 @@ impl LiveAccess {
             return ToolDecision {
                 permission: Permission::Deny,
                 reason: access::Reason::AgentDenied,
+            };
+        }
+        // A hard limit from tool.json: hidden from levels its roles exclude.
+        if !self.tool_role_allowed(name, ability_ids) {
+            return ToolDecision {
+                permission: Permission::Deny,
+                reason: access::Reason::RoleDenied,
             };
         }
         // A tool several abilities provide works through any the owner's tier allows.
@@ -304,7 +324,7 @@ impl LiveAccess {
         };
         // One calculation drives discovery, guidance, schemas, previews and dispatch.
         // Report the narrowing layer without interpreting visibility as permission.
-        if installation != Permission::Deny && self.tier_tool_permission(name) != Permission::Deny {
+        if self.tier_tool_permission(name) != Permission::Deny {
             if !ability_ids.is_empty() && allowed.is_empty() {
                 // Administrator tools are hidden, not offered with a tier error.
                 let reason = if ability_ids
@@ -330,26 +350,15 @@ impl LiveAccess {
                 };
             }
         }
-        self.resolve_tool(
-            name,
-            installation,
-            ability,
-            available,
-            visible,
-            read_only,
-            is_read,
-        )
+        self.resolve_tool(name, ability, available, visible)
     }
 
     fn resolve_tool(
         &self,
         name: &str,
-        installation: Permission,
         ability: Permission,
         available: bool,
         visible: bool,
-        read_only: bool,
-        is_read: bool,
     ) -> ToolDecision {
         if name == "build_work" && !self.principal.administrator() {
             return ToolDecision {
@@ -359,7 +368,6 @@ impl LiveAccess {
         }
         let level = self.capability_level.tool_permission(name);
         if level == Permission::Deny
-            && installation != Permission::Deny
             && self.tier_tool_permission(name) != Permission::Deny
             && self.agent_tool_permission(name) != Permission::Deny
         {
@@ -369,7 +377,6 @@ impl LiveAccess {
             };
         }
         ToolFactors {
-            installation,
             tier: self.tier_tool_permission(name),
             agent: self.agent_tool_permission(name).meet(level),
             ability,
@@ -378,8 +385,6 @@ impl LiveAccess {
             agent_enabled: self.agent_enabled,
             available,
             visible,
-            read_only,
-            is_read,
         }
         .resolve()
     }

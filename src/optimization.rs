@@ -479,7 +479,6 @@ mod tests {
         .unwrap();
         assert_eq!(catalog.known("optimization"), expected);
         let names = catalog.schemas_with(
-            &crate::policy_default(),
             &json!([]),
             &json!({"visibility":{"optimization":"visible"}}),
             &json!({"active":[],"suppressed":[]}),

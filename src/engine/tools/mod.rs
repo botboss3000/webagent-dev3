@@ -70,13 +70,13 @@ pub fn retry(name: &str) -> webagent_engine::tools::retry_guard::Retry {
         ..Retry::default()
     };
     webagent_abilities::tool_definitions::get(name).map_or_else(fallback, |definition| Retry {
-        risk: match definition.retry_risk {
+        risk: match definition.repeat_guard.risk {
             Some(RetryRisk::None) => Risk::None,
             Some(RetryRisk::Low) => Risk::Low,
             Some(RetryRisk::High) | None => Risk::High,
         },
-        hint: definition.retry_hint.clone(),
-        warning: definition.repeat_warning.clone(),
+        hint: definition.repeat_guard.hint.clone(),
+        warning: definition.repeat_guard.warning.clone(),
     })
 }
 
@@ -179,15 +179,47 @@ pub(crate) fn definition_problems() -> Vec<String> {
                 format!("Compiled tool {name} has no tool folder definition; it is disabled")
             }),
     );
+    let pending = pending_tools();
     problems.extend(
         definitions::definitions()
             .keys()
-            .filter(|name| !handlers.contains(name.as_str()))
+            .filter(|name| !handlers.contains(name.as_str()) && !pending.contains(name.as_str()))
             .map(|name| {
                 format!("Tool folder {name} has no compiled handler; it is listed but cannot run")
             }),
     );
     problems
+}
+
+/// Tools listed by abilities whose manifest says `"readiness": "pending"`: catalog-only
+/// definitions that are expected to have no compiled handler yet.
+fn pending_tools() -> std::collections::BTreeSet<String> {
+    let Some(root) = webagent_abilities::tool_definitions::root() else {
+        return Default::default();
+    };
+    let groups = std::fs::read_dir(root).into_iter().flatten().flatten();
+    groups
+        .flat_map(|group| {
+            std::fs::read_dir(group.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+        })
+        .filter_map(|ability| {
+            let id = ability.file_name().to_string_lossy().into_owned();
+            let bytes = std::fs::read(ability.path().join(format!("{id}.json"))).ok()?;
+            let manifest: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+            (manifest["readiness"] == "pending").then(|| manifest["tools"].clone())
+        })
+        .flat_map(|tools| {
+            tools
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|tool| tool.as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// Default access for a tool defined in a tool folder; `None` keeps the earlier Auto for
@@ -200,8 +232,8 @@ pub(crate) fn tool_defaults(name: &str, rungs: &[String]) -> Option<webagent_acc
     webagent_abilities::tool_definitions::get(name).map(|definition| definition.default_for(rungs))
 }
 
-/// Let capability levels fall back to tool defaults, and owners' tiers gate abilities and
-/// tools by their manifests' `tier_access`; once per process.
+/// Let capability levels fall back to tool defaults, owners' tiers gate abilities and
+/// tools by their `owner_tier`, and built-in roles by their `role_access`; once per process.
 pub(crate) fn install_tool_defaults() {
     webagent_access::capabilities::install_tool_defaults(tool_defaults);
     webagent_access::install_tier_access(
@@ -209,16 +241,32 @@ pub(crate) fn install_tool_defaults() {
         tool_tiers,
         webagent_abilities::ability_access::administrator_ability,
     );
+    webagent_access::install_role_access(
+        webagent_abilities::ability_access::ability_role_allows,
+        tool_roles,
+    );
 }
 
-/// A tool's own `tier_access` for an owner tier; live checkout edits apply at once.
+/// A tool's own `owner_tier` for an owner tier; live checkout edits apply at once.
 fn tool_tiers(name: &str, tier: &str) -> bool {
     let current = crate::ability_drift::current();
     current
         .definition(name)
         .or_else(|| webagent_abilities::tool_definitions::get(name))
-        .and_then(|definition| definition.tier_access.as_ref())
+        .and_then(|definition| definition.owner_tier.as_ref())
         .is_none_or(|tiers| tiers.iter().any(|allowed| allowed == tier))
+}
+
+/// A tool's own `role_access` for a level's rungs; `None` when the tool sets none, so its
+/// abilities' lists decide. Live checkout edits apply at once.
+fn tool_roles(name: &str, rungs: &[String]) -> Option<bool> {
+    let current = crate::ability_drift::current();
+    let role = webagent_abilities::ability_access::built_in_role(rungs);
+    current
+        .definition(name)
+        .or_else(|| webagent_abilities::tool_definitions::get(name))
+        .and_then(|definition| definition.role_access.as_ref())
+        .map(|roles| roles.iter().any(|allowed| allowed == role))
 }
 
 pub fn schemas() -> Vec<Value> {

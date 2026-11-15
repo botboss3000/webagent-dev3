@@ -22,7 +22,6 @@ pub use ports::Host;
 #[cfg(feature = "test-support")]
 pub trait TestHost: Host {
     fn native_fixture() -> Catalog<Self>;
-    fn policy_fixture() -> serde_json::Value;
 }
 #[cfg(feature = "test-support")]
 pub use catalog::registered_tests as catalog_testing;

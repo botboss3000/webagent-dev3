@@ -425,7 +425,7 @@ mod tests {
 
     fn tool(name: &str, description: &str, effect: &str, operator: &str) -> String {
         json!({"name":name,"description":description,"effect":effect,
-            "policy_ceiling":"auto","default_access":{"operator":operator},
+            "default_policy":{"operator":operator},
             "parameters":{"type":"object","properties":{"q":{"type":"string"}},"required":[],"additionalProperties":false}})
             .to_string()
     }
@@ -441,7 +441,7 @@ mod tests {
             write(
                 root,
                 "Core/files/tools/read_file/tool.json",
-                &tool("read_file", "Read", "read", "auto"),
+                &tool("read_file", "Read", "read", "allow"),
             );
             write(
                 root,
@@ -451,7 +451,7 @@ mod tests {
             write(
                 root,
                 "Core/files/tools/write_file/tool.json",
-                &tool("write_file", "Write", "write", "auto"),
+                &tool("write_file", "Write", "write", "allow"),
             );
             write(
                 root,
@@ -480,7 +480,7 @@ mod tests {
         write(
             &new,
             "Core/files/tools/read_file/tool.json",
-            &tool("read_file", "Read a file", "read", "ask"),
+            &tool("read_file", "Read a file", "read", "require_approval"),
         );
         write(
             &new,
@@ -515,7 +515,7 @@ mod tests {
         write(
             &new,
             "Core/files/tools/read_file/tool.json",
-            &tool("read_file", "Read", "write", "auto"),
+            &tool("read_file", "Read", "write", "allow"),
         );
         write(&new, "Core/files/tools/write_file/tool.json", "{");
         fs::remove_dir_all(new.join("Core/notes")).unwrap();
@@ -548,7 +548,7 @@ mod tests {
         write(
             &new,
             "Core/files/tools/move_file/tool.json",
-            &tool("move_file", "Move", "write", "auto"),
+            &tool("move_file", "Move", "write", "allow"),
         );
         write(&new, "Core/files/adapter.rs", "fn main() { changed() }");
         write(&new, "Core/files/files.json", r#"{"name":"Files v2"}"#);

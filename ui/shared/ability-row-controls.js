@@ -41,38 +41,24 @@ export function _buildMoreButton(items, opts = {}) {
 }
 
 export function _buildPermissionTri(cfg) {
-  const { value = 'auto', canEdit = true, onChange = _noop, ceiling = 'auto', displayOnly = false } = cfg || {};
-  const ORDER = ['deny', 'ask', 'auto'];
-  // Strictness rank — higher = stricter. The agent's pick must rank >= the
-  // ceiling's rank (i.e. be at least as strict as the admin's global limit).
-  const RANK = { auto: 0, ask: 1, deny: 2 };
-  const ceilRank = RANK[ceiling] ?? 0;
+  const { value = 'allow', canEdit = true, onChange = _noop, displayOnly = false } = cfg || {};
+  const ORDER = ['deny', 'require_approval', 'allow'];
   // Map the permission mode onto the group tri's off/mixed/on detents so the
   // knob position + colour are shared 1:1: deny→off (left, grey), ask→mixed
   // (middle, amber), auto→on (right, accent on a filled track).
-  const _toState = m => (m === 'auto' ? 'on' : (m === 'ask' ? 'mixed' : 'off'));
+  const _toState = m => (m === 'allow' ? 'on' : (m === 'require_approval' ? 'mixed' : 'off'));
 
   const tri = document.createElement('span');
   tri.className = 'ac-tri ac-tri-perm';
   tri.setAttribute('role', 'slider');
   tri.setAttribute('tabindex', canEdit ? '0' : '-1');
   tri.innerHTML = '<span class="ac-tri-knob"></span>';
-  // Carry the ceiling on the element as an introspection hook (the old app3.css
-  // hatch that consumed it is gone — the panel's greyed row shows the limit now).
-  if (ceilRank > 0) tri.dataset.ceiling = ceiling;
-
-  let current = ORDER.includes(value) ? value : 'auto';
-  // Never display a value looser than the admin ceiling.
-  if ((RANK[current] ?? 0) < ceilRank) current = ceiling;
-  const _ceilNote = ceilRank > 0
-    ? ` — admin global limit: ${ceiling === 'deny' ? 'Deny (locked)' : 'Ask'}, agents can only be stricter`
-    : '';
+  let current = ORDER.includes(value) ? value : 'allow';
   const _titleFor = m =>
-    'Deny · Ask · Auto — '
-    + (m === 'deny' ? 'blocked: the agent never sees this tool'
-      : m === 'ask' ? 'allowed, but asks for confirmation before each use'
-      : 'allowed, runs automatically')
-    + _ceilNote;
+    'Deny · Require approval · Allow — '
+    + (m === 'deny' ? 'Deny: the agent never sees this tool'
+      : m === 'require_approval' ? 'Require approval before each use'
+      : 'Allow: runs without approval');
   const paint = () => {
     tri.dataset.state = _toState(current);
     tri.title = _titleFor(current);
@@ -83,7 +69,7 @@ export function _buildPermissionTri(cfg) {
   tri._mode = () => current;
   // Repaint from a new mode WITHOUT saving — a display-only caller (the tool row)
   // drives this from the tool's own state, never from clicks on the tri.
-  tri._paint = (m) => { current = ORDER.includes(m) ? m : 'auto'; paint(); };
+  tri._paint = (m) => { current = ORDER.includes(m) ? m : 'allow'; paint(); };
 
   // DISPLAY-ONLY — the tri renders the three detents (Deny · Ask · Auto) but OWNS
   // no selection: the tool row's choice is made in the panel this graphic opens,
@@ -108,8 +94,6 @@ export function _buildPermissionTri(cfg) {
   let _busy = false;
   async function _go(next) {
     if (_busy || !ORDER.includes(next)) return;
-    // Clamp a looser-than-ceiling request UP to the admin ceiling.
-    if ((RANK[next] ?? 0) < ceilRank) next = ceiling;
     if (next === current) return;
     const prev = current;
     _busy = true;
@@ -132,15 +116,15 @@ export function _buildPermissionTri(cfg) {
     e.stopPropagation();
     const r = tri.getBoundingClientRect();
     const frac = (e.clientX - r.left) / r.width;
-    _go(frac < 1 / 3 ? 'deny' : (frac < 2 / 3 ? 'ask' : 'auto'));
+    _go(frac < 1 / 3 ? 'deny' : (frac < 2 / 3 ? 'require_approval' : 'allow'));
   });
-  // Keyboard: ←/↓ step toward Deny, →/↑ step toward Auto, Home/End jump to ends.
+  // Keyboard: ←/↓ step toward Deny, →/↑ step toward Allow, Home/End jump to ends.
   tri.addEventListener('keydown', e => {
     const i = ORDER.indexOf(current);
     if (e.key === 'ArrowRight' || e.key === 'ArrowUp') { e.preventDefault(); _go(ORDER[Math.min(ORDER.length - 1, i + 1)]); }
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') { e.preventDefault(); _go(ORDER[Math.max(0, i - 1)]); }
     else if (e.key === 'Home') { e.preventDefault(); _go('deny'); }
-    else if (e.key === 'End') { e.preventDefault(); _go('auto'); }
+    else if (e.key === 'End') { e.preventDefault(); _go('allow'); }
   });
 
   return tri;
@@ -368,13 +352,11 @@ function _buildToolStateControl(toolMeta, opts) {
     onResultDeduplicationChange,
   } = opts || {};
 
-  const ORDER = ['deny', 'ask', 'auto'];          // least → most permissive
-  const RANK = { auto: 0, ask: 1, deny: 2 };      // higher = stricter
-  const ceiling = toolMeta.ceiling || 'auto';     // loosest allowed (admin limit)
-  const ceilRank = RANK[ceiling] ?? 0;            // looser picks clamp UP to this
+  const ORDER = ['deny', 'require_approval', 'allow'];   // least → most permissive
+  // role_access excludes the viewed capability level: shown, but not editable.
+  const roleBlocked = toolMeta.role_blocked === true;
 
-  let perm = ORDER.includes(toolMeta.permMode) ? toolMeta.permMode : 'auto';
-  if ((RANK[perm] ?? 0) < ceilRank) perm = ceiling;
+  let perm = ORDER.includes(toolMeta.permMode) ? toolMeta.permMode : 'allow';
   let vis = toolMeta.mode === 'discoverable' ? 'discoverable' : 'visible';
   let execution = toolMeta.execution ? { ...toolMeta.execution } : null;
   let savingExecution = false;
@@ -397,16 +379,14 @@ function _buildToolStateControl(toolMeta, opts) {
   // the tool has no visibility, green once it is discoverable or visible.
   const tri = _buildPermissionTri({
     value: perm,
-    ceiling,
-    canEdit,
+    canEdit: canEdit && !roleBlocked,
     displayOnly: true,
   });
   tri.classList.add('ac-tool-perm-tri');
 
-  // Approval: Ask asks before each use unless the chat is in Auto mode; Auto never asks.
-  const _permText = m => (m === 'deny' ? 'Off' : (m === 'ask' ? 'Ask unless Auto' : 'Never ask'));
+  const _permText = m => (m === 'deny' ? 'Deny' : (m === 'require_approval' ? 'Require approval' : 'Allow'));
   const _visText = m => (m === 'discoverable' ? 'Discoverable' : 'Visible');
-  const _permSvg = m => (m === 'deny' ? _TOOL_STATE_OFF_SVG : (m === 'ask' ? _TOOL_STATE_ASK_SVG : _TOOL_STATE_AUTO_SVG));
+  const _permSvg = m => (m === 'deny' ? _TOOL_STATE_OFF_SVG : (m === 'require_approval' ? _TOOL_STATE_ASK_SVG : _TOOL_STATE_AUTO_SVG));
 
   function paint() {
     tri._paint(perm);                                  // knobs = the permission
@@ -425,7 +405,6 @@ function _buildToolStateControl(toolMeta, opts) {
   async function _save(kind, next) {
     const isPerm = kind === 'perm';
     const cur = isPerm ? perm : vis;
-    if (isPerm && (RANK[next] ?? 0) < ceilRank) next = ceiling;   // clamp to ceiling
     if (next === cur) return true;
     if (isPerm) perm = next; else vis = next;
     paint();                                   // optimistic
@@ -496,17 +475,17 @@ function _buildToolStateControl(toolMeta, opts) {
       out.push({ info: true, className: 'ac-tool-state-head', label: 'Availability' });
       if (showPerm) out.push({
         iconHtml: _EYE_OFF_SVG, label: 'Off', checked: perm === 'deny',
-        disabled: !canEdit || locked, keepOpen: true, action: () => _save('perm', 'deny'),
+        disabled: !canEdit || roleBlocked || locked, keepOpen: true, action: () => _save('perm', 'deny'),
       });
       for (const v of ['discoverable', 'visible']) {
         out.push({
           iconHtml: v === 'discoverable' ? _DOWNLOAD_SVG : _EYE_ON_SVG,
           label: _visText(v),
           checked: perm !== 'deny' && vis === v,
-          disabled: !canEdit || locked || (showPerm && ceiling === 'deny'),
+          disabled: !canEdit || roleBlocked || locked,
           keepOpen: true,
-          // Leaving Off lands on Ask, the safe permission.
-          action: async () => (perm !== 'deny' || await _save('perm', 'ask')) && _save('vis', v),
+          // Leaving Off lands on Require approval, the safe permission.
+          action: async () => (perm !== 'deny' || await _save('perm', 'require_approval')) && _save('vis', v),
         });
       }
       if (locked) out.push({ info: true, label: 'Always visible: agents use this tool to find and load the others.' });
@@ -514,20 +493,19 @@ function _buildToolStateControl(toolMeta, opts) {
     if (showPerm) {
       if (out.length) out.push({ separator: true });   // the hairline divider
       out.push({ info: true, className: 'ac-tool-state-head', label: 'Approval' });
-      for (const m of showVisibility ? ['ask', 'auto'] : ORDER) {
+      for (const m of showVisibility ? ['require_approval', 'allow'] : ORDER) {
         out.push({
           iconHtml: _permSvg(m),
           label: _permText(m),
           checked: perm === m,
-          // A pick looser than the admin ceiling is not offered (same lock the
-          // old tri-toggle showed on its locked detent).
-          disabled: !canEdit || (RANK[m] ?? 0) < ceilRank,
+          disabled: !canEdit || roleBlocked,
           keepOpen: true,
           action: () => _save('perm', m),
         });
       }
     }
     // Settings stay editable; the owner's tier decides whether the agent can use them.
+    if (roleBlocked) out.push({ info: true, className: 'v3-role-note', label: 'Not available to this level' });
     if (toolMeta.tierBlocked) out.push({ info: true, className: 'v3-tier-note',
       label: 'Unavailable on the agent owner’s tier: the agent sees this tool, but calls fail until the owner upgrades.' });
     if (showResultDeduplication) {

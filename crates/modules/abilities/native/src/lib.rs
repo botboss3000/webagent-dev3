@@ -141,18 +141,15 @@ pub trait NativeHost: Sync {
         agent: &'a str,
         pin: &'a PlatformPin,
     ) -> Pending<'a, Result<Value>>;
-    /// Session `sid`'s effective policy, mode revision, ability visibility and ability state.
-    fn ability_controls<'a>(
-        &'a self,
-        sid: &'a str,
-    ) -> Pending<'a, Result<(Value, u64, Value, Value)>>;
+    /// Session `sid`'s mode revision, ability visibility and ability state.
+    fn ability_controls<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<(u64, Value, Value)>>;
     /// `ability_controls` for discovery: abilities whose required model role `agent` cannot
     /// resolve are turned Off, so the model cannot load a tool it cannot run.
     fn discovery_controls<'a>(
         &'a self,
         sid: &'a str,
         agent: &'a str,
-    ) -> Pending<'a, Result<(Value, u64, Value, Value)>>;
+    ) -> Pending<'a, Result<(u64, Value, Value)>>;
     /// Session `sid`'s validated capability mode.
     fn session_mode<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Value>>;
     /// Each item's closest-text score against `query` from the matcher's `rank` operation;
@@ -168,11 +165,9 @@ pub trait NativeHost: Sync {
         &self,
         access: &LiveAccess,
         name: &str,
-        policy: &Value,
         visibility: &Value,
         state: &Value,
         loaded: &Value,
-        read_only: bool,
     ) -> ToolDecision;
     /// The model a provider selection without one falls back to.
     fn default_agent_model(&self) -> &'static str;
@@ -224,7 +219,7 @@ pub trait NativeHost: Sync {
     /// The abilities catalog's ability state with conversation selections `loaded` applied.
     fn selected_state(&self, visibility: &Value, state: &Value, loaded: &Value) -> Value;
     /// The abilities catalog's entries under `policy`, `visibility` and `state`.
-    fn catalog_with(&self, policy: &Value, visibility: &Value, state: &Value) -> Vec<Value>;
+    fn catalog_with(&self, visibility: &Value, state: &Value) -> Vec<Value>;
     /// Every tool schema the abilities catalog knows.
     fn all_schemas(&self) -> Vec<Value>;
     /// Whether tool `name` is (available, visible) in the abilities catalog.
@@ -257,13 +252,13 @@ pub trait NativeHost: Sync {
         store: &'a StoreCore,
         sid: &'a str,
     ) -> Pending<'a, Result<String>>;
-    /// Session `sid`'s effective policy, mode revision, ability visibility and ability state,
+    /// Session `sid`'s mode revision, ability visibility and ability state,
     /// read through agent store `store`'s planes.
     fn scoped_ability_controls<'a>(
         &'a self,
         store: &'a StoreCore,
         sid: &'a str,
-    ) -> Pending<'a, Result<(Value, u64, Value, Value)>>;
+    ) -> Pending<'a, Result<(u64, Value, Value)>>;
     /// Session `sid`'s validated capability mode, read through agent store `store`'s planes.
     fn scoped_session_mode<'a>(
         &'a self,

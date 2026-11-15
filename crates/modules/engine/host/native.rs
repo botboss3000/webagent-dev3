@@ -518,18 +518,11 @@ impl
         >,
         sid: &'a str,
         run: &'a str,
-        read_only: bool,
     ) -> impl std::future::Future<Output = Result<Vec<webagent_capability_contracts::Guidance>>>
            + Send
            + 'a {
         async move {
-            crate::tools::core_skills::own_capability_guidance(
-                &self.host.app(view),
-                sid,
-                run,
-                read_only,
-            )
-            .await
+            crate::tools::core_skills::own_capability_guidance(&self.host.app(view), sid, run).await
         }
     }
 

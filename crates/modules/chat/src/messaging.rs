@@ -13,16 +13,6 @@ pub fn owns(name: &str) -> bool {
     starts(name) || name == "message_session"
 }
 
-/// Project defaults for legacy saved policies; explicit denials remain authoritative.
-pub fn policy_defaults(mut policy: Value) -> Value {
-    for name in ["message_session", "start_session", "start_spawn"] {
-        if policy["rules"].get(name).is_none() {
-            policy["rules"][name] = json!("allow");
-        }
-    }
-    policy
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MessageArgs {

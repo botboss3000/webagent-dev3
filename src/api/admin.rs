@@ -13,7 +13,7 @@ pub(crate) async fn overview(State(app): State<App>) -> Api {
     let runs = runs.iter().map(public_run).collect::<Vec<_>>();
     Ok(Json(
         json!({"shutoff":app.shutoff().await?,"provider":{"connected":if operator {Some(app.store.get("provider_tokens").await?.is_some())}else{None},"login":login},
-        "model":if operator {app.store.agent_model().await?["model"].clone()}else{Value::Null},"policy":app.store.get("policy").await?,"runs":runs}),
+        "model":if operator {app.store.agent_model().await?["model"].clone()}else{Value::Null},"runs":runs}),
     ))
 }
 pub(crate) fn requested_selection(
@@ -96,92 +96,19 @@ pub(crate) async fn migrate_provider_selection(store: &Store) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn migrate_tool_policy_defaults(store: &Store) -> Result<()> {
-    let mut policy = store.get("policy").await?.unwrap_or_else(policy_default);
-    let defaults = policy_default();
-    let mut changed = false;
-    if policy["rules"]["build_work"].is_null() {
-        policy["rules"]["build_work"] = json!("require_approval");
-        changed = true;
-    }
-    // Rules for the retired v3 build and source tools no longer gate anything.
-    for retired in [
-        "v3_build_work",
-        "v3_worker_submit",
-        "v3_source_list",
-        "v3_source_read",
-        "v3_source_apply",
-    ] {
-        if let Some(rules) = policy["rules"].as_object_mut() {
-            changed |= rules.remove(retired).is_some();
-        }
-    }
-    // Renamed Base background controls keep the rule their old names had.
-    for (new, old) in [
-        ("background_status", "task_status"),
-        ("background_cancel", "task_cancel"),
-    ] {
-        if policy["rules"][new].is_null() || policy["rules"].get(old).is_some() {
-            if let Some(rule) = policy["rules"][old].as_str().map(str::to_owned) {
-                policy["rules"][new] = json!(rule);
-            }
-        }
-    }
-    for old in ["task_status", "task_wait", "task_cancel"] {
-        if policy["rules"]
-            .as_object_mut()
-            .is_some_and(|rules| rules.remove(old).is_some())
-        {
-            changed = true;
-        }
-    }
-    // A tool folder's `policy_ceiling` is its installation rule, set nowhere else.
-    for (name, definition) in webagent_abilities::tool_definitions::definitions() {
-        let rule = json!(match definition.policy_ceiling {
-            webagent_access::Permission::Auto => "allow",
-            webagent_access::Permission::Ask => "require_approval",
-            webagent_access::Permission::Deny => "deny",
-        });
-        if policy["rules"][name] != rule {
-            policy["rules"][name] = rule;
-            changed = true;
-        }
-    }
-    for (name, _) in defaults["rules"].as_object().unwrap() {
-        if policy["rules"][name].is_null() {
-            policy["rules"][name] = json!("deny");
-            changed = true;
-        }
-    }
-    if changed {
-        policy["version"] = json!(policy["version"].as_u64().unwrap_or(0) + 1);
-        store.put("policy", &policy).await?;
-    }
-    Ok(())
-}
 pub(crate) async fn ability_catalog(State(app): State<App>) -> Api {
-    let policy = app
-        .store
-        .get("policy")
-        .await?
-        .unwrap_or_else(policy_default);
     let visibility = Value::Null;
     Ok(Json(json!({"catalog_version":app.abilities.version(),
         "visibility_revision":visibility["revision"],
-        "abilities":app.abilities.catalog_with(&policy, &visibility, &Value::Null)})))
+        "abilities":app.abilities.catalog_with(&visibility, &Value::Null)})))
 }
 pub(crate) async fn agent_ability_catalog(State(app): State<App>, Path(id): Path<String>) -> Api {
     let app = admin_agent_view(&app, &id).await?;
     let visibility = agent_abilities(&app).await?;
-    let policy = app
-        .store
-        .get("policy")
-        .await?
-        .unwrap_or_else(policy_default);
     Ok(Json(json!({"catalog_version":app.abilities.version(),
         "revision":visibility["revision"],"visibility":visibility["visibility"],
         "skill_visibility":visibility["skill_visibility"],"tool_modes":visibility["tool_modes"],
-        "abilities":app.abilities.configuration_catalog(&policy, &visibility)})))
+        "abilities":app.abilities.configuration_catalog(&visibility)})))
 }
 // Same fresh-agent Prompt / Skills / Tools composition as the v2 Abilities
 // overview. V3 has no provider tokenizer yet, so the numbers are explicit
@@ -190,20 +117,18 @@ pub(crate) fn estimated_tokens(text: &str) -> usize {
     text.chars().count().div_ceil(4)
 }
 /// Revision stamp over every input the composition estimate reads: the catalog
-/// guidance version, this agent's ability visibility revision, the policy
-/// revision and the prompt-slot rows. The abilities overview polls it often and
+/// guidance version, this agent's ability visibility revision and the
+/// prompt-slot rows. The abilities overview polls it often and
 /// rebuilds the estimate only when it moves, so it must cover every input.
 pub(crate) fn composition_revision(
     catalog_version: &str,
     visibility: &Value,
-    policy: &Value,
     prompt_slots: (i64, i64, i64),
 ) -> String {
     let (slots, updated, revisions) = prompt_slots;
     format!(
-        "{catalog_version}:{}:{}:{slots}:{updated}:{revisions}",
+        "{catalog_version}:{}:{slots}:{updated}:{revisions}",
         visibility["revision"].as_u64().unwrap_or(0),
-        policy["revision"].as_u64().unwrap_or(0)
     )
 }
 pub(crate) async fn agent_context_composition(
@@ -213,15 +138,9 @@ pub(crate) async fn agent_context_composition(
     let app = admin_agent_view(&app, &id).await?;
     let slots = app.store.list_prompt_slots().await?;
     let visibility = agent_abilities(&app).await?;
-    let policy = app
-        .store
-        .get("policy")
-        .await?
-        .unwrap_or_else(policy_default);
     let revision = composition_revision(
         app.abilities.version(),
         &visibility,
-        &policy,
         app.store.prompt_slot_stamp().await?,
     );
     let mut prompt_sources = vec![json!({"label":"Base instructions",
@@ -233,9 +152,7 @@ pub(crate) async fn agent_context_composition(
                 "tokens":estimated_tokens(content)}));
         }
     }
-    let guidance = app
-        .abilities
-        .visible_guidance(&policy, &visibility, &Value::Null);
+    let guidance = app.abilities.visible_guidance(&visibility, &Value::Null);
     let skill_sources = if guidance.is_empty() {
         Vec::new()
     } else {
@@ -243,7 +160,7 @@ pub(crate) async fn agent_context_composition(
     };
     let tool_sources = app
         .abilities
-        .schemas_with(&policy, &json!([]), &visibility, &Value::Null)
+        .schemas_with(&json!([]), &visibility, &Value::Null)
         .into_iter()
         .map(|schema| {
             let name = schema["name"].as_str().unwrap_or("Tool");
@@ -278,15 +195,9 @@ pub(crate) async fn agent_context_composition_revision(
 ) -> Api {
     let app = admin_agent_view(&app, &id).await?;
     let visibility = agent_abilities(&app).await?;
-    let policy = app
-        .store
-        .get("policy")
-        .await?
-        .unwrap_or_else(policy_default);
     let revision = composition_revision(
         app.abilities.version(),
         &visibility,
-        &policy,
         app.store.prompt_slot_stamp().await?,
     );
     Ok(Json(json!({"revision":revision})))
@@ -403,36 +314,6 @@ pub(crate) async fn agent_tool_mode_set(
         .await?;
     Ok(Json(value))
 }
-pub(crate) async fn policy_get(State(app): State<App>) -> Api {
-    let mut policy = app
-        .store
-        .get("policy")
-        .await?
-        .unwrap_or_else(policy_default);
-    let names: std::collections::BTreeSet<String> = app
-        .abilities
-        .all_schemas()
-        .iter()
-        .chain(crate::mcp::all_schemas().iter())
-        .filter_map(|s| s["name"].as_str().map(str::to_owned))
-        .collect();
-    // Show unnamed tools with the template rule the runtime applies to them.
-    let template = policy_default();
-    for name in &names {
-        if policy["rules"].get(name).is_none() {
-            policy["rules"][name] = template["rules"].get(name).cloned().unwrap_or_else(|| {
-                json!(if crate::tools::is_read(name) {
-                    "allow"
-                } else {
-                    "require_approval"
-                })
-            });
-        }
-    }
-    Ok(Json(
-        json!({"version":policy["version"],"rules":policy["rules"],"catalog_names":names}),
-    ))
-}
 // Tenant connections are the sole credential authority after the catalog migration.
 // Retire the global route so installation oversight cannot bypass connection ownership.
 pub(crate) async fn provider_start(State(app): State<App>) -> Api {
@@ -505,25 +386,23 @@ mod composition_revision_tests {
     #[test]
     fn stamp_moves_with_each_estimated_input_and_is_stable_otherwise() {
         let visibility = json!({"revision":3});
-        let policy = json!({"revision":7});
-        let base = composition_revision("catalog-a", &visibility, &policy, (2, 100, 9));
+        let base = composition_revision("catalog-a", &visibility, (2, 100, 9));
         assert_eq!(
             base,
-            composition_revision("catalog-a", &visibility, &policy, (2, 100, 9))
+            composition_revision("catalog-a", &visibility, (2, 100, 9))
         );
         for changed in [
-            composition_revision("catalog-b", &visibility, &policy, (2, 100, 9)),
-            composition_revision("catalog-a", &json!({"revision":4}), &policy, (2, 100, 9)),
-            composition_revision("catalog-a", &visibility, &json!({"revision":8}), (2, 100, 9)),
-            composition_revision("catalog-a", &visibility, &policy, (3, 100, 9)),
-            composition_revision("catalog-a", &visibility, &policy, (2, 101, 9)),
-            composition_revision("catalog-a", &visibility, &policy, (2, 100, 10)),
+            composition_revision("catalog-b", &visibility, (2, 100, 9)),
+            composition_revision("catalog-a", &json!({"revision":4}), (2, 100, 9)),
+            composition_revision("catalog-a", &visibility, (3, 100, 9)),
+            composition_revision("catalog-a", &visibility, (2, 101, 9)),
+            composition_revision("catalog-a", &visibility, (2, 100, 10)),
         ] {
             assert_ne!(base, changed);
         }
         assert_eq!(
-            composition_revision("c", &json!({}), &json!({}), (0, 0, 0)),
-            "c:0:0:0:0:0"
+            composition_revision("c", &json!({}), (0, 0, 0)),
+            "c:0:0:0:0"
         );
     }
 
@@ -531,14 +410,7 @@ mod composition_revision_tests {
     async fn stored_prompt_slots_move_the_stamp() {
         let (_root, app) = crate::runtime_tests::fixture().await;
         let visibility = app.store.agent_abilities().await.unwrap();
-        let policy = app
-            .store
-            .get("policy")
-            .await
-            .unwrap()
-            .unwrap_or_else(policy_default);
-        let stamp =
-            |slots| composition_revision(app.abilities.version(), &visibility, &policy, slots);
+        let stamp = |slots| composition_revision(app.abilities.version(), &visibility, slots);
         let before = stamp(app.store.prompt_slot_stamp().await.unwrap());
         assert_eq!(before, stamp(app.store.prompt_slot_stamp().await.unwrap()));
         app.store

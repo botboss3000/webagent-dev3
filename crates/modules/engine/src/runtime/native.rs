@@ -58,7 +58,6 @@ pub trait NativeDispatch<S: Sync, C: SchemaCatalog, B: Sync, H: SessionBinding>:
         view: View<'a, S, C, B, H>,
         sid: &'a str,
         run: &'a str,
-        read_only: bool,
     ) -> impl Future<Output = Result<Vec<webagent_capability_contracts::Guidance>>> + Send + 'a;
 
     fn optimization_prepare<'a>(

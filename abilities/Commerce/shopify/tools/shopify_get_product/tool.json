@@ -1,0 +1,11 @@
+{
+  "name": "shopify_get_product",
+  "description": "Shopify get product (shopify ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

@@ -108,7 +108,7 @@ impl<
         } else {
             None
         };
-        let (_, _, settings, _) = app.ability_controls(sid).await?;
+        let (_, settings, _) = app.ability_controls(sid).await?;
         Ok(crate::digest(&json!([
             policy,
             template,
@@ -142,7 +142,7 @@ impl<
         sid: &'a str,
     ) -> impl std::future::Future<Output = Result<Value>> + Send + 'a {
         async move {
-            let (_, _, settings, _) = self.ability_controls(sid).await?;
+            let (_, settings, _) = self.ability_controls(sid).await?;
             Ok(settings)
         }
     }

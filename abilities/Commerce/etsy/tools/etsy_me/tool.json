@@ -1,0 +1,11 @@
+{
+  "name": "etsy_me",
+  "description": "Etsy me (etsy ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

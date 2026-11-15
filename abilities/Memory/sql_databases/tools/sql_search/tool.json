@@ -1,0 +1,11 @@
+{
+  "name": "sql_search",
+  "description": "Sql search (sql_databases ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

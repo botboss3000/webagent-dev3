@@ -19,11 +19,12 @@
     "additionalProperties": false
   },
   "effect": "write",
-  "retry_risk": "low",
-  "policy_ceiling": "ask",
-  "default_access": {
-    "operator": "ask",
-    "member": "ask",
-    "visitor": "ask"
+  "repeat_guard": {
+    "risk": "low"
+  },
+  "default_policy": {
+    "operator": "require_approval",
+    "member": "require_approval",
+    "visitor": "require_approval"
   }
 }

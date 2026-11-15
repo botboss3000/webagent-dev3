@@ -1,0 +1,11 @@
+{
+  "name": "square_get_inventory",
+  "description": "Square get inventory (square ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

@@ -3,9 +3,9 @@ import { _markSaving, _flashSaveCheck } from '../../../../shared/models/dom-util
 const node = (tag, cls = '', text = '') => {
   const el = document.createElement(tag); el.className = cls; el.textContent = text; return el;
 };
-const permissions = ['deny', 'ask', 'auto'];
+const permissions = ['deny', 'require_approval', 'allow'];
 const clone = value => structuredClone(value || {});
-const title = mode => ({ deny: 'Off', ask: 'Ask unless Auto', auto: 'Never ask' })[mode] || mode;
+const title = mode => ({ deny: 'Deny', require_approval: 'Require approval', allow: 'Allow' })[mode] || mode;
 const select = (label, choices, current) => {
   const el = node('select', 'ac-input ac-config-sel'); el.setAttribute('aria-label', label);
   for (const [value, name] of choices) {

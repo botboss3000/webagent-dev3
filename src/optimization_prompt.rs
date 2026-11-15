@@ -46,7 +46,7 @@ async fn prospective(
     if !access.admitted() {
         return Ok(None);
     }
-    let (policy, _, visibility, state) = ability_controls(app, sid).await?;
+    let (_, visibility, state) = ability_controls(app, sid).await?;
     let mode = session_mode(app, sid).await?;
     let mut trial_state = state.clone();
     let mut active = state["active"]
@@ -87,11 +87,9 @@ async fn prospective(
             app,
             &access,
             name,
-            &policy,
             &visibility,
             &trial_state,
             &json!(loaded),
-            mode["mode"] == "read_only",
         )
         .for_execution_mode(&mode);
         if decision.permission == crate::access::Permission::Deny {
@@ -107,7 +105,7 @@ const EXPERIMENT_GUIDANCE: &str = "This run is an explicit /optimize software re
 /// The request settings are pinned once; preferences and command overrides remain separate.
 pub(crate) async fn prepare(app: &App, sid: &str, run: &mut Value) -> Result<()> {
     if run["optimization_checked"] != true {
-        let (_, _, visibility, _) = ability_controls(app, sid).await?;
+        let (_, visibility, _) = ability_controls(app, sid).await?;
         let preferences = match visibility["settings"].get("optimization") {
             Some(value) => serde_json::from_value(value.clone()),
             None => Ok(crate::optimization_settings::OptimizationSettings::default()),
@@ -158,7 +156,7 @@ pub(crate) async fn prepare(app: &App, sid: &str, run: &mut Value) -> Result<()>
         return Ok(());
     }
     // Commit no activation until every dependency has passed prospective checks.
-    let previous = ability_controls(app, sid).await?.3;
+    let previous = ability_controls(app, sid).await?.2;
     if state["active"] != previous["active"] {
         state["revision"] = json!(
             previous["revision"]
@@ -203,17 +201,16 @@ mod tests {
             .save_agent_abilities(&settings, revision)
             .await
             .unwrap();
-        app.store
-            .put(
-                "policy",
-                &json!({"version":1,"rules":{"file_edit":"require_approval"}}),
-            )
-            .await
-            .unwrap();
+        crate::runtime_tests::set_tool_permission(
+            &app,
+            "file_edit",
+            crate::access::Permission::Ask,
+        )
+        .await;
         app.store
             .put(
                 &crate::key("session_mode", &sid),
-                &json!({"mode":"write","revision":1}),
+                &json!({"execution_mode":"ask","revision":1}),
             )
             .await
             .unwrap();
@@ -223,10 +220,12 @@ mod tests {
     #[tokio::test]
     async fn discoverable_inactive_dependency_passes_prospective_checks_without_side_effects() {
         let (_root, app, sid, run) = fixture().await;
-        let state = ability_controls(&app, &sid).await.unwrap().3;
-        // The builtin Ask composer mode is read-only. This fixture explicitly
-        // keeps writes enabled while the installation policy requires approval.
-        assert_eq!(session_mode(&app, &sid).await.unwrap()["mode"], "write");
+        let state = ability_controls(&app, &sid).await.unwrap().2;
+        // The level requires approval for file_edit.
+        assert_eq!(
+            session_mode(&app, &sid).await.unwrap()["execution_mode"],
+            "ask"
+        );
         assert!(!app.abilities.tool_available(
             "file_edit",
             &app.store.agent_abilities().await.unwrap(),
@@ -245,27 +244,17 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&json!("tool:file_edit")));
-        let (policy, _, visibility, _) = ability_controls(&app, &sid).await.unwrap();
+        let (_, visibility, _) = ability_controls(&app, &sid).await.unwrap();
         let access = app
             .store
             .live_access(app.store.current_user_id(), "shared_default")
             .await
             .unwrap();
         assert_eq!(
-            live_tool_decision(
-                &app,
-                &access,
-                "file_edit",
-                &policy,
-                &visibility,
-                &trial,
-                &loaded,
-                false
-            )
-            .permission,
+            live_tool_decision(&app, &access, "file_edit", &visibility, &trial, &loaded).permission,
             crate::access::Permission::Ask
         );
-        assert_eq!(ability_controls(&app, &sid).await.unwrap().3, state);
+        assert_eq!(ability_controls(&app, &sid).await.unwrap().2, state);
     }
 
     #[tokio::test]
@@ -324,7 +313,7 @@ mod tests {
             .await
             .unwrap()
             .is_none());
-        assert!(ability_controls(&app, &sid).await.unwrap().3["active"]
+        assert!(ability_controls(&app, &sid).await.unwrap().2["active"]
             .as_array()
             .unwrap()
             .is_empty());

@@ -1,0 +1,11 @@
+{
+  "name": "bigcommerce_list_orders",
+  "description": "Bigcommerce list orders (bigcommerce ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

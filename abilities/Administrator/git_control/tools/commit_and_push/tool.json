@@ -2,9 +2,8 @@
   "name": "commit_and_push",
   "description": "Commit explicit reviewed paths and push without force; reconcile any uncertain result",
   "effect": "write",
-  "policy_ceiling": "ask",
-  "default_access": {
-    "operator": "auto",
+  "default_policy": {
+    "operator": "require_approval",
     "member": "deny",
     "visitor": "deny"
   },

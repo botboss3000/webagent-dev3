@@ -241,9 +241,7 @@ fn metadata_validation_and_mode_selection() {
     let mut metadata = json!({"owner_id":"owner","ability_revision":7,"manager_incoming_message":{"enabled":true}});
     let update = IdentityUpdate {
         revision: 1,
-        execution_modes: Some(
-            json!([{"id":"review","label":" Review ","prompt":"Read only","permission_policy":"read_only"}]),
-        ),
+        execution_modes: Some(json!([{"id":"review","label":" Review ","prompt":"Read only"}])),
         default_execution_mode: Some("review".into()),
         ..Default::default()
     };
@@ -278,7 +276,6 @@ fn invalid_fields_and_mode_boundaries() {
         json!({}),
         json!([{"id":"ask"},{"id":"ask"}]),
         json!([{"id":"Bad"}]),
-        json!([{"id":"x","permission_policy":"admin"}]),
         json!([{"id":"x","label":" "}]),
     ] {
         assert!(modes::normalize(&raw).is_err());

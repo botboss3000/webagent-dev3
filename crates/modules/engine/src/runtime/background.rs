@@ -143,7 +143,7 @@ impl<
         if !access.admitted() {
             return Ok(false);
         }
-        let (policy, mode_revision, visibility, state) = app
+        let (mode_revision, visibility, state) = app
             .ability_controls_for(
                 sid,
                 origin["requester_user_id"]
@@ -169,7 +169,6 @@ impl<
             || arguments != task["arguments"]
             || authorization["digest"] != digest(&authorization["arguments"])
             || !authorization["human_approved"].is_boolean()
-            || authorization["policy_version"] != task["policy_version"]
         {
             return Ok(false);
         }
@@ -177,11 +176,9 @@ impl<
             .live_tool_decision(
                 &access,
                 name,
-                &policy,
                 &visibility,
                 &state,
                 &task["loaded_abilities"],
-                true,
             )
             .for_execution_mode(&mode);
         if decision.permission == access::Permission::Deny {
@@ -189,8 +186,7 @@ impl<
         }
         let approved = authorization["human_approved"] == true;
         if approved || decision.permission == access::Permission::Ask {
-            let fresh = authorization["policy_version"] == policy["version"]
-                && authorization["mode_revision"] == json!(mode_revision)
+            let fresh = authorization["mode_revision"] == json!(mode_revision)
                 && authorization["visibility_revision"] == visibility["revision"]
                 && authorization["ability_state_revision"] == state["revision"]
                 && authorization["access_revision"] == json!(access.revision.clone());

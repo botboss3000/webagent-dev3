@@ -2,11 +2,10 @@
   "name": "stop_session",
   "description": "Cancel a session's active runs and pending queued messages. Use it for a session in scope. It does not undo completed or uncertain external effects.",
   "effect": "write",
-  "policy_ceiling": "ask",
-  "default_access": {
-    "operator": "auto",
-    "member": "auto",
-    "visitor": "ask"
+  "default_policy": {
+    "operator": "require_approval",
+    "member": "require_approval",
+    "visitor": "require_approval"
   },
   "parameters": {
     "type": "object",

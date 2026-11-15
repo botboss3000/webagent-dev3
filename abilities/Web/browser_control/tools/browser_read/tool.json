@@ -2,10 +2,9 @@
   "name": "browser_read",
   "description": "Look at web pages in a private server browser: navigate, read rendered text, measure element sizes and positions, sample rendered pixel colours, read page-load timing, wait for and time conditions, inspect animations, scroll, emulate phone/desktop and dark mode, and take screenshots that attach to the reply. Signed out on public sites; clicking and typing use browser_input",
   "effect": "read",
-  "policy_ceiling": "auto",
-  "default_access": {
-    "operator": "auto",
-    "member": "ask",
+  "default_policy": {
+    "operator": "allow",
+    "member": "require_approval",
     "visitor": "deny"
   },
   "parameters": {
@@ -163,7 +162,7 @@
       "label": {
         "type": "string",
         "maxLength": 80,
-        "description": "screenshot (or a script step with \"screenshot\": true): a short name shown under the image in the chat, for example \"Option A \u00b7 step rail \u00b7 phone\". Always label screenshots the user will compare."
+        "description": "screenshot (or a script step with \"screenshot\": true): a short name shown under the image in the chat, for example \"Option A · step rail · phone\". Always label screenshots the user will compare."
       }
     },
     "required": [

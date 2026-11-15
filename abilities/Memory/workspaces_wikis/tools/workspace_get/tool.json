@@ -1,0 +1,11 @@
+{
+  "name": "workspace_get",
+  "description": "Workspace get (workspaces_wikis ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "read"
+}

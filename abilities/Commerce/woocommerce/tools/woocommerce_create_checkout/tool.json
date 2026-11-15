@@ -1,0 +1,11 @@
+{
+  "name": "woocommerce_create_checkout",
+  "description": "Woocommerce create checkout (woocommerce ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "write"
+}

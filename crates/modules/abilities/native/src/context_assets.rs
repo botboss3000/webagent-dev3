@@ -54,8 +54,7 @@ async fn view(host: &dyn NativeHost, sid: &str, run_id: &str) -> Result<View> {
     {
         bail!("Context assets run scope mismatch");
     }
-    let (policy, _, visibility, state) = host.scoped_ability_controls(&scoped, sid).await?;
-    let mode = host.scoped_session_mode(&scoped, sid).await?;
+    let (_, visibility, state) = host.scoped_ability_controls(&scoped, sid).await?;
     let access = host
         .scoped_live_access(&scoped, &actor, sid, &agent)
         .await?;
@@ -64,11 +63,9 @@ async fn view(host: &dyn NativeHost, sid: &str, run_id: &str) -> Result<View> {
             .live_tool_decision(
                 &access,
                 "context_assets",
-                &policy,
                 &visibility,
                 &state,
                 &run["loaded_abilities"],
-                mode["mode"] == "read_only",
             )
             .permission
             == Permission::Deny

@@ -1,0 +1,11 @@
+{
+  "name": "square_create_payment_link",
+  "description": "Square create payment link (square ability). Not yet implemented.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "effect": "write"
+}

@@ -172,12 +172,6 @@ impl AdministrationHost for Fake {
     fn shutoff(&self) -> Pending<'_, Result<bool>> {
         Box::pin(async { Ok(false) })
     }
-    fn policy(&self) -> Pending<'_, Result<Value>> {
-        Box::pin(async { Ok(json!({"version":3,"rules":{"source_review":"allow"}})) })
-    }
-    fn rule(&self, policy: &Value, name: &str) -> String {
-        policy["rules"][name].as_str().unwrap_or("deny").to_owned()
-    }
     fn record<'a>(
         &'a self,
         _agent: Option<&'a str>,
