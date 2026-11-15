@@ -23,7 +23,7 @@ const httpsEndpoint = value => {
   } catch { return false; }
 };
 
-export function buildMcpControls({ ability, request, scope, canManage, levelId, previewUser, status }) {
+export function buildMcpControls({ ability, request, scope, canManage, levelId, status }) {
   if (ability.id !== 'mcp') return null;
   const panel = node('section', 'ac-list v3-mcp-settings');
   const notice = node('p', 'ac-hint', 'Loading MCP connections…');
@@ -33,7 +33,7 @@ export function buildMcpControls({ ability, request, scope, canManage, levelId, 
   const discovery = node('div', 'ac-list');
   const reload = button('Reload MCP connections');
   panel.append(node('h4', '', 'MCP connections'), notice, list, discovery, editor, reload);
-  const editable = canManage === true && !levelId && !previewUser;
+  const editable = canManage === true && !levelId;
   const base = scope + '/mcp';
   let revision = null, generation = 0, busy = false, available = false;
   const current = token => panel.isConnected && token === generation;

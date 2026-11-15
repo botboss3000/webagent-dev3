@@ -345,9 +345,8 @@ pub(super) fn router(app: App) -> Router {
         )
         .route(
             "/agents/{id}/abilities/effective",
-            get(ability_admin::preview),
+            get(ability_admin::level_view),
         )
-        .route("/agents/{id}/ability-members", get(ability_admin::members))
         .route(
             "/agents/{id}/ability-permissions",
             put(ability_admin::permissions_set),

@@ -63,7 +63,6 @@ const request = async (url, method = 'GET', body) => {
     if (path.endsWith('/slots')) return {slots:[{slot_name:'system',content:'Configured prompt'}]};
     if (path.endsWith('/repository-connections')) return {load_failed:true};
     if (path.endsWith('/source-control/sites')) return {load_failed:true};
-    if (path.endsWith('/ability-members')) return {members:[{user_id:'u1',username:'User One',relationship:'member'}]};
     throw new Error('Unexpected GET ' + url);
   }
   const visibility = path.match(/\\/abilities\\/([^/]+)\\/visibility$/);

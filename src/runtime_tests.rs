@@ -7980,21 +7980,6 @@ async fn tenant_ability_http_levels_effective_views_and_stale_updates() {
             .0,
         StatusCode::FORBIDDEN
     );
-    let (_, preview) = call(
-        &app,
-        &token,
-        "a",
-        "GET",
-        &format!("{path}/effective?user_id={user}"),
-        Value::Null,
-    )
-    .await;
-    // The member is no administrator, so Administrator abilities are not even listed.
-    assert!(preview["abilities"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|a| a["id"] != "codebase_admin"));
     // Administrator abilities need an administrator caller, whatever the level saves.
     assert_eq!(
         app.store

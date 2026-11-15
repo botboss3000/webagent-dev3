@@ -184,19 +184,14 @@ async fn catalog(app: &App, identity: &Value, id: &str, params: &HashMap<String,
     // The Abilities page is operator-only; members get abilities through their sessions.
     let rights = authority(app, identity, id, true).await?;
     let caller = identity["_user_id"].as_str().ok_or_else(denied)?;
-    let user = params.get("user_id").map(String::as_str).unwrap_or(caller);
-    if (user != caller || params.contains_key("level_id")) && rights["can_manage"] != true {
+    if params.contains_key("level_id") && rights["can_manage"] != true {
         return Err(denied());
     }
-    // Preview only members of this agent, never arbitrary installation accounts.
     let mut access = app
         .store
-        .live_access(user, id)
+        .live_access(caller, id)
         .await
         .map_err(|_| denied())?;
-    if user != caller && !access.admitted() {
-        return Err(denied());
-    }
     let levels = app.store.capability_levels(id).await?;
     if let Some(level) = params.get("level_id").filter(|v| !v.is_empty()) {
         access.capability_level = levels
@@ -369,23 +364,13 @@ pub(crate) async fn read(
 ) -> Api {
     catalog(&app, &identity, &id, &HashMap::new()).await
 }
-pub(crate) async fn preview(
+pub(crate) async fn level_view(
     State(app): State<App>,
     Extension(identity): Extension<Value>,
     Path(id): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Api {
     catalog(&app, &identity, &id, &params).await
-}
-pub(crate) async fn members(
-    State(app): State<App>,
-    Extension(identity): Extension<Value>,
-    Path(id): Path<String>,
-) -> Api {
-    authority(&app, &identity, &id, true).await?;
-    Ok(Json(
-        json!({"members":app.store.agent_memberships(&id).await?}),
-    ))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

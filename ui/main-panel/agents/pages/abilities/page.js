@@ -32,17 +32,14 @@ export async function renderAbilities(host, request, options) {
     document.removeEventListener('visibilitychange', host._abilityVisibilityHandler);
     host._abilityVisibilityHandler = null;
   }
-  const { agentId, levelId = 'operator', previewUser = '' } = options;
+  const { agentId, levelId = 'operator' } = options;
   const scope = '/agents/' + encodeURIComponent(agentId);
   const generation = (host._abilityGeneration || 0) + 1;
   host._abilityGeneration = generation;
   // Start every read at once; manager-only reads are refused for members and ignored below.
   const managed = (path, fallback) => request(scope + path).catch(() => fallback);
-  const effectiveRead = levelId || previewUser
-    ? request(scope + '/abilities/effective?' + new URLSearchParams({
-        ...(levelId ? { level_id: levelId } : {}),
-        ...(previewUser ? { user_id: previewUser } : {}),
-      })) : null;
+  const effectiveRead = levelId
+    ? request(scope + '/abilities/effective?' + new URLSearchParams({ level_id: levelId })) : null;
   effectiveRead?.catch(() => {});
   const reads = [managed('/slots', { slots: [] }), managed('/context-composition', { tokens: 0 }),
     managed('/repository-connections', { load_failed: true }), managed('/source-control/sites', { load_failed: true })];
@@ -140,7 +137,7 @@ export async function renderAbilities(host, request, options) {
   const list = node('div', 'conn-grid ac-list v3-abilities-list');
   const prompts = canManage ? await buildPromptsGroup(request, agentId) : null;
   if (prompts) list.append(prompts);
-  const controls = await buildPolicyControls({ data, request, scope, levelId, previewUser, rerender, status });
+  const controls = await buildPolicyControls({ data, request, scope, levelId, rerender, status });
   if (host._abilityGeneration !== generation) return;
   overview.querySelector('[data-tier-selector]').replaceChildren(controls.selector);
 
@@ -198,7 +195,7 @@ export async function renderAbilities(host, request, options) {
     const trigger = _buildMoreButton(() => modes.map(mode => ({
       icon: mode === 'off' ? 'eye-off' : mode === 'visible' ? 'eye' : 'download',
       label: mode[0].toUpperCase() + mode.slice(1), checked: trigger._mode === mode,
-      disabled: !canManage || !!previewUser,
+      disabled: !canManage,
       action: () => save(ability, kind, mode, trigger._floatingMenuOwner || trigger, toolName)
         .then(() => { trigger._mode = mode; }, () => {}),
     })), { title: 'Choose ' + kind + ' availability' });
@@ -239,7 +236,7 @@ export async function renderAbilities(host, request, options) {
   const buildAbilityBody = (detail, ability) => {
     if (detail.childElementCount) return;
     if (ability.id === 'mcp') detail.append(buildMcpControls({ ability, request, scope,
-      canManage, levelId, previewUser, status }));
+      canManage, levelId, status }));
     const tools = _buildAbilitySettingsList();
     tools.classList.add('v3-ability-tools');
     const generalSkills = ability.general_skills ||
@@ -247,7 +244,7 @@ export async function renderAbilities(host, request, options) {
         when_to_use: ability.skill_summary || '', mode: ability.skill_visibility || 'visible' }] : []);
     for (const entry of generalSkills) {
       const skill = buildSkillRow(entry, {
-        canEdit: canManage && levelId==='operator' && !previewUser,
+        canEdit: canManage && levelId==='operator',
         menu: modeMenu(ability, 'skill', entry.mode || 'visible', entry.skill_id, true),
         loadContent: () => request(scope + '/abilities/' + encodeURIComponent(ability.id) +
           (entry.skill_id === 'core' ? '/skill-content' :
@@ -256,9 +253,9 @@ export async function renderAbilities(host, request, options) {
       markDefault(skill.row, entry.default_mode);
       tools.append(skill.row, skill.body);
     }
-    if (ability.id === "git_control" && canManage) tools.append(buildSourceControlControls({ data: sourceSites, request, scope, enabled: levelId === "operator" && !previewUser, status, rerender }));
+    if (ability.id === "git_control" && canManage) tools.append(buildSourceControlControls({ data: sourceSites, request, scope, enabled: levelId === "operator", status, rerender }));
     const administrator = buildAdministratorControls({ ability, data, repository, request, scope,
-      levelId, previewUser, status,
+      levelId, status,
       // A settings save re-renders the page; keep this ability open, like the tool rows do.
       rerender: options => { expandedAbility = ability.id; return rerender(options); } });
     if (administrator) {
@@ -308,7 +305,7 @@ export async function renderAbilities(host, request, options) {
         role_blocked: tool.role_blocked === true || effectiveTool.role_blocked === true,
         tierBlocked: effectiveTool.effective?.reason === 'tier_denied',
       }, {
-        canEdit: canManage && !previewUser,
+        canEdit: canManage,
         showPerm: true,
         abilityId: ability.id,
         hasToolSkill: tool.has_tool_skill === true,
@@ -401,7 +398,7 @@ export async function renderAbilities(host, request, options) {
       const toggle = node('input', 'conn-toggle');
       toggle.type = 'checkbox';
       // Base holds the loaders and core tools, so it is always on.
-      toggle.disabled = !canManage || !!previewUser || ability.id === 'base' || roleBlocked;
+      toggle.disabled = !canManage || ability.id === 'base' || roleBlocked;
       toggle.checked = ability.visibility !== 'off';
       toggle.setAttribute('aria-label', ability.name + ' on or off');
       // An ability is only a group: On lets its tools and skills follow their own settings.

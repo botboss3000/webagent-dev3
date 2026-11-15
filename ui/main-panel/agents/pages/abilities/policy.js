@@ -48,14 +48,14 @@ export function effectiveLabel(record) {
   return [permission ? title(permission) : '', reason || (record.available === false ? 'Unavailable' : '')]
     .filter(Boolean).join(' · ');
 }
-export async function buildPolicyControls({data,request,scope,levelId,previewUser,rerender,status}) {
+export async function buildPolicyControls({data,request,scope,levelId,rerender,status}) {
   const canManage=data.authority?.can_manage===true;
   const levels=data.capability_levels?.levels||{};
   const order=data.capability_levels?.order||Object.keys(levels);
   const selector=node('div','member-policy-selector');
   const levelSelect=select('Capability level to configure',order.map(id=>[id,levels[id].name||id]),levelId||'operator');
   levelSelect.disabled=!canManage;
-  levelSelect.onchange=()=>rerender({levelId:levelSelect.value,previewUser:''}).catch(error=>{status.textContent=error.message;});
+  levelSelect.onchange=()=>rerender({levelId:levelSelect.value}).catch(error=>{status.textContent=error.message;});
   selector.append(levelSelect,node('div','ac-hint',canManage
     ? 'Editing '+(levels[levelId]?.name||'Operator')+'. Higher agent levels and app account policy cap effective access.'
     : 'Read-only effective access for your agent membership.'));
@@ -87,11 +87,6 @@ export async function buildPolicyControls({data,request,scope,levelId,previewUse
     }
   }
   if(!canManage)return {selector,panel};
-  const memberResult=await request(scope+'/ability-members');
-  const members=memberResult.members||[];
-  const preview=select('Effective access preview user',[['','Your effective access'],...members.filter(m=>m.relationship!=='revoked').map(m=>[m.user_id,m.username||m.user_id])],previewUser);
-  preview.onchange=()=>rerender({previewUser:preview.value}).catch(error=>{status.textContent=error.message;});
-  panel.append(row('Effective access preview',preview,'Previewing a user disables policy edits.'));
   const links=node('div');
   for(const [view,label]of [['identity','Configure member levels'],['members','Manage members']]){
     const link=node('a','ac-btn',label);link.href='/app?tab=agents&agent='+encodeURIComponent(data.agent_id)+'&agentView='+view;links.append(link);

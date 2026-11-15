@@ -1,4 +1,4 @@
-// Agent configuration is distinct from capability-level previews; Rust enforces every save.
+// Agent configuration is distinct from capability-level views; Rust enforces every save.
 import { buildConfigRow } from '../../../../shared/ability-row-controls.js';
 import { _markSaving, _flashSaveCheck } from '../../../../shared/models/dom-utils.js';
 const node = (tag, cls = '', text = '') => {
@@ -32,19 +32,19 @@ async function saveSettings({ ability, data, request, scope, status, settings, c
   }
 }
 const cautions = ['cautious', 'balanced', 'trusted'];
-// Agent settings are edited at the agent's own (Operator) level; other levels and user previews are read-only.
-const editable = (levelId, previewUser) => (!levelId || levelId === 'operator') && !previewUser;
+// Agent settings are edited at the agent's own (Operator) level; other levels are read-only.
+const editable = levelId => !levelId || levelId === 'operator';
 const settingsSpec = {
   terminal_control: ['terminal_caution', 'Terminal caution'],
   codebase_admin: ['destructive_caution', 'Destructive operation caution'],
   git_control: ['notify_repo_changes', 'Notify repository changes'],
 };
-function buildOptimizationControls({ ability, data, request, scope, levelId, previewUser, status, rerender }) {
+function buildOptimizationControls({ ability, data, request, scope, levelId, status, rerender }) {
   const panel = node('div', 'ac-list v3-administrator-settings');
-  const enabled = editable(levelId, previewUser);
+  const enabled = editable(levelId);
   panel.append(node('p', 'ac-hint', enabled
     ? 'Defaults for explicit /optimize requests. Command overrides apply to that request only. Experiments produce a candidate for review.'
-    : 'Optimization settings are read-only while previewing a user or capability level.'));
+    : 'Optimization settings are read-only while viewing another capability level.'));
   const help = node('details', 'v3-optimization-help');
   help.open = true;
   help.append(node('summary', '', 'How to use Optimization'));
@@ -124,14 +124,14 @@ function buildOptimizationControls({ ability, data, request, scope, levelId, pre
 const manifestSettings = new Set(['agent_management', 'browser_extension', 'browser_control']);
 // The Default Agent reaches all owned sessions and may delegate unless its owner changes it.
 const defaultAgentSettings = { session_scope: 'owned', allow_delegation: true };
-function buildManifestSettings({ ability, data, request, scope, levelId, previewUser, status, rerender }) {
+function buildManifestSettings({ ability, data, request, scope, levelId, status, rerender }) {
   const declared = Array.isArray(ability.config?.settings) ? ability.config.settings : [];
   if (!declared.length) return null;
   const panel = node('div', 'ac-list v3-administrator-settings');
-  const enabled = editable(levelId, previewUser);
+  const enabled = editable(levelId);
   panel.append(node('p', 'ac-hint', enabled
     ? 'Agent settings save as soon as you change them.'
-    : 'Agent settings are read-only while previewing a user or capability level.'));
+    : 'Agent settings are read-only while viewing another capability level.'));
   const saved = data.settings?.[ability.id] || {};
   const fallback = data.agent_id === 'shared_default' ? defaultAgentSettings : {};
   const value = item => item.key in saved ? saved[item.key] : item.key in fallback ? fallback[item.key] : item.default;
@@ -200,20 +200,20 @@ function buildManifestSettings({ ability, data, request, scope, levelId, preview
   return panel;
 }
 export function buildAdministratorControls({ ability, data, repository, request, scope,
-  levelId, previewUser, status, rerender }) {
+  levelId, status, rerender }) {
   if (manifestSettings.has(ability.id) && data.authority?.can_manage === true) {
-    return buildManifestSettings({ ability, data, request, scope, levelId, previewUser, status, rerender });
+    return buildManifestSettings({ ability, data, request, scope, levelId, status, rerender });
   }
   if (ability.id === 'optimization' && data.authority?.can_manage === true) {
-    return buildOptimizationControls({ ability, data, request, scope, levelId, previewUser, status, rerender });
+    return buildOptimizationControls({ ability, data, request, scope, levelId, status, rerender });
   }
   const spec = settingsSpec[ability.id];
   if (!spec || data.authority?.can_manage !== true) return null;
   const panel = node('div', 'ac-list v3-administrator-settings');
-  const enabled = editable(levelId, previewUser);
+  const enabled = editable(levelId);
   panel.append(node('p', 'ac-hint', enabled
     ? 'Agent settings. Caution never raises access above installation, account tier or capability policy.'
-    : 'Agent settings are read-only while previewing a user or capability level.'));
+    : 'Agent settings are read-only while viewing another capability level.'));
   const [key, title] = spec;
   const current = data.settings?.[ability.id]?.[key];
   let control;
