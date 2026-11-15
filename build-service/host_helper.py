@@ -316,7 +316,8 @@ class Helper:
     def restore_broker(self, folder):
         """Put back the saved build config and unit, then restart the broker on that release."""
         meta = json.loads((folder / "broker.json").read_text())
-        self.write(Path(meta["config"]), (folder / "build-service.json").read_bytes(), 0o600)
+        # lifecycle.py writes the config 0644; the broker and buildctl read it as non-root users.
+        self.write(Path(meta["config"]), (folder / "build-service.json").read_bytes(), 0o644)
         self.write(Path(meta["unit"]), (folder / "unit").read_bytes(), 0o644)
         self.runner(["systemctl", "daemon-reload"], check=True, timeout=60)
         self.runner(["systemctl", "restart", meta["unit_name"]], check=True, timeout=120)
@@ -343,6 +344,8 @@ class Helper:
             # A refused install must never leave the broker stopped on a half-written release.
             self.restore_broker(folder)
             raise
+        # lifecycle.py install leaves the unit stopped; start it before the health test.
+        run(["systemctl", "start", unit_name], 120)
         health = self.broker_health(before)
         if not health["healthy"]:
             self.log({"event": "broker_reverted", "id": request_id, "problem": health["problem"]})

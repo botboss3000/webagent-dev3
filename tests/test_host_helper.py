@@ -191,6 +191,8 @@ class SupervisorTests(unittest.TestCase):
         result = install()
         self.assertEqual(("new", "/releases/old", True), (result["installed_release"], result["previous_release"], result["health"]["healthy"]))
         self.assertIn("/releases/new", self.config.read_text())
+        # lifecycle.py install leaves the unit stopped; the helper starts it before the health test.
+        self.assertIn(["systemctl", "start", "webagent-build-development.service"], self.commands)
 
     def test_failed_health_test_restores_the_previous_release(self):
         self.healthy = False
@@ -201,6 +203,8 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn("/releases/old", self.config.read_text())
         self.assertIn("/releases/old", self.unit.read_text())
         self.assertIn(["systemctl", "restart", "webagent-build-development.service"], self.commands)
+        # The broker and buildctl read the restored config as non-root users.
+        self.assertEqual(0o644, self.config.stat().st_mode & 0o777)
 
     def test_busy_broker_and_bad_trees_are_refused(self):
         import json
