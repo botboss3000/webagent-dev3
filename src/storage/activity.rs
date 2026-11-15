@@ -368,6 +368,42 @@ impl Store {
         }
         Ok(json!({"segments":segments,"cursor":cursor}))
     }
+    /// The newest run's start time and the counts of its latest activity group, for a session
+    /// list row while that run is live. Decrypts one run view and that run's groups only.
+    pub async fn live_run_summary(&self, sid: &str) -> Result<Value> {
+        let Some(run_id) = sqlx::query_scalar::<_, String>(
+            "SELECT id FROM run_index WHERE session_id=? ORDER BY updated_at DESC,id DESC LIMIT 1",
+        )
+        .bind(sid)
+        .fetch_optional(&self.pool)
+        .await?
+        else {
+            return Ok(Value::Null);
+        };
+        let started = self
+            .get(&format!("run_view:{run_id}"))
+            .await?
+            .map_or(Value::Null, |view| view["created_at"].clone());
+        let first: Option<i64> =
+            sqlx::query_scalar("SELECT MIN(seq) FROM interactions WHERE session_id=? AND run_id=?")
+                .bind(sid)
+                .bind(&run_id)
+                .fetch_one(&self.pool)
+                .await?;
+        let counts = match first {
+            Some(first) => self.private_activity_summary(sid, first - 1, None).await?["segments"]
+                .as_array()
+                .and_then(|groups| {
+                    groups
+                        .iter()
+                        .rev()
+                        .find(|group| group["run_id"] == run_id.as_str())
+                })
+                .map_or(Value::Null, |group| group["counts"].clone()),
+            None => Value::Null,
+        };
+        Ok(json!({"run_started_at":started,"activity_counts":counts}))
+    }
     /// One activity page; `errors_only` keeps just non-success tool results. The cursor and
     /// `has_more` still follow the scanned rows, so a filtered page may be short or empty.
     pub async fn private_activity(

@@ -15,7 +15,8 @@
  * calls re-render the data.
  */
 
-import { _esc,_escAttr,_fmtTime,_formatRelativeTime,_isSessionRead,positionKebabPopup,icon,claudeMark,codexMark,ICON_PICKER_ICONS,compareSessionsByPinnedOrder,createSessionAdapter } from './adapter.js';
+import { blockHTML,bindNotes,flagToggle,isLive,rowFlag,setFlagCatalog,tickTimes } from '../../../../../chat/controls/session-dropdown/row.js';
+import { _esc,_escAttr,_fmtTime,_formatRelativeTime,positionKebabPopup,icon,claudeMark,codexMark,ICON_PICKER_ICONS,compareSessionsByPinnedOrder,createSessionAdapter } from './adapter.js';
 import { advanceDeleteBtn,resetDeleteBtn } from './delete-control.js';
 import { loadViewerConfig,getColumns,getGutterConfig,getDataSources,getBreakpointRules,getHiddenColumns,getStickyTotalWidth,respHideClass } from './column-config.js';
 
@@ -34,7 +35,6 @@ export function mountSessions(host, options) {
   const readAgentCache=key=>cache.get(key),writeAgentCache=(key,value)=>cache.set(key,value);
   const ensureAgentCacheHydrated=()=>Promise.resolve();
   const kvRead=key=>adapter.loadState(key),kvWrite=(key,legacy,value)=>adapter.saveState(key,value);
-  const sessionAttentionFlag=()=>'',sessionFlagIsRead=row=>!row.is_unread,flagLabel=()=>'',flagTone=()=>'',closingCta=()=>'';
   const primeSessionMetadataCache=()=>{},enrichSessions=async rows=>rows;
   const hydrateAgentDisplay=async()=>[];
   const populateSessionSelect=()=>options.changed();
@@ -157,79 +157,10 @@ function _statusBadge(status) {
   return `<span class="sess-status ${_esc(cls)}">${_esc(status)}</span>`;
 }
 
-// Time-ago tint mirrors the session's run-status chip (same semantic hues):
-// complete=green, running=blue, interrupted/error=red, stopped=amber; a session
-// with no run status keeps the neutral base grey. Same normalization as
-// _statusBadge so the class always matches a chip class when one exists.
-function _timeStatusClass(runStatus) {
-  if (!runStatus) return '';
-  return String(runStatus).replace(/\s+/g, '_');
-}
-
-// The page's status chip and the chat session dropdown share ONE predicate:
-// `sessionAckFlag` (ui/shared/js/session-flag.js) shows the session's RESOLVED
-// flag — the closer's own verdict when the run carries one, else the runtime
-// run_status — while the session is unread. Same resolver the notification pill
-// uses, so all three surfaces agree.
-
-// Read awareness, mirroring the chat session dropdown. The dropdown normalizes
-// activity_at from the row's last_active before calling the shared predicate
-// (see session-dropdown/list.js: `activity_at: session.activity_at || session.last_active`);
-// the page's rows carry last_active, so supply the same normalization here so
-// the read/activity comparison uses the true last-activity timestamp rather
-// than falling through to created_at.
-function _rowIsRead(row) {
-  if (!row) return false;
-  if (row.v2_notification) return !row.v2_notification.unread;
-  return _isSessionRead({ ...row, activity_at: row.activity_at || row.last_active });
-}
-
-// ── Live time-ago ticking + click-to-flash-status ──────────────────
-// The relative times next to session names are LIVE: a 1s interval re-runs
-// _formatRelativeTime on every [data-ts] span so "8m ago" counts up to 9m, 10m,
-// … and hours/days roll over while the page stays open. Clicking a time
-// flashes the session's run status to its left (e.g. "Completed 8m ago") for
-// exactly 1s, then it clears.
-const _STATUS_LABELS = {
-  complete: 'Completed',
-  running: 'Running',
-  queued: 'Queued',
-  interrupted: 'Interrupted',
-  error: 'Error',
-  stopped: 'Stopped',
-  needs_manual_resume: 'Needs resume',
-};
-
-function _statusFlashLabel(status) {
-  if (!status) return '';
-  if (_STATUS_LABELS[status]) return _STATUS_LABELS[status];
-  return status.charAt(0).toUpperCase() + status.slice(1).replace(/_/g, ' ');
-}
-
-// One 1s pass: recompute every visible relative time from its data-ts.
+// One 1s pass: refresh every visible row time (row.js formats since/run clocks).
 function _tickRelativeTimes() {
-  document.querySelectorAll('#sessions-table .sess-title-time[data-ts]').forEach(el => {
-    el.textContent = _formatRelativeTime(el.dataset.ts);
-  });
-}
-
-// Show the run-status label left of a clicked time for 1s. Re-clicking while
-// visible restarts the timer; a re-render that replaces the node cancels it.
-function _flashStatus(timeEl) {
-  const wrap = timeEl.closest('.sess-title-time-wrap');
-  if (!wrap) return;
-  const statusEl = wrap.querySelector('.sess-title-status');
-  const label = _statusFlashLabel(timeEl.dataset.status || '');
-  if (!statusEl || !label) return;
-  if (wrap._flashTimer) clearTimeout(wrap._flashTimer);
-  statusEl.classList.remove('flash');
-  void statusEl.offsetWidth;   // restart the CSS animation
-  statusEl.textContent = label;
-  statusEl.classList.add('flash');
-  wrap._flashTimer = setTimeout(() => {
-    statusEl.classList.remove('flash');
-    statusEl.textContent = '';
-  }, 1000);
+  const table = document.getElementById('sessions-table');
+  if (table) tickTimes(table);
 }
 
 // Small icon badge marking sessions that drove the live web browser
@@ -283,7 +214,8 @@ let _searchQuery = '';
 let _searchMode = 'content';  // 'title' | 'content' — persisted in IDB-backed UI state
 // FLAG chip in the footer (beside the search field): when on, the table keeps
 // only rows carrying a status flag, so idle sessions drop out. Shares the
-// row-chip predicate `sessionAttentionFlag`, so filter and chips always agree.
+// row-chip predicate `rowFlag` (row.js), so filter and chips always agree;
+// the fallback `unflagged` does not count.
 let _flagFilterOn = false;
 let _lastTheadConfigId = null; // only rebuild thead when config/view actually changes
 let _contextLoadToken = 0;   // supersedes a queued context load on a newer click
@@ -693,7 +625,7 @@ function _wireActivityChart() {
 }
 function _reloadActivityChart() {}
 
-async function _fetchSource(src) { return adapter.catalog(src.endpoint); }
+async function _fetchSource(src) { const rows = await adapter.catalog(src.endpoint); setFlagCatalog(adapter.flags()); return rows; }
 async function _enrichActiveSessionMetadata(rows) { return rows; }
 
 async function _fetchForConfig(cfg, agentFilterId) {
@@ -954,7 +886,7 @@ function _renderTable(rows) {
     // FLAG chip: keep only session rows that carry a chip — the very predicate
     // the row chip renders from (`_renderRow`'s ackFlag), so an idle session
     // always leaves the list and a flagged one never does.
-    candidates = candidates.filter(r => r._rowType === 'session' && !!sessionAttentionFlag(r));
+    candidates = candidates.filter(r => r._rowType === 'session' && !['', 'unflagged'].includes(rowFlag(r)));
   }
   if (!candidates || candidates.length === 0) {
     tbody.innerHTML = '';
@@ -1066,7 +998,7 @@ function _sessionRowClass(s, childrenOf, depth) {
   if (depth > 0) {
     return 'sessions-child-row' + (childCount > 0 ? ' group-parent' + (_expandedGroups.has(s.session_id) ? ' expanded' : '') : '') + activeChat;
   }
-  return (s.is_unread?'is-unread ':'')+(childCount > 0 ? 'group-parent' + (_expandedGroups.has(s.session_id) ? ' expanded' : '') : '') + activeChat;
+  return (childCount > 0 ? 'group-parent' + (_expandedGroups.has(s.session_id) ? ' expanded' : '') : '') + activeChat;
 }
 
 function _renderCell(row, col, ctx) {
@@ -1123,13 +1055,14 @@ function _renderTitleCell(row, colId, depth, isSession, isAuto, childrenOf) {
   // recency spacing, icon alignment, and typography stay identical across both
   // session surfaces. Change these details in tandem with session-dropdown/list.js.
   const rowClasses = 'session-row sess-title-row';
-  let inner = '<span class="session-row-title sess-title-text"><span class="session-row-title-label">' + titleText + '</span></span>';
+  // Sessions mirror the chat dropdown row: title and flag above, note and time below (row.js).
+  let inner = '<span class="session-row-title sess-title-text">' + (isSession ? blockHTML(row, row.title || 'New Session') : '<span class="session-row-title-label">' + titleText + '</span>') + '</span>';
   if (isSession) {
     // The avatar is the family control: parent sessions expand inline beneath
     // their title, while ordinary session avatars remain passive identity marks.
     const kids = childrenOf ? (childrenOf.get(row.session_id) || []) : [];
     const childCount = kids.length;
-    const avatarClasses = 'session-row-agent-icon sess-title-agent-slot' + (row.main_chat === true ? ' session-row-agent-main' : row.pinned ? ' sess-title-agent-warning' : '');
+    const avatarClasses = 'session-row-agent-icon sess-title-agent-slot' + (row.main_chat === true ? ' session-row-agent-main' : row.pinned ? ' sess-title-agent-warning' : '') + (isLive(row) ? ' session-row-agent-running' : '');
     if (childCount > 0 && !row._cross) {
       const open = _expandedGroups.has(row.session_id);
       inner = '<button type="button" class="' + avatarClasses + ' sess-title-agent-toggle" data-session-id="' + _esc(row.session_id) + '" title="' + (open ? 'Collapse' : 'Expand') + ' ' + childCount + ' subagent' + (childCount === 1 ? '' : 's') + '" aria-label="' + (open ? 'Collapse' : 'Expand') + ' ' + childCount + ' subagent' + (childCount === 1 ? '' : 's') + '" aria-expanded="' + (open ? 'true' : 'false') + '">' + _agentIconHtml(row.agent_icon, row.agent_engine, '12px') + '</button>' + inner;
@@ -1142,57 +1075,6 @@ function _renderTitleCell(row, colId, depth, isSession, isAuto, childrenOf) {
     // Child rows are identified by their role icon and agent avatar only; no
     // connector rail is rendered ahead of the fork icon.
     inner = '<i data-lucide="' + roleIcon + '" class="sess-child-role-icon" style="width:12px;height:12px;"></i>' + inner;
-  }
-  // Shared with the chat dropdown: the acknowledgement chip shows the session's
-  // RESOLVED flag (the closer's own verdict, else the runtime status) and sits
-  // before the relative-time counter so the flag and counter stay adjacent.
-  //
-  // Lifetime is sessionAttentionFlag's, not the unread-only sessionAckFlag: a
-  // CLEAN completion (complete) drops its chip the moment the user reads it, but
-  // any OTHER settled flag — needs_input / partial / unverified / error /
-  // interrupted — keeps a NEUTRAL grey chip after being read, so a read-but-still-
-  // unfinished session stays visibly unfinished. Clicking a grey chip marks the
-  // session unread again (restoring the coloured flag), which is why the read chip
-  // carries data-needs-input-verb="unread" and the coloured one "read".
-  const ackFlag = isSession ? sessionAttentionFlag(row) : '';
-  const ackRead = ackFlag ? sessionFlagIsRead(row) : false;
-  if (ackFlag) {
-    const ackLabel = _escAttr(flagLabel(ackFlag));
-    const ackTone = ackRead ? 'neutral' : flagTone(ackFlag);
-    const ackVerb = ackRead ? 'unread' : 'read';
-    // The closer's own short account of the run, shown on the chip's FIRST click
-    // (ui/shared/js/needs-input-chip.js) — the same line the pop-up carries.
-    const ackNote = _escAttr(closingCta(row));
-    const ackHint = ackLabel + ' — click to mark ' + ackVerb;
-    inner += '<button type="button" class="session-row-status session-status-needs-input session-needs-input-chip flag-tone-' + _esc(ackTone) + '" data-session-id="' + _esc(row.session_id) + '" data-state="needs-input" data-flag="' + _esc(ackFlag) + '" data-needs-input-verb="' + ackVerb + '" data-needs-input-label="' + ackLabel + '" data-needs-input-note="' + ackNote + '" title="' + ackHint + '" aria-label="' + ackHint + '">' + ackLabel + '</button>';
-  }
-  // Relative "time ago" to the right of the title — same format as the chat
-  // session dropdown (s/m/h/d/w ago, then a short date once old enough). It
-  // TICKS live (a 1s interval re-renders every [data-ts] span in place) and is
-  // clickable: clicking flashes the run-status label to its left for 1s
-  // (e.g. "Completed 8m ago"). Running sessions swap the timer for the same
-  // radial loader the chat session dropdown shows.
-  if (isSession && row.last_active) {
-    const timeCls = _timeStatusClass(row.run_status);
-    // 'resuming' = involuntarily stopped but still inside the auto-resume ladder,
-    // so the session is in progress, not finished — same radial loader.
-    const running = row.run_status === 'running' || row.run_status === 'resuming';
-    // Mirror the chat session dropdown's read awareness: a finished run
-    // (complete/interrupted/error) the user has already read keeps its
-    // timestamp but drops the green/red attention hue for a muted grey. A row
-    // showing the acknowledgement flag keeps its counter and is never muted.
-    const finished = ['complete', 'interrupted', 'error'].includes(row.run_status);
-    const readCls = finished && !ackFlag && _rowIsRead(row) ? ' read' : '';
-    // The flag cluster is ONE colour: the counter beside the acknowledgement chip
-    // takes the chip's own tone (its resolved flag, or neutral once read) instead
-    // of always reading amber — a complete flag counts down green, an error flag
-    // red. Rules: `.sess-title-time-wrap.needs-input-counter.flag-tone-*`.
-    const counterTone = ackFlag ? ' flag-tone-' + _esc(ackRead ? 'neutral' : flagTone(ackFlag)) : '';
-    const timeHtml = running
-      ? '<span class="session-row-time sess-title-time" title="' + (row.run_status === 'resuming' ? 'Re-assessing after an interruption…' : 'Agent is thinking…') + '"><span class="session-radial-loader sm session-status-running"></span></span>'
-      : '<span class="session-row-time sess-title-time" role="button" tabindex="0" data-ts="' + _esc(row.last_active) + '" data-status="' + _esc(row.run_status || '') + '" title="' + _esc(row.last_active) + ' — click for status">' + _formatRelativeTime(row.last_active) + '</span>';
-    inner += '<span class="sess-title-time-wrap' + (timeCls ? ' ' + timeCls : '') + readCls + (ackFlag ? ' needs-input-counter' : '') + counterTone + '">' +
-      '<span class="sess-title-status" aria-hidden="true"></span>' + timeHtml + '</span>';
   }
   // Origin badge — which catalog a row came from. Cross-catalog search results
   // always carry one, so a match from the other view is unmistakable. In the
@@ -1859,7 +1741,6 @@ function _sessionRowById(sid) {
   return _sessionsData.find(row => row && row._rowType === 'session' && row.session_id === sid) || null;
 }
 
-async function _setSessionReadState(sid,read) { if(!read)throw Error('Mark unread is pending in V3');await adapter.markRead(sid);await _loadAndRender('mutation'); }
 
 function _copySessionRowId(value, label, row) {
   if (!value || !navigator.clipboard?.writeText) return;
@@ -1879,7 +1760,7 @@ function _openSessionRowActions(sid, kebabBtn) {
   const sess = _sessionRowById(sid);
   if (!sess || !kebabBtn) return;
   _closeSessionRowActions();
-  const isRead = !sess.is_unread;
+  const toggle = flagToggle(sess);
   const lastSeen = '';
   const tableRow = kebabBtn.closest('tr');
   const popup = document.createElement('div');
@@ -1891,15 +1772,14 @@ function _openSessionRowActions(sid, kebabBtn) {
     `<button type="button" class="session-row-action" data-action="auto-rename">${icon('wand-2', { size: '14px' })} Auto rename</button>` +
     `<button type="button" class="session-row-action" data-action="rename">${icon('pencil', { size: '14px' })} Rename session</button>` +
     `<button type="button" class="session-row-action" data-action="refresh">${icon('refresh-cw', { size: '14px' })} Refresh session</button>` +
-    `<div class="session-row-action session-row-read-info" role="status">${icon('clock-3', { size: '14px' })} Read through message ${sess.read_through_seq||0}</div>` +
-    `<button type="button" class="session-row-action" data-action="${isRead ? 'mark-unread' : 'mark-read'}">${icon(isRead ? 'mail-open' : 'check-circle', { size: '14px' })} ${isRead ? 'Mark unread' : 'Mark read'}</button>` +
+    (toggle ? `<button type="button" class="session-row-action" data-action="flag">${icon(toggle.glyph, { size: '14px' })} ${toggle.title}</button>` : '') +
     (sess._origin === 'archived'
       ? `<button type="button" class="session-row-action danger" data-action="delete">${icon('trash-2', { size: '14px' })} Delete session</button>`
       : `<button type="button" class="session-row-action danger" data-action="archive">${icon('archive', { size: '14px' })} Archive session</button>`);
 
   if(sess.main_chat===true||sess.can_delete===false)popup.querySelector('[data-action="archive"],[data-action="delete"]')?.remove();
-  for(const [action,reason] of [['auto-rename','On-demand auto rename · Pending V3'],['mark-unread','Mark unread · Pending V3']]){const button=popup.querySelector(`[data-action="${action}"]`);if(button){button.disabled=true;button.title=reason;button.textContent=reason;}}
-  if(sess._origin==='archived'){for(const action of ['pin','rename','mark-read']){const button=popup.querySelector(`[data-action="${action}"]`);if(button){button.disabled=true;button.title='Unarchive this session first';}}const unarchive=document.createElement('button');unarchive.className='session-row-action';unarchive.textContent='Unarchive session';unarchive.onclick=async()=>{if(await _unarchiveOne(sid)){_closeSessionRowActions();await _loadAndRender('mutation');}};popup.prepend(unarchive);}
+  for(const [action,reason] of [['auto-rename','On-demand auto rename · Pending V3']]){const button=popup.querySelector(`[data-action="${action}"]`);if(button){button.disabled=true;button.title=reason;button.textContent=reason;}}
+  if(sess._origin==='archived'){for(const action of ['pin','rename','flag']){const button=popup.querySelector(`[data-action="${action}"]`);if(button){button.disabled=true;button.title='Unarchive this session first';}}const unarchive=document.createElement('button');unarchive.className='session-row-action';unarchive.textContent='Unarchive session';unarchive.onclick=async()=>{if(await _unarchiveOne(sid)){_closeSessionRowActions();await _loadAndRender('mutation');}};popup.prepend(unarchive);}
   const info = document.createElement('div');
   info.className = 'session-row-actions-info';
   const addIdRow = (key, label, value) => {
@@ -1947,13 +1827,10 @@ function _openSessionRowActions(sid, kebabBtn) {
           await _loadAndRender('mutation');
           try { populateSessionSelect(app.currentUserId); } catch (_) {}
           break;
-        case 'mark-read':
-          await _setSessionReadState(sid, true);
+        case 'flag':
+          await adapter.mutate(sid, 'patch', flagToggle(sess).changes);
           _closeSessionRowActions();
-          break;
-        case 'mark-unread':
-          await _setSessionReadState(sid, false);
-          _closeSessionRowActions();
+          await _loadAndRender('mutation');
           break;
         case 'archive':
         case 'delete':
@@ -2036,21 +1913,6 @@ async function _onArchivedChipClick(chip) {
     try { populateSessionSelect(app.currentUserId); } catch (_) {}
   }
 }
-
-// Shared flag chip: the first click arms its visible confirmation for two
-// seconds; the second runs the verb the chip itself carries (read from the chip,
-// never from local state, so a re-render between the two clicks cannot flip the
-// meaning of the second one — same contract as ui/shared/js/needs-input-chip.js).
-//
-//   'read'   — the COLOURED unread flag. Marking read LEAVES the flag in place
-//              and greys it for every flag except `complete` (a read but
-//              unfinished session still wants attention); a clean `complete`
-//              drops its chip, because the work is acknowledged.
-//   'unread' — the GREY read-but-unfinished chip. Puts the session back to
-//              unread so the coloured flag (and the notification row) return.
-//
-// SYNC: ui/chat/elements/session-dropdown/controller.js honours the same verb.
-async function _onNeedsInputChipClick() {} // V2 attention actions await a V3 contract.
 
 function archiveTitle() { return 'Archive selected active sessions'; }
 // The selection button archives active rows; with only archived rows selected it
@@ -2337,15 +2199,8 @@ function _wireDom() {
   // Wire row clicks (delegated) — skip clicks on check cells
   const tbody = _qs('sessions-table-body');
   if (tbody) {
+    bindNotes(tbody, abort.signal);
     _listen(tbody,'click', (e) => {
-      const needsInputChip = e.target.closest('.session-needs-input-chip');
-      if (needsInputChip) {
-        // Stop here so a stale/re-mounted delegated listener cannot interpret
-        // the same physical first click as the confirmation click.
-        e.stopImmediatePropagation();
-        void _onNeedsInputChipClick(needsInputChip);
-        return;
-      }
       const rowMore = e.target.closest('[data-session-row-more]');
       if (rowMore) {
         e.stopPropagation();
@@ -2378,14 +2233,6 @@ function _wireDom() {
       if (archivedChip) {
         e.stopPropagation();
         _onArchivedChipClick(archivedChip);
-        return;
-      }
-      // Live time-ago — click to flash the run status to its left for 1s
-      // (e.g. "Completed 8m ago") instead of switching to the session.
-      const timeEl = e.target.closest('.sess-title-time[data-ts]');
-      if (timeEl) {
-        e.stopPropagation();
-        _flashStatus(timeEl);
         return;
       }
       _onRowClick(e);

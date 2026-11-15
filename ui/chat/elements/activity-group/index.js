@@ -29,7 +29,7 @@ export function activityLabel(group,{error='',extra=[]}={}) {
       group.boundary_quality==='legacy_unverified'?'Legacy boundary unverified':''].filter(Boolean).join(' · ');
 }
 // Tool chips header counts: "8 tool calls, 3 messages", then any other nonzero kinds.
-function chipCounts(counts={}) {
+export function chipCounts(counts={}) {
   const plural=(count,one,many=one+'s')=>count+' '+(count===1?one:many);
   const messages=(counts.updates||0)+(counts.responses||0);
   const nouns={subagents:['sub-agent'],retries:['retry','retries'],compactions:['compaction'],modes:['mode change']};

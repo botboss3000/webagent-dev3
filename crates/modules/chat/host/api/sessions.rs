@@ -129,12 +129,37 @@ pub(crate) async fn sessions(State(app): State<App>, Query(args): Query<SessionL
             })
             .then_with(|| a["id"].as_str().cmp(&b["id"].as_str()))
     });
-    // Each flag's label, colour role and tooltip, from closing_status.json, for the list chips.
-    let flags =
-        crate::gate_registry::closing_config().map_or(json!([]), |config| json!(config.flags));
+    add_live_runs(&app, &mut list).await?;
     Ok(Json(
-        json!({"sessions":list,"flags":flags,"server_time":now()}),
+        json!({"sessions":list,"flags":flag_catalog(),"server_time":now()}),
     ))
+}
+/// Give each row whose newest run is live that run's start time and latest activity
+/// counts, for the row's bottom line. Shared rows are skipped.
+pub(crate) async fn add_live_runs(app: &App, list: &mut [Value]) -> anyhow::Result<()> {
+    for row in list.iter_mut() {
+        let live = matches!(
+            row["run_status"].as_str(),
+            Some(
+                "running"
+                    | "queued"
+                    | "waiting_approval"
+                    | "waiting_external"
+                    | "recovery"
+                    | "ready"
+            )
+        );
+        if let (true, false, Some(sid)) = (live, row["shared"] == true, row["id"].as_str()) {
+            let summary = app.store.live_run_summary(&sid.to_owned()).await?;
+            row["run_started_at"] = summary["run_started_at"].clone();
+            row["activity_counts"] = summary["activity_counts"].clone();
+        }
+    }
+    Ok(())
+}
+/// Each flag's label, colour role and tooltip, from closing_status.json, for the list chips.
+pub(crate) fn flag_catalog() -> Value {
+    crate::gate_registry::closing_config().map_or(json!([]), |config| json!(config.flags))
 }
 pub(crate) async fn patch_session_api(
     State(app): State<App>,

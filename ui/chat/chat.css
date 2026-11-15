@@ -258,24 +258,6 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
   white-space:nowrap;
 }
 
-/* Recency counter: one size per surface for every state — 12px in the header pill,
-   10px in the dropdown rows (unread used to inherit 18px and 12px respectively). */
-#session-dropdown #session-dropdown-status,
-#session-dropdown .session-row-status:not(.session-needs-input) {
-  font-size:12px;
-  line-height:1;
-  width:auto;
-  height:auto;
-  min-width:16px;
-}
-#session-dropdown-menu .session-row-status:not(.session-needs-input) {
-  font-size:10px;
-  line-height:1;
-  width:auto;
-  height:auto;
-  min-width:16px;
-}
-
 /* Apply only configured role border/box_shadow and inherited Markdown line_height, overriding shared presets. */
 #chat-messages-inner .chat-bubble.v3-config-bubble .md-body{line-height:inherit}
 #chat-panel #chat-messages-inner .chat-bubble.v3-config-bubble{border:var(--message-border)!important;box-shadow:var(--message-shadow)!important}

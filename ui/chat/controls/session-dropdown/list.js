@@ -1,5 +1,6 @@
 // V2 dropdown presentation/lifecycle, with independent Rust data authority.
 // Session dropdown presentation and interactions.
+import {bindNotes, createBlock, fillBlock, flagToggle, isLive, setFlagCatalog, tickTimes} from './row.js';
 /** Renders active/archived sessions, private search results, and revision-fenced management actions. Controller callbacks own navigation; client writes retain retry receipts, and teardown fences pending work. */
 export function createSessionList(root, {guard, refresh, select, client, archived = () => {}, screenSettings = () => null}) {
   const protectedSession=item=>item?.main_chat===true||item?.can_delete===false;
@@ -80,41 +81,22 @@ export function createSessionList(root, {guard, refresh, select, client, archive
     new MutationObserver((_,observer) => { if (!popup.isConnected) { observer.disconnect(); chip.setAttribute('aria-expanded','false'); document.removeEventListener('pointerdown',close,true); } }).observe(document.body,{childList:true});
     window.lucide?.createIcons(); popup.querySelector('button')?.focus({preventScroll:true});
   }
-  /** Formats activity timestamps for row labels without changing stored values. */
-  function elapsed(ts) {
-    if (!ts) return '';
-    const seconds = Math.max(0, Math.floor(Date.now() / 1000 - ts));
-    for (const [unit, size] of [['s',60], ['m',3600], ['h',86400], ['d',604800], ['w',2419200]]) {
-      if (seconds < size) return Math.floor(seconds / ({s:1,m:60,h:3600,d:86400,w:604800}[unit])) + unit;
-    }
-    return new Date(ts * 1000).toLocaleDateString(undefined, {month:'short', day:'numeric'});
-  }
-  /** Builds the unread/activity status chip used by the trigger and list rows. */
-  function statusNode(item) {
-    const node = document.createElement('span');
-    node.className = 'session-row-status ' + (item.is_unread ? 'session-status-unread' : 'session-status-idle');
-    node.dataset.ts = item.last_active_at || '';
-    node.textContent = elapsed(item.last_active_at);
-    node.title = (item.is_unread ? `${item.unread_count} unread assistant messages · ` : '') +
-      (item.last_active_at ? 'Last active ' + new Date(item.last_active_at * 1000).toLocaleString() : 'Activity unknown');
-    return node;
-  }
   /** Refreshes trigger label/status from the currently selected session. */
   function label() {
     const item = items.find(s => s.id === selected);
-    const label = root.querySelector('#session-dropdown-label');
     // A selected session whose row has not loaded yet is not a new session; never claim it is.
-    if (label) label.textContent = item?.title || (selected ? '\u2014' : 'New Session');
+    const block = root.querySelector('#session-dropdown-block');
+    if (block && !editing) fillBlock(block, item, item?.title || (selected ? '\u2014' : 'New Session'));
     root.dataset.loaded = 'true';
     for (const id of ['icon','label','status','kebab','delete']) {
-      const node = root.querySelector('#session-dropdown-' + id);
+      const node = id === 'label' ? root.querySelector('#session-dropdown-block .session-row-title-label') : id === 'status' ? root.querySelector('#session-dropdown-block .srow-time') : root.querySelector('#session-dropdown-' + id);
+      if (!node) continue;
       node.hidden = config.trigger?.[{icon:'agent_icon',label:'session_name',kebab:'row_actions',delete:'archive'}[id] || id] === false || (id === 'kebab' && config.trigger?.row_actions !== true) || (id === 'delete' && (config.trigger?.archive !== true || protectedSession(item)));
       node.style.display = node.hidden ? 'none' : '';
     }
     root.querySelector('#session-dropdown-icon').classList.toggle('session-row-agent-warning', !!item?.pinned && item?.main_chat !== true);
     root.querySelector('#session-dropdown-icon').classList.toggle('session-row-agent-main', item?.main_chat === true);
-    const statusEl = root.querySelector('#session-dropdown-status');
-    statusEl.replaceChildren(); if (item) statusEl.append(statusNode(item));
+    root.querySelector('#session-dropdown-icon').classList.toggle('session-row-agent-running', isLive(item));
     root.querySelector('#session-dropdown-delete').disabled = !item || item.status === 'archived' || protectedSession(item);
   }
   /** Sends revision-fenced client actions with stable retry IDs for uncertain responses. */
@@ -221,10 +203,11 @@ export function createSessionList(root, {guard, refresh, select, client, archive
     for (const [key, title, glyph, fn] of (item.status === 'archived' ? archivedActions : [
       ['pinning',item.pinned ? 'Unpin session' : 'Pin session',item.pinned ? 'pin-off' : 'pin',() => mutate(item,'patch',{pinned:!item.pinned})],
       ['auto_rename','Auto rename','wand-2',null],
-      ['rename','Rename session','pencil',() => { root._sessionDropdownController.setPopup(null); rename(item, anchor.closest('.session-row')?.querySelector('.session-row-title') || root.querySelector('#session-dropdown-label')); }],
+      ['rename','Rename session','pencil',() => { root._sessionDropdownController.setPopup(null); rename(item, anchor.closest('.session-row')?.querySelector('.session-row-title-label') || root.querySelector('#session-dropdown-block .session-row-title-label')); }],
       ['open_in_widget','Open in widget','messages-square',null],
       ['refresh','Refresh session','refresh-cw',async () => { await refresh(); await loadScope(); }],
       ['start_scratchpad','Start a scratchpad','notepad-text',null],
+      ...(flagToggle(item) ? [['flag_status',flagToggle(item).title,flagToggle(item).glyph,() => mutate(item,'patch',flagToggle(item).changes)]] : []),
       ['archive','Archive session','archive',() => mutate(item,'archive')]
     ])) {
       if (config.menu?.[key] === false || (['archive','delete'].includes(key)&&protectedSession(item))) continue;
@@ -325,6 +308,7 @@ export function createSessionList(root, {guard, refresh, select, client, archive
     const turn = ++epoch, scope = status;
     const data = await client.sessions(scope);
     if (destroyed || turn !== epoch) return;
+    setFlagCatalog(data.flags);
     if (scope === 'active') items = data.sessions;
     else archivedItems = data.sessions;
     if (query.trim()) await search(); else render();
@@ -372,9 +356,12 @@ export function createSessionList(root, {guard, refresh, select, client, archive
         if (children) avatar.setAttribute('aria-expanded',String(open)); else avatar.innerHTML = icon('bot');
         title.append(avatar);
       }
-      const text = document.createElement('span'); text.className = 'session-row-title-label'; text.textContent = (item.title || 'New Session') + (children ? ` (${children})` : ''); text.hidden = config.menu?.session_name === false; title.append(text); row.append(title);
+      title.querySelector('.session-row-agent-icon')?.classList.toggle('session-row-agent-running', isLive(item));
+      const block = fillBlock(createBlock(), item, (item.title || 'New Session') + (children ? ` (${children})` : ''));
+      block.querySelector('.session-row-title-label').hidden = config.menu?.session_name === false;
+      block.querySelector('.srow-time').hidden = config.menu?.status === false;
+      title.append(block); row.append(title);
       if (hit) { const snippet = document.createElement('span'); snippet.className = 'session-row-msg-hit'; snippet.textContent = hit.snippet; snippet.title = hit.snippet; row.append(snippet); }
-      if (config.menu?.status !== false) row.append(statusNode(item));
       if (status === 'archived') {
         const b = button('Unarchive session','archive-restore',null,'session-row-archived'); b.textContent = 'archived';
         confirmButton(b,'Unarchive?',() => mutate(item,'unarchive')); if (config.menu?.unarchive !== false) row.append(b);
@@ -416,14 +403,21 @@ export function createSessionList(root, {guard, refresh, select, client, archive
   }
   root.querySelector('#session-dropdown-kebab').onclick = e => { e.stopPropagation(); const item = items.find(s => s.id === selected); if (item) actions(item,e.currentTarget); };
   confirmButton(root.querySelector('#session-dropdown-delete'),'Archive?',() => { const item = items.find(s => s.id === selected); return item ? mutate(item,'archive') : undefined; });
-  // Refresh relative times each second, writing only labels whose text changed.
-  const tick = setInterval(() => { for (const node of [...menu.querySelectorAll('[data-ts]'),...root.querySelectorAll('[data-ts]')]) { const value = elapsed(Number(node.dataset.ts)); if (node.textContent !== value) node.textContent = value; } },1000);
+  bindNotes(menu, abort.signal); bindNotes(root.querySelector('.session-dropdown-trigger'), abort.signal);
+  // Refresh times each second; while a shown session's run is live, reload rows every 5 s
+  // so its activity counts stay current.
+  let pollAt = 0;
+  const tick = setInterval(() => {
+    tickTimes(menu); tickTimes(root);
+    const shown = isLive(items.find(s => s.id === selected)) || (!menu.hidden && items.some(isLive));
+    if (shown && Date.now() >= pollAt && !editing && !destroyed) { pollAt = Date.now() + 5000; refresh().catch(() => {}); }
+  },1000);
   // Public lifecycle API keeps selected rows, configuration, search state and timers in sync.
   return {
     /** Loaded sub-agent sessions under `id`, as [{id, label: 'Spawn n'}], for the Broker chip. */
     family(id) { const kids = childrenOf(), out = [], walk = parent => { for (const child of kids.get(parent) || []) { out.push({id:child.id,label:'Spawn ' + (out.length + 1)}); walk(child.id); } }; walk(id); return out; },
     // Replace authoritative rows/selection and drop checkbox IDs no longer present.
-    update(rows,id) { items = rows; if (id !== selected) for (const parent of ancestors(id)) expanded.add(parent); selected = id; for (const id of checked) if (!items.some(item => item.id === id)) checked.delete(id); label(); renderTabs(); render(); },
+    update(rows,id,flags) { setFlagCatalog(flags); items = rows; if (id !== selected) for (const parent of ancestors(id)) expanded.add(parent); selected = id; for (const id of checked) if (!items.some(item => item.id === id)) checked.delete(id); label(); renderTabs(); render(); },
     // Reapply menu options; disabling batch delete also clears its transient selection.
     configure(cfg) { cancelHold(); config = cfg || {}; root._sessionDropdownController.setPopup(null); if (config.footer?.enabled === false || config.footer?.batch_archive === false) { checkboxMode = false; checked.clear(); } if (config.footer?.enabled === false || config.footer?.archived === false) status = 'active'; if (config.footer?.enabled === false || config.footer?.search === false) { ++epoch; clearTimeout(timer); query = ''; hits = []; continuation = null; searching = false; searchInfo = ''; } menu.style.setProperty('--session-dropdown-max-height',config.menu?.max_height || 'none'); label(); render(); },
     // Invalidate in-flight search and restore the default active, unfiltered list.

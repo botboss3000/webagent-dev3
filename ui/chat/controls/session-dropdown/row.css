@@ -1,0 +1,40 @@
+/* Two-line session row block (row.js), shared by the chat session dropdown, its trigger
+   and the Agents → Sessions title column: title and flag on top, note and time below. */
+.srow-block { display:flex; flex-direction:column; justify-content:center; gap:2px; flex:1 1 auto; min-width:0; line-height:1.3; }
+.srow-top,
+.srow-bottom { display:flex; align-items:center; gap:6px; min-width:0; }
+.srow-top .session-row-title-label { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.srow-bottom { font-size:11px; line-height:1.25; color:var(--fg-3); }
+/* Flag chip: label in the flag's colour role, outlined in the same colour. */
+.srow-flag { flex-shrink:0; font-size:10px; line-height:1; padding:2px 6px; border-radius:999px;
+  border:var(--border-width) solid currentColor; white-space:nowrap; color:var(--fg-3); }
+.srow-flag[hidden] { display:none; }
+.srow-flag[data-tone="success"] { color:var(--success); }
+.srow-flag[data-tone="warning"] { color:var(--warning); }
+.srow-flag[data-tone="danger"] { color:var(--danger); }
+.srow-flag[data-tone="info"] { color:var(--accent); }
+/* The note is one truncated line; hover or a sideways drag slides the rest into view. */
+.srow-note { flex:1 1 auto; min-width:0; overflow:hidden; touch-action:pan-y; }
+.srow-note-text { display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  vertical-align:bottom; transition:transform .25s ease-out; }
+.srow-note-text.srow-reveal,
+.srow-note-text.srow-dragging { max-width:none; overflow:visible; text-overflow:clip; }
+.srow-note-text.srow-dragging { transition:none; }
+.srow-note-text.srow-reveal { animation:srow-reveal 4s ease-in-out 1; }
+@keyframes srow-reveal {
+  0%, 15% { transform:translateX(0); }
+  50%, 65% { transform:translateX(var(--srow-shift, 0)); }
+  100% { transform:translateX(0); }
+}
+/* Reduced motion: hovering wraps the note in place instead of sliding it. */
+@media (prefers-reduced-motion: reduce) {
+  .srow-note:hover .srow-note-text { white-space:normal; overflow:visible; }
+}
+.srow-time { flex-shrink:0; font-variant-numeric:tabular-nums; }
+/* A live run spins a ring around the agent avatar. */
+.session-row-agent-running { position:relative; }
+.session-row-agent-running::after { content:''; position:absolute; inset:-3px; border-radius:50%; pointer-events:none;
+  background:conic-gradient(var(--brand) 0deg 90deg, transparent 90deg 360deg);
+  -webkit-mask:radial-gradient(circle, transparent 62%, #000 64%); mask:radial-gradient(circle, transparent 62%, #000 64%);
+  animation:session-radial-spin .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .session-row-agent-running::after { animation:none; } }

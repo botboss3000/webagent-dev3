@@ -13,7 +13,6 @@ export const _formatRelativeTime = value => {
   return seconds+'s ago';
 };
 export const _fmtTime = value => value ? _formatRelativeTime(value) : '—';
-export const _isSessionRead = row => !row.is_unread;
 export function positionKebabPopup(popup,button){const r=button.getBoundingClientRect();popup.style.position='fixed';popup.style.zIndex='10000';popup.style.top=Math.max(4,Math.min(r.bottom,innerHeight-popup.offsetHeight-4))+'px';popup.style.left=Math.max(4,Math.min(r.right-popup.offsetWidth,innerWidth-popup.offsetWidth-4))+'px';}
 // Main Chats form one recent-activity group regardless of their pin flags.
 export const compareSessionsByPinnedOrder = (a,b) => {
@@ -24,6 +23,8 @@ export const compareSessionsByPinnedOrder = (a,b) => {
 };
 export function createSessionAdapter({request, roster, userId, changed, isAlive=()=>true}) {
   const receipts=new Map(), rows=new Map();
+  // The flag catalog from the latest statistics page, for row.js.
+  let flags=[];
   const iso=seconds=>seconds>0?new Date(seconds*1000).toISOString():null;
   function project(item){
     const agent=roster.find(a=>a.id===item.agent_id),usage=item.usage;
@@ -32,7 +33,7 @@ export function createSessionAdapter({request, roster, userId, changed, isAlive=
     const row={...item,session_id:item.id,_rowType:'session',agent_name:agent?.name||item.agent_id,agent_icon:agent?.icon||'bot',last_active:iso(item.last_active_at),created_at:iso(item.created_at),_origin:item.status==='archived'?'archived':'active',total_input_tokens:recorded?usage.input_tokens:null,total_output_tokens:recorded?usage.output_tokens:null,total_cost:recorded&&usage.unknown_cost_calls===0&&!partial?usage.known_cost_usd:null,total_duration_ms:null,usage_note:!usage?'Usage unavailable; historical calls may predate recording':partial?'Partial provider-reported token totals; some calls have no usage':'Provider-reported token totals',run_status:({completed:'complete',failed:'error'})[item.run_status]||item.run_status};
     rows.set(item.id,row);return row;
   }
-  async function catalog(endpoint){let offset=0,result=[];do{const data=await request(endpoint+'&limit=100&offset='+offset);if(!isAlive())return [];result.push(...data.sessions.map(project));if(data.next_offset==null)break;if(data.next_offset<=offset)throw Error('Invalid statistics continuation');offset=data.next_offset;}while(isAlive());return result;}
+  async function catalog(endpoint){let offset=0,result=[];do{const data=await request(endpoint+'&limit=100&offset='+offset);if(!isAlive())return [];if(Array.isArray(data.flags))flags=data.flags;result.push(...data.sessions.map(project));if(data.next_offset==null)break;if(data.next_offset<=offset)throw Error('Invalid statistics continuation');offset=data.next_offset;}while(isAlive());return result;}
   async function mutate(id,action,fields={}){
     if(!isAlive())throw Error('Sessions page closed');
     const row=rows.get(id);if(!row)throw Error('Refresh before changing this session');
@@ -50,9 +51,8 @@ export function createSessionAdapter({request, roster, userId, changed, isAlive=
       return data;
     }catch(error){if(error.status===409||error.status===400)receipts.delete(signature);throw error;}
   }
-  async function markRead(id){if(!isAlive())throw Error('Sessions page closed');const row=rows.get(id);if(!row||row._origin==='archived')throw Error('Unarchive this session before marking it read');await request('/sessions/'+encodeURIComponent(id)+'/read','PUT',{through_seq:row.last_public_seq||0});if(isAlive())changed();}
   const stateKey='v3:sessions-view:'+userId;
-  return {project,catalog,mutate,markRead,rows,
+  return {project,catalog,mutate,rows,flags:()=>flags,
     loadState(key){try{return JSON.parse(localStorage.getItem(stateKey+":"+key)||'{}');}catch{return {}; }},
     saveState(key,value){try{localStorage.setItem(stateKey+":"+key,JSON.stringify(value));}catch{}},
     async search(q,status,continuation){return request('/sessions/search?'+new URLSearchParams({q,status,limit:'50',...(continuation?{continuation}:{})}));}

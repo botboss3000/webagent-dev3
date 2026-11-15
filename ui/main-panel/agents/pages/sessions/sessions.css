@@ -1,4 +1,5 @@
 @import url("/ui/shared/main-chat-avatar.css");
+@import url("/ui/chat/controls/session-dropdown/row.css");
 /* ── Sessions Panel ──────────────────────────────────────────────── */
 /* ---- HARMONY: toolbar action styles (sessions-tb-btn, sessions-tb-archive,
        sessions-tb-unarchive) mirror the agents page's
@@ -480,10 +481,10 @@ body.light-mode .sessions-tb-btn { color: var(--fg-2); border-color: rgba(var(--
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;   /* 26 + 2px border = 28px — fits the fixed 30px row */
+  width: 26px;   /* 26 + 2px border = 28px — fits the fixed 40px row */
   height: 26px;
   /* Center the box vertically in the cell: default baseline alignment
-     would sit it at the top of the 30px line box. */
+     would sit it at the top of the 40px line box. */
   vertical-align: middle;
   border-radius: 5px;
   border: var(--border-width) solid var(--border);
@@ -584,80 +585,8 @@ body.light-mode .sessions-tb-btn { color: var(--fg-2); border-color: rgba(var(--
   outline-offset: 2px;
 }
 
-/* Live time-ago group: table-specific click-to-flash behavior around the
-   dropdown's shared .session-row-time primitive. */
-/* DESIGN SYNC CONTRACT: Title → Recency is flush in the table and dropdown.
-   Cancel the base row's 6px gap; Recency's shared cell itself has 0px sides. */
-.sess-title-time-wrap {
-  display: inline-flex;
-  align-items: center;
-  white-space: nowrap;
-  flex-shrink: 0;
-  margin-left: -6px;
-}
-/* Needs input is paired with its counter using the same 4px gap as the chat
-   dropdown. The title row supplies a 6px flex gap, so retain 4px net spacing
-   by cancelling only 2px when the counter follows the chip. */
-.session-needs-input-chip + .sess-title-time-wrap {
-  margin-left: -2px;
-}
-.sess-title-time[data-ts] { cursor: pointer; }
-.sess-title-time[data-ts]:hover {
-  color: var(--fg-2);
-  text-decoration: underline dotted;
-  text-underline-offset: 2px;
-}
-/* Time-ago tint mirrors the row's run-status chip (same palette, same class
-   names): complete=green, running=blue, interrupted/error=red,
-   stopped/needs_manual_resume=amber; unmapped or missing status falls back to
-   the neutral base grey above. */
-.sess-title-time-wrap.complete .sess-title-time           { color: var(--success); }
-.sess-title-time-wrap.running .sess-title-time            { color: var(--accent); }
-/* Needs input deliberately overrides completed-green so its counter matches the flag. */
-.sess-title-time-wrap.needs-input-counter .sess-title-time { color: var(--warning); }
-/* …and the counter takes the FLAG's OWN tone, so the chip and its counter read as
-   ONE flag: a complete unread counts down green, an error red, and the grey
-   read-but-unfinished flag keeps a grey counter instead of the amber default.
-   sessions-page.js sets flag-tone-* on this wrapper from the resolved flag
-   (sessionAttentionFlag / flagTone); placed after the run-status tints above so
-   the flag wins. SYNC: the chat dropdown's counter
-   (app1.css `.session-needs-input-counter.flag-tone-*`) uses the same palette. */
-.sess-title-time-wrap.needs-input-counter.flag-tone-success .sess-title-time { color: var(--success); }
-.sess-title-time-wrap.needs-input-counter.flag-tone-danger .sess-title-time  { color: var(--danger); }
-.sess-title-time-wrap.needs-input-counter.flag-tone-info .sess-title-time    { color: var(--accent); }
-.sess-title-time-wrap.needs-input-counter.flag-tone-neutral .sess-title-time { color: var(--fg-3); }
-/* A stopped run (kill switch / user stop) shows its "time since stopped" in
-   neutral grey — stopped is not an error. True errors stay red. */
-.sess-title-time-wrap.interrupted .sess-title-time        { color: var(--fg-4); }
-.sess-title-time-wrap.error .sess-title-time              { color: var(--danger); }
-.sess-title-time-wrap.stopped .sess-title-time,
-.sess-title-time-wrap.needs_manual_resume .sess-title-time { color: var(--warning); }
-/* Read awareness, mirroring the chat session dropdown's .session-status-read: a
-   finished run the user has already read keeps its completion timestamp but
-   drops the green/error attention hue for a muted grey. Placed after the tint
-   rules so it wins the cascade; the needs-input amber counter above is never
-   muted (readCls is suppressed when the run needs input). */
-.sess-title-time-wrap.read .sess-title-time { color: var(--fg-4); }
-/* Transient status label — hidden by default, flashed in for 1s on click
-   ("Completed 8m ago"). Slides in beside the time, then collapses away. */
-.sess-title-status {
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--fg-2);
-  white-space: nowrap;
-  opacity: 0;
-  max-width: 0;
-  overflow: hidden;
-  transition: opacity .12s ease, max-width .15s ease, margin-right .15s ease;
-}
-.sess-title-status.flash {
-  opacity: 1;
-  max-width: 160px;
-  margin-right: 6px;
-}
 #sessions-table tbody tr {
-  height: 30px;   /* fixed row height — identical in compact and full mode (see td rule below) */
+  height: 40px;   /* fixed two-line row height (row.js block) — identical in compact and full mode (see td rule below) */
   transition: background 0.1s;
   cursor: pointer;   /* whole row is clickable → switches chat to this session */
 }
@@ -688,7 +617,7 @@ body.light-mode .sessions-tb-btn { color: var(--fg-2); border-color: rgba(var(--
   display: inline-flex;
   align-items: center;
   margin-left: 8px;
-  height: 24px;    /* 24 + 2px border = 26px — fits the fixed 30px row */
+  height: 24px;    /* 24 + 2px border = 26px — fits the fixed 40px row */
   padding: 0 7px;
   line-height: 1;
   border-radius: 999px;
@@ -730,7 +659,7 @@ body.light-mode .sessions-tb-btn { color: var(--fg-2); border-color: rgba(var(--
   justify-content: center;
   margin-left: 8px;
   min-width: 24px;
-  height: 24px;    /* 24 + 2px border = 26px — fits the fixed 30px row */
+  height: 24px;    /* 24 + 2px border = 26px — fits the fixed 40px row */
   padding: 0 5px;
   border-radius: 999px;
   font-size: 10px;
@@ -774,14 +703,15 @@ body.light-mode .sessions-tb-btn { color: var(--fg-2); border-color: rgba(var(--
   box-shadow: inset 0 0 0 999px rgba(var(--brand-rgb), 0.14);
 }
 #sessions-table tbody td {
-  /* Fixed 30px rows: the height lives on the cell (the tr height is a hint;
+  /* Fixed 40px rows: the height lives on the cell (the tr height is a hint;
      the row grows to the tallest cell). Vertical padding is removed and the
      line-height matches the row so text fills it exactly. Every badge/pill
      inside is constrained to ≤28px (see below) so no content can stretch a
-     row — compact and full mode render identical row heights. */
-  height: 30px;
+     row — compact and full mode render identical row heights. The title cell's
+     two-line block (row.js) sets its own line heights. */
+  height: 40px;
   padding: 0 6px;
-  line-height: 30px;
+  line-height: 40px;
   /* Match the Title column's standard table typography across every data column. */
   font-size: 12px;
   font-weight: 400;
@@ -860,7 +790,7 @@ body.light-mode .sessions-tb-btn { color: var(--fg-2); border-color: rgba(var(--
   gap: 4px;
   font-size: 10px;
   font-weight: 600;
-  height: 24px;    /* 24 + 2px border = 26px — fits the fixed 30px row */
+  height: 24px;    /* 24 + 2px border = 26px — fits the fixed 40px row */
   padding: 0 8px;
   line-height: 1;
   border-radius: 10px;
@@ -917,7 +847,7 @@ body.light-mode .sessions-tb-btn { color: var(--fg-2); border-color: rgba(var(--
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;   /* 26 + 2px border = 28px — fits the fixed 30px row */
+  width: 26px;   /* 26 + 2px border = 28px — fits the fixed 40px row */
   height: 26px;
   border-radius: 6px;
   margin-right: 4px;
@@ -939,7 +869,7 @@ body.light-mode .sessions-tb-btn { color: var(--fg-2); border-color: rgba(var(--
   font-size: 11px;
   font-weight: 500;
   color: var(--fg-2);
-  height: 24px;    /* 24 + 2px border = 26px — fits the fixed 30px row */
+  height: 24px;    /* 24 + 2px border = 26px — fits the fixed 40px row */
   padding: 0 8px;
   line-height: 1;
   background: var(--bg-2);
@@ -1361,7 +1291,6 @@ body.light-mode .sess-agent-badge {
   }
   body.mobile-mode #sessions-table tbody td.col-check { line-height: 1; }
   body.mobile-mode .col-sortable .sort-arrow { font-size: 11px; }
-  body.mobile-mode .sess-title-status { font-size: 12px; }
   body.mobile-mode .sess-status { font-size: 12px; height: 28px; }
   body.mobile-mode .sess-agent-badge { font-size: 13px; height: 28px; max-width: 180px; }
   body.mobile-mode .sess-origin-badge { font-size: 12px; height: 28px; }
@@ -1742,7 +1671,6 @@ body.light-mode .sess-agent-badge {
 #sessions-footer, #sessions-footer-dock { background:var(--bg-1); }
 #sessions-section .v3-pending { color:var(--fg-3); font-size:11px; }
 #sessions-section button:disabled, .session-row-actions button:disabled { opacity:.5; cursor:not-allowed; }
-#sessions-section tr.is-unread .session-row-title-label { font-weight:700; }
 #sessions-section .sessions-check-cell { cursor:pointer; }
 #sessions-section .sessions-check-cell:focus-visible { outline:2px solid var(--accent); }
 #sessions-section .sessions-search-wrap { min-width:100px; }

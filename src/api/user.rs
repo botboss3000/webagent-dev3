@@ -228,8 +228,10 @@ async fn session_statistics(
                 sessions.push(item);
             }
         }
+        crate::api::chat_sessions::add_live_runs(&app, &mut sessions).await?;
         Ok(Json(
-            serde_json::json!({"sessions":sessions,"next_offset":next,"server_time":crate::now()}),
+            serde_json::json!({"sessions":sessions,"next_offset":next,
+            "flags":crate::api::chat_sessions::flag_catalog(),"server_time":crate::now()}),
         ))
     }
     read(app, args).await.into_response()
