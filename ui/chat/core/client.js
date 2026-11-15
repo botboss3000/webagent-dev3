@@ -7,7 +7,8 @@ import { createStorageNotice } from './storage-notice.js';
  * Stream epochs fence stale sessions; snapshot recovery fills gaps after delivery or connection failures.
  * @param {object} options Supplies request, notices, stream creation, and timer adapters.
  * @returns {object} Session, run, attachment, voice, approval, and recovery request methods.
- * Errors from the initial session request propagate; stream recovery retries are bounded.
+ * Errors from the initial session request propagate; stream recovery retries back off to 30 s
+ * and continue until a snapshot succeeds or the session closes.
  */
 // Locates the v3 chat transport and sequence-based stream recovery
 export function createChatClient({request, note, issues, clearNoticeFrom = () => {}, createStream, EventSourceClass = EventSource,
@@ -74,9 +75,9 @@ export function createChatClient({request, note, issues, clearNoticeFrom = () =>
       } catch(error) {
         if (!valid(state)) return;
         issues?.fail('chat_sync',error,state.id);
-        if (++state.failures <= 3) {
-          state.retry = setTimeoutFn(() => {state.retry = null; void recover(state);}, 1000 * 2 ** (state.failures-1));
-        } else if(!issues)note("Couldn't sync chat history", 'chat-sync');
+        if (++state.failures === 4 && !issues) note("Couldn't sync chat history", 'chat-sync');
+        // Keeps retrying with backoff capped at 30 s, so the sync notice clears once the server answers again.
+        state.retry = setTimeoutFn(() => {state.retry = null; void recover(state);}, Math.min(30000, 1000 * 2 ** (state.failures-1)));
       } finally { state.inFlight = null; }
     })();
     return state.inFlight;

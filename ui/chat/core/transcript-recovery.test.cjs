@@ -3,16 +3,16 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 const tick=()=>new Promise(setImmediate);
 const msg=seq=>({seq,id:'message-'+seq,role:'assistant',content:'reply'});
 const snapshot=(messages=[],runs=[])=>({messages,runs,last_seq:Math.max(0,...messages.map(m=>m.seq))});
-async function fixture() {
- const streams=[],saved=new Map([['a',snapshot([],[{id:'run',session_id:'a',status:'running'}])],['b',snapshot()]]),published=[],notes=[],timers=new Map(),calls=[],queues=[],metadata=[];
+async function fixture(issues) {
+ const streams=[],saved=new Map([['a',snapshot([],[{id:'run',session_id:'a',status:'running'}])],['b',snapshot()]]),published=[],notes=[],timers=new Map(),delays=[],calls=[],queues=[],metadata=[];
  let nextTimer=0,failRender=0,readOverride=null,metadataHook=()=>{};
  class EventSource {constructor(url){this.url=url;streams.push(this);}addEventListener(name,fn){(this.listeners??={})[name]=fn;}close(){this.closed=true;}emit(item){this.onmessage({data:JSON.stringify(item)});}}
- const context=vm.createContext({document:{getElementById:()=>null},EventSource,Set,Map,setTimeout:fn=>{timers.set(++nextTimer,fn);return nextTimer;},clearTimeout:id=>timers.delete(id)});
+ const context=vm.createContext({document:{getElementById:()=>null},EventSource,Set,Map,setTimeout:(fn,ms)=>{timers.set(++nextTimer,fn);delays.push(ms);return nextTimer;},clearTimeout:id=>timers.delete(id)});
  const module=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'client.js'),'utf8'),{context});
  await module.link(specifier=>specifier.includes('storage-notice')?new vm.SyntheticModule(['createStorageNotice'],function(){this.setExport('createStorageNotice',()=>async()=>{});},{context}):new vm.SyntheticModule(['createAdministratorNotices'],function(){this.setExport('createAdministratorNotices',()=>({start(){},stop(){}}));},{context}));await module.evaluate();
- const client=module.namespace.createChatClient({request:async url=>{const id=url.split('/').at(-1);calls.push(id);return readOverride?readOverride(id):structuredClone(saved.get(id));},note:text=>notes.push(text)});
+ const client=module.namespace.createChatClient({request:async url=>{const id=url.split('/').at(-1);calls.push(id);return readOverride?readOverride(id):structuredClone(saved.get(id));},note:text=>notes.push(text),issues});
  async function open(id){await client.open(id,()=>{},(item,options)=>{if(failRender){--failRender;throw Error('render failed');}published.push({item,options});},summary=>{metadata.push(summary);metadataHook(summary);},data=>queues.push(data));}
- return {client,streams,saved,published,notes,timers,calls,queues,metadata,metadataHook:fn=>metadataHook=fn,open,failRender:n=>failRender=n,override:fn=>readOverride=fn};
+ return {client,streams,saved,published,notes,timers,delays,calls,queues,metadata,metadataHook:fn=>metadataHook=fn,open,failRender:n=>failRender=n,override:fn=>readOverride=fn};
 }
 test('terminal poll restores dropped final event exactly once',async()=>{
  const f=await fixture();await f.open('a');f.saved.set('a',snapshot([msg(3)]));f.client.updateRuns([{id:'run',session_id:'a',status:'completed'}]);await tick();
@@ -37,11 +37,20 @@ test('overlapping triggers coalesce and completion mid-fetch gets fresh snapshot
 test('delayed old session response cannot publish into new session',async()=>{
  const f=await fixture();await f.open('a');let resolve;f.override(id=>id==='a'?new Promise(r=>resolve=r):snapshot());reconnect(f.streams[0]);await f.open('b');resolve(snapshot([msg(6)]));await tick();assert.equal(f.published.length,0);assert.equal(f.streams[0].closed,true);f.client.disconnect();
 });
-test('retries stop after three timers and disconnect cancels scheduled retry',async()=>{
+const fireRetry=async f=>{assert.equal(f.timers.size,1);const [id,fn]=f.timers.entries().next().value;f.timers.delete(id);fn();await tick();};
+test('without an issue tracker the history note shows once while retries continue, and disconnect cancels scheduled retry',async()=>{
  const f=await fixture();await f.open('a');f.override(()=>{throw Error('offline');});f.streams[0].onerror();await tick();
- for(let i=0;i<3;i++){assert.equal(f.timers.size,1);const [id,fn]=f.timers.entries().next().value;f.timers.delete(id);fn();await tick();}
- assert.equal(f.timers.size,0);assert.equal(f.notes.length,1);f.client.disconnect();
+ for(let i=0;i<5;i++)await fireRetry(f);
+ assert.equal(f.timers.size,1);assert.equal(f.notes.length,1);f.client.disconnect();assert.equal(f.timers.size,0);
  const g=await fixture();await g.open('a');g.override(()=>{throw Error('offline');});g.streams[0].onerror();await tick();assert.equal(g.timers.size,1);g.client.disconnect();assert.equal(g.timers.size,0);
+});
+test('chat sync issue keeps retrying with capped backoff and resolves once the server answers',async()=>{
+ const events=[];const f=await fixture({fail:(operation,error,id)=>events.push(['fail',operation,id]),resolve:(operation,id)=>events.push(['resolve',operation,id])});
+ await f.open('a');f.override(()=>{throw Error('offline');});f.streams[0].onerror();await tick();
+ for(let i=0;i<8;i++)await fireRetry(f);
+ assert.deepEqual(f.delays,[1000,2000,4000,8000,16000,30000,30000,30000,30000]);assert.deepEqual(events.at(-1),['fail','chat_sync','a']);
+ f.override(null);await fireRetry(f);
+ assert.equal(f.timers.size,0);assert.deepEqual(events.at(-1),['resolve','chat_sync','a']);assert.equal(f.notes.length,0);f.client.disconnect();
 });
 test('other session completion does not fetch current snapshot',async()=>{
  const f=await fixture();await f.open('a');f.client.updateRuns([{id:'other',session_id:'b',status:'completed'}]);await tick();assert.equal(f.calls.length,1);f.client.disconnect();
