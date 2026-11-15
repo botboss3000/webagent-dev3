@@ -22,8 +22,13 @@ function paintSystem(step,title,meta,row) {
   if(step.children.length!==2 || step.children[0]!==head || step.children[1]!==list) step.replaceChildren(head,list);
   if(list.children.length!==1 || list.firstChild!==row) list.replaceChildren(row);
 }
-// One model step = its message row followed by the tool calls it issued together.
-// A message opens a step; the tool rows after it join that step until the next message or notice.
+// The model turn (agent loop) that wrote a row, as run:turn, or '' when the journal has none.
+function rowTurn(row) {
+  const event=row.events.find(e=>e.kind!=='tool_result' && e.turn!=null);
+  return event?event.run_id+':'+event.turn:'';
+}
+// One model step = one agent loop: its message row, if any, followed by the tool calls it issued together.
+// A message or a new model turn opens a step; tool rows join it until the next message, turn or notice.
 function stepContainer(existing,id) {
   let step=existing.get(id);
   if(!step) {
@@ -83,13 +88,16 @@ function reconcile(node,entries,events) {
       flush();const block=stepContainer(existing,'system:'+entry.id);
       paintSystem(block,SYSTEM_TITLES[category]||'System',systemMeta(entry.row),detail);wanted.push(block);continue;
     }
+    const turn=rowTurn(entry.row);
     if(category==='tools') {
-      // A call with no message before it still gets its own step.
-      if(!step) {number++;step={node:stepContainer(existing,'step:'+entry.id),number,message:null,calls:[]};wanted.push(step.node);}
+      // A call with no message before it, or from a later model turn, starts its own step.
+      if(step && turn && step.turn && turn!==step.turn) flush();
+      if(!step) {number++;step={node:stepContainer(existing,'step:'+entry.id),number,message:null,calls:[],turn};wanted.push(step.node);}
+      step.turn||=turn;
       step.calls.push(detail);
     } else {
       flush();number++;
-      step={node:stepContainer(existing,'step:'+entry.id),number,message:detail,calls:[]};wanted.push(step.node);
+      step={node:stepContainer(existing,'step:'+entry.id),number,message:detail,calls:[],turn};wanted.push(step.node);
     }
   }
   flush();

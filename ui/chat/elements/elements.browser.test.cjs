@@ -101,6 +101,23 @@ test('mini transcript can be opened by an alternate ellipsis trigger',async t=>{
  await p.evaluate(()=>{indicator.dispose();transcript.dispose();});assert.equal(await p.locator('.v2-activity-body').count(),0);
 });
 
+test('each agent loop is its own step, even when the loop sent no message',async t=>{
+ const p=await fixture(t);
+ const heads=await p.evaluate(async()=>{
+  view.disconnect();const {createMiniTranscript}=await import('/ui/chat/elements/mini-transcript/index.js');
+  const call=(id,turn)=>({id:'tool:'+id,category:'tools',label:'file_read · done',events:[
+   {kind:'tool_call',run_id:'r',turn,payload:{tool:'file_read',tool_call_id:id}},
+   {kind:'tool_result',run_id:'r',turn:null,payload:{tool_call_id:id,output:'ok'}}]});
+  const note={id:'message:n',category:'updates',label:'Update',text:'Checking the tests next.',
+   events:[{kind:'agent_step_end',run_id:'r',turn:3,payload:{asst_id:'n',content:'Checking the tests next.'}}]};
+  const transcript=createMiniTranscript();document.querySelector('#messages').append(transcript.element);
+  transcript.update({rows:[call('a',1),call('b',1),call('c',2),note,call('d',3)],events:[]});transcript.open();
+  return [...transcript.element.querySelectorAll('.tc-step:not([data-kind="system"]) > .tc-step-head')].map(n=>n.textContent);
+ });
+ // Turn 1 made two calls, turn 2 one, and turn 3 a message with its call.
+ assert.deepEqual(heads,['Step 12 tool calls','Step 21 tool call','Step 31 tool call']);
+});
+
 test('broker metadata renders inside expanded tool details with inert values',async t=>{
  const p=await fixture(t);
  await p.evaluate(async()=>{

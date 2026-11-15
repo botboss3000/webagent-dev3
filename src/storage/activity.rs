@@ -86,7 +86,13 @@ fn event(
 ) -> Result<Value> {
     let seq = row.get::<i64, _>("seq");
     let run = row.get::<String, _>("run_id");
-    let shown = in_chat.contains(&(run.clone(), row.get::<String, _>("step")));
+    let step = row.get::<String, _>("step");
+    // The model turn that wrote this item (`model:<turn>:<ordinal>`); tool results have none.
+    let turn = step
+        .strip_prefix("model:")
+        .and_then(|rest| rest.split(':').next())
+        .and_then(|turn| turn.parse::<u64>().ok());
+    let shown = in_chat.contains(&(run.clone(), step));
     let item = store.unseal(&row.get::<Vec<u8>, _>("item"))?;
     let (kind, payload) = match item["type"].as_str().unwrap_or("") {
         "function_call" => (
@@ -146,7 +152,7 @@ fn event(
         .map(|bytes| store.unseal(&bytes))
         .transpose()?;
     Ok(
-        json!({"execution_metadata":execution_metadata,"seq":seq,"event_id":format!("interaction:{seq}"),"session_id":sid,"run_id":run,"kind":kind,"payload":payload,
+        json!({"execution_metadata":execution_metadata,"seq":seq,"event_id":format!("interaction:{seq}"),"session_id":sid,"run_id":run,"turn":turn,"kind":kind,"payload":payload,
         "created_at":row.get::<i64,_>("created_at")*1000,"boundary_quality":if row.get::<Option<String>,_>("boundary_item_id").is_some(){"recorded"}else{"legacy_unverified"}}),
     )
 }
@@ -482,6 +488,24 @@ mod tests {
                 (json!("Plan: do X"), json!(true)),
                 (json!("All done"), json!(true))
             ]
+        );
+        // Each model item carries the turn that wrote it, so the page can split steps per loop.
+        let turn_of = |kind: &str, field: &str, value: &str| {
+            data["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|event| event["kind"] == kind && event["payload"][field] == value)
+                .map(|event| event["turn"].clone())
+        };
+        assert_eq!(
+            turn_of("agent_step_end", "content", "private note"),
+            Some(json!(1))
+        );
+        assert_eq!(turn_of("tool_call", "tool_call_id", "p1"), Some(json!(2)));
+        assert_eq!(
+            turn_of("tool_result", "tool_call_id", "p1"),
+            Some(Value::Null)
         );
         let summary = store.private_activity_summary("s", 0, None).await.unwrap();
         let (tools, updates) = summary["segments"].as_array().unwrap().iter().fold(
