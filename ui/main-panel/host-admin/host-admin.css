@@ -14,6 +14,7 @@
 #tab-host-admin .host-meta{font-size:.78rem;color:var(--fg-3);overflow-wrap:anywhere}
 #tab-host-admin .host-error{font-size:.8rem;color:var(--danger);overflow-wrap:anywhere}
 #tab-host-admin .host-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+#tab-host-admin input[type=password]{font:inherit;font-size:.82rem;padding:7px 11px;min-height:36px;min-width:0;flex:1 1 200px;border:var(--border-width) solid var(--border);border-radius:var(--r-md);background:var(--bg-1);color:var(--fg-1)}
 #tab-host-admin button,#tab-host-admin select{font:inherit;font-size:.82rem;padding:7px 11px;min-height:36px;border:var(--border-width) solid var(--border);border-radius:var(--r-md);background:var(--bg-elev);color:var(--fg-1);cursor:pointer;-webkit-tap-highlight-color:transparent}
 #tab-host-admin button:hover,#tab-host-admin button:active{background:var(--accent-soft);border-color:var(--accent)}
 #tab-host-admin button:focus-visible,#tab-host-admin select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}

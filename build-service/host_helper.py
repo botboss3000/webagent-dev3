@@ -7,6 +7,9 @@ the host runs without an approved decision or a live allow-all window. Every req
 decision and result is appended to the log. Host-specific values come from the host profile.
 """
 import difflib
+import getpass
+import hashlib
+import hmac
 import fnmatch
 import json
 import os
@@ -294,22 +297,57 @@ class Helper:
 
     def decide(self, message):
         decision, admin = message.get("decision"), message.get("admin")
-        stepped_up = message.get("stepped_up") is True
         if decision not in ("approve", "deny") or not isinstance(admin, str) or not admin:
             raise ValueError("decision approve or deny and the deciding admin required")
         with self.lock:
             record = self.load(message.get("id"))
             if record["state"] != "pending":
                 raise ValueError("request is " + record["state"])
-            # The app sets stepped_up only after the administrator re-entered their password.
-            if decision == "approve" and record["boot_disk"] and not stepped_up:
-                raise PermissionError("boot and disk changes need the administrator password on approval")
+            # Boot and disk approvals need the host approval passphrase, checked here, never by the app.
+            if decision == "approve" and record["boot_disk"]:
+                self.check_passphrase(message.get("passphrase"))
             record.update(state="approved" if decision == "approve" else "denied", decided_at=self.clock(), decided_by=admin)
             self.save(record)
             self.log({"event": record["state"], "id": record["id"], "by": admin})
             if decision == "approve":
                 self.run_approved(record)
         return record
+
+    # Host approval passphrase -----------------------------------------------------------
+    def passphrase_path(self):
+        return self.state / "passphrase.json"
+
+    def check_passphrase(self, given):
+        """Verify against the salted scrypt hash; 5 wrong tries lock it for 15 minutes."""
+        path = self.passphrase_path()
+        if not path.exists():
+            raise PermissionError("no host approval passphrase is set; set it at the server console first")
+        stored = json.loads(path.read_text())
+        now = self.clock()
+        failures = [t for t in stored.get("failures", []) if t > now - 900]
+        if len(failures) >= 5:
+            raise PermissionError("too many wrong passphrases; try again in 15 minutes")
+        digest = hashlib.scrypt(str(given or "").encode(), salt=bytes.fromhex(stored["salt"]), n=2 ** 14, r=8, p=1).hex()
+        if not isinstance(given, str) or not hmac.compare_digest(digest, stored["hash"]):
+            stored["failures"] = failures + [now]
+            path.write_text(json.dumps(stored))
+            self.log({"event": "passphrase_failed"})
+            raise PermissionError("wrong host approval passphrase")
+        if stored.get("failures"):
+            stored["failures"] = []
+            path.write_text(json.dumps(stored))
+
+    def set_passphrase(self, value):
+        if len(value) < 12:
+            raise ValueError("use at least 12 characters")
+        salt = secrets.token_bytes(16)
+        digest = hashlib.scrypt(value.encode(), salt=salt, n=2 ** 14, r=8, p=1).hex()
+        path = self.passphrase_path()
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"salt": salt.hex(), "hash": digest, "set_at": self.clock()}))
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+        self.log({"event": "passphrase_set"})
 
     def allow(self, message):
         session, seconds, admin = message.get("session"), message.get("seconds", self.profile["allow_default_seconds"]), message.get("admin")
@@ -362,6 +400,14 @@ def main():
         sys.exit("host helper must run as root")
     os.umask(0o077)
     profile = load_profile()
+    if sys.argv[1:] == ["passphrase"]:
+        # Console only: set or change the host approval passphrase (never over the app).
+        first = getpass.getpass("New host approval passphrase: ")
+        if first != getpass.getpass("Repeat it: "):
+            sys.exit("the two entries differ; nothing changed")
+        Helper(profile).set_passphrase(first)
+        print("Host approval passphrase saved.")
+        return
     serve(Helper(profile), profile["socket"])
 
 

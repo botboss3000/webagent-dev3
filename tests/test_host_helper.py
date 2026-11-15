@@ -104,9 +104,24 @@ class HelperTests(unittest.TestCase):
         self.helper.handle(APP, {"op": "allow", "session": "s", "seconds": 600, "admin": "admin"})
         record = self.helper.handle(APP, {"op": "request", "action": "file_write", "args": {"path": str(boot), "content": "x"}, "requester": {"session": "s"}})
         self.assertEqual(("pending", True), (record["state"], record["boot_disk"]))  # allow-all never covers boot/disk
-        with self.assertRaisesRegex(PermissionError, "password"):
+        with self.assertRaisesRegex(PermissionError, "no host approval passphrase"):
             self.helper.handle(APP, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "admin"})
-        self.assertEqual("done", self.approve(record, stepped_up=True)["state"])
+        self.helper.set_passphrase("correct horse battery")
+        with self.assertRaisesRegex(PermissionError, "wrong"):
+            self.helper.handle(APP, {"op": "decide", "id": record["id"], "decision": "approve", "admin": "admin", "passphrase": "guess"})
+        self.assertEqual("done", self.approve(record, passphrase="correct horse battery")["state"])
+
+    def test_wrong_passphrases_lock_for_fifteen_minutes(self):
+        self.helper.set_passphrase("correct horse battery")
+        for _ in range(5):
+            with self.assertRaisesRegex(PermissionError, "wrong"):
+                self.helper.check_passphrase("nope")
+        with self.assertRaisesRegex(PermissionError, "too many"):
+            self.helper.check_passphrase("correct horse battery")
+        self.now += 901
+        self.helper.check_passphrase("correct horse battery")
+        with self.assertRaises(ValueError):
+            self.helper.set_passphrase("short")
 
     def test_units_and_containers_come_from_the_profile(self):
         with self.assertRaises(ValueError):

@@ -47,3 +47,21 @@ run `sudo sshd -t`, then `sudo systemctl reload ssh`.
 Always run `sudo sshd -t` before a reload, reload (never restart) so existing sessions stay
 open, and confirm a **new** SSH connection works before closing the old one. If a new login
 fails, undo as above from the still-open session or from the console.
+
+# Host approval passphrase
+
+Boot loader and disk changes (paths in the host profile's `boot_disk_paths`, such as
+`/etc/fstab`, `/etc/default/grub` and `/boot/*`) need this passphrase on the approval card.
+The root host helper checks it; the app never stores it. It is separate from every login
+and `sudo` password: if it leaked, it could approve only boot and disk cards.
+
+Set or change it at the server's own console (not over the app), as root:
+
+```bash
+sudo python3 -I /usr/local/lib/webagent-host/host_helper.py passphrase
+```
+
+It asks twice and needs at least 12 characters. Only a salted scrypt hash is kept, in
+`/var/lib/webagent-host/passphrase.json` (root only). Five wrong entries within 15 minutes
+lock boot and disk approvals for 15 minutes; failures are logged without the value.
+Until a passphrase is set, boot and disk requests cannot be approved at all.

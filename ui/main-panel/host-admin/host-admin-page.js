@@ -67,14 +67,26 @@ export function start(mount) {
     const meta = el('span', 'host-meta', who(request.requester) + ' · ' + when(request.created_at)
       + (pending ? ' · expires ' + when(request.expires_at) : request.decided_by ? ' · by ' + request.decided_by : ''));
     item.append(top, preview, meta);
+    if (pending && request.boot_disk) item.append(el('span', 'host-error', 'Boot or disk change: a mistake can stop the server booting.'));
     if (request.error) item.append(el('span', 'host-error', request.error));
     if (pending) {
       const actions = el('div', 'host-actions');
       const approve = el('button', 'host-approve', 'Approve');
       const deny = el('button', '', 'Deny');
+      // Boot and disk changes need the host approval passphrase, set at the server console.
+      let passphrase = null;
+      if (request.boot_disk) {
+        passphrase = el('input');
+        passphrase.type = 'password';
+        passphrase.autocomplete = 'off';
+        passphrase.placeholder = 'Host approval passphrase';
+        passphrase.setAttribute('aria-label', 'Host approval passphrase');
+        actions.append(passphrase);
+      }
       for (const [button, decision] of [[approve, 'approve'], [deny, 'deny']]) {
         button.type = 'button';
-        button.onclick = () => post('/api/v3/admin/host/requests/' + encodeURIComponent(request.id) + '/decision', {decision}, button);
+        button.onclick = () => post('/api/v3/admin/host/requests/' + encodeURIComponent(request.id) + '/decision',
+          decision === 'approve' && passphrase ? {decision, passphrase: passphrase.value} : {decision}, button);
       }
       actions.append(approve, deny);
       if (request.allow_key && request.undo !== 'none' && !request.boot_disk) {

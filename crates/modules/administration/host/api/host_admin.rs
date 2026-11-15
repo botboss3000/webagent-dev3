@@ -161,9 +161,15 @@ pub(crate) async fn decide(
         return Err(bad("Decision must be approve or deny"));
     }
     let admin = identity["_user_id"].as_str().unwrap_or_default();
-    Ok(Json(
-        helper(json!({"op": "decide", "id": id, "decision": decision, "admin": admin})).await?,
-    ))
+    let mut message = json!({"op": "decide", "id": id, "decision": decision, "admin": admin});
+    // Boot and disk approvals carry the host approval passphrase; only the helper checks it.
+    if let Some(passphrase) = body["passphrase"].as_str() {
+        if passphrase.len() > 256 {
+            return Err(bad("Passphrase too long"));
+        }
+        message["passphrase"] = json!(passphrase);
+    }
+    Ok(Json(helper(message).await?))
 }
 
 /// Open (or end, with 0 seconds) an allow-all window for one requester: `{"requester":
