@@ -17,6 +17,7 @@ import {mountComposerMedia,describesUploads} from '../controls/composer-media.js
 import {mountVoiceReply} from '../controls/voice-reply.js';
 import {mountSessionControls} from '../controls/session-controls.js';
 import {mountChatActionPanel,createChatAction} from './chat-action-panel.js';
+import {buildReplyForm,answerText} from './reply-panel.js';
 import {mountUsageStats} from '../controls/usage-stats.js';
 import {mountBrowserLink} from './browser-link.js';
 import {createMessageRow as createMessage,updateAdmission} from './message-view.js';
@@ -310,53 +311,20 @@ function renderComponent(row){
       const dismiss=document.createElement('button');dismiss.type='button';dismiss.className='v3-reply-dismiss';dismiss.textContent='Dismiss';
       dismiss.onclick=async()=>{dismiss.disabled=true;try{await client.dismissComponent(session,id,null);settle(null);}catch(error){dismiss.disabled=false;note(error.message);}};
       const status=()=>{const line=document.createElement('small');line.className='v3-reply-state';line.textContent=state==='answered'?'Answered':'Dismissed';return line;};
-      if(reply){
-        const choices=document.createElement('div');choices.className='v3-reply-choices';
-        for(const option of Array.isArray(data.options)?data.options.slice(0,8):[]){
-          if(typeof option?.label!=='string'||!option.label)continue;
-          const button=document.createElement('button');button.type='button';button.textContent=option.label;
-          if(state){button.disabled=true;if(option.id===answer.option_id){button.classList.add('is-chosen');button.textContent='✓ '+option.label;}}
-          // A picked option is sent at once as the user's message "<title>: <label>", naming its panel.
-          else button.onclick=async()=>{for(const node of choices.children)node.disabled=true;try{await submit(title+': '+option.label,false,{componentId:id});void client.dismissComponent(session,id,{option_id:option.id}).catch(()=>{});settle({option_id:option.id});}catch(error){note(error.message);for(const node of choices.children)node.disabled=false;}};
-          choices.append(button);
-        }
-        if(!state)choices.append(dismiss);
-        body.append(choices);if(state)body.append(status());place();return;
-      }
-      // A submitted form is one user message: the title, then the values ("Title: A, C" for one field).
-      const form=document.createElement('form');form.className='v3-reply-form';
-      const values=answer.values&&typeof answer.values==='object'?answer.values:{};
-      const inputs=[];
-      for(const field of Array.isArray(data.fields)?data.fields.slice(0,20):[]){
-        if(typeof field?.name!=='string')continue;
-        const name=field.label||field.name,saved=values[field.name];
-        if(field.type==='multi'){
-          const group=document.createElement('fieldset');group.className='v3-reply-multi';const legend=document.createElement('legend');legend.textContent=name;group.append(legend);
-          const boxes=[];
-          for(const value of Array.isArray(field.options)?field.options.slice(0,8):[]){
-            const label=document.createElement('label');const box=document.createElement('input');box.type='checkbox';box.value=value;
-            box.checked=Array.isArray(saved)&&saved.includes(value);box.disabled=Boolean(state);label.append(box,document.createTextNode(' '+value));group.append(label);boxes.push(box);
-          }
-          form.append(group);inputs.push({field,name,read:()=>boxes.filter(box=>box.checked).map(box=>box.value),missing:()=>field.required===true&&!boxes.some(box=>box.checked)});continue;
-        }
-        const label=document.createElement('label');label.textContent=name;
-        let input;
-        if(field.type==='select'){input=document.createElement('select');for(const value of Array.isArray(field.options)?field.options:[])input.append(new Option(value,value));}
-        else{input=document.createElement('input');input.type=['email','number'].includes(field.type)?field.type:'text';}
-        input.required=field.required===true;if(typeof saved==='string')input.value=saved;input.disabled=Boolean(state);label.append(input);form.append(label);inputs.push({field,name,read:()=>input.value,missing:()=>false});
-      }
-      if(state){body.append(form,status());place();return;}
-      const actions=document.createElement('div');actions.className='v3-reply-choices';
-      const send=document.createElement('button');send.type='submit';send.textContent='Send';
-      actions.append(send,dismiss);form.append(actions);
-      form.onsubmit=async event=>{event.preventDefault();
-        if(inputs.some(item=>item.missing())){note('Choose at least one option');return;}
-        send.disabled=true;
-        const answers=inputs.map(item=>[item,item.read()]),shown=value=>Array.isArray(value)?value.join(', '):value;
-        const text=answers.length===1?title+': '+shown(answers[0][1]):[title,...answers.map(([item,value])=>item.name+': '+shown(value))].join('\n');
-        const submitted={values:Object.fromEntries(answers.map(([item,value])=>[item.field.name,value]))};
-        try{await submit(text,false,{componentId:id});void client.dismissComponent(session,id,submitted).catch(()=>{});settle(submitted);}catch(error){note(error.message);send.disabled=false;}};
-      body.append(form);place();return;
+      // A choice panel is one required round single-choice list; its recorded answer names the option id.
+      const options=reply?(Array.isArray(data.options)?data.options.slice(0,8):[]).filter(option=>typeof option?.label==='string'&&option.label):[];
+      const fields=reply?[{name:'choice',label:'',type:'radio',options:options.map(option=>option.label),required:true}]:(Array.isArray(data.fields)?data.fields.slice(0,20):[]).filter(field=>typeof field?.name==='string');
+      const values=reply?{choice:options.find(option=>option.id===answer.option_id)?.label||''}:answer.values&&typeof answer.values==='object'?answer.values:{};
+      const form=buildReplyForm({fields,paged:!reply&&data.paged===true,state,values,dismiss,
+        // A panel's + stages files on the composer, so they go out with the answer message.
+        addFiles:async files=>{await media.add(files);return media.count;},
+        // A submitted panel is one user message: "Title: value", or the title then one "Label: value" line per field.
+        send:async answers=>{
+          const submitted=reply?{option_id:options.find(option=>option.label===answers[0].value)?.id}:{values:Object.fromEntries(answers.map(item=>[item.name,item.value]))};
+          try{await submit(answerText(title,answers),false,{componentId:id});}catch(error){note(error.message);throw error;}
+          void client.dismissComponent(session,id,submitted).catch(()=>{});settle(submitted);
+        }});
+      body.append(form);if(state)body.append(status());place();return;
     }
     const lines=spec.type==='status'?data.sections?.map(item=>[item.label,item.value].filter(Boolean).join(': ')):
       spec.type==='todo_list'?data.items?.map(item=>(item.done?'☑ ':'☐ ')+item.label):

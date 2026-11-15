@@ -75,7 +75,8 @@
     },
     {
       "id": "chat.limits.attachments.max_file_size_mb",
-      "description": "Largest file, in megabytes, that can be attached to a chat message.",
+      "description": "Largest file, in megabytes, that can be attached to a chat message; null means no limit.",
+      "nullable": true,
       "type": "number",
       "pointer": "/chat_limits/attachments/max_file_size_mb",
       "layers": [
@@ -98,7 +99,8 @@
     },
     {
       "id": "chat.limits.attachments.max_per_message",
-      "description": "How many files one chat message may attach.",
+      "description": "How many files one chat message may attach; null means no limit.",
+      "nullable": true,
       "type": "integer",
       "pointer": "/chat_limits/attachments/max_per_message",
       "layers": [

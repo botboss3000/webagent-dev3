@@ -383,15 +383,46 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
   #chat-messages{scrollbar-width:none;scrollbar-gutter:auto}
   #chat-messages::-webkit-scrollbar{display:none}
 }
-/* Reply choices from offer_choices: a click sends the label as the user's message. */
-.v3-reply-choices{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-.v3-reply-choices button{font:inherit;color:var(--fg-1);background:var(--bg-elev);border:1px solid var(--border);border-radius:999px;padding:6px 12px;min-height:34px;cursor:pointer;-webkit-tap-highlight-color:transparent}
-.v3-reply-choices button:hover:not(:disabled){border-color:color-mix(in oklab,var(--fg-1) 35%,transparent)}
-.v3-reply-choices button.v3-reply-dismiss{background:transparent;color:var(--fg-2,var(--fg-1));border-style:dashed}
-.v3-reply-form{display:flex;flex-direction:column;gap:8px;margin-top:8px}
-.v3-reply-form label{display:flex;flex-direction:column;gap:4px;font-size:14px;color:var(--fg-2,var(--fg-1))}
-.v3-reply-form input,.v3-reply-form select{font:inherit;color:var(--fg-1);background:var(--bg-elev);border:1px solid var(--border);border-radius:var(--r-sm,8px);padding:8px 10px;min-height:38px;box-sizing:border-box;width:100%}
-.v3-reply-choices button:disabled{opacity:.55;cursor:default}
+/* Agent reply panels (choice and form cards from present_chat_component): round single-choice rows,
+   checkbox rows, free text with +, and a footer with Submit and Dismiss; the answer is sent as the
+   user's own message. Rows and buttons are at least 44px tall for touch. */
+.v3-reply-form{display:flex;flex-direction:column;gap:14px;margin-top:8px}
+.v3-reply-field{display:flex;flex-direction:column;gap:8px;min-width:0}
+.v3-reply-field[hidden]{display:none}
+.v3-reply-q{font-weight:600;color:var(--fg-1);overflow-wrap:anywhere}
+.v3-reply-hint{margin:-4px 0 0;font-size:13px;color:var(--fg-3)}
+.v3-reply-options{display:flex;flex-direction:column;border:var(--border-width) solid var(--border);border-radius:12px;overflow:hidden}
+.v3-reply-option{position:relative;display:flex;align-items:center;gap:12px;min-height:44px;padding:10px 14px;box-sizing:border-box;cursor:pointer;color:var(--fg-1);overflow-wrap:anywhere;-webkit-tap-highlight-color:transparent}
+.v3-reply-option+.v3-reply-option{border-top:var(--border-width) solid var(--border-soft)}
+.v3-reply-option input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.v3-reply-option-text{min-width:0}
+/* Round radio: a ring that fills light with a small dark centre when chosen; checkboxes are squares with a cut-out tick. */
+.v3-reply-mark{flex:none;display:grid;place-items:center;width:20px;height:20px;box-sizing:border-box;border:2px solid var(--fg-3);border-radius:50%}
+.v3-reply-option input[type=checkbox]+.v3-reply-mark{border-radius:5px}
+.v3-reply-option input:checked+.v3-reply-mark{background:var(--fg-1);border-color:var(--fg-1)}
+.v3-reply-option input[type=radio]:checked+.v3-reply-mark::after{content:'';width:8px;height:8px;border-radius:50%;background:var(--bg-0)}
+.v3-reply-option input[type=checkbox]:checked+.v3-reply-mark::after{content:'';width:5px;height:10px;box-sizing:border-box;border:solid var(--bg-0);border-width:0 2.5px 2.5px 0;transform:translateY(-1px) rotate(45deg)}
+.v3-reply-option input:focus-visible+.v3-reply-mark{outline:2px solid var(--accent);outline-offset:2px}
+.v3-reply-option:has(input:disabled){cursor:default}
+@media (hover:hover){.v3-reply-option:not(:has(input:disabled)):hover{background:var(--bg-tint)}}
+.v3-reply-input{display:flex;align-items:flex-start;gap:8px;min-width:0}
+.v3-reply-form :is(input:not([type=radio],[type=checkbox],[type=file]),select,textarea){font:inherit;color:var(--fg-1);background:var(--bg-elev);border:var(--border-width) solid var(--border);border-radius:8px;padding:10px 12px;min-height:44px;box-sizing:border-box;width:100%;min-width:0}
+.v3-reply-form textarea{resize:vertical;min-height:88px;line-height:1.4}
+.v3-reply-form .v3-reply-options input.v3-reply-other{width:auto;margin:0 14px 12px}
+.v3-reply-form :is(input,select,textarea):disabled{opacity:.7}
+.v3-reply-attach{flex:none;width:44px;height:44px;border-radius:50%;border:var(--border-width) solid var(--border);background:var(--bg-elev);color:var(--fg-1);font:inherit;font-size:22px;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.v3-reply-files{color:var(--fg-2);font-size:13px}
+.v3-reply-error{margin:0;color:var(--danger);font-size:13px}
+.v3-reply-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;padding-top:12px;border-top:var(--border-width) solid var(--border-soft)}
+.v3-reply-step{margin-right:auto;color:var(--fg-3);font-size:13px}
+.v3-reply-btn{font:inherit;min-height:44px;padding:0 18px;border-radius:999px;border:var(--border-width) solid var(--border);background:transparent;color:var(--fg-1);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.v3-reply-btn.is-primary{background:var(--fg-1);border-color:var(--fg-1);color:var(--bg-0);font-weight:600}
+.v3-reply-btn.is-quiet{border-color:transparent;color:var(--fg-2)}
+@media (hover:hover){.v3-reply-btn.is-quiet:hover:not(:disabled){background:var(--bg-tint);color:var(--fg-1)}}
+.v3-reply-btn:disabled{opacity:.55;cursor:default}
+.v3-reply-panel.is-answered .v3-reply-option:not(:has(input:checked)),.v3-reply-panel.is-dismissed .v3-reply-option{opacity:.55}
+/* While a reply panel's text field holds focus the composer steps aside, so a phone keyboard shows the panel rather than two text boxes. */
+body:has(.v3-reply-panel :is(input:not([type=radio],[type=checkbox],[type=file]),textarea,select):focus) #composer{display:none!important}
 /* Admission review blocked this message: the agent never saw it. */
 .message-admission-status.is-blocked{display:block;margin:8px 0 0;padding:8px 10px;border-radius:8px;border:1px solid rgba(var(--warning-rgb),.55);background:var(--warning-soft);color:var(--fg-1);font-size:13px;font-weight:600;line-height:1.35;opacity:1}
 .message-admission-status.is-blocked::before{content:'⚠ ';color:var(--warning)}
@@ -400,14 +431,7 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
    scrollbar, so without this bubbles sit flush against the view. */
 #chat-messages-inner{padding-inline:8px!important}
 .v3-reply-prompt{margin:4px 0 0}
-.v3-reply-panel.is-answered .v3-reply-choices button,.v3-reply-panel.is-dismissed .v3-reply-choices button{opacity:.5}
-.v3-reply-choices button.is-chosen{opacity:1!important;border:2px solid var(--accent,var(--fg-1));color:var(--fg-1);font-weight:600}
-.v3-reply-state{display:block;margin-top:6px;color:var(--fg-2,var(--fg-1));font-size:13px}
-.v3-reply-multi{display:flex;flex-direction:column;gap:6px;border:0;margin:0;padding:0;min-width:0}
-.v3-reply-multi legend{font-size:14px;color:var(--fg-2,var(--fg-1));margin-bottom:4px;padding:0}
-.v3-reply-multi label{flex-direction:row!important;align-items:center;gap:8px!important;color:var(--fg-1)!important;overflow-wrap:anywhere}
-.v3-reply-multi input{width:auto!important;min-height:0!important;margin:0}
-.v3-reply-form input:disabled,.v3-reply-form select:disabled{opacity:.7}
+.v3-reply-state{display:block;margin-top:6px;color:var(--fg-2);font-size:13px}
 .v3-subagent-notices{display:flex;flex-direction:column;gap:2px;color:var(--fg-3);font-size:12px;min-width:0}
 .v3-subagent-row>summary{cursor:pointer;padding:0 8px;border-radius:var(--r-sm,8px);overflow-wrap:anywhere;list-style:none;-webkit-tap-highlight-color:transparent}
 .v3-subagent-row>summary::-webkit-details-marker{display:none}

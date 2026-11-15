@@ -301,27 +301,31 @@ fn component(args: ComponentArgs, fallback_id: &str) -> Result<(String, Value, u
                     bail!("Invalid field name");
                 }
                 let field_type = field["type"].as_str().unwrap_or("text");
-                if !matches!(field_type, "text" | "email" | "number" | "select" | "multi") {
+                if !matches!(
+                    field_type,
+                    "text" | "email" | "number" | "select" | "multi" | "radio" | "textarea"
+                ) {
                     bail!("Unsupported field type");
                 }
+                let picks = matches!(field_type, "multi" | "radio");
                 let mut choices = Vec::new();
-                if field_type == "multi" {
+                if picks {
                     let options = field["options"]
                         .as_array()
                         .map(Vec::as_slice)
                         .unwrap_or(&[]);
                     if options.is_empty() || options.len() > 8 {
-                        bail!("Multi fields need 1..8 options");
+                        bail!("Multi and radio fields need 1..8 options");
                     }
                     for option in options {
                         let label = text(
                             option
                                 .as_str()
-                                .ok_or_else(|| anyhow!("Multi options must be text"))?,
+                                .ok_or_else(|| anyhow!("Multi and radio options must be text"))?,
                             80,
                         )?;
                         if label.is_empty() || label.contains('\n') {
-                            bail!("Multi options must be one non-empty line");
+                            bail!("Multi and radio options must be one non-empty line");
                         }
                         choices.push(label);
                     }
@@ -344,14 +348,21 @@ fn component(args: ComponentArgs, fallback_id: &str) -> Result<(String, Value, u
                         bail!("Select fields need options");
                     }
                 }
+                // `other` adds a "Something else…" row to a pick list; `attach` adds a + button
+                // that stages files on the answer message. Both are ignored on other types.
+                let flag = |key: &str| field[key].as_bool().unwrap_or(false);
+                let attaches = matches!(field_type, "text" | "textarea");
                 clean.push(
                     json!({"name":name,"label":text(field["label"].as_str().unwrap_or(name),120)?,
-                    "type":field_type,"required":field["required"].as_bool().unwrap_or(false),
-                    "options":choices}),
+                    "type":field_type,"required":flag("required"),"options":choices,
+                    "hint":text(field["hint"].as_str().unwrap_or(""),200)?,
+                    "other":picks && flag("other"),"attach":attaches && flag("attach")}),
                 );
             }
+            // A paged form shows one field per page with a step counter, Back and Skip.
+            let paged = data.get("paged").and_then(Value::as_bool).unwrap_or(false);
             json!({"prompt":text(data.get("prompt").and_then(Value::as_str).unwrap_or(""),200)?,
-                "fields":clean})
+                "fields":clean,"paged":paged})
         }
         _ => unreachable!(),
     };
@@ -630,5 +641,40 @@ mod tests {
             "c",
         )
         .is_err());
+    }
+    #[test]
+    fn paged_forms_keep_radio_other_and_attach_only_where_they_apply() {
+        let form = |fields: Value| {
+            component(
+                serde_json::from_value(json!({"type":"form","expected_revision":0,
+                    "title":"Panel setup","data":{"paged":true,"fields":fields}}))
+                .unwrap(),
+                "c",
+            )
+        };
+        let (_, spec, _) = form(json!([
+            {"name":"layout","type":"radio","options":["A","B"],"other":true,"attach":true,
+             "required":true,"hint":"Pick one"},
+            {"name":"notes","type":"textarea","attach":true,"other":true},
+            {"name":"when","type":"select","options":["Now"],"attach":true}
+        ]))
+        .unwrap();
+        let fields = &spec["data"]["fields"];
+        assert_eq!(spec["data"]["paged"], true);
+        assert_eq!(fields[0]["type"], "radio");
+        assert_eq!(fields[0]["options"][1], "B");
+        assert_eq!(fields[0]["hint"], "Pick one");
+        assert_eq!(
+            (&fields[0]["other"], &fields[0]["attach"]),
+            (&json!(true), &json!(false))
+        );
+        assert_eq!(
+            (&fields[1]["other"], &fields[1]["attach"]),
+            (&json!(false), &json!(true))
+        );
+        assert_eq!(fields[2]["attach"], false);
+        assert!(form(json!([{"name":"layout","type":"radio","options":[]}])).is_err());
+        assert!(form(json!([{"name":"layout","type":"radio","options":["A\nB"]}])).is_err());
+        assert!(form(json!([{"name":"x","type":"html"}])).is_err());
     }
 }

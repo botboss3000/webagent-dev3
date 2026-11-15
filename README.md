@@ -932,7 +932,7 @@ a build stale even if compilation passed.
 Configure the live file ui/chat/chat.json under
 chat_limits.attachments:
 
-    { "max_file_size_mb": 25, "max_per_message": 10 }
+    { "max_file_size_mb": null, "max_per_message": null }
 
 Missing or null keys mean no application size/count limit. Positive integers
 restrict file size in MiB and attachment count; there are no fixed configuration
@@ -940,8 +940,8 @@ ceilings beyond machine numeric representation. Invalid values reject attachment
 operations. The former 256 MiB storage quota is removed; physical storage limits
 still apply. Rust reads settings on upload/message admission, and the composer
 receives them through session controls. Refresh the browser after a configuration
-change. The current JSON explicitly selects 25 MiB and 10 files; delete those
-keys or set them to null for unrestricted application defaults.
+change. The current JSON sets both keys to null (no application size or count
+limit); set positive integers to restrict them again.
 
 The current encrypted-record upload transport buffers JSON/base64 and decoded
 file data in memory. Removing application caps does not remove memory, SQLite,
