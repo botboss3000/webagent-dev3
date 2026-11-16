@@ -3154,6 +3154,20 @@ class Broker:
                     for folder in sets[2:]:
                         if now - last_used(folder) >= unused_after:
                             candidates.append((folder, {}, "unused_cargo_downloads"))
+                # Superseded UI asset releases. Keep the current one, the one it replaced, any an
+                # unfinished job could restore and the two newest.
+                releases = ASSET_ROOT / "releases"
+                if releases.is_dir() and not releases.is_symlink():
+                    current = self.runner.current_asset_id()
+                    keep = {current, (self.jobs.get(current) or {}).get("asset_previous")}
+                    keep.update(j.get("asset_previous") for j in self.jobs.values()
+                        if j.get("status") not in TERMINAL_JOB_STATUS)
+                    folders = sorted((f for f in releases.iterdir() if f.is_dir() and not f.is_symlink()),
+                        key=lambda f: f.stat().st_mtime, reverse=True)
+                    keep.update(f.name for f in folders[:2])
+                    for folder in folders:
+                        if folder.name not in keep and (self.jobs.get(folder.name) or {}).get("status") in {"completed", "cancelled", "failed"}:
+                            candidates.append((folder, {}, "superseded_ui_release"))
                 for key, item in self.work.items():
                     if not self.scheduler.retention_allowed(key):
                         continue
@@ -3185,9 +3199,12 @@ class Broker:
                     if any(parent.is_symlink() for parent in (cache, *cache.parents)) or not cache.is_dir():
                         continue
                     resolved = cache.resolve()
-                    if any(resolved == m or resolved in m.parents or m in resolved.parents for m in mounts):
+                    # The API mounts all of ui-assets to switch releases live; that mount pins nothing
+                    # by itself, the exact release mounts under it do.
+                    pins = [m for m in mounts if m != ASSET_ROOT.resolve()] if kind == "superseded_ui_release" else mounts
+                    if any(resolved == m or resolved in m.parents or m in resolved.parents for m in pins):
                         continue
-                    if kind in {"terminal_job_scratch", "unselectable_engine_build", "unused_cargo_downloads"}:
+                    if kind in {"terminal_job_scratch", "unselectable_engine_build", "unused_cargo_downloads", "superseded_ui_release"}:
                         # Nothing writes here again (selection or job status decided that); a stat replaces the walk.
                         job = self.jobs.get(cache.name) or {}
                         newest = max(cache.stat().st_mtime, job.get("finished_at", 0),
@@ -3211,6 +3228,8 @@ class Broker:
                     current_ids = self.runner.command(["docker", "ps", "-aq", "--filter", "name="+TARGETS[0]], timeout=5).split()
                     current_mounts = [path for path in container_mounts(self.runner, current_ids)
                         if path != self.state.parent.resolve()]
+                    if kind == "superseded_ui_release":
+                        current_mounts = [m for m in current_mounts if m != ASSET_ROOT.resolve()]
                     if any(resolved == m or resolved in m.parents or m in resolved.parents for m in current_mounts):
                         continue
                     size = int(self.runner.command(["du", "-s", "-B1", "--one-file-system", "--", str(cache)], timeout=10).split()[0])

@@ -141,3 +141,17 @@ class CacheRetentionTests(unittest.TestCase):
         removed=self.broker.prune_check_caches()["removed"]
         self.assertEqual([r["kind"]for r in removed],["unused_cargo_downloads"]*2)
         self.assertEqual(sorted(p.name[0]for p in root.iterdir()),["0","1"])
+    def test_superseded_ui_releases_removed_despite_asset_root_mount(self):
+        from unittest.mock import patch
+        assets=self.state/"ui-assets";names=["%08d-0000-0000-0000-000000000000"%n for n in range(1,7)]
+        for index,name in enumerate(names):
+            folder=assets/"releases"/name/"v3/config";folder.mkdir(parents=True);(folder/"app.json").write_text("{}")
+            self.old(assets/"releases"/name);os.utime(assets/"releases"/name,(1000+index,)*2)
+            self.broker.jobs[name]={"job_id":name,"status":"completed"}
+        self.broker.jobs[names[2]]["asset_previous"]=names[1]
+        self.mounts=[{"Source":str(assets)},{"Source":str(assets/"releases"/names[2]/"v3/config")}]
+        self.runner.current_asset_id=lambda:names[2]
+        with patch.object(fixtures.host,"ASSET_ROOT",assets):
+            removed=self.broker.prune_check_caches()["removed"]
+        self.assertEqual({r["kind"]for r in removed},{"superseded_ui_release"})
+        self.assertEqual(sorted(p.name for p in (assets/"releases").iterdir()),[names[1],names[2],names[4],names[5]])
