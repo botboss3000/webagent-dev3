@@ -46,8 +46,10 @@
     ],
     "additionalProperties": false
   },
-  "effect": "write",
+  "effect": "read",
   "default_policy": {
-    "operator": "require_approval"
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "allow"
   }
 }
