@@ -7,6 +7,8 @@ mod agent_encryption;
 mod agent_memberships;
 mod agent_pages;
 mod app_pages;
+#[path = "../../crates/modules/chat/host/storage/artifacts.rs"]
+mod artifacts;
 mod background_tasks;
 pub(crate) mod base_task;
 #[path = "../../crates/modules/chat/host/storage/conversation_history.rs"]

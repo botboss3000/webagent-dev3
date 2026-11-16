@@ -85,7 +85,8 @@ pub async fn open_pool(path: &Path, events: bool, runs: bool) -> Result<SqlitePo
             CREATE INDEX IF NOT EXISTS loop_commands_run ON loop_commands(run_id,seq);
             CREATE TABLE IF NOT EXISTS loop_events(seq INTEGER PRIMARY KEY AUTOINCREMENT,run_id TEXT NOT NULL,schema_version INTEGER NOT NULL CHECK(schema_version=1),kind TEXT NOT NULL,payload BLOB NOT NULL,created_at INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS loop_events_run ON loop_events(run_id,seq);
-            CREATE TABLE IF NOT EXISTS publication_outbox(run_id TEXT PRIMARY KEY,schema_version INTEGER NOT NULL CHECK(schema_version=1),payload BLOB NOT NULL,created_at INTEGER NOT NULL);")
+            CREATE TABLE IF NOT EXISTS publication_outbox(run_id TEXT PRIMARY KEY,schema_version INTEGER NOT NULL CHECK(schema_version=1),payload BLOB NOT NULL,created_at INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS session_artifacts(session_id TEXT NOT NULL,artifact_id TEXT NOT NULL,kind TEXT NOT NULL,revision INTEGER NOT NULL,run_id TEXT NOT NULL,bytes INTEGER NOT NULL,body BLOB NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(session_id,artifact_id));")
             .execute(&pool).await?;
         // Recovery input is encrypted item-by-item, separate from small run
         // metadata. Both are committed atomically; interactions remain untouched.

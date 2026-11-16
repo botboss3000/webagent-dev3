@@ -780,6 +780,18 @@ impl Store {
                 .await?;
         }
         sqlx::query("DELETE FROM chat_context_boundaries WHERE message_id IN (SELECT id FROM chat WHERE session_id=?)").bind(sid).execute(&mut *tx).await?;
+        // Artifacts the agent produced go with their session.
+        let has_artifacts: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='session_artifacts'",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        if has_artifacts != 0 {
+            sqlx::query("DELETE FROM session_artifacts WHERE session_id=?")
+                .bind(sid)
+                .execute(&mut *tx)
+                .await?;
+        }
         for table in [
             "chat",
             "interactions",

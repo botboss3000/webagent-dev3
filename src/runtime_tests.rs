@@ -1633,7 +1633,7 @@ async fn image_capable_candidates_receive_sent_images_and_others_keep_text() {
 
 /// Leaving Plan needs the agreed plan: without one the call is refused before any approval
 /// card, even inside a multi-call step. With one, "Continue in Ask mode" approves the call
-/// with Ask as the target, and the plan is pinned in the chat.
+/// with Ask as the target, and the plan is saved as a session artifact.
 #[tokio::test]
 async fn plan_exit_needs_a_plan_and_can_continue_in_ask_mode() {
     use axum::routing::post;
@@ -1729,10 +1729,24 @@ async fn plan_exit_needs_a_plan_and_can_continue_in_ask_mode() {
         (&mode["execution_mode"], &mode["revision"]),
         (&json!("ask"), &json!(2))
     );
-    let cards = app.store.base_chat_components(&sid).await.unwrap();
-    assert_eq!(cards.len(), 1);
-    assert_eq!(cards[0]["component"]["id"], "plan-overview");
-    assert_eq!(cards[0]["component"]["placement"], "sticky");
+    // The plan is a session artifact, not a transcript card, and goes with its session.
+    assert!(app
+        .store
+        .base_chat_components(&sid)
+        .await
+        .unwrap()
+        .is_empty());
+    let artifacts = app.store.session_artifacts(&sid).await.unwrap();
+    assert_eq!(artifacts.len(), 1);
+    assert_eq!(
+        (
+            &artifacts[0]["id"],
+            &artifacts[0]["kind"],
+            &artifacts[0]["title"]
+        ),
+        (&json!("plan"), &json!("plan"), &json!("Standup note"))
+    );
+    assert_eq!(artifacts[0]["sections"][0]["value"], "Write a daily note");
     let requests = requests.lock().await;
     assert_eq!(requests.len(), 4);
     let output = |n: usize, call: &str| {
@@ -1750,6 +1764,9 @@ async fn plan_exit_needs_a_plan_and_can_continue_in_ask_mode() {
         "{}",
         output(3, "call")
     );
+    drop(requests);
+    app.store.delete_agent_session(&sid).await.unwrap();
+    assert!(app.store.session_artifacts(&sid).await.unwrap().is_empty());
     server.abort();
 }
 

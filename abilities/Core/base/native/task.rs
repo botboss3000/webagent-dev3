@@ -88,8 +88,8 @@ pub struct Plan {
     title: String,
     checklist: Vec<Step>,
 }
-/// Id of the pinned card that shows a session's agreed plan.
-pub const PLAN_CARD: &str = "plan-overview";
+/// Session artifact id (and kind) of a session's agreed plan.
+pub const PLAN_ARTIFACT: &str = "plan";
 /// Hard limit for panel prompts and hints; the tool skill asks for 200 or fewer. The margin
 /// only protects against runaway text.
 const PANEL_TEXT: usize = 400;
@@ -384,9 +384,9 @@ fn component(args: ComponentArgs, fallback_id: &str) -> Result<(String, Value, u
     }
     Ok((id, spec, args.expected_revision))
 }
-/// The pinned status card for an agreed `plan`: goal, criteria and notes, then the numbered
+/// The session artifact for an agreed `plan`: goal, criteria and notes, then the numbered
 /// checklist. Validates every field, so a bad plan is refused before anything changes.
-pub fn plan_card(args: &Plan) -> Result<Value> {
+pub fn plan_artifact(args: &Plan) -> Result<Value> {
     let steps = validate_steps(&args.checklist)?;
     let mut sections = Vec::new();
     for (label, value) in [
@@ -416,12 +416,11 @@ pub fn plan_card(args: &Plan) -> Result<Value> {
         .join("\n");
     sections.push(json!({"label":"Checklist","value":list,"status":null}));
     let title = short_title(&args.title, "Plan")?;
-    let spec = json!({"id":PLAN_CARD,"type":"status","title":title,"placement":"sticky",
-        "data":{"sections":sections},"lifecycle":{},"authority":"display_only"});
-    if serde_json::to_vec(&spec)?.len() > 24 * 1024 {
+    let artifact = json!({"title":title,"sections":sections});
+    if serde_json::to_vec(&artifact)?.len() > 24 * 1024 {
         bail!("Plan exceeds 24 KiB");
     }
-    Ok(spec)
+    Ok(artifact)
 }
 /// Fresh live authority for the task call `pending_id`: the run generation, or an error
 /// when the call, its recorded revisions or the caller's live access no longer admit it.
@@ -575,21 +574,18 @@ pub async fn execute(
 mod tests {
     use super::*;
     #[test]
-    fn plan_card_pins_the_plan_and_refuses_bad_steps() {
+    fn plan_artifact_holds_the_plan_and_refuses_bad_steps() {
         let plan: Plan = serde_json::from_value(json!({"title":"Standup note","goal":"Daily note",
             "checklist":[{"label":"Write it"},{"label":"Schedule it","status":"done"}]}))
         .unwrap();
-        let card = plan_card(&plan).unwrap();
+        let card = plan_artifact(&plan).unwrap();
+        assert_eq!(card["title"], "Standup note");
         assert_eq!(
-            (&card["id"], &card["placement"]),
-            (&json!(PLAN_CARD), &json!("sticky"))
-        );
-        assert_eq!(
-            card["data"]["sections"][1]["value"],
+            card["sections"][1]["value"],
             "1. [ ] Write it\n2. [x] Schedule it"
         );
         let short: Plan = serde_json::from_value(json!({"checklist":[{"label":"x"}]})).unwrap();
-        assert!(plan_card(&short).is_err());
+        assert!(plan_artifact(&short).is_err());
         assert!(
             serde_json::from_value::<Plan>(json!({"checklist":[],"expected_revision":0})).is_err()
         );

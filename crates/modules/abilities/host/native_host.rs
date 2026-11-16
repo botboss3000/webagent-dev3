@@ -103,6 +103,23 @@ impl NativeHost for Host<'_> {
             artifact,
         ))
     }
+    fn write_session_artifact<'a>(
+        &'a self,
+        call: Call<'a>,
+        kind: &'a str,
+        id: &'a str,
+        body: &'a Value,
+    ) -> Pending<'a, Result<Value>> {
+        Box::pin(self.0.store.session_artifact_write(
+            call.sid,
+            call.run_id,
+            call.pending_id,
+            call.generation,
+            kind,
+            id,
+            body,
+        ))
+    }
     fn attachment_limits<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<AttachmentLimits>> {
         Box::pin(async move {
             api::uploads::limits(self.0, sid)

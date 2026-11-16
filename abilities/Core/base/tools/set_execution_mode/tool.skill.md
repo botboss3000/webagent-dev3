@@ -12,4 +12,4 @@ Request `mode: "auto"` to start executing. The user sees the plan with three cho
 - **Continue in Ask mode**: the session enters Ask instead. The result carries a `note` saying so: execute the plan, and tools that need approval ask the user.
 - **Keep planning**: the call is denied and the session stays in Plan. Ask what is still open, then request again.
 
-Once the user lets the work start, the plan is pinned in the chat. Track progress with `update_task_checkpoint`.
+Once the user lets the work start, the plan is saved as the session's plan artifact; the user opens it from the Artifacts chip in the chat header. Track progress with `update_task_checkpoint`.

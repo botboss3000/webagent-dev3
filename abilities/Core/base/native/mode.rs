@@ -1,7 +1,7 @@
 //! A model can change only the authenticated run's own session mode.
 //! Entering Auto always needs a fresh human approval. Leaving Plan carries the agreed plan,
-//! which is pinned in the chat once the user lets the work start.
-use crate::task::{plan_card, Plan, PLAN_CARD};
+//! which is saved as the session's plan artifact once the user lets the work start.
+use crate::task::{plan_artifact, Plan, PLAN_ARTIFACT};
 use crate::{Call, NativeHost};
 use anyhow::{bail, Result};
 use serde::Deserialize;
@@ -47,7 +47,7 @@ pub async fn execute(
             bail!("Invalid mode change");
         }
         // A bad plan is refused before the mode changes.
-        let card = query.plan.as_ref().map(plan_card).transpose()?;
+        let artifact = query.plan.as_ref().map(plan_artifact).transpose()?;
         let agent = host.session_agent_id(call.sid).await?;
         let store = host.agent_store(&agent).await?;
         // "Continue in Ask mode" approves this Auto request with Ask as the target.
@@ -63,15 +63,8 @@ pub async fn execute(
             .change_session_mode(&agent, call, mode, query.expected_revision)
             .await?
             .map_err(|_| anyhow::anyhow!("Session mode revision or access changed"))?;
-        if let Some(card) = card {
-            let revision = host
-                .chat_components(&store, call.sid)
-                .await?
-                .iter()
-                .find(|row| row["component"]["id"] == PLAN_CARD)
-                .and_then(|row| row["revision"].as_u64())
-                .unwrap_or(0);
-            host.write_artifact(call, "component", PLAN_CARD, revision, &card)
+        if let Some(artifact) = artifact {
+            host.write_session_artifact(call, PLAN_ARTIFACT, PLAN_ARTIFACT, &artifact)
                 .await?;
         }
         let mut result = json!({"status":"success","output":response});

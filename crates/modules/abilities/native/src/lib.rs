@@ -134,6 +134,16 @@ pub trait NativeHost: Sync {
         expected_revision: u64,
         artifact: &'a Value,
     ) -> Pending<'a, Result<Value>>;
+    /// Save session artifact `id` of `kind` (agent output kept with the session, such as the
+    /// agreed plan) at `call`'s position under a stable receipt; a later save of the same id
+    /// replaces it.
+    fn write_session_artifact<'a>(
+        &'a self,
+        call: Call<'a>,
+        kind: &'a str,
+        id: &'a str,
+        body: &'a Value,
+    ) -> Pending<'a, Result<Value>>;
     /// The attachment limits of session `sid`'s agent.
     fn attachment_limits<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<AttachmentLimits>>;
     /// Attach a file to session `sid` as the actor's upload; `body` is an upload request
