@@ -6,8 +6,7 @@ use std::path::PathBuf;
 pub(crate) struct NativeHost;
 pub(crate) type Catalog = webagent_abilities::Catalog<NativeHost>;
 pub(crate) use webagent_abilities::{
-    is_discovery, near_word, public_context, search_words, AbilityContext, AbilityInclusion,
-    SkillInclusion,
+    near_word, public_context, search_words, AbilityContext, AbilityInclusion, SkillInclusion,
 };
 impl webagent_abilities::Host for NativeHost {
     fn selected_source() -> Result<Option<PathBuf>> {
@@ -70,16 +69,14 @@ mod tests {
         webagent_abilities::catalog_testing::tests::visible_large_guidance_is_complete_and_discovery_is_not_activation::<crate::abilities::NativeHost>();
     }
     #[test]
-    fn discoverable_activation_is_durable_without_reloading_or_revealing_discoverable_tools() {
-        webagent_abilities::catalog_testing::tests::discoverable_activation_is_durable_without_reloading_or_revealing_discoverable_tools::<crate::abilities::NativeHost>();
+    fn every_enabled_tool_is_sent_and_off_stays_hidden() {
+        webagent_abilities::catalog_testing::tests::every_enabled_tool_is_sent_and_off_stays_hidden::<
+            crate::abilities::NativeHost,
+        >();
     }
     #[test]
     fn diagnostic_projection_rejects_content_and_unknown_identifiers() {
         webagent_abilities::catalog_testing::tests::diagnostic_projection_rejects_content_and_unknown_identifiers::<crate::abilities::NativeHost>();
-    }
-    #[test]
-    fn search_activation_preserves_visible_tools_and_respects_denials() {
-        webagent_abilities::catalog_testing::tests::search_activation_preserves_visible_tools_and_respects_denials::<crate::abilities::NativeHost>();
     }
     #[test]
     fn changed_manifest_withdraws_cached_loaded_tools_until_reload() {
@@ -92,10 +89,6 @@ mod tests {
     #[test]
     fn symlink_replacement_cannot_restore_cached_bundled_guidance() {
         webagent_abilities::catalog_testing::tests::symlink_replacement_cannot_restore_cached_bundled_guidance::<crate::abilities::NativeHost>();
-    }
-    #[test]
-    fn model_index_advertises_discoverable_abilities_without_hidden_tools() {
-        webagent_abilities::catalog_testing::tests::model_index_advertises_discoverable_abilities_without_hidden_tools::<crate::abilities::NativeHost>();
     }
     #[test]
     fn manifest_and_skill_are_loaded_without_exposing_denied_tools() {
@@ -124,8 +117,8 @@ mod tests {
         webagent_abilities::catalog_testing::tests::catalog_only_v2_tool_is_listed_but_never_executable::<crate::abilities::NativeHost>();
     }
     #[test]
-    fn loaded_tool_and_skill_owners_expose_no_other_tools() {
-        webagent_abilities::catalog_testing::tests::loaded_tool_and_skill_owners_expose_no_other_tools::<
+    fn group_tools_are_sent_without_loading() {
+        webagent_abilities::catalog_testing::tests::group_tools_are_sent_without_loading::<
             crate::abilities::NativeHost,
         >();
     }

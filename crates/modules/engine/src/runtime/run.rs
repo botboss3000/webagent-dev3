@@ -77,9 +77,48 @@ pub fn preload_suggestions(run: &Value) -> String {
         return String::new();
     }
     format!(
-        "\n## Suggested for this request\nLikely useful but not loaded; load with load_tool or load_skill if needed:\n{}\n",
+        "\n## Suggested for this request\nLikely useful but not loaded; load skills with load_skill if needed:\n{}\n",
         rows.join("\n")
     )
+}
+
+/// Guidance IDs of skills whose `load_skill` result, text included, is still in `input`.
+fn skills_in_history(input: &Value) -> std::collections::HashSet<String> {
+    let items = input.as_array().map(Vec::as_slice).unwrap_or_default();
+    // Parse only load_skill results: other tool outputs can be large and are never skills.
+    let calls: std::collections::HashSet<&str> = items
+        .iter()
+        .filter(|item| item["type"] == "function_call" && item["name"] == "load_skill")
+        .filter_map(|item| item["call_id"].as_str())
+        .collect();
+    if calls.is_empty() {
+        return std::collections::HashSet::new();
+    }
+    items
+        .iter()
+        .filter(|item| {
+            item["type"] == "function_call_output"
+                && item["call_id"]
+                    .as_str()
+                    .is_some_and(|id| calls.contains(id))
+        })
+        .filter_map(|item| serde_json::from_str::<Value>(item["output"].as_str()?).ok())
+        .filter_map(|result| {
+            let skill = &result["output"];
+            if skill["status"] != "loaded"
+                || skill["context_source"] != "live_skill_catalog"
+                || !skill["text"].is_string()
+            {
+                return None;
+            }
+            let (ability, name) = (skill["ability_id"].as_str()?, skill["skill_id"].as_str()?);
+            Some(match skill["kind"].as_str()? {
+                "ability" => format!("ability:{ability}"),
+                "own" => format!("own:base:{name}"),
+                kind => format!("{kind}:{ability}:{name}"),
+            })
+        })
+        .collect()
 }
 
 pub fn model_turn(run: &Value) -> u64 {
@@ -193,6 +232,33 @@ fn history_shape(history: &[Value]) -> String {
 #[cfg(test)]
 mod history_journal_tests {
     use super::*;
+    #[test]
+    fn loaded_skill_text_in_history_is_found_until_compacted() {
+        let result = |kind: &str, text: Option<&str>| {
+            let mut output = json!({"status":"loaded","context_source":"live_skill_catalog",
+                "ability_id":"files","kind":kind,"skill_id":"file_read"});
+            if let Some(text) = text {
+                output["text"] = json!(text);
+            }
+            json!({"type":"function_call_output","call_id":kind,
+                "output":json!({"status":"success","output":output}).to_string()})
+        };
+        let call = |id: &str, name: &str| json!({"type":"function_call","call_id":id,"name":name});
+        let input = json!([
+            call("tool", "load_skill"),
+            result("tool", Some("body")),
+            call("selectable", "load_skill"),
+            result("selectable", None)
+        ]);
+        let found = skills_in_history(&input);
+        assert!(found.contains("tool:files:file_read"));
+        // A summary keeps no text, so the skill is no longer in the history.
+        assert!(!found.contains("selectable:files:file_read"));
+        assert!(skills_in_history(&json!([])).is_empty());
+        // Only load_skill results count, whatever another tool's output contains.
+        let other = json!([call("tool", "file_read"), result("tool", Some("body"))]);
+        assert!(skills_in_history(&other).is_empty());
+    }
     #[test]
     fn unresolved_history_calls_get_one_unknown_outcome_result_inside_their_turn() {
         let call = |id: &str| json!({"type":"function_call","call_id":id,"name":"file_write","arguments":"{}"});
@@ -309,7 +375,6 @@ impl<
         workflow::record_tool_result(run, result)?;
         let previous_tools = run["selected_tools"].clone();
         let previous_skills = run["loaded_skills"].clone();
-        X::apply_tool_selection(run, result);
         X::apply_skill_selection(run, result);
         crate::context_assets::record_tool_operation(
             run,
@@ -395,6 +460,8 @@ impl<
                 <= request.ceiling;
         let (selection, input, tools, instructions, effort, token_run) = if same_model {
             let mut input = request.input.to_vec();
+            // The summary must not keep skill bodies; selectors re-place them afterwards.
+            context_compaction::omit_skill_bodies(&mut input);
             input.push(json!({"role":"user","content":message}));
             (
                 request.selection.clone(),
@@ -741,9 +808,9 @@ impl<
                         )
                     )
                 })
-                && !calls.iter().any(|call| {
-                    super::batch::serial_discovery::<B>(call["name"].as_str().unwrap_or(""))
-                })
+                && !calls
+                    .iter()
+                    .any(|call| super::batch::serial_discovery(call["name"].as_str().unwrap_or("")))
         }) {
             // NATIVE-GATE-SERIAL: private controls keep provider order and
             // never enter a parallel batch or the Python tool worker.
@@ -874,7 +941,7 @@ impl<
             .await?;
         let mode = app.session_mode(&sid).await?;
         let authorization_mode = mode.clone();
-        let mut effective = if B::is_discovery(&name) || always_on(&name) {
+        let mut effective = if always_on(&name) {
             access.tool_decision(&name, true, true)
         } else {
             app.live_tool_decision(
@@ -987,116 +1054,6 @@ impl<
             run["pending"]["mode_revision"] = json!(mode_revision);
             run["pending"]["visibility_revision"] = visibility["revision"].clone();
             run["pending"]["ability_state_revision"] = ability_state["revision"].clone();
-        }
-        if B::is_discovery(&name) {
-            if effective.permission == access::Permission::Deny {
-                let result = json!({"status":"denied","output":"Ability discovery unavailable"});
-                Self::append_tool(&mut run, &result)?;
-                app.store
-                    .save_run_observed(
-                        &mut run,
-                        "tool_result",
-                        &json!({"run_id":id,"name":name,"result":result}),
-                    )
-                    .await?;
-                return Ok(std::ops::ControlFlow::Continue(()));
-            }
-            if effective.permission == access::Permission::Ask
-                && run["pending"]["decision"] != "approve"
-            {
-                run["status"] = json!("waiting_approval");
-                run["pending"]["state"] = json!("waiting");
-                let mut payload = run["pending"].clone();
-                payload["run_id"] = json!(id);
-                app.store
-                    .save_run_observed(&mut run, "approval_required", &payload)
-                    .await?;
-                return Ok(std::ops::ControlFlow::Break(()));
-            }
-            if let Some(result) = tools::retry_guard::discovery_repeat(
-                &mut run,
-                &name,
-                &args,
-                call["call_id"].as_str().unwrap_or_default(),
-            ) {
-                Self::append_tool(&mut run, &result)?;
-                app.store
-                    .save_run_observed(
-                        &mut run,
-                        "tool_result",
-                        &json!({"run_id":id,"name":name,"result":result}),
-                    )
-                    .await?;
-                return Ok(std::ops::ControlFlow::Continue(()));
-            }
-            // Abilities needing a model role this agent lacks stay out of discovery.
-            app.hide_without_model_role(agent_id, &mut visibility, &ability_state)
-                .await?;
-            let mut result =
-                app.abilities
-                    .discover_with(&name, &args, &mut run, &visibility, &ability_state);
-            if name == "list_abilities" {
-                let mut unavailable = Vec::new();
-                if let Some(entries) = result["abilities"].as_array_mut() {
-                    entries.retain_mut(|entry| {
-                        let (id, label) = (entry["id"].clone(), entry["name"].clone());
-                        let kept = app.filter_ability_entry(
-                            &access,
-                            entry,
-                            &visibility,
-                            &ability_state,
-                            &run["loaded_abilities"],
-                        );
-                        if !kept {
-                            unavailable.push(json!({"id":id,"name":label}));
-                        }
-                        kept
-                    });
-                    for entry in entries.iter_mut() {
-                        *entry = webagent_abilities::discovery_row(entry);
-                    }
-                }
-                // Abilities the agent or caller may not use are named, so the agent asks the
-                // user instead of hunting for a substitute. Off abilities never reach here.
-                if !unavailable.is_empty() {
-                    result["unavailable"] = json!(unavailable);
-                    result["unavailable_note"] = json!(
-                        "Not enabled for this agent, your access level or this session. Do not \
-                         look for a substitute; tell the user which ability is needed."
-                    );
-                }
-            } else if matches!(result["status"].as_str(), Some("ok" | "already_available")) {
-                // Authorization uses the fresh catalog, never the loader acknowledgment.
-                let allowed = app
-                    .abilities
-                    .catalog_with(&visibility, &ability_state)
-                    .into_iter()
-                    .find(|entry| entry["id"] == args["ability_id"])
-                    .is_some_and(|mut entry| {
-                        app.filter_ability_entry(
-                            &access,
-                            &mut entry,
-                            &visibility,
-                            &ability_state,
-                            &run["loaded_abilities"],
-                        )
-                    });
-                if !allowed {
-                    if let Some(loaded) = run["loaded_abilities"].as_array_mut() {
-                        loaded.retain(|item| item != &args["ability_id"]);
-                    }
-                    result = json!({"status":"denied","output":"Ability unavailable under current access"});
-                }
-            }
-            Self::append_tool(&mut run, &result)?;
-            app.store
-                .save_run_observed(
-                    &mut run,
-                    "tool_result",
-                    &json!({"run_id":id,"name":name,"result":result}),
-                )
-                .await?;
-            return Ok(std::ops::ControlFlow::Continue(()));
         }
         if effective.permission == access::Permission::Deny
             || run["pending"]["decision"] == "deny"
@@ -1979,13 +1936,17 @@ impl<
                 if let Some(input) = run["input"].as_array_mut() {
                     drop_orphan_outputs(input);
                 }
-                let (_, visibility, ability_state) = app
+                let (_, mut visibility, ability_state) = app
                     .ability_controls_for(
                         &sid,
                         run["requester_user_id"]
                             .as_str()
                             .unwrap_or(app.store.current_user_id()),
                     )
+                    .await?;
+                // Every enabled schema is sent, so an ability needing a model role this agent
+                // lacks is switched off here.
+                app.hide_without_model_role(&agent_id, &mut visibility, &ability_state)
                     .await?;
                 let ability_state = app.abilities.selected_state(
                     &visibility,
@@ -2017,11 +1978,11 @@ impl<
                         .map(|binding| (name.to_owned(), binding))))
                     .collect::<std::collections::BTreeMap<_, _>>());
                 let assembled_asset_key = prepared_asset_key;
-                let mut schemas = app.abilities.schemas_with(
-                    &run["loaded_abilities"],
-                    &visibility,
-                    &ability_state,
-                );
+                // Every enabled tool is decided below; gate them all in one pass.
+                let gates =
+                    app.abilities
+                        .tool_gates(&visibility, &ability_state, &run["loaded_abilities"]);
+                let mut schemas = app.abilities.schemas_gated(&gates);
                 // Core tools are offered without loading their ability.
                 for schema in app.abilities.all_schemas() {
                     let name = schema["name"].as_str().unwrap_or("");
@@ -2050,31 +2011,18 @@ impl<
                     })
                     .filter(|schema| {
                         let name = schema["name"].as_str().unwrap_or("");
-                        if B::is_discovery(name) || always_on(name) {
+                        if always_on(name) {
                             access.tool_decision(name, true, true).permission
                                 != access::Permission::Deny
                         } else {
-                            app.live_tool_decision(
-                                &access,
-                                name,
-                                &visibility,
-                                &ability_state,
-                                &run["loaded_abilities"],
-                            )
-                            .offered()
+                            let gate = gates.get(name).cloned().unwrap_or_default();
+                            app.live_tool_decision_gated(&access, name, &visibility, &gate)
+                                .offered()
                         }
                     })
                     .collect::<Vec<_>>();
                 let mut entries = app.abilities.catalog_with(&visibility, &ability_state);
-                entries.retain_mut(|entry| {
-                    app.filter_ability_entry(
-                        &access,
-                        entry,
-                        &visibility,
-                        &ability_state,
-                        &run["loaded_abilities"],
-                    )
-                });
+                entries.retain_mut(|entry| app.filter_ability_entry_gated(&access, entry, &gates));
                 let mut guidance_blocks = app.abilities.capability_guidance(
                     &entries,
                     &schemas,
@@ -2111,13 +2059,16 @@ impl<
                         return Ok(());
                     }
                 }
+                // A loaded skill's text is its load_skill result; it joins the skills only
+                // once compaction has taken that result out of the history.
+                let in_history = skills_in_history(&run["input"]);
+                guidance_blocks.retain(|block| block.natural || !in_history.contains(&block.id));
                 let names = schemas
                     .iter()
                     .filter_map(|schema| schema["name"].as_str().map(str::to_owned))
                     .collect::<Vec<_>>();
                 let menu = format!(
-                    "{}\n{}\n{}{}",
-                    B::model_index(&entries, &schemas),
+                    "{}\n{}{}",
                     tool_execution::guidance::<A>(&visibility, &names)?,
                     X::optimization_guidance(&run),
                     preload_suggestions(&run)

@@ -76,7 +76,7 @@ async fn prospective(
                 active.push(json!(id));
             }
         }
-        let marker = json!(crate::tools::native::tool_search::marker(name));
+        let marker = json!(webagent_abilities::selection::marker(name));
         if !loaded.contains(&marker) {
             loaded.push(marker);
         }
@@ -226,7 +226,8 @@ mod tests {
             session_mode(&app, &sid).await.unwrap()["execution_mode"],
             "ask"
         );
-        assert!(!app.abilities.tool_available(
+        // Enabled tools are sent without activation.
+        assert!(app.abilities.tool_available(
             "file_edit",
             &app.store.agent_abilities().await.unwrap(),
             &state,

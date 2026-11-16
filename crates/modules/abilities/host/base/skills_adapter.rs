@@ -25,9 +25,15 @@ struct ListArgs {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LoadArgs {
+    #[serde(default)]
     ability_id: String,
+    #[serde(default)]
     kind: String,
+    #[serde(default)]
     skill_id: String,
+    /// A tool whose schema the agent is sent; its skill loads as kind `tool`.
+    #[serde(default)]
+    tool_name: Option<String>,
     #[serde(default)]
     expected_catalog_version: Option<String>,
 }
@@ -111,6 +117,15 @@ async fn ranked_skills(query: &str, skills: Vec<Value>) -> (Vec<Value>, &'static
 }
 /// Constrain kind, private scope and optional catalog receipt version before lookup.
 fn validate_load(args: &LoadArgs) -> Result<()> {
+    if let Some(tool) = &args.tool_name {
+        if !valid_id(tool)
+            || !(args.ability_id.is_empty() && args.kind.is_empty() && args.skill_id.is_empty())
+            || args.expected_catalog_version.is_some()
+        {
+            bail!("Pass either tool_name alone or ability_id, kind and skill_id");
+        }
+        return Ok(());
+    }
     if !valid_id(&args.ability_id)
         || !valid_id(&args.skill_id)
         || !matches!(
@@ -265,6 +280,41 @@ fn skill_tool_allowed(current: &View, tool: &str) -> bool {
     )
     .offered()
 }
+/// Resolve a tool name to its skill selector. The tool's schema must be sent to this agent;
+/// `None` when no ability ships a skill for it.
+fn tool_skill(current: &View, tool: &str) -> Result<Option<LoadArgs>> {
+    let offered = live_tool_decision(
+        &current.app,
+        &current.access,
+        tool,
+        &current.visibility,
+        &current.state,
+        &current.loaded,
+    )
+    .offered();
+    if !offered {
+        bail!("Tool {tool} is unknown, off or not available to this agent");
+    }
+    let owners = current.app.abilities.tool_abilities(
+        tool,
+        &current.visibility,
+        &current.state,
+        &current.loaded,
+    );
+    for ability_id in owners {
+        let query = LoadArgs {
+            ability_id,
+            kind: "tool".into(),
+            skill_id: tool.into(),
+            tool_name: None,
+            expected_catalog_version: None,
+        };
+        if load_asset(current, &query).is_ok() {
+            return Ok(Some(query));
+        }
+    }
+    Ok(None)
+}
 /// Read current bundled or own guidance through catalog and private-record authority gates.
 fn load_asset(current: &View, query: &LoadArgs) -> Result<Value> {
     let allow_ability = |id: &str| current.access.ability_offered(id);
@@ -314,11 +364,17 @@ pub(crate) fn apply_selection(run: &mut Value, result: &Value) {
     let Ok(selector) = selector else {
         return;
     };
+    let same_selector = match &selector.tool_name {
+        Some(tool) => evidence.kind == "tool" && &evidence.skill_id == tool,
+        None => {
+            evidence.ability_id == selector.ability_id
+                && evidence.kind == selector.kind
+                && evidence.skill_id == selector.skill_id
+        }
+    };
     if validate_load(&selector).is_err()
         || evidence.activates
-        || evidence.ability_id != selector.ability_id
-        || evidence.kind != selector.kind
-        || evidence.skill_id != selector.skill_id
+        || !same_selector
         || !valid_hash(&evidence.sha256)
         || evidence.status != "loaded"
         || evidence.bytes == 0
@@ -357,7 +413,7 @@ pub(crate) fn apply_selection(run: &mut Value, result: &Value) {
 /// Preload the tools and skills a new user message clearly needs and keep the next few as
 /// call-scoped suggestions. Best effort: any failure preloads nothing and never stops the run.
 /// The engine stages `preload.selectors` as ordinary activation selectors, so preloads persist
-/// like `load_tool` and `load_skill`; live policy and approval checks still decide.
+/// like `load_skill`; live policy and approval checks still decide.
 pub(crate) async fn preload(app: &App, sid: &str, run: &mut Value) {
     if run["preload_checked"] == true
         || !webagent_abilities::tool_match::PRELOAD_ENABLED
@@ -406,8 +462,7 @@ pub(crate) async fn preload(app: &App, sid: &str, run: &mut Value) {
         "suggested":suggest.iter().map(row).collect::<Vec<_>>(),"selectors":selectors});
 }
 
-/// The texts `rank` embeds for a tool; `eligible` caps descriptions at 1024 characters, so the
-/// warm-up does too and its embeddings are the ones later ranks reuse.
+/// The texts `rank` embeds for a tool, its description capped at 1024 characters.
 fn tool_texts(name: &str, description: &str) -> Vec<String> {
     let (examples, _) = webagent_abilities::tool_match::hints(name);
     let description: String = description.chars().take(1024).collect();
@@ -433,7 +488,7 @@ fn skill_texts(skill: &Value) -> Vec<String> {
     )
 }
 
-/// Embed every tool and skill text once, so the first preload or `list_tools` after a restart
+/// Embed every tool and skill text once, so the first preload or `list_skills` after a restart
 /// finds the model loaded and the catalog cached. Permissions are not applied: nothing is
 /// returned to anyone. `Some(item count)` when the service answered.
 pub(crate) async fn warm_inference(app: &App) -> Option<usize> {
@@ -488,48 +543,71 @@ async fn preload_candidates(
     )>,
 > {
     use webagent_abilities::tool_match::{self, Candidate};
-    let agent = session_agent_id(app, sid).await?;
-    let host = crate::tools::native_host::Host(app);
-    let tools =
-        crate::tools::native::tool_search::eligible(&host, sid, &agent, &run["loaded_abilities"])
-            .await?;
-    let mut skills = Vec::new();
-    if let Ok(current) = view(
+    let current = view(
         app,
         sid,
         run["id"].as_str().unwrap_or_default(),
         "list_skills",
     )
-    .await
+    .await?;
+    let schemas = current.app.abilities.all_schemas();
+    let mut tools = std::collections::BTreeMap::new();
+    let mut skills = Vec::new();
+    let allow_ability = |id: &str| current.access.ability_offered(id);
+    let allow_tool = |tool: &str| skill_tool_allowed(&current, tool);
+    for entry in current
+        .app
+        .abilities
+        .catalog_with(&current.visibility, &current.state)
     {
-        let allow_ability = |id: &str| current.access.ability_offered(id);
-        let allow_tool = |tool: &str| skill_tool_allowed(&current, tool);
-        for entry in current
+        let Some(id) = entry["id"].as_str() else {
+            continue;
+        };
+        if !allow_ability(id) {
+            continue;
+        }
+        // Every offered tool's schema is already sent, so tools rank but never need loading.
+        for name in entry["tools"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|tool| tool["name"].as_str())
+        {
+            if live_tool_decision(
+                &current.app,
+                &current.access,
+                name,
+                &current.visibility,
+                &current.state,
+                &current.loaded,
+            )
+            .offered()
+            {
+                let description = schemas
+                    .iter()
+                    .find(|schema| schema["name"] == name)
+                    .and_then(|schema| schema["description"].as_str())
+                    .unwrap_or_default();
+                tools.insert(name.to_owned(), description.to_owned());
+            }
+        }
+        // Tool skills arrive with their tool, so only ability and selectable skills count.
+        for mut skill in current
             .app
             .abilities
-            .catalog_with(&current.visibility, &current.state)
+            .bundled_skill_list(
+                id,
+                &current.visibility,
+                &current.state,
+                allow_ability,
+                allow_tool,
+            )
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|skill| skill["kind"] != "tool")
         {
-            let Some(id) = entry["id"].as_str() else {
-                continue;
-            };
-            // Tool skills arrive with their tool, so only ability and selectable skills count.
-            for mut skill in current
-                .app
-                .abilities
-                .bundled_skill_list(
-                    id,
-                    &current.visibility,
-                    &current.state,
-                    allow_ability,
-                    allow_tool,
-                )
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|skill| skill["kind"] != "tool")
-            {
-                mark_availability(&mut skill, &current.loaded_skills, &current.loaded);
-                skills.push(skill);
-            }
+            mark_availability(&mut skill, &current.loaded_skills, &current.loaded);
+            skills.push(skill);
         }
     }
     let list = |value: &Value, key: &str| {
@@ -542,19 +620,10 @@ async fn preload_candidates(
     };
     // (kind, key, name for exact matching, keywords, loadable, texts)
     let mut items = Vec::new();
-    for tool in &tools {
-        let name = tool["name"].as_str().unwrap_or_default();
+    for (name, description) in &tools {
         let (_, keywords) = tool_match::hints(name);
-        let texts = tool_texts(name, tool["description"].as_str().unwrap_or_default());
-        let loadable = tool["requires_activation"] == true;
-        items.push((
-            "tool",
-            name.to_owned(),
-            name.to_owned(),
-            keywords,
-            loadable,
-            texts,
-        ));
+        let texts = tool_texts(name, description);
+        items.push(("tool", name.clone(), name.clone(), keywords, false, texts));
     }
     for skill in &skills {
         let id = skill["skill_id"].as_str().unwrap_or_default();
@@ -631,7 +700,9 @@ struct SelectionEvidence {
     catalog_version: String,
     context_source: String,
 }
-/// Return scope and observation metadata while omitting complete instruction text.
+/// Return scope, observation metadata and, for a new load, the skill text itself. The text
+/// reaches the model as this tool result; after compaction the selector places it among the
+/// skills instead.
 fn skill_acknowledgment(asset: &Value, catalog_version: &str) -> Value {
     let available = asset["requires_activation"] == false;
     let mut ack = json!({"status":if available {"already_available"} else {"loaded"},
@@ -641,7 +712,10 @@ fn skill_acknowledgment(asset: &Value, catalog_version: &str) -> Value {
         "context_source":"live_skill_catalog","requires_activation":false,
         "availability":if available {asset["availability"].as_str().unwrap_or("activated")} else {"activated"},
         "message":if available {"This guidance is already supplied to the current model context."}
-            else {"Guidance selected for this conversation and refreshed in each model context."}});
+            else {"Guidance loaded for this conversation; its text follows."}});
+    if !available {
+        ack["text"] = asset["text"].clone();
+    }
     if let Some(revision) = asset.get("revision") {
         ack["revision"] = revision.clone();
     }
@@ -776,6 +850,8 @@ async fn work(app: &App, sid: &str, run_id: &str, name: &str, args: &Value) -> R
                 allow_ability,
                 allow_tool,
             )?;
+            // Tool skills load by tool name; the list holds selectable skills only.
+            skills.retain(|skill| skill["kind"] != "tool");
             if query.ability_id == "base" {
                 for record in current.own["skills"]
                     .as_array()
@@ -824,6 +900,16 @@ async fn work(app: &App, sid: &str, run_id: &str, name: &str, args: &Value) -> R
             {
                 bail!("Skill catalog changed; list skills again");
             }
+            let query = match &query.tool_name {
+                Some(tool) => match tool_skill(&current, tool)? {
+                    Some(query) => query,
+                    None => {
+                        return Ok(json!({"status":"no_skill","tool_name":tool,
+                            "message":format!("{tool} has no skill; its schema is complete.")}))
+                    }
+                },
+                None => query,
+            };
             let mut skill = load_asset(&current, &query)?;
             mark_availability(&mut skill, &current.loaded_skills, &current.loaded);
             skill_acknowledgment(&skill, &current.version)
@@ -897,20 +983,34 @@ mod tests {
         assert_eq!(run, before);
     }
     #[test]
-    /// Keep instruction text outside tool acknowledgments and durable selectors.
-    fn acknowledgment_only_skill_load_selects_without_recording_the_body() {
+    /// Return the skill text as the tool result while durable selectors stay content-free.
+    fn skill_load_returns_the_body_without_recording_it() {
         let mut asset = ack_fixture();
         asset["text"] = json!("PRIVATE_SKILL_BODY");
         asset["requires_activation"] = json!(true);
         let ack = skill_acknowledgment(&asset, &"a".repeat(64));
         assert_eq!(ack["status"], "loaded");
-        assert!(ack.get("text").is_none());
-        assert!(!ack.to_string().contains("PRIVATE_SKILL_BODY"));
+        assert_eq!(ack["text"], "PRIVATE_SKILL_BODY");
         let initial = json!({"pending":{"name":"load_skill","arguments":{
             "ability_id":"base","kind":"ability","skill_id":"base"}}});
         let mut run = initial.clone();
         apply_selection(&mut run, &json!({"status":"success","output":ack}));
         assert_eq!(run["loaded_skills"].as_array().unwrap().len(), 1);
+        assert!(!run["loaded_skills"]
+            .to_string()
+            .contains("PRIVATE_SKILL_BODY"));
+        // A tool name selects the same identity as its explicit kind `tool` selector.
+        let mut tool_ack = ack.clone();
+        tool_ack["ability_id"] = json!("files");
+        tool_ack["kind"] = json!("tool");
+        tool_ack["skill_id"] = json!("file_read");
+        let mut by_name =
+            json!({"pending":{"name":"load_skill","arguments":{"tool_name":"file_read"}}});
+        apply_selection(&mut by_name, &json!({"status":"success","output":tool_ack}));
+        assert_eq!(
+            by_name["loaded_skills"],
+            json!([{"ability_id":"files","kind":"tool","skill_id":"file_read"}])
+        );
         for field in [
             "status",
             "catalog_version",
@@ -992,6 +1092,7 @@ mod tests {
                 ability_id: "base".into(),
                 kind: "selectable".into(),
                 skill_id: skill.into(),
+                tool_name: None,
                 expected_catalog_version: None
             })
             .is_err());
@@ -1001,6 +1102,7 @@ mod tests {
                 ability_id: "base".into(),
                 kind: kind.into(),
                 skill_id: "base".into(),
+                tool_name: None,
                 expected_catalog_version: None
             })
             .is_err());
@@ -1009,6 +1111,7 @@ mod tests {
             ability_id: "foreign".into(),
             kind: "own".into(),
             skill_id: "my_steps".into(),
+            tool_name: None,
             expected_catalog_version: None
         })
         .is_err());
@@ -1016,6 +1119,7 @@ mod tests {
             ability_id: "base".into(),
             kind: "own".into(),
             skill_id: "my_steps".into(),
+            tool_name: None,
             expected_catalog_version: None
         })
         .is_ok());
@@ -1023,6 +1127,7 @@ mod tests {
             ability_id: "base".into(),
             kind: "ability".into(),
             skill_id: "base".into(),
+            tool_name: None,
             expected_catalog_version: Some("a".repeat(65))
         })
         .is_err());

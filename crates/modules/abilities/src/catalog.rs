@@ -145,6 +145,16 @@ struct GroupManifest {
     order: i32,
 }
 
+/// One tool's gate for a model call: installed, offered by an executable ability
+/// (`available`), not hidden by Off or suppression (`visible`), and the abilities supplying it.
+#[derive(Clone, Debug, Default)]
+pub struct ToolGate {
+    pub installed: bool,
+    pub available: bool,
+    pub visible: bool,
+    pub abilities: Vec<String>,
+}
+
 #[derive(Clone)]
 pub struct Catalog<H: Host> {
     host: std::marker::PhantomData<H>,
@@ -279,25 +289,6 @@ fn front_matter_list(text: &str, key: &str, sep: char) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// The model-facing list_abilities row: enough to choose and load an ability. Full config,
-/// skill text and tool policy arrive with load_ability, so discovery stays small.
-pub fn discovery_row(entry: &Value) -> Value {
-    let tools: Vec<&Value> = entry["tools"]
-        .as_array()
-        .map(|tools| tools.iter().map(|tool| &tool["name"]).collect())
-        .unwrap_or_default();
-    json!({
-        "id": entry["id"],
-        "name": entry["name"],
-        "description": entry["description"],
-        "group": entry["group_name"],
-        "availability": entry["availability"],
-        "requires_activation": entry["requires_activation"],
-        "tools": tools,
-        "selectable_skills": entry["selectable_skills"],
-    })
 }
 
 pub(crate) fn read_bytes(path: &Path, limit: u64) -> Result<Vec<u8>> {
@@ -1331,16 +1322,18 @@ impl<H: Host> Catalog<H> {
 
     /// Whether `name` can run; a tool the checkout turned off cannot.
     fn installed(&self, name: &str) -> bool {
+        self.installed_with(name, &H::drift())
+    }
+    fn installed_with(&self, name: &str, drift: &crate::drift::Drift) -> bool {
         (self
             .abilities
             .iter()
             .any(|a| a.plugin.as_ref().is_some_and(|p| p.owns(name)))
             || Self::supported(name))
-            && !H::drift().disabled(name)
+            && !drift.disabled(name)
     }
     fn supported(name: &str) -> bool {
-        is_discovery(name)
-            || H::administrator_supported(name)
+        H::administrator_supported(name)
             || H::native_schemas_without_administrator()
                 .iter()
                 .any(|schema| schema["name"] == name)
@@ -1580,6 +1573,24 @@ impl<H: Host> Catalog<H> {
             .collect()
     }
 
+    /// `(ability id, required model role)` for each ability `catalog_with` would list that
+    /// declares `config.required_model_role`, without reading any guidance.
+    pub fn required_model_roles(&self, visibility: &Value, state: &Value) -> Vec<(String, String)> {
+        self.abilities
+            .iter()
+            .filter_map(|ability| {
+                let role = ability.config["required_model_role"].as_str()?;
+                (Self::executable(ability)
+                    && !Self::is_off(visibility, &ability.id)
+                    && !Self::suppressed(state, &ability.id)
+                    && ability.tools.iter().any(|name| {
+                        self.installed(name) && Self::tool_mode(visibility, name) != "off"
+                    }))
+                .then(|| (ability.id.clone(), role.to_owned()))
+            })
+            .collect()
+    }
+
     /// Project installed tools and guidance for administrators using one schema snapshot.
     pub fn configuration_catalog(&self, visibility: &Value) -> Vec<Value> {
         // Resolve dynamic package availability once for this projection.
@@ -1700,29 +1711,20 @@ impl<H: Host> Catalog<H> {
         loaded: &Value,
     ) -> (bool, bool) {
         // Conversation selections and context use the same call-local activation.
-        // This projection preserves Off, suppression and per-tool discovery gates.
+        // This projection preserves Off and suppression.
         let state = self.selected_state(visibility, state, loaded);
         let supported = self.installed(name);
         let mut available = false;
         let mut visible = false;
-        let selected = Self::contains_id(loaded, &crate::selection::marker(name));
         for ability in &self.abilities {
             if !Self::executable(ability) || !ability.tools.iter().any(|tool| tool == name) {
                 continue;
             }
             available |= supported;
+            // Every enabled tool's schema is sent; only Off hides it.
             visible |= supported
-                && match Self::tool_mode(visibility, name) {
-                    "off" => false,
-                    // An explicitly activated ability (session state, /optimize) supplies
-                    // its discoverable tools; loaded tools add only their own marker.
-                    "on_request" => selected || Self::active(&state, &ability.id),
-                    _ => true,
-                }
-                && (Self::available(ability, visibility, &state)
-                    || (selected
-                        && !Self::is_off(visibility, &ability.id)
-                        && !Self::suppressed(&state, &ability.id)));
+                && Self::tool_mode(visibility, name) != "off"
+                && Self::available(ability, visibility, &state);
         }
         (available, visible)
     }
@@ -1752,6 +1754,38 @@ impl<H: Host> Catalog<H> {
         })
     }
 
+    /// Every declared tool's `tool_gate` and `tool_abilities` in one pass, for a model call
+    /// that decides hundreds of tools: the call-local state and drift are read once.
+    pub fn tool_gates(
+        &self,
+        visibility: &Value,
+        state: &Value,
+        loaded: &Value,
+    ) -> BTreeMap<String, ToolGate> {
+        let state = self.selected_state(visibility, state, loaded);
+        let drift = H::drift();
+        let mut gates: BTreeMap<String, ToolGate> = BTreeMap::new();
+        for ability in self
+            .abilities
+            .iter()
+            .filter(|ability| Self::executable(ability))
+        {
+            let open = Self::available(ability, visibility, &state);
+            for name in &ability.tools {
+                let gate = gates.entry(name.clone()).or_insert_with(|| ToolGate {
+                    installed: self.installed_with(name, &drift),
+                    ..ToolGate::default()
+                });
+                if gate.installed {
+                    gate.available = true;
+                    gate.visible |= open && Self::tool_mode(visibility, name) != "off";
+                    gate.abilities.push(ability.id.clone());
+                }
+            }
+        }
+        gates
+    }
+
     pub fn tool_available(
         &self,
         name: &str,
@@ -1773,11 +1807,17 @@ impl<H: Host> Catalog<H> {
     }
 
     pub fn schemas_with(&self, loaded: &Value, visibility: &Value, state: &Value) -> Vec<Value> {
+        self.schemas_gated(&self.tool_gates(visibility, state, loaded))
+    }
+
+    /// The schemas `gates` (from `tool_gates`) leaves available and visible.
+    pub fn schemas_gated(&self, gates: &BTreeMap<String, ToolGate>) -> Vec<Value> {
         self.all_schemas()
             .into_iter()
             .filter(|tool| {
-                let name = tool["name"].as_str().unwrap_or("");
-                self.tool_available(name, visibility, state, loaded)
+                gates
+                    .get(tool["name"].as_str().unwrap_or(""))
+                    .is_some_and(|gate| gate.available && gate.visible)
             })
             .collect()
     }
@@ -2023,7 +2063,8 @@ impl<H: Host> Catalog<H> {
                     kind: GuidanceKind::Tool,
                     body: body.into_owned(),
                     selected: explicit("tool", name),
-                    natural: sent.contains(name.as_str()) && mode != "off",
+                    // A sent schema brings its skill only in a prompt mode; otherwise load_skill.
+                    natural: sent.contains(name.as_str()) && in_prompt(mode),
                 });
             }
             for (name, cached) in &ability.selectable_skills {
@@ -2167,111 +2208,6 @@ impl<H: Host> Catalog<H> {
             })
             .collect()
     }
-
-    /// Render a complete inventory from the exact entries and schemas authorized
-    /// for this model call. Discoverable abilities keep their tool schemas hidden.
-    pub fn model_index(entries: &[Value], schemas: &[Value]) -> String {
-        fn add(out: &mut String, line: &str) {
-            out.push_str(line);
-            out.push('\n');
-        }
-        fn short(value: &str) -> String {
-            value
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .chars()
-                .take(160)
-                .collect()
-        }
-        let callable = schemas
-            .iter()
-            .filter_map(|s| s["name"].as_str())
-            .collect::<HashSet<_>>();
-        let can_load = callable.contains("load_tool");
-        let mut ready_tools = BTreeMap::new();
-        // One line per group keeps the index small and stable however many tools it holds.
-        let mut groups = Vec::new();
-        for entry in entries {
-            let Some(id) = entry["id"].as_str() else {
-                continue;
-            };
-            let mut loadable = 0;
-            for tool in entry["tools"].as_array().into_iter().flatten() {
-                let Some(name) = tool["name"].as_str() else {
-                    continue;
-                };
-                if callable.contains(name) {
-                    let description = schemas
-                        .iter()
-                        .find(|s| s["name"] == name)
-                        .and_then(|s| s["description"].as_str())
-                        .unwrap_or("");
-                    ready_tools.insert(name.to_owned(), short(description));
-                } else if tool["mode"] == "on_request" {
-                    loadable += 1;
-                }
-            }
-            if can_load && loadable > 0 {
-                let name = short(entry["name"].as_str().unwrap_or(id));
-                let summary = short(
-                    entry["skill_summary"]
-                        .as_str()
-                        .or_else(|| entry["description"].as_str())
-                        .unwrap_or(""),
-                );
-                groups.push(format!("- {id} ({loadable}) — {name}: {summary}"));
-            }
-        }
-        if ready_tools.is_empty() && groups.is_empty() {
-            return String::new();
-        }
-        let mut out = String::new();
-        add(&mut out, "# [TOOLS]");
-        add(
-            &mut out,
-            "These tools can be called now. A call may still require approval.",
-        );
-        for (name, description) in ready_tools {
-            let row = if description.is_empty() {
-                format!("- {name}")
-            } else {
-                format!("- {name} — {description}")
-            };
-            add(&mut out, &row);
-        }
-        if !groups.is_empty() {
-            add(&mut out, "");
-            add(&mut out, "## Load on demand");
-            add(&mut out, "These groups hold more tools (count in brackets). Find what a task needs with list_tools and a few task words (for example 'edit file' or 'screenshot page'); results are ranked, best match first. Use group=<id> only when a query finds nothing useful. Load everything you need with one load_tool call, passing several names in tool_names; each tool brings its own skill.");
-            for row in groups {
-                add(&mut out, &row);
-            }
-        }
-        out
-    }
-
-    /// `list_abilities`/`load_ability` were removed: abilities are On/Off groups and tools load
-    /// one by one. shortcut: the engine still routes these names here; delete the route with
-    /// the next engine change.
-    pub fn discover_with(
-        &self,
-        _name: &str,
-        _args: &Value,
-        _run: &mut Value,
-        _visibility: &Value,
-        _state: &Value,
-    ) -> Value {
-        json!({"status":"denied","output":"Abilities are groups and need no loading. Use list_tools and load_tool, or list_skills and load_skill."})
-    }
-
-    pub fn discover(&self, name: &str, args: &Value, run: &mut Value) -> Value {
-        self.discover_with(name, args, run, &Value::Null, &Value::Null)
-    }
-}
-
-pub fn is_discovery(name: &str) -> bool {
-    matches!(name, "list_abilities" | "load_ability")
 }
 
 #[cfg(feature = "test-support")]
@@ -2369,20 +2305,7 @@ pub mod registered_tests {
             assert!(guidance.contains(&core));
             assert!(guidance.contains(&tool));
             assert!(!guidance.contains("omitted"));
-            // The removed ability loaders are refused and change nothing.
-            let mut run = json!({"loaded_abilities":[]});
-            let before = run.clone();
-            for name in ["list_abilities", "load_ability"] {
-                let result = catalog.discover_with(
-                    name,
-                    &json!({"ability_id":"codebase_admin"}),
-                    &mut run,
-                    &v,
-                    &state,
-                );
-                assert_eq!(result["status"], "denied");
-            }
-            assert_eq!(run, before);
+            let run = json!({"loaded_abilities":[]});
             let schemas = catalog.schemas_with(&run["loaded_abilities"], &v, &state);
             let entries = catalog.catalog_with(&v, &state);
             let report =
@@ -2404,79 +2327,36 @@ pub mod registered_tests {
             assert!(public_context(&value).is_some());
         }
 
-        pub fn discoverable_activation_is_durable_without_reloading_or_revealing_discoverable_tools<
-            H: crate::TestHost,
-        >() {
+        pub fn every_enabled_tool_is_sent_and_off_stays_hidden<H: crate::TestHost>() {
             let (_root, catalog) = fixture::<H>();
-            // An On ability exposes nothing by default: each tool loads on its own.
+            // On request tools are sent without loading; only Off hides a schema.
             let v = json!({"visibility":{"codebase_admin":"on_request"},
             "tool_modes":{"file_search":"on_request","file_edit":"off"}});
             let mut state = json!({"active":[],"suppressed":[]});
             let none = json!([]);
-            let picked = json!(["tool:file_read", "tool:file_edit"]);
-            assert!(!catalog.tool_available("file_read", &v, &state, &none));
-            assert!(catalog.tool_available("file_read", &v, &state, &picked));
-            assert!(!catalog.tool_available("file_search", &v, &state, &picked));
-            // Off stays hidden even when selected.
+            let picked = json!(["tool:file_edit"]);
+            assert!(catalog.tool_available("file_read", &v, &state, &none));
+            assert!(catalog.tool_available("file_search", &v, &state, &none));
+            // Off stays hidden even when an old selector names it.
             assert!(!catalog.tool_available("file_edit", &v, &state, &picked));
-            for name in ["list_tools", "load_tool", "list_skills", "load_skill"] {
+            for name in ["list_skills", "load_skill"] {
                 assert_eq!(Catalog::<H>::tool_mode(&v, name), "core");
             }
-            let names = |loaded: &Value, state: &Value| {
-                catalog
-                    .schemas_with(loaded, &v, state)
-                    .into_iter()
-                    .map(|s| s["name"].as_str().unwrap().to_owned())
-                    .collect::<Vec<_>>()
-            };
-            assert!(!names(&none, &state).contains(&"file_read".into()));
-            assert!(names(&picked, &state).contains(&"file_read".into()));
+            let names = catalog
+                .schemas_with(&none, &v, &state)
+                .into_iter()
+                .map(|s| s["name"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>();
+            assert!(names.contains(&"file_read".into()));
+            assert!(!names.contains(&"file_edit".into()));
             state["suppressed"] = json!(["codebase_admin"]);
             assert!(catalog.visible_guidance(&v, &state).is_empty());
-            assert!(!catalog.tool_available("file_read", &v, &state, &picked));
+            assert!(!catalog.tool_available("file_read", &v, &state, &none));
         }
 
         pub fn diagnostic_projection_rejects_content_and_unknown_identifiers<H: crate::TestHost>() {
             let value = json!({"turn":1,"call":1,"abilities":[],"prompt":"PRIVATE"});
             assert!(public_context(&value).is_none());
-        }
-
-        pub fn search_activation_preserves_visible_tools_and_respects_denials<
-            H: crate::TestHost,
-        >() {
-            let (_root, catalog) = fixture::<H>();
-            let visibility = json!({"visibility":{"codebase_admin":"loaded"},
-            "tool_modes":{"file_read":"loaded","file_search":"on_request","file_edit":"off"}});
-            let state = json!({"active":[],"suppressed":[]});
-            let mut run = json!({"pending":{"name":"load_tool"},"loaded_abilities":[]});
-            let names = |run: &Value, state: &Value| {
-                catalog
-                    .schemas_with(&run["loaded_abilities"], &visibility, state)
-                    .into_iter()
-                    .map(|s| s["name"].as_str().unwrap().to_owned())
-                    .collect::<Vec<_>>()
-            };
-            let before = names(&run, &state);
-            assert!(before.contains(&"file_read".into()));
-            assert!(!before.contains(&"file_search".into()));
-            crate::selection::apply_selection(
-                &mut run,
-                &json!({"status":"success","output":{"activated":true,
-                "selected_tools":["file_search","file_edit","python"]}}),
-            );
-            let after = names(&run, &state);
-            assert!(before.iter().all(|name| after.contains(name)));
-            assert!(after.contains(&"file_search".into()));
-            assert!(!after.contains(&"file_edit".into()));
-            crate::selection::apply_selection(
-                &mut run,
-                &json!({"status":"success","output":{"activated":true,"selected_tools":[]}}),
-            );
-            assert_eq!(names(&run, &state), after);
-            assert!(
-                !names(&run, &json!({"active":[],"suppressed":["codebase_admin"]}))
-                    .contains(&"file_read".into())
-            );
         }
 
         pub fn changed_manifest_withdraws_cached_loaded_tools_until_reload<H: crate::TestHost>() {
@@ -2716,49 +2596,6 @@ pub mod registered_tests {
                 .is_err());
         }
 
-        pub fn model_index_advertises_discoverable_abilities_without_hidden_tools<
-            H: crate::TestHost,
-        >() {
-            let (_root, catalog) = fixture::<H>();
-            let state = json!({"active":[],"suppressed":[]});
-            let entries = catalog.catalog_with(&Value::Null, &state);
-            let mut schemas = catalog.schemas_with(&json!([]), &Value::Null, &state);
-            // The fixture compiles no native loader; the index needs load_tool to offer groups.
-            schemas.push(json!({"name":"load_tool"}));
-            let index = Catalog::<H>::model_index(&entries, &schemas);
-            // Discoverable tools appear only as one line per group, never by name.
-            assert!(!index.contains("# [ABILITIES]"));
-            assert!(index.contains("## Load on demand"));
-            assert!(index.contains("- codebase_admin ("));
-            assert!(index.contains(") — Codebase Admin"));
-            assert!(!index.contains("- file_read"));
-            assert!(!index.contains("Use scoped workspace tools."));
-            let crowded = Catalog::<H>::model_index(&vec![entries[0].clone(); 512], &schemas);
-            assert_eq!(
-                crowded
-                    .matches(&format!("- {} (", entries[0]["id"].as_str().unwrap()))
-                    .count(),
-                512
-            );
-
-            let visible = json!({"visibility":{"codebase_admin":"loaded"},
-            "tool_modes":{"file_read":"loaded"}});
-            let entries = catalog.catalog_with(&visible, &state);
-            let schemas = catalog.schemas_with(&json!([]), &visible, &state);
-            let index = Catalog::<H>::model_index(&entries, &schemas);
-            assert!(index.contains("- file_read"));
-            assert!(!index.contains("- python"));
-            assert!(!index.contains("- file_edit"));
-
-            let suppressed = json!({"active":[],"suppressed":["codebase_admin"]});
-            assert!(!Catalog::<H>::model_index(
-                &catalog.catalog_with(&visible, &suppressed),
-                &catalog.schemas_with(&json!([]), &visible, &suppressed)
-            )
-            .contains("codebase_admin"));
-            assert!(!Catalog::<H>::model_index(&[], &[]).contains("codebase_admin"));
-        }
-
         pub fn manifest_and_skill_are_loaded_without_exposing_denied_tools<H: crate::TestHost>() {
             let (_root, catalog) = fixture::<H>();
             let names = |loaded: &Value| {
@@ -2768,14 +2605,12 @@ pub mod registered_tests {
                     .map(|schema| schema["name"].as_str().unwrap().to_owned())
                     .collect::<Vec<_>>()
             };
+            // Enabled tools are sent without loading; old tool selectors add nothing.
             let start = names(&json!([]));
-            assert!(!start.contains(&"list_abilities".to_owned()));
-            assert!(!start.contains(&"load_ability".to_owned()));
-            assert!(!start.contains(&"file_edit".to_owned()));
+            assert!(start.contains(&"file_edit".to_owned()));
+            assert!(start.contains(&"state_inspect".to_owned()));
             let loaded = json!(["tool:file_edit", "tool:state_inspect", "tool:python"]);
-            let names = names(&loaded);
-            assert!(names.contains(&"file_edit".to_owned()));
-            assert!(names.contains(&"state_inspect".to_owned()));
+            assert_eq!(names(&loaded), start);
         }
 
         /// Reject unknown identities while adopting current bytes from the registered source.
@@ -2880,19 +2715,6 @@ pub mod registered_tests {
 
         pub fn catalog_only_v2_tool_is_listed_but_never_executable<H: crate::TestHost>() {
             let (root, _) = fixture::<H>();
-            // Discovery tools belong to built-in Base and are always supported.
-            let discovery = Catalog::<H>::load(root.path())
-                .unwrap()
-                .configuration_catalog(&Value::Null)
-                .into_iter()
-                .find(|item| item["id"] == "base")
-                .unwrap();
-            assert!(discovery["tools"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|tool| tool["name"].as_str().is_some_and(is_discovery))
-                .all(|tool| tool["supported"] == true));
             let path = root.path().join("Administrator/computer_control");
             fs::create_dir_all(&path).unwrap();
             fs::write(
@@ -2923,17 +2745,6 @@ pub mod registered_tests {
             assert!(!catalog
                 .visible_guidance(&visibility, &Value::Null)
                 .contains("Control the excluded attached computer."));
-            let mut run = json!({"loaded_abilities":[]});
-            assert_eq!(
-                catalog.discover_with(
-                    "load_ability",
-                    &json!({"ability_id":"computer_control"}),
-                    &mut run,
-                    &visibility,
-                    &Value::Null
-                )["status"],
-                "denied"
-            );
             assert!(!catalog.tool_available(
                 "computer_screenshot",
                 &visibility,
@@ -2946,9 +2757,9 @@ pub mod registered_tests {
             let (_root, catalog) = fixture::<H>();
             let state = json!({"active":[],"suppressed":[]});
             let off = json!({"visibility":{"base":"off","codebase_admin":"loaded"}});
-            // Saving Base as Off never hides its loaders.
+            // Saving Base as Off never hides its skill loaders.
             assert_eq!(
-                catalog.tool_gate("list_tools", &off, &state, &Value::Null),
+                catalog.tool_gate("list_skills", &off, &state, &Value::Null),
                 (true, true)
             );
             let entries = catalog.catalog_with(&off, &state);
@@ -2960,18 +2771,16 @@ pub mod registered_tests {
             assert_eq!(admin["skill_visibility"], "on_request");
         }
 
-        pub fn loaded_tool_and_skill_owners_expose_no_other_tools<H: crate::TestHost>() {
+        pub fn group_tools_are_sent_without_loading<H: crate::TestHost>() {
             let (_root, catalog) = fixture::<H>();
             let state = json!({"active":[],"suppressed":[]});
             let visibility = json!({"visibility":{"codebase_admin":"loaded"}});
-            // A loaded tool records only its own marker (context-asset hydration adds no
-            // owner), so the group's other tools stay hidden.
-            let loaded = json!([crate::selection::marker("file_read")]);
-            assert!(catalog.tool_available("file_read", &visibility, &state, &loaded));
-            assert!(!catalog.tool_available("file_edit", &visibility, &state, &loaded));
-            // Explicit session activation still supplies the group's discoverable tools.
-            let active = json!({"active":["codebase_admin"],"suppressed":[]});
-            assert!(catalog.tool_available("file_edit", &visibility, &active, &loaded));
+            // Every enabled tool of an On group is sent; no marker or activation is needed.
+            for name in ["file_read", "file_edit"] {
+                assert!(catalog.tool_available(name, &visibility, &state, &Value::Null));
+            }
+            let off = json!({"visibility":{"codebase_admin":"off"}});
+            assert!(!catalog.tool_available("file_read", &off, &state, &Value::Null));
         }
 
         pub fn tool_gate_distinguishes_missing_tools_from_hidden_tools<H: crate::TestHost>() {
@@ -2992,14 +2801,10 @@ pub mod registered_tests {
                 catalog.tool_gate("file_read", &visible, &state, &Value::Null),
                 (true, true)
             );
-            // Discoverable by default: hidden until selected.
+            // On request by default, and still sent without a selection.
             let on = json!({"visibility":{"codebase_admin":"loaded"}});
             assert_eq!(
                 catalog.tool_gate("file_read", &on, &state, &Value::Null),
-                (true, false)
-            );
-            assert_eq!(
-                catalog.tool_gate("file_read", &on, &state, &json!(["tool:file_read"])),
                 (true, true)
             );
             assert_eq!(
@@ -3053,7 +2858,8 @@ pub mod registered_tests {
             assert!(guidance.contains("UI THEME"));
             assert!(!guidance.contains("Match one exact span."));
             let entries = catalog.catalog_with(&v, &state);
-            let schemas = catalog.schemas_with(&json!([]), &v, &state);
+            // No schema sent, as when access withholds every tool.
+            let schemas: Vec<Value> = Vec::new();
             let report =
                 catalog.context_inclusion(&entries, &schemas, &v, &state, &json!([]), &json!([]));
             let entry = &report[0];
@@ -3148,13 +2954,9 @@ pub mod registered_tests {
                 .schemas_with(&selected, &Value::Null, &cleared)
                 .iter()
                 .any(|schema| schema["name"] == "file_edit"));
-            // Unloading the selection removes its exposure. Explicit suppression also
+            // An enabled tool stays sent without a selection. Explicit suppression
             // wins while a selected identity remains in the conversation ledger.
-            assert!(!catalog.tool_available("file_edit", &Value::Null, &cleared, &json!([])));
-            assert!(!catalog
-                .schemas_with(&json!([]), &Value::Null, &cleared)
-                .iter()
-                .any(|schema| schema["name"] == "file_edit"));
+            assert!(catalog.tool_available("file_edit", &Value::Null, &cleared, &json!([])));
             let suppressed = json!({"revision":3,"active":[],"suppressed":["codebase_admin"]});
             assert!(!catalog.tool_available("file_edit", &Value::Null, &suppressed, &selected));
             assert!(!catalog
@@ -3188,17 +2990,6 @@ pub mod registered_tests {
                 .iter()
                 .any(|schema| schema["name"] == "file_edit"));
             assert!(catalog.visible_guidance(&visibility, &state).is_empty());
-            let mut run = json!({"loaded_abilities":["codebase_admin"]});
-            assert_eq!(
-                catalog.discover_with(
-                    "load_ability",
-                    &json!({"ability_id":"codebase_admin"}),
-                    &mut run,
-                    &visibility,
-                    &state
-                )["status"],
-                "denied"
-            );
         }
 
         pub fn bundled_skill_mode_is_independent_of_ability_mode<H: crate::TestHost>() {
@@ -3276,18 +3067,6 @@ pub mod registered_tests {
                 "future",
             ] {
                 let vis = json!({"visibility":{id:"loaded"}});
-                let mut run = json!({"loaded_abilities":[]});
-                assert_eq!(
-                    catalog.discover_with(
-                        "load_ability",
-                        &json!({"ability_id":id}),
-                        &mut run,
-                        &vis,
-                        &Value::Null
-                    )["status"],
-                    "denied"
-                );
-                assert_eq!(run["loaded_abilities"], json!([]));
                 assert!(!catalog
                     .visible_guidance(&vis, &Value::Null)
                     .contains("Unsafe v2"));
@@ -3449,7 +3228,7 @@ pub mod registered_tests {
             }) {
                 for name in &ability.tools {
                     assert!(
-                        Catalog::<H>::supported(name) || is_discovery(name),
+                        Catalog::<H>::supported(name),
                         "Unwired Core tool: {}::{name}",
                         ability.id
                     );
@@ -3477,10 +3256,7 @@ pub mod registered_tests {
                 assert!(!Catalog::<H>::supported(tool));
             }
             for name in &base.tools {
-                assert!(
-                    Catalog::<H>::supported(name) || is_discovery(name),
-                    "Unwired Base tool: {name}"
-                );
+                assert!(Catalog::<H>::supported(name), "Unwired Base tool: {name}");
             }
             assert!(!catalog
                 .abilities
@@ -3525,7 +3301,7 @@ pub mod registered_tests {
             let mut v = json!({"visibility":{"web_access":"on_request"}});
             let state = json!({"active":[],"suppressed":[]});
             let loaded = json!(["tool:maps_geocode", "tool:get_weather"]);
-            assert!(!catalog.tool_available("maps_geocode", &v, &state, &json!([])));
+            assert!(catalog.tool_available("maps_geocode", &v, &state, &json!([])));
             assert!(catalog.tool_available("maps_geocode", &v, &state, &loaded));
             assert_eq!(
                 catalog.tool_abilities("maps_geocode", &v, &state, &loaded),
@@ -3746,6 +3522,7 @@ pub mod registered_tests {
             fs::write(&path, skill("FIRST BODY")).unwrap();
             let catalog = Catalog::<H>::load_snapshot(root.path()).unwrap();
             let visible = json!({"visibility":{"codebase_admin":"loaded"},"skill_visibility":{"codebase_admin":"loaded"},
+            "tool_modes":{"file_edit":"loaded"},
             "settings":{"codebase_admin":{"terminal_caution":"cautious"}}});
             let state = json!({"active":[],"suppressed":[]});
             let entries = catalog.catalog_with(&visible, &state);
@@ -3880,12 +3657,25 @@ pub mod registered_tests {
             H: crate::TestHost,
         >() {
             let (_root, catalog) = fixture::<H>();
-            let visible = json!({"visibility":{"codebase_admin":"loaded"},
+            let mut visible = json!({"visibility":{"codebase_admin":"loaded"},
             "tool_modes":{"file_edit":"on_request"}});
             let state = json!({});
             let mut entries = catalog.catalog_with(&visible, &state);
             let schemas = vec![json!({"name":"file_edit"})];
             let selected = json!(["tool:file_edit"]);
+            // An On request tool's sent schema does not bring its skill.
+            assert!(catalog
+                .capability_guidance(
+                    &entries,
+                    &schemas,
+                    &visible,
+                    &state,
+                    &selected,
+                    &Value::Null
+                )
+                .iter()
+                .any(|item| item.id == "tool:codebase_admin:file_edit" && !item.natural));
+            visible["tool_modes"]["file_edit"] = json!("loaded");
             let body = catalog.capability_guidance(
                 &entries,
                 &schemas,
@@ -3974,25 +3764,5 @@ pub mod registered_tests {
                 state
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod discovery_row_tests {
-    use super::discovery_row;
-    use serde_json::json;
-
-    #[test]
-    fn discovery_row_keeps_choice_fields_and_drops_bulk() {
-        let row = discovery_row(&json!({
-            "id": "codebase_admin", "name": "Codebase Admin", "description": "Edit source",
-            "group_name": "Administrator", "availability": "on_request",
-            "requires_activation": true, "selectable_skills": ["rust_quality"],
-            "tools": [{"name": "file_read", "policy": "allow", "mode": "loaded"}],
-            "config": {"bias": {}}, "general_skills": ["long text"],
-        }));
-        assert_eq!(row["tools"], json!(["file_read"]));
-        assert_eq!(row["group"], "Administrator");
-        assert!(row.get("config").is_none() && row.get("general_skills").is_none());
     }
 }

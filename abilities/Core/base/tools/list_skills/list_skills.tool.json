@@ -1,6 +1,6 @@
 {
   "name": "list_skills",
-  "description": "List inactive discoverable skills; include_available also shows visible and already loaded guidance",
+  "description": "List selectable skills of one ability; include_available also shows visible and already loaded ones. Tool skills load by tool name with load_skill.",
   "parameters": {
     "type": "object",
     "properties": {

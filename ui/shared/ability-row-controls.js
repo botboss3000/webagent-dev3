@@ -5,7 +5,6 @@
 import { _markSaving, _flashSaveCheck } from './models/dom-utils.js';
 import {requestTouchVibration} from './vibrate.js';
 const _noop = () => {};
-const _TOOL_ALWAYS_ON = new Set(); // v3 authority is provided by the Rust projection, not v2 core names.
 function _moreDotsSvg() {
   return '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>';
 }
@@ -300,15 +299,6 @@ export function _buildToolRow(toolMeta, opts) {
   // (On request · Loaded) — with exactly one selection per section. State is
   // only ever changed by a selection inside that panel, mirroring the ability
   // row's panel-driven selection.
-  const permLocked = toolMeta.locked || _TOOL_ALWAYS_ON.has(toolMeta.name);
-  if (showPerm && permLocked) {
-    const pill = document.createElement('span');
-    pill.className = 'agents-tool-always-on';
-    pill.textContent = 'always on';
-    pill.title = 'Essential tool — always permitted, cannot be gated.';
-    ctrl.appendChild(pill);
-  }
-
   // Core tools are always sent, so their state is fixed — no panel at all.
   if (toolMeta.locked) {
     const pill = document.createElement('span');
@@ -322,7 +312,7 @@ export function _buildToolRow(toolMeta, opts) {
   // Per-agent discovery only; the admin panel passes showVisibility:false (it
   // sets the ceiling — enable + permission — not discovery).
   const showVisibility = !(opts && opts.showVisibility === false);
-  const usePerm = showPerm && !permLocked;
+  const usePerm = showPerm;
   if (usePerm || showVisibility) {
     ctrl.appendChild(_buildToolStateControl(toolMeta, {
       canEdit,
@@ -469,26 +459,24 @@ function _buildToolStateControl(toolMeta, opts) {
   const _menuItems = () => {
     const out = [];
     // Availability (Off · On request · Loaded) comes first, as for skills; Off is the
-    // permission deny, so Permission below keeps only Ask · Auto. Loaders stay visible.
-    const locked = _BOOTSTRAP_TOOLS.includes(toolMeta.name);
+    // permission deny, so Permission below keeps only Ask · Auto.
     if (showVisibility) {
       out.push({ info: true, className: 'ac-tool-state-head', label: 'Availability' });
       if (showPerm) out.push({
         iconHtml: _EYE_OFF_SVG, label: 'Off', checked: perm === 'deny',
-        disabled: !canEdit || roleBlocked || locked, keepOpen: true, action: () => _save('perm', 'deny'),
+        disabled: !canEdit || roleBlocked, keepOpen: true, action: () => _save('perm', 'deny'),
       });
       for (const v of ['on_request', 'loaded']) {
         out.push({
           iconHtml: v === 'on_request' ? _DOWNLOAD_SVG : _EYE_ON_SVG,
           label: _visText(v),
           checked: perm !== 'deny' && vis === v,
-          disabled: !canEdit || roleBlocked || locked,
+          disabled: !canEdit || roleBlocked,
           keepOpen: true,
           // Leaving Off lands on Require approval, the safe permission.
           action: async () => (perm !== 'deny' || await _save('perm', 'require_approval')) && _save('vis', v),
         });
       }
-      if (locked) out.push({ info: true, label: 'Always loaded: agents use this tool to find and load the others.' });
     }
     if (showPerm) {
       if (out.length) out.push({ separator: true });   // the hairline divider
@@ -602,8 +590,6 @@ function _buildToolStateControl(toolMeta, opts) {
 const _EYE_ON_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>';
 const _EYE_OFF_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>';
 const _DOWNLOAD_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg>';
-// Mirrors BOOTSTRAP_TOOLS in crates/modules/abilities/src/catalog.rs.
-const _BOOTSTRAP_TOOLS = ['list_tools', 'load_tool', 'list_skills', 'load_skill'];
 
 let floatingMenuCleanup = null;
 

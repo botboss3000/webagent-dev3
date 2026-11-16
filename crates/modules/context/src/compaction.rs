@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn loader_acknowledgments_pass_unchanged_to_replay_and_summary() {
         let config = Config::configured().unwrap();
-        for name in ["load_ability", "load_tool", "load_skill"] {
+        for name in ["load_skill"] {
             let output = json!({"status":"success","output":{"status":"loaded",
                 "scope":"run","context_source":"live_skill_catalog"}})
             .to_string();

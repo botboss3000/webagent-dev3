@@ -252,7 +252,8 @@ export async function renderAbilities(host, request, options) {
           (entry.skill_id === 'core' ? '/skill-content' :
             '/skills/' + encodeURIComponent(entry.skill_id) + '/content')),
       });
-      markDefault(skill.row, entry.default_mode);
+      // A core skill's mode is fixed, so it shows no default.
+      if (entry.mode !== 'core') markDefault(skill.row, entry.default_mode);
       tools.append(skill.row, skill.body);
     }
     if (ability.id === "git_control" && canManage) tools.append(buildSourceControlControls({ data: sourceSites, request, scope, enabled: levelId === "operator", status, rerender }));
@@ -346,7 +347,7 @@ export async function renderAbilities(host, request, options) {
         onVisibilityChange: (_, mode) => save(ability, 'tool', mode, toolRow.querySelector('.ac-tri'), tool.name),
       });
       if (tool.supported === false) toolRow.querySelector('.ac-tool-name').style.color = 'var(--danger)';
-      markDefault(toolRow, effectiveTool.default);
+      if (tool.locked !== true && tool.mode !== 'core') markDefault(toolRow, effectiveTool.default);
       toolRow.title = [tool.supported ? '' : 'Unavailable in v3', effectiveLabel(effectiveTool)].filter(Boolean).join(' · ');
       tools.append(toolRow);
     }

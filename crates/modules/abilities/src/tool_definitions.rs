@@ -83,7 +83,7 @@ pub struct ToolDefinition {
     /// One line added to argument errors to guide the agent's next call.
     #[serde(default)]
     pub usage_hint: Option<String>,
-    /// Example requests and exact keywords that `list_tools` ranks this tool by.
+    /// Example requests and exact keywords that preload ranks this tool by.
     #[serde(default, rename = "match")]
     pub match_data: Option<ToolMatch>,
 }

@@ -104,10 +104,7 @@ impl webagent_engine::runtime::ports::SkillSources<Store> for NativePolicy {
         store.list_own_skills()
     }
     fn tool_marker(name: &str) -> String {
-        tools::native::tool_search::marker(name)
-    }
-    fn apply_tool_selection(run: &mut Value, result: &Value) {
-        tools::native::tool_search::apply_selection(run, result)
+        webagent_abilities::selection::marker(name)
     }
     fn apply_skill_selection(run: &mut Value, result: &Value) {
         tools::core_skills::apply_selection(run, result)

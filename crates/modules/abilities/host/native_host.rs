@@ -277,19 +277,6 @@ impl NativeHost for Host<'_> {
             Ok((revision, visibility, state))
         })
     }
-    fn rank_scores<'a>(
-        &'a self,
-        query: &'a str,
-        items: Vec<Vec<String>>,
-    ) -> Pending<'a, Option<Vec<f32>>> {
-        Box::pin(async move {
-            let scores = crate::api::inference::rank(query, items).await;
-            if scores.is_none() {
-                tracing::warn!("Matcher unavailable; discovery falls back to word ranking");
-            }
-            scores
-        })
-    }
     fn session_mode<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Value>> {
         Box::pin(crate::session_mode(self.0, sid))
     }

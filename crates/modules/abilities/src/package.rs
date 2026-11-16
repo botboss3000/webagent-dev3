@@ -473,7 +473,6 @@ impl Package {
             if !tools.iter().any(|t| t == name)
                 || !names.insert(name)
                 || native.iter().any(|s| s["name"] == name)
-                || crate::is_discovery(name)
                 || matches!(name, "publish_main_message" | "codebase_admin_protocol")
                 || ["administrator_", "v3_", "ability_plugin", "mcp_"]
                     .iter()

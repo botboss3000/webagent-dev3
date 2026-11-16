@@ -88,7 +88,6 @@ pub struct Overlay {
 pub struct Schema {
     pub name: String,
     pub bytes: usize,
-    pub bootstrap: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Report {

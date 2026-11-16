@@ -766,7 +766,7 @@ async fn run_process() -> Result<()> {
         return webagent_inference::evaluate(&std::env::args().skip(2).collect::<Vec<_>>());
     }
     if std::env::args().nth(1).as_deref() == Some("--tool-match-eval") {
-        // Score list_tools/list_skills ranking (crates/modules/inference/eval/tool-match-eval.jsonl).
+        // Score tool and list_skills ranking (crates/modules/inference/eval/tool-match-eval.jsonl).
         return crate::tool_match_eval::evaluate(&std::env::args().skip(2).collect::<Vec<_>>());
     }
     if std::env::args().nth(1).as_deref() == Some("--find-eval") {

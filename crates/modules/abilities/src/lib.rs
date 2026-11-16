@@ -14,8 +14,8 @@ pub mod tool_match;
 pub mod user_files;
 pub use cache::CatalogCache;
 pub use catalog::{
-    discovery_row, is_discovery, near_word, public_context, search_words, AbilityContext,
-    AbilityInclusion, Catalog, SkillInclusion,
+    near_word, public_context, search_words, AbilityContext, AbilityInclusion, Catalog,
+    SkillInclusion, ToolGate,
 };
 pub use ports::Host;
 

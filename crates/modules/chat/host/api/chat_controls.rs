@@ -527,7 +527,7 @@ mod tests {
                 let response=if number==1{
                     shared.started.notify_one();shared.release.notified().await;
                     json!({"status":"completed","usage":{"input_tokens":12,"output_tokens":1},
-                        "output":[{"type":"function_call","call_id":"discover","name":"list_abilities","arguments":"{}"}]})
+                        "output":[{"type":"function_call","call_id":"discover","name":"get_time","arguments":"{}"}]})
                 }else{
                     json!({"status":"completed","usage":{"input_tokens":23,"output_tokens":2},
                         "output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"boundary complete"}]}]})

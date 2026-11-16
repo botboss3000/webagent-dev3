@@ -1363,8 +1363,7 @@ pub async fn context_smoke() -> Result<Value> {
         &json!({"provider":"deepseek","model":"smoke-model"}),
         "unused",
     )?;
-    let schemas =
-        vec![json!({"name":"load_ability","parameters":{"type":"object","properties":{}}})];
+    let schemas = vec![json!({"name":"get_time","parameters":{"type":"object","properties":{}}})];
     let contributions = vec![context_input::Contribution {
         id: "mode".into(),
         source: "smoke".into(),
@@ -2013,7 +2012,7 @@ fn validated<'a>(
         } => {
             let model = context_assembly::model_metadata(request.selection);
             let overlays=selected.iter().map(|item|json!({"id":item.item.id,"source":item.item.source,"lifetime":item.item.lifetime,"disposition":item.disposition,"content_bytes":item.item.content.len()})).collect::<Vec<_>>();
-            let schemas=request.schemas.iter().map(|schema|Ok(json!({"name":schema["name"].as_str().unwrap_or(""),"bytes":context_accounting::json_size(schema)?,"bootstrap":matches!(schema["name"].as_str(),Some("list_abilities"|"load_ability"))}))).collect::<Result<Vec<Value>>>()?;
+            let schemas=request.schemas.iter().map(|schema|Ok(json!({"name":schema["name"].as_str().unwrap_or(""),"bytes":context_accounting::json_size(schema)?}))).collect::<Result<Vec<Value>>>()?;
             if report.version != 1
                 || report.scope != "logical_call_envelope"
                 || report.accounting != "serialized_json_bytes_not_provider_tokens"

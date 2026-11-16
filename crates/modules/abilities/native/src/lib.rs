@@ -56,8 +56,6 @@ pub mod session;
 pub mod task;
 #[path = "../../../../../abilities/Core/base/native/text_search.rs"]
 pub mod text_search;
-#[path = "../../../../../abilities/Core/base/native/tool_search.rs"]
-pub mod tool_search;
 #[path = "../../../../../abilities/Core/user_files/native/user_files.rs"]
 pub mod user_files;
 #[path = "../../../../../abilities/Core/base/native/utilities.rs"]
@@ -189,13 +187,6 @@ pub trait NativeHost: Sync {
     ) -> Pending<'a, Result<(u64, Value, Value)>>;
     /// Session `sid`'s validated capability mode.
     fn session_mode<'a>(&'a self, sid: &'a str) -> Pending<'a, Result<Value>>;
-    /// Each item's closest-text score against `query` from the matcher's `rank` operation;
-    /// `None` when the matcher is unavailable, so discovery falls back to word ranking.
-    fn rank_scores<'a>(
-        &'a self,
-        query: &'a str,
-        items: Vec<Vec<String>>,
-    ) -> Pending<'a, Option<Vec<f32>>>;
     /// The engine's live permission decision for tool `name` under these controls.
     #[allow(clippy::too_many_arguments)]
     fn live_tool_decision(

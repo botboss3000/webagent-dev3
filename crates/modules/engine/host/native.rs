@@ -337,15 +337,6 @@ impl
                     cancel,
                 )
                 .await
-            } else if tools::native::tool_search::owns(&name) {
-                tools::native::tool_search::execute(
-                    &tools::native_host::Host(&app),
-                    native_call,
-                    &name,
-                    &args,
-                    cancel,
-                )
-                .await
             } else if tools::native::compaction::owns(&name) {
                 tools::native::compaction::execute(
                     &tools::native_host::Host(&app),

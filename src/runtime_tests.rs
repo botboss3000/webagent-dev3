@@ -491,7 +491,7 @@ async fn agent_tool_off_revokes_schema_and_survives_reopen() {
 }
 
 #[tokio::test]
-async fn discoverable_tool_requires_its_own_selection() {
+async fn on_request_tool_is_sent_without_selection() {
     let (_root, app) = fixture().await;
     let result = agent_tool_mode_set(
         State(app.clone()),
@@ -509,17 +509,14 @@ async fn discoverable_tool_requires_its_own_selection() {
     .unwrap()
     .0;
     let state = json!({"active":[],"suppressed":[]});
-    assert!(!app
+    assert!(app
         .abilities
         .tool_available("file_read", &result, &state, &json!([])));
-    assert!(app
+    // Suppression still withholds it.
+    let suppressed = json!({"active":[],"suppressed":["codebase_admin"]});
+    assert!(!app
         .abilities
-        .tool_available("file_read", &result, &state, &json!(["tool:file_read"])));
-    // Explicit activation (session state, /optimize) also supplies it.
-    let active = json!({"active":["codebase_admin"],"suppressed":[]});
-    assert!(app
-        .abilities
-        .tool_available("file_read", &result, &active, &json!([])));
+        .tool_available("file_read", &result, &suppressed, &json!([])));
 }
 
 #[tokio::test]
@@ -1650,7 +1647,7 @@ async fn plan_exit_needs_a_plan_and_can_continue_in_ask_mode() {
         let plan = json!({"title":"Standup note","goal":"Write a daily note",
             "checklist":[{"label":"Write the note"},{"label":"Schedule it"}]});
         let output = match requests.len() {
-            1 => json!([{"type":"function_call","call_id":"load","name":"load_tool","arguments":"{\"tool_name\":\"set_execution_mode\"}"}]),
+            1 => json!([{"type":"function_call","call_id":"load","name":"get_time","arguments":"{}"}]),
             2 => json!([{"type":"function_call","call_id":"noplan","name":"set_execution_mode","arguments":"{\"mode\":\"auto\",\"expected_revision\":1}"},
                 {"type":"function_call","call_id":"time","name":"get_time","arguments":"{}"}]),
             3 => json!([{"type":"function_call","call_id":"call","name":"set_execution_mode",
@@ -1923,6 +1920,14 @@ async fn catalog_change_revokes_loaded_ability_before_pending_tool() {
         axum::serve(listener, mock).await.unwrap();
     });
     app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+    // Loading no longer gates a tool; switching it Off while the call waits does.
+    let mut visibility = app.store.agent_abilities().await.unwrap();
+    let revision = visibility["revision"].as_u64().unwrap();
+    visibility["tool_modes"]["shell"] = json!("off");
+    app.store
+        .save_agent_abilities(&visibility, revision)
+        .await
+        .unwrap();
     let sid = conversation(&app).await;
     let id = queued(&app, &sid).await;
     let mut run = app.run(&id).await.unwrap();
@@ -2852,76 +2857,66 @@ async fn image_generation_stays_off_without_an_image_out_model() {
             .unwrap();
     }
     set_tool_permission(&app, "generate_image", access::Permission::Auto).await;
-    let mock = Router::new().route(
-        "/responses",
-        post(move |Json(body): Json<Value>| async move {
-            let answered = body["input"].as_array().is_some_and(|items| {
-                items
-                    .iter()
-                    .any(|item| item["type"] == "function_call_output")
-            });
-            let output = if answered {
-                json!([{"type":"message","role":"assistant",
-                    "content":[{"type":"output_text","text":"Done."}]}])
-            } else {
-                json!([{"type":"function_call","call_id":"load","name":"load_tool",
-                    "arguments":"{\"tool_name\":\"generate_image\"}"}])
-            };
-            let event = json!({"type":"response.completed",
-                "response":{"status":"completed","output":output}});
-            (
-                [("content-type", "text/event-stream")],
-                format!("data: {event}\n\n"),
-            )
-        }),
-    );
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured = requests.clone();
+    let mock = Router::new()
+        .route(
+            "/responses",
+            post(
+                |AxumState(requests): AxumState<Arc<Mutex<Vec<Value>>>>,
+                 Json(body): Json<Value>| async move {
+                    requests.lock().await.push(body);
+                    let event = json!({"type":"response.completed","response":{"status":"completed",
+                    "output":[{"type":"message","role":"assistant",
+                        "content":[{"type":"output_text","text":"Done."}]}]}});
+                    (
+                        [("content-type", "text/event-stream")],
+                        format!("data: {event}\n\n"),
+                    )
+                },
+            ),
+        )
+        .with_state(captured);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         axum::serve(listener, mock).await.unwrap();
     });
     app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
-    let load_result = |app: App, generation: &'static str| async move {
-        let sid = conversation(&app).await;
-        session_mode_set(
-            State(app.clone()),
-            Path(sid.clone()),
-            Json(SessionModeBody {
-                mode: "auto".into(),
-                expected_revision: session_mode(&app, &sid).await.unwrap()["revision"].as_u64(),
-                confirm_write: true,
-            }),
-        )
-        .await
-        .unwrap();
-        let sent = send(
-            State(app.clone()),
-            Path(sid.clone()),
-            Json(json!({"client_message_id":uuid(),"text":"draw a cat"})),
-        )
-        .await
-        .unwrap();
-        let id = sent.1 .0["run_id"].as_str().unwrap().to_owned();
-        running(&app, &id, generation).await;
-        execute_fixture_journey(
-            app.clone(),
-            id.clone(),
-            generation.into(),
-            CancellationToken::new(),
-        )
-        .await;
-        let run = app.run(&id).await.unwrap();
-        let item = run["input"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|item| item["type"] == "function_call_output" && item["call_id"] == "load")
-            .cloned()
+    // Whether the model call carried generate_image's schema.
+    let offered = |app: App, generation: &'static str| {
+        let requests = requests.clone();
+        async move {
+            requests.lock().await.clear();
+            let sid = conversation(&app).await;
+            let sent = send(
+                State(app.clone()),
+                Path(sid.clone()),
+                Json(json!({"client_message_id":uuid(),"text":"draw a cat"})),
+            )
+            .await
             .unwrap();
-        serde_json::from_str::<Value>(item["output"].as_str().unwrap()).unwrap()
+            let id = sent.1 .0["run_id"].as_str().unwrap().to_owned();
+            running(&app, &id, generation).await;
+            execute_fixture_journey(
+                app.clone(),
+                id.clone(),
+                generation.into(),
+                CancellationToken::new(),
+            )
+            .await;
+            let requests = requests.lock().await;
+            assert!(!requests.is_empty());
+            requests.iter().any(|body| {
+                body["tools"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|tool| tool["name"] == "generate_image")
+            })
+        }
     };
-    let refused = load_result(app.clone(), "role-missing").await;
-    assert_ne!(refused["status"], "ok", "{refused}");
+    assert!(!offered(app.clone(), "role-missing").await);
 
     let mut catalog = app.store.model_catalog().await.unwrap();
     let standard = catalog.agent_models["shared_default"].roles
@@ -2946,94 +2941,7 @@ async fn image_generation_stays_off_without_an_image_out_model() {
         .save_model_catalog(&catalog, catalog.revision)
         .await
         .unwrap();
-    let loaded = load_result(app.clone(), "role-present").await;
-    assert_eq!(loaded["status"], "success", "{loaded}");
-    server.abort();
-}
-#[tokio::test]
-/// Verify discovery calls batched with other calls run serially: both list calls succeed and a
-/// tool from an ability loaded earlier in the same batch is authorized after the load.
-async fn batched_discovery_calls_run_serially_and_succeed() {
-    use axum::routing::post;
-
-    let (_root, mut app) = fixture().await;
-    let sid = conversation(&app).await;
-    let sent = send(
-        State(app.clone()),
-        Path(sid.clone()),
-        Json(json!({"client_message_id":uuid(),"text":"what can you inspect?"})),
-    )
-    .await
-    .unwrap();
-    let id = sent.1 .0["run_id"].as_str().unwrap().to_owned();
-    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
-    let captured = requests.clone();
-    let mock = Router::new().route(
-        "/responses",
-        post(move |Json(body): Json<Value>| {
-            let captured = captured.clone();
-            async move {
-                let mut captured = captured.lock().await;
-                captured.push(body);
-                let output = match captured.len() {
-                    1 => json!([
-                        {"type":"function_call","call_id":"list-a","name":"list_tools",
-                            "arguments":"{\"query\":\"state\"}"},
-                        {"type":"function_call","call_id":"list-b","name":"list_tools",
-                            "arguments":"{\"include_available\":true}"}]),
-                    2 => json!([
-                        {"type":"function_call","call_id":"load","name":"load_tool",
-                            "arguments":"{\"tool_name\":\"state_inspect\"}"},
-                        {"type":"function_call","call_id":"inspect","name":"state_inspect",
-                            "arguments":"{\"resource\":\"chat\",\"limit\":1}"}]),
-                    3 => json!([{"type":"message","role":"assistant",
-                        "content":[{"type":"output_text","text":"Done."}]}]),
-                    _ => panic!("Unexpected provider turn"),
-                };
-                let event = json!({"type":"response.completed",
-                    "response":{"status":"completed","output":output}});
-                (
-                    [("content-type", "text/event-stream")],
-                    format!("data: {event}\n\n"),
-                )
-            }
-        }),
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        axum::serve(listener, mock).await.unwrap();
-    });
-    app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
-    running(&app, &id, "batched-discovery").await;
-    execute_fixture_journey(
-        app.clone(),
-        id.clone(),
-        "batched-discovery".into(),
-        CancellationToken::new(),
-    )
-    .await;
-
-    assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
-    let requests = requests.lock().await;
-    assert_eq!(requests.len(), 3);
-    let result_for = |request: &Value, call_id: &str| -> Value {
-        let item = request["input"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|item| item["type"] == "function_call_output" && item["call_id"] == call_id)
-            .unwrap();
-        serde_json::from_str(item["output"].as_str().unwrap()).unwrap()
-    };
-    for call_id in ["list-a", "list-b"] {
-        let listed = result_for(&requests[1], call_id);
-        assert_eq!(listed["status"], "success", "{call_id}: {listed}");
-    }
-    let loaded = result_for(&requests[2], "load");
-    assert_eq!(loaded["status"], "success", "{loaded}");
-    let inspected = result_for(&requests[2], "inspect");
-    assert_eq!(inspected["status"], "success", "{inspected}");
+    assert!(offered(app.clone(), "role-present").await);
     server.abort();
 }
 /// Preload journey: the stub scores `file read` high and `file search` as a suggestion.
@@ -3084,7 +2992,7 @@ async fn preload_journey(stub: Option<crate::api::inference::RankStub>) -> Vec<V
                 captured.push(body);
                 let output = match captured.len() {
                     1 => json!([{"type":"function_call","call_id":"list",
-                        "name":"list_tools","arguments":"{}"}]),
+                        "name":"list_skills","arguments":"{\"ability_id\":\"base\"}"}]),
                     2 => json!([{"type":"message","role":"assistant",
                         "content":[{"type":"output_text","text":"Done."}]}]),
                     _ => panic!("Unexpected provider turn"),
@@ -3186,8 +3094,9 @@ async fn matcher_failure_preloads_nothing_and_the_run_works() {
 }
 
 #[tokio::test]
-/// A loaded tool adds only itself to the next model request, never its group's other tools.
-async fn loaded_tool_exposes_only_itself_in_the_next_request() {
+/// Every enabled tool's schema is sent from the first request, and load_skill by tool name
+/// returns that tool's skill text as its result.
+async fn enabled_tools_are_sent_and_load_skill_returns_tool_skill_text() {
     use axum::routing::post;
 
     let (_root, mut app) = fixture().await;
@@ -3210,11 +3119,9 @@ async fn loaded_tool_exposes_only_itself_in_the_next_request() {
                 let mut captured = captured.lock().await;
                 captured.push(body);
                 let output = match captured.len() {
-                    1 => json!([{"type":"function_call","call_id":"load-read",
-                        "name":"load_tool","arguments":"{\"tool_name\":\"file_read\"}"}]),
-                    2 => json!([{"type":"function_call","call_id":"load-search",
-                        "name":"load_tool","arguments":"{\"tool_name\":\"file_search\"}"}]),
-                    3 => json!([{"type":"message","role":"assistant",
+                    1 => json!([{"type":"function_call","call_id":"skill",
+                        "name":"load_skill","arguments":"{\"tool_name\":\"file_read\"}"}]),
+                    2 => json!([{"type":"message","role":"assistant",
                         "content":[{"type":"output_text","text":"Done."}]}]),
                     _ => panic!("Unexpected provider turn"),
                 };
@@ -3233,60 +3140,49 @@ async fn loaded_tool_exposes_only_itself_in_the_next_request() {
         axum::serve(listener, mock).await.unwrap();
     });
     app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
-    running(&app, &id, "load-one-tool").await;
+    running(&app, &id, "tool-skill").await;
     execute_fixture_journey(
         app.clone(),
         id.clone(),
-        "load-one-tool".into(),
+        "tool-skill".into(),
         CancellationToken::new(),
     )
     .await;
 
     assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
     let requests = requests.lock().await;
-    assert_eq!(requests.len(), 3);
-    let names = |request: &Value| {
-        request["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
-            .collect::<std::collections::BTreeSet<_>>()
-    };
-    let baseline = names(&requests[0]);
-    for loader in ["list_tools", "load_tool", "list_skills", "load_skill"] {
-        assert!(baseline.contains(loader), "{baseline:?}");
+    assert_eq!(requests.len(), 2);
+    let names = request_tools(&requests[0]);
+    for tool in ["list_skills", "load_skill", "file_read", "file_search"] {
+        assert!(names.contains(&tool.to_owned()), "{tool}: {names:?}");
     }
-    for hidden in ["file_read", "file_search", "calculate", "get_date"] {
-        assert!(
-            !baseline.contains(hidden),
-            "{hidden} visible before loading: {baseline:?}"
-        );
+    for removed in ["list_tools", "load_tool"] {
+        assert!(!names.contains(&removed.to_owned()), "{names:?}");
     }
-    let added = |request: &Value| {
-        names(request)
-            .difference(&baseline)
-            .cloned()
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(added(&requests[1]), vec!["file_read".to_owned()]);
-    let search_load = requests[2]["input"]
+    let item = requests[1]["input"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|item| item["type"] == "function_call_output" && item["call_id"] == "load-search")
-        .map(|item| item["output"].clone());
-    assert_eq!(
-        added(&requests[2]),
-        vec!["file_read".to_owned(), "file_search".to_owned()],
-        "{search_load:?}"
-    );
+        .find(|item| item["type"] == "function_call_output" && item["call_id"] == "skill")
+        .unwrap();
+    let loaded: Value = serde_json::from_str(item["output"].as_str().unwrap()).unwrap();
+    assert_eq!(loaded["status"], "success", "{loaded}");
+    assert_eq!(loaded["output"]["kind"], "tool", "{loaded}");
+    assert_eq!(loaded["output"]["skill_id"], "file_read", "{loaded}");
+    let text = loaded["output"]["text"].as_str().unwrap();
+    assert!(!text.is_empty());
+    // The text is the tool result; it is not repeated in the next call's instructions.
+    assert!(!requests[1]["instructions"]
+        .as_str()
+        .unwrap_or("")
+        .contains(text));
     server.abort();
 }
 
 #[tokio::test]
-/// Verify native ability loading adds current guidance only to model-call frames and keeps state inspection scoped to the active session.
-async fn agent_discovers_ability_then_inspects_only_its_current_session() {
+/// Verify an enabled tool and its Visible ability guidance arrive without loading, guidance stays
+/// in model-call frames, and state inspection stays scoped to the active session.
+async fn enabled_tool_inspects_only_its_current_session() {
     use axum::routing::post;
 
     let (_root, mut app) = fixture().await;
@@ -3329,18 +3225,13 @@ async fn agent_discovers_ability_then_inspects_only_its_current_session() {
                 let mut captured = captured.lock().await;
                 captured.push(body);
                 let output = match captured.len() {
-                    1 => json!([{"type":"function_call","call_id":"discover",
-                        "name":"list_tools","arguments":"{\"query\":\"inspect session state\"}"}]),
-                    2 => json!([{"type":"function_call","call_id":"load",
-                        "name":"load_tool",
-                        "arguments":"{\"tool_name\":\"state_inspect\"}"}]),
-                    3 => json!([{"type":"function_call","call_id":"inspect",
+                    1 => json!([{"type":"function_call","call_id":"inspect",
                         "name":"state_inspect",
                         "arguments":"{\"resource\":\"chat\",\"limit\":1}"}]),
-                    4 => json!([{"type":"function_call","call_id":"cross-session",
+                    2 => json!([{"type":"function_call","call_id":"cross-session",
                         "name":"state_inspect",
                         "arguments":json!({"resource":"chat","session_id":other_for_call}).to_string()}]),
-                    5 => json!([{"type":"message","role":"assistant",
+                    3 => json!([{"type":"message","role":"assistant",
                         "content":[{"type":"output_text","text":"Inspection complete."}]}]),
                     _ => panic!("Unexpected provider turn"),
                 };
@@ -3369,29 +3260,11 @@ async fn agent_discovers_ability_then_inspects_only_its_current_session() {
     .await;
 
     assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
-    assert!(app.run(&id).await.unwrap()["loaded_abilities"]
-        .as_array()
-        .unwrap()
-        .contains(&json!("tool:state_inspect")));
     let requests = requests.lock().await;
-    assert_eq!(requests.len(), 5);
-    let names = |request: &Value| {
-        request["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
-            .collect::<Vec<_>>()
-    };
-    for request in &requests[..2] {
-        // Only the always-visible loaders before any tool loads.
-        let names = names(request);
-        assert!(names.contains(&"list_tools".to_owned()), "{names:?}");
-        assert!(names.contains(&"load_tool".to_owned()), "{names:?}");
-        assert!(!names.contains(&"state_inspect".to_owned()));
-        assert!(!names.contains(&"list_abilities".to_owned()));
-    }
-    assert!(names(&requests[2]).contains(&"state_inspect".to_owned()));
+    assert_eq!(requests.len(), 3);
+    let names = request_tools(&requests[0]);
+    assert!(names.contains(&"state_inspect".to_owned()), "{names:?}");
+    assert!(!names.contains(&"list_tools".to_owned()), "{names:?}");
     let result_for = |request: &Value, call_id: &str| -> Value {
         let item = request["input"]
             .as_array()
@@ -3401,23 +3274,10 @@ async fn agent_discovers_ability_then_inspects_only_its_current_session() {
             .unwrap();
         serde_json::from_str(item["output"].as_str().unwrap()).unwrap()
     };
-    let discovery = result_for(&requests[1], "discover");
-    assert_eq!(discovery["status"], "success", "{discovery}");
-    assert_eq!(
-        discovery["output"]["tools"][0]["name"], "state_inspect",
-        "{discovery}"
-    );
-    let loaded = result_for(&requests[2], "load");
-    assert_eq!(loaded["status"], "success", "{loaded}");
-    assert_eq!(loaded["output"]["tool_name"], "state_inspect");
-    assert_eq!(loaded["output"]["ability_id"], "codebase_admin");
-    for request in &requests[..2] {
-        assert!(native_ability_frames(request, "codebase_admin").is_empty());
-    }
-    let guidance = native_ability_frames(&requests[2], "codebase_admin");
+    let guidance = native_ability_frames(&requests[0], "codebase_admin");
     assert_eq!(guidance.len(), 1);
     assert!(guidance[0].contains("Codebase Admin"));
-    assert!(!requests[2]["instructions"]
+    assert!(!requests[0]["instructions"]
         .as_str()
         .unwrap()
         .contains("## Untrusted live guidance: ability:codebase_admin\n"));
@@ -3427,7 +3287,7 @@ async fn agent_discovers_ability_then_inspects_only_its_current_session() {
     assert!(!json!(app.store.context(&sid).await.unwrap())
         .to_string()
         .contains("## Untrusted live guidance: ability:codebase_admin\n"));
-    let inspected = result_for(&requests[3], "inspect");
+    let inspected = result_for(&requests[1], "inspect");
     assert_eq!(inspected["status"], "success", "{inspected}");
     let messages = inspected["output"]["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 1);
@@ -3443,7 +3303,7 @@ async fn agent_discovers_ability_then_inspects_only_its_current_session() {
     assert!(messages[0].get("content").is_none());
     assert!(!inspected.to_string().contains(private_other_text));
     // `session_id` is not in the schema, so the argument check refuses it before dispatch.
-    let cross = result_for(&requests[4], "cross-session");
+    let cross = result_for(&requests[2], "cross-session");
     assert_eq!(cross["status"], "rejected", "{cross}");
     assert_eq!(cross["error_kind"], "invalid_arguments", "{cross}");
     server.abort();
@@ -4225,7 +4085,8 @@ async fn ability_management_routes_enforce_auth_revisions_and_session_boundaries
     assert_eq!(status, StatusCode::OK);
     assert_eq!(changed["revision"], 2);
     let (_, visibility, second_state) = ability_controls(&app, &second).await.unwrap();
-    assert!(!app
+    // On request still sends every enabled tool's schema.
+    assert!(app
         .abilities
         .schemas_with(&json!([]), &visibility, &second_state)
         .iter()
@@ -6912,6 +6773,18 @@ async fn rolling_compaction_uses_explicit_system_model_and_persists_checkpoint()
         .unwrap();
     let config_path = app.compaction_config_path.clone();
     let mut config = context_compaction::Config::read(&config_path).unwrap();
+    // Only Base stays on, so the sent tool schemas stay small beside the folded history.
+    let mut visibility = app.store.agent_abilities().await.unwrap();
+    let revision = visibility["revision"].as_u64().unwrap();
+    for id in app.abilities.ids() {
+        if id != "base" {
+            visibility["visibility"][id] = json!("off");
+        }
+    }
+    app.store
+        .save_agent_abilities(&visibility, revision)
+        .await
+        .unwrap();
     config.trigger_tokens = 20_000;
     // No background window: the summary runs on System before the main call.
     config.ceiling_tokens = None;
@@ -6953,7 +6826,7 @@ async fn rolling_compaction_uses_explicit_system_model_and_persists_checkpoint()
     .await
     .unwrap();
     let done = app.run(&id).await.unwrap();
-    assert_eq!(done["status"], "completed");
+    assert_eq!(done["status"], "completed", "{}", done["error"]);
     assert_eq!(done["compactions"], 1);
     let requests = requests.lock().await;
     assert_eq!(requests.len(), 2);
@@ -10082,8 +9955,8 @@ fn live_context_fixture_skill(body: &str) -> String {
 }
 
 /// Drive native load_skill and a second tool round through the actual execute_run loop.
-/// Current source prompts, saved overrides, encrypted slots and selected skill files
-/// must replace old text without copying guidance into durable history or selectors.
+/// Current source prompts, saved overrides and encrypted slots replace old text; the loaded
+/// skill text is its tool result and never enters selectors.
 async fn live_context_default_stack_journey() {
     use axum::routing::post;
     let (root, mut app) = Box::pin(fixture()).await;
@@ -10226,14 +10099,16 @@ async fn live_context_default_stack_journey() {
     assert!(requests[1]["input"]
         .to_string()
         .contains("LIVE_SKILL_FIRST"));
+    // The skill text is the load_skill result; while that result is in the history it is
+    // not placed again, so a later edit waits for compaction.
     assert!(requests[2]["input"]
         .to_string()
-        .contains("LIVE_SKILL_CURRENT"));
+        .contains("LIVE_SKILL_FIRST"));
     assert!(!requests[2]["input"]
         .to_string()
-        .contains("LIVE_SKILL_FIRST"));
+        .contains("LIVE_SKILL_CURRENT"));
+    assert!(durable["input"].to_string().contains("LIVE_SKILL_FIRST"));
     for marker in ["LIVE_SKILL_FIRST", "LIVE_SKILL_CURRENT"] {
-        assert!(!durable["input"].to_string().contains(marker));
         assert!(!durable["loaded_skills"].to_string().contains(marker));
     }
     assert_eq!(
@@ -11070,27 +10945,10 @@ async fn visibility_native_call(app: &App, sid: &str, id: &str, name: &str, args
     )
     .unwrap();
     app.save(&mut run).await.unwrap();
-    let result = if tools::core_skills::owns(name) {
-        tools::core_skills::execute(app, sid, id, name, &args, CancellationToken::new())
-            .await
-            .unwrap()
-    } else {
-        let call = tools::native::Call {
-            sid,
-            run_id: id,
-            generation: "",
-            pending_id: "",
-        };
-        tools::native::tool_search::execute(
-            &tools::native_host::Host(app),
-            call,
-            name,
-            &args,
-            CancellationToken::new(),
-        )
+    assert!(tools::core_skills::owns(name));
+    let result = tools::core_skills::execute(app, sid, id, name, &args, CancellationToken::new())
         .await
-        .unwrap()
-    };
+        .unwrap();
     let mut run = app.run(id).await.unwrap();
     append_tool(&mut run, &result).unwrap();
     app.save(&mut run).await.unwrap();
@@ -11167,10 +11025,8 @@ async fn native_skill_catalog_marks_supplied_guidance_and_rebuilds_selected_afte
     .await;
     assert_eq!(result["status"], "success", "{result}");
     assert_eq!(result["output"]["status"], "loaded");
-    assert!(result["output"].get("text").is_none());
-    assert!(!result.to_string().contains(sentinel));
-    let stored = app.run(&id).await.unwrap();
-    assert!(!stored["input"].to_string().contains(sentinel));
+    // The skill text is the tool result itself.
+    assert_eq!(result["output"]["text"], sentinel);
     assert!(tools::core_skills::active_guidance(&app, &sid, &id)
         .await
         .unwrap()
@@ -11251,7 +11107,7 @@ async fn native_skill_catalog_marks_supplied_guidance_and_rebuilds_selected_afte
         .is_empty());
 }
 #[tokio::test]
-async fn exact_native_tool_selection_obeys_visibility_mode_denial_and_suppression() {
+async fn tool_skill_loads_by_name_and_obeys_mode_denial_and_suppression() {
     let (_root, app) = fixture().await;
     visibility_fixture_base_access(&app).await;
     let sid = conversation(&app).await;
@@ -11272,80 +11128,33 @@ async fn exact_native_tool_selection_obeys_visibility_mode_denial_and_suppressio
         .save_agent_abilities(&visibility, revision)
         .await
         .unwrap();
-    let listed = visibility_native_call(&app, &sid, &id, "list_tools", json!({})).await;
-    assert_eq!(listed["status"], "success", "{listed}");
-    assert!(listed["output"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|row| row["name"] == "state_inspect" && row["availability"] == "on_request"));
-    let loaded = visibility_native_call(
-        &app,
-        &sid,
-        &id,
-        "load_tool",
-        json!({"tool_name":"state_inspect"}),
-    )
-    .await;
+    let load = |name: &'static str| {
+        let (app, sid, id) = (app.clone(), sid.clone(), id.clone());
+        async move {
+            visibility_native_call(&app, &sid, &id, "load_skill", json!({"tool_name":name})).await
+        }
+    };
+    let loaded = load("state_inspect").await;
     assert_eq!(loaded["status"], "success", "{loaded}");
-    assert_eq!(loaded["output"]["activated"], true);
-    assert_eq!(loaded["output"]["tool_name"], "state_inspect");
-    assert!(loaded["output"].get("tool").is_none());
-    assert!(loaded["output"].get("description").is_none());
+    assert_eq!(loaded["output"]["status"], "loaded", "{loaded}");
+    assert_eq!(loaded["output"]["kind"], "tool");
+    assert_eq!(loaded["output"]["ability_id"], "codebase_admin");
+    assert!(!loaded["output"]["text"].as_str().unwrap().is_empty());
     let run = app.run(&id).await.unwrap();
-    assert!(run["loaded_abilities"]
-        .as_array()
-        .unwrap()
-        .contains(&json!("tool:state_inspect")));
+    assert!(run["loaded_skills"].as_array().unwrap().contains(
+        &json!({"ability_id":"codebase_admin","kind":"tool","skill_id":"state_inspect"})
+    ));
+    assert!(!run["loaded_skills"].to_string().contains("text"));
+    let again = load("state_inspect").await;
+    assert_eq!(again["output"]["status"], "already_available", "{again}");
+    assert!(again["output"].get("text").is_none());
+    // A Loaded tool's skill is already in the prompt.
+    let visible = load("file_read").await;
     assert_eq!(
-        session_ability_state(&app, &sid).await.unwrap()["active"],
-        json!([])
+        visible["output"]["status"], "already_available",
+        "{visible}"
     );
-    let ack = visibility_native_call(
-        &app,
-        &sid,
-        &id,
-        "load_tool",
-        json!({"tool_name":"state_inspect"}),
-    )
-    .await;
-    assert_eq!(ack["status"], "already_available", "{ack}");
-    let listed = visibility_native_call(&app, &sid, &id, "list_tools", json!({})).await;
-    assert!(!listed["output"]["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|row| row["name"] == "state_inspect"));
-    let full = visibility_native_call(
-        &app,
-        &sid,
-        &id,
-        "list_tools",
-        json!({"include_available":true}),
-    )
-    .await;
-    assert_eq!(
-        full["output"]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|row| row["name"] == "state_inspect")
-            .unwrap()["availability"],
-        "activated"
-    );
-    let visible = visibility_native_call(
-        &app,
-        &sid,
-        &id,
-        "load_tool",
-        json!({"tool_name":"file_read"}),
-    )
-    .await;
-    assert_eq!(visible["status"], "already_available", "{visible}");
-    assert!(!app.run(&id).await.unwrap()["loaded_abilities"]
-        .as_array()
-        .unwrap()
-        .contains(&json!("tool:file_read")));
+    assert_eq!(load("no_such_tool").await["status"], "error");
     let mut visibility = app.store.agent_abilities().await.unwrap();
     let revision = visibility["revision"].as_u64().unwrap();
     visibility["tool_modes"]["state_inspect"] = json!("off");
@@ -11353,15 +11162,8 @@ async fn exact_native_tool_selection_obeys_visibility_mode_denial_and_suppressio
         .save_agent_abilities(&visibility, revision)
         .await
         .unwrap();
-    let off = visibility_native_call(
-        &app,
-        &sid,
-        &id,
-        "load_tool",
-        json!({"tool_name":"state_inspect"}),
-    )
-    .await;
-    assert_eq!(off["status"], "denied", "{off}");
+    let off = load("state_inspect").await;
+    assert_eq!(off["status"], "error", "{off}");
     let mut visibility = app.store.agent_abilities().await.unwrap();
     let revision = visibility["revision"].as_u64().unwrap();
     visibility["tool_modes"]["state_inspect"] = json!("on_request");
@@ -11370,15 +11172,8 @@ async fn exact_native_tool_selection_obeys_visibility_mode_denial_and_suppressio
         .await
         .unwrap();
     set_tool_permission(&app, "state_inspect", access::Permission::Deny).await;
-    let denied = visibility_native_call(
-        &app,
-        &sid,
-        &id,
-        "load_tool",
-        json!({"tool_name":"state_inspect"}),
-    )
-    .await;
-    assert_eq!(denied["status"], "denied", "{denied}");
+    let denied = load("state_inspect").await;
+    assert_eq!(denied["status"], "error", "{denied}");
     set_tool_permission(&app, "state_inspect", access::Permission::Auto).await;
     app.store
         .put(
@@ -11388,15 +11183,8 @@ async fn exact_native_tool_selection_obeys_visibility_mode_denial_and_suppressio
         )
         .await
         .unwrap();
-    let suppressed = visibility_native_call(
-        &app,
-        &sid,
-        &id,
-        "load_tool",
-        json!({"tool_name":"state_inspect"}),
-    )
-    .await;
-    assert_eq!(suppressed["status"], "denied", "{suppressed}");
+    let suppressed = load("state_inspect").await;
+    assert_eq!(suppressed["status"], "error", "{suppressed}");
 }
 
 #[tokio::test]
@@ -11925,7 +11713,8 @@ async fn failed_same_model_fold_retries_a_requested_fold_with_system() {
     let (_root, mut app) = fixture().await;
     let config_path = app.compaction_config_path.clone();
     let mut config = context_compaction::Config::read(&config_path).unwrap();
-    config.trigger_tokens = 20_000;
+    // Every enabled tool schema is sent, so the trigger leaves room for them.
+    config.trigger_tokens = 120_000;
     config.ceiling_tokens = None;
     config.tail_tokens = 100;
     config.summary_tokens = 100;
@@ -11999,7 +11788,8 @@ async fn compaction_only_run_folds_without_a_model_call() {
     let (_root, mut app) = fixture().await;
     let config_path = app.compaction_config_path.clone();
     let mut config = context_compaction::Config::read(&config_path).unwrap();
-    config.trigger_tokens = 20_000;
+    // Every enabled tool schema is sent, so the trigger leaves room for them.
+    config.trigger_tokens = 120_000;
     config.ceiling_tokens = None;
     config.tail_tokens = 100;
     config.summary_tokens = 100;

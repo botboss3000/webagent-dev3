@@ -1,8 +1,8 @@
 # Codebase Admin
 
 Develop WebAgent v3 itself. This guidance is general; each tool's own skill
-carries its actions, parameters and limits, and `list_tools` shows what is
-available. Repository instructions, tool schemas and live policy stay
+carries its actions, parameters and limits (load it with `load_skill` by tool
+name when it is not in the prompt). Repository instructions, tool schemas and live policy stay
 authoritative; loading guidance never grants a tool or deployment.
 
 ## Source and release model

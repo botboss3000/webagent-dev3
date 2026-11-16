@@ -276,9 +276,8 @@ never belong in URL parameters. Backend changes require an image rebuild.
 ## Boundaries
 
 The Rust application owns policies, approvals, execution state, recovery and shutoff. The first v3 UI port uses v2's Agents partial and CSS at image-build time; the independent v3 API and storage serve its chat and model settings. Other v2 tabs and agent subpages are not wired yet.
-The model first receives `list_abilities` and `load_ability`. Loading a catalog ability
-makes its currently permitted worker schemas available for that run; execution checks the
-current policy again. Named Auto mode runs allowed tools without per-tool approval; Deny still blocks them. The authenticated
+The model receives the schema of every enabled tool of its On abilities; Off tools are
+withheld. Execution checks the current policy again. Named Auto mode runs allowed tools without per-tool approval; Deny still blocks them. The authenticated
 `GET /api/v3/abilities` endpoint exposes the visible catalog and effective tool policies.
 The Administrator catalog contains nine abilities. This coding port implements Codebase Admin,
 Git Control, Terminal Control, Diagnostics, Remote Tunnel, V3 Build and V3 Workspace. Computer Control and Program Screenshot are explicitly excluded. New
@@ -399,16 +398,14 @@ session had activated it. The agent configuration catalog keeps disabled entries
 visible so they can be re-enabled. The separate skill setting uses
 `PUT /api/v3/agents/shared_default/abilities/{ability_id}/skill-visibility`
 with the same body and revision: `off` withholds the bundled skill,
-`discoverable` returns it only through `load_ability`, and `visible` includes
+`discoverable` returns it only through `load_skill`, and `visible` includes
 it in the agent context when the ability is revealed. Tool modes use
 PUT /api/v3/agents/shared_default/abilities/{ability_id}/tools/{tool_name}/mode
 with the same revision; off removes the tool from schemas and execution.
 Use the revision from GET; stale revisions return 409.
 
 `GET /api/v3/sessions/{id}/abilities` returns the effective catalog and
-the session's revisioned `active` and `suppressed` lists. A successful
-`load_ability` activates a discoverable ability for later runs in that
-session. An administrator can set a known ability to `active`,
+the session's revisioned `active` and `suppressed` lists. An administrator can set a known ability to `active`,
 `suppressed`, or `default` (clear the session override) with CSRF-protected
 `PUT /api/v3/sessions/{id}/abilities/{ability_id}` and
 `{"state":"...","expected_revision":n}`; stale revisions return 409.
@@ -418,14 +415,10 @@ Changes increment a revision and revoke approvals waiting under old
 settings. Agent visibility and session activation are encrypted in their
 respective databases.
 
-At each model call Rust now builds a bounded # [ABILITIES] menu from the live,
-caller-authorized catalog. A discoverable, unloaded ability appears by ID,
-name, and short summary; its tool schemas and skill body remain withheld until
-load_ability succeeds. The generated # [TOOLS] list names discovery tools and
-tools callable in that call. An individually discoverable tool under a visible
-ability appears under Load on demand with its owning ability ID. Off, suppressed,
-pending, and denied entries are absent. The menu is rebuilt after policy and
-session changes and does not become durable chat history. V2's bootstrap_tools
+At each model call Rust sends the schema of every enabled, permitted tool. Off,
+suppressed, pending and denied entries are absent. Skills of Loaded and Core tools are in the
+prompt; other tool skills load with `load_skill` by tool name. The tool list is rebuilt after
+policy and session changes and does not become durable chat history. V2's bootstrap_tools
 slot is authored and template-seeded; its live ability/tool indexes are generated.
 V3 uses its pinned base instructions plus this generated index, not a copied V2
 bootstrap slot that could advertise unavailable tools.
@@ -1011,7 +1004,7 @@ Webhook subscriptions and delivery remain Phase 2; widget engagement is excluded
 
 ### Visible and discoverable context
 
-Visible ability guidance and configured Visible skills are supplied in full at every model-call boundary. Ability, tool and skill visibility remain independent. `list_abilities`, `list_tools` and `list_skills` default to inactive Discoverable items; `include_available: true` includes items already Visible or Activated. Redundant loads return an acknowledgment without duplicating instructions. `load_tool` selects one exact permitted tool without a Decision model; ranked `search_tools` retains its TypeSafe requirement.
+Visible ability guidance and configured Visible skills are supplied in full at every model-call boundary. Ability, tool and skill visibility remain independent. `list_skills` lists selectable skills, by default the ones not yet supplied; `include_available: true` includes items already Visible or loaded. `load_skill` takes a skill selector or any tool name and returns the skill text as its result; after compaction loaded skills are supplied with the other skills. Redundant loads return an acknowledgment without duplicating instructions.
 
 Activated abilities remain session state. Exact tool and skill selectors remain run state across compaction and restart; skill selectors bind to the validated catalog hash and own-skill revision. Rust rebuilds full live guidance and tool schemas alongside boot guidance before compacted conversation history. All ability, exact tool and skill loaders return acknowledgment and metadata only, including fresh loads. Their full definitions and guidance are supplied separately on the next model call. Loader journals contain no copied guidance body; replay and compaction consume their acknowledgments without a loader-specific projection. Off settings, suppression and fresh caller policy withdraw guidance and execution independently. The configured full request budget applies; guidance has no separate fixed size cap. Matching-session run diagnostics expose content-free ability/skill inclusion and schema names through `ability_context`.
 

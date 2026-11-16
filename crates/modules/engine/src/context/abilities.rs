@@ -7,8 +7,6 @@ pub use webagent_context_contracts::abilities::{AbilityContext, AbilityInclusion
 /// Abilities retains source selection, classification, availability and native/plugin declarations.
 /// The Engine borrows already-authorized views; implementations do not receive App or Engine state bundles.
 pub trait Catalog: Clone + Send + Sync + 'static {
-    fn is_discovery(name: &str) -> bool;
-    fn model_index(entries: &[Value], schemas: &[Value]) -> String;
     fn all_schemas(&self) -> Vec<Value>;
     fn capability_guidance(
         &self,
@@ -29,18 +27,21 @@ pub trait Catalog: Clone + Send + Sync + 'static {
         loaded: &Value,
         loaded_skills: &Value,
     ) -> Vec<AbilityInclusion>;
-    fn discover_with(
-        &self,
-        name: &str,
-        args: &Value,
-        run: &mut Value,
-        visibility: &Value,
-        state: &Value,
-    ) -> Value;
     fn live_version(&self) -> String;
     fn plugin_binding(&self, name: &str) -> Option<Value>;
     fn published(&self) -> bool;
     fn schemas_with(&self, loaded: &Value, visibility: &Value, state: &Value) -> Vec<Value>;
+    fn required_model_roles(&self, visibility: &Value, state: &Value) -> Vec<(String, String)>;
+    fn tool_gates(
+        &self,
+        visibility: &Value,
+        state: &Value,
+        loaded: &Value,
+    ) -> std::collections::BTreeMap<String, webagent_abilities::ToolGate>;
+    fn schemas_gated(
+        &self,
+        gates: &std::collections::BTreeMap<String, webagent_abilities::ToolGate>,
+    ) -> Vec<Value>;
     fn selected_state(&self, visibility: &Value, state: &Value, loaded: &Value) -> Value;
     fn snapshot_root(&self) -> &Path;
     fn source_root(&self) -> Option<&Path>;
@@ -67,12 +68,6 @@ pub trait Catalog: Clone + Send + Sync + 'static {
 }
 
 impl<H: webagent_abilities::Host> Catalog for webagent_abilities::Catalog<H> {
-    fn is_discovery(name: &str) -> bool {
-        webagent_abilities::is_discovery(name)
-    }
-    fn model_index(entries: &[Value], schemas: &[Value]) -> String {
-        webagent_abilities::Catalog::<H>::model_index(entries, schemas)
-    }
     fn all_schemas(&self) -> Vec<Value> {
         webagent_abilities::Catalog::<H>::all_schemas(self)
     }
@@ -117,16 +112,6 @@ impl<H: webagent_abilities::Host> Catalog for webagent_abilities::Catalog<H> {
             loaded_skills,
         )
     }
-    fn discover_with(
-        &self,
-        name: &str,
-        args: &Value,
-        run: &mut Value,
-        visibility: &Value,
-        state: &Value,
-    ) -> Value {
-        webagent_abilities::Catalog::<H>::discover_with(self, name, args, run, visibility, state)
-    }
     fn live_version(&self) -> String {
         webagent_abilities::Catalog::<H>::live_version(self)
     }
@@ -138,6 +123,23 @@ impl<H: webagent_abilities::Host> Catalog for webagent_abilities::Catalog<H> {
     }
     fn schemas_with(&self, loaded: &Value, visibility: &Value, state: &Value) -> Vec<Value> {
         webagent_abilities::Catalog::<H>::schemas_with(self, loaded, visibility, state)
+    }
+    fn required_model_roles(&self, visibility: &Value, state: &Value) -> Vec<(String, String)> {
+        webagent_abilities::Catalog::<H>::required_model_roles(self, visibility, state)
+    }
+    fn tool_gates(
+        &self,
+        visibility: &Value,
+        state: &Value,
+        loaded: &Value,
+    ) -> std::collections::BTreeMap<String, webagent_abilities::ToolGate> {
+        webagent_abilities::Catalog::<H>::tool_gates(self, visibility, state, loaded)
+    }
+    fn schemas_gated(
+        &self,
+        gates: &std::collections::BTreeMap<String, webagent_abilities::ToolGate>,
+    ) -> Vec<Value> {
+        webagent_abilities::Catalog::<H>::schemas_gated(self, gates)
     }
     fn selected_state(&self, visibility: &Value, state: &Value, loaded: &Value) -> Value {
         webagent_abilities::Catalog::<H>::selected_state(self, visibility, state, loaded)

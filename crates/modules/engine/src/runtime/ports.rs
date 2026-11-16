@@ -150,7 +150,6 @@ pub trait CredentialBindings<S>: Clone + Send + Sync + 'static {
 pub trait SkillSources<S>: Clone + Send + Sync + 'static {
     fn own_skills<'a>(&'a self, store: &'a S) -> impl Future<Output = Result<Value>> + Send + 'a;
     fn tool_marker(name: &str) -> String;
-    fn apply_tool_selection(run: &mut Value, result: &Value);
     fn apply_skill_selection(run: &mut Value, result: &Value);
 }
 pub trait PromptSlots<S>: Clone + Send + Sync + 'static {

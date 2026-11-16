@@ -177,11 +177,12 @@ impl Config {
     /// source limit, large tool outputs become previews, then stubs, so that one oversized tool
     /// exchange cannot block every fold. The plan itself always keeps the exact history.
     pub fn summary_source(&self, input: &[Value]) -> Result<String> {
-        let items: Vec<Value> = input
+        let mut items: Vec<Value> = input
             .iter()
             .filter(|item| item["type"] != "reasoning")
             .cloned()
             .collect();
+        omit_skill_bodies(&mut items);
         let mut source = serde_json::to_string(&items)?;
         // Each level shortens the original outputs, never an earlier preview: the planner
         // sizes cut points from stubs of the originals, and a stub of a preview can be
@@ -237,19 +238,45 @@ impl Config {
     }
 }
 
+/// Drop the skill text from `load_skill` results so a summary never keeps a skill body;
+/// after compaction the loaded selector places the current text among the skills.
+pub fn omit_skill_bodies(input: &mut [Value]) {
+    let loads = input
+        .iter()
+        .filter(|item| item["type"] == "function_call" && item["name"] == "load_skill")
+        .filter_map(call_id)
+        .map(str::to_owned)
+        .collect::<HashSet<_>>();
+    for item in input {
+        if item["type"] != "function_call_output"
+            || !item["call_id"]
+                .as_str()
+                .is_some_and(|id| loads.contains(id))
+        {
+            continue;
+        }
+        let Some(mut result) = item["output"]
+            .as_str()
+            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        else {
+            continue;
+        };
+        if let Some(output) = result["output"].as_object_mut() {
+            if output.remove("text").is_some() {
+                output.insert("text_omitted".into(), json!(true));
+                item["output"] = json!(result.to_string());
+            }
+        }
+    }
+}
+
 /// Keep the encrypted interaction as the full record. Only provider replay is
 /// reduced, including on resume of a run saved before this limit was installed.
 pub fn project_tool_results(input: &mut [Value], preview_bytes: usize) -> Result<bool> {
     // Keep catalog metadata intact while bounding ordinary results.
     let instruction_calls = input
         .iter()
-        .filter(|item| {
-            item["type"] == "function_call"
-                && matches!(
-                    item["name"].as_str(),
-                    Some("list_abilities" | "load_ability" | "load_skill")
-                )
-        })
+        .filter(|item| item["type"] == "function_call" && item["name"] == "load_skill")
         .filter_map(call_id)
         .map(str::to_owned)
         .collect::<HashSet<_>>();

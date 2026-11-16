@@ -407,13 +407,7 @@ mod tests {
                 .unwrap();
             }
         }
-        for name in [
-            "shell",
-            "python",
-            "v3_build_work",
-            "search_tools",
-            "unknown",
-        ] {
+        for name in ["shell", "python", "v3_build_work", "unknown"] {
             let settings = resolve(&json!({}), name).unwrap();
             assert_eq!(settings.max_concurrency, 1);
             assert!(!background_capable(name));
@@ -496,13 +490,7 @@ mod tests {
             .validate(name)
             .is_err());
         }
-        for name in [
-            "load_skill",
-            "search_tools",
-            "set_execution_mode",
-            "shell",
-            "unknown",
-        ] {
+        for name in ["load_skill", "set_execution_mode", "shell", "unknown"] {
             assert!(!concurrent_capable(name));
             assert_eq!(max_supported_concurrency(name), 1);
         }

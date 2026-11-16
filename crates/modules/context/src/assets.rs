@@ -66,18 +66,14 @@ fn arguments(run: &Value) -> Result<Value> {
 pub fn record_tool_operation(
     run: &mut Value,
     result: &Value,
-    previous_tools: &Value,
+    _previous_tools: &Value,
     previous_skills: &Value,
 ) -> Result<()> {
     let Some(name) = run["pending"]["name"].as_str() else {
         return Ok(());
     };
     let name = name.to_owned();
-    if !matches!(
-        name.as_str(),
-        "context_assets" | "load_tool" | "search_tools" | "load_skill" | "load_ability"
-    ) || !matches!(result["status"].as_str(), Some("success" | "ok"))
-    {
+    if !matches!(name.as_str(), "context_assets" | "load_skill") || result["status"] != "success" {
         return Ok(());
     }
     let args = arguments(run)?;
@@ -104,31 +100,8 @@ pub fn record_tool_operation(
     }
     let mut selectors = Vec::new();
     match name.as_str() {
-        "load_tool" | "search_tools"
-            if result["status"] == "success" && result["output"]["activated"] == true =>
-        {
-            for tool in result["output"]["selected_tools"]
-                .as_array()
-                .into_iter()
-                .flatten()
-            {
-                if !run["selected_tools"]
-                    .as_array()
-                    .is_some_and(|items| items.contains(tool))
-                    || previous_tools
-                        .as_array()
-                        .is_some_and(|items| items.contains(tool))
-                {
-                    continue;
-                }
-                let value = json!({"type":"tool","tool_name":tool});
-                webagent_assets_contracts::validate_selector(&value)?;
-                if !selectors.contains(&value) {
-                    selectors.push(value);
-                }
-            }
-        }
-        "load_skill" if result["status"] == "success" && result["output"]["status"] == "loaded" => {
+        // A tool name resolves to its kind `tool` selector, recorded like any skill.
+        "load_skill" if result["output"]["status"] == "loaded" => {
             let expected = skill_selector(&result["output"])?;
             if run["loaded_skills"]
                 .as_array()
@@ -142,19 +115,6 @@ pub fn record_tool_operation(
                     .any(|skill| skill_selector(skill).ok().as_ref() == Some(&expected))
             {
                 selectors.push(expected);
-            }
-        }
-        "load_ability"
-            if result["status"] == "ok" && result["ability_id"] == args["ability_id"] =>
-        {
-            let id = args["ability_id"].clone();
-            if run["loaded_abilities"]
-                .as_array()
-                .is_some_and(|items| items.contains(&id))
-            {
-                let value = json!({"type":"ability","ability_id":id});
-                webagent_assets_contracts::validate_selector(&value)?;
-                selectors.push(value);
             }
         }
         _ => {}
@@ -425,12 +385,15 @@ pub async fn project_context(
 mod tests {
     use super::*;
     #[test]
-    fn explicit_tool_delta_only() {
-        let mut run = json!({"id":"r","context_assets_revision":4,"pending":{"name":"load_tool","call_id":"c","arguments":{"tool_name":"file_read"}},
-   "selected_tools":["file_read"],"loaded_abilities":["automatic"]});
+    fn explicit_tool_skill_delta_only() {
+        let skill = json!({"ability_id":"files","kind":"tool","skill_id":"file_read"});
+        let mut run = json!({"id":"r","context_assets_revision":4,"pending":{"name":"load_skill","call_id":"c","arguments":{"tool_name":"file_read"}},
+   "loaded_skills":[skill.clone()]});
+        let mut output = skill.clone();
+        output["status"] = json!("loaded");
         record_tool_operation(
             &mut run,
-            &json!({"status":"success","output":{"activated":true,"selected_tools":["file_read"]}}),
+            &json!({"status":"success","output":output}),
             &json!([]),
             &json!([]),
         )
@@ -448,7 +411,7 @@ mod tests {
         assert_eq!(expected_revision, 4);
         assert_eq!(
             selectors,
-            vec![json!({"type":"tool","tool_name":"file_read"})]
+            vec![json!({"type":"skill","ability_id":"files","kind":"tool","skill_id":"file_read"})]
         );
         let mut denied = run.clone();
         denied

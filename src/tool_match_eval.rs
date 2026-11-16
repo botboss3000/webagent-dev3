@@ -1,4 +1,4 @@
-//! `webagent-v3 --tool-match-eval FILE...` scores `list_tools`/`list_skills` ranking against
+//! `webagent-v3 --tool-match-eval FILE...` scores tool and `list_skills` ranking against
 //! request sets (`crates/modules/inference/eval/tool-match-eval.jsonl`): one line per case
 //! `{"id", "kind": "tool"|"skill", "query", "expect": [ID...]}`, then a summary per kind. It uses
 //! the installed model and the same rules as the live tools, over the whole catalog (no access

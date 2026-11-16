@@ -1,4 +1,4 @@
-//! Ranking rules for `list_tools` and `list_skills` queries. Scores come from the matcher's
+//! Ranking rules for `list_skills` queries and preload. Scores come from the matcher's
 //! `rank` operation (each candidate's closest text to the query); these rules add exact-name and
 //! keyword evidence, pick the best match and keep a result list from ever being empty.
 use crate::catalog::search_words;
@@ -287,16 +287,6 @@ const COMPILED: &[(&str, &[&str], &[&str])] = &[
             "change a source file without a broker task",
         ],
         &["checkout", "direct edit"],
-    ),
-    (
-        "list_tools",
-        &["find a tool for this task", "which tools can I load"],
-        &["tools"],
-    ),
-    (
-        "load_tool",
-        &["load a tool by name", "enable the file_edit tool"],
-        &["load tool"],
     ),
     (
         "list_skills",

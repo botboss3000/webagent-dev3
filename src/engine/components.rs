@@ -89,6 +89,18 @@ mod lifecycle_tests {
             let id = crate::runtime_tests::queued(&app, &sid).await;
             let mut run = app.run(&id).await.unwrap();
             if compact {
+                // Only Base stays on, so the sent tool schemas stay small beside the history.
+                let mut visibility = app.store.agent_abilities().await.unwrap();
+                let revision = visibility["revision"].as_u64().unwrap();
+                for id in app.abilities.ids() {
+                    if id != "base" {
+                        visibility["visibility"][id] = json!("off");
+                    }
+                }
+                app.store
+                    .save_agent_abilities(&visibility, revision)
+                    .await
+                    .unwrap();
                 let mut config =
                     context_compaction::Config::read(&app.compaction_config_path).unwrap();
                 config.trigger_tokens = 16000;

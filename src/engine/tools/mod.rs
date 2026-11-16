@@ -90,8 +90,7 @@ pub fn is_read(name: &str) -> bool {
         || crate::modules::is_read(name)
         || matches!(
             name,
-            "search_tools"
-                | "file_list"
+            "file_list"
                 | "file_read"
                 | "file_search"
                 | "source_review"
