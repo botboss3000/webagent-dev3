@@ -82,6 +82,9 @@ impl<'a> CallDraft<'a> {
     pub fn with_reasoning_effort(self, effort: Option<&'a str>) -> Self {
         Self(self.0.with_reasoning_effort(effort))
     }
+    pub fn with_bridge_fork(self, fork: bool) -> Self {
+        Self(self.0.with_bridge_fork(fork))
+    }
     pub async fn prepare(
         self,
         root: &std::path::Path,

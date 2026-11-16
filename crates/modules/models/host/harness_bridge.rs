@@ -42,6 +42,12 @@ fn recently_seen(seen: Option<u64>, at: u64, b: &Bridge) -> bool {
     seen.is_some_and(|seen| at <= seen + b.client_online_seconds)
 }
 
+/// Whether a process polling this link recently reported that it can fork `provider`'s
+/// sessions (`fork` in the link's seen record holds the last report time per provider).
+fn forks_recently(seen: &Value, provider: &str, at: u64, b: &Bridge) -> bool {
+    recently_seen(seen["fork"][provider].as_u64(), at, b)
+}
+
 /// A call no process holds: never fetched, or offered and left unacknowledged past its lease.
 fn open(call: &Value, at: u64, b: &Bridge) -> bool {
     match call["state"].as_str() {
@@ -103,13 +109,25 @@ impl BridgeQueue for Queue {
                 .0
                 .get(&format!("{SEEN}{link}"))
                 .await?
-                .and_then(|v| v["at"].as_u64());
-            if !recently_seen(seen, now(), &bridge()) {
+                .unwrap_or(Value::Null);
+            if !recently_seen(seen["at"].as_u64(), now(), &bridge()) {
                 return Err(offline());
+            }
+            // A fork goes only to a client that can make one; without one it fails at once, so
+            // the summary falls back to the System model instead of waiting in the queue.
+            let provider = json!(call.provider);
+            if call.fork
+                && !forks_recently(&seen, provider.as_str().unwrap_or(""), now(), &bridge())
+            {
+                return Err(typed_failure(
+                    FailureKind::ModelUnavailable,
+                    false,
+                    "No bridge client for this model can fork a session",
+                ));
             }
             let id = Uuid::new_v4().to_string();
             let key = format!("{CALLS}{link}:{id}");
-            self.0.put(&key, &json!({"id":id,"session":call.session,"provider":call.provider,"body":call.body,"state":"pending","created":now()})).await?;
+            self.0.put(&key, &json!({"id":id,"session":call.session,"provider":call.provider,"body":call.body,"fork":call.fork,"state":"pending","created":now()})).await?;
             // Stop usually drops this future rather than firing `call.cancel`; the guard settles
             // the call either way.
             let mut guard = Abandoned {
@@ -237,6 +255,8 @@ struct Caller {
     link: String,
     client: String,
     instance: String,
+    /// Bridge providers whose sessions this process reports it can fork.
+    fork: Vec<String>,
 }
 
 /// Admit only a paired client's secret; the body names the calling process.
@@ -256,10 +276,19 @@ async fn admit(store: &Store, headers: &HeaderMap, input: &Value) -> Result<Call
         .as_str()
         .filter(|id| Uuid::parse_str(id).is_ok())
         .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "Instance id required".into()))?;
+    let fork = input["fork"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|name| matches!(*name, "claude_bridge" | "opencode_bridge"))
+        .map(str::to_owned)
+        .collect();
     Ok(Caller {
         link: admission["link"].as_str().unwrap_or("").to_owned(),
         client: admission["client"].as_str().unwrap_or("").to_owned(),
         instance: instance.to_owned(),
+        fork,
     })
 }
 
@@ -270,13 +299,19 @@ fn call_id(input: &Value) -> Result<&str, ApiError> {
         .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "Call id required".into()))
 }
 
-/// Mark the link online and this process running.
+/// Mark the link online and this process running, with the providers it can fork now.
 async fn mark_seen(app: &App, caller: &Caller) -> Result<(), ApiError> {
     let at = now();
-    app.store
-        .put(&format!("{SEEN}{}", caller.link), &json!({"at":at}))
-        .await?;
     let _guard = app.gate.lock().await;
+    let seen_key = format!("{SEEN}{}", caller.link);
+    let previous = app.store.get(&seen_key).await?.unwrap_or(Value::Null);
+    let mut fork = previous["fork"].as_object().cloned().unwrap_or_default();
+    for provider in &caller.fork {
+        fork.insert(provider.clone(), json!(at));
+    }
+    app.store
+        .put(&seen_key, &json!({"at":at,"fork":fork}))
+        .await?;
     let key = format!("{CLIENTS}{}:{}", caller.link, caller.client);
     if let Some(mut client) = app.store.get(&key).await? {
         let mut instances = client["instances"].as_object().cloned().unwrap_or_default();
@@ -328,13 +363,17 @@ pub async fn next(
                 if !open(&call, now(), &b) || session.is_some_and(|s| call["session"] != s) {
                     continue;
                 }
+                let provider = call["provider"].as_str().unwrap_or("");
+                if call["fork"] == true && !caller.fork.iter().any(|p| p == provider) {
+                    continue;
+                }
                 call["state"] = json!("offered");
                 call["offered"] = json!(now());
                 call["client"] = json!(caller.client);
                 call["instance"] = json!(caller.instance);
                 app.store.put(&key, &call).await?;
                 return Ok(Json(
-                    json!({"call":{"id":call["id"],"session":call["session"],"provider":call["provider"],"body":call["body"]},"cancelled":cancelled,"settings":settings}),
+                    json!({"call":{"id":call["id"],"session":call["session"],"provider":call["provider"],"body":call["body"],"fork":call["fork"] == true},"cancelled":cancelled,"settings":settings}),
                 ));
             }
             if !cancelled.is_empty() {
@@ -647,6 +686,27 @@ mod tests {
             &b
         ));
         assert!(!super::recently_seen(None, 1000, &b));
+    }
+
+    /// A fork goes only where a polling process reported fork support for that provider lately.
+    #[test]
+    fn fork_support_is_per_provider_and_expires() {
+        let b = webagent_models::settings::Settings::default().harness_bridge;
+        let seen = json!({"at":1000,"fork":{"claude_bridge":1000}});
+        assert!(super::forks_recently(&seen, "claude_bridge", 1000, &b));
+        assert!(!super::forks_recently(&seen, "opencode_bridge", 1000, &b));
+        assert!(!super::forks_recently(
+            &seen,
+            "claude_bridge",
+            1001 + b.client_online_seconds,
+            &b
+        ));
+        assert!(!super::forks_recently(
+            &json!({"at":1000}),
+            "claude_bridge",
+            1000,
+            &b
+        ));
     }
 
     /// An offered call is held only for its lease; then any process may take it again.

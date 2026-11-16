@@ -49,7 +49,8 @@ export function renderCompaction(host, agent, persist) {
     host.append(wrap);
     inputs.set(key, input);
   }
-  // Same model reuses the running request's cached prefix; bridges always use System.
+  // Same model reuses the running request's cached prefix; Claude and OpenCode bridges answer from a
+  // fork of the chat's session, Muse uses System.
   const summarizerWrap = document.createElement('div');
   summarizerWrap.className = 'ac-cfg-field';
   const summarizerLabel = document.createElement('label');
@@ -69,7 +70,7 @@ export function renderCompaction(host, agent, persist) {
   summarizerLabel.htmlFor = summarizer.id;
   const summarizerHelp = document.createElement('p');
   summarizerHelp.className = 'ac-hint';
-  summarizerHelp.textContent = 'Same model writes the summary from the agent’s own request, which reuses its provider cache. Bridge models, and any summary that fails, use the System model.';
+  summarizerHelp.textContent = 'Same model writes the summary from the agent’s own request, which reuses its provider cache. Claude and OpenCode bridges answer from a fork of the chat’s session when their client supports it; Muse, and any summary that fails, use the System model.';
   summarizerWrap.append(summarizerLabel, summarizer, summarizerHelp);
   host.append(summarizerWrap);
   const inherited = document.createElement('p');

@@ -77,6 +77,13 @@ harness (HARNESSES below).
                                   chat's muse-inbox/ (see answer_muse).
     stats [HOURS]                 summarize auto-mode call timing (work/harness-bridge/timing.jsonl), default 24 h
 
+Session forks (auto mode, Claude and OpenCode only): when the CLI can fork a session (Claude Code's
+--fork-session, OpenCode 2.0.32+'s `run --fork`) this client tells WebAgent so. WebAgent then asks for a
+context summary as a fork call: answered from a fork of the chat's session, so it reuses its cached
+prefix, without changing the session, state.json or the chat's tool files. After a fold the chat's
+next session starts from a checkpoint session holding the summary blocks it shares with the previous
+call, so a later fold forks that checkpoint instead of resending them. Muse never forks.
+
 Files live in ../work/harness-bridge/ relative to this script's folder (below: work/harness-bridge/).
 Client secret and server: work/harness-bridge/client.json (mode 0600), written by `pair`.
 Server override: $HARNESS_BRIDGE_URL.
@@ -134,6 +141,49 @@ def opencode_config(work, model):
                              "command": [sys.executable, "-B", str(Path(__file__).resolve()), "mcp", str(work)]}},
         "agent": {"webagent-bridge": {"mode": "primary", "prompt": OPENCODE_PROMPT,
                                       "permission": {"*": own, "execute": "allow", MCP_PREFIX + "*": "allow"}}}})
+
+
+FORK_SUPPORT = None
+
+
+def fork_support():
+    """Bridge providers whose CLI on this computer can fork a session (Claude Code's --fork-session,
+    OpenCode 2.0.32+'s `run --fork`), checked once per process. Only these get fork calls and
+    checkpoint sessions; WebAgent summarizes with its System model for the rest."""
+    global FORK_SUPPORT
+    if FORK_SUPPORT is None:
+        def output(command):
+            try:
+                done = subprocess.run(command, capture_output=True, text=True, timeout=30)
+                return done.stdout + done.stderr
+            except (OSError, subprocess.TimeoutExpired):
+                return ""
+        found = []
+        if "--fork-session" in output(["claude", "--help"]):
+            found.append("claude_bridge")
+        version = re.search(r"(\d+)\.(\d+)\.(\d+)", output([OPENCODE, "--version"]))
+        if version and tuple(map(int, version.groups())) >= (2, 0, 32) and "--fork" in output([OPENCODE, "run", "--help"]):
+            found.append("opencode_bridge")
+        FORK_SUPPORT = found
+    return FORK_SUPPORT
+
+
+# Main calls running per WebAgent chat. A fork waits for them, so it copies a settled session.
+BUSY, BUSY_LOCK = {}, threading.Condition()
+
+
+def busy(chat, change):
+    with BUSY_LOCK:
+        BUSY[chat] = BUSY.get(chat, 0) + change
+        if not BUSY[chat]:
+            del BUSY[chat]
+            BUSY_LOCK.notify_all()
+
+
+def wait_idle(chat):
+    with BUSY_LOCK:
+        if not BUSY_LOCK.wait_for(lambda: chat not in BUSY, timeout=HARNESS_SECS):
+            raise RuntimeError("the chat's own call did not finish in time to fork its session")
 
 
 # Client tunables. The server sends the live values (`models-runtime.json`, harness_bridge.client)
@@ -459,12 +509,16 @@ def stop_calls(ids):
             interrupt(RUNNING[call])
 
 
-def fetch(session=None):
+def fetch(session=None, forks=()):
     """Long-poll until a call arrives and this process takes it; ride out gateway restarts and network blips.
-    An unacknowledged call returns to WebAgent's queue after a minute, so a lost response or ack only delays it."""
+    An unacknowledged call returns to WebAgent's queue after a minute, so a lost response or ack only delays it.
+    `forks` names the providers this process can fork sessions for; only those get fork calls."""
+    request = {"session": session} if session else {}
+    if forks:
+        request["fork"] = list(forks)
     while True:
         try:
-            response = post("/api/v3/harness-bridge/next", {"session": session} if session else {}, timeout=POLL_TIMEOUT)
+            response = post("/api/v3/harness-bridge/next", request, timeout=POLL_TIMEOUT)
             stop_calls(response.get("cancelled") or [])
             apply_settings(response.get("settings"))
             call = response["call"]
@@ -541,17 +595,36 @@ def remember(call):
     """Save the full request and work out what is new for this chat."""
     folder = SESSIONS / (call.get("session") or "unknown")
     folder.mkdir(parents=True, exist_ok=True)
-    state_path = folder / "state.json"
-    state = json.loads(state_path.read_text()) if state_path.exists() else {}
-    body = call["body"]
+    state = load_state(folder)
     (folder / "requests").mkdir(exist_ok=True)
     count = len(list((folder / "requests").iterdir())) + 1
     (folder / "requests" / f"{count:04d}-{call['id']}.json").write_text(json.dumps(call, indent=1))
+    return folder, state, changes(folder, state, call["body"], count)
+
+
+def load_state(folder):
+    state_path = folder / "state.json"
+    return json.loads(state_path.read_text()) if state_path.exists() else {}
+
+
+def fork_delta(call):
+    """What a fork appends to the chat's session, once the chat's own calls are done. The chat's saved
+    state is read, never written: the session it describes stays the chat's."""
+    wait_idle(call.get("session"))
+    check_stopped()
+    folder = SESSIONS / (call.get("session") or "unknown")
+    state = load_state(folder)
+    return folder, state, changes(folder, dict(state), call["body"], 0)
+
+
+def changes(folder, state, body, count):
+    """What is new in `body` since the call `state` records; `state` is updated to this call."""
     instructions, conversation = split(body)
     tools = tools_of(body)
     seen = state.get("conversation", [])
     old_schemas = state.get("tool_schemas", {})
-    append = len(seen) <= len(conversation) and all(digest(m) == d for m, d in zip(conversation, seen))
+    digests = [digest(m) for m in conversation]
+    append = len(seen) <= len(conversation) and all(d == old for d, old in zip(digests, seen))
     delta = {
         "folder": folder, "count": count,
         "instructions": None if digest(instructions) == state.get("instructions") else instructions,
@@ -564,12 +637,14 @@ def remember(call):
         "previous_instructions": state.get("instructions_text"),
         "rewritten": bool(seen) and not append,
         "new": conversation[len(seen):] if append else conversation,
+        # The previous call's conversation, for a checkpoint after a rewrite.
+        "previous": seen, "digests": digests,
     }
     state.update(instructions=digest(instructions), tools=sorted(tools), tools_digest=digest(body.get("tools")),
                  instructions_text=[text_of(m.get("content"), folder) for m in instructions],
                  tool_schemas={n: digest(t) for n, t in tools.items()},
-                 conversation=[digest(m) for m in conversation])
-    return folder, state, delta
+                 conversation=digests)
+    return delta
 
 
 def save_state(folder, state):
@@ -707,6 +782,69 @@ def updates(delta, folder):
 def resumable(state, key, delta):
     """Restart only when the transcript was rewritten (compaction or edits); other changes are appended."""
     return bool(state.get(key)) and not delta["rewritten"]
+
+
+# Leading messages worth a checkpoint session (about 1000 tokens); shorter ones are simply resent.
+CHECKPOINT_MIN_CHARS = 4000
+CHECKPOINT_NOTE = ("(Context checkpoint: the conversation continues in the next message. Reply with only OK "
+                   "and call no tools.)")
+
+
+def checkpoint_setup(state, body):
+    """What a checkpoint's cached prefix depends on besides its messages."""
+    return digest([state.get("instructions"), state.get("tools_digest"), body.get("model"),
+                   body.get("reasoning_effort")])
+
+
+def checkpoint_plan(state, key, delta, body):
+    """A rewritten transcript (after a fold) restarts the chat's session. The leading messages it shares
+    with the previous call (after a fold, the earlier summary blocks, which later folds keep) go into a
+    checkpoint session, and the turn runs in a fork of it, so the next fold forks the checkpoint instead
+    of resending them. None starts fresh as before; otherwise fork `base` (None: start one) after adding
+    the messages up to `keep` when `extend`."""
+    if not delta["rewritten"]:
+        return None
+    digests, previous = delta["digests"], delta["previous"]
+    keep = 0
+    while keep < min(len(previous), len(digests) - 1) and previous[keep] == digests[keep]:
+        keep += 1
+    base = state.get(key)
+    held = len(base["messages"]) if base else 0
+    if not (base and base.get("setup") == checkpoint_setup(state, body) and held < len(digests)
+            and base["messages"] == digests[:held]):
+        base, held = None, 0
+    if base and held >= keep:
+        return {"base": base, "keep": held, "extend": False}
+    if len(json.dumps(split(body)[1][held:keep])) < CHECKPOINT_MIN_CHARS:
+        return {"base": base, "keep": held, "extend": False} if base else None
+    return {"base": base, "keep": keep, "extend": True}
+
+
+def checkpoint_prompt(call, plan, folder):
+    """The text that turns `plan`'s base (or a new session) into the new checkpoint."""
+    body, held = call["body"], len(plan["base"]["messages"]) if plan["base"] else 0
+    messages = split(body)[1][held:plan["keep"]]
+    lines = []
+    if not plan["base"]:
+        instructions = split(body)[0]
+        lines.append("## Agent instructions\n" + "\n\n".join(text_of(m.get("content"), folder) for m in instructions))
+        lines.append("## Tools you may call\n" + json.dumps([t["function"] for t in tools_of(body).values()], indent=1))
+        lines.append("## Conversation")
+    else:
+        lines.append("## Conversation, continued")
+    lines += [render(m, folder, full=True) for m in messages]
+    lines.append(CHECKPOINT_NOTE)
+    return "\n\n".join(lines)
+
+
+def checkpoint_record(plan, state, delta, body, session):
+    return {"session": session, "messages": delta["digests"][:plan["keep"]], "setup": checkpoint_setup(state, body)}
+
+
+def continued_prompt(call, keep, folder):
+    """The turn in a fork of a checkpoint holding the first `keep` messages."""
+    messages = split(call["body"])[1][keep:]
+    return "\n\n".join(["## Conversation, continued"] + [render(m, folder, full=True) for m in messages])
 
 
 def mcp_stub(work):
@@ -858,7 +996,7 @@ def opencode_turn(command, prompt, work, model):
     process.stdin.close()
     server = command[command.index("--server") + 1] if "--server" in command else None
     watch = StallWatch(server, work, model, process) if server else None
-    session, texts, usage, errors, stopped = None, {}, {"input": 0, "output": 0}, [], False
+    session, texts, usage, errors, stopped = None, {}, {"input": 0, "output": 0, "cached": 0}, [], False
     try:
         for line in process.stdout:
             try:
@@ -874,6 +1012,7 @@ def opencode_turn(command, prompt, work, model):
                 cache = tokens.get("cache") or {}
                 usage["input"] += tokens.get("input", 0) + cache.get("read", 0) + cache.get("write", 0)
                 usage["output"] += tokens.get("output", 0)
+                usage["cached"] += cache.get("read", 0)
                 if (work / "calls.jsonl").exists() and (work / "calls.jsonl").stat().st_size:
                     stopped = True
                     stop()
@@ -896,37 +1035,118 @@ def opencode_turn(command, prompt, work, model):
     return session, "\n\n".join("".join(parts) for parts in texts.values() if "".join(parts).strip()), usage
 
 
+def opencode_usage(*usages):
+    """Chat-completions usage for one or more `opencode run`s; None when none reported any (some models
+    report no step usage). Cache reads are reported apart so WebAgent records them."""
+    total = {k: sum(u[k] for u in usages) for k in ("input", "output", "cached")}
+    if not (total["input"] or total["output"]):
+        return None
+    return {"prompt_tokens": total["input"], "completion_tokens": total["output"],
+            "total_tokens": total["input"] + total["output"], "prompt_tokens_details": {"cached_tokens": total["cached"]}}
+
+
+def opencode_calls(work):
+    calls = [json.loads(line) for line in (work / "calls.jsonl").read_text().splitlines()] \
+        if (work / "calls.jsonl").exists() else []
+    return [{"name": c["name"].removeprefix(MCP_PREFIX), "arguments": c["arguments"]} for c in calls]
+
+
+def with_images(command, prompt):
+    for image in re.findall(r"\[image: (/[^\]]+)\]", prompt):
+        command = command + ["-f", image]
+    return command
+
+
 def answer_opencode(call, folder, state, delta):
     body = call["body"]
+    model = body.get("model", "")
     fresh = not resumable(state, "opencode_session", delta)
     prompt = prompt_for(call, delta, fresh)
     work = OPENCODE_HOME / folder.name
     work.mkdir(parents=True, exist_ok=True)
     (work / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
-    command = [OPENCODE, "run", "--server", opencode_server(work, body.get("model", "")), "--agent", "webagent-bridge",
-               "-m", body.get("model", ""), "--format", "json"]
-    if not fresh:
-        command += ["-s", state["opencode_session"]]
-    for image in re.findall(r"\[image: (/[^\]]+)\]", prompt):
-        command += ["-f", image]
+    run = [OPENCODE, "run", "--server", opencode_server(work, model), "--agent", "webagent-bridge",
+           "-m", model, "--format", "json"]
+    command = run + ([] if fresh else ["-s", state["opencode_session"]])
+    usages = []
+    plan = checkpoint_plan(state, "opencode_checkpoint", delta, body) \
+        if fresh and "opencode_bridge" in fork_support() else None
     # The work folder is outside this repository: OpenCode would otherwise load the enclosing git project.
     (work / "calls.jsonl").unlink(missing_ok=True)
     started = time.time()
-    session, text, usage = opencode_turn(command, prompt, work, body.get("model", ""))
+    if plan:
+        try:
+            base = plan["base"]
+            if plan["extend"]:
+                text = checkpoint_prompt(call, plan, folder)
+                made, _, usage = opencode_turn(
+                    with_images(run + (["-s", base["session"], "--fork"] if base else []), text), text, work, model)
+                usages.append(usage)
+                base = state["opencode_checkpoint"] = checkpoint_record(plan, state, delta, body, made)
+                (work / "calls.jsonl").unlink(missing_ok=True)
+            command = run + ["-s", base["session"], "--fork"]
+            prompt = continued_prompt(call, len(base["messages"]), folder)
+        except (HarnessFailure, RuntimeError) as error:
+            # A checkpoint is an optimization: without one the turn starts fresh as before.
+            print(f"{call['id']}: checkpoint skipped ({str(error)[:200]})", file=sys.stderr)
+            state.pop("opencode_checkpoint", None)
+            (work / "calls.jsonl").unlink(missing_ok=True)
+            plan = None
+    try:
+        session, text, usage = opencode_turn(with_images(command, prompt), prompt, work, model)
+    except (HarnessFailure, RuntimeError) as error:
+        if not plan or getattr(error, "source", None) == "upstream":
+            raise
+        # The checkpoint could not be forked (for example its session is gone): start fresh once.
+        print(f"{call['id']}: checkpoint fork failed ({str(error)[:200]}); starting fresh", file=sys.stderr)
+        state.pop("opencode_checkpoint", None)
+        (work / "calls.jsonl").unlink(missing_ok=True)
+        prompt = prompt_for(call, delta, True)
+        session, text, usage = opencode_turn(with_images(run, prompt), prompt, work, model)
+    usages.append(usage)
     ended = time.time()
-    calls = [json.loads(line) for line in (work / "calls.jsonl").read_text().splitlines()] \
-        if (work / "calls.jsonl").exists() else []
-    calls = [{"name": c["name"].removeprefix(MCP_PREFIX), "arguments": c["arguments"]} for c in calls]
+    calls = opencode_calls(work)
     message = parse_reply(json.dumps({"content": text, "tool_calls": calls}), body)
-    # Some models report no step usage; send none rather than zeros.
-    usage = {"prompt_tokens": usage["input"], "completion_tokens": usage["output"],
-             "total_tokens": usage["input"] + usage["output"]} if usage["input"] or usage["output"] else None
-    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": usage})
+    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": opencode_usage(*usages)})
     record(call, state, delta, started, ended)
     state["opencode_session"] = session
     save_state(folder, state)
     print(f"{call['id']}: answered chat {call.get('session')} with {body.get('model')} "
           f"({'fresh' if fresh else 'resumed'} session {session}, {len(calls)} tool call(s))")
+
+
+def opencode_session_exists(server, work, session):
+    """Whether `session` is visible on `server`; `run -s` would otherwise start an empty session of that id."""
+    try:
+        return session in json.dumps(server_request(server, "/api/session/" + urllib.parse.quote(session), work))
+    except (OSError, ValueError):
+        return False
+
+
+def fork_opencode(call):
+    """Answer a fork call from a fork of the chat's OpenCode session, on the chat's own fork server and work
+    folder: the chat's server, session, state and tool files are left as they are."""
+    folder, state, delta = fork_delta(call)
+    body = call["body"]
+    model = body.get("model", "")
+    session = state.get("opencode_session")
+    if not session or delta["rewritten"] or delta["instructions"] is not None or delta["tools_changed"]:
+        raise RuntimeError("the chat's session cannot be forked for this request")
+    work = OPENCODE_HOME / (folder.name + ".fork")
+    work.mkdir(parents=True, exist_ok=True)
+    (work / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
+    (work / "calls.jsonl").unlink(missing_ok=True)
+    server = opencode_server(work, model)
+    if not opencode_session_exists(server, work, session):
+        raise RuntimeError("the chat's OpenCode session is not visible to its fork server")
+    prompt = prompt_for(call, delta, False)
+    command = [OPENCODE, "run", "--server", server, "--agent", "webagent-bridge", "-m", model, "--format", "json",
+               "-s", session, "--fork"]
+    forked, text, usage = opencode_turn(with_images(command, prompt), prompt, work, model)
+    calls = opencode_calls(work)
+    message = parse_reply(json.dumps({"content": text, "tool_calls": calls}), body)
+    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": opencode_usage(usage)})
+    print(f"{call['id']}: answered a fork of chat {call.get('session')} (session {session} -> {forked})")
 
 
 def check_stopped():
@@ -953,11 +1173,21 @@ def answer(call):
     done = threading.Event()
     threading.Thread(target=heartbeat, args=(call["id"], done), daemon=True).start()
     try:
+        if call.get("fork"):
+            forker = FORKERS.get(call.get("provider"))
+            if not forker or call.get("provider") not in fork_support():
+                raise RuntimeError(f"no session fork for {call.get('provider')} on this client")
+            forker(call)
+            return
         harness = HARNESSES.get(call.get("provider"))
         if not harness:
             raise RuntimeError(f"no harness for {call.get('provider')} on this client")
         folder, state, delta = remember(call)
-        harness(call, folder, state, delta)
+        busy(call.get("session"), 1)
+        try:
+            harness(call, folder, state, delta)
+        finally:
+            busy(call.get("session"), -1)
     except Stopped:
         print(f"{call['id']}: stopped; no reply sent", file=sys.stderr)
     except (Exception, SystemExit) as error:
@@ -975,25 +1205,23 @@ def answer(call):
         STOPPED.discard(call["id"])
 
 
-def answer_claude(call, folder, state, delta):
-    body = call["body"]
-    fresh = not resumable(state, "claude_session", delta)
-    session = str(uuid.uuid4()) if fresh else state["claude_session"]
-    # WebAgent's tools come from the MCP stub, which records each call for the reply (as for OpenCode).
-    (folder / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
-    (folder / "calls.jsonl").unlink(missing_ok=True)
+def claude_command(body, stub):
+    """`claude -p` for one call. The MCP stub serves the tools in stub/tools.json and records calls in
+    stub/calls.jsonl; checkpoints and forks pass the same arguments, so the cached prefix matches."""
     # The CLI reserves the server name "webagent" and silently skips it.
     mcp = {"mcpServers": {"harness": {"command": sys.executable,
-                                      "args": ["-B", str(Path(__file__).resolve()), "mcp", str(folder)]}}}
+                                      "args": ["-B", str(Path(__file__).resolve()), "mcp", str(stub)]}}}
     command = ["claude", "-p", "--output-format", "json", "--system-prompt", AUTO_PROMPT, "--tools", "Read",
                "--mcp-config", json.dumps(mcp), "--allowedTools", "mcp__harness", "--model", body.get("model", ""),
                *BARE]
     if body.get("reasoning_effort"):
         command += ["--effort", body["reasoning_effort"]]
-    command += ["--session-id", session] if fresh else ["--resume", session]
+    return command
+
+
+def run_claude(command, prompt, folder):
+    """Run one `claude -p` in the chat folder (its sessions live under that project); return its JSON output."""
     # Prompt on stdin: a fresh chat's full history exceeds Linux's 128 KiB single-argument limit.
-    prompt = prompt_for(call, delta, fresh)
-    started = time.time()
     process = start_harness(command, cwd=folder)
     try:
         stdout, stderr = process.communicate(prompt, timeout=HARNESS_SECS)
@@ -1001,26 +1229,108 @@ def answer_claude(call, folder, state, delta):
         interrupt(process)
         stdout, stderr = process.communicate()
     check_stopped()
-    result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
-    ended = time.time()
     try:
-        output = json.loads(result.stdout)
+        output = json.loads(stdout)
     except ValueError:
-        raise RuntimeError(f"claude failed ({result.returncode}): {result.stderr[:300]}")
+        raise RuntimeError(f"claude failed ({process.returncode}): {stderr[:300]}")
     if output.get("is_error"):
         raise RuntimeError(f"claude error: {str(output.get('result'))[:300]}")
-    calls = [json.loads(line) for line in (folder / "calls.jsonl").read_text().splitlines()] \
-        if (folder / "calls.jsonl").exists() else []
-    message = parse_reply(json.dumps({"content": output.get("result") or "", "tool_calls": calls}), body)
-    usage = output.get("usage") or {}
-    prompt_tokens = sum(usage.get(k, 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
-    completion_tokens = usage.get("output_tokens", 0)
-    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": {
-        "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "total_tokens": prompt_tokens + completion_tokens}})
+    return output
+
+
+def claude_usage(*outputs):
+    """Chat-completions usage for one or more `claude -p` runs; cache reads are reported apart."""
+    usages = [output.get("usage") or {} for output in outputs]
+    prompt = sum(u.get(k, 0) for u in usages for k in ("input_tokens", "cache_read_input_tokens",
+                                                        "cache_creation_input_tokens"))
+    completion = sum(u.get("output_tokens", 0) for u in usages)
+    return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion,
+            "prompt_tokens_details": {"cached_tokens": sum(u.get("cache_read_input_tokens", 0) for u in usages)}}
+
+
+def stub_calls(stub):
+    return [json.loads(line) for line in (stub / "calls.jsonl").read_text().splitlines()] \
+        if (stub / "calls.jsonl").exists() else []
+
+
+def answer_claude(call, folder, state, delta):
+    body = call["body"]
+    fresh = not resumable(state, "claude_session", delta)
+    session = str(uuid.uuid4()) if fresh else state["claude_session"]
+    # WebAgent's tools come from the MCP stub, which records each call for the reply (as for OpenCode).
+    (folder / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
+    (folder / "calls.jsonl").unlink(missing_ok=True)
+    command = claude_command(body, folder)
+    prompt = prompt_for(call, delta, fresh)
+    outputs = []
+    plan = checkpoint_plan(state, "claude_checkpoint", delta, body) \
+        if fresh and "claude_bridge" in fork_support() else None
+    started = time.time()
+    if plan:
+        try:
+            base = plan["base"]
+            if plan["extend"]:
+                start = ["--resume", base["session"], "--fork-session"] if base else ["--session-id", str(uuid.uuid4())]
+                outputs.append(run_claude(command + start, checkpoint_prompt(call, plan, folder), folder))
+                base = state["claude_checkpoint"] = checkpoint_record(plan, state, delta, body,
+                                                                      outputs[-1].get("session_id"))
+                (folder / "calls.jsonl").unlink(missing_ok=True)
+            if not base["session"]:
+                raise RuntimeError("claude reported no checkpoint session")
+            command += ["--resume", base["session"], "--fork-session"]
+            prompt = continued_prompt(call, len(base["messages"]), folder)
+            session = None
+        except RuntimeError as error:
+            # A checkpoint is an optimization: without one the turn starts fresh as before.
+            print(f"{call['id']}: checkpoint skipped ({str(error)[:200]})", file=sys.stderr)
+            state.pop("claude_checkpoint", None)
+            (folder / "calls.jsonl").unlink(missing_ok=True)
+            plan = None
+    if not plan:
+        command += ["--session-id", session] if fresh else ["--resume", session]
+    try:
+        output = run_claude(command, prompt, folder)
+    except RuntimeError as error:
+        if not plan:
+            raise
+        # The checkpoint could not be forked (for example its session is gone): start fresh once.
+        print(f"{call['id']}: checkpoint fork failed ({str(error)[:200]}); starting fresh", file=sys.stderr)
+        state.pop("claude_checkpoint", None)
+        (folder / "calls.jsonl").unlink(missing_ok=True)
+        session = str(uuid.uuid4())
+        output = run_claude(claude_command(body, folder) + ["--session-id", session],
+                            prompt_for(call, delta, True), folder)
+    outputs.append(output)
+    ended = time.time()
+    message = parse_reply(json.dumps({"content": output.get("result") or "", "tool_calls": stub_calls(folder)}), body)
+    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": claude_usage(*outputs)})
     record(call, state, delta, started, ended, output)
     state["claude_session"] = output.get("session_id") or session
     save_state(folder, state)
     print(f"{call['id']}: answered chat {call.get('session')} ({'fresh' if fresh else 'resumed'} session {state['claude_session']})")
+
+
+def fork_claude(call):
+    """Answer a fork call from a fork of the chat's Claude session (`--resume S --fork-session`). It runs in
+    the chat folder, where the session lives, with its own stub folder: the chat's session, state and
+    tool files are left as they are."""
+    folder, state, delta = fork_delta(call)
+    body = call["body"]
+    session = state.get("claude_session")
+    if not session or delta["rewritten"] or delta["instructions"] is not None or delta["tools_changed"]:
+        raise RuntimeError("the chat's session cannot be forked for this request")
+    stub = folder / "forks" / call["id"]
+    stub.mkdir(parents=True, exist_ok=True)
+    try:
+        (stub / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
+        output = run_claude(claude_command(body, stub) + ["--resume", session, "--fork-session"],
+                            prompt_for(call, delta, False), folder)
+        calls = stub_calls(stub)
+    finally:
+        shutil.rmtree(stub, ignore_errors=True)
+    message = parse_reply(json.dumps({"content": output.get("result") or "", "tool_calls": calls}), body)
+    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": claude_usage(output)})
+    print(f"{call['id']}: answered a fork of chat {call.get('session')} (session {session} -> {output.get('session_id')})")
 
 
 # Muse Bridge harness (supplied by the Muse side). There is no Muse CLI: the harness is a live
@@ -1084,14 +1394,17 @@ def answer_muse(call, folder, state, delta):
 
 # Bridge provider -> harness that answers its calls. Each takes (call, folder, state, delta).
 HARNESSES = {"claude_bridge": answer_claude, "opencode_bridge": answer_opencode, "muse_bridge": answer_muse}
+# Bridge provider -> fork harness. Each takes (call); Muse cannot fork.
+FORKERS = {"claude_bridge": fork_claude, "opencode_bridge": fork_opencode}
 
 
 def cmd_auto(session):
     reattach_servers()
     threading.Thread(target=reap_servers, daemon=True).start()
+    forks = fork_support()
     # One thread per call, no cap: each call already holds its own harness process.
     while True:
-        threading.Thread(target=answer, args=(fetch(session),), daemon=True).start()
+        threading.Thread(target=answer, args=(fetch(session, forks),), daemon=True).start()
 
 
 def selftest():
@@ -1115,9 +1428,43 @@ def selftest():
     assert resumable({"opencode_session": "x"}, "opencode_session", delta)
     update = "\n".join(updates(delta, SESSIONS / "s"))
     assert "+use tools" in update and '"file_read"' in update and '"file_list"' not in update
+    # A fork reads the chat's state but never writes it, and gets only what is new.
+    saved = (SESSIONS / "s" / "state.json").read_text()
+    fork_body = json.loads(json.dumps(body))
+    fork_body["messages"].append({"role": "user", "content": "summarize"})
+    _, _, delta = fork_delta({"id": "f", "session": "s", "body": fork_body})
+    assert delta["new"] == [{"role": "user", "content": "summarize"}] and not delta["rewritten"]
+    assert (SESSIONS / "s" / "state.json").read_text() == saved
     body["messages"] = body["messages"][:1] + [{"role": "user", "content": "summary"}]
     _, _, delta = remember({"id": "c", "session": "s", "body": body})
     assert delta["rewritten"] and len(delta["new"]) == 1
+    # After a fold the summary blocks it shares with the previous call go into a checkpoint session;
+    # the next fold extends that checkpoint, a short addition reuses it, a new model starts over.
+    system, tail = {"role": "system", "content": "i"}, {"role": "user", "content": "tail"}
+    blocks = [{"role": "user", "content": f"Summary block {n} " + "x" * CHECKPOINT_MIN_CHARS} for n in (1, 2)]
+    chat = {}
+    changes(folder, chat, {"model": "m", "messages": [system, blocks[0], {"role": "user", "content": "a"}]}, 1)
+    second = {"model": "m", "messages": [system, blocks[0], blocks[1], tail]}
+    folded = changes(folder, chat, second, 2)
+    plan = checkpoint_plan(chat, "claude_checkpoint", folded, second)
+    assert plan == {"base": None, "keep": 1, "extend": True}
+    assert "Summary block 1" in checkpoint_prompt({"body": second}, plan, folder) and "Summary block 2" not in \
+        checkpoint_prompt({"body": second}, plan, folder)
+    assert "Summary block 2" in continued_prompt({"body": second}, 1, folder)
+    chat["claude_checkpoint"] = checkpoint_record(plan, chat, folded, second, "cp1")
+    third = {"model": "m", "messages": [system, blocks[0], blocks[1], {"role": "user", "content": "block 3"}, tail]}
+    later = changes(folder, dict(chat), third, 3)
+    assert checkpoint_plan(chat, "claude_checkpoint", later, third) == \
+        {"base": chat["claude_checkpoint"], "keep": 2, "extend": True}
+    short = {"model": "m", "messages": [system, blocks[0], {"role": "user", "content": "b2"}, tail]}
+    assert checkpoint_plan(chat, "claude_checkpoint", changes(folder, dict(chat), short, 3), short) == \
+        {"base": chat["claude_checkpoint"], "keep": 1, "extend": False}
+    other = dict(third, model="n")
+    assert checkpoint_plan(chat, "claude_checkpoint", changes(folder, dict(chat), other, 3), other)["base"] is None
+    assert checkpoint_plan(chat, "claude_checkpoint", dict(later, rewritten=False), third) is None
+    assert claude_usage({"usage": {"input_tokens": 1, "cache_read_input_tokens": 10, "output_tokens": 2}}) == \
+        {"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13, "prompt_tokens_details": {"cached_tokens": 10}}
+    assert opencode_usage({"input": 0, "output": 0, "cached": 0}) is None
     message = parse_reply('{"content":"","tool_calls":[{"name":"file_list","arguments":{}}]}', body)
     assert message["tool_calls"][0]["function"] == {"name": "file_list", "arguments": "{}"}
     assert classify("Upstream request failed: [prefill_cap_refused] the cell is at capacity; retry shortly (after 30 s)") \
@@ -1169,6 +1516,10 @@ def selftest():
         answer(muse_call)
         # A harness failure is reported at once instead of leaving the call to time out.
         answer({"id": "x", "session": "s", "provider": "unknown_bridge", "body": body})
+        # A fork this client cannot make fails at once, so WebAgent summarizes with its System model.
+        global FORK_SUPPORT
+        FORK_SUPPORT = []
+        answer({"id": "y", "session": "s", "provider": "claude_bridge", "fork": True, "body": body})
     finally:
         post = real_post
     # Each call heartbeats as it starts; the replies follow.
@@ -1177,6 +1528,7 @@ def selftest():
     assert posted and posted[0][0] == "/api/v3/harness-bridge/reply"
     assert posted[0][1]["message"]["tool_calls"][0]["function"]["name"] == "file_list"
     assert posted[1][1] == {"id": "x", "error": "no harness for unknown_bridge on this client", "source": "harness"}
+    assert posted[2][1] == {"id": "y", "error": "no session fork for claude_bridge on this client", "source": "harness"}
     apply_settings({"heartbeat_seconds": 7, "stall_seconds": "x", "probe_seconds": 0})
     assert (HEARTBEAT_SECS, STALL_SECS, PROBE_SECS) == (7, 120, 30)
     print("selftest ok")

@@ -100,7 +100,7 @@
       ],
       "agent_pointer": "/compaction_thresholds/summarizer",
       "bounds": "validator",
-      "notes": "Bridge models and failed same-model summaries use System."
+      "notes": "Claude and OpenCode bridges fork the chat's session when their client reports fork support; Muse, bridges without such a client and failed same-model summaries use System."
     },
     {
       "id": "context.compaction.merge_tokens",

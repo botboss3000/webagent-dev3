@@ -14,6 +14,7 @@ pub struct CallDraft<'a> {
     tools: Vec<Value>,
     session: &'a str,
     instructions: &'a str,
+    bridge_fork: bool,
 }
 
 pub struct ValidatedCall<'a> {
@@ -50,6 +51,7 @@ enum PreparedRequest<'a> {
         body: Value,
         session: &'a str,
         provider: ProviderId,
+        fork: bool,
     },
 }
 
@@ -64,6 +66,7 @@ enum ReadyTransport<'a> {
         body: Value,
         session: &'a str,
         provider: ProviderId,
+        fork: bool,
         link: &'a str,
     },
 }
@@ -85,11 +88,18 @@ impl<'a> CallDraft<'a> {
             tools,
             session,
             instructions,
+            bridge_fork: false,
         }
     }
 
     pub fn with_reasoning_effort(mut self, effort: Option<&'a str>) -> Self {
         self.reasoning_effort = effort;
+        self
+    }
+
+    /// Ask a bridge to answer from a fork of the chat's harness session (ignored elsewhere).
+    pub fn with_bridge_fork(mut self, fork: bool) -> Self {
+        self.bridge_fork = fork;
         self
     }
 
@@ -272,6 +282,7 @@ impl<'a> CallDraft<'a> {
                     body,
                     session: self.session,
                     provider: self.selection.provider,
+                    fork: self.bridge_fork,
                 }
             }
             webagent_provider_contracts::MaterializedV1::ChatCompletions { messages, tools } => {
@@ -364,10 +375,12 @@ impl<'a> ValidatedCall<'a> {
                 body,
                 session,
                 provider,
+                fork,
             } => ReadyTransport::Bridge {
                 body,
                 session,
                 provider,
+                fork,
                 link: required(tokens, "api_key")?,
             },
         };
@@ -400,6 +413,7 @@ impl Provider {
                 body,
                 session,
                 provider,
+                fork,
                 link,
             } => {
                 let queue = self.bridge.as_ref().ok_or_else(|| {
@@ -415,6 +429,7 @@ impl Provider {
                         session: session.to_owned(),
                         provider,
                         body,
+                        fork,
                         cancel,
                     })
                     .await?;

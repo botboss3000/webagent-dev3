@@ -35,6 +35,11 @@ impl ProviderId {
             Self::ClaudeBridge | Self::OpencodeBridge | Self::MuseBridge
         )
     }
+    /// Bridges whose harness can fork a chat's session, so a summary reuses its cached prefix.
+    /// A call still reaches only clients that report fork support for the provider.
+    pub fn bridge_forks(self) -> bool {
+        matches!(self, Self::ClaudeBridge | Self::OpencodeBridge)
+    }
     /// Installation-owned endpoints only. Client catalog payloads cannot override these.
     pub fn chat_endpoint(self) -> Option<&'static str> {
         match self {

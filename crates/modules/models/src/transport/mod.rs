@@ -213,6 +213,9 @@ pub struct BridgeCall {
     pub session: String,
     pub provider: ProviderId,
     pub body: Value,
+    /// Answer from a fork of the chat's harness session, leaving the session itself unchanged;
+    /// only a client reporting fork support takes it.
+    pub fork: bool,
     pub cancel: CancellationToken,
 }
 /// Storage identity of a bridge connection's link secret, which never leaves the server.

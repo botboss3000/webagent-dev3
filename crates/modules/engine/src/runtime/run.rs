@@ -367,8 +367,10 @@ impl<
 
     /// Start a background summary for `fold` beside the main call. The same-model summary
     /// copies the running request and adds its message, so the provider reuses its cached
-    /// prefix; bridges, a request that would not fit, or a failed same-model summary use
-    /// System. A summary that cannot be prepared is skipped: the ceiling still folds.
+    /// prefix; a bridge answers it from a fork of the chat's harness session. Muse (which
+    /// cannot fork), a bridge with no fork-capable client, a request that would not fit, or a
+    /// failed same-model summary use System. A summary that cannot be prepared is skipped:
+    /// the ceiling still folds.
     #[allow(clippy::too_many_arguments)]
     async fn start_background_compaction(
         app: &Self,
@@ -386,7 +388,8 @@ impl<
             focus,
         } = fold;
         let same_model = config.summarizer == context_compaction::Summarizer::SameModel
-            && !request.selection.provider.is_bridge()
+            && (!request.selection.provider.is_bridge()
+                || request.selection.provider.bridge_forks())
             && !request.system_next
             && request.envelope_bytes + message.len() + config.token_bytes(config.summary_tokens)
                 <= request.ceiling;
@@ -441,6 +444,7 @@ impl<
             return Ok(());
         }
         let summarizer = if same_model { "self" } else { "system" };
+        let bridge_fork = same_model && selection.provider.is_bridge();
         let step = format!(
             "compaction:{}:{}",
             run["compactions"].as_u64().unwrap_or(0) + 1,
@@ -470,6 +474,7 @@ impl<
                 let prepared =
                     crate::provider::CallDraft::new(&selection, input, tools, &sid, &instructions)
                         .with_reasoning_effort(effort.as_deref())
+                        .with_bridge_fork(bridge_fork)
                         .prepare(
                             crate::ports::AgentMetadata::root(app.store.records()),
                             &cancel,
