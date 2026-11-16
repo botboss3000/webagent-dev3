@@ -12,6 +12,12 @@ pub use webagent_context_contracts::context_compaction::*;
 pub struct AgentThresholds {
     pub trigger_tokens: usize,
     pub tail_tokens: usize,
+    /// Absent keeps the app ceiling; a value below the trigger means the trigger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling_tokens: Option<usize>,
+    /// Absent keeps the app's summarizer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summarizer: Option<Summarizer>,
 }
 
 impl AgentThresholds {
@@ -20,6 +26,12 @@ impl AgentThresholds {
         let mut effective = defaults.clone();
         effective.trigger_tokens = self.trigger_tokens;
         effective.tail_tokens = self.tail_tokens;
+        if let Some(ceiling) = self.ceiling_tokens {
+            effective.ceiling_tokens = Some(ceiling);
+        }
+        if let Some(summarizer) = self.summarizer {
+            effective.summarizer = summarizer;
+        }
         effective.validate()?;
         Ok(effective)
     }
@@ -430,19 +442,102 @@ mod tests {
         assert_eq!(Config::read(&path).unwrap().bytes_per_token, None);
     }
     #[test]
-    fn second_fold_includes_previous_checkpoint_without_stacking_summaries() {
+    fn second_fold_adds_a_block_and_keeps_the_first_byte_identical() {
         let c = rolling_config();
         let input = vec![user(&"old".repeat(250)), assistant("done"), user("latest")];
         let p = plan_rolling(&input, 4096, &c).unwrap().unwrap();
-        let mut first = apply_summary(&input, &p, "checkpoint one").unwrap();
+        let mut first = apply_summary(&input, &p, "block one").unwrap();
         first.extend([assistant(&"aged".repeat(250)), user("newest")]);
         let p2 = plan_rolling(&first, 4096, &c).unwrap().unwrap();
-        assert_eq!(p2.source[0], first[0]);
-        assert!(p2.drop_until > 1);
-        let second = apply_summary(&first, &p2, "checkpoint two").unwrap();
-        assert_eq!(second.len(), 2);
-        assert_eq!(second[1], user("newest"));
-        assert!(!second[0].to_string().contains("checkpoint one"));
+        assert_eq!((p2.first, p2.kind), (1, PlanKind::Fold));
+        // The block prompt covers only the items after the existing block.
+        assert!(!c.prompt(&p2).unwrap().contains("block one"));
+        let second = apply_summary(&first, &p2, "block two").unwrap();
+        assert_eq!(second.len(), 3);
+        assert_eq!(second[0], first[0]);
+        assert!(second[1].to_string().contains("block two"));
+        assert_eq!(second[2], user("newest"));
+    }
+
+    #[test]
+    fn oversized_blocks_merge_the_oldest_and_keep_the_newest_two() {
+        let mut c = rolling_config();
+        c.merge_tokens = 100;
+        let block = |text: &str| user(&format!("{}{text}", c.summary_prefix));
+        let mut input = vec![
+            block(&"a".repeat(200)),
+            block(&"b".repeat(200)),
+            block(&"c".repeat(200)),
+            block(&"d".repeat(200)),
+        ];
+        input.extend([user(&"old".repeat(250)), assistant("done"), user("latest")]);
+        let merge = plan_rolling(&input, 1 << 20, &c).unwrap().unwrap();
+        assert_eq!(
+            (merge.kind, merge.first, merge.drop_until),
+            (PlanKind::Merge, 0, 2)
+        );
+        assert!(c.prompt(&merge).unwrap().contains(&"a".repeat(200)));
+        let merged = apply_summary(&input, &merge, "a and b").unwrap();
+        assert_eq!(merged.len(), input.len() - 1);
+        assert_eq!(&merged[1..], &input[2..]);
+        assert!(merged[0]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with(&c.summary_prefix));
+        // Under the threshold, the next plan folds history after the blocks instead.
+        c.merge_tokens = 1_000;
+        let fold = plan_rolling(&merged, 1 << 20, &c).unwrap().unwrap();
+        assert_eq!((fold.kind, fold.first), (PlanKind::Fold, 3));
+    }
+
+    #[test]
+    fn a_fold_never_covers_only_earlier_blocks() {
+        let c = rolling_config();
+        let blocks = vec![
+            user(&format!("{}{}", c.summary_prefix, "x".repeat(900))),
+            user(&format!("{}{}", c.summary_prefix, "y".repeat(900))),
+            user("latest"),
+        ];
+        // Too big to keep, but the only fold boundaries lie inside the blocks.
+        assert!(!matches!(plan_rolling(&blocks, 4096, &c), Ok(Some(_))));
+    }
+
+    #[test]
+    fn the_ceiling_is_never_below_the_trigger() {
+        let mut c = rolling_config();
+        // The live JSON sets a ceiling; an omitted one falls back to the trigger.
+        c.ceiling_tokens = None;
+        assert_eq!(c.ceiling(), c.trigger_tokens);
+        c.ceiling_tokens = Some(c.trigger_tokens - 1);
+        assert_eq!(c.ceiling(), c.trigger_tokens);
+        c.ceiling_tokens = Some(c.trigger_tokens * 2);
+        assert_eq!(c.at_ceiling().trigger_tokens, c.trigger_tokens * 2);
+        let thresholds = AgentThresholds {
+            trigger_tokens: 200,
+            tail_tokens: 40,
+            ceiling_tokens: Some(300),
+            summarizer: Some(Summarizer::System),
+        };
+        let applied = thresholds.apply(&c).unwrap();
+        assert_eq!(
+            (applied.ceiling(), applied.summarizer),
+            (300, Summarizer::System)
+        );
+    }
+
+    #[test]
+    fn a_background_plan_applies_after_new_items_are_appended() {
+        let c = rolling_config();
+        let input = vec![user(&"old".repeat(250)), assistant("done"), user("latest")];
+        let plan = plan_trigger(&input, 4096, &c, 0).unwrap().unwrap();
+        let mut grown = input.clone();
+        grown.extend([assistant("more work"), user("another message")]);
+        let applied = apply_summary(&grown, &plan, "old work").unwrap();
+        assert_eq!(&applied[1..], &grown[plan.drop_until..]);
+        // A rewritten prefix makes the stored plan stale.
+        let mut rewritten = grown.clone();
+        rewritten[1] = assistant("changed");
+        assert!(apply_summary(&rewritten, &plan, "old work").is_err());
     }
     #[test]
     fn single_file_is_required_live_and_rejects_invalid_or_provider_fields() {

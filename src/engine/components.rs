@@ -92,6 +92,8 @@ mod lifecycle_tests {
                 let mut config =
                     context_compaction::Config::read(&app.compaction_config_path).unwrap();
                 config.trigger_tokens = 16000;
+                // No background window: the run folds before its model call.
+                config.ceiling_tokens = None;
                 config.tail_tokens = 50;
                 config.summary_tokens = 30;
                 config.summary_reserve_bytes = 300;

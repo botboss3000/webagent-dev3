@@ -148,7 +148,12 @@ async fn identity_get(
             .unwrap_or(crate::context_compaction::AgentThresholds {
                 trigger_tokens: defaults.trigger_tokens,
                 tail_tokens: defaults.tail_tokens,
+                ceiling_tokens: None,
+                summarizer: None,
             });
+    // Absent agent ceiling or summarizer means the app's.
+    let ceiling = effective.ceiling_tokens.unwrap_or(defaults.ceiling());
+    let summarizer = effective.summarizer.unwrap_or(defaults.summarizer);
     let compaction_valid = effective.apply(&defaults).is_ok();
     let tool_output_defaults = crate::tool_output::Policy::live()?;
     let tool_output_override = crate::tool_output::agent_override(&store, &id).await?;
@@ -168,8 +173,8 @@ async fn identity_get(
     let fixed = crate::gate_registry::visibility_config()?.guidance;
     Ok(Json(
         json!({"member_access":store.access_repository().member_access(&id).await?,"capability_levels":store.capability_levels(&id).await?,"shared_chat":crate::shared_chat::policy(&store,&id).await?,"manager_incoming_message":manager,"closing_message":closing,"voice_output":voice_output.to_value(),"voice_catalog":webagent_media::speech::voice_catalog(),"closing_protocol":{"flags":closing_protocol.agent_flags(),"notification_target_words":closing_protocol.notification.target_words},"message_visibility":{"mode":settings.mode,"guidance":settings.guidance,"fixed_protocol":fixed},"execution_modes":config["execution_modes"],"default_execution_mode":config["default_execution_mode"],"id":id,"name":owned["name"],
-        "compaction_thresholds":{"trigger_tokens":effective.trigger_tokens,"tail_tokens":effective.tail_tokens},
-        "compaction_defaults":{"trigger_tokens":defaults.trigger_tokens,"tail_tokens":defaults.tail_tokens,"summary_tokens":defaults.summary_tokens},
+        "compaction_thresholds":{"trigger_tokens":effective.trigger_tokens,"tail_tokens":effective.tail_tokens,"ceiling_tokens":ceiling,"summarizer":summarizer},
+        "compaction_defaults":{"trigger_tokens":defaults.trigger_tokens,"tail_tokens":defaults.tail_tokens,"summary_tokens":defaults.summary_tokens,"ceiling_tokens":defaults.ceiling(),"summarizer":defaults.summarizer},
         "tool_result_deduplication":crate::tool_output::dedup_policy(&store,&id).await?,"tool_output_policy":tool_output_policy,"tool_output_defaults":tool_output_defaults,
         "tool_output_overridden":tool_output_overridden,"tool_output_eligible_tools":tool_output_eligible_tools,
         "compaction_overridden":override_settings.is_some(),"compaction_valid":compaction_valid,
@@ -1174,6 +1179,8 @@ mod tests {
             compaction_thresholds: Some(crate::context_compaction::AgentThresholds {
                 trigger_tokens: trigger,
                 tail_tokens: tail,
+                ceiling_tokens: None,
+                summarizer: None,
             }),
             tool_output_policy: None,
             reset_tool_output_policy: None,

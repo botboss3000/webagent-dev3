@@ -33,10 +33,38 @@ pub struct Config {
     pub summary_prefix: String,
     pub active_summary_prefix: String,
     pub summary_prompt: String,
+    /// Lean prompt for one incremental summary block; `summary_prompt` merges blocks.
+    /// Absent (older policies) uses `summary_prompt` for every fold.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub block_prompt: String,
+    /// Background summaries start at `trigger_tokens`; the run stops to fold only at the
+    /// ceiling. Absent or below the trigger means the trigger is the ceiling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling_tokens: Option<usize>,
+    /// Summary blocks larger than this together merge their oldest blocks into one.
+    #[serde(default = "default_merge_tokens")]
+    pub merge_tokens: usize,
+    /// Who writes summaries: the running model (cache-friendly fork) or the System role.
+    #[serde(default)]
+    pub summarizer: Summarizer,
     /// Call-scoped measured serialized bytes per provider token (the model's calibrated
     /// ratio). Thresholds stay in provider tokens; absent uses `characters_per_token`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytes_per_token: Option<f64>,
+}
+/// Who writes a summary. `SameModel` forks the running request so its cached prefix is
+/// reused; providers that cannot fork fall back to the System role.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Summarizer {
+    #[default]
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "self")]
+    SameModel,
+}
+/// Older policies without a merge threshold keep summary blocks to 50k tokens.
+fn default_merge_tokens() -> usize {
+    50_000
 }
 /// Last-resort summary-source preview size: the receipt keeps status, size and digest.
 const STUB_PREVIEW_BYTES: usize = 1024;
@@ -85,6 +113,12 @@ impl Config {
             || self.summary_prompt.len() > 16384
             || self.summary_prompt.matches("{source}").count() != 1
             || self.summary_prompt.matches("{summary_characters}").count() != 1
+            || (!self.block_prompt.is_empty()
+                && (self.block_prompt.len() > 16384
+                    || self.block_prompt.matches("{source}").count() != 1
+                    || self.block_prompt.matches("{summary_characters}").count() != 1))
+            || self.ceiling_tokens.is_some_and(|tokens| tokens > 1_000_000)
+            || !(1..=1_000_000).contains(&self.merge_tokens)
             || self
                 .bytes_per_token
                 .is_some_and(|ratio| !(1.0..=16.0).contains(&ratio))
@@ -101,9 +135,34 @@ impl Config {
             None => tokens.saturating_mul(self.characters_per_token),
         }
     }
+    /// The ceiling in tokens: never below the trigger.
+    pub fn ceiling(&self) -> usize {
+        self.ceiling_tokens
+            .unwrap_or(self.trigger_tokens)
+            .max(self.trigger_tokens)
+    }
+    /// The same policy folding only at the ceiling; the main call assembles with it while
+    /// a background summary runs from the trigger.
+    pub fn at_ceiling(&self) -> Self {
+        let mut config = self.clone();
+        config.trigger_tokens = self.ceiling();
+        config
+    }
     /// Render the planned private prefix only for the core-owned summary-model call.
     pub fn prompt(&self, plan: &Plan) -> Result<String> {
-        self.prompt_source(&plan.source, true)
+        self.prompt_for(plan, &plan.source)
+    }
+    /// The summary prompt for `plan` over `source` (the plan's source, or its shortened
+    /// projection): a lean block prompt for a fold, the full checkpoint prompt for a merge.
+    pub fn prompt_for(&self, plan: &Plan, source: &[Value]) -> Result<String> {
+        let (template, tokens) = match plan.kind {
+            PlanKind::Merge => (&self.summary_prompt, self.summary_tokens * 2),
+            PlanKind::Fold if !self.block_prompt.is_empty() => {
+                (&self.block_prompt, self.summary_tokens)
+            }
+            PlanKind::Fold => (&self.summary_prompt, self.summary_tokens),
+        };
+        self.render(template, tokens, plan.summarized(source), true)
     }
     /// Summary-model transcript JSON without opaque reasoning. When the full outputs exceed the
     /// source limit, large tool outputs become previews, then stubs, so that one oversized tool
@@ -131,16 +190,29 @@ impl Config {
     /// Substitute transcript text last to prevent template expansion.
     /// Source limits apply to dispatched summaries; measurement may inspect larger histories.
     pub fn prompt_source(&self, input: &[Value], enforce_source_limit: bool) -> Result<String> {
+        self.render(
+            &self.summary_prompt,
+            self.summary_tokens,
+            input,
+            enforce_source_limit,
+        )
+    }
+    fn render(
+        &self,
+        template: &str,
+        tokens: usize,
+        input: &[Value],
+        enforce_source_limit: bool,
+    ) -> Result<String> {
         let source = self.summary_source(input)?;
         if enforce_source_limit && source.len() > self.max_source_bytes {
             bail!("Context summary source is too large");
         }
         // Substitute source last so transcript text cannot expand template placeholders.
-        Ok(self
-            .summary_prompt
+        Ok(template
             .replace(
                 "{summary_characters}",
-                &(self.summary_tokens * self.characters_per_token).to_string(),
+                &(tokens * self.characters_per_token).to_string(),
             )
             .replace("{source}", &source))
     }
@@ -232,11 +304,26 @@ pub enum Boundary {
     CompletedToolExchange,
 }
 
+/// A fold summarizes history after the existing summary blocks into one new block; a
+/// merge folds the oldest blocks into one, keeping the newest two.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PlanKind {
+    #[default]
+    Fold,
+    Merge,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
     /// Items before this index are summarized; the rest are retained verbatim.
     pub drop_until: usize,
+    /// Items before this index are kept unchanged ahead of the new summary block: the
+    /// existing blocks for a fold, none for a merge.
+    #[serde(default)]
+    pub first: usize,
+    #[serde(default)]
+    pub kind: PlanKind,
     pub boundary: Boundary,
     /// Exact original prefix. The summary prompt masks native bundled guidance.
     pub source: Vec<Value>,
@@ -249,6 +336,14 @@ pub struct Plan {
     // COMPACTION SNAPSHOT: apply_summary uses the planning settings even if the
     // external JSON changes while main.rs is awaiting the normal agent model.
     config: Config,
+}
+
+impl Plan {
+    /// The items a summary covers, from `source` (the plan source or its shortened
+    /// projection, item for item): a fold leaves earlier blocks out of its summary.
+    pub fn summarized<'a>(&self, source: &'a [Value]) -> &'a [Value] {
+        source.get(self.first..).unwrap_or(source)
+    }
 }
 
 /// A compacted prefix is retained for recall without provider reasoning.
@@ -287,6 +382,21 @@ fn digest(items: &[Value]) -> Result<String> {
 /// Recognize user-turn boundaries in the existing provider-neutral history representation.
 fn is_user(item: &Value) -> bool {
     item.get("role").and_then(Value::as_str) == Some("user")
+}
+
+/// Leading summary blocks: the user items at the start of history that carry a summary
+/// prefix. Folds keep them byte-identical so a provider's cached prefix stays valid.
+pub fn leading_blocks(input: &[Value], config: &Config) -> usize {
+    input
+        .iter()
+        .take_while(|item| {
+            is_user(item)
+                && item["content"].as_str().is_some_and(|text| {
+                    text.starts_with(&config.summary_prefix)
+                        || text.starts_with(&config.active_summary_prefix)
+                })
+        })
+        .count()
 }
 
 /// Require usable exchange identities before treating a tool call or result as a safe boundary.
@@ -358,6 +468,34 @@ pub fn plan_cached(
     config.validate()?;
     plan_request_cached(input, max_bytes, config, sizes, characters, 0)
 }
+/// Background trigger check: the same rolling plan as assembly, measured here, for a
+/// summary that starts while the main call proceeds under `Config::at_ceiling`.
+pub fn plan_trigger(
+    input: &[Value],
+    max_bytes: usize,
+    config: &Config,
+    request_overhead: usize,
+) -> Result<Option<Plan>> {
+    config.validate()?;
+    if config.summary_reserve_bytes >= max_bytes {
+        bail!("Invalid context budget");
+    }
+    let sizes = input.iter().map(encoded_len).collect::<Result<Vec<_>>>()?;
+    let characters = input
+        .iter()
+        .map(|item| serde_json::to_string(item).map(|text| text.chars().count()))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    plan_measured(
+        input,
+        max_bytes,
+        config,
+        true,
+        false,
+        &sizes,
+        &characters,
+        request_overhead,
+    )
+}
 /// Request overhead is measured from the selected instructions, schemas and framing.
 /// It affects the trigger and retained-history budget, never the summary source.
 pub fn plan_request_cached(
@@ -412,6 +550,31 @@ fn plan_measured(
     if total <= max_bytes && !request_triggered && !system_triggered && !force {
         return Ok(None);
     }
+    // Earlier summaries stay as separate blocks ahead of new history. Once together they
+    // outgrow `merge_tokens`, the oldest fold into one block first; the newest two stay.
+    let blocks = leading_blocks(input, config);
+    if !force && blocks >= 3 {
+        let drop_until = blocks - 2;
+        let block_bytes = sizes[..blocks].iter().sum::<usize>();
+        if block_bytes > config.token_bytes(config.merge_tokens)
+            && config.summary_source(&input[..drop_until])?.len() <= config.max_source_bytes
+        {
+            let source = input[..drop_until].to_vec();
+            return Ok(Some(Plan {
+                drop_until,
+                first: 0,
+                kind: PlanKind::Merge,
+                boundary: Boundary::PriorTurn,
+                source_digest: digest(&source)?,
+                source,
+                max_bytes,
+                reserve_bytes,
+                system_input_budget: config.system_input_budget,
+                summary_instructions: config.summary_instructions.clone(),
+                config: config.clone(),
+            }));
+        }
+    }
 
     // JSON array syntax costs two brackets and one comma between items.
     let mut suffix = vec![2usize; input.len() + 1];
@@ -441,19 +604,12 @@ fn plan_measured(
     for i in (0..input.len()).rev() {
         tail_chars[i] = tail_chars[i + 1] + characters[i];
     }
-    // Never summarize only the previous checkpoint: a rolling fold must also
-    // age real history, otherwise an oversized checkpoint could retrigger forever.
-    let checkpoint = input
-        .first()
-        .and_then(|v| v["content"].as_str())
-        .is_some_and(|text| {
-            text.starts_with(&config.summary_prefix)
-                || text.starts_with(&config.active_summary_prefix)
-        });
+    // A fold never summarizes only earlier blocks: it must also age real history,
+    // otherwise oversized blocks could retrigger forever.
     let fits = |index: usize| {
         suffix[index] <= target
             && (!rolling || tail_chars[index] <= config.token_bytes(config.tail_tokens))
-            && !(checkpoint && index == 1)
+            && index > blocks
     };
     let mut pending = HashSet::new();
     let mut seen = HashSet::new();
@@ -478,23 +634,28 @@ fn plan_measured(
             .checked_add(size + usize::from(i > 0))
             .ok_or_else(|| anyhow!("Context size overflow"))?;
     }
+    // A fold's summary covers only the items after the existing blocks.
     let source_fits = |index: usize| -> Result<bool> {
-        if prefix[index] > config.max_source_bytes {
+        // Brackets, and no comma before the first summarized item.
+        let bytes = prefix[index] - prefix[blocks] + 2 - usize::from(blocks > 0);
+        if bytes > config.max_source_bytes {
             return Ok(false);
         }
         match config.system_input_budget {
-            Some(budget) => Ok(config.summary_envelope_bytes(&input[..index])? <= budget),
+            Some(budget) => Ok(config.summary_envelope_bytes(&input[blocks..index])? <= budget),
             None => Ok(true),
         }
     };
     for (i, item) in input.iter().enumerate() {
         // Evaluate a boundary before consuming its user turn. This prevents
         // splitting a function call from its corresponding output.
-        if i > 0 && is_user(item) && valid && pending.is_empty() && source_fits(i)? {
+        if i > blocks && is_user(item) && valid && pending.is_empty() && source_fits(i)? {
             if fits(i) {
                 let source = input[..i].to_vec();
                 return Ok(Some(Plan {
                     drop_until: i,
+                    first: blocks,
+                    kind: PlanKind::Fold,
                     boundary: Boundary::PriorTurn,
                     source_digest: digest(&source)?,
                     source,
@@ -538,6 +699,8 @@ fn plan_measured(
             let source = input[..drop_until].to_vec();
             return Ok(Some(Plan {
                 drop_until,
+                first: blocks,
+                kind: PlanKind::Fold,
                 boundary,
                 source_digest: digest(&source)?,
                 source,
@@ -561,7 +724,7 @@ pub fn apply_summary(input: &[Value], plan: &Plan, summary: &str) -> Result<Vec<
             .get(plan.drop_until.saturating_sub(1))
             .is_some_and(|item| item["type"] == "function_call_output"),
     };
-    if plan.drop_until == 0
+    if plan.drop_until <= plan.first
         || plan.drop_until > input.len()
         || !valid_boundary
         || input[..plan.drop_until] != plan.source
@@ -576,14 +739,15 @@ pub fn apply_summary(input: &[Value], plan: &Plan, summary: &str) -> Result<Vec<
     {
         bail!("Context summary has invalid length");
     }
-    let mut result = Vec::with_capacity(input.len() - plan.drop_until + 1);
-    let prefix = match plan.boundary {
-        Boundary::PriorTurn => &plan.config.summary_prefix,
-        Boundary::CompletedToolExchange => &plan.config.active_summary_prefix,
+    let mut result = Vec::with_capacity(plan.first + input.len() - plan.drop_until + 1);
+    let prefix = match (plan.kind, plan.boundary) {
+        (PlanKind::Merge, _) | (_, Boundary::PriorTurn) => &plan.config.summary_prefix,
+        (_, Boundary::CompletedToolExchange) => &plan.config.active_summary_prefix,
     };
+    // COMPACTION BLOCKS: earlier blocks stay byte-identical, the new block follows them,
+    // and the retained suffix remains verbatim for the loop to save.
+    result.extend_from_slice(&input[..plan.first]);
     result.push(json!({"role":"user","content":format!("{prefix}{summary}")}));
-    // COMPACTION CHECKPOINT: one summary replaces the entire aged prefix (including
-    // its previous checkpoint); the retained suffix remains verbatim for main.rs to save.
     result.extend_from_slice(&input[plan.drop_until..]);
     let result_bytes = encoded_len(&json!(&result))?;
     if result_bytes > plan.max_bytes && result_bytes >= encoded_len(&json!(input))? {
@@ -622,12 +786,20 @@ pub fn validate_external_plan(
     {
         return Err(stale("source prefix"));
     }
-    if config.summary_source(&plan.source)?.len() > config.max_source_bytes {
+    let blocks = leading_blocks(input, config);
+    let range = match plan.kind {
+        PlanKind::Fold => plan.first == blocks && plan.drop_until > blocks,
+        PlanKind::Merge => plan.first == 0 && blocks >= 3 && plan.drop_until + 2 == blocks,
+    };
+    if !range {
+        return Err(stale("summary blocks"));
+    }
+    if config.summary_source(plan.summarized(&plan.source))?.len() > config.max_source_bytes {
         return Err(stale("source size"));
     }
     if config.system_input_budget.is_some_and(|budget| {
         config
-            .summary_envelope_bytes(&plan.source)
+            .summary_envelope_bytes(plan.summarized(&plan.source))
             .map_or(true, |size| size > budget)
     }) {
         return Err(stale("summary model budget"));

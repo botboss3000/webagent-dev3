@@ -12,6 +12,7 @@ use tokio::sync::{Mutex, RwLock, Semaphore};
 use tokio_util::sync::CancellationToken;
 pub mod actions;
 pub mod background;
+pub mod background_compaction;
 pub mod background_followup;
 pub mod batch;
 pub mod build_tasks;

@@ -50,10 +50,83 @@
       "agent_pointer": "/compaction_thresholds/tail_tokens",
       "bounds": "validator (relation) + proposed",
       "notes": "Must stay below trigger_tokens - summary_tokens."
+    },
+    {
+      "id": "context.compaction.ceiling_tokens",
+      "description": "Conversation size, in tokens, at which the agent stops to finish a background summary before continuing.",
+      "type": "integer",
+      "pointer": "/ceiling_tokens",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "let the agent keep working longer while summarizing",
+        "stop and compact at 250k tokens"
+      ],
+      "areas": [
+        "context",
+        "memory",
+        "agent"
+      ],
+      "unit": "tokens",
+      "min": 10000,
+      "max": 1000000,
+      "agent_pointer": "/compaction_thresholds/ceiling_tokens",
+      "bounds": "validator + proposed",
+      "notes": "Below trigger_tokens or absent means the trigger; the model's context limit caps it."
+    },
+    {
+      "id": "context.compaction.summarizer",
+      "description": "Whether summaries are written by the agent's own model (reusing its cached request) or by the System model.",
+      "type": "enum",
+      "pointer": "/summarizer",
+      "layers": [
+        "app",
+        "agent"
+      ],
+      "examples": [
+        "summarize with the same model",
+        "use the system model for compaction"
+      ],
+      "areas": [
+        "context",
+        "memory",
+        "agent"
+      ],
+      "enum": [
+        "self",
+        "system"
+      ],
+      "agent_pointer": "/compaction_thresholds/summarizer",
+      "bounds": "validator",
+      "notes": "Bridge models and failed same-model summaries use System."
+    },
+    {
+      "id": "context.compaction.merge_tokens",
+      "description": "Total size, in tokens, of summary blocks above which the oldest blocks are merged into one.",
+      "type": "integer",
+      "pointer": "/merge_tokens",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "merge summary blocks sooner",
+        "allow more summary blocks before merging"
+      ],
+      "areas": [
+        "context",
+        "memory"
+      ],
+      "unit": "tokens",
+      "min": 1,
+      "max": 1000000,
+      "bounds": "validator"
     }
   ],
   "excluded": {
     "/active_summary_prefix": "Prompt text; prompts are never offered (Q1).",
+    "/block_prompt": "Prompt text; prompts are never offered (Q1).",
     "/characters_per_token": "Internal size limit; not offered in v1.",
     "/dedup_max_output_bytes": "Internal size limit; not offered in v1.",
     "/max_source_bytes": "Internal size limit; not offered in v1.",

@@ -6,7 +6,7 @@ use super::ports::{
     ProviderUsage, RunObservation, RunPresentation, ScopedStorage, SessionBinding, SkillSources,
     StartupPolicy,
 };
-use super::{config, models::ModelRecords, Runtime};
+use super::{background_compaction, config, models::ModelRecords, Runtime};
 use crate::context::abilities::{self, Catalog};
 use crate::gates::protocol as gate_protocol;
 use crate::gates::{self as gate_registry, controls as gate_controls};
@@ -363,6 +363,146 @@ impl<
             run["error"] = json!("Tool outcome unknown; review before continuing");
             Ok(None)
         }
+    }
+
+    /// Start a background summary for `plan` beside the main call. The same-model summary
+    /// copies the running request and adds `message`, so the provider reuses its cached
+    /// prefix; bridges, a request that would not fit, or a failed same-model summary use
+    /// System. A summary that cannot be prepared is skipped: the ceiling still folds.
+    #[allow(clippy::too_many_arguments)]
+    async fn start_background_compaction(
+        app: &Self,
+        run: &mut Value,
+        plan: context_compaction::Plan,
+        message: String,
+        request: BackgroundRequest<'_>,
+        config: &context_compaction::Config,
+        workflow_policy: &workflow::Policy,
+        cancel: &CancellationToken,
+    ) -> Result<()> {
+        let same_model = config.summarizer == context_compaction::Summarizer::SameModel
+            && !request.selection.provider.is_bridge()
+            && !request.system_next
+            && request.envelope_bytes + message.len() + config.token_bytes(config.summary_tokens)
+                <= request.ceiling;
+        let (selection, input, tools, instructions, effort, token_run) = if same_model {
+            let mut input = request.input.to_vec();
+            input.push(json!({"role":"user","content":message}));
+            (
+                request.selection.clone(),
+                input,
+                request.schemas.to_vec(),
+                request.instructions.to_owned(),
+                request.effort.map(str::to_owned),
+                run.clone(),
+            )
+        } else {
+            let Ok(system_run) = system_dispatch_run(run) else {
+                return Ok(());
+            };
+            let selection = provider::ProviderSelection::parse(
+                &system_run["provider_selection"],
+                X::default_model(),
+            )?;
+            let summary_source = app.dedup_summary_source(run, &plan.source).await?;
+            let Ok(prompt) = config
+                .prompt_for(&plan, &summary_source)
+                .or_else(|_| config.prompt_for(&plan, &plan.source))
+            else {
+                return Ok(());
+            };
+            let input = vec![json!({"role":"user","content":prompt})];
+            let instructions = provider::Provider::instructions_for_snapshot(
+                provider::DEFAULT_INSTRUCTIONS,
+                crate::ports::AgentMetadata::root(app.store.records()),
+                app.abilities.source_root(),
+            )?;
+            let context = config::Config::<C>::read(&app.runtime_path)?.context;
+            if validate_system_summary_input(
+                &context,
+                &selection,
+                &input,
+                &instructions,
+                workflow_policy.max_context_bytes,
+            )
+            .is_err()
+            {
+                return Ok(());
+            }
+            (selection, input, Vec::new(), instructions, None, system_run)
+        };
+        if !app.run_model_authorized(&token_run).await {
+            return Ok(());
+        }
+        let summarizer = if same_model { "self" } else { "system" };
+        let step = format!(
+            "compaction:{}:{}",
+            run["compactions"].as_u64().unwrap_or(0) + 1,
+            uuid::Uuid::new_v4()
+        );
+        let input_bytes: usize = input
+            .iter()
+            .map(|item| item["content"].as_str().map_or(0, str::len))
+            .sum();
+        compaction_activity(
+            run,
+            format!("{step}:call"),
+            json!({"type":"compaction_call","model":selection.model,"input_bytes":input_bytes,
+                "reason":"automatic","mode":"background","summarizer":summarizer}),
+        );
+        app.save(run).await?;
+        let sid = request.sid.to_owned();
+        let mut job = json!({"state":"running","plan":plan,"step":step,"summarizer":summarizer});
+        app.store
+            .put(&background_compaction::key(&sid), &job)
+            .await?;
+        let done = background_compaction::register(&sid);
+        let app = app.clone();
+        let cancel = cancel.child_token();
+        tokio::spawn(async move {
+            let response = async {
+                let prepared =
+                    crate::provider::CallDraft::new(&selection, input, tools, &sid, &instructions)
+                        .with_reasoning_effort(effort.as_deref())
+                        .prepare(
+                            crate::ports::AgentMetadata::root(app.store.records()),
+                            &cancel,
+                        )
+                        .await?;
+                let tokens = app.tokens_for(&selection, &token_run).await?;
+                let ready = prepared.bind_credentials(&tokens, &cancel)?;
+                let (sender, mut receiver) = tokio::sync::mpsc::channel::<String>(32);
+                let drain = tokio::spawn(async move { while receiver.recv().await.is_some() {} });
+                let response = app.provider.dispatch(ready, sender, cancel.clone()).await;
+                let _ = drain.await;
+                response
+            }
+            .await;
+            match &response {
+                Ok(value) => match background_compaction::summary_text(value) {
+                    Some(summary) => {
+                        job["state"] = json!("done");
+                        job["summary"] = json!(summary);
+                        job["usage"] = value["usage"].clone();
+                        job["cached_input_tokens"] =
+                            json!(background_compaction::cached_tokens(value));
+                    }
+                    None => {
+                        job["state"] = json!("failed");
+                        job["error"] = json!("The summary was empty or called a tool");
+                    }
+                },
+                Err(error) => {
+                    job["state"] = json!("failed");
+                    job["error"] = json!(error.to_string());
+                }
+            }
+            if let Err(error) = app.store.put(&background_compaction::key(&sid), &job).await {
+                eprintln!("Background summary result for session {sid} not saved: {error}");
+            }
+            background_compaction::finish(&sid, done);
+        });
+        Ok(())
     }
 
     // Recheck all context authority after credential retrieval, under the dispatch gate.
@@ -2376,6 +2516,91 @@ impl<
                     .context
                     .ceiling(&selection)?
                     .min(workflow_policy.max_context_bytes);
+                // BACKGROUND COMPACTION: between the trigger and the ceiling a summary runs
+                // beside the main call, so the main call assembles with the ceiling as its
+                // fold limit. The model's hard limit (`model_ceiling`) still bounds both.
+                let background = compaction_config.ceiling() > compaction_config.trigger_tokens;
+                let assembly_compaction = if background {
+                    context_compaction::Config(compaction_config.at_ceiling())
+                } else {
+                    compaction_config.clone()
+                };
+                let job_key = background_compaction::key(&sid);
+                let mut job = app.store.get(&job_key).await?.unwrap_or(Value::Null);
+                // A job this process does not run was cut off by a restart; record it and let
+                // the trigger plan a fresh one. A failed job never stops the run.
+                if job["state"] == "running" && background_compaction::running(&sid).is_none() {
+                    job["state"] = json!("failed");
+                    job["error"] = json!("Background summary interrupted by a restart");
+                }
+                if job["state"] == "failed" {
+                    let step = job["step"].as_str().unwrap_or("compaction:0").to_owned();
+                    compaction_result(
+                        &mut run,
+                        &step,
+                        json!({"error":job["error"],"summarizer":job["summarizer"],
+                            "mode":"background"}),
+                    );
+                    // After a same-model failure the next summary uses System.
+                    job = json!({"state":"idle","system_next":job["summarizer"] == "self"});
+                    app.store.put(&job_key, &job).await?;
+                }
+                // BACKGROUND COMPACTION RESULT: history is append-only, so the plan made at
+                // the trigger still applies here; its digest rejects a changed prefix.
+                if job["state"] == "done" {
+                    let step = job["step"].as_str().unwrap_or("compaction:0").to_owned();
+                    let summary = job["summary"].as_str().unwrap_or_default().to_owned();
+                    let applied =
+                        serde_json::from_value::<context_compaction::Plan>(job["plan"].clone())
+                            .map_err(anyhow::Error::from)
+                            .and_then(|plan| {
+                                let history = retention_input.as_deref().unwrap_or(
+                                    run["input"].as_array().expect("run input is an array"),
+                                );
+                                context_compaction::apply_summary(history, &plan, &summary)
+                                    .map(|compacted| (plan, compacted))
+                            });
+                    let outcome = json!({"summarizer":job["summarizer"],"mode":"background",
+                        "cached_input_tokens":job["cached_input_tokens"]});
+                    app.store.put(&job_key, &json!({"state":"idle"})).await?;
+                    match applied {
+                        Ok((plan, compacted)) => {
+                            let mut outcome = outcome;
+                            outcome["summary"] = json!(summary);
+                            compaction_result(&mut run, &step, outcome);
+                            X::record_usage(&mut run, &json!({"usage": job["usage"]}));
+                            run["input"] = json!(compacted);
+                            run["tool_result_projection"]["rebase"] = json!(true);
+                            context_accounting.reset();
+                            run["compactions"] =
+                                json!(run["compactions"].as_u64().unwrap_or(0) + 1);
+                            run["updated_at"] = json!(now());
+                            let segment_id = format!(
+                                "{}-{}",
+                                id,
+                                run["compactions"]
+                                    .as_u64()
+                                    .expect("run counters are numbers")
+                            );
+                            app.store
+                                .save_run_observed(
+                                    &mut run,
+                                    "context_compacted",
+                                    &json!({"run_id":id,"source_digest":plan.source_digest,
+                                        "segment_id":segment_id,"source":plan.source,
+                                        "dropped_items":plan.drop_until,
+                                        "summary_bytes":summary.len()}),
+                                )
+                                .await?;
+                            continue;
+                        }
+                        Err(error) => {
+                            let mut outcome = outcome;
+                            outcome["error"] = json!(format!("Summary no longer applies: {error}"));
+                            compaction_result(&mut run, &step, outcome);
+                        }
+                    }
+                }
                 let assembly_request = context_input::Request {
                     history: retention_input
                         .as_deref()
@@ -2390,7 +2615,7 @@ impl<
                     },
                     selection: &selection,
                     max_bytes: model_ceiling,
-                    compaction: &compaction_config,
+                    compaction: &assembly_compaction,
                 };
                 if !crate::components::available(crate::ports::AgentMetadata::root(
                     app.store.records(),
@@ -2460,6 +2685,20 @@ impl<
                 } else {
                     assembled
                 };
+                // At the ceiling (or on a manual request) a running summary is awaited
+                // instead of starting a second one; its result applies on the next pass.
+                if matches!(assembled, context_assembly::Prepared::Compact(_)) {
+                    if let Some(mut finished) = background_compaction::running(&sid) {
+                        run["phase"] = json!("compacting");
+                        app.save(&mut run).await?;
+                        drop(_guard);
+                        tokio::select! {
+                            _ = cancel.cancelled() => return Ok(()),
+                            _ = finished.wait_for(|done| *done) => {}
+                        }
+                        continue;
+                    }
+                }
                 // The assembler only plans; the loop owns summarization and persistence.
                 if let context_assembly::Prepared::Compact(plan) = assembled {
                     if let Some(report) = assembly_diagnostic {
@@ -2491,8 +2730,8 @@ impl<
                     // Restored full tool outputs can outgrow the source the planner sized;
                     // summarize those shortened previews instead of stopping the run.
                     let prompt = match compaction_config
-                        .prompt_source(&summary_source, true)
-                        .or_else(|_| compaction_config.prompt_source(&plan.source, true))
+                        .prompt_for(&plan, &summary_source)
+                        .or_else(|_| compaction_config.prompt_for(&plan, &plan.source))
                     {
                         Ok(prompt) => prompt,
                         Err(_) => {
@@ -2880,6 +3119,32 @@ impl<
                 };
                 let report = serde_json::to_value(&envelope.report)?;
                 let envelope_bytes = envelope.report.envelope_bytes;
+                // Past the trigger with no summary pending: plan one to run beside this call.
+                let background_plan = if background
+                    && job["state"] != "running"
+                    && background_compaction::running(&sid).is_none()
+                    && run["closing_turn"].is_null()
+                    && run["manual_compaction_requested"] != true
+                {
+                    context_compaction::plan_trigger(
+                        envelope.input,
+                        envelope.report.history_budget_bytes,
+                        &compaction_config,
+                        envelope.report.max_bytes - envelope.report.history_budget_bytes,
+                    )
+                    .ok()
+                    .flatten()
+                    .map(|plan| {
+                        let message = background_compaction::fork_message(
+                            &plan,
+                            envelope.input,
+                            &compaction_config,
+                        );
+                        (plan, message)
+                    })
+                } else {
+                    None
+                };
                 let instructions = envelope.instructions;
                 // DISPATCH-HISTORY-TRANSFER: fingerprint the borrowed history before
                 // metadata mutation, then transfer its allocation only after saves.
@@ -2996,6 +3261,30 @@ impl<
                         run["closing_turn"]["error"].as_str(),
                     );
                     projected_input.push(json!({"role":"user","content":message}));
+                }
+                if let Some((plan, message)) = background_plan {
+                    let request = BackgroundRequest {
+                        sid: &sid,
+                        selection: &selection,
+                        input: &projected_input,
+                        schemas: &schemas,
+                        instructions: &instructions,
+                        effort: core_effort.as_deref(),
+                        envelope_bytes,
+                        ceiling: model_ceiling,
+                        system_next: job["system_next"] == true,
+                    };
+                    Self::start_background_compaction(
+                        &app,
+                        &mut run,
+                        plan,
+                        message,
+                        request,
+                        &compaction_config,
+                        &workflow_policy,
+                        &cancel,
+                    )
+                    .await?;
                 }
                 let prepared_provider = match crate::provider::CallDraft::new(
                     &selection,
@@ -3571,6 +3860,19 @@ impl<
             }
         }
     }
+}
+
+/// The running request a background summary may copy; see `start_background_compaction`.
+struct BackgroundRequest<'a> {
+    sid: &'a str,
+    selection: &'a provider::ProviderSelection,
+    input: &'a [Value],
+    schemas: &'a [Value],
+    instructions: &'a str,
+    effort: Option<&'a str>,
+    envelope_bytes: usize,
+    ceiling: usize,
+    system_next: bool,
 }
 
 /// Queue one activity row for the next run save. Rows are stored in `interactions`

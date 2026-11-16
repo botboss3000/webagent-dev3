@@ -28,7 +28,7 @@ try {
     const {renderToolOutputPolicy}=await import('/ui/main-panel/agents/pages/identity/tool-output-policy.js');
     const {vibrationConfigReady}=await import('/ui/shared/vibrate.js');await vibrationConfigReady;
     const stored=JSON.parse(localStorage.getItem('dedup-fixture')||'true');
-    const agent={can_manage:canManage,compaction_thresholds:{trigger_tokens:150000,tail_tokens:20000},compaction_defaults:{trigger_tokens:150000,tail_tokens:20000,summary_tokens:5000},tool_output_policy:{enabled:true,scope:'all_eligible',tools:[],lifetime_calls:6,ordinary_chars:24000,promoted_chars:24000,refresh_on_recall:true,promote_on_edit:true},tool_output_eligible_tools:['file_read']};
+    const agent={can_manage:canManage,compaction_thresholds:{trigger_tokens:150000,tail_tokens:20000,ceiling_tokens:250000,summarizer:'self'},compaction_defaults:{trigger_tokens:150000,tail_tokens:20000,summary_tokens:5000,ceiling_tokens:250000,summarizer:'self'},tool_output_policy:{enabled:true,scope:'all_eligible',tools:[],lifetime_calls:6,ordinary_chars:24000,promoted_chars:24000,refresh_on_recall:true,promote_on_edit:true},tool_output_eligible_tools:['file_read']};
     if(available)agent.tool_result_deduplication={enabled:stored};
     window.fixture={writes:[],fail:false,agent};
     document.querySelector('#host').replaceChildren();
@@ -65,7 +65,7 @@ try {
   await page.getByLabel('Summary trigger',{exact:true}).fill('160000');
   await page.getByRole('button',{name:'Save compaction thresholds',exact:true}).click();
   await page.getByText('Saved. New model calls use these thresholds.',{exact:true}).waitFor();
-  assert.deepEqual(await page.evaluate(()=>fixture.writes),[{compaction_thresholds:{trigger_tokens:160000,tail_tokens:20000}}]);
+  assert.deepEqual(await page.evaluate(()=>fixture.writes),[{compaction_thresholds:{trigger_tokens:160000,tail_tokens:20000,ceiling_tokens:250000,summarizer:'self'}}]);
   await page.getByRole('button',{name:'Expand Lifetime/budget retention',exact:true}).click();
   assert.equal(await page.getByLabel('Enable retention',{exact:true}).isDisabled(),true);
   assert.equal(await page.getByLabel('Retention scope',{exact:true}).isDisabled(),true);
@@ -96,6 +96,8 @@ try {
   await page.getByRole('button',{name:'Expand Context compaction',exact:true}).click();
   assert.equal(await page.getByLabel('Summary trigger',{exact:true}).getAttribute('readonly'),'');
   assert.equal(await page.getByRole('button',{name:'Save compaction thresholds',exact:true}).count(),0);
+  // The expanded compaction row is tall on a phone; collapse it before the tool row below.
+  await page.getByRole('button',{name:'Collapse Context compaction',exact:true}).click();
   await page.evaluate(async()=>{
    const {_buildToolRow}=await import('/ui/shared/ability-row-controls.js');
    const host=document.querySelector('#tools');host.replaceChildren();fixture.inclusions=[];

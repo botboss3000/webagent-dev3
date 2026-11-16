@@ -6913,6 +6913,8 @@ async fn rolling_compaction_uses_explicit_system_model_and_persists_checkpoint()
     let config_path = app.compaction_config_path.clone();
     let mut config = context_compaction::Config::read(&config_path).unwrap();
     config.trigger_tokens = 20_000;
+    // No background window: the summary runs on System before the main call.
+    config.ceiling_tokens = None;
     config.tail_tokens = 100;
     config.summary_tokens = 100;
     config.persist(&config_path).unwrap();
@@ -6965,7 +6967,7 @@ async fn rolling_compaction_uses_explicit_system_model_and_persists_checkpoint()
         .is_none_or(|tools| tools.is_empty()));
     assert!(requests[0]["input"]
         .to_string()
-        .contains("Fold the previous checkpoint"));
+        .contains("Write one summary block"));
     let events = app.store.events(&sid, 0).await.unwrap();
     assert_eq!(
         events

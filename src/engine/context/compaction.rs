@@ -293,19 +293,18 @@ mod tests {
         assert!(plan_rolling(&input, 4096, &raised).unwrap().is_none());
     }
     #[test]
-    fn second_fold_includes_previous_checkpoint_without_stacking_summaries() {
+    fn second_fold_adds_a_block_and_keeps_the_first_byte_identical() {
         let c = rolling_config();
         let input = vec![user(&"old".repeat(250)), assistant("done"), user("latest")];
         let p = plan_rolling(&input, 4096, &c).unwrap().unwrap();
-        let mut first = apply_summary(&input, &p, "checkpoint one").unwrap();
+        let mut first = apply_summary(&input, &p, "block one").unwrap();
         first.extend([assistant(&"aged".repeat(250)), user("newest")]);
         let p2 = plan_rolling(&first, 4096, &c).unwrap().unwrap();
-        assert_eq!(p2.source[0], first[0]);
-        assert!(p2.drop_until > 1);
-        let second = apply_summary(&first, &p2, "checkpoint two").unwrap();
-        assert_eq!(second.len(), 2);
-        assert_eq!(second[1], user("newest"));
-        assert!(!second[0].to_string().contains("checkpoint one"));
+        assert_eq!(p2.first, 1);
+        let second = apply_summary(&first, &p2, "block two").unwrap();
+        assert_eq!(second.len(), 3);
+        assert_eq!(second[0], first[0]);
+        assert_eq!(second[2], user("newest"));
     }
     #[test]
     fn single_file_is_required_live_and_rejects_invalid_or_provider_fields() {
