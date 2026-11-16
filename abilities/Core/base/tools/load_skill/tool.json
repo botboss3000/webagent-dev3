@@ -43,7 +43,7 @@
   "effect": "read",
   "default_policy": {
     "operator": "allow",
-    "member": "require_approval",
-    "visitor": "require_approval"
+    "member": "allow",
+    "visitor": "allow"
   }
 }
