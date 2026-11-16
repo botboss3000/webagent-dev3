@@ -4778,6 +4778,14 @@ class Broker:
 
     def _release_plan(self,changed,current_changed,candidate,base_blob,trusted):
         """Select the release lane once for finish and preflight; reads only, no reservation."""
+        # Broker files that already match the installed broker need no app build: the
+        # task's other files pick the lane, so a broker+UI task publishes as ui_deploy.
+        host_scope=self.host_source_scope()[1]
+        host_part=[p for p in current_changed if p in host_scope]
+        host_split=(bool(host_part)and any(p not in host_scope for p in changed)
+                    and self.host_source_only(host_part,candidate,trusted))
+        all_changed=changed
+        if host_split:changed=[p for p in changed if p not in host_scope]
         package_changed=[path for path in changed if not hot_source_path(path) and (
             generic_package_path(path,candidate) or generic_package_path(path,base_blob))]
         docs_changed=any(path.startswith("v3/docs/")and path.endswith(".md")for path in changed)
@@ -4817,7 +4825,7 @@ class Broker:
         broken=sorted(path for path in live_changed if path.endswith(".json")and malformed(path))
         if broken:
             refusal="Live JSON file does not parse: "+broken[0].removeprefix("v3/")
-        leaked=sorted(path for path in changed if path in files and release.possible_credentials(files[path][1]))
+        leaked=sorted(path for path in all_changed if path in files and release.possible_credentials(files[path][1]))
         if not host_only and broker_paths and set(current_changed)<=self.host_source_scope()[1]:
             # A build_deploy would rebuild unchanged app images and still not install the broker.
             refusal=("Broker-only change is not installed: build_deploy would rebuild app images and leave the old broker running. "
@@ -4827,8 +4835,8 @@ class Broker:
             # Paths only: matched bytes never enter receipts or replies.
             refusal=("Possible credentials in changed files: "+", ".join(p.removeprefix("v3/")for p in leaked[:20])
                      +". Remove them; for a test fixture keep the value but avoid a credential-shaped literal (for example Rust concat!).")
-        return {"operation":operation,"changed_paths":sorted(changed),"ui_only":ui_only,"plugin_only":plugin_only,"index_only":False,"host_only":host_only,
-                "refusal":refusal,"broker_install_required":bool(broker_paths)and not host_only,"shared_ui_paths":shared_ui}
+        return {"operation":operation,"changed_paths":sorted(all_changed),"ui_only":ui_only,"plugin_only":plugin_only,"index_only":False,"host_only":host_only,
+                "refusal":refusal,"broker_install_required":bool(broker_paths)and not host_only and not host_split,"shared_ui_paths":shared_ui}
 
     def _require_expected_plan(self,args,plan):
         """Refuse a finish whose broker-computed paths or lane differ from the caller's stated plan."""

@@ -15,7 +15,7 @@ import threading
 import time
 import unittest
 import uuid
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 PATH = Path(__file__).resolve().parents[1] / "build-service/host.py"
 spec = importlib.util.spec_from_file_location("admin_build", PATH)
@@ -324,7 +324,9 @@ class BuildTests(unittest.TestCase):
     def broker_fixture(self, files):
         self.runner.blob = context(extra={"v3/README.md":"released", "v3/build-service/README.md":"broker"})
         task = self.call("v3_build_work", {"action":"begin", "task_id":"broker-task", "summary":"broker", "mode":"isolated"})
-        for name, text in files.items():Path(task["workspace_path"], name).write_text(text)
+        for name, text in files.items():
+            Path(task["workspace_path"], name).parent.mkdir(parents=True, exist_ok=True)
+            Path(task["workspace_path"], name).write_text(text)
         return self.call("v3_build_work", {"action":"status", "task_id":"broker-task"})["own"][0]["workspace_inputs_sha256"]
 
     def test_uninstalled_broker_only_change_is_refused_before_any_job(self):
@@ -345,6 +347,15 @@ class BuildTests(unittest.TestCase):
         job = self.call("v3_build_work", {"action":"finish", "task_id":"broker-task", "expected_inputs_sha256":digest})
         self.assertEqual(self.broker.jobs[job["job_id"]]["broker_install"]["required"], True)
         self.assertEqual(self.broker.jobs[job["job_id"]]["broker_install"]["paths"], ["v3/build-service/README.md"])
+
+    def test_installed_broker_files_leave_the_lane_to_the_rest(self):
+        digest = self.broker_fixture({"build-service/README.md":"broker edit", "ui/app.css":"body{}"})
+        installed_only = lambda changed, *_: all(p.startswith("v3/build-service/") for p in changed)
+        with patch.object(self.broker, "host_source_only", side_effect=installed_only) as installed:
+            plan = self.call("v3_build_work", {"action":"preflight", "task_id":"broker-task"})["release_plan"]
+        installed.assert_any_call(["v3/build-service/README.md"], ANY, ANY)
+        self.assertEqual(plan["operation"], "ui_deploy");self.assertFalse(plan["broker_install_required"])
+        self.assertEqual(plan["changed_paths"], ["v3/build-service/README.md", "v3/ui/app.css"])
 
     def drift_fixture(self):
         self.runner.blob = context(extra={"v3/README.md":"released",
