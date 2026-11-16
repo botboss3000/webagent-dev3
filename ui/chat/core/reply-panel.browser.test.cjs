@@ -15,14 +15,14 @@ for(const mobile of [false,true])for(const light of [false,true])test(`reply pan
  const context=await browser.newContext({viewport:mobile?{width:390,height:844}:{width:1200,height:1000},isMobile:mobile,hasTouch:mobile});const p=await context.newPage();await p.goto('http://127.0.0.1:'+server.address().port);
  await p.evaluate(async light=>{
   document.body.classList.toggle('light-mode',light);window.sent=[];window.staged=[];
-  const {buildReplyForm,answerText}=await import('/chat/core/reply-panel.js');window.answerText=answerText;
+  const {buildReplyForm,answerText,answeredPanelRuns}=await import('/chat/core/reply-panel.js');window.answerText=answerText;window.answeredPanelRuns=answeredPanelRuns;
   const fields=[{name:'layout',label:'Layout',type:'radio',options:['Cards','List'],other:true,required:true},{name:'extras',label:'Extras',type:'multi',options:['Skip labels','Step counter']},{name:'notes',label:'Notes',type:'textarea',attach:true},{name:'name',label:'Name',type:'text',required:true}];
   // Mirror the transcript: the panel's content holds the bold title, then the form.
   const card=(id,form)=>{const panel=document.createElement('div');panel.className='v3-reply-panel';if(id)panel.id=id;const body=document.createElement('div');body.className='message-content';const title=document.createElement('strong');title.textContent='Panel setup';body.append(title,form);panel.append(body);return panel;};
   const dismiss=document.createElement('button');dismiss.type='button';dismiss.textContent='Dismiss';
   const live=card('',buildReplyForm({fields,paged:true,dismiss,addFiles:async files=>{staged.push(...files.map(file=>file.name));return staged.length;},send:async answers=>{sent.push(answers);}}));
-  const done=card('answered',buildReplyForm({fields,paged:true,state:'answered',values:{layout:'List',name:'Bo'},dismiss:document.createElement('button')}));
-  document.getElementById('chat-messages-inner').append(live,done);
+  const done=card('answered',buildReplyForm({fields,paged:true,state:'answered',values:{layout:'List',name:'Bo'},comments:{layout:'chosen for clarity'},dismiss:document.createElement('button')}));
+  done.classList.add('is-answered');document.getElementById('chat-messages-inner').append(live,done);
  },light);
  const live=p.locator('.v3-reply-panel:not(#answered)');
  const step=()=>live.locator('.v3-reply-step').innerText();
@@ -78,10 +78,19 @@ for(const mobile of [false,true])for(const light of [false,true])test(`reply pan
  assert.equal(await p.evaluate(()=>answerText('Panel setup',sent[0])),'Panel setup\nLayout: Tiles\nLayout — comment: chosen for clarity\nExtras: skipped\nNotes: Keep it short\nName: Ana');
  assert.equal(await p.evaluate(()=>sent[0].find(item=>item.name==='layout').comment),'chosen for clarity');
  assert.deepEqual(await p.evaluate(()=>staged),['a.txt','b.txt']);
- // An answered panel shows every question read-only with no buttons.
+ // An answered panel shows every recorded answer read-only and greyed out, with Complete where Submit was.
  const answered=p.locator('#answered');assert.equal(await answered.locator('button').count(),0);
  assert.equal(await answered.locator('input:not([disabled]),textarea:not([disabled])').count(),0);
  assert.equal(await answered.getByRole('radio',{name:'List'}).isChecked(),true);
+ assert.equal(await answered.locator('.v3-reply-state').count(),0);
+ assert.equal(await answered.locator('.v3-reply-complete').innerText(),'Complete');
+ const complete=await answered.locator('.v3-reply-complete').boundingBox(),field=await answered.locator('.v3-reply-field').last().boundingBox(),options=await answered.locator('.v3-reply-options').first().boundingBox();
+ assert.ok(complete.y>=field.y+field.height-1,'Complete sits below the answers');
+ assert.ok(Math.abs(options.x+options.width-(complete.x+complete.width))<=1,'Complete sits where Submit was, at the footer right');
+ assert.ok(complete.height>=44);
+ const greyed=await answered.locator('.v3-reply-options,.v3-reply-comment,.v3-reply-input').evaluateAll(nodes=>nodes.map(node=>Number(getComputedStyle(node).opacity)));
+ assert.ok(greyed.length>=2&&greyed.every(value=>value>0&&value<1),'recorded picks and comments are greyed out');
+ assert.deepEqual(await p.evaluate(()=>[...window.answeredPanelRuns([{component:{lifecycle:{message_run_id:'run-1'}}},{component:{lifecycle:{}}},{}])]),['run-1']);
  assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  if(process.env.EVIDENCE_DIR)await p.screenshot({path:path.join(process.env.EVIDENCE_DIR,`reply-panel-${mobile?'mobile':'desktop'}-${light?'light':'dark'}.png`),fullPage:true});
 });

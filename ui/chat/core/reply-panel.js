@@ -4,7 +4,9 @@
 // text and free-text fields with + inside the box to stage files on the answer, and an
 // optional one-question-per-page flow with "N of M" between back/forward chevrons. Dismiss sits at
 // the card's top right; the main button reads Continue, Skip (optional page left empty) or Submit.
-// The answer only ever goes out as the user's own message; a panel never authorizes anything.
+// The answer only ever goes out as the user's own message, which the transcript leaves out; a panel
+// never authorizes anything. An answered panel keeps its answers visible but greyed out and locked,
+// with Complete where Submit was.
 
 const OTHER='\u0000other';
 
@@ -19,6 +21,9 @@ export function shownAnswer(value){if(Array.isArray(value))return value.length?v
 
 /** Builds the reply text: "Title: value" for one uncommented field, else the title then one "Label: value" line per field, each comment on its own "Label — comment: text" line. */
 export function answerText(title,answers){if(answers.length===1&&!answers[0].comment)return title+': '+shownAnswer(answers[0].value);return [title,...answers.flatMap(item=>[item.label+': '+shownAnswer(item.value),...(item.comment?[item.label+' — comment: '+item.comment]:[])])].join('\n');}
+
+/** Collects the run that carried each panel's answer message, which the transcript leaves out. */
+export function answeredPanelRuns(components){const runs=new Set();for(const row of Array.isArray(components)?components:[]){const run=row?.component?.lifecycle?.message_run_id;if(typeof run==='string'&&run)runs.add(run);}return runs;}
 
 /** Builds one question: its label, hint, control, inline error, and how to read, check and clear it. */
 function question(field,saved,locked,addFiles,key,savedComment){
@@ -96,7 +101,8 @@ export function buildReplyForm({fields,paged=false,state='',values={},comments={
   const locked=Boolean(state),key='v3r-'+Math.random().toString(36).slice(2);
   const items=fields.map((field,index)=>question(field,values[field.name],locked,addFiles,key+'-'+index,comments[field.name]));
   for(const item of items)form.append(item.page);
-  if(locked)return form;
+  // An answered panel shows its recorded answer read-only, with Complete where Submit was.
+  if(locked){const foot=el('div','v3-reply-foot');if(state==='answered')foot.append(el('span','v3-reply-complete','Complete'));if(foot.childElementCount)form.append(foot);return form;}
   // Dismiss sits at the card's top right, away from the answer buttons.
   dismiss.className='v3-reply-btn is-quiet v3-reply-dismiss';form.prepend(dismiss);
   const foot=el('div','v3-reply-foot');

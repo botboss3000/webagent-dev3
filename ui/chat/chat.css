@@ -439,7 +439,11 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 .v3-reply-btn.is-quiet{border-color:transparent;color:var(--fg-2)}
 @media (hover:hover){.v3-reply-btn.is-quiet:hover:not(:disabled){background:color-mix(in oklab,var(--fg-1) 8%,transparent);color:var(--fg-1)}}
 .v3-reply-btn:disabled{opacity:.55;cursor:default}
-.v3-reply-panel.is-answered .v3-reply-option:not(:has(input:checked)),.v3-reply-panel.is-dismissed .v3-reply-option{opacity:.55}
+/* An answered or dismissed panel is read-only: its picks, comment boxes and text fields are greyed out. */
+.v3-reply-panel:is(.is-answered,.is-dismissed) :is(.v3-reply-options,.v3-reply-comment,.v3-reply-input){opacity:.6}
+.v3-reply-panel:is(.is-answered,.is-dismissed) :is(.v3-reply-options,.v3-reply-comment,.v3-reply-input) :is(input,select,textarea):disabled{opacity:1}
+/* Complete stands where Submit was: a quiet, non-interactive pill at the footer's right. */
+.v3-reply-complete{display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:999px;border:var(--border-width) solid var(--border-soft);color:var(--fg-3);font-size:15px}
 /* While a reply panel's text field holds focus the composer steps aside, so a phone keyboard shows the panel rather than two text boxes. */
 body:has(.v3-reply-panel :is(input:not([type=radio],[type=checkbox],[type=file]),textarea,select):focus) #composer{display:none!important}
 /* Admission review blocked this message: the agent never saw it. */
@@ -450,7 +454,6 @@ body:has(.v3-reply-panel :is(input:not([type=radio],[type=checkbox],[type=file])
    scrollbar, so without this bubbles sit flush against the view. */
 #chat-messages-inner{padding-inline:8px!important}
 .v3-reply-prompt{margin:4px 0 0}
-.v3-reply-state{display:block;margin-top:6px;color:var(--fg-2);font-size:13px}
 .v3-subagent-notices{display:flex;flex-direction:column;gap:2px;color:var(--fg-3);font-size:12px;min-width:0}
 .v3-subagent-row>summary{cursor:pointer;padding:0 8px;border-radius:var(--r-sm,8px);overflow-wrap:anywhere;list-style:none;-webkit-tap-highlight-color:transparent}
 .v3-subagent-row>summary::-webkit-details-marker{display:none}
