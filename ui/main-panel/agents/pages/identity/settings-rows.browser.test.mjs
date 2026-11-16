@@ -26,7 +26,7 @@ try{
    const {renderIdentity}=await import('/ui/main-panel/agents/pages/identity/page.js');
    const {vibrationConfigReady}=await import('/ui/shared/vibrate.js');await vibrationConfigReady;
    window.pulses=[];Object.defineProperty(navigator,'vibrate',{configurable:true,value:n=>{pulses.push(n);return true;}});
-   const agent={name:'Fixture',description:'',revision:3,can_manage:true,member_access:{visitor_access:false,app_login_members:true,conversation_privacy:'operator_reviewable'},capability_levels:{revision:0,order:['operator','member','visitor'],levels:Object.fromEntries([['operator','Operator'],['member','Member'],['visitor','Visitor']].map(([id,name])=>[id,{id,name,revision:1,ability_permissions:{},tool_permissions:{},ability_exposure:{},tool_exposure:{},skill_exposure:{}}]))},default_execution_mode:'ask',execution_modes:[{id:'ask',label:'Ask',description:'Ask first',prompt:'Ask prompt',builtin:true},{id:'auto',label:'Auto',description:'Act',prompt:'Auto prompt',builtin:true}],shared_chat:{shareable:false,admin_view:false,admin_join:false,help:false,initial_active:true},compaction_thresholds:{trigger_tokens:150000,tail_tokens:40000},compaction_defaults:{trigger_tokens:150000,tail_tokens:40000},manager_incoming_message:{enabled:false,criteria:''},message_visibility:{mode:'manual',guidance:'Saved guidance',fixed_protocol:'Fixed protocol'},closing_message:{notification_guidance:'Saved closing'},closing_protocol:{flags:['complete'],notification_target_words:5}};
+   const agent={name:'Fixture',description:'',revision:3,can_manage:true,member_access:{visitor_access:false,app_login_members:true,conversation_privacy:'operator_reviewable'},capability_levels:{revision:0,order:['operator','member','visitor'],levels:Object.fromEntries([['operator','Operator'],['member','Member'],['visitor','Visitor']].map(([id,name])=>[id,{id,name,revision:1,ability_permissions:{},tool_permissions:{},ability_exposure:{},tool_exposure:{},skill_exposure:{}}]))},default_execution_mode:'ask',execution_modes:[{id:'ask',label:'Ask',description:'Ask first',prompt:'Ask prompt',builtin:true},{id:'auto',label:'Auto',description:'Act',prompt:'Auto prompt',builtin:true}],shared_chat:{shareable:false,admin_view:false,admin_join:false,help:false,initial_active:true},compaction_thresholds:{trigger_tokens:150000,tail_tokens:40000},compaction_defaults:{trigger_tokens:150000,tail_tokens:40000},manager_incoming_message:{enabled:false,criteria:''},message_visibility:{mode:'manual',guidance:'Saved guidance',fixed_protocol:'Fixed protocol'},closing_message:{notification_guidance:'Saved closing'},closing_protocol:{flags:['complete'],notification_target_words:5},voice_output:{enabled:false,voice:'af_heart'},voice_catalog:[{id:'af_heart',name:'Heart',group:'English'}]};
    const widget={revision:5,config:{enabled:false,guest_access:false,allowed_origins:['https://example.com']}};
    window.fixture={agent,widget,writes:[],fail:false};
    const request=async(url,method='GET',body)=>{
@@ -40,62 +40,101 @@ try{
    };
    window.remount=async()=>{await renderIdentity(document.querySelector('#host'),request,{agentId:'one'});};await remount();
   },light);
-  const titles=['Website chat widget','Shared conversations','Chat modes','Review incoming messages','Working-message promotion','Final response','Member access'];
+  const titles=['Profile','Member access','Website chat widget','Shared conversations','Main Chat','Context compaction','Duplicate tool results','Lifetime/budget retention','Chat modes','Review incoming messages','Working-message promotion','Final response','Voice output'];
+  const rowFor=title=>page.locator('.ir-row',{hasText:title}).first();
+  const openRow=async title=>{
+   await rowFor(title).click();
+   await page.waitForFunction(()=>{const menu=document.querySelector('.ir-menu');const detail=document.querySelector('.ir-detail');return detail&&!detail.hidden&&menu&&menu.hidden;});
+  };
+  const backToList=async()=>{
+   await page.locator('.ir-back').click();
+   await page.waitForFunction(()=>{const menu=document.querySelector('.ir-menu');return document.querySelector('.ir-detail').hidden&&!menu.hidden;});
+  };
+  const toList=async()=>{if(await page.evaluate(()=>!document.querySelector('.ir-detail').hidden))await backToList();};
+  assert.equal(await page.locator('.ir-row').count(),titles.length);
+  assert.equal(await page.locator('.ir-menu .ir-title').first().textContent(),'Profile');
+  // Each category opens its own panel, back returns focus to its row, and opening never writes.
   for(const title of titles){
-   const btn=page.getByRole('button',{name:'Expand '+title,exact:true});assert.equal(await btn.getAttribute('aria-expanded'),'false');
-   await btn.press('Enter');assert.equal(await page.getByRole('button',{name:'Collapse '+title,exact:true}).getAttribute('aria-expanded'),'true');
+   await openRow(title);
+   assert.equal(await page.locator('.ir-detail-body').evaluate(node=>node.children.length>0),true);
+   await backToList();
+   assert.equal(await rowFor(title).evaluate(node=>node===document.activeElement),true);
   }
   assert.equal(await page.evaluate(()=>fixture.writes.length),0);
-  assert.equal(await page.locator('[data-identity-section="shared-conversations"] > .conn-card-header input').count(),0);
-  assert.equal(await page.locator('[data-identity-section="working-message-promotion"] > .conn-card-header select').count(),0);
-  const reviewRow=page.locator('[data-identity-section="review-incoming-messages"]');
-  await reviewRow.locator('.conn-toggle-wrap').click();
+  assert.equal(await page.locator('.ir-section-head').count(),0);
+  assert.equal(await page.locator('.ir-toggle-slot .conn-toggle-wrap').count(),0);
+  await openRow('Review incoming messages');
+  const reviewPanel=page.locator('.ir-detail-body');
+  await page.locator('.ir-toggle-slot .conn-toggle-wrap').click();
   assert.equal(await page.getByLabel('Enable incoming-message review',{exact:true}).isChecked(),false);
-  assert.match(await reviewRow.innerText(),/Enter an acceptance prompt/);
+  assert.match(await reviewPanel.innerText(),/Enter an acceptance prompt/);
+  assert.equal(await page.getByLabel('Acceptance prompt',{exact:true}).evaluate(node=>node===document.activeElement),true);
   assert.equal(await page.evaluate(()=>fixture.writes.length),0);
   await page.getByLabel('Acceptance prompt',{exact:true}).fill('Accept relevant requests');
   await page.getByRole('button',{name:'Save prompt',exact:true}).click();await page.waitForFunction(()=>fixture.agent.manager_incoming_message.criteria==='Accept relevant requests');
   assert.equal(await page.evaluate(()=>fixture.agent.manager_incoming_message.enabled),false);
-  await page.getByRole('button',{name:'Collapse Review incoming messages',exact:true}).click();
-  await reviewRow.locator('.conn-toggle-wrap').click();await page.waitForFunction(()=>fixture.agent.manager_incoming_message.enabled);
-  assert.equal(await page.getByRole('button',{name:'Expand Review incoming messages',exact:true}).getAttribute('aria-expanded'),'false');
-  await page.evaluate(()=>fixture.fail=true);await reviewRow.locator('.conn-toggle-wrap').click();
-  await page.getByRole('button',{name:'Collapse Review incoming messages',exact:true}).waitFor();assert.equal(await page.getByLabel('Enable incoming-message review',{exact:true}).isChecked(),true);assert.match(await reviewRow.innerText(),/Save failed: stale revision/);
-  await page.locator('[data-identity-section="website-chat-widget"] .conn-toggle-wrap').click();
+  await page.locator('.ir-toggle-slot .conn-toggle-wrap').click();await page.waitForFunction(()=>fixture.agent.manager_incoming_message.enabled);
+  await page.evaluate(()=>fixture.fail=true);await page.locator('.ir-toggle-slot .conn-toggle-wrap').click();
+  await page.waitForFunction(()=>document.querySelector('.ir-toggle-slot input[type=checkbox]').checked===true);
+  assert.match(await reviewPanel.innerText(),/Save failed: stale revision/);
+  await toList();
+  await openRow('Website chat widget');
+  await page.locator('.ir-toggle-slot .conn-toggle-wrap').click();
   assert.equal(await page.evaluate(()=>fixture.widget.config.enabled),false);
   await page.getByRole('button',{name:'Save widget settings',exact:true}).click();await page.waitForFunction(()=>fixture.widget.config.enabled);assert.equal(await page.evaluate(()=>fixture.writes.at(-1).body.expected_revision),5);
+  await toList();
+  await openRow('Shared conversations');
   await page.getByLabel('Participants may invite others',{exact:true}).check();await page.getByRole('button',{name:'Save shared-chat policy',exact:true}).click();await page.waitForFunction(()=>fixture.agent.shared_chat.shareable);
+  await toList();
+  await openRow('Member access');
   assert.equal(await page.getByRole('radio',{name:/^Registered/}).isChecked(),true);
   await page.getByRole('radio',{name:/^Authorized/}).check();await page.waitForFunction(()=>fixture.agent.member_access.app_login_members===false&&fixture.agent.member_access.visitor_access===false);
   await page.getByLabel('Conversation privacy',{exact:true}).selectOption('private');await page.waitForFunction(()=>fixture.agent.member_access.conversation_privacy==='private');
+  await toList();
+  await openRow('Chat modes');
   await page.locator('[data-field="default_execution_mode"]').selectOption('auto');await page.waitForFunction(()=>fixture.agent.default_execution_mode==='auto');
   await page.locator('[data-mode-id="ask"] summary').click();await page.locator('[data-mode-id="ask"] [data-mode-field="prompt"]').fill('Updated prompt');await page.locator('[data-mode-id="ask"] [data-mode-card-save]').click();await page.waitForFunction(()=>fixture.agent.execution_modes[0].prompt==='Updated prompt');
+  await toList();
+  await openRow('Working-message promotion');
   await page.getByLabel('Working-message promotion',{exact:true}).selectOption('none');await page.waitForFunction(()=>fixture.agent.message_visibility.mode==='none');assert.equal(await page.getByLabel('Additional promotion guidance',{exact:true}).isVisible(),false);
   await page.getByLabel('Working-message promotion',{exact:true}).selectOption('manual');await page.waitForFunction(()=>fixture.agent.message_visibility.mode==='manual');
-  await page.getByLabel('Notification guidance',{exact:true}).fill('Updated closing');await page.locator('[data-identity-section="final-response"]').getByRole('button',{name:'Save',exact:true}).click();await page.waitForFunction(()=>fixture.agent.closing_message.notification_guidance==='Updated closing');
-  const closingRow=page.locator('[data-identity-section="final-response"]');
+  await toList();
+  await openRow('Final response');
+  await page.getByLabel('Notification guidance',{exact:true}).fill('Updated closing');await page.locator('.ir-detail-body').getByRole('button',{name:'Save',exact:true}).click();await page.waitForFunction(()=>fixture.agent.closing_message.notification_guidance==='Updated closing');
   await page.locator('[data-closing-key="require_flag"]').uncheck();await page.waitForFunction(()=>fixture.agent.closing_message.require_flag===false);
   assert.equal(await page.evaluate(()=>fixture.agent.closing_message.notification_guidance),'Updated closing');
-  await closingRow.locator('.conn-toggle-wrap').click();await page.waitForFunction(()=>fixture.agent.closing_message.enabled===false);
+  await page.locator('.ir-toggle-slot .conn-toggle-wrap').click();await page.waitForFunction(()=>fixture.agent.closing_message.enabled===false);
   assert.equal(await page.locator('[data-closing-key="require_notification"]').isDisabled(),true);assert.equal(await page.getByLabel('Notification guidance',{exact:true}).isDisabled(),true);
-  await closingRow.locator('.conn-toggle-wrap').click();await page.waitForFunction(()=>fixture.agent.closing_message.enabled===true);
-  await page.evaluate(()=>remount());for(const title of titles)assert.equal(await page.getByRole('button',{name:'Expand '+title,exact:true}).getAttribute('aria-expanded'),'false');
-  await page.getByRole('button',{name:'Expand Chat modes',exact:true}).click();assert.equal(await page.locator('[data-field="default_execution_mode"]').inputValue(),'auto');
-  await page.getByRole('button',{name:'Expand Final response',exact:true}).click();assert.equal(await page.getByLabel('Notification guidance',{exact:true}).inputValue(),'Updated closing');assert.equal(await page.locator('[data-closing-key="require_flag"]').isChecked(),false);
-  if(touch){const before=await page.evaluate(()=>pulses.length);await page.getByRole('button',{name:'Expand Shared conversations',exact:true}).tap();assert.equal(await page.evaluate(()=>pulses.length),before+1);}
-  // Per-level message limits save as whole numbers on that level only; saving reloads the page.
-  await page.getByRole('button',{name:'Expand Member access',exact:true}).click();
+  await page.locator('.ir-toggle-slot .conn-toggle-wrap').click();await page.waitForFunction(()=>fixture.agent.closing_message.enabled===true);
+  await page.evaluate(()=>remount());
+  assert.equal(await page.locator('.ir-row').count(),titles.length);
+  await openRow('Chat modes');assert.equal(await page.locator('[data-field="default_execution_mode"]').inputValue(),'auto');await toList();
+  await openRow('Final response');assert.equal(await page.getByLabel('Notification guidance',{exact:true}).inputValue(),'Updated closing');assert.equal(await page.locator('[data-closing-key="require_flag"]').isChecked(),false);await toList();
+  if(touch){
+   const before=await page.evaluate(()=>pulses.length);
+   await rowFor('Shared conversations').tap();
+   await page.waitForFunction(()=>!document.querySelector('.ir-detail').hidden&&document.querySelector('.ir-menu').hidden);
+   assert.equal(await page.evaluate(()=>pulses.length),before+1);
+   // The way back is a touch control too: one tap, one request.
+   await page.locator('.ir-back').tap();
+   await page.waitForFunction(()=>document.querySelector('.ir-detail').hidden&&!document.querySelector('.ir-menu').hidden);
+   assert.equal(await page.evaluate(()=>pulses.length),before+2);
+  }
+  await openRow('Member access');
   await page.getByLabel('Member messages per 24 hours',{exact:true}).fill('5');await page.getByRole('button',{name:'Save limits'}).first().click();
   await page.waitForFunction(()=>fixture.ladder?.ladder.levels.member.daily_turns===5&&fixture.ladder.ladder.levels.visitor.daily_turns===undefined);
+  await toList();
   await page.evaluate(async()=>{fixture.agent.can_manage=false;await remount();});
   assert.equal(await page.locator('[data-identity-section="website-chat-widget"]').count(),0);
-  for(const title of titles.slice(1))await page.getByRole('button',{name:'Expand '+title,exact:true}).click();
-  assert.equal(await page.locator('[data-field="default_execution_mode"]').isDisabled(),true);
-  for(const label of ['Enable incoming-message review','Working-message promotion','Notification guidance','Conversation privacy'])assert.equal(await page.getByLabel(label,{exact:true}).isDisabled(),true);
-  assert.equal(await page.getByRole('radio',{name:/^Authorized/}).isDisabled(),true);
+  assert.equal(await page.locator('.ir-row').count(),titles.length-1);
+  await openRow('Chat modes');assert.equal(await page.locator('[data-field="default_execution_mode"]').isDisabled(),true);await toList();
+  await openRow('Review incoming messages');assert.equal(await page.getByLabel('Enable incoming-message review',{exact:true}).isDisabled(),true);await toList();
+  await openRow('Working-message promotion');assert.equal(await page.getByLabel('Working-message promotion',{exact:true}).isDisabled(),true);await toList();
+  await openRow('Final response');assert.equal(await page.getByLabel('Notification guidance',{exact:true}).isDisabled(),true);await toList();
+  await openRow('Member access');assert.equal(await page.getByLabel('Conversation privacy',{exact:true}).isDisabled(),true);assert.equal(await page.getByRole('radio',{name:/^Authorized/}).isDisabled(),true);await toList();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   if(touch)assert.equal(await page.evaluate(()=>innerWidth===390&&matchMedia('(pointer: coarse)').matches),true);
   assert.deepEqual(errors,[]);await context.close();
  }
- console.log('Identity configuration rows: seven features including joining and pinned privacy, keyboard-only expansion without writes, explicit widget save, revision fences, review validation/rollback, shared policy, modes, promotion, closing, remount persistence, read-only, touch, both themes.');
+ console.log('Identity settings register: thirteen categories, one panel at a time, focus returns to the row, touch pulse per tap, review validation focus, explicit saves, revision fences, shared policy, modes, promotion, closing, remount persistence, read-only, both themes.');
 }finally{await browser?.close();await new Promise(r=>server.close(r));}

@@ -7,7 +7,7 @@ const root=path.resolve(new URL('../../../../../',import.meta.url).pathname);
 const server=http.createServer(async(req,res)=>{
  try {
   const url=new URL(req.url,'http://localhost').pathname;
-  if(url==='/') {res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/shared/ui/shared/css/design-system.css"><link rel="stylesheet" href="/shared/ui/main-panel/agents/agents.css"><link rel="stylesheet" href="/ui/app.css"><link rel="stylesheet" href="/ui/shared/models/reference.css"><main id="host" style="padding:12px;max-width:650px"></main><div id="tools"></div>');return;}
+  if(url==='/') {res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/shared/ui/shared/css/design-system.css"><link rel="stylesheet" href="/shared/ui/main-panel/agents/agents.css"><link rel="stylesheet" href="/ui/app.css"><link rel="stylesheet" href="/ui/shared/models/reference.css"><main id="host" style="padding:12px;max-width:650px"></main>');return;}
   if(url==='/ui/vibrate.json') {res.setHeader('content-type','application/json');res.end(JSON.stringify({enabled:true,duration_ms:17}));return;}
   const file=url.startsWith('/shared/')?path.resolve(root,url.slice(8)):path.resolve(root,'.'+url);
   if(!file.startsWith(root+'/ui/')&&!file.startsWith(path.join(root,'ui')+'/'))throw Error('outside fixture');
@@ -45,19 +45,9 @@ try {
    },{available,canManage,light});
   };
   await page.goto('http://127.0.0.1:'+server.address().port+'/');await setup();
-  // Each row starts collapsed; expanding and collapsing must never save settings.
-  for(const name of ['Context compaction','Duplicate tool results','Lifetime/budget retention']) {
-   const expand=page.getByRole('button',{name:'Expand '+name,exact:true});
-   assert.equal(await expand.getAttribute('aria-expanded'),'false');
-   await expand.focus();await page.keyboard.press('Enter');
-   const collapse=page.getByRole('button',{name:'Collapse '+name,exact:true});
-   assert.equal(await collapse.getAttribute('aria-expanded'),'true');
-   await page.keyboard.press('Space');
-   assert.equal(await expand.getAttribute('aria-expanded'),'false');
-  }
+  // The register owns the disclosure now: these rows render their fields openly and rendering never saves.
   assert.deepEqual(await page.evaluate(()=>fixture.writes),[]);
   assert.equal(await page.locator('[data-identity-section=context-compaction] input[type=checkbox]').count(),0);
-  await page.getByRole('button',{name:'Expand Context compaction',exact:true}).click();
   await page.getByLabel('Summary trigger',{exact:true}).fill('10000');
   await page.getByRole('button',{name:'Save compaction thresholds',exact:true}).click();
   await page.getByText('Trigger must exceed the tail plus the summary target (5,000).',{exact:true}).waitFor();
@@ -69,52 +59,32 @@ try {
   await page.getByRole('button',{name:'Use app defaults',exact:true}).click();
   await page.getByText('Saved. New model calls use the app defaults.',{exact:true}).waitFor();
   assert.deepEqual((await page.evaluate(()=>fixture.writes)).at(-1),{reset_compaction_thresholds:true});
-  await page.getByRole('button',{name:'Expand Lifetime/budget retention',exact:true}).click();
   assert.equal(await page.getByLabel('Enable retention',{exact:true}).isDisabled(),true);
   assert.equal(await page.getByLabel('Retention scope',{exact:true}).isDisabled(),true);
   await page.getByText('Under development · Experimental — disabled. Saved lifetime and budget values are preserved for a later strategy revision.',{exact:true}).waitFor();
   if(touch)assert.equal(await page.evaluate(()=>innerWidth===390&&matchMedia('(pointer: coarse)').matches),true);
-  for(const name of ['Context compaction','Lifetime/budget retention'])await page.getByRole('button',{name:'Collapse '+name,exact:true}).click();
   await page.evaluate(()=>{fixture.writes=[];pulses.length=0;});
   const toggle=page.getByLabel('Suppress identical tool results',{exact:true});
   assert.equal(await toggle.isChecked(),true);
   if(touch)await page.locator('[data-identity-section=duplicate-tool-results] .conn-toggle-wrap').tap();else {await toggle.focus();await page.keyboard.press('Space');}
-  await page.getByRole('button',{name:'Expand Duplicate tool results',exact:true}).click();
   await page.getByText('Saved. Future results use this setting; existing references stay unchanged.',{exact:true}).waitFor();
   assert.equal(await toggle.isChecked(),false);
   assert.deepEqual(await page.evaluate(()=>pulses),touch?[17]:[]);
   assert.deepEqual(await page.evaluate(()=>fixture.writes),[{tool_result_deduplication:{enabled:false}}]);
   await page.reload();await setup();assert.equal(await toggle.isChecked(),false);
-  await page.getByRole('button',{name:'Expand Duplicate tool results',exact:true}).click();
   await page.evaluate(()=>fixture.fail=true);await page.locator('[data-identity-section=duplicate-tool-results] .conn-toggle-wrap').click();
   await page.getByText('Identity changed elsewhere. Reload this page before saving.',{exact:true}).waitFor();
   assert.equal(await toggle.isChecked(),false);
   await setup(false);assert.equal(await toggle.isDisabled(),true);
   assert.equal(await page.getByLabel('Enable retention',{exact:true}).isChecked(),true);
-  await page.getByRole('button',{name:'Expand Lifetime/budget retention',exact:true}).click();
   await page.getByText(/running lifetime\/budget policy is unchanged/).waitFor();
   await page.evaluate(()=>document.querySelector('#identity-tool-result-deduplication-enabled').dispatchEvent(new Event('change')));
   assert.deepEqual(await page.evaluate(()=>fixture.writes),[]);
   await setup(true,false);assert.equal(await toggle.isDisabled(),true);
-  await page.getByRole('button',{name:'Expand Context compaction',exact:true}).click();
   assert.equal(await page.getByLabel('Summary trigger',{exact:true}).getAttribute('readonly'),'');
   assert.equal(await page.getByRole('button',{name:'Save compaction thresholds',exact:true}).count(),0);
-  // The expanded compaction row is tall on a phone; collapse it before the tool row below.
-  await page.getByRole('button',{name:'Collapse Context compaction',exact:true}).click();
-  await page.evaluate(async()=>{
-   const {_buildToolRow}=await import('/ui/shared/ability-row-controls.js');
-   const host=document.querySelector('#tools');host.replaceChildren();fixture.inclusions=[];
-   host.append(_buildToolRow({name:'file_read',permMode:'allow',mode:'loaded',result_deduplication:true},
-    {canEdit:true,showPerm:true,onResultDeduplicationChange:async(name,included)=>{fixture.inclusions.push({name,included});}}));
-  });
-  await page.locator('#tools .ac-tri').click();
-  const inclusion=page.getByRole('menuitemcheckbox',{name:'Suppress identical results'});
-  assert.equal(await inclusion.getAttribute('aria-checked'),'true');
-  await inclusion.focus();await page.keyboard.press('Enter');
-  await page.waitForFunction(()=>document.querySelector('[role="menuitemcheckbox"]')?.getAttribute('aria-checked')==='false');
-  assert.equal(await inclusion.evaluate(node=>node===document.activeElement),true);
-  assert.deepEqual(await page.evaluate(()=>fixture.inclusions),[{name:'file_read',included:false}]);
-  await page.keyboard.press('Escape');assert.equal(await inclusion.count(),0);
+  // The per-tool result-deduplication picker belongs to the shared ability row control,
+  // which its own test suite covers; this fixture covers this page's policy only.
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   assert.deepEqual(errors,[]);await context.close();
  }
