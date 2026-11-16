@@ -3,9 +3,10 @@ const fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const ROOT=process.env.SOURCE_ROOT||path.resolve(__dirname,'../../..'),UI=path.join(ROOT,'ui');
 // A paged reply panel pages with chevrons around "N of M", clears a radio on a second tap, swaps
-// Skip/Continue, takes "Something else…", stages files from + inside a two-row text box, keeps
-// Dismiss as a chip at the top right, hides the composer while a panel field is focused and sends
-// one answer message.
+// Skip/Continue, takes "Something else…", keeps its pick list flush so the marks line up with the
+// comment field below, carries a comment typed under a pick list into the answer, stages files from
+// + inside a two-row text box, keeps Dismiss as a chip at the top right, hides the composer while a
+// panel field is focused and sends one answer message.
 for(const mobile of [false,true])for(const light of [false,true])test(`reply panel ${mobile?'mobile':'desktop'} ${light?'light':'dark'}`,async t=>{
  const html='<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/chat/chat.css"><style>:root{--fg-1:#eee;--fg-2:#ddd;--fg-3:#aaa;--bg-0:#000;--bg-1:#222;--bg-elev:#181818;--brand:#48f;--accent:#48f;--danger:#e44;--border:#666;--border-width:1px}body{margin:0;background:#111;font-family:system-ui}body.light-mode{background:white;--fg-1:#222;--fg-2:#333;--fg-3:#666;--bg-0:#fff;--bg-1:#eee;--bg-elev:#fafafa}#chat-panel{max-width:650px;margin:auto}#chat-input-area{position:static!important}</style><main id="chat-panel">'+fs.readFileSync(path.join(UI,'chat/chat.html'),'utf8')+'</main>';
  const server=http.createServer((req,res)=>{const rel=new URL(req.url,'http://localhost').pathname;if(rel==='/'){res.setHeader('content-type','text/html');return res.end(html);}const p=path.resolve(UI,rel.replace(/^\/ui\//,'').replace(/^\//,''));if(!p.startsWith(UI+path.sep)){res.writeHead(403);return res.end();}fs.readFile(p,(e,b)=>{res.writeHead(e?404:200,{'content-type':p.endsWith('.js')?'text/javascript':p.endsWith('.css')?'text/css':'text/plain'});res.end(e?'missing':b);});});
@@ -36,6 +37,12 @@ for(const mobile of [false,true])for(const light of [false,true])test(`reply pan
  // The single-choice mark is a round 20 px circle; the checkbox mark is a rounded square.
  const marks=await live.locator('.v3-reply-mark').evaluateAll(nodes=>nodes.map(n=>{const s=getComputedStyle(n);return [n.previousElementSibling.type,s.width,s.height,s.borderTopLeftRadius];}));
  assert.deepEqual(marks.find(m=>m[0]==='radio'),['radio','20px','20px','50%']);assert.deepEqual(marks.find(m=>m[0]==='checkbox'),['checkbox','20px','20px','5px']);
+ // The pick list has no box of its own, and its marks line up with the comment field below it.
+ const listStyle=await live.locator('.v3-reply-options').first().evaluate(n=>{const s=getComputedStyle(n);return [s.borderTopWidth,s.borderLeftWidth,s.borderTopLeftRadius];});
+ assert.deepEqual(listStyle,['0px','0px','0px']);
+ assert.ok(Math.abs((await live.locator('.v3-reply-mark').first().boundingBox()).x-(await live.locator('.v3-reply-comment').first().boundingBox()).x)<=1,'marks align with the comment field');
+ // A comment typed under a pick list goes out with the answer.
+ await live.getByRole('textbox',{name:'Layout: comments'}).fill('chosen for clarity');
  await live.getByRole('button',{name:'Continue'}).click();
  assert.equal(await live.locator('.v3-reply-error:visible').innerText(),'Choose one option.');assert.equal(await step(),'1 of 4');
  // Tapping the chosen radio again clears it.
@@ -68,7 +75,8 @@ for(const mobile of [false,true])for(const light of [false,true])test(`reply pan
  await live.getByRole('button',{name:'Submit'}).click();assert.equal(await live.locator('.v3-reply-error:visible').innerText(),'Name is required.');assert.equal(await p.evaluate(()=>sent.length),0);
  await live.getByRole('textbox',{name:'Name'}).fill('Ana');await live.getByRole('button',{name:'Submit'}).click();
  await p.waitForFunction(()=>sent.length===1);
- assert.equal(await p.evaluate(()=>answerText('Panel setup',sent[0])),'Panel setup\nLayout: Tiles\nExtras: skipped\nNotes: Keep it short\nName: Ana');
+ assert.equal(await p.evaluate(()=>answerText('Panel setup',sent[0])),'Panel setup\nLayout: Tiles\nLayout — comment: chosen for clarity\nExtras: skipped\nNotes: Keep it short\nName: Ana');
+ assert.equal(await p.evaluate(()=>sent[0].find(item=>item.name==='layout').comment),'chosen for clarity');
  assert.deepEqual(await p.evaluate(()=>staged),['a.txt','b.txt']);
  // An answered panel shows every question read-only with no buttons.
  const answered=p.locator('#answered');assert.equal(await answered.locator('button').count(),0);
