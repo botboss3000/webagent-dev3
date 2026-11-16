@@ -2,6 +2,22 @@
 use super::*;
 
 const MAX_ARTIFACT_BYTES: usize = 24 * 1024;
+/// Undelivered panel notes kept per session; older ones drop first.
+const MAX_PANEL_NOTES: usize = 8;
+
+/// The tool call ID of pending call `pending_id` in `run`, alone or in a batch.
+fn pending_call_id(run: &Value, pending_id: &str) -> Option<String> {
+    let pending = if run["pending"]["id"] == pending_id {
+        &run["pending"]
+    } else {
+        run["batch"]
+            .as_array()?
+            .iter()
+            .map(|item| &item["pending"])
+            .find(|pending| pending["id"] == pending_id)?
+    };
+    pending["call_id"].as_str().map(str::to_owned)
+}
 
 fn artifact_key(sid: &str, kind: &str, id: &str) -> Result<String> {
     if sid.is_empty()
@@ -120,21 +136,39 @@ impl Store {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |elapsed| elapsed.as_millis() as u64)
             });
-        // The newest chat row when the panel first appeared places it in the transcript.
+        // The panel follows its run's newest published row when it first appeared (the
+        // message the panel belongs to), never another run's or the user's row.
         let after_seq = match prior.as_ref().and_then(|value| value["after_seq"].as_i64()) {
             Some(seq) => seq,
             None => {
                 sqlx::query_scalar::<_, i64>(
-                    "SELECT COALESCE(MAX(seq),0) FROM chat WHERE session_id=?",
+                    "SELECT COALESCE(MAX(seq),0) FROM chat WHERE session_id=? AND run_id=?",
                 )
                 .bind(sid)
+                .bind(rid)
                 .fetch_one(&mut *tx)
                 .await?
             }
         };
+        // A panel stays linked to the call that first drew it: its run and tool call.
+        let origin = match prior.as_ref().map(|value| &value["origin"]) {
+            Some(origin) if origin.is_object() => origin.clone(),
+            _ if kind == "component" => {
+                let call_id =
+                    sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+                        .bind(format!("run:{rid}"))
+                        .fetch_optional(&mut *tx)
+                        .await?
+                        .map(|raw| self.unseal(&raw))
+                        .transpose()?
+                        .and_then(|run| pending_call_id(&run, pending_id));
+                json!({"run_id":rid,"call_id":call_id})
+            }
+            _ => Value::Null,
+        };
         let document = json!({"schema_version":1,"revision":next,"kind":kind,
             "id":id,"session_id":sid,"updated_by_run":rid,"created_at":created_at,
-            "after_seq":after_seq,"artifact":artifact});
+            "after_seq":after_seq,"origin":origin,"artifact":artifact});
         sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
             .bind(&key).bind(if kind=="core_webhook"{self.seal(&document)?}else{self.encode_user_record(&document)?}).execute(&mut *tx).await?;
         let output = json!({"revision":next,"kind":kind,"id":id,"artifact":artifact});
@@ -162,20 +196,79 @@ impl Store {
         Ok(seq.max(0) as u64)
     }
 
-    /// Records the user's answer to choice or form panel `id`, or its dismissal when `answer`
-    /// is null. The panel stays in the chat, read-only, so the answer survives reload. Only
-    /// `user_reply` panels can be answered; returns whether one was found.
-    pub async fn base_component_dismiss(
+    /// Reply panel `id` of session `sid` as stored, or `None`.
+    pub async fn base_component(&self, sid: &str, id: &str) -> Result<Option<Value>> {
+        let key = artifact_key(sid, "component", id)?;
+        let document = self.get(&key).await?;
+        Ok(document.filter(|document| document["session_id"] == sid))
+    }
+
+    /// The stored reply panel `id` marked answered by the message of run `message_run`,
+    /// for the caller to write in the same transaction as that message. Fails unless the
+    /// panel is still open at `revision` and `answer` fits it; the first answer stands.
+    pub async fn base_component_answered(
+        &self,
+        sid: &str,
+        id: &str,
+        revision: u64,
+        answer: &Value,
+        message_run: &str,
+    ) -> Result<(String, Value)> {
+        let key = artifact_key(sid, "component", id)?;
+        if !answer.is_object() || serde_json::to_vec(answer)?.len() > 16 * 1024 {
+            return Err(anyhow!("Invalid panel answer"));
+        }
+        let mut document = self
+            .base_component(sid, id)
+            .await?
+            .ok_or_else(|| anyhow!("Panel not found"))?;
+        let card = &document["artifact"];
+        if card["authority"] != "user_reply" || card["lifecycle"]["dismissed"] == true {
+            return Err(anyhow!("Only open choice and form panels take answers"));
+        }
+        if card["lifecycle"]["user_state"].is_string() {
+            return Err(anyhow!("Panel already answered"));
+        }
+        if document["revision"].as_u64() != Some(revision) {
+            return Err(anyhow!("Panel changed; reload it before answering"));
+        }
+        webagent_native_tools::task::answer_text(card, answer)?;
+        document["revision"] = json!(revision + 1);
+        document["artifact"]["lifecycle"] = json!({"user_state":"answered","answer":answer,
+            "message_run_id":message_run});
+        Ok((key, document))
+    }
+
+    /// Announce a panel change written with a message, so open chats redraw it.
+    pub async fn base_component_changed(&self, sid: &str, id: &str, revision: u64) -> Result<()> {
+        sqlx::query("INSERT INTO events(session_id,kind,payload) VALUES(?,'base_task_artifact',?)")
+            .bind(sid)
+            .bind(
+                self.encode_user_record(&json!({"kind":"component","id":id,"revision":revision}))?,
+            )
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Records the dismissal of choice or form panel `id`, or, for a server-built panel
+    /// whose answer sends no message, `answer`. The panel stays in the chat, read-only, so
+    /// the outcome survives reload, and `note` waits for the agent's next message. Only
+    /// `user_reply` panels qualify; returns whether one was found.
+    pub async fn base_component_settle(
         &self,
         sid: &str,
         id: &str,
         answer: &Value,
+        note: &str,
     ) -> Result<bool> {
         let key = artifact_key(sid, "component", id)?;
         if !(answer.is_null() || answer.is_object()) || serde_json::to_vec(answer)?.len() > 8 * 1024
         {
             return Err(anyhow!("Invalid panel answer"));
         }
+        let notes_key = format!("panel_notes:{sid}");
+        let _guard = self.context_gate.write().await;
         let mut tx = self.pool.begin().await?;
         let Some(raw) = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
             .bind(&key)
@@ -200,6 +293,9 @@ impl Store {
         if card["lifecycle"]["user_state"].is_string() {
             return Ok(true); // Already answered or dismissed; the first answer stands.
         }
+        if !answer.is_null() && card["server_action"].is_null() {
+            return Err(anyhow!("Answers to agent panels are sent as messages"));
+        }
         let next = document["revision"].as_u64().unwrap_or(0) + 1;
         document["revision"] = json!(next);
         document["artifact"]["lifecycle"] = if answer.is_null() {
@@ -217,7 +313,27 @@ impl Store {
             .bind(self.encode_user_record(&json!({"kind":"component","id":id,"revision":next}))?)
             .execute(&mut *tx)
             .await?;
+        // The agent learns of the outcome with the next message it receives.
+        let mut notes = sqlx::query_scalar::<_, Vec<u8>>("SELECT value FROM docs WHERE key=?")
+            .bind(&notes_key)
+            .fetch_optional(&mut *tx)
+            .await?
+            .map(|raw| self.unseal(&raw))
+            .transpose()?
+            .and_then(|value| value["notes"].as_array().cloned())
+            .unwrap_or_default();
+        notes.push(json!(note));
+        let skip = notes.len().saturating_sub(MAX_PANEL_NOTES);
+        sqlx::query("INSERT INTO docs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+            .bind(&notes_key)
+            .bind(self.encode_user_record(&json!({"notes":notes[skip..]}))?)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
+        self.cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .invalidate(&[key, notes_key]);
         Ok(true)
     }
 
@@ -249,10 +365,17 @@ impl Store {
             {
                 return Err(anyhow!("Invalid stored chat component"));
             }
-            // The run that wrote the card anchors it in the transcript.
+            // The run that drew the card anchors it after that run's reply; the server's own
+            // action stays private.
+            let mut component = document["artifact"].clone();
+            if let Some(card) = component.as_object_mut() {
+                card.remove("server_action");
+            }
+            let origin = &document["origin"];
             components.push(json!({"revision":document["revision"],
-                "run_id":document["updated_by_run"],"created_at":document["created_at"],
-                "after_seq":document["after_seq"],"component":document["artifact"]}));
+                "run_id":origin["run_id"].as_str().map_or(&document["updated_by_run"], |_| &origin["run_id"]),
+                "call_id":origin["call_id"],"created_at":document["created_at"],
+                "after_seq":document["after_seq"],"component":component}));
         }
         tx.commit().await?;
         components.sort_by_key(|row| row["created_at"].as_u64().unwrap_or(0));

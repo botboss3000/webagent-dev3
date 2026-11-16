@@ -384,6 +384,133 @@ fn component(args: ComponentArgs, fallback_id: &str) -> Result<(String, Value, u
     }
     Ok((id, spec, args.expected_revision))
 }
+/// One answer as the agent reads it: list items joined by commas, an empty one "skipped".
+fn shown(value: &Value) -> String {
+    match value {
+        Value::Array(items) if !items.is_empty() => items
+            .iter()
+            .map(|item| item.as_str().unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(", "),
+        Value::String(text) if !text.is_empty() => text.clone(),
+        _ => "skipped".to_owned(),
+    }
+}
+
+/// Checks the user's `answer` to reply panel `spec` and builds the message the agent
+/// receives: "<title>: <value>" for one uncommented answer, else the title and one
+/// "<label>: <value>" line per field, each comment on a "<label> — comment: <text>" line.
+/// A choice answer is `{option_id}`; a form answer is `{values, comments}` keyed by field.
+pub fn answer_text(spec: &Value, answer: &Value) -> Result<String> {
+    if spec["authority"] != "user_reply" {
+        bail!("Only choice and form panels take answers");
+    }
+    let title = spec["title"].as_str().unwrap_or("Answer");
+    if spec["type"] == "choice" {
+        let option = spec["data"]["options"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|option| answer["option_id"].is_string() && option["id"] == answer["option_id"])
+            .ok_or_else(|| anyhow!("Unknown panel option"))?;
+        return Ok(format!(
+            "{title}: {}",
+            option["label"].as_str().unwrap_or("")
+        ));
+    }
+    let fields = spec["data"]["fields"]
+        .as_array()
+        .ok_or_else(|| anyhow!("Panel has no fields"))?;
+    let values = answer["values"]
+        .as_object()
+        .ok_or_else(|| anyhow!("Form answer values required"))?;
+    let comments = match &answer["comments"] {
+        Value::Null => serde_json::Map::new(),
+        Value::Object(map) => map.clone(),
+        _ => bail!("Form answer comments must be an object"),
+    };
+    let known = |name: &String| fields.iter().any(|field| field["name"] == name.as_str());
+    if !values.keys().all(known) || !comments.keys().all(known) {
+        bail!("Answer names a field the panel does not have");
+    }
+    let mut lines = Vec::new();
+    for field in fields {
+        let name = field["name"].as_str().unwrap_or_default();
+        let label = field["label"].as_str().unwrap_or(name);
+        let kind = field["type"].as_str().unwrap_or("text");
+        let options: Vec<&str> = field["options"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        let other = field["other"] == true;
+        let value = values.get(name).cloned().unwrap_or(Value::Null);
+        let picked: Vec<&str> = match (&value, kind) {
+            (Value::Null, _) => Vec::new(),
+            (Value::Array(items), "multi") => items
+                .iter()
+                .map(|item| {
+                    item.as_str()
+                        .ok_or_else(|| anyhow!("Invalid answer for {label}"))
+                })
+                .collect::<Result<_>>()?,
+            (Value::String(text), "multi") if text.is_empty() => Vec::new(),
+            (Value::String(text), _) if kind != "multi" => {
+                if text.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![text.as_str()]
+                }
+            }
+            _ => bail!("Invalid answer for {label}"),
+        };
+        if field["required"] == true && picked.iter().all(|text| text.trim().is_empty()) {
+            bail!("{label} is required");
+        }
+        for text in &picked {
+            let limit = if kind == "textarea" { 8000 } else { 2000 };
+            if text.chars().count() > limit {
+                bail!("Answer for {label} is too long");
+            }
+            match kind {
+                "radio" | "multi" if !other && !options.contains(text) => {
+                    bail!("Unknown option for {label}")
+                }
+                "select" if !options.contains(text) => bail!("Unknown option for {label}"),
+                "number" if text.trim().parse::<f64>().is_err() => {
+                    bail!("{label} must be a number")
+                }
+                "email" if !text.contains('@') => bail!("{label} must be an email address"),
+                _ => {}
+            }
+        }
+        if picked.len() > 9 || (kind != "multi" && picked.len() > 1) {
+            bail!("Too many answers for {label}");
+        }
+        lines.push(format!("{label}: {}", shown(&value)));
+        if let Some(comment) = comments.get(name) {
+            let comment = comment
+                .as_str()
+                .ok_or_else(|| anyhow!("Comments must be text"))?;
+            if field["comment"] != true || comment.chars().count() > 2000 {
+                bail!("Invalid comment for {label}");
+            }
+            if !comment.trim().is_empty() {
+                lines.push(format!("{label} — comment: {comment}"));
+            }
+        }
+    }
+    if lines.len() == 1 && fields.len() == 1 {
+        let value = values.get(fields[0]["name"].as_str().unwrap_or_default());
+        return Ok(format!("{title}: {}", shown(value.unwrap_or(&Value::Null))));
+    }
+    Ok(std::iter::once(title.to_owned())
+        .chain(lines)
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
 /// The session artifact for an agreed `plan`: goal, criteria and notes, then the numbered
 /// checklist. Validates every field, so a bad plan is refused before anything changes.
 pub fn plan_artifact(args: &Plan) -> Result<Value> {
@@ -697,5 +824,54 @@ mod tests {
         assert!(form(json!([{"name":"layout","type":"radio","options":[]}])).is_err());
         assert!(form(json!([{"name":"layout","type":"radio","options":["A\nB"]}])).is_err());
         assert!(form(json!([{"name":"x","type":"html"}])).is_err());
+    }
+
+    /// Answers are checked against the stored panel and become the text the old browser
+    /// built, so the agent reads the same message as before.
+    #[test]
+    fn answers_are_validated_and_rendered_on_the_server() {
+        let (_, choice, _) = component(
+            serde_json::from_value(json!({"type":"choice","expected_revision":0,
+                "title":"For Bob","data":{"options":["Yes","No"]}}))
+            .unwrap(),
+            "c",
+        )
+        .unwrap();
+        assert_eq!(
+            answer_text(&choice, &json!({"option_id":"option-2"})).unwrap(),
+            "For Bob: No"
+        );
+        assert!(answer_text(&choice, &json!({"option_id":"option-9"})).is_err());
+        let (_, form, _) = component(
+            serde_json::from_value(json!({"type":"form","expected_revision":0,"title":"Setup",
+                "data":{"fields":[
+                    {"name":"pick","label":"Pick","type":"multi","options":["A","B"]},
+                    {"name":"size","label":"Size","type":"number","required":true}]}}))
+            .unwrap(),
+            "c",
+        )
+        .unwrap();
+        let answer = json!({"values":{"pick":["A","B"],"size":"3"},"comments":{"pick":"both"}});
+        assert_eq!(
+            answer_text(&form, &answer).unwrap(),
+            "Setup\nPick: A, B\nPick — comment: both\nSize: 3"
+        );
+        for bad in [
+            json!({"values":{"pick":["C"],"size":"3"}}),
+            json!({"values":{"pick":[]}}),
+            json!({"values":{"size":"three"}}),
+            json!({"values":{"size":"3","extra":"x"}}),
+            json!({"values":{"size":"3"},"comments":{"size":"no comment box"}}),
+        ] {
+            assert!(answer_text(&form, &bad).is_err(), "{bad}");
+        }
+        let (_, status, _) = component(
+            serde_json::from_value(json!({"type":"status","expected_revision":0,
+                "data":{"sections":[{"label":"A","value":"B"}]}}))
+            .unwrap(),
+            "c",
+        )
+        .unwrap();
+        assert!(answer_text(&status, &json!({"option_id":"option-1"})).is_err());
     }
 }

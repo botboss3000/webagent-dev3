@@ -89,7 +89,17 @@ pub(crate) async fn submit(
     }
     let prepared = api::chat::prepare_followup(app, s, body).await?;
     // Delivered at the run's next model step; a running tool call is detached for it.
-    let (e, docs) = prepared_entry(prepared, "steer");
+    let (mut e, docs) = prepared_entry(prepared, "steer");
+    // A compaction-only run takes it once its summary is done, unless the user sends it now.
+    if app
+        .store
+        .active_runs()
+        .await?
+        .iter()
+        .any(|r| r["session_id"] == s && r["compaction_only"] == true && !terminal(status(r)))
+    {
+        e["wait"] = json!("compaction");
+    }
     let id = e["id"].as_str().unwrap().to_owned();
     let result = json!({"run_id":null,"submission_id":id,"message_id":e["message_id"],"delivery_state":"queued","queue_entry":public_entry(&e),"attachments":e["attachments"]});
     let message_id = e["message_id"].clone();

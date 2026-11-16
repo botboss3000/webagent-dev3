@@ -7,6 +7,7 @@
   "max_source_bytes": 262144,
   "max_summary_bytes": 65536,
   "merge_tokens": 50000,
+  "min_fold_tokens": 8000,
   "schema_version": 1,
   "search_line_bytes": 240,
   "search_output_bytes": 32768,

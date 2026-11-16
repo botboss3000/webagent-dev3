@@ -16,6 +16,8 @@ pub fn public_entry(e: &Value) -> Value {
         "choice": e["choice"],
         "status": e["status"],
         "send_now": e["send_now"] == true,
+        // Sent while a compaction-only run (`/compact`) works; delivered when it ends.
+        "waiting_for_compaction": e["wait"] == "compaction",
         "content": e["content"],
         "attachments": e["attachments"],
         "consuming_run_id": e["consuming_run_id"],

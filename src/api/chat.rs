@@ -27,10 +27,32 @@ pub(crate) async fn current_workflow_policy(app: &App) -> Result<workflow::Polic
     loop_runtime::Config::read(&app.runtime_path)?.policy()
 }
 
+/// Fields only the server sets: a panel answer (`/components/{cid}/answer`) and a
+/// compaction-only run (`/compact` or a Compact click on an idle chat).
+const SERVER_FIELDS: [&str; 4] = [
+    "component_id",
+    "component_answer",
+    "component_revision",
+    "compaction_only",
+];
+
 pub(crate) async fn send(
     State(app): State<App>,
     Path(id): Path<String>,
     Json(body): Json<Value>,
+) -> std::result::Result<(StatusCode, Json<Value>), ApiError> {
+    if SERVER_FIELDS.iter().any(|field| body.get(field).is_some()) {
+        return Err(bad("Answer panels through their answer endpoint"));
+    }
+    send_message(app, id, body).await
+}
+
+/// Admit one user message: queued behind live work, or as a new run. `body` may carry the
+/// server-set fields of `SERVER_FIELDS`.
+pub(crate) async fn send_message(
+    app: App,
+    id: String,
+    body: Value,
 ) -> std::result::Result<(StatusCode, Json<Value>), ApiError> {
     let text = body["text"]
         .as_str()
@@ -39,8 +61,11 @@ pub(crate) async fn send(
         return Err(bad("text has invalid length"));
     }
     let request_id = required(&body, "client_message_id", 128)?;
-    if let Some(stopped) = typed_stop(&app, &id, &body, text, request_id).await? {
-        return Ok((StatusCode::ACCEPTED, Json(stopped)));
+    let generated = SERVER_FIELDS.iter().any(|field| body.get(field).is_some());
+    if !generated {
+        if let Some(stopped) = typed_stop(&app, &id, &body, text, request_id).await? {
+            return Ok((StatusCode::ACCEPTED, Json(stopped)));
+        }
     }
     let _guard = app.gate.lock().await;
     let agent_id = session_agent_id(&app, &id).await?;
@@ -400,7 +425,8 @@ async fn prepare_message_inner(
         && crate::manager::config::incoming(&app.store, &agent_id)
             .await
             .is_ok_and(|settings| !settings.review_staff);
-    let manager = if staff_exempt {
+    // A compaction-only run carries no request for the agent, so review has nothing to judge.
+    let manager = if staff_exempt || body["compaction_only"] == true {
         None
     } else {
         crate::manager::prepare(&app, &agent_id)
@@ -440,22 +466,55 @@ async fn prepare_message_inner(
     if !prepared.metadata.is_empty() {
         message["context_content"] = json!(prepared.context_content(text)?);
     }
-    // A choice or form panel answer names its panel so the agent can link the reply to it.
+    // PANEL ANSWER: the message and the answered panel commit together, so a panel
+    // has at most one answer and the reply names the call that drew it.
+    let mut panel_doc = None;
     if let Some(panel) = body.get("component_id").and_then(Value::as_str) {
-        if panel.is_empty()
-            || panel.len() > 64
-            || !panel
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-        {
-            return Err(bad("Invalid component_id"));
-        }
+        let revision = body["component_revision"]
+            .as_u64()
+            .ok_or_else(|| bad("component_revision required"))?;
+        let (key, document) = app
+            .store
+            .base_component_answered(id, panel, revision, &body["component_answer"], &run_id)
+            .await
+            .map_err(|error| conflict(&error.to_string()))?;
+        let origin = document["origin"].clone();
+        let call = origin["call_id"].as_str().unwrap_or("unknown");
         let content = message["context_content"]
             .as_str()
             .unwrap_or(text)
             .to_owned();
-        message["context_content"] = json!(format!("{content}\n\n[Answer to chat panel {panel}]"));
+        message["context_content"] = json!(format!(
+            "{content}\n\n[Answer to chat panel {panel}, shown by tool call {call}]"
+        ));
         message["component_id"] = json!(panel);
+        message["component_origin"] = origin;
+        panel_doc = Some((key, document));
+    }
+    if body["compaction_only"] == true {
+        let content = message["context_content"]
+            .as_str()
+            .unwrap_or(text)
+            .to_owned();
+        message["context_content"] = json!(format!(
+            "{content}\n\n[The user compacted earlier context. No reply is needed.]"
+        ));
+    }
+    // Panel outcomes that sent no message (a dismissal, Keep) reach the agent here.
+    let notes_key = format!("panel_notes:{id}");
+    let panel_notes = app
+        .store
+        .get(&notes_key)
+        .await?
+        .and_then(|record| record["notes"].as_array().cloned())
+        .filter(|notes| !notes.is_empty());
+    if let Some(notes) = &panel_notes {
+        let content = message["context_content"]
+            .as_str()
+            .unwrap_or(text)
+            .to_owned();
+        let notes: Vec<&str> = notes.iter().filter_map(Value::as_str).collect();
+        message["context_content"] = json!(format!("{content}\n\n{}", notes.join("\n")));
     }
     // A total stop leaves one note so the agent confirms before restarting stopped work.
     let stop_key = format!("session_stopped:{id}");
@@ -562,6 +621,9 @@ async fn prepare_message_inner(
     let mut run = json!({"agent_id":agent_id,"selection_plan":plan,"failover_state":model_selection::FailoverState::default(),"instructions":instructions,"provider_selection":selection.value(),"id":run_id,"session_id":id,"status":"queued","phase":"model","context_hydration_pending":true,"input":input,"calls":[],"call_index":0,"loaded_abilities":[],"ability_catalog_version":app.abilities.version(),
         "turns":0,"attempt":0,"pending":null,"generation":"","uncertain":false,"error":null,"created_at":now(),"updated_at":now()});
     run["requester_user_id"] = json!(crate::shared_chat::actor(app));
+    if body["compaction_only"] == true {
+        run["compaction_only"] = json!(true);
+    }
     run["participation_generation"] = participation["generation"].clone();
     // Both role cursors survive recovery without changing one another on failover.
     run["system_selection_plan"] = json!(system_plan);
@@ -621,6 +683,10 @@ async fn prepare_message_inner(
         docs.push((format!("manager_review:{run_id}"), record));
         docs.push((format!("manager_pending:{id}"), json!({"id":run_id})));
         docs.extend(stop_delivery);
+        docs.extend(panel_doc);
+        if panel_notes.is_some() {
+            docs.push((notes_key, json!({"notes":[]})));
+        }
         return Ok(PreparedMessage {
             docs,
             kind: "manager_submission",
@@ -636,6 +702,10 @@ async fn prepare_message_inner(
     ));
     docs.push((key("run", &run_id), run));
     docs.extend(stop_delivery);
+    docs.extend(panel_doc);
+    if panel_notes.is_some() {
+        docs.push((notes_key, json!({"notes":[]})));
+    }
     Ok(PreparedMessage {
         docs,
         kind: "message",

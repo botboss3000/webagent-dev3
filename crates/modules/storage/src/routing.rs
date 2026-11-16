@@ -57,6 +57,11 @@ pub fn plane_for(key: &str) -> Plane {
         || key.starts_with("session_naming:")
         || key.starts_with("receipt:chat_controls:")
         || key.starts_with("compaction_segment:")
+        || key.starts_with("context_compaction_job:")
+        || key.starts_with("compaction_request:")
+        || key.starts_with("compaction_panel:")
+        || key.starts_with("compaction_asked:")
+        || key.starts_with("panel_notes:")
         || key.starts_with("session_ability_state:")
         || key.starts_with("session_context_assets:")
         || key.starts_with("session_main_notes:")
@@ -133,6 +138,25 @@ impl<'a> Planes<'a> {
             Plane::Agent => self.agent,
             Plane::User => self.user,
             Plane::Application => self.application,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fold requests, compaction panels and panel notes belong to the conversation's owner.
+    #[test]
+    fn compaction_and_panel_records_are_user_owned() {
+        for key in [
+            "context_compaction_job:s",
+            "compaction_request:s",
+            "compaction_panel:s",
+            "compaction_asked:s",
+            "panel_notes:s",
+        ] {
+            assert_eq!(plane_for(key), Plane::User, "{key}");
         }
     }
 }

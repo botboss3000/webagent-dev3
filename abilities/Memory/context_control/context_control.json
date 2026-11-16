@@ -13,9 +13,9 @@
       "key": "self_compaction_posture",
       "default": "balanced",
       "levels": {
-        "off": "Do NOT call compact_context yourself — leave all compaction to the automatic background threshold.",
-        "balanced": "Reserve compact_context for a rare, deliberate fold only at a clean checkpoint of a long multi-step project, when early settled turns are taking room you need next.",
-        "eager": "On big multi-step work, proactively call compact_context at each phase boundary to reclaim room before the next phase (still never mid-phase)."
+        "off": "Do NOT call compact_context — leave compaction to the automatic threshold and the user's /compact.",
+        "balanced": "Call compact_context only when the user starts a clearly separate task after a long, finished one whose details the new task will not need.",
+        "eager": "Call compact_context whenever the user starts a separate task after a long one (still once per earlier task, never mid-task)."
       }
     },
     "settings": [
@@ -27,18 +27,18 @@
         "options": [
           {
             "value": "off",
-            "label": "Off — never self-compact"
+            "label": "Off — never ask to compact"
           },
           {
             "value": "balanced",
-            "label": "Balanced — only at clean phase checkpoints"
+            "label": "Balanced — ask only after a long finished task"
           },
           {
             "value": "eager",
-            "label": "Eager — free room proactively between phases"
+            "label": "Eager — ask at each separate new task"
           }
         ],
-        "hint": "How willing the agent is to run compact_context ITSELF (separate from automatic compaction).",
+        "hint": "How willing the agent is to offer a Compact/Keep panel when a new task starts (separate from automatic compaction and /compact).",
         "scope": "agent"
       },
       {

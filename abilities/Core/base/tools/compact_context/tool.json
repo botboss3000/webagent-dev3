@@ -1,16 +1,34 @@
 {
   "name": "compact_context",
-  "description": "Request a safe summary of older current-session context at the next model boundary. Original history stays encrypted for recall_compacted.",
+  "description": "Ask the user whether to summarize an earlier, finished task now that the conversation has moved to a new one. Shows a Compact/Keep panel and returns at once; keep working and do not wait for the answer. On Compact the earlier task folds into a summary in the background; the new task's messages stay word for word and the originals stay encrypted for recall_compacted. new_task_quote is the opening words of the user message that began the new task, quoted exactly; earlier_task names the finished task in a few words; focus (optional) says what the summary must keep.",
   "parameters": {
     "type": "object",
-    "properties": {},
-    "required": [],
+    "properties": {
+      "new_task_quote": {
+        "type": "string",
+        "minLength": 12,
+        "maxLength": 300
+      },
+      "earlier_task": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 80
+      },
+      "focus": {
+        "type": "string",
+        "maxLength": 300
+      }
+    },
+    "required": [
+      "new_task_quote",
+      "earlier_task"
+    ],
     "additionalProperties": false
   },
   "effect": "read",
   "default_policy": {
     "operator": "allow",
-    "member": "require_approval",
-    "visitor": "require_approval"
+    "member": "allow",
+    "visitor": "allow"
   }
 }

@@ -78,6 +78,7 @@ mod model_catalog;
 mod model_usage;
 #[path = "../../crates/modules/notifications/host/api.rs"]
 pub(crate) mod notifications;
+pub(crate) mod panel_answer;
 pub(crate) mod repository;
 mod service_admin;
 #[cfg(test)]

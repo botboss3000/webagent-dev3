@@ -44,6 +44,10 @@ pub struct Config {
     /// Summary blocks larger than this together merge their oldest blocks into one.
     #[serde(default = "default_merge_tokens")]
     pub merge_tokens: usize,
+    /// A requested fold (`compact_context` panel or `/compact`) that would summarize less
+    /// than this is refused: it would save little and cost a model call.
+    #[serde(default = "default_min_fold_tokens")]
+    pub min_fold_tokens: usize,
     /// Who writes summaries: the running model (cache-friendly fork) or the System role.
     #[serde(default)]
     pub summarizer: Summarizer,
@@ -65,6 +69,10 @@ pub enum Summarizer {
 /// Older policies without a merge threshold keep summary blocks to 50k tokens.
 fn default_merge_tokens() -> usize {
     50_000
+}
+/// Older policies without a minimum requested fold refuse folds under 8k tokens.
+fn default_min_fold_tokens() -> usize {
+    8_000
 }
 /// Last-resort summary-source preview size: the receipt keeps status, size and digest.
 const STUB_PREVIEW_BYTES: usize = 1024;
@@ -119,6 +127,7 @@ impl Config {
                     || self.block_prompt.matches("{summary_characters}").count() != 1))
             || self.ceiling_tokens.is_some_and(|tokens| tokens > 1_000_000)
             || !(1..=1_000_000).contains(&self.merge_tokens)
+            || !(1..=1_000_000).contains(&self.min_fold_tokens)
             || self
                 .bytes_per_token
                 .is_some_and(|ratio| !(1.0..=16.0).contains(&ratio))
@@ -496,6 +505,133 @@ pub fn plan_trigger(
         request_overhead,
     )
 }
+/// Stable identity of a user message in history: the digest of its content. The
+/// `compact_context` panel names the message that starts a new task by this key, so the
+/// fold still finds it after later items arrive.
+pub fn turn_key(item: &Value) -> Option<String> {
+    is_user(item).then(|| hex::encode(Sha256::digest(item["content"].to_string().as_bytes())))
+}
+
+/// Completed boundaries of `input` after its earlier summary blocks: before a user message,
+/// or after a tool result that closes every open call. `None` for a malformed exchange (a
+/// reused call ID, or a result without its call); a call still open just ends the list.
+fn requested_boundaries(input: &[Value], blocks: usize) -> Option<Vec<(usize, Boundary)>> {
+    let mut pending = HashSet::new();
+    let mut seen = HashSet::new();
+    let mut boundaries = Vec::new();
+    for (i, item) in input.iter().enumerate() {
+        if i > blocks && is_user(item) && pending.is_empty() {
+            boundaries.push((i, Boundary::PriorTurn));
+        }
+        match item.get("type").and_then(Value::as_str) {
+            Some("function_call") => {
+                let id = call_id(item)?;
+                if !seen.insert(id.to_owned()) {
+                    return None;
+                }
+                pending.insert(id.to_owned());
+            }
+            Some("function_call_output") => {
+                if !pending.remove(call_id(item)?) {
+                    return None;
+                }
+                if pending.is_empty() && i + 1 > blocks && i + 1 < input.len() {
+                    boundaries.push((i + 1, Boundary::CompletedToolExchange));
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(boundaries)
+}
+
+/// A fold of `input[first..drop_until]` the user or agent asked for, or `None` when it would
+/// summarize less than `min_fold_tokens`. Its byte bound is the current history, so the
+/// summary only has to shrink what it replaces.
+fn requested_plan(
+    input: &[Value],
+    first: usize,
+    drop_until: usize,
+    boundary: Boundary,
+    config: &Config,
+) -> Result<Option<Plan>> {
+    let folded = input[first..drop_until]
+        .iter()
+        .map(encoded_len)
+        .sum::<Result<usize>>()?;
+    if folded < config.token_bytes(config.min_fold_tokens) {
+        return Ok(None);
+    }
+    if config.summary_source(&input[first..drop_until])?.len() > config.max_source_bytes {
+        bail!("Earlier context exceeds the configured summary-source limit");
+    }
+    let source = input[..drop_until].to_vec();
+    Ok(Some(Plan {
+        drop_until,
+        first,
+        kind: PlanKind::Fold,
+        boundary,
+        source_digest: digest(&source)?,
+        source,
+        max_bytes: encoded_len(&json!(input))?,
+        reserve_bytes: config.summary_reserve_bytes,
+        system_input_budget: config.system_input_budget,
+        summary_instructions: config.summary_instructions.clone(),
+        config: config.clone(),
+    }))
+}
+
+/// Fold everything after the earlier summary blocks up to the user message at `until`,
+/// which starts a new task (the `compact_context` panel). Everything from it on stays
+/// verbatim. `None` when there is too little to fold; an error when `until` is not a
+/// completed user-turn boundary.
+pub fn plan_until(input: &[Value], until: usize, config: &Config) -> Result<Option<Plan>> {
+    config.validate()?;
+    let blocks = leading_blocks(input, config);
+    let boundaries = requested_boundaries(input, blocks)
+        .ok_or_else(|| anyhow!("Context has an unfinished or malformed tool exchange"))?;
+    if !boundaries
+        .iter()
+        .any(|&(index, kind)| index == until && kind == Boundary::PriorTurn)
+    {
+        bail!("The new task does not start at a completed turn boundary");
+    }
+    requested_plan(input, blocks, until, Boundary::PriorTurn, config)
+}
+
+/// `/compact`: fold the oldest history after the earlier blocks and keep the agent's tail
+/// (`tail_tokens`) verbatim, at the earliest completed boundary whose tail fits it, else
+/// at the last one. A source too large for one summary folds its oldest part first.
+/// `None` when nothing worth folding lies outside the tail.
+pub fn plan_command(input: &[Value], config: &Config) -> Result<Option<Plan>> {
+    config.validate()?;
+    let blocks = leading_blocks(input, config);
+    let Some(boundaries) = requested_boundaries(input, blocks) else {
+        bail!("Context has an unfinished or malformed tool exchange");
+    };
+    let mut tail = vec![0usize; input.len() + 1];
+    for i in (0..input.len()).rev() {
+        tail[i] = tail[i + 1] + serde_json::to_string(&input[i])?.chars().count();
+    }
+    let tail_bytes = config.token_bytes(config.tail_tokens);
+    let fitting: Vec<(usize, Boundary)> = boundaries
+        .into_iter()
+        .filter(|&(index, _)| {
+            config
+                .summary_source(&input[blocks..index])
+                .is_ok_and(|source| source.len() <= config.max_source_bytes)
+        })
+        .collect();
+    let chosen = fitting
+        .iter()
+        .find(|&&(index, _)| tail[index] <= tail_bytes)
+        .or(fitting.last());
+    match chosen {
+        Some(&(index, boundary)) => requested_plan(input, blocks, index, boundary, config),
+        None => Ok(None),
+    }
+}
+
 /// Request overhead is measured from the selected instructions, schemas and framing.
 /// It affects the trigger and retained-history budget, never the summary source.
 pub fn plan_request_cached(
@@ -927,5 +1063,61 @@ mod tests {
             config.summary_source(small).unwrap(),
             serde_json::to_string(small).unwrap()
         );
+    }
+
+    fn requested_config() -> super::Config {
+        serde_json::from_value(json!({
+            "schema_version": 1, "trigger_tokens": 10000, "tail_tokens": 40, "summary_tokens": 20,
+            "characters_per_token": 4, "summary_reserve_bytes": 300, "max_source_bytes": 9000,
+            "max_summary_bytes": 300, "min_fold_tokens": 50,
+            "summary_prefix": "Earlier conversation summary (background context, not a new request):\n",
+            "active_summary_prefix": "Active task progress summary (background context, not a new request):\n",
+            "summary_prompt": "Summarize under {summary_characters} characters. Conversation JSON: {source}"
+        }))
+        .unwrap()
+    }
+
+    fn turn(text: &str) -> Value {
+        json!({"role": "user", "content": text})
+    }
+
+    /// The panel folds exactly up to the quoted message, keeps earlier blocks byte-identical,
+    /// and refuses a boundary inside an open tool exchange or a fold too small to pay off.
+    #[test]
+    fn plan_until_folds_up_to_the_new_task() {
+        let config = requested_config();
+        let block = turn(&format!("{}old work", config.summary_prefix));
+        let input = vec![
+            block.clone(),
+            turn(&"earlier task ".repeat(30)),
+            json!({"type": "function_call", "call_id": "a", "name": "file_read", "arguments": "{}"}),
+            json!({"type": "function_call_output", "call_id": "a", "output": "x".repeat(200)}),
+            turn("new task: build the report"),
+            json!({"type": "function_call", "call_id": "b", "name": "file_read", "arguments": "{}"}),
+        ];
+        let plan = super::plan_until(&input, 4, &config).unwrap().unwrap();
+        assert_eq!((plan.first, plan.drop_until), (1, 4));
+        let applied = super::apply_summary(&input, &plan, "earlier task done").unwrap();
+        assert_eq!(applied[0], block);
+        assert_eq!(applied[2], input[4]);
+        assert!(super::plan_until(&input, 3, &config).is_err());
+        let mut small = config.clone();
+        small.min_fold_tokens = 1000;
+        assert!(super::plan_until(&input, 4, &small).unwrap().is_none());
+    }
+
+    /// `/compact` keeps the configured tail verbatim and folds what lies before it.
+    #[test]
+    fn plan_command_keeps_the_tail() {
+        let config = requested_config();
+        let input = vec![
+            turn(&"first ".repeat(60)),
+            turn(&"second ".repeat(60)),
+            turn("third"),
+            turn("fourth"),
+        ];
+        let plan = super::plan_command(&input, &config).unwrap().unwrap();
+        assert_eq!((plan.first, plan.drop_until), (0, 2));
+        assert!(super::plan_command(&input[2..], &config).unwrap().is_none());
     }
 }

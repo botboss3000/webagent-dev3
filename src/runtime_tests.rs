@@ -11916,3 +11916,87 @@ async fn recovery_sorts_calls_a_restart_left_executing() {
     assert_eq!(run["batch"][0]["result"]["error_kind"], "outcome_unknown");
     assert_eq!(run["batch"][1]["state"], "requested");
 }
+
+/// `/compact` on an idle chat: the compaction-only run makes no model call. It folds the
+/// earlier history in the background with the user's focus, applies the summary and ends
+/// with a short reply.
+#[tokio::test]
+async fn compaction_only_run_folds_without_a_model_call() {
+    use axum::routing::post;
+    let (_root, mut app) = fixture().await;
+    let config_path = app.compaction_config_path.clone();
+    let mut config = context_compaction::Config::read(&config_path).unwrap();
+    config.trigger_tokens = 20_000;
+    config.ceiling_tokens = None;
+    config.tail_tokens = 100;
+    config.summary_tokens = 100;
+    config.min_fold_tokens = 100;
+    config.summarizer = context_compaction::Summarizer::System;
+    config.persist(&config_path).unwrap();
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured = requests.clone();
+    let mock = Router::new().route("/responses", post(move |Json(body): Json<Value>| {
+        let captured = captured.clone();
+        async move {
+            captured.lock().await.push(body);
+            let event = json!({"type":"response.completed","response":{"status":"completed",
+                "output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Folded earlier work"}]}]}});
+            ([("content-type","text/event-stream")], format!("data: {event}\n\n"))
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, mock).await.unwrap();
+    });
+    app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+    let sid = conversation(&app).await;
+    let id = queued(&app, &sid).await;
+    let mut run = app.run(&id).await.unwrap();
+    run["compaction_only"] = json!(true);
+    run["input"] = json!([{"role":"user","content":"old ".repeat(2_000)},
+        {"role":"assistant","content":"done"},{"role":"user","content":"/compact"}]);
+    app.save(&mut run).await.unwrap();
+    app.store
+        .put(
+            &format!("compaction_request:{sid}"),
+            &json!({"state":"pending","source":"command","focus":"the API design"}),
+        )
+        .await
+        .unwrap();
+    running(&app, &id, "compact-only").await;
+    execute_run(
+        app.clone(),
+        id.clone(),
+        "compact-only".into(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let done = app.run(&id).await.unwrap();
+    assert_eq!(done["status"], "completed");
+    assert_eq!(done["compactions"], 1);
+    let requests = requests.lock().await;
+    assert_eq!(requests.len(), 1, "only the summary call is made");
+    assert!(requests[0]["input"].to_string().contains("the API design"));
+    let context = app.store.context(&sid).await.unwrap();
+    assert!(context[0].to_string().contains("Folded earlier work"));
+    // The closing reply is shown in the chat but never enters the agent's context.
+    assert!(!context.iter().any(|item| item["role"] == "assistant"));
+    let replies: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM chat WHERE session_id=? AND role='assistant' AND run_id=?",
+    )
+    .bind(&sid)
+    .bind(&id)
+    .fetch_one(&app.store.pool)
+    .await
+    .unwrap();
+    assert_eq!(replies, 1);
+    let request = app
+        .store
+        .get(&format!("compaction_request:{sid}"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(request["state"], "started");
+}

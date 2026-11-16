@@ -843,6 +843,11 @@ pub(crate) fn router() -> Router<App> {
             "/sessions/{id}/components/{cid}/dismiss",
             post(component_dismiss),
         )
+        .route(
+            "/sessions/{id}/components/{cid}/answer",
+            post(component_answer),
+        )
+        .route("/sessions/{id}/compact", post(session_compact))
         .route("/sessions/{id}/voice/capabilities", get(voice_capabilities))
         .route(
             "/sessions/{id}/voice/reply",
@@ -920,8 +925,8 @@ async fn session_stop(
         .await
         .into_response()
 }
-/// Records the user's answer to (body `answer`) or dismissal of a reply panel; anyone who
-/// may send in the session may do it, as clicking an option would.
+/// Records the dismissal of a reply panel; anyone who may send in the session may do it,
+/// as clicking an option would. The agent reads a note with its next message.
 async fn component_dismiss(
     Extension(app): Extension<App>,
     Path((sid, cid)): Path<(String, String)>,
@@ -934,16 +939,83 @@ async fn component_dismiss(
     if let Err(e) = guard_access(&app, true, false) {
         return e.into_response();
     }
+    if !body["answer"].is_null() {
+        return crate::ApiError(
+            axum::http::StatusCode::BAD_REQUEST,
+            "Answer panels through their answer endpoint".into(),
+        )
+        .into_response();
+    }
+    let title = match app.store.base_component(&sid, &cid).await {
+        Ok(Some(panel)) => panel["artifact"]["title"]
+            .as_str()
+            .unwrap_or("a panel")
+            .to_owned(),
+        Ok(None) => return Json(serde_json::json!({"dismissed":false})).into_response(),
+        Err(error) => {
+            return crate::ApiError(axum::http::StatusCode::BAD_REQUEST, error.to_string())
+                .into_response()
+        }
+    };
+    let note = format!("[The user dismissed your panel \"{title}\" without answering.]");
     match app
         .store
-        .base_component_dismiss(&sid, &cid, &body["answer"])
+        .base_component_settle(&sid, &cid, &serde_json::Value::Null, &note)
         .await
     {
-        Ok(removed) => Json(serde_json::json!({"dismissed":removed})).into_response(),
+        Ok(removed) => {
+            // A dismissed Compact/Keep panel no longer blocks the agent's next ask.
+            if let Ok(Some(open)) = app.store.get(&format!("compaction_panel:{sid}")).await {
+                if open["panel_id"] == cid.as_str() {
+                    let _ = app
+                        .store
+                        .put(
+                            &format!("compaction_panel:{sid}"),
+                            &serde_json::json!({"state":"dismissed","panel_id":cid}),
+                        )
+                        .await;
+                }
+            }
+            Json(serde_json::json!({"dismissed":removed})).into_response()
+        }
         Err(error) => {
             crate::ApiError(axum::http::StatusCode::BAD_REQUEST, error.to_string()).into_response()
         }
     }
+}
+/// The user's answer to a reply panel, admitted as their message; send access as above.
+async fn component_answer(
+    Extension(app): Extension<App>,
+    Path((sid, cid)): Path<(String, String)>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let app = match session_app(app, &sid).await {
+        Ok(app) => app,
+        Err(e) => return e.into_response(),
+    };
+    if let Err(e) = guard_access(&app, true, false) {
+        return e.into_response();
+    }
+    crate::api::panel_answer::answer(app, sid, cid, body)
+        .await
+        .into_response()
+}
+/// `/compact [focus]`: fold earlier context now; anyone who may send in the session may.
+async fn session_compact(
+    Extension(app): Extension<App>,
+    Path(sid): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let app = match session_app(app, &sid).await {
+        Ok(app) => app,
+        Err(e) => return e.into_response(),
+    };
+    if let Err(e) = guard_access(&app, true, false) {
+        return e.into_response();
+    }
+    crate::api::panel_answer::compact(app, sid, body)
+        .await
+        .into_response()
 }
 async fn messaging_routes(Extension(app): Extension<App>, Path(sid): Path<String>) -> Response {
     let app = match session_app(app, &sid).await {

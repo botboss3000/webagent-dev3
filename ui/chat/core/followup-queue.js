@@ -17,7 +17,7 @@ export function mountFollowupQueue({root,client,getSession,guard,note,keyId,forg
   const terminal=new Set(['delivered','cancelled','rejected']);
   // Translate durable queue states into short status text for transcript controls.
   // Every message joins the conversation at the agent's next step; Send now forces that step.
-  const label=entry=>held&&['pending','held'].includes(entry.status)?'Held'+(reason?': '+reason:''):entry.status==='pending'&&entry.send_now?'Sending now…':({pending:'Sending — next step',reviewing:'Reviewing…',held:'Held — waiting to resume',delivered:'Delivered',cancelled:'Cancelled',rejected:'Not sent — rejected'})[entry.status]||entry.status;
+  const label=entry=>held&&['pending','held'].includes(entry.status)?'Held'+(reason?': '+reason:''):entry.status==='pending'&&entry.send_now?'Sending now…':entry.status==='pending'&&entry.waiting_for_compaction?'Waiting for compaction':({pending:'Sending — next step',reviewing:'Reviewing…',held:'Held — waiting to resume',delivered:'Delivered',cancelled:'Cancelled',rejected:'Not sent — rejected'})[entry.status]||entry.status;
   // Create a text-only action button and pass its callback through the panel guard.
   function makeButton(text,action){const b=document.createElement('button');b.type='button';b.textContent=text;b.onclick=guard(action);return b;}
   // Reconcile visible delivery rows from the current queue while retaining focused controls.

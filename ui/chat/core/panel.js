@@ -17,7 +17,7 @@ import {mountComposerMedia,describesUploads} from '../controls/composer-media.js
 import {mountVoiceReply} from '../controls/voice-reply.js';
 import {mountSessionControls} from '../controls/session-controls.js';
 import {mountChatActionPanel,createChatAction} from './chat-action-panel.js';
-import {buildReplyForm,answerText} from './reply-panel.js';
+import {buildReplyForm} from './reply-panel.js';
 import {mountUsageStats} from '../controls/usage-stats.js';
 import {mountBrowserLink} from './browser-link.js';
 import {createMessageRow as createMessage,updateAdmission} from './message-view.js';
@@ -259,7 +259,8 @@ function nearDuplicate(kept,reply){const threshold=repeatSimilarity;if(!(thresho
 /** Places each component card among its run's rows where it was created: after the last row at
  * or before its stored chat position, else the last row written no later than it, else the run's
  * last row. A stored position far from the time-based one is distrusted and logged. */
-function placeCards(){const target=$('chat-messages-inner');const chained=new Map();for(const card of [...target.children].filter(node=>node.dataset.componentRun).sort((a,b)=>Number(a.dataset.componentCreated||0)-Number(b.dataset.componentCreated||0))){const run=card.dataset.componentRun;const rows=[...target.children].filter(node=>node.dataset.turnId===run&&!node.dataset.componentId);const lastWhere=test=>{let found;for(const row of rows)if(test(row))found=row;return found;};const afterSeq=Number(card.dataset.componentAfter),created=Number(card.dataset.componentCreated);const bySeq=afterSeq>0?lastWhere(row=>Number(row.dataset.seq)<=afterSeq):undefined;const byTime=created>0?lastWhere(row=>row.dataset.created&&Number(row.dataset.created)*1000<=created):undefined;let after=bySeq||byTime||rows[rows.length-1];if(bySeq&&byTime&&Math.abs(rows.indexOf(bySeq)-rows.indexOf(byTime))>3){console.warn('Panel position by sequence disagrees with its time; using time',card.dataset.componentId);after=byTime;}
+function placeCards(){const target=$('chat-messages-inner');const chained=new Map();for(const card of [...target.children].filter(node=>node.dataset.componentRun).sort((a,b)=>Number(a.dataset.componentCreated||0)-Number(b.dataset.componentCreated||0))){const run=card.dataset.componentRun;const rows=[...target.children].filter(node=>node.dataset.turnId===run&&!node.dataset.componentId);const lastWhere=test=>{let found;for(const row of rows)if(test(row))found=row;return found;};// The server records the run's own published row the panel follows (after_seq); before that row is drawn the panel follows the run's newest row.
+const afterSeq=Number(card.dataset.componentAfter);const after=(afterSeq>0?lastWhere(row=>Number(row.dataset.seq)<=afterSeq):undefined)||rows[rows.length-1];
 // A panel whose turn is not drawn yet waits hidden while older rows are still undrawn, instead of piling up at the end.
 if(!after){card.hidden=transcriptWindow.hasEarlier();continue;}card.hidden=false;const anchor=chained.get(after)||after;if(anchor.nextElementSibling!==card)anchor.after(card);chained.set(after,card);}}
 // Base presentation is display-only. Never turn model-supplied choice or
@@ -312,8 +313,8 @@ function renderComponent(row){
         // A submitted panel is one user message: "Title: value", or the title then one "Label: value" line per field.
         send:async answers=>{
           const submitted=reply?{option_id:options.find(option=>option.label===answers[0].value)?.id}:{values:Object.fromEntries(answers.map(item=>[item.name,item.value])),comments:Object.fromEntries(answers.filter(item=>item.comment).map(item=>[item.name,item.comment]))};
-          try{await submit(answerText(title,answers),false,{componentId:id});}catch(error){note(error.message);throw error;}
-          void client.dismissComponent(session,id,submitted).catch(()=>{});settle(submitted);
+          try{await answerPanel(id,submitted,Number(row.revision||0));}catch(error){note(error.message);throw error;}
+          settle(submitted);
         }});
       body.append(form);if(state)body.append(status());place();return;
     }
@@ -466,6 +467,29 @@ async function sendWithRetry(send){
     catch(error){if(attempt>=4||!transientSend(error))throw error;progress.note('Connection problem — retrying…');await new Promise(resolve=>setTimeout(resolve,1000*2**attempt));}
   }
 }
+/** Sends a reply panel's answer; the server checks it against the panel, builds the message text and records the answer with the message. */
+async function answerPanel(id,answer,revision){
+  if(historyBusy||submitting||getState().shutoff)throw Error('Chat is busy or execution is disabled');
+  const sid=session;if(!sid)throw Error('Conversation unavailable; answer was not sent.');
+  progress.note('Sending…');submitting=true;
+  try{
+    const ids=media.snapshot(sid),requestKey='panel:'+sid+':'+id+':'+revision+':'+JSON.stringify(answer)+':'+ids.join(',');
+    const sent=await sendWithRetry(()=>client.answerComponent(sid,id,{answer,revision,client_message_id:keyId(requestKey),attachment_ids:ids}));
+    forgetKey(requestKey);media.committed(sid,ids);
+    if(sid===session){progress.note(sent?.submission_id?'Message queued':sent?.run_id?'Message sent':'Answer recorded');syncSnapshot(await client.snapshot(sid));}
+  }finally{submitting=false;await refresh();}
+}
+/** "/compact [focus]": folds earlier context now, keeping the agent's recent tail; nothing is sent to the agent. */
+async function compactCommand(focus){
+  const sid=session;if(!sid){note('Nothing to compact yet.');return;}
+  progress.note('Compacting…');
+  const result=await client.compact(sid,{focus,client_request_id:'compact-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10)});
+  progress.note(result?.status==='nothing_to_fold'?result.notice:result?.status==='scheduled'?'Compaction starts at the next step':'Compacting earlier context…');
+  if(result?.status==='nothing_to_fold')note(result.notice);
+  $('chat-input').value='';saveDraft(sid,'');
+  if(sid===session)syncSnapshot(await client.snapshot(sid));
+  await refresh();
+}
 /** Submits text plus staged attachments/page context, preserving draft and session identity across awaits. */
 async function submit(text,clearInput=false,{componentId=''}={}){
   // An empty draft with no attachments is ignored: no notice, no request, draft left in place.
@@ -503,7 +527,8 @@ async function submit(text,clearInput=false,{componentId=''}={}){
 }
 // Sends the current composer draft on form submission; submit ignores an empty draft.
 // A host that supports sign-in handles "/login" itself; it is never sent to the agent.
-$('composer').onsubmit=guard(()=>{const text=$('chat-input').value.trim();if(onLogin&&text.toLowerCase()==='/login'){$('chat-input').value='';saveDraft(session,'');return onLogin();}return submit(text,true);});
+// "/compact [focus]" folds earlier context through its own endpoint; it is never sent as a message.
+$('composer').onsubmit=guard(()=>{const text=$('chat-input').value.trim();if(onLogin&&text.toLowerCase()==='/login'){$('chat-input').value='';saveDraft(session,'');return onLogin();}const compact=/^\/compact(?:\s+(.*))?$/is.exec(text);if(compact&&!media.count)return compactCommand((compact[1]||'').trim());return submit(text,true);});
 // Continue is a new user turn, not an automatic retry of an exhausted run.
 $('chat-continue-btn').onclick=guard(()=>submit('Continue'));
 // Enter behavior follows chat_common.composer.enter_behavior; touch devices are detected once per adoption.

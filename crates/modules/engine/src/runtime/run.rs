@@ -365,21 +365,26 @@ impl<
         }
     }
 
-    /// Start a background summary for `plan` beside the main call. The same-model summary
-    /// copies the running request and adds `message`, so the provider reuses its cached
+    /// Start a background summary for `fold` beside the main call. The same-model summary
+    /// copies the running request and adds its message, so the provider reuses its cached
     /// prefix; bridges, a request that would not fit, or a failed same-model summary use
     /// System. A summary that cannot be prepared is skipped: the ceiling still folds.
     #[allow(clippy::too_many_arguments)]
     async fn start_background_compaction(
         app: &Self,
         run: &mut Value,
-        plan: context_compaction::Plan,
-        message: String,
+        fold: BackgroundFold,
         request: BackgroundRequest<'_>,
         config: &context_compaction::Config,
         workflow_policy: &workflow::Policy,
         cancel: &CancellationToken,
     ) -> Result<()> {
+        let BackgroundFold {
+            plan,
+            message,
+            reason,
+            focus,
+        } = fold;
         let same_model = config.summarizer == context_compaction::Summarizer::SameModel
             && !request.selection.provider.is_bridge()
             && !request.system_next
@@ -408,6 +413,7 @@ impl<
             let Ok(prompt) = config
                 .prompt_for(&plan, &summary_source)
                 .or_else(|_| config.prompt_for(&plan, &plan.source))
+                .map(|prompt| background_compaction::with_focus(prompt, focus.as_deref()))
             else {
                 return Ok(());
             };
@@ -448,7 +454,7 @@ impl<
             run,
             format!("{step}:call"),
             json!({"type":"compaction_call","model":selection.model,"input_bytes":input_bytes,
-                "reason":"automatic","mode":"background","summarizer":summarizer}),
+                "reason":reason,"focus":focus,"mode":"background","summarizer":summarizer}),
         );
         app.save(run).await?;
         let sid = request.sid.to_owned();
@@ -1329,7 +1335,8 @@ impl<
             run["pending"]["policy_version"].as_u64().unwrap_or(0),
             call_cancel.clone(),
         ));
-        // Build calls keep their broker-job path; compaction must finish inside its step.
+        // Build calls keep their broker-job path; the compaction panel call is short and
+        // records its guards inside its step.
         let detachable = !matches!(
             name.as_str(),
             "v3_build_work" | "build_work" | "compact_context"
@@ -1541,12 +1548,6 @@ impl<
                     &A::retry(&name),
                 );
                 Self::append_tool(&mut run, &value)?;
-                if name == "compact_context"
-                    && value["status"] == "success"
-                    && value["control"] == "manual_compaction_requested"
-                {
-                    run["manual_compaction_requested"] = json!(true);
-                }
                 app.store
                     .save_run_observed(
                         &mut run,
@@ -1688,7 +1689,8 @@ impl<
             }
             // Apply a composer choice before validating the next dispatch. This never
             // cancels/replays the model response or tool effects from the previous call.
-            if run["phase"] == "model" {
+            // A compaction-only run takes waiting messages only once its summary is done.
+            if run["phase"] == "model" && run["compaction_only"] != true {
                 if app.apply_steering(&mut run).await? {
                     context_accounting.reset();
                 }
@@ -2541,6 +2543,10 @@ impl<
                         json!({"error":job["error"],"summarizer":job["summarizer"],
                             "mode":"background"}),
                     );
+                    run["compaction_only_note"] = json!(format!(
+                        "Compaction failed ({}); the conversation is unchanged.",
+                        job["error"].as_str().unwrap_or("summary unavailable")
+                    ));
                     // After a same-model failure the next summary uses System.
                     job = json!({"state":"idle","system_next":job["summarizer"] == "self"});
                     app.store.put(&job_key, &job).await?;
@@ -2653,39 +2659,7 @@ impl<
                         return Ok(());
                     }
                 };
-                // A manual request is only acted on after its tool result has been
-                // saved, so no pending call is split across the summary boundary.
-                let assembled = if run["manual_compaction_requested"] == true {
-                    match assembled {
-                        context_assembly::Prepared::Ready(ref envelope) => {
-                            match context_compaction::plan_manual(
-                                run["input"].as_array().expect("run input is an array"),
-                                envelope.report.history_budget_bytes,
-                                &compaction_config,
-                            ) {
-                                Ok(Some(plan)) => context_assembly::Prepared::Compact(plan),
-                                _ => {
-                                    run["status"] = json!("paused");
-                                    run["error"]=json!("Manual compaction has no safe completed boundary; review this run");
-                                    if let Some(report) = app.native.validation(
-                                        app.store.records(),
-                                        &run,
-                                        "manual_no_safe_boundary",
-                                        "compaction_plan",
-                                    ) {
-                                        run["latest_context_assembly"] = report;
-                                    }
-                                    app.save(&mut run).await?;
-                                    return Ok(());
-                                }
-                            }
-                        }
-                        prepared => prepared,
-                    }
-                } else {
-                    assembled
-                };
-                // At the ceiling (or on a manual request) a running summary is awaited
+                // At the ceiling a running summary is awaited
                 // instead of starting a second one; its result applies on the next pass.
                 if matches!(assembled, context_assembly::Prepared::Compact(_)) {
                     if let Some(mut finished) = background_compaction::running(&sid) {
@@ -2807,17 +2781,12 @@ impl<
                         .iter()
                         .map(|item| item["content"].as_str().map_or(0, str::len))
                         .sum();
-                    let reason = if run["manual_compaction_requested"] == true {
-                        "requested"
-                    } else {
-                        "automatic"
-                    };
                     run["phase"] = json!("compacting");
                     compaction_activity(
                         &mut run,
                         format!("{compaction_step}:call"),
                         json!({"type":"compaction_call","model":selection.model,
-                            "input_bytes":input_bytes,"reason":reason}),
+                            "input_bytes":input_bytes,"reason":"automatic"}),
                     );
                     app.save(&mut run).await?;
                     let prepared_system = match crate::provider::CallDraft::new(
@@ -3093,7 +3062,6 @@ impl<
                     run["tool_result_projection"]["rebase"] = json!(true);
                     context_accounting.reset();
                     run["compactions"] = json!(run["compactions"].as_u64().unwrap_or(0) + 1);
-                    run["manual_compaction_requested"] = json!(false);
                     run["updated_at"] = json!(now());
                     run["error"] = Value::Null;
                     let segment_id = format!(
@@ -3119,13 +3087,56 @@ impl<
                 };
                 let report = serde_json::to_value(&envelope.report)?;
                 let envelope_bytes = envelope.report.envelope_bytes;
-                // Past the trigger with no summary pending: plan one to run beside this call.
-                let background_plan = if background
-                    && job["state"] != "running"
+                let job_free = job["state"] != "running"
                     && background_compaction::running(&sid).is_none()
-                    && run["closing_turn"].is_null()
-                    && run["manual_compaction_requested"] != true
-                {
+                    && run["closing_turn"].is_null();
+                // REQUESTED COMPACTION: a Compact click on the agent's panel or `/compact`
+                // folds in the background like the trigger's summary. A request is used once;
+                // one that finds nothing to fold leaves a notice row.
+                let request_key = background_compaction::request_key(&sid);
+                let request = if job_free {
+                    app.store
+                        .get(&request_key)
+                        .await?
+                        .filter(|request| request["state"] == "pending")
+                } else {
+                    None
+                };
+                let mut request_notice = None;
+                let requested = match request {
+                    Some(mut request) => {
+                        request["state"] = json!("started");
+                        app.store.put(&request_key, &request).await?;
+                        match background_compaction::requested_plan(
+                            &request,
+                            envelope.input,
+                            &compaction_config,
+                        ) {
+                            Ok(plan) => Some((plan, request)),
+                            Err(error) => {
+                                request_notice = Some(format!("Nothing was compacted: {error}"));
+                                None
+                            }
+                        }
+                    }
+                    None => None,
+                };
+                // Past the trigger with no summary pending: plan one to run beside this call.
+                let background_plan = if let Some((plan, request)) = requested {
+                    let focus = request["focus"]
+                        .as_str()
+                        .filter(|focus| !focus.trim().is_empty())
+                        .map(str::to_owned);
+                    let message = background_compaction::with_focus(
+                        background_compaction::fork_message(
+                            &plan,
+                            envelope.input,
+                            &compaction_config,
+                        ),
+                        focus.as_deref(),
+                    );
+                    Some((plan, message, "requested", focus))
+                } else if background && job_free {
                     context_compaction::plan_trigger(
                         envelope.input,
                         envelope.report.history_budget_bytes,
@@ -3140,7 +3151,7 @@ impl<
                             envelope.input,
                             &compaction_config,
                         );
-                        (plan, message)
+                        (plan, message, "automatic", None)
                     })
                 } else {
                     None
@@ -3153,6 +3164,14 @@ impl<
                 let schemas = envelope.schemas.to_vec();
                 if let Some(report) = assembly_diagnostic {
                     run["latest_context_assembly"] = report;
+                }
+                if let Some(notice) = request_notice {
+                    compaction_result(
+                        &mut run,
+                        &format!("compaction:request:{}", uuid::Uuid::new_v4()),
+                        json!({"error":notice,"reason":"requested","mode":"background"}),
+                    );
+                    run["compaction_only_note"] = json!(notice);
                 }
                 run["attempt"] =
                     json!(run["attempt"].as_u64().expect("run counters are numbers") + 1);
@@ -3262,7 +3281,7 @@ impl<
                     );
                     projected_input.push(json!({"role":"user","content":message}));
                 }
-                if let Some((plan, message)) = background_plan {
+                if let Some((plan, message, reason, focus)) = background_plan {
                     let request = BackgroundRequest {
                         sid: &sid,
                         selection: &selection,
@@ -3277,14 +3296,74 @@ impl<
                     Self::start_background_compaction(
                         &app,
                         &mut run,
-                        plan,
-                        message,
+                        BackgroundFold {
+                            plan,
+                            message,
+                            reason,
+                            focus,
+                        },
                         request,
                         &compaction_config,
                         &workflow_policy,
                         &cancel,
                     )
                     .await?;
+                }
+                // COMPACTION-ONLY RUN: `/compact` (or a Compact click) on an idle chat makes
+                // no model call. It waits for its summary, applies it on the next pass and
+                // ends with a short reply. Messages sent meanwhile wait for it unless the
+                // user chooses "Send now", which turns this into an ordinary run; the
+                // summary then applies at a later boundary.
+                if run["compaction_only"] == true {
+                    if app.message_forced(&run).await.unwrap_or(false) {
+                        run["compaction_only"] = json!(false);
+                        run["phase"] = json!("model");
+                        app.save(&mut run).await?;
+                        continue;
+                    }
+                    if let Some(mut finished) = background_compaction::running(&sid) {
+                        run["phase"] = json!("compacting");
+                        app.save(&mut run).await?;
+                        drop(_guard);
+                        loop {
+                            let waiting = tokio::select! {
+                                _ = cancel.cancelled() => return Ok(()),
+                                _ = async { finished.wait_for(|done| *done).await.map(|_| ()) } => false,
+                                _ = tokio::time::sleep(Duration::from_secs(1)) => true,
+                            };
+                            if !waiting || app.message_forced(&run).await.unwrap_or(false) {
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+                    if app.apply_steering(&mut run).await? {
+                        run["compaction_only"] = json!(false);
+                        run["phase"] = json!("model");
+                        app.save(&mut run).await?;
+                        context_accounting.reset();
+                        continue;
+                    }
+                    let text = run["compaction_only_note"]
+                        .as_str()
+                        .unwrap_or("Earlier context is compacted into a summary block.")
+                        .to_owned();
+                    match publication::terminal(&app.store, &mut run, &[], &text, &workflow_policy)
+                        .await
+                    {
+                        Ok(()) => return Ok(()),
+                        Err(error)
+                            if error
+                                .to_string()
+                                .contains("Pending followup prevents terminal publication") =>
+                        {
+                            run["compaction_only"] = json!(false);
+                            run["phase"] = json!("model");
+                            app.save(&mut run).await?;
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
                 let prepared_provider = match crate::provider::CallDraft::new(
                     &selection,
@@ -3873,6 +3952,16 @@ struct BackgroundRequest<'a> {
     envelope_bytes: usize,
     ceiling: usize,
     system_next: bool,
+}
+
+/// One background summary to start: its plan, the private message a same-model fork adds,
+/// why it runs (`automatic` at the trigger, `requested` by the panel or `/compact`) and the
+/// user's focus, if any.
+struct BackgroundFold {
+    plan: context_compaction::Plan,
+    message: String,
+    reason: &'static str,
+    focus: Option<String>,
 }
 
 /// Queue one activity row for the next run save. Rows are stored in `interactions`
