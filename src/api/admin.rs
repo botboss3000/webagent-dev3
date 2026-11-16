@@ -217,7 +217,7 @@ pub(crate) async fn agent_ability_visibility_set(
     if !app.abilities.known(&ability_id) {
         return Err(bad("Unknown ability ID"));
     }
-    if !matches!(body.visibility.as_str(), "off" | "visible" | "discoverable") {
+    if !matches!(body.visibility.as_str(), "off" | "loaded" | "on_request") {
         return Err(bad("Invalid ability visibility"));
     }
     let _guard = app.gate.lock().await;
@@ -227,7 +227,7 @@ pub(crate) async fn agent_ability_visibility_set(
     }
     let old = value["visibility"][&ability_id]
         .as_str()
-        .unwrap_or("discoverable");
+        .unwrap_or("on_request");
     if old == body.visibility {
         return Ok(Json(value));
     }
@@ -256,8 +256,11 @@ pub(crate) async fn agent_ability_skill_visibility_set(
     if !app.abilities.known(&ability_id) {
         return Err(bad("Unknown ability ID"));
     }
-    if !matches!(body.visibility.as_str(), "off" | "visible" | "discoverable") {
+    if !matches!(body.visibility.as_str(), "off" | "loaded" | "on_request") {
         return Err(bad("Invalid skill visibility"));
+    }
+    if app.abilities.skill_is_core(&ability_id) {
+        return Err(bad("Core skills are always loaded"));
     }
     let _guard = app.gate.lock().await;
     let mut value = agent_abilities(&app).await?;
@@ -266,7 +269,7 @@ pub(crate) async fn agent_ability_skill_visibility_set(
     }
     let old = value["skill_visibility"][&ability_id]
         .as_str()
-        .unwrap_or("visible");
+        .unwrap_or(app.abilities.skill_default_mode(&ability_id));
     if old == body.visibility {
         return Ok(Json(value));
     }
@@ -291,8 +294,11 @@ pub(crate) async fn agent_tool_mode_set(
     if !app.abilities.has_tool(&ability_id, &tool_name) {
         return Err(bad("Unknown ability tool"));
     }
-    if !matches!(body.visibility.as_str(), "off" | "visible" | "discoverable") {
+    if !matches!(body.visibility.as_str(), "off" | "loaded" | "on_request") {
         return Err(bad("Invalid tool mode"));
+    }
+    if webagent_abilities::tool_definitions::is_core(&tool_name) {
+        return Err(bad("Core tools are always loaded"));
     }
     let _guard = app.gate.lock().await;
     let mut value = agent_abilities(&app).await?;

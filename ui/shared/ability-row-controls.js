@@ -297,7 +297,7 @@ export function _buildToolRow(toolMeta, opts) {
   // TOOL-STATE-PANEL: the row owns NO interactive toggle. Its only control is a
   // launcher that opens a panel holding the tool's WHOLE state — Permission
   // (Off · Ask · Auto) and, when this caller tunes discovery, Visibility
-  // (Discoverable · Visible) — with exactly one selection per section. State is
+  // (On request · Loaded) — with exactly one selection per section. State is
   // only ever changed by a selection inside that panel, mirroring the ability
   // row's panel-driven selection.
   const permLocked = toolMeta.locked || _TOOL_ALWAYS_ON.has(toolMeta.name);
@@ -313,7 +313,7 @@ export function _buildToolRow(toolMeta, opts) {
   if (toolMeta.locked) {
     const pill = document.createElement('span');
     pill.className = 'agents-tool-always-on';
-    pill.textContent = 'core';
+    pill.textContent = 'Core';
     pill.title = 'Core tool — always sent, cannot be changed.';
     ctrl.appendChild(pill);
     return row;
@@ -357,7 +357,7 @@ function _buildToolStateControl(toolMeta, opts) {
   const roleBlocked = toolMeta.role_blocked === true;
 
   let perm = ORDER.includes(toolMeta.permMode) ? toolMeta.permMode : 'allow';
-  let vis = toolMeta.mode === 'discoverable' ? 'discoverable' : 'visible';
+  let vis = toolMeta.mode === 'loaded' ? 'loaded' : 'on_request';
   let execution = toolMeta.execution ? { ...toolMeta.execution } : null;
   let savingExecution = false;
   let resultDeduplication = toolMeta.result_deduplication;
@@ -385,7 +385,7 @@ function _buildToolStateControl(toolMeta, opts) {
   tri.classList.add('ac-tool-perm-tri');
 
   const _permText = m => (m === 'deny' ? 'Deny' : (m === 'require_approval' ? 'Require approval' : 'Allow'));
-  const _visText = m => (m === 'discoverable' ? 'Discoverable' : 'Visible');
+  const _visText = m => (m === 'on_request' ? 'Skill on request' : 'Skill loaded');
   const _permSvg = m => (m === 'deny' ? _TOOL_STATE_OFF_SVG : (m === 'require_approval' ? _TOOL_STATE_ASK_SVG : _TOOL_STATE_AUTO_SVG));
 
   function paint() {
@@ -468,7 +468,7 @@ function _buildToolStateControl(toolMeta, opts) {
   //    ✓ marks always show exactly one selection per section. ─────────────────
   const _menuItems = () => {
     const out = [];
-    // Availability (Off · Discoverable · Visible) comes first, as for skills; Off is the
+    // Availability (Off · On request · Loaded) comes first, as for skills; Off is the
     // permission deny, so Permission below keeps only Ask · Auto. Loaders stay visible.
     const locked = _BOOTSTRAP_TOOLS.includes(toolMeta.name);
     if (showVisibility) {
@@ -477,9 +477,9 @@ function _buildToolStateControl(toolMeta, opts) {
         iconHtml: _EYE_OFF_SVG, label: 'Off', checked: perm === 'deny',
         disabled: !canEdit || roleBlocked || locked, keepOpen: true, action: () => _save('perm', 'deny'),
       });
-      for (const v of ['discoverable', 'visible']) {
+      for (const v of ['on_request', 'loaded']) {
         out.push({
-          iconHtml: v === 'discoverable' ? _DOWNLOAD_SVG : _EYE_ON_SVG,
+          iconHtml: v === 'on_request' ? _DOWNLOAD_SVG : _EYE_ON_SVG,
           label: _visText(v),
           checked: perm !== 'deny' && vis === v,
           disabled: !canEdit || roleBlocked || locked,
@@ -488,7 +488,7 @@ function _buildToolStateControl(toolMeta, opts) {
           action: async () => (perm !== 'deny' || await _save('perm', 'require_approval')) && _save('vis', v),
         });
       }
-      if (locked) out.push({ info: true, label: 'Always visible: agents use this tool to find and load the others.' });
+      if (locked) out.push({ info: true, label: 'Always loaded: agents use this tool to find and load the others.' });
     }
     if (showPerm) {
       if (out.length) out.push({ separator: true });   // the hairline divider

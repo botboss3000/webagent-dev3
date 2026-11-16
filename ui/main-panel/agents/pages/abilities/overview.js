@@ -606,7 +606,7 @@ export function buildAbilitiesOverview() {
     compositionChart.setAttribute('aria-label', `Agent context: ${sizeLabel}. ${entries.map((entry) => `${entry.label} ${Math.round((entry.tokens / resolvedTotal) * 100)} percent`).join(', ')}. Each radial bar is an individual source; move around the chart or use arrow keys to inspect one.`);
     compositionTotal.innerHTML = `<span class="agent-context-composition-total-row"><b>Configured</b><i>${resolvedTotal.toLocaleString()} tokens</i></span>`;
     // AGENT-CONTEXT-COMPACT-LEGEND: one line per group — short name plus its inventory
-    // count ("Tools (83-36-47)" = total-visible-discoverable) and the group's share
+    // count ("Tools (83-36-47)" = total-loaded-on_request) and the group's share
     // of the base context. The per-row token/source sub-line is gone: the centre
     // total and the bar sizes already carry it.
     compositionLegend.innerHTML = entries.map((entry) => {
@@ -632,12 +632,12 @@ export function buildAbilitiesOverview() {
     const tools = active.flatMap(ability => ability.tools || [])
       .filter(tool => tool.supported && tool.mode !== 'off');
     const count = (items, mode) => items.filter(item =>
-      (mode === 'visible' ? (item.skill_visibility || item.mode || item.visibility) === 'visible'
-        : (item.skill_visibility || item.mode || item.visibility) === 'discoverable')).length;
+      (mode === 'loaded' ? ['loaded', 'core'].includes(item.skill_visibility || item.mode || item.visibility)
+        : (item.skill_visibility || item.mode || item.visibility) === 'on_request')).length;
     const counts = {
       system_prompt: String(slots.length),
-      skills: `${skills.length}-${count(skills, 'visible')}-${count(skills, 'discoverable')}`,
-      tools: `${tools.length}-${count(tools, 'visible')}-${count(tools, 'discoverable')}`,
+      skills: `${skills.length}-${count(skills, 'loaded')}-${count(skills, 'on_request')}`,
+      tools: `${tools.length}-${count(tools, 'loaded')}-${count(tools, 'on_request')}`,
     };
     // One signature covers everything this repaint depends on: the server estimate
     // (totals, breakdown and source list) and the inventory counts from this page's

@@ -125,10 +125,10 @@ pub async fn eligible(
                 if selected {
                     "activated"
                 } else {
-                    "visible"
+                    "loaded"
                 }
             } else {
-                "discoverable"
+                "on_request"
             };
             tools.entry(name.to_owned()).or_insert_with(||json!({"availability":availability,"requires_activation":!visible,"name":name,"description":description.chars().take(1024).collect::<String>(),"ability_id":entry["id"],"approval_required":decision.permission==Permission::Ask}));
         }

@@ -218,17 +218,17 @@ fn mark_availability(asset: &mut Value, loaded: &Value, tools: &Value) {
                     == Some(format!("tool:{}", asset["skill_id"].as_str().unwrap_or("")).as_str())
             })
         });
-    let available = asset["availability"] == "visible"
+    let available = asset["availability"] == "loaded"
         || asset["availability"] == "activated"
         || tool_selected
         || loaded
             .as_array()
             .is_some_and(|items| items.iter().any(|item| same_asset(item, asset)));
-    if available && asset["availability"] != "visible" {
+    if available && asset["availability"] != "loaded" {
         asset["availability"] = json!("activated");
     }
     if !available {
-        asset["availability"] = json!("discoverable");
+        asset["availability"] = json!("on_request");
     }
     asset["requires_activation"] = json!(!available);
 }
@@ -244,7 +244,7 @@ fn own_asset(record: &Value) -> Result<Value> {
     use sha2::{Digest, Sha256};
     Ok(
         json!({"ability_id":"base","kind":"own","skill_id":record["name"],
-        "mode":"discoverable","availability":"discoverable","requires_activation":true,
+        "mode":"on_request","availability":"on_request","requires_activation":true,
         "revision":record["revision"],"bytes":text.len(),
         "sha256":hex::encode(Sha256::digest(text.as_bytes())),"text":text,
         "source_kind":"untrusted_agent_skill","activates":false}),
@@ -925,7 +925,7 @@ mod tests {
             assert_eq!(rejected, initial, "invalid {field}");
         }
         asset["requires_activation"] = json!(false);
-        asset["availability"] = json!("visible");
+        asset["availability"] = json!("loaded");
         let visible = skill_acknowledgment(&asset, &"a".repeat(64));
         assert_eq!(visible["status"], "already_available");
         let mut unchanged = initial.clone();
@@ -939,27 +939,27 @@ mod tests {
     /// Retain selected availability across edits without merging distinct identities.
     fn availability_tracks_live_identity_across_guidance_edits() {
         let mut visible = json!({"ability_id":"base","kind":"ability","skill_id":"base",
-            "sha256":"old","availability":"visible"});
+            "sha256":"old","availability":"loaded"});
         mark_availability(&mut visible, &Value::Null, &Value::Null);
         assert_eq!(visible["requires_activation"], false);
-        assert_eq!(visible["availability"], "visible");
+        assert_eq!(visible["availability"], "loaded");
         let mut hidden = json!({"ability_id":"base","kind":"selectable","skill_id":"guide",
-            "sha256":"old","availability":"discoverable"});
+            "sha256":"old","availability":"on_request"});
         let selected = json!([hidden.clone()]);
         mark_availability(&mut hidden, &selected, &Value::Null);
         assert_eq!(hidden["availability"], "activated");
         assert_eq!(hidden["requires_activation"], false);
-        hidden["availability"] = json!("discoverable");
+        hidden["availability"] = json!("on_request");
         hidden["sha256"] = json!("replacement");
         mark_availability(&mut hidden, &selected, &Value::Null);
         assert_eq!(hidden["requires_activation"], false);
         assert_eq!(hidden["availability"], "activated");
         hidden["skill_id"] = json!("another_guide");
-        hidden["availability"] = json!("discoverable");
+        hidden["availability"] = json!("on_request");
         mark_availability(&mut hidden, &selected, &Value::Null);
         assert_eq!(hidden["requires_activation"], true);
         let mut tool = json!({"ability_id":"files","kind":"tool","skill_id":"file_read",
-            "sha256":"x","availability":"discoverable"});
+            "sha256":"x","availability":"on_request"});
         mark_availability(&mut tool, &Value::Null, &json!(["tool:file_read"]));
         assert_eq!(tool["availability"], "activated");
         assert_eq!(tool["requires_activation"], false);

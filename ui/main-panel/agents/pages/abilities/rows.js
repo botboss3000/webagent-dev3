@@ -4,8 +4,16 @@ import { buildConfigRow } from '../../../../shared/ability-row-controls.js';
 const chevronSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>';
 export function buildSkillRow(skill, { canEdit, menu, loadContent }) {
 let skillRow, skillBody;
-const skillMode = skill.mode || 'visible';
-const skillCtrl = document.createElement('label');
+const skillMode = skill.mode || 'on_request';
+let skillCtrl;
+if (skillMode === 'core') {
+ // A core skill (skill.json) is always loaded: a locked pill, not a menu.
+ skillCtrl = document.createElement('span');
+ skillCtrl.className = 'agents-tool-always-on';
+ skillCtrl.textContent = 'Core';
+ skillCtrl.title = 'Core skill — always loaded, cannot be changed.';
+} else {
+skillCtrl = document.createElement('label');
 skillCtrl.className = 'conn-toggle-wrap ac-ability-toggle-wrap';
 skillCtrl.innerHTML = `<input type="checkbox" class="conn-toggle" ${skillMode !== 'off' ? 'checked' : ''} ${canEdit ? '' : 'disabled'}><span class="conn-toggle-track"></span>`;
 const skillToggle = skillCtrl.querySelector('input');
@@ -19,6 +27,7 @@ skillToggle.addEventListener('click', event => {
  menu._floatingMenuAnchorPoint = { x: event.clientX || rect.right, y: event.clientY || rect.bottom };
  menu.click();
 });
+}
     // "Skill" is the row HEADING and the skill text drops to its own line below it,
     // exactly like a tool row's name + description (shared buildConfigRow).
     skillRow = buildConfigRow({

@@ -436,7 +436,7 @@ async fn agent_ability_off_is_persisted_and_conflicts_on_stale_revision() {
         State(app),
         Path(("shared_default".into(), "codebase_admin".into())),
         Json(AbilityVisibilityBody {
-            visibility: "visible".into(),
+            visibility: "loaded".into(),
             expected_revision: 0,
         }),
     )
@@ -501,7 +501,7 @@ async fn discoverable_tool_requires_its_own_selection() {
             "file_read".into(),
         )),
         Json(AbilityVisibilityBody {
-            visibility: "discoverable".into(),
+            visibility: "on_request".into(),
             expected_revision: 0,
         }),
     )
@@ -3293,7 +3293,7 @@ async fn agent_discovers_ability_then_inspects_only_its_current_session() {
     // Core skills default to discoverable; this journey checks Visible core guidance.
     let mut visibility = app.store.agent_abilities().await.unwrap();
     let revision = visibility["revision"].as_u64().unwrap();
-    visibility["skill_visibility"]["codebase_admin"] = json!("visible");
+    visibility["skill_visibility"]["codebase_admin"] = json!("loaded");
     app.store
         .save_agent_abilities(&visibility, revision)
         .await
@@ -3942,7 +3942,7 @@ async fn ability_management_routes_enforce_auth_revisions_and_session_boundaries
     let first_set_uri = format!("{first_uri}/codebase_admin");
     let second_uri = format!("/api/v3/sessions/{second}/abilities");
     let second_set_uri = format!("{second_uri}/codebase_admin");
-    let visible = json!({"visibility":"visible","expected_revision":0});
+    let visible = json!({"visibility":"loaded","expected_revision":0});
     let active = json!({"state":"active","expected_revision":0});
 
     assert_eq!(
@@ -3996,7 +3996,7 @@ async fn ability_management_routes_enforce_auth_revisions_and_session_boundaries
         ability_request(&app, Method::GET, agent_uri, None, Some(&cookie), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(agent["revision"], 0);
-    assert_eq!(agent["abilities"][0]["visibility"], "discoverable");
+    assert_eq!(agent["abilities"][0]["visibility"], "on_request");
     // Each row carries its declared default for the viewed level, shown read-only.
     for ability in agent["abilities"].as_array().unwrap() {
         assert!(ability["default"].is_string(), "{}", ability["id"]);
@@ -4023,12 +4023,12 @@ async fn ability_management_routes_enforce_auth_revisions_and_session_boundaries
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(result["revision"], 1);
-    assert_eq!(result["visibility"]["codebase_admin"], "visible");
+    assert_eq!(result["visibility"]["codebase_admin"], "loaded");
     let (status, same) = ability_request(
         &app,
         Method::PUT,
         visibility_uri,
-        Some(json!({"visibility":"visible","expected_revision":1})),
+        Some(json!({"visibility":"loaded","expected_revision":1})),
         Some(&cookie),
         Some("ability-fixture"),
     )
@@ -4066,7 +4066,7 @@ async fn ability_management_routes_enforce_auth_revisions_and_session_boundaries
             &app,
             Method::PUT,
             "/api/v3/agents/shared_default/abilities/missing/visibility",
-            Some(json!({"visibility":"visible","expected_revision":1})),
+            Some(json!({"visibility":"loaded","expected_revision":1})),
             Some(&cookie),
             Some("ability-fixture")
         )
@@ -4079,7 +4079,7 @@ async fn ability_management_routes_enforce_auth_revisions_and_session_boundaries
             &app,
             Method::PUT,
             "/api/v3/agents/missing/abilities/codebase_admin/visibility",
-            Some(json!({"visibility":"visible","expected_revision":1})),
+            Some(json!({"visibility":"loaded","expected_revision":1})),
             Some(&cookie),
             Some("ability-fixture")
         )
@@ -4217,7 +4217,7 @@ async fn ability_management_routes_enforce_auth_revisions_and_session_boundaries
         &app,
         Method::PUT,
         visibility_uri,
-        Some(json!({"visibility":"discoverable","expected_revision":1})),
+        Some(json!({"visibility":"on_request","expected_revision":1})),
         Some(&cookie),
         Some("ability-fixture"),
     )
@@ -4276,7 +4276,7 @@ async fn ability_changes_revoke_waiting_approvals_for_both_scopes() {
         &app,
         Method::PUT,
         agent_uri,
-        Some(json!({"visibility":"visible","expected_revision":0})),
+        Some(json!({"visibility":"loaded","expected_revision":0})),
         Some(&cookie),
         Some("ability-fixture"),
     )
@@ -4298,7 +4298,7 @@ async fn ability_changes_revoke_waiting_approvals_for_both_scopes() {
         &app,
         Method::PUT,
         agent_uri,
-        Some(json!({"visibility":"discoverable","expected_revision":1})),
+        Some(json!({"visibility":"on_request","expected_revision":1})),
         Some(&cookie),
         Some("ability-fixture"),
     )
@@ -5597,7 +5597,7 @@ pub(crate) async fn selection_fixture(app: &App) -> model_selection::Catalog {
     let agent_pool = crate::agent_storage::open_agent_pool(&app.store.root, "agent-a")
         .await
         .unwrap();
-    let metadata = json!({"owner_id":"admin","ability_modes":{"codebase_admin":"visible"},
+    let metadata = json!({"owner_id":"admin","ability_modes":{"codebase_admin":"loaded"},
         "skill_modes":{},"tool_modes":{},"ability_revision":0});
     sqlx::query("INSERT INTO agents(id,name,description,provider,model,status,metadata,revision,created_at,updated_at) VALUES('agent-a','Agent A','','openai_subscription','fixture','active',?,1,0,0)")
         .bind(app.store.seal(&metadata).unwrap()).execute(&agent_pool).await.unwrap();
@@ -7929,7 +7929,7 @@ async fn web_access_api_support_auth_csrf_revision_and_persistence() {
             .status(),
         StatusCode::OK
     );
-    let stale = json!({"visibility":"visible","expected_revision":0});
+    let stale = json!({"visibility":"loaded","expected_revision":0});
     assert_eq!(
         router(app.clone())
             .oneshot(request("PUT", &path, true, true, stale))
@@ -8226,9 +8226,9 @@ async fn removed_manifest_withdraws_cached_schemas_and_guidance_within_run() {
     app.abilities = Arc::new(abilities::Catalog::load(&catalog_root).unwrap());
     let mut visibility = app.store.agent_abilities().await.unwrap();
     let revision = visibility["revision"].as_u64().unwrap();
-    visibility["visibility"]["codebase_admin"] = json!("visible");
-    visibility["tool_modes"]["state_inspect"] = json!("visible");
-    visibility["skill_visibility"]["codebase_admin"] = json!("visible");
+    visibility["visibility"]["codebase_admin"] = json!("loaded");
+    visibility["tool_modes"]["state_inspect"] = json!("loaded");
+    visibility["skill_visibility"]["codebase_admin"] = json!("loaded");
     app.store
         .save_agent_abilities(&visibility, revision)
         .await
@@ -8334,7 +8334,7 @@ async fn bundle_withdrawal_during_credentials_rebuilds_before_provider_dispatch(
         app.abilities = Arc::new(abilities::Catalog::load(&catalog_root).unwrap());
         let mut visibility = app.store.agent_abilities().await.unwrap();
         let revision = visibility["revision"].as_u64().unwrap();
-        visibility["visibility"]["codebase_admin"] = json!("visible");
+        visibility["visibility"]["codebase_admin"] = json!("loaded");
         app.store
             .save_agent_abilities(&visibility, revision)
             .await
@@ -10078,7 +10078,7 @@ fn copy_live_context_fixture(source: &std::path::Path, target: &std::path::Path)
 
 /// Valid selectable metadata stays current while only its complete body changes.
 fn live_context_fixture_skill(body: &str) -> String {
-    format!("---\nid: live_refresh\ntitle: Live refresh fixture\nwhen_to_use: Verify current live context\ndefault_mode: discoverable\n---\n{body}")
+    format!("---\nid: live_refresh\ntitle: Live refresh fixture\nwhen_to_use: Verify current live context\ndefault_mode: on_request\n---\n{body}")
 }
 
 /// Drive native load_skill and a second tool round through the actual execute_run loop.
@@ -10091,7 +10091,7 @@ async fn live_context_default_stack_journey() {
     Box::pin(visibility_fixture_ability_access(&app, "web_access")).await;
     let mut visibility = app.store.agent_abilities().await.unwrap();
     let revision = visibility["revision"].as_u64().unwrap();
-    visibility["tool_modes"]["context_assets"] = json!("visible");
+    visibility["tool_modes"]["context_assets"] = json!("loaded");
     app.store
         .save_agent_abilities(&visibility, revision)
         .await
@@ -10945,7 +10945,7 @@ fn consolidated_codebase_schema_and_guidance_contract() {
         assert!(tools::administrator::owns(name) || tools::administrator::plugin(name).is_some());
     }
     assert!(schema.iter().any(|s| s["name"] == "build_work"));
-    let visibility = json!({"visibility":{"codebase_admin":"visible"}});
+    let visibility = json!({"visibility":{"codebase_admin":"loaded"}});
     let state = json!({"active":["codebase_admin"]});
     assert!(
         catalog
@@ -11020,7 +11020,7 @@ async fn visibility_fixture_base_access(app: &App) {
     visibility_fixture_ability_access(app, "base").await;
     let mut visibility = app.store.agent_abilities().await.unwrap();
     let revision = visibility["revision"].as_u64().unwrap();
-    visibility["visibility"]["codebase_admin"] = json!("visible");
+    visibility["visibility"]["codebase_admin"] = json!("loaded");
     app.store
         .save_agent_abilities(&visibility, revision)
         .await
@@ -11051,8 +11051,8 @@ async fn visibility_fixture_ability_access(app: &App, id: &str) {
         .unwrap();
     let mut visibility = app.store.agent_abilities().await.unwrap();
     let revision = visibility["revision"].as_u64().unwrap();
-    visibility["visibility"][id] = json!("visible");
-    visibility["skill_visibility"][id] = json!("visible");
+    visibility["visibility"][id] = json!("loaded");
+    visibility["skill_visibility"][id] = json!("loaded");
     app.store
         .save_agent_abilities(&visibility, revision)
         .await
@@ -11119,7 +11119,7 @@ async fn native_skill_catalog_marks_supplied_guidance_and_rebuilds_selected_afte
         .iter()
         .find(|row| row["kind"] == "ability")
         .unwrap();
-    assert_eq!(core["availability"], "visible");
+    assert_eq!(core["availability"], "loaded");
     let core_id = core["skill_id"].clone();
     let default =
         visibility_native_call(&app, &sid, &id, "list_skills", json!({"ability_id":"base"})).await;
@@ -11127,7 +11127,7 @@ async fn native_skill_catalog_marks_supplied_guidance_and_rebuilds_selected_afte
         .as_array()
         .unwrap()
         .iter()
-        .all(|row| row["requires_activation"] == true && row["availability"] == "discoverable"));
+        .all(|row| row["requires_activation"] == true && row["availability"] == "on_request"));
     let ack = visibility_native_call(
         &app,
         &sid,
@@ -11266,8 +11266,8 @@ async fn exact_native_tool_selection_obeys_visibility_mode_denial_and_suppressio
         .unwrap();
     let mut visibility = app.store.agent_abilities().await.unwrap();
     let revision = visibility["revision"].as_u64().unwrap();
-    visibility["tool_modes"]["state_inspect"] = json!("discoverable");
-    visibility["tool_modes"]["file_read"] = json!("visible");
+    visibility["tool_modes"]["state_inspect"] = json!("on_request");
+    visibility["tool_modes"]["file_read"] = json!("loaded");
     app.store
         .save_agent_abilities(&visibility, revision)
         .await
@@ -11278,7 +11278,7 @@ async fn exact_native_tool_selection_obeys_visibility_mode_denial_and_suppressio
         .as_array()
         .unwrap()
         .iter()
-        .any(|row| row["name"] == "state_inspect" && row["availability"] == "discoverable"));
+        .any(|row| row["name"] == "state_inspect" && row["availability"] == "on_request"));
     let loaded = visibility_native_call(
         &app,
         &sid,
@@ -11364,7 +11364,7 @@ async fn exact_native_tool_selection_obeys_visibility_mode_denial_and_suppressio
     assert_eq!(off["status"], "denied", "{off}");
     let mut visibility = app.store.agent_abilities().await.unwrap();
     let revision = visibility["revision"].as_u64().unwrap();
-    visibility["tool_modes"]["state_inspect"] = json!("discoverable");
+    visibility["tool_modes"]["state_inspect"] = json!("on_request");
     app.store
         .save_agent_abilities(&visibility, revision)
         .await

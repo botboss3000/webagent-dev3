@@ -2,7 +2,7 @@
 id: journey_testing
 title: Development journey testing
 when_to_use: Verifying requested development API or browser journeys and independent Diagnostics package publication.
-default_mode: discoverable
+default_mode: on_request
 examples: test the page in a browser; run an end to end journey; verify the API flow works
 keywords: journey, end to end, acceptance test
 minimum_access: registered

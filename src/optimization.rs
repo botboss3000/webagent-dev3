@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(catalog.known("optimization"), expected);
         let names = catalog.schemas_with(
             &json!([]),
-            &json!({"visibility":{"optimization":"visible"}}),
+            &json!({"visibility":{"optimization":"loaded"}}),
             &json!({"active":[],"suppressed":[]}),
         );
         assert_eq!(

@@ -19,16 +19,16 @@ let compositionReads = 0;
 const requests = [];
 const abilityRows = () => [
   {id:'base',name:'Base',description:'Core tools and loaders',group:'core',group_name:'Core',
-   visibility:'visible',readiness:'ready',installed:true,declared:true,configured:true,
-   has_skill:true,skill_visibility:'visible',default:'on',default_mode:'visible',
-   general_skills:[{skill_id:'core',title:'Skill',when_to_use:'',mode:'visible'}],
-   tools:[{name:'shell',description:'Run commands',policy:'allow',mode:'visible',supported:true,
+   visibility:'loaded',readiness:'ready',installed:true,declared:true,configured:true,
+   has_skill:true,skill_visibility:'loaded',default:'on',default_mode:'loaded',
+   general_skills:[{skill_id:'core',title:'Skill',when_to_use:'',mode:'loaded'}],
+   tools:[{name:'shell',description:'Run commands',policy:'allow',mode:'loaded',supported:true,
      default:'allow',has_tool_skill:false}]},
   {id:'web_access',name:'Web Access',description:'Weather and places',group:'web',group_name:'Web',
-   visibility:'visible',readiness:'ready',installed:true,declared:true,configured:true,
-   has_skill:true,skill_visibility:'visible',default:'on',default_mode:'visible',
-   general_skills:[{skill_id:'core',title:'Skill',when_to_use:'',mode:'visible'}],
-   tools:[{name:'get_weather',description:'Forecast',policy:'allow',mode:'visible',supported:true,
+   visibility:'loaded',readiness:'ready',installed:true,declared:true,configured:true,
+   has_skill:true,skill_visibility:'loaded',default:'on',default_mode:'loaded',
+   general_skills:[{skill_id:'core',title:'Skill',when_to_use:'',mode:'loaded'}],
+   tools:[{name:'get_weather',description:'Forecast',policy:'allow',mode:'loaded',supported:true,
      default:'allow',has_tool_skill:false}]},
 ];
 const data = () => ({

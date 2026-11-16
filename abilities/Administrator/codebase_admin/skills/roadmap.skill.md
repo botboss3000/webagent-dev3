@@ -2,7 +2,7 @@
 id: roadmap
 title: Deferred work and design directions
 when_to_use: Use before designing in tool policy, retry risk, file access, network egress, browser sessions, storage limits or plugin installation, to respect decided future directions.
-default_mode: discoverable
+default_mode: on_request
 examples: what is planned for the egress proxy; is per-user browser limits designed; tool audit plans
 keywords: roadmap, future, deferred, plan
 minimum_access: registered

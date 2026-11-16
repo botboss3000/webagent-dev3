@@ -550,8 +550,16 @@ async fn visibility(
     {
         return Err(bad("Unknown ability, skill or tool"));
     }
-    if !matches!(body.visibility.as_str(), "off" | "visible" | "discoverable") {
+    if !matches!(body.visibility.as_str(), "off" | "loaded" | "on_request") {
         return Err(bad("Invalid visibility mode"));
+    }
+    // Core comes only from tool.json and skill.json; its mode cannot be changed.
+    if tool
+        .as_deref()
+        .is_some_and(webagent_abilities::tool_definitions::is_core)
+        || (skill.as_deref() == Some("core") && app.abilities.skill_is_core(&ability))
+    {
+        return Err(bad("Core tools and skills are always loaded"));
     }
     let mut scoped = admin_agent_view(&app, &id).await?;
     scoped.store = scoped
@@ -562,6 +570,7 @@ async fn visibility(
     if value["revision"] != body.expected_revision {
         return Err(conflict("Agent ability revision changed"));
     }
+    let core_skill = skill.as_deref() == Some("core");
     let (key, name) = match tool {
         Some(t) => ("tool_modes", t),
         None => match skill {
@@ -570,12 +579,16 @@ async fn visibility(
             None => ("visibility", ability),
         },
     };
-    let fallback = if key == "visibility" {
-        "discoverable"
+    // Match the server defaults so an unchanged write stays a no-op; a selectable
+    // skill's default lives in its front matter, so only a saved value counts there.
+    let fallback = if core_skill {
+        Some(app.abilities.skill_default_mode(&name).to_owned())
+    } else if key == "skill_visibility" {
+        None
     } else {
-        "visible"
+        Some("on_request".to_owned())
     };
-    if value[key][&name].as_str().unwrap_or(fallback) == body.visibility {
+    if value[key][&name].as_str().or(fallback.as_deref()) == Some(body.visibility.as_str()) {
         return Ok(Json(value));
     }
     value[key][name] = json!(body.visibility);
@@ -1306,7 +1319,7 @@ mod tests {
             Extension(identity.clone()),
             Path(path.clone()),
             Json(AbilityVisibilityBody {
-                visibility: "visible".into(),
+                visibility: "loaded".into(),
                 expected_revision: revision
             })
         )

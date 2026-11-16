@@ -4213,8 +4213,8 @@ body.light-mode .ac-group-body > .ac-card.ac-card-compact .ac-int-row:hover {
    visibility, GREEN once it is discoverable or visible. The selector carries
    both classes so it outranks the `[data-state="on"]` rule above. */
 .ac-tri.ac-tool-perm-tri { border-color: var(--codex-gray); }
-.ac-tri.ac-tool-perm-tri[data-vis="discoverable"],
-.ac-tri.ac-tool-perm-tri[data-vis="visible"] { border-color: var(--success); }
+.ac-tri.ac-tool-perm-tri[data-vis="on_request"],
+.ac-tri.ac-tool-perm-tri[data-vis="loaded"] { border-color: var(--success); }
 /* Display-only tris only LOOK like toggles: the click belongs to the caller
    (it opens the panel), so there are no detent zones to hint at. */
 .ac-tri.ac-tri-readonly { cursor: pointer; }
@@ -6914,8 +6914,8 @@ body:has(#tab-app.active) #main-panel:has(.inst-settings-host) > #settings-page-
 }
 .ac-ability-exposure-choice.is-selected[data-exposure-choice="discoverable"] { border-color: var(--border); }
 .ac-ability-exposure-choice.is-selected[data-exposure-choice="discoverable"] .ac-ability-exposure-dot { background: var(--success); }
-.ac-ability-exposure-choice.is-selected[data-exposure-choice="visible"] { border-color: var(--success); }
-.ac-ability-exposure-choice.is-selected[data-exposure-choice="visible"] .ac-ability-exposure-dot { border-color: var(--success); background: var(--success); }
+.ac-ability-exposure-choice.is-selected[data-exposure-choice="loaded"] { border-color: var(--success); }
+.ac-ability-exposure-choice.is-selected[data-exposure-choice="loaded"] .ac-ability-exposure-dot { border-color: var(--success); background: var(--success); }
 /* Off = neutral gray. Discoverable = normal outline + green circle. Visible = green outline + green circle. */
 .ac-ability-row[data-exposure="off"] .ac-ability-toggle-wrap .conn-toggle + .conn-toggle-track { background: var(--bg-2); border-color: var(--codex-gray); }
 .ac-ability-row[data-exposure="off"] .ac-ability-toggle-wrap .conn-toggle + .conn-toggle-track::after { background: var(--codex-gray); }

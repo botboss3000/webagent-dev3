@@ -2455,7 +2455,7 @@ impl<
                                 .strip_prefix("own:base:")
                                 .unwrap_or(&asset.id)
                                 .into(),
-                            mode: "discoverable".into(),
+                            mode: "on_request".into(),
                             included: asset.included,
                             content_bytes: if asset.included {
                                 asset.content_bytes
@@ -2465,7 +2465,7 @@ impl<
                             reason: if asset.included {
                                 "included"
                             } else {
-                                "discoverable"
+                                "on_request"
                             }
                             .into(),
                         });

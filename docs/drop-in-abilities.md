@@ -44,6 +44,21 @@ tool an ability lists has a `<tool>.tool.json`; a tool not built yet keeps a ske
 `parameters`, no handler) so its access is declared.
 Abilities not yet moved keep the manifest `tools` list and flat `tools/<tool>.skill.md`.
 
+## Skill modes
+
+Tools and skills have one of four modes: `core` (always in the prompt, locked; set only by
+`"core": true` in `<tool>.tool.json` or `<id>.skill.json`), `loaded` (in the prompt without
+a request), `on_request` (the agent loads it when needed) and `off`. With nothing saved a
+tool or skill is `on_request`. Saved data written before these names (`visible`,
+`discoverable`) is rewritten once at startup.
+
+- An ability's own skill `skills/<id>.skill.md` may have `skills/<id>.skill.json` beside it:
+  `{"core": bool, "default_mode": "loaded" | "on_request" | "off"}`, both optional and no
+  other keys. `core: true` makes the skill core; `default_mode` is its mode when nothing is
+  saved. A change counts as a skill edit for the ability's identity.
+- A selectable skill `skills/<name>.skill.md` sets its default in front matter:
+  `default_mode: loaded` or `default_mode: on_request` (the default).
+
 ## Ability access defaults and app tiers
 
 An ability's manifest may declare `default_policy` per role, like `<tool>.tool.json`. It is

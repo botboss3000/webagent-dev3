@@ -19,7 +19,9 @@ const node = (tag, className = '', text = '') => {
   return element;
 };
 const chevronSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>';
-const modes = ['off', 'discoverable', 'visible'];
+const modes = ['off', 'on_request', 'loaded'];
+// Core is set only by tool.json or skill.json and is shown as a locked pill.
+const modeLabel = mode => ({ loaded: 'Skill loaded', on_request: 'Skill on request', off: 'Off', core: 'Core' })[mode] || mode;
 let searchText = '';
 let expandedAbility = null;
 
@@ -58,9 +60,9 @@ export async function renderAbilities(host, request, options) {
     const mode=(map,key,fallback)=>map?.[key]||map?.['*']||fallback;
     for(const ability of abilities){
       ability.visibility=mode(selectedLevel.ability_exposure,ability.id,ability.visibility);
-      ability.skill_visibility=mode(selectedLevel.skill_exposure,ability.id,ability.skill_visibility);
+      if(ability.skill_visibility!=='core')ability.skill_visibility=mode(selectedLevel.skill_exposure,ability.id,ability.skill_visibility);
       for(const skill of ability.selectable_skills||[])skill.mode=mode(selectedLevel.skill_exposure,ability.id+':'+skill.skill_id,skill.mode);
-      for(const tool of ability.tools||[])tool.visibility=mode(selectedLevel.tool_exposure,tool.name,tool.visibility||'visible');
+      for(const tool of ability.tools||[])tool.visibility=mode(selectedLevel.tool_exposure,tool.name,tool.visibility||'on_request');
     }
   }
   const slots = slotsResult.slots || [];
@@ -193,8 +195,8 @@ export async function renderAbilities(host, request, options) {
   };
   const modeMenu = (ability, kind, current, toolName = null, anchorOnly = false) => {
     const trigger = _buildMoreButton(() => modes.map(mode => ({
-      icon: mode === 'off' ? 'eye-off' : mode === 'visible' ? 'eye' : 'download',
-      label: mode[0].toUpperCase() + mode.slice(1), checked: trigger._mode === mode,
+      icon: mode === 'off' ? 'eye-off' : mode === 'loaded' ? 'eye' : 'download',
+      label: modeLabel(mode), checked: trigger._mode === mode,
       disabled: !canManage,
       action: () => save(ability, kind, mode, trigger._floatingMenuOwner || trigger, toolName)
         .then(() => { trigger._mode = mode; }, () => {}),
@@ -227,7 +229,7 @@ export async function renderAbilities(host, request, options) {
   // ability is switched on (a new ability stays off for existing agents).
   const markDefault = (row, value) => {
     if (!value) return;
-    const label = { deny: 'Deny', require_approval: 'Require approval', allow: 'Allow', visible: 'Visible', discoverable: 'Discoverable', off: 'Off', on: 'On' }[value] || value;
+    const label = { deny: 'Deny', require_approval: 'Require approval', allow: 'Allow', loaded: modeLabel('loaded'), on_request: modeLabel('on_request'), off: 'Off', on: 'On' }[value] || value;
     const anchor = row.querySelector('.ac-ability-desc') || row.querySelector('.ac-ability-name');
     const mark = node('div', 'ac-hint v3-default-mark', 'Default: ' + label);
     mark.style.whiteSpace = 'nowrap'; // Keep "Default: Auto" on one line on phones.
@@ -241,11 +243,11 @@ export async function renderAbilities(host, request, options) {
     tools.classList.add('v3-ability-tools');
     const generalSkills = ability.general_skills ||
       (ability.has_skill ? [{ skill_id: 'core', title: 'Skill',
-        when_to_use: ability.skill_summary || '', mode: ability.skill_visibility || 'visible' }] : []);
+        when_to_use: ability.skill_summary || '', mode: ability.skill_visibility || 'on_request' }] : []);
     for (const entry of generalSkills) {
       const skill = buildSkillRow(entry, {
         canEdit: canManage && levelId==='operator',
-        menu: modeMenu(ability, 'skill', entry.mode || 'visible', entry.skill_id, true),
+        menu: modeMenu(ability, 'skill', entry.mode || 'on_request', entry.skill_id, true),
         loadContent: () => request(scope + '/abilities/' + encodeURIComponent(ability.id) +
           (entry.skill_id === 'core' ? '/skill-content' :
             '/skills/' + encodeURIComponent(entry.skill_id) + '/content')),
@@ -303,6 +305,7 @@ export async function renderAbilities(host, request, options) {
         // one exists, as saveToolPermission writes). Effective access can still be
         // Deny because of the account tier, visibility or port status.
         permMode: toolPolicy()?.tool_permissions?.[tool.name] || effectiveTool.default || 'require_approval',
+        locked: tool.locked === true || tool.mode === 'core',
         role_blocked: tool.role_blocked === true || effectiveTool.role_blocked === true,
         tierBlocked: effectiveTool.effective?.reason === 'tier_denied',
       }, {
@@ -407,7 +410,7 @@ export async function renderAbilities(host, request, options) {
       toggle.addEventListener('click', event => {
         event.preventDefault();
         event.stopPropagation();
-        save(ability, 'ability', ability.visibility !== 'off' ? 'off' : 'visible', toggleWrap).catch(() => {});
+        save(ability, 'ability', ability.visibility !== 'off' ? 'off' : 'loaded', toggleWrap).catch(() => {});
       });
       toggleWrap.append(toggle, node('span', 'conn-toggle-track'));
       header.append(chevron, icon, label, toggleWrap);

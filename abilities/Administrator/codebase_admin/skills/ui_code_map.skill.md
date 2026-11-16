@@ -2,7 +2,7 @@
 id: ui_code_map
 title: Finding UI code
 when_to_use: Use before changing or debugging WebAgent UI behaviour, to find which file owns an element, gesture, focus or keyboard behaviour, and its tests.
-default_mode: discoverable
+default_mode: on_request
 examples: the text area loses focus when I tap a button; keep the keyboard open while scrolling the row below the composer; fix how the chat panel scrolls; where is the code for this chat control
 keywords: ui code, chat panel, composer, keyboard, focus, gesture, scroll
 minimum_access: registered

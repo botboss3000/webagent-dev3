@@ -194,8 +194,8 @@ mod tests {
         let run = app.run(&id).await.unwrap();
         let mut settings = app.store.agent_abilities().await.unwrap();
         let revision = settings["revision"].as_u64().unwrap();
-        settings["visibility"]["codebase_admin"] = json!("discoverable");
-        settings["tool_modes"]["file_edit"] = json!("discoverable");
+        settings["visibility"]["codebase_admin"] = json!("on_request");
+        settings["tool_modes"]["file_edit"] = json!("on_request");
         settings["revision"] = json!(revision + 1);
         app.store
             .save_agent_abilities(&settings, revision)
@@ -290,7 +290,7 @@ mod tests {
             .await
             .unwrap()
             .is_none());
-        settings["visibility"]["codebase_admin"] = json!("discoverable");
+        settings["visibility"]["codebase_admin"] = json!("on_request");
         settings["revision"] = json!(revision + 2);
         app.store
             .save_agent_abilities(&settings, revision + 1)

@@ -142,8 +142,8 @@ pub struct CapabilityLevels {
 #[serde(rename_all = "snake_case")]
 pub enum Exposure {
     Off,
-    Discoverable,
-    Visible,
+    OnRequest,
+    Loaded,
 }
 impl Exposure {
     pub fn meet(self, other: Self) -> Self {
@@ -154,7 +154,7 @@ fn exposure(map: &BTreeMap<String, Exposure>, id: &str) -> Exposure {
     map.get(id)
         .or_else(|| map.get("*"))
         .copied()
-        .unwrap_or(Exposure::Visible)
+        .unwrap_or(Exposure::Loaded)
 }
 pub(crate) fn meet_permissions(
     target: &mut BTreeMap<String, Permission>,

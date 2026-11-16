@@ -18,6 +18,7 @@ mod conversation_privacy;
 mod execution_metadata;
 #[path = "../../crates/modules/chat/host/storage/followup_queue.rs"]
 mod followup_queue;
+mod mode_names;
 #[path = "../../crates/modules/chat/host/storage/naming.rs"]
 mod naming;
 pub(crate) mod own_skills;
@@ -206,6 +207,7 @@ impl Store {
         for agent in store.agent_ids().await? {
             let view = store.for_agent(&agent).await?;
             view.import_agent_memberships().await?;
+            view.migrate_mode_names().await?;
         }
         store.pin_conversation_privacy().await?;
         for user in store.all_user_ids().await? {
@@ -389,7 +391,7 @@ impl Store {
                     }
                 }
             }
-            let metadata = json!({"discovery_default":"discoverable","ability_modes":modes,
+            let metadata = json!({"discovery_default":"on_request","ability_modes":modes,
                 "skill_modes":old_abilities["skill_visibility"],"tool_modes":{},"ability_access":{},
                 "ability_revision":old_abilities["revision"].as_i64().unwrap_or(0).max(0)});
             let now: i64 = sqlx::query_scalar("SELECT CAST(strftime('%s','now') AS INTEGER)")
@@ -1687,7 +1689,7 @@ mod tests {
             .put(
                 "agent_abilities:shared_default",
                 &serde_json::json!({"revision":3,"visibility":{"codebase_admin":"off"},
-                "skill_visibility":{"codebase_admin":"discoverable"}}),
+                "skill_visibility":{"codebase_admin":"on_request"}}),
             )
             .await
             .unwrap();
@@ -1710,7 +1712,7 @@ mod tests {
         );
         assert_eq!(
             migrated.agent_abilities().await.unwrap()["skill_visibility"]["codebase_admin"],
-            "discoverable"
+            "on_request"
         );
         assert_eq!(
             migrated.get_prompt_slot("legacy").await.unwrap().unwrap()["content"],
@@ -1730,7 +1732,7 @@ mod tests {
     async fn ability_controls_use_encrypted_authorities_and_survive_reopen() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
-        let agent = json!({"revision":1,"visibility":{"codebase_admin":"visible"}});
+        let agent = json!({"revision":1,"visibility":{"codebase_admin":"loaded"}});
         let session = json!({"revision":1,"active":[],"suppressed":["codebase_admin"]});
         store
             .put("agent_abilities:shared_default", &agent)

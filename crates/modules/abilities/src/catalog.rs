@@ -19,10 +19,10 @@ pub fn public_context(value: &Value) -> Option<AbilityContext> {
     if report.abilities.len() > MAX_ABILITIES
         || report.abilities.iter().any(|a| {
             !valid_id(&a.id)
-                || !matches!(a.visibility.as_str(), "visible" | "discoverable")
+                || !matches!(a.visibility.as_str(), "loaded" | "on_request")
                 || !matches!(
                     a.availability.as_str(),
-                    "visible" | "activated" | "discoverable"
+                    "loaded" | "activated" | "on_request"
                 )
                 || a.schemas.len() > 512
                 || a.schemas.iter().any(|id| !valid_id(id))
@@ -30,10 +30,10 @@ pub fn public_context(value: &Value) -> Option<AbilityContext> {
                 || a.skills.iter().any(|s| {
                     !valid_id(&s.id)
                         || !matches!(s.kind.as_str(), "ability" | "tool" | "selectable" | "own")
-                        || !matches!(s.mode.as_str(), "visible" | "discoverable" | "off")
+                        || !matches!(s.mode.as_str(), "loaded" | "core" | "on_request" | "off")
                         || !matches!(
                             s.reason.as_str(),
-                            "included" | "off" | "discoverable" | "unavailable"
+                            "included" | "off" | "on_request" | "unavailable"
                         )
                 })
         })
@@ -96,6 +96,19 @@ struct Ability {
     skill: Option<String>,
     tool_skills: BTreeMap<String, String>,
     selectable_skills: BTreeMap<String, String>,
+    skill_config: SkillConfig,
+}
+
+/// Optional `skills/<ability>.skill.json` beside the ability's own skill.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SkillConfig {
+    /// A core skill is always in the prompt and its mode cannot be changed.
+    #[serde(default)]
+    core: bool,
+    /// Mode when nothing is saved; absent means `on_request`.
+    #[serde(default)]
+    default_mode: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -309,6 +322,34 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let data = read_bytes(path, MAX_MANIFEST_BYTES)?;
     serde_json::from_slice(&data)
         .with_context(|| format!("Invalid ability manifest: {}", path.display()))
+}
+
+/// Read `skills/<ability>.skill.json` with the digest it adds to the ability's identity.
+fn read_skill_config(ability: &Path, id: &str) -> Result<(SkillConfig, Option<String>)> {
+    let path = ability.join("skills").join(format!("{id}.skill.json"));
+    match fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((SkillConfig::default(), None))
+        }
+        Err(error) => return Err(error.into()),
+        Ok(_) => {}
+    }
+    let bytes = read_bytes(&path, MAX_MANIFEST_BYTES)?;
+    let config: SkillConfig = serde_json::from_slice(&bytes)
+        .with_context(|| format!("Invalid skill settings: {}", path.display()))?;
+    if config
+        .default_mode
+        .as_deref()
+        .is_some_and(|mode| !matches!(mode, "loaded" | "on_request" | "off"))
+    {
+        bail!("Invalid skill default mode: {}", path.display());
+    }
+    Ok((config, Some(hex::encode(Sha256::digest(&bytes)))))
+}
+
+/// True for modes whose guidance or schema is in the prompt without a request.
+pub fn in_prompt(mode: &str) -> bool {
+    matches!(mode, "loaded" | "core")
 }
 
 /// An ability's own guidance: `skills/<ability>.skill.md`.
@@ -669,6 +710,9 @@ impl<H: Host> Catalog<H> {
                     for asset in fs::read_dir(&skills_path)? {
                         let asset = asset?;
                         let filename = asset.file_name().to_string_lossy().to_string();
+                        if filename == format!("{id}.skill.json") {
+                            continue;
+                        }
                         let Some(key) = filename.strip_suffix(".skill.md") else {
                             bail!("Invalid selectable skill asset: {id}");
                         };
@@ -688,6 +732,14 @@ impl<H: Host> Catalog<H> {
                     bail!("Invalid configuration metadata: {id}");
                 }
                 let skill = optional_skill(&primary_skill_path(&ability_path, &id))?;
+                // Skill settings change the ability's identity like a skill edit.
+                let (skill_config, config_digest) = read_skill_config(&ability_path, &id)?;
+                if let Some(config_digest) = config_digest {
+                    manifest_digest = hex::encode(Sha256::digest(serde_json::to_vec(&json!([
+                        manifest_digest,
+                        config_digest
+                    ]))?));
+                }
                 abilities.push(Ability {
                     id,
                     path: ability_path,
@@ -716,6 +768,7 @@ impl<H: Host> Catalog<H> {
                     skill,
                     tool_skills,
                     selectable_skills,
+                    skill_config,
                 });
                 if abilities.len() > MAX_ABILITIES {
                     bail!("Too many abilities");
@@ -752,6 +805,7 @@ impl<H: Host> Catalog<H> {
                 skill: H::optimization_guidance(),
                 tool_skills: BTreeMap::new(),
                 selectable_skills: BTreeMap::new(),
+                skill_config: SkillConfig::default(),
             });
         }
         // Base sorts with the Core group's other abilities when that group exists.
@@ -763,6 +817,7 @@ impl<H: Host> Catalog<H> {
             });
         let base_path = root.join("Core").join(crate::base::ID);
         let base_skill = optional_skill(&primary_skill_path(&base_path, crate::base::ID))?;
+        let (base_config, base_config_digest) = read_skill_config(&base_path, crate::base::ID)?;
         // Base tools are `tools/<tool>/` folders; their definitions load through
         // `tool_definitions`, and their skills and bytes join Base's identity here.
         let base_tools = crate::tool_definitions::read_folder(&base_path)?.unwrap_or_default();
@@ -772,7 +827,8 @@ impl<H: Host> Catalog<H> {
             .collect();
         let base_digest = hex::encode(Sha256::digest(serde_json::to_vec(&json!([
             base_skill,
-            crate::tool_definitions::folded_digest("", &base_tools)
+            crate::tool_definitions::folded_digest("", &base_tools),
+            base_config_digest
         ]))?));
         abilities.push(Ability {
             id: crate::base::ID.into(),
@@ -803,6 +859,7 @@ impl<H: Host> Catalog<H> {
             skill: base_skill,
             tool_skills: base_tool_skills,
             selectable_skills: BTreeMap::new(),
+            skill_config: base_config,
         });
         abilities.sort_by(|a, b| {
             (a.group_order, &a.group_name, a.order, &a.name, &a.id).cmp(&(
@@ -1090,7 +1147,7 @@ impl<H: Host> Catalog<H> {
             })
             .context("Bundled skills unavailable under current access")?;
         let mut assets = Vec::new();
-        if Self::skill_mode(visibility, ability_id) != "off" {
+        if Self::skill_mode(visibility, ability) != "off" {
             if let Some(text) = Self::core_skill(ability) {
                 assets.push(("ability", ability.id.as_str(), text));
             }
@@ -1134,7 +1191,7 @@ impl<H: Host> Catalog<H> {
             .into_iter()
             .map(|(kind, name, text)| {
                 let mode = Self::asset_mode(visibility, ability, kind, name, &text);
-                let supplied = mode == "visible";
+                let supplied = in_prompt(mode);
                 // Discovery hints: a tool skill uses its tool's, a core skill its ability's text.
                 let (examples, keywords) = match kind {
                     "tool" => crate::tool_match::hints(name),
@@ -1153,7 +1210,7 @@ impl<H: Host> Catalog<H> {
                 };
                 json!({"ability_id":ability.id,"kind":kind,"skill_id":name,
                 "examples":examples,"keywords":keywords,
-                "mode":mode,"availability":if supplied {"visible"} else {"discoverable"},
+                "mode":mode,"availability":if supplied {"loaded"} else {"on_request"},
                 "requires_activation":!supplied,
                 "bytes":text.len(),"sha256":hex::encode(Sha256::digest(text.as_bytes())),
                 "summary":text.lines().take(16).find_map(|line|
@@ -1167,13 +1224,13 @@ impl<H: Host> Catalog<H> {
     /// Resolve independent core, tool and selectable visibility from current caller configuration.
     fn asset_mode<'a>(
         visibility: &'a Value,
-        ability: &Ability,
+        ability: &'a Ability,
         kind: &str,
         name: &str,
         text: &str,
     ) -> &'a str {
         match kind {
-            "ability" => Self::skill_mode(visibility, &ability.id),
+            "ability" => Self::skill_mode(visibility, ability),
             "tool" => Self::tool_mode(visibility, name),
             _ => Self::selectable_mode(visibility, &ability.id, name, text),
         }
@@ -1202,8 +1259,8 @@ impl<H: Host> Catalog<H> {
         Ok(
             json!({"ability_id":ability.id,"kind":kind,"skill_id":skill_id,
             "mode":Self::asset_mode(visibility,ability,kind,skill_id,&text),
-            "availability":if Self::asset_mode(visibility,ability,kind,skill_id,&text)=="visible" {"visible"} else {"discoverable"},
-            "requires_activation":Self::asset_mode(visibility,ability,kind,skill_id,&text)!="visible",
+            "availability":if in_prompt(Self::asset_mode(visibility,ability,kind,skill_id,&text)) {"loaded"} else {"on_request"},
+            "requires_activation":!in_prompt(Self::asset_mode(visibility,ability,kind,skill_id,&text)),
             "bytes":text.len(),"sha256":hex::encode(Sha256::digest(text.as_bytes())),
             "text":text,"source_kind":"untrusted_bundled_guidance","activates":false}),
         )
@@ -1309,23 +1366,31 @@ impl<H: Host> Catalog<H> {
             .get(id)
             .or_else(|| caps.get("*"))
             .and_then(Value::as_str)
-            .unwrap_or("visible");
+            .unwrap_or("loaded");
         if configured == "off" || ceiling == "off" {
             "off"
-        } else if configured == "discoverable" || ceiling == "discoverable" {
-            "discoverable"
+        } else if configured == "on_request" || ceiling == "on_request" {
+            "on_request"
         } else {
             configured
         }
     }
     fn is_off(visibility: &Value, id: &str) -> bool {
         // Base holds the loaders and core tools, so it is always on; its tools keep their own settings.
-        id != crate::base::ID
-            && Self::exposure(visibility, "visibility", id, "discoverable") == "off"
+        id != crate::base::ID && Self::exposure(visibility, "visibility", id, "on_request") == "off"
     }
 
-    fn skill_mode<'a>(visibility: &'a Value, id: &str) -> &'a str {
-        Self::exposure(visibility, "skill_visibility", id, "discoverable")
+    fn skill_mode<'a>(visibility: &'a Value, ability: &'a Ability) -> &'a str {
+        if ability.skill_config.core {
+            return "core";
+        }
+        let default = ability.skill_config.default_mode.as_deref();
+        Self::exposure(
+            visibility,
+            "skill_visibility",
+            &ability.id,
+            default.unwrap_or("on_request"),
+        )
     }
 
     fn selectable_metadata(name: &str, text: &str) -> Option<(String, String, &'static str)> {
@@ -1333,7 +1398,7 @@ impl<H: Host> Catalog<H> {
         if lines.next()? != "---" {
             return None;
         }
-        let (mut id, mut title, mut when, mut mode) = (None, None, None, "discoverable");
+        let (mut id, mut title, mut when, mut mode) = (None, None, None, "on_request");
         let mut closed = false;
         for line in lines.by_ref() {
             if line == "---" {
@@ -1358,8 +1423,8 @@ impl<H: Host> Catalog<H> {
             return None;
         }
         let mode = match mode {
-            "visible" | "always" | "always_on" => "visible",
-            "discoverable" | "selectable" => "discoverable",
+            "loaded" => "loaded",
+            "on_request" => "on_request",
             _ => return None,
         };
         Some((title.to_owned(), when.to_owned(), mode))
@@ -1383,11 +1448,27 @@ impl<H: Host> Catalog<H> {
     }
 
     fn tool_mode<'a>(visibility: &'a Value, name: &str) -> &'a str {
-        // Abilities are groups: tools load one by one, so core tools stay visible.
+        // Abilities are groups: tools load one by one, so core tools stay in the prompt.
         if crate::tool_definitions::is_core(name) {
-            return "visible";
+            return "core";
         }
-        Self::exposure(visibility, "tool_modes", name, "discoverable")
+        Self::exposure(visibility, "tool_modes", name, "on_request")
+    }
+
+    /// Whether ability `id`'s own skill is core (its `skill.json`): always loaded, locked.
+    pub fn skill_is_core(&self, id: &str) -> bool {
+        self.abilities
+            .iter()
+            .any(|ability| ability.id == id && ability.skill_config.core)
+    }
+
+    /// The mode ability `id`'s own skill has when nothing is saved.
+    pub fn skill_default_mode(&self, id: &str) -> &str {
+        self.abilities
+            .iter()
+            .find(|ability| ability.id == id)
+            .and_then(|ability| ability.skill_config.default_mode.as_deref())
+            .unwrap_or("on_request")
     }
 
     pub fn has_tool(&self, ability_id: &str, tool_name: &str) -> bool {
@@ -1399,7 +1480,7 @@ impl<H: Host> Catalog<H> {
     }
 
     fn is_visible(visibility: &Value, id: &str) -> bool {
-        Self::exposure(visibility, "visibility", id, "discoverable") == "visible"
+        Self::exposure(visibility, "visibility", id, "on_request") == "loaded"
     }
 
     fn available(ability: &Ability, visibility: &Value, state: &Value) -> bool {
@@ -1428,7 +1509,7 @@ impl<H: Host> Catalog<H> {
         if Self::core_skill(ability).is_some() {
             general_skills.push(
                 json!({"skill_id":"core","title":"Skill","when_to_use":ability.skill_summary,
-                "mode":Self::skill_mode(visibility,&ability.id),"default_mode":"discoverable"}),
+                "mode":Self::skill_mode(visibility,ability),"default_mode":ability.skill_config.default_mode.as_deref().unwrap_or("on_request"),"core":ability.skill_config.core}),
             );
         }
         for (name, cached) in &ability.selectable_skills {
@@ -1454,10 +1535,10 @@ impl<H: Host> Catalog<H> {
             "has_skill":Self::core_skill(ability).is_some(),
             "selectable_skills":ability.selectable_skills.iter().filter_map(|(name,cached)| Self::asset_text(ability,"selectable",name,cached).filter(|text|Self::skill_live(ability,"selectable",name,text) && Self::selectable_metadata(name,text).is_some() && Self::selectable_mode(visibility,&ability.id,name,text)!="off").map(|_|name)).collect::<Vec<_>>(),
             "general_skills":general_skills,
-            "skill_visibility":Self::skill_mode(visibility, &ability.id),
-            "visibility":if off {"off"} else if visible {"visible"} else {"discoverable"},
+            "skill_visibility":Self::skill_mode(visibility, ability),
+            "visibility":if off {"off"} else if visible {"loaded"} else {"on_request"},
             "active":Self::active(state, &ability.id),
-            "availability":if visible {"visible"} else if Self::active(state, &ability.id) {"activated"} else {"discoverable"},
+            "availability":if visible {"loaded"} else if Self::active(state, &ability.id) {"activated"} else {"on_request"},
             "requires_activation":!visible && !Self::active(state, &ability.id)});
         if ability.id == "codebase_admin" && !ability.frozen {
             if let Some(path) = Self::published_skill(ability, "ability", "codebase_admin")
@@ -1635,7 +1716,7 @@ impl<H: Host> Catalog<H> {
                     "off" => false,
                     // An explicitly activated ability (session state, /optimize) supplies
                     // its discoverable tools; loaded tools add only their own marker.
-                    "discoverable" => selected || Self::active(&state, &ability.id),
+                    "on_request" => selected || Self::active(&state, &ability.id),
                     _ => true,
                 }
                 && (Self::available(ability, visibility, &state)
@@ -1765,7 +1846,7 @@ impl<H: Host> Catalog<H> {
 
             // Visible core guidance is mandatory. Discoverable skill loads rebuild
             // their own context layer, independently of ability activation.
-            if has_tool && Self::skill_mode(visibility, &ability.id) == "visible" {
+            if has_tool && in_prompt(Self::skill_mode(visibility, ability)) {
                 if let Some(skill) = Self::core_skill(ability) {
                     part.push_str("\n");
                     part.push_str(&skill);
@@ -1791,7 +1872,7 @@ impl<H: Host> Catalog<H> {
                     continue;
                 };
                 if Self::selectable_metadata(name, &skill).is_some()
-                    && Self::selectable_mode(visibility, &ability.id, name, &skill) == "visible"
+                    && in_prompt(Self::selectable_mode(visibility, &ability.id, name, &skill))
                     && Self::skill_live(ability, "selectable", name, &skill)
                 {
                     part.push_str("\n\nSkill ");
@@ -1918,14 +1999,14 @@ impl<H: Host> Catalog<H> {
                     natural: has_tool,
                 });
             }
-            if Self::skill_mode(visibility, id) != "off" {
+            if Self::skill_mode(visibility, ability) != "off" {
                 if let Some(body) = Self::core_skill(ability) {
                     guidance.push(Guidance {
                         id: format!("ability:{id}"),
                         kind: GuidanceKind::Ability,
                         body: body.into_owned(),
                         selected: explicit("ability", id),
-                        natural: Self::skill_mode(visibility, id) == "visible" && has_tool,
+                        natural: in_prompt(Self::skill_mode(visibility, ability)) && has_tool,
                     });
                 }
             }
@@ -1961,7 +2042,7 @@ impl<H: Host> Catalog<H> {
                     kind: GuidanceKind::Selectable,
                     body: body.into_owned(),
                     selected: explicit("selectable", name),
-                    natural: normal && mode == "visible",
+                    natural: normal && in_prompt(mode),
                 });
             }
         }
@@ -2018,8 +2099,8 @@ impl<H: Host> Catalog<H> {
                         "included"
                     } else if mode == "off" {
                         "off"
-                    } else if mode == "discoverable" || entry["availability"] == "discoverable" {
-                        "discoverable"
+                    } else if mode == "on_request" || entry["availability"] == "on_request" {
+                        "on_request"
                     } else {
                         "unavailable"
                     };
@@ -2033,13 +2114,13 @@ impl<H: Host> Catalog<H> {
                     });
                 };
                 if let Some(body) = Self::core_skill(ability) {
-                    let mode = Self::skill_mode(visibility, id);
+                    let mode = Self::skill_mode(visibility, ability);
                     add(
                         "ability",
                         id,
                         mode,
                         &body,
-                        mode == "visible" && (normal || extra),
+                        in_prompt(mode) && (normal || extra),
                     );
                 }
                 for (name, cached) in &ability.tool_skills {
@@ -2067,7 +2148,7 @@ impl<H: Host> Catalog<H> {
                         && Self::skill_live(ability, "selectable", name, &body)
                     {
                         let mode = Self::selectable_mode(visibility, id, name, &body);
-                        add("selectable", name, mode, &body, on && mode == "visible");
+                        add("selectable", name, mode, &body, on && in_prompt(mode));
                     }
                 }
                 Some(AbilityInclusion {
@@ -2127,7 +2208,7 @@ impl<H: Host> Catalog<H> {
                         .and_then(|s| s["description"].as_str())
                         .unwrap_or("");
                     ready_tools.insert(name.to_owned(), short(description));
-                } else if tool["mode"] == "discoverable" {
+                } else if tool["mode"] == "on_request" {
                     loadable += 1;
                 }
             }
@@ -2281,8 +2362,8 @@ pub mod registered_tests {
             fs::write(folder.join("skills/codebase_admin.skill.md"), &core).unwrap();
             fs::write(folder.join("tools/file_edit.skill.md"), &tool).unwrap();
             let catalog = Catalog::<H>::load(root.path()).unwrap();
-            let v = json!({"visibility":{"codebase_admin":"visible"},"skill_visibility":{"codebase_admin":"visible"},
-            "tool_modes":{"file_read":"visible","file_edit":"visible"}});
+            let v = json!({"visibility":{"codebase_admin":"loaded"},"skill_visibility":{"codebase_admin":"loaded"},
+            "tool_modes":{"file_read":"loaded","file_edit":"loaded"}});
             let state = json!({"active":[],"suppressed":[]});
             let guidance = catalog.visible_guidance(&v, &state);
             assert!(guidance.contains(&core));
@@ -2328,8 +2409,8 @@ pub mod registered_tests {
         >() {
             let (_root, catalog) = fixture::<H>();
             // An On ability exposes nothing by default: each tool loads on its own.
-            let v = json!({"visibility":{"codebase_admin":"discoverable"},
-            "tool_modes":{"file_search":"discoverable","file_edit":"off"}});
+            let v = json!({"visibility":{"codebase_admin":"on_request"},
+            "tool_modes":{"file_search":"on_request","file_edit":"off"}});
             let mut state = json!({"active":[],"suppressed":[]});
             let none = json!([]);
             let picked = json!(["tool:file_read", "tool:file_edit"]);
@@ -2339,7 +2420,7 @@ pub mod registered_tests {
             // Off stays hidden even when selected.
             assert!(!catalog.tool_available("file_edit", &v, &state, &picked));
             for name in ["list_tools", "load_tool", "list_skills", "load_skill"] {
-                assert_eq!(Catalog::<H>::tool_mode(&v, name), "visible");
+                assert_eq!(Catalog::<H>::tool_mode(&v, name), "core");
             }
             let names = |loaded: &Value, state: &Value| {
                 catalog
@@ -2364,8 +2445,8 @@ pub mod registered_tests {
             H: crate::TestHost,
         >() {
             let (_root, catalog) = fixture::<H>();
-            let visibility = json!({"visibility":{"codebase_admin":"visible"},
-            "tool_modes":{"file_read":"visible","file_search":"discoverable","file_edit":"off"}});
+            let visibility = json!({"visibility":{"codebase_admin":"loaded"},
+            "tool_modes":{"file_read":"loaded","file_search":"on_request","file_edit":"off"}});
             let state = json!({"active":[],"suppressed":[]});
             let mut run = json!({"pending":{"name":"load_tool"},"loaded_abilities":[]});
             let names = |run: &Value, state: &Value| {
@@ -2406,8 +2487,8 @@ pub mod registered_tests {
                     .join("Administrator/codebase_admin/codebase_admin.json");
                 let original = fs::read(&path).unwrap();
                 let mut manifest: Value = serde_json::from_slice(&original).unwrap();
-                let visibility = json!({"visibility":{"codebase_admin":"visible"},
-                    "tool_modes":{"file_read":"visible","file_write":"visible"}});
+                let visibility = json!({"visibility":{"codebase_admin":"loaded"},
+                    "tool_modes":{"file_read":"loaded","file_write":"loaded"}});
                 let active = json!({"active":["codebase_admin"],"suppressed":[]});
                 let loaded = json!(["codebase_admin"]);
                 assert_eq!(
@@ -2465,12 +2546,12 @@ pub mod registered_tests {
         >() {
             let (root, _) = fixture::<H>();
             let folder = root.path().join("Administrator/codebase_admin");
-            let theme = "---\nid: ui_theming\ntitle: UI theming\nwhen_to_use: Use for theme changes\ndefault_mode: visible\n---\nScoped theme guidance";
+            let theme = "---\nid: ui_theming\ntitle: UI theming\nwhen_to_use: Use for theme changes\ndefault_mode: loaded\n---\nScoped theme guidance";
             fs::write(folder.join("skills/ui_theming.skill.md"), theme).unwrap();
             fs::write(folder.join("skills/ui_toggle_list.skill.md"),
-            "---\nid: ui_toggle_list\ntitle: Toggle lists\nwhen_to_use: Use for list controls\ndefault_mode: discoverable\n---\nScoped list guidance").unwrap();
+            "---\nid: ui_toggle_list\ntitle: Toggle lists\nwhen_to_use: Use for list controls\ndefault_mode: on_request\n---\nScoped list guidance").unwrap();
             let catalog = Catalog::<H>::load(root.path()).unwrap();
-            let visible = json!({"visibility":{"codebase_admin":"visible"}});
+            let visible = json!({"visibility":{"codebase_admin":"loaded"}});
             let active = json!({"active":["codebase_admin"],"suppressed":[]});
             let list = catalog
                 .bundled_skill_list(
@@ -2526,7 +2607,7 @@ pub mod registered_tests {
             assert!(catalog
                 .bundled_skill_list("codebase_admin", &visible, &active, |_| false, |_| true)
                 .is_err());
-            let off = json!({"visibility":{"codebase_admin":"visible"},"skill_visibility":{"codebase_admin":"off"}});
+            let off = json!({"visibility":{"codebase_admin":"loaded"},"skill_visibility":{"codebase_admin":"off"}});
             let without_root = catalog
                 .bundled_skill_list(
                     "codebase_admin",
@@ -2538,7 +2619,7 @@ pub mod registered_tests {
                 .unwrap();
             assert_eq!(without_root.len(), 2);
             assert!(!without_root.iter().any(|skill| skill["kind"] == "ability"));
-            let separate = json!({"visibility":{"codebase_admin":"visible"},
+            let separate = json!({"visibility":{"codebase_admin":"loaded"},
             "skill_visibility":{"codebase_admin:ui_theming":"off"}});
             let separate_list = catalog
                 .bundled_skill_list(
@@ -2627,7 +2708,7 @@ pub mod registered_tests {
                     "codebase_admin",
                     "ability",
                     "codebase_admin",
-                    &json!({"visibility":{"codebase_admin":"visible"}}),
+                    &json!({"visibility":{"codebase_admin":"loaded"}}),
                     &json!({}),
                     |_| true,
                     |_| true
@@ -2660,8 +2741,8 @@ pub mod registered_tests {
                 512
             );
 
-            let visible = json!({"visibility":{"codebase_admin":"visible"},
-            "tool_modes":{"file_read":"visible"}});
+            let visible = json!({"visibility":{"codebase_admin":"loaded"},
+            "tool_modes":{"file_read":"loaded"}});
             let entries = catalog.catalog_with(&visible, &state);
             let schemas = catalog.schemas_with(&json!([]), &visible, &state);
             let index = Catalog::<H>::model_index(&entries, &schemas);
@@ -2736,7 +2817,7 @@ pub mod registered_tests {
             let (root, catalog) = fixture::<H>();
             let missing = root.path().join("removed");
             let empty = Catalog::<H>::load(&missing).unwrap();
-            let visibility = json!({"visibility":{"codebase_admin":"visible"}});
+            let visibility = json!({"visibility":{"codebase_admin":"loaded"}});
             let state = json!({"active":["codebase_admin"]});
             assert!(empty
                 .configuration_catalog(&visibility)
@@ -2769,8 +2850,8 @@ pub mod registered_tests {
             )
             .unwrap();
             let catalog = Catalog::<H>::load(root.path()).unwrap();
-            let visibility = json!({"visibility":{"core_probe":"visible"},
-            "tool_modes":{"get_weather":"visible","legacy_unwired_tool":"visible"}});
+            let visibility = json!({"visibility":{"core_probe":"loaded"},
+            "tool_modes":{"get_weather":"loaded","legacy_unwired_tool":"loaded"}});
             let state = json!({"active":["core_probe"]});
             let item = catalog
                 .configuration_catalog(&visibility)
@@ -2827,7 +2908,7 @@ pub mod registered_tests {
             )
             .unwrap();
             let catalog = Catalog::<H>::load(root.path()).unwrap();
-            let visibility = json!({"visibility":{"computer_control":"visible"}});
+            let visibility = json!({"visibility":{"computer_control":"loaded"}});
             let item = catalog
                 .configuration_catalog(&visibility)
                 .into_iter()
@@ -2864,7 +2945,7 @@ pub mod registered_tests {
         pub fn base_stays_on_and_skills_default_discoverable<H: crate::TestHost>() {
             let (_root, catalog) = fixture::<H>();
             let state = json!({"active":[],"suppressed":[]});
-            let off = json!({"visibility":{"base":"off","codebase_admin":"visible"}});
+            let off = json!({"visibility":{"base":"off","codebase_admin":"loaded"}});
             // Saving Base as Off never hides its loaders.
             assert_eq!(
                 catalog.tool_gate("list_tools", &off, &state, &Value::Null),
@@ -2876,13 +2957,13 @@ pub mod registered_tests {
                 .find(|e| e["id"] == "codebase_admin")
                 .unwrap();
             // Ability core skills default to discoverable, so none enter guidance unasked.
-            assert_eq!(admin["skill_visibility"], "discoverable");
+            assert_eq!(admin["skill_visibility"], "on_request");
         }
 
         pub fn loaded_tool_and_skill_owners_expose_no_other_tools<H: crate::TestHost>() {
             let (_root, catalog) = fixture::<H>();
             let state = json!({"active":[],"suppressed":[]});
-            let visibility = json!({"visibility":{"codebase_admin":"visible"}});
+            let visibility = json!({"visibility":{"codebase_admin":"loaded"}});
             // A loaded tool records only its own marker (context-asset hydration adds no
             // owner), so the group's other tools stay hidden.
             let loaded = json!([crate::selection::marker("file_read")]);
@@ -2905,14 +2986,14 @@ pub mod registered_tests {
                 catalog.tool_gate("missing", &hidden, &state, &Value::Null),
                 (false, false)
             );
-            let visible = json!({"visibility":{"codebase_admin":"visible"},
-            "tool_modes":{"file_read":"visible"}});
+            let visible = json!({"visibility":{"codebase_admin":"loaded"},
+            "tool_modes":{"file_read":"loaded"}});
             assert_eq!(
                 catalog.tool_gate("file_read", &visible, &state, &Value::Null),
                 (true, true)
             );
             // Discoverable by default: hidden until selected.
-            let on = json!({"visibility":{"codebase_admin":"visible"}});
+            let on = json!({"visibility":{"codebase_admin":"loaded"}});
             assert_eq!(
                 catalog.tool_gate("file_read", &on, &state, &Value::Null),
                 (true, false)
@@ -2929,7 +3010,7 @@ pub mod registered_tests {
                 catalog.tool_abilities("file_read", &hidden, &state, &Value::Null),
                 vec!["codebase_admin".to_owned()]
             );
-            let disabled_tool = json!({"visibility":{"codebase_admin":"visible"},
+            let disabled_tool = json!({"visibility":{"codebase_admin":"loaded"},
             "tool_modes":{"file_read":"off"}});
             assert_eq!(
                 catalog.tool_gate("file_read", &disabled_tool, &state, &Value::Null),
@@ -2960,10 +3041,10 @@ pub mod registered_tests {
             let (root, _) = fixture::<H>();
             let path = root.path().join("Administrator/codebase_admin/skills");
             fs::create_dir_all(&path).unwrap();
-            fs::write(path.join("ui_theme.skill.md"),"---\nid: ui_theme\ntitle: Theme\nwhen_to_use: Edit UI\ndefault_mode: visible\n---\nUI THEME").unwrap();
+            fs::write(path.join("ui_theme.skill.md"),"---\nid: ui_theme\ntitle: Theme\nwhen_to_use: Edit UI\ndefault_mode: loaded\n---\nUI THEME").unwrap();
             let catalog = Catalog::<H>::load(root.path()).unwrap();
-            let v = json!({"visibility":{"codebase_admin":"visible"},
-            "tool_modes":{"file_read":"discoverable","file_edit":"discoverable"}});
+            let v = json!({"visibility":{"codebase_admin":"loaded"},
+            "tool_modes":{"file_read":"on_request","file_edit":"on_request"}});
             let state = json!({"active":[],"suppressed":[]});
             let guidance =
                 catalog.visible_guidance_authorized(&v, &state, |_| true, |_| true, |_| false);
@@ -2994,8 +3075,8 @@ pub mod registered_tests {
 
         pub fn visible_guidance_and_schema_respect_suppression<H: crate::TestHost>() {
             let (_root, catalog) = fixture::<H>();
-            let visibility = json!({"revision":1,"visibility":{"codebase_admin":"visible"},"skill_visibility":{"codebase_admin":"visible"},
-            "tool_modes":{"file_edit":"visible"}});
+            let visibility = json!({"revision":1,"visibility":{"codebase_admin":"loaded"},"skill_visibility":{"codebase_admin":"loaded"},
+            "tool_modes":{"file_edit":"loaded"}});
             let state = json!({"revision":0,"active":[],"suppressed":[]});
             let names = catalog
                 .schemas_with(&json!([]), &visibility, &state)
@@ -3027,7 +3108,7 @@ pub mod registered_tests {
 
         pub fn visible_guidance_filters_denied_ability_and_tool_text<H: crate::TestHost>() {
             let (_root, catalog) = fixture::<H>();
-            let visibility = json!({"visibility":{"codebase_admin":"visible"},"skill_visibility":{"codebase_admin":"visible"}});
+            let visibility = json!({"visibility":{"codebase_admin":"loaded"},"skill_visibility":{"codebase_admin":"loaded"}});
             let state = json!({"active":[],"suppressed":[]});
             let normal = catalog.visible_guidance(&visibility, &state);
             assert!(normal.contains("Use scoped workspace tools."));
@@ -3123,12 +3204,12 @@ pub mod registered_tests {
         pub fn bundled_skill_mode_is_independent_of_ability_mode<H: crate::TestHost>() {
             let (_root, catalog) = fixture::<H>();
             let state = json!({"active":[],"suppressed":[]});
-            let mut visibility = json!({"visibility":{"codebase_admin":"visible"},
+            let mut visibility = json!({"visibility":{"codebase_admin":"loaded"},
             "skill_visibility":{"codebase_admin":"off"}});
             assert!(!catalog
                 .visible_guidance(&visibility, &state)
                 .contains("Use scoped workspace tools."));
-            visibility["skill_visibility"]["codebase_admin"] = json!("discoverable");
+            visibility["skill_visibility"]["codebase_admin"] = json!("on_request");
             assert!(!catalog
                 .visible_guidance(&visibility, &state)
                 .contains("Use scoped workspace tools."));
@@ -3138,12 +3219,12 @@ pub mod registered_tests {
 
         pub fn ability_activation_preserves_independent_skill_visibility<H: crate::TestHost>() {
             let (_root, catalog) = fixture::<H>();
-            let v = json!({"visibility":{"codebase_admin":"discoverable"},"skill_visibility":{"codebase_admin":"discoverable"}});
+            let v = json!({"visibility":{"codebase_admin":"on_request"},"skill_visibility":{"codebase_admin":"on_request"}});
             let active = json!({"active":["codebase_admin"],"suppressed":[]});
             assert!(!catalog
                 .visible_guidance(&v, &active)
                 .contains("Use scoped workspace tools."));
-            let visible = json!({"visibility":{"codebase_admin":"discoverable"},"skill_visibility":{"codebase_admin":"visible"}});
+            let visible = json!({"visibility":{"codebase_admin":"on_request"},"skill_visibility":{"codebase_admin":"loaded"}});
             assert!(catalog
                 .visible_guidance(&visible, &active)
                 .contains("Use scoped workspace tools."));
@@ -3194,7 +3275,7 @@ pub mod registered_tests {
                 "background",
                 "future",
             ] {
-                let vis = json!({"visibility":{id:"visible"}});
+                let vis = json!({"visibility":{id:"loaded"}});
                 let mut run = json!({"loaded_abilities":[]});
                 assert_eq!(
                     catalog.discover_with(
@@ -3238,7 +3319,7 @@ pub mod registered_tests {
             fs::write(path.join("legacy.json"), r#"{"display_name":"Legacy","description":"Pending","kind":"ability","tools":["v2_only"]}"#).unwrap();
             fs::write(path.join("legacy.skill.md"), "Unsafe guidance").unwrap();
             let catalog = Catalog::<H>::load(root.path()).unwrap();
-            let v = json!({"visibility":{"legacy":"visible"}});
+            let v = json!({"visibility":{"legacy":"loaded"}});
             assert!(!catalog
                 .catalog_with(&v, &Value::Null)
                 .iter()
@@ -3311,13 +3392,13 @@ pub mod registered_tests {
         pub fn selected_tool_markers_preserve_off_and_suppressed_controls<H: crate::TestHost>() {
             let catalog = H::native_fixture();
             let loaded = json!(["tool:file_read"]);
-            let mut visibility = json!({"visibility":{"codebase_admin":"discoverable"},
-            "tool_modes":{"file_read":"discoverable"}});
+            let mut visibility = json!({"visibility":{"codebase_admin":"on_request"},
+            "tool_modes":{"file_read":"on_request"}});
             let state = json!({"active":[],"suppressed":[]});
             assert!(catalog.tool_available("file_read", &visibility, &state, &loaded));
             visibility["visibility"]["codebase_admin"] = json!("off");
             assert!(!catalog.tool_available("file_read", &visibility, &state, &loaded));
-            visibility["visibility"]["codebase_admin"] = json!("discoverable");
+            visibility["visibility"]["codebase_admin"] = json!("on_request");
             assert!(!catalog.tool_available(
                 "file_read",
                 &visibility,
@@ -3441,7 +3522,7 @@ pub mod registered_tests {
 
         pub fn web_access_loading_and_visibility_gates<H: crate::TestHost>() {
             let catalog = H::native_fixture();
-            let mut v = json!({"visibility":{"web_access":"discoverable"}});
+            let mut v = json!({"visibility":{"web_access":"on_request"}});
             let state = json!({"active":[],"suppressed":[]});
             let loaded = json!(["tool:maps_geocode", "tool:get_weather"]);
             assert!(!catalog.tool_available("maps_geocode", &v, &state, &json!([])));
@@ -3481,7 +3562,7 @@ pub mod registered_tests {
             assert!(!Catalog::<H>::executable(entry));
             assert!(!catalog.tool_available(
                 "schedule_task",
-                &json!({"visibility":{"automation":"visible"}}),
+                &json!({"visibility":{"automation":"loaded"}}),
                 &json!({"active":["automation"]}),
                 &Value::Null
             ));
@@ -3659,12 +3740,12 @@ pub mod registered_tests {
             let folder = root.path().join("Administrator/codebase_admin");
             fs::create_dir_all(folder.join("skills")).unwrap();
             let skill = |body: &str| {
-                format!("---\nid: verification\ntitle: Verification\nwhen_to_use: Review implementation\ndefault_mode: discoverable\n---\n{body}")
+                format!("---\nid: verification\ntitle: Verification\nwhen_to_use: Review implementation\ndefault_mode: on_request\n---\n{body}")
             };
             let path = folder.join("skills/verification.skill.md");
             fs::write(&path, skill("FIRST BODY")).unwrap();
             let catalog = Catalog::<H>::load_snapshot(root.path()).unwrap();
-            let visible = json!({"visibility":{"codebase_admin":"visible"},"skill_visibility":{"codebase_admin":"visible"},
+            let visible = json!({"visibility":{"codebase_admin":"loaded"},"skill_visibility":{"codebase_admin":"loaded"},
             "settings":{"codebase_admin":{"terminal_caution":"cautious"}}});
             let state = json!({"active":[],"suppressed":[]});
             let entries = catalog.catalog_with(&visible, &state);
@@ -3690,7 +3771,7 @@ pub mod registered_tests {
                     && item.natural
                     && item.body.contains("Configured terminal_caution: cautious")));
             let mut hidden_core = visible.clone();
-            hidden_core["skill_visibility"] = json!({"codebase_admin":"discoverable"});
+            hidden_core["skill_visibility"] = json!({"codebase_admin":"on_request"});
             let hidden = catalog.capability_guidance(
                 &entries,
                 &schemas,
@@ -3799,8 +3880,8 @@ pub mod registered_tests {
             H: crate::TestHost,
         >() {
             let (_root, catalog) = fixture::<H>();
-            let visible = json!({"visibility":{"codebase_admin":"visible"},
-            "tool_modes":{"file_edit":"discoverable"}});
+            let visible = json!({"visibility":{"codebase_admin":"loaded"},
+            "tool_modes":{"file_edit":"on_request"}});
             let state = json!({});
             let mut entries = catalog.catalog_with(&visible, &state);
             let schemas = vec![json!({"name":"file_edit"})];
@@ -3842,7 +3923,7 @@ pub mod registered_tests {
             H: crate::TestHost,
         >() {
             let (_root, catalog) = fixture::<H>();
-            let visibility = json!({"visibility":{"codebase_admin":"discoverable"}});
+            let visibility = json!({"visibility":{"codebase_admin":"on_request"}});
             let state = json!({"active":["another"],"suppressed":[],"revision":7});
             let original = state.clone();
             let loaded = json!([
@@ -3860,7 +3941,7 @@ pub mod registered_tests {
                 (true, true)
             );
             // An activated ability supplies its discoverable tools, never its Off ones.
-            let tool_off = json!({"visibility":{"codebase_admin":"discoverable"},"tool_modes":{"file_edit":"off"}});
+            let tool_off = json!({"visibility":{"codebase_admin":"on_request"},"tool_modes":{"file_edit":"off"}});
             assert_eq!(
                 catalog.tool_gate("file_edit", &tool_off, &state, &json!(["codebase_admin"])),
                 (true, false)
@@ -3905,9 +3986,9 @@ mod discovery_row_tests {
     fn discovery_row_keeps_choice_fields_and_drops_bulk() {
         let row = discovery_row(&json!({
             "id": "codebase_admin", "name": "Codebase Admin", "description": "Edit source",
-            "group_name": "Administrator", "availability": "discoverable",
+            "group_name": "Administrator", "availability": "on_request",
             "requires_activation": true, "selectable_skills": ["rust_quality"],
-            "tools": [{"name": "file_read", "policy": "allow", "mode": "visible"}],
+            "tools": [{"name": "file_read", "policy": "allow", "mode": "loaded"}],
             "config": {"bias": {}}, "general_skills": ["long text"],
         }));
         assert_eq!(row["tools"], json!(["file_read"]));
