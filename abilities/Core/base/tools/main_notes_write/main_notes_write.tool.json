@@ -1,6 +1,6 @@
 {
   "name": "main_notes_write",
-  "description": "Contribute durable cross-session goals, decisions, blockers or actions; reuse topic and entry IDs. Policy may save a proposal for approval. Never invent timing. This does not execute or schedule actions.",
+  "description": "Contribute durable cross-session goals, decisions, blockers or actions to the main notes.",
   "parameters": {
     "type": "object",
     "properties": {

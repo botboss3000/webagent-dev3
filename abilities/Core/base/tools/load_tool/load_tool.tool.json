@@ -1,6 +1,6 @@
 {
   "name": "load_tool",
-  "description": "Load permitted tools by exact name for this conversation: pass every tool the task needs in tool_names (up to 8) in one call. Each loaded tool's own skill comes with it. Already supplied tools are acknowledged; refused names are listed. Live policy still applies.",
+  "description": "Load permitted tools by exact name (up to 8 per call) for this conversation.",
   "parameters": {
     "type": "object",
     "properties": {

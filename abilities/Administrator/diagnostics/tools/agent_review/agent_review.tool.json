@@ -1,6 +1,6 @@
 {
   "name": "agent_review",
-  "description": "Explain a grouped tool issue, open an issue no failed call produced, or mark one resolved by a release. Administrator only. One record per group or title: a later call replaces the earlier one",
+  "description": "Explain a grouped tool issue, open an issue, or mark one resolved by a release (administrators only).",
   "effect": "write",
   "repeat_guard": {
     "risk": "none",

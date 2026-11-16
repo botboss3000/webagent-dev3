@@ -1,5 +1,10 @@
 # source_site_create
 
+## Usage
+
+- Configure a caller-owned site connection with public metadata, create a private GitHub repository and static Cloudflare Worker, or connect an existing static site.
+- Configure returns private vault request names; tokens are never tool arguments.
+
 Use operation=configure first with site_id, request_id, connection_revision=0 (or the current revision when editing) and configuration holding github_owner, github_repo, worker_name and optional custom_domain. Cloudflare account ID and build-token UUID are optional and normally omitted: create discovers them with the saved Cloudflare token. No external repository or Worker is created during configure. Invalid input returns status failed with the reason and an example.
 
 The response contains credential_requests (each with label, create_url and permissions) and setup_links. Show those links and permissions to the user, then call request_credential with one credential's name, origin, label and create_url at a time, waiting for check_credential before the next. Only the human private panel accepts token values; never include secrets in configuration or tool arguments.

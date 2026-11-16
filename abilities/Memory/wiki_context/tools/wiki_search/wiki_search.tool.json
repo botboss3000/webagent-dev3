@@ -1,6 +1,6 @@
 {
   "name": "wiki_search",
-  "description": "Search the shared server Wiki by keywords across titles, tags, keywords and bodies. Pass synonyms and other phrasings of the query in also; articles matching more of them rank higher. Returns slugs, titles and excerpts, best match first. Search before answering from or writing to the Wiki.",
+  "description": "Search the shared server Wiki by keywords; search before answering from or writing to it.",
   "effect": "read",
   "default_policy": {
     "operator": "allow",

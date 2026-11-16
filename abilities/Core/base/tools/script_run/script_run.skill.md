@@ -1,5 +1,10 @@
 # Session scripts
 
+## Usage
+
+- Run a session or saved script's steps in order as ordinary tool calls; stops at the first failed step and returns every step's result.
+- Without scope, a session script of that name runs before a saved one
+
 A session script is a named list of tool calls saved for this conversation tree: the
 top-level conversation and every sub-agent session started from it, at any depth. Save
 one when you or your sub-agents will run the same sequence more than once, for example

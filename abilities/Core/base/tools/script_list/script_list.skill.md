@@ -1,5 +1,9 @@
 # Session scripts
 
+## Usage
+
+- List this conversation tree's session scripts and this agent's approved saved scripts: scope, name, description and params, plus saved-script proposals awaiting the user's approval
+
 A session script is a named list of tool calls saved for this conversation tree: the
 top-level conversation and every sub-agent session started from it, at any depth. Save
 one when you or your sub-agents will run the same sequence more than once, for example

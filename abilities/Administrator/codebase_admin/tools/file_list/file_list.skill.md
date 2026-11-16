@@ -1,5 +1,15 @@
 # file_list
 
+## Usage
+
+- List a directory by absolute container path or relative live-checkout path; with pattern (e.g. *composer*), list matching file paths under it recursively.
+- Source writes use isolated broker work automatically.
+- Files are read from the source checkout (/code) and this session's workspace; other container paths, including runtime data, are refused.
+- Reads without a selector inspect published/container files; pass a returned broker_id for private-source reads.
+- Optional broker_id selects current, new or returned work.
+- Explicit runtime/workspace paths retain their owning tools.
+- Never deploys.
+
 file_list pages use offset from 0 and limit at most 100.
 
 With `pattern` (for example `*composer*` or `*.test.mjs`), file_list returns the file

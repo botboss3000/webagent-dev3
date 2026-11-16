@@ -1,6 +1,6 @@
 {
   "name": "wiki_update",
-  "description": "App administrators only. Edit an article; only the fields you pass change and the slug stays. wiki_get it first and pass its revision. The previous version stays in history.",
+  "description": "App administrators only: edit a Wiki article; only passed fields change.",
   "effect": "write",
   "default_policy": {
     "operator": "allow"

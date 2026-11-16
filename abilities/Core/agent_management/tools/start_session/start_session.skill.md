@@ -1,5 +1,10 @@
 # start_session
 
+## Usage
+
+- Start a separate session in the user's list.
+- By default it is a fork of this agent carrying this conversation's history up to the last completed reply, told to do the task in text directly. notify (default false) sends you its final reply when its run ends.
+
 Starts a separate session that appears in the user's session list.
 
 By default it is a fork of this agent. It carries this conversation's history up

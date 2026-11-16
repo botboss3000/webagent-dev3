@@ -1,5 +1,10 @@
 # browser_read
 
+## Usage
+
+- Look at web pages in a private server browser: navigate, read rendered text, measure element sizes and positions, sample rendered pixel colours, read page-load timing, wait for and time conditions, inspect animations, scroll, emulate phone/desktop and dark mode, and take screenshots that attach to the reply.
+- Signed out on public sites; clicking and typing use browser_input
+
 Every browser action except input. For a known sequence of reads, use one `script` call; add `"screenshot": true` only to steps whose image you need. Scripts with clicks use browser_input. A script has a time budget of 10 s per step (at least 25 s, at most 120 s); when it runs out between steps the script stops with `failed_step` and returns the steps already finished.
 
 ## Pages

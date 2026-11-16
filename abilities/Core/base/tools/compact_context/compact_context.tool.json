@@ -1,6 +1,6 @@
 {
   "name": "compact_context",
-  "description": "Ask the user whether to summarize an earlier, finished task now that the conversation has moved to a new one. Shows a Compact/Keep panel and returns at once; keep working and do not wait for the answer. On Compact the earlier task folds into a summary in the background; the new task's messages stay word for word and the originals stay encrypted for recall_compacted. new_task_quote is the opening words of the user message that began the new task, quoted exactly; earlier_task names the finished task in a few words; focus (optional) says what the summary must keep.",
+  "description": "Ask the user whether to summarize an earlier finished task now that the conversation has moved on.",
   "parameters": {
     "type": "object",
     "properties": {

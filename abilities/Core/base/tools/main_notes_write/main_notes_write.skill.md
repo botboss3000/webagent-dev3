@@ -1,5 +1,12 @@
 # Write Main Notes
 
+## Usage
+
+- Contribute durable cross-session goals, decisions, blockers or actions; reuse topic and entry IDs.
+- Policy may save a proposal for approval.
+- Never invent timing.
+- This does not execute or schedule actions.
+
 Create or update a topic entry in the current session agent's Main Notes. The host determines agent scope and enforces tool permissions and the configured Notes write-approval mode; by default writes save without approval. The optional Main Chat coordination toggle does not grant or withdraw this tool's access.
 
 First read the relevant topic and current revision with main_notes_read. Supply a stable request_id, expected_revision and contribution. The contribution contains topic_id, title, scope and an entry with id, text and state. Reuse existing topic and entry IDs for updates. Prefer updating or closing an existing entry (state done or cancelled) over adding a similar one, so the notes every session carries stay short. Optional fields include groups, sources, subtopic, timing, condition, progress and outcome. Keep action intent in text, current progress in progress and observed results in outcome.

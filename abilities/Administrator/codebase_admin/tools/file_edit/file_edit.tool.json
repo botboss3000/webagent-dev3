@@ -1,6 +1,6 @@
 {
   "name": "file_edit",
-  "description": "Replace exactly one matching span in an existing container or live-checkout file; policy-gated. Source writes use isolated broker work automatically. Files are read from the source checkout (/code) and this session's workspace; other container paths, including runtime data, are refused. Reads without a selector inspect published/container files; pass a returned broker_id for private-source reads. Optional broker_id selects current, new or returned work. Explicit runtime/workspace paths retain their owning tools. Never deploys.",
+  "description": "Replace exactly one matching span in an existing container or live-checkout file; policy-gated, never deploys.",
   "parameters": {
     "type": "object",
     "properties": {

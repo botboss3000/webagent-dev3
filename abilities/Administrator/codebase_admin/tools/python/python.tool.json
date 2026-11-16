@@ -1,6 +1,6 @@
 {
   "name": "python",
-  "description": "Execute Python in this session workspace; reads any container file, writes only the workspace; source changes use broker task tools or checkout_edit; policy-gated",
+  "description": "Execute Python in this session workspace; policy-gated.",
   "parameters": {
     "type": "object",
     "properties": {

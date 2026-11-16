@@ -1,5 +1,14 @@
 # build_work
 
+## Usage
+
+- Manage isolated broker work.
+- Broker ID selects one independently deployable outcome: begin new work with a label and summary, omit to continue it, or reuse a returned ID.
+- Broker Job ID identifies execution;
+- Broker Release ID identifies publication.
+- Session identity and request receipts are runtime owned.
+- Ownership and publication gates remain enforced.
+
 The isolated broker task lifecycle: begin, status, review, check, preflight,
 finish, decide, receipt, wait, cancel and abandon. File tools create a task
 automatically; begin explicitly only to set a summary. Creating or editing a

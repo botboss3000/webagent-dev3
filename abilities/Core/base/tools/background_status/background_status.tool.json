@@ -1,6 +1,6 @@
 {
   "name": "background_status",
-  "description": "Read the status of a caller-owned background task (a background read, or a call moved to the background when the user sent a message). Its result arrives on its own; do not poll.",
+  "description": "Read the status of a caller-owned background task.",
   "parameters": {
     "type": "object",
     "properties": {

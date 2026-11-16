@@ -1,6 +1,6 @@
 {
   "name": "change_app_setting",
-  "description": "Save one app-wide setting that applies to everyone, using the revision find_setting returned for the app layer. Administrators only; the owner's validation and revision checks apply.",
+  "description": "Save one app-wide setting that applies to everyone (administrators only).",
   "effect": "write",
   "repeat_guard": {
     "risk": "none",

@@ -1,6 +1,6 @@
 {
   "name": "change_agent_setting",
-  "description": "Save one setting of an agent the signed-in user manages (this conversation's agent unless `agent` names another one they manage), using the revision find_setting returned for the agent layer. The agent's owner checks apply.",
+  "description": "Save one setting of an agent the signed-in user manages.",
   "effect": "write",
   "repeat_guard": {
     "risk": "none",

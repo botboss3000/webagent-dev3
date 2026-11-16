@@ -1,5 +1,11 @@
 # Load skill guidance
 
+## Usage
+
+- Load discoverable guidance for this conversation.
+- Returns only acknowledgment and metadata; full guidance is supplied in the next model context.
+- Does not activate abilities or tools
+
 Use `load_skill` with exact `ability_id`, `kind` (`ability`, `tool`, `selectable`, or `own`) and `skill_id` from `list_skills`. Optionally send `expected_catalog_version` to reject a change since listing. Paths and other user, agent or session scopes are unsupported. Visible or already selected guidance needs no repeated load.
 
 The result contains only an acknowledgment and metadata: identity, observed digest, byte count and catalog version. A new successful load records a content-free conversation selector for the selected agent and authenticated requester. Full guidance enters the next model context separately from the durable tool result. Hashes and own-skill revisions describe this read; they do not pin future content.

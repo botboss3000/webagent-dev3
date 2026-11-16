@@ -1,5 +1,11 @@
 # browser_input
 
+## Usage
+
+- Click, type or press a key in the private server browser, or save the site's sign-in.
+- Each click, type or press needs a browser_read read under 120 seconds old whose region contains the target.
+- Sign-in fields take a vault entry (vault), never literal passwords; save_login keeps the signed-in site for later visits
+
 Input on the page: click, type literal text or a vault entry, press one allow-listed key, touch, or save the site's sign-in. Read the region first with browser_read; the result reports the target used and, for press and touch, the element focused afterwards. A failed input did nothing; an uncertain one may have: read before repeating it.
 
 - `click` `selector`, `type` `selector` `text` or `vault`, `press` `key` (`selector`): each needs a read under 120 seconds old, on the same URL, whose region (its selector, or the whole body) contains the target. Each input uses up that read. Changes elsewhere on the page, such as live timestamps, do not matter. The result reports the `target` it used (tag and visible label). Password and credential fields take only a `vault` entry, never literal text. `press` takes one of Tab, Shift+Tab, Enter, Escape, Space, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, sent to `selector` or to the focused element, and reports the element `focused` afterwards.

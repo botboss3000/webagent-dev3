@@ -1,5 +1,10 @@
 # host_admin
 
+## Usage
+
+- Request a change to the server through the root host helper, or read host status.
+- Every change waits for an administrator's approval on the Host Admin page; a background notice wakes this chat when it is decided and finished.
+
 - `{"action":"status"}`: uptime, disk, listed units and containers. Runs at once.
 - `{"action":"request","host_action":"file_write","host_args":{"path":"/etc/webagent/x.json","content":"<whole file>"}}`:
   `content` replaces the whole file; read it first with status or ask the user, and

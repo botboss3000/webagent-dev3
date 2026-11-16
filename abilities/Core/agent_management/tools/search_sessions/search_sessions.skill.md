@@ -1,5 +1,12 @@
 # search_sessions
 
+## Usage
+
+- Search the user and agent messages of the sessions in scope by keywords.
+- Words match by stem and common irregular forms (garden finds gardening, ran finds run); add related words to the same query (feline cat kitten) since any word counts.
+- Nearby matches merge into one excerpt.
+- Each result names its session and turn; open more with read_session from/to around that turn.
+
 Searches the user and agent messages of the sessions in scope (the same sessions
 list_sessions shows; not this conversation, which search_this_session covers).
 

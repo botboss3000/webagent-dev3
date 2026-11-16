@@ -1,6 +1,6 @@
 {
   "name": "host_admin",
-  "description": "Request a change to the server through the root host helper, or read host status. Every change waits for an administrator's approval on the Host Admin page; a background notice wakes this chat when it is decided and finished.",
+  "description": "Request a server change through the root host helper (needs administrator approval), or read host status.",
   "effect": "write",
   "default_policy": {
     "operator": "allow",

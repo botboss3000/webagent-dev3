@@ -1,6 +1,6 @@
 {
   "name": "build_work",
-  "description": "Manage isolated broker work. Broker ID selects one independently deployable outcome: begin new work with a label and summary, omit to continue it, or reuse a returned ID. Broker Job ID identifies execution; Broker Release ID identifies publication. Session identity and request receipts are runtime owned. Ownership and publication gates remain enforced.",
+  "description": "Manage isolated broker work: begin, continue or release a task and its jobs.",
   "effect": "write",
   "default_policy": {
     "operator": "require_approval",

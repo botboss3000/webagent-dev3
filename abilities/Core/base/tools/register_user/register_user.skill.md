@@ -1,0 +1,7 @@
+# register_user
+
+## Usage
+
+- Request a private account-registration form in the active browser.
+- The user enters their own credentials; the existing registration policy and administrator approval still apply.
+- No account is created until the user submits the form.

@@ -1,6 +1,6 @@
 {
   "name": "delegate_to_agent",
-  "description": "Hand off to an accessible saved agent in a new owner-private conversation using an explicit text summary. Requests navigation in the active browser and preserves the original conversation.",
+  "description": "Hand off to an accessible saved agent in a new private conversation using a text summary.",
   "effect": "write",
   "default_policy": {
     "operator": "require_approval",

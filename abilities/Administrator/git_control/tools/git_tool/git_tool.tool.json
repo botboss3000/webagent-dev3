@@ -1,6 +1,6 @@
 {
   "name": "git_tool",
-  "description": "Typed Git operations in a workspace repository, or administrator inspection and push of the published V3 checkout with repo=__root__; mutations need approval and an exact HEAD fence",
+  "description": "Typed Git operations in a workspace repository, or administrator inspection and push of the published V3 checkout.",
   "effect": "write",
   "default_policy": {
     "operator": "require_approval",

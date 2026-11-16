@@ -1,5 +1,11 @@
 # Agent review note
 
+## Usage
+
+- Explain a grouped tool issue, open an issue no failed call produced, or mark one resolved by a release.
+- Administrator only.
+- One record per group or title: a later call replaces the earlier one
+
 Use this when the diagnostics review shows an issue group this conversation created and
 has not explained yet, or when an issue you just hit is still unexplained. One note per
 group: a later note replaces the earlier one, so revise rather than append.

@@ -1,5 +1,10 @@
 # Search this session
 
+## Usage
+
+- Search this conversation's user and assistant messages by keywords; words match by stem (garden finds gardening), so add related words to the query (feline cat).
+- Nearby matches merge into one excerpt
+
 Search the public user and assistant messages of the current conversation. It does
 not search other conversations (Agent Management's search_sessions does), private
 model interactions, tool arguments or results.

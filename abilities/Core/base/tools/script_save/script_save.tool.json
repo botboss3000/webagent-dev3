@@ -1,6 +1,6 @@
 {
   "name": "script_save",
-  "description": "Save a named sequence of read-only or Browser Control tool calls. Scope session (default): for this conversation and its sub-agents, saved at once; the same name replaces it. Scope saved: propose a reusable script for later conversations with this agent; it is saved only after the user approves it on the Artifacts page. A step that would need approval is refused",
+  "description": "Save a named sequence of read-only or Browser Control tool calls as a session or saved script.",
   "parameters": {
     "type": "object",
     "properties": {

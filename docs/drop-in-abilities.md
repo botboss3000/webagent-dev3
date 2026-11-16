@@ -13,6 +13,9 @@ its manifest; a packaged ability whose package contract checks the manifest list
 it, naming exactly its tool folders. `<tool>.tool.json` holds:
 
 - `name` (the folder name), `description`, JSON-schema `parameters`, optional `strict`.
+  Keep `description` to one sentence of at most 160 characters (what the tool does and
+  when to use it): it rides every call. Field formats, limits and examples go in the
+  tool's `<tool>.skill.md`.
 - `effect`: `read` or `write`. It says whether the tool changes anything and drives
   recovery (an interrupted write is uncertain and never rerun), batches, background work
   and the repeat guard. It never decides access.

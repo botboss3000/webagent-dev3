@@ -1,5 +1,11 @@
 # start_spawn
 
+## Usage
+
+- Start a sub agent: a child session shown as a tab in this conversation.
+- It runs the task in text with this agent or agent_id, and you get a notice with its final reply when it finishes.
+- End your turn after starting it; do not poll.
+
 Starts a sub agent in a child session that shows as a tab in this conversation.
 Give it a complete, specific task in `text`; it does not see this conversation.
 `agent_id` picks another saved agent; without it the child uses this agent.

@@ -1,5 +1,12 @@
 # Session scripts
 
+## Usage
+
+- Save a named sequence of read-only or Browser Control tool calls.
+- Scope session (default): for this conversation and its sub-agents, saved at once; the same name replaces it.
+- Scope saved: propose a reusable script for later conversations with this agent; it is saved only after the user approves it on the Artifacts page.
+- A step that would need approval is refused
+
 A session script is a named list of tool calls saved for this conversation tree: the
 top-level conversation and every sub-agent session started from it, at any depth. Save
 one when you or your sub-agents will run the same sequence more than once, for example

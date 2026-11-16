@@ -1,5 +1,12 @@
 # wiki_create
 
+## Usage
+
+- App administrators only.
+- Create a Wiki article; its slug is derived from the title.
+- Search first to avoid duplicates.
+- New articles are drafts (members only) unless status is published.
+
 Only app administrators can write; for anyone else a write returns `denied`, so
 explain that instead of retrying.
 

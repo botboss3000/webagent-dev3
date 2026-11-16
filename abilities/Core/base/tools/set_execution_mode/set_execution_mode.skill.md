@@ -1,5 +1,11 @@
 # Change the session mode
 
+## Usage
+
+- Change this session to an agent execution mode ID (ask, plan, auto, or custom); legacy read_only/write are supported at a revision checkpoint.
+- Entering Auto needs human approval.
+- Leaving Plan needs plan: the agreed plan, shown to the user on the approval card and saved as the session's plan artifact when they let the work start.
+
 Call with `{"mode":"<id>","expected_revision":<current mode revision>}`. The current revision is in the session mode note of every step. Use a short `reason` when it helps the user.
 
 ## Leaving Plan

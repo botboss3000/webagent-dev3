@@ -1,6 +1,6 @@
 {
   "name": "context_assets",
-  "description": "List or unload this requester's dynamically selected conversation tools and skills. Changes selection only; never changes permissions, files or configured visible guidance.",
+  "description": "List or unload this requester's dynamically selected conversation tools and skills.",
   "strict": false,
   "parameters": {
     "type": "object",

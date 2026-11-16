@@ -1,6 +1,6 @@
 {
   "name": "load_skill",
-  "description": "Load discoverable guidance for this conversation. Returns only acknowledgment and metadata; full guidance is supplied in the next model context. Does not activate abilities or tools",
+  "description": "Load discoverable guidance for this conversation.",
   "parameters": {
     "type": "object",
     "properties": {

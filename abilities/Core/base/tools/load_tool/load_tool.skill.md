@@ -1,5 +1,12 @@
 # Load tools
 
+## Usage
+
+- Load permitted tools by exact name for this conversation: pass every tool the task needs in tool_names (up to 8) in one call.
+- Each loaded tool's own skill comes with it.
+- Already supplied tools are acknowledged; refused names are listed.
+- Live policy still applies.
+
 Use `list_tools` to find an exact permitted tool name, then load every tool the task needs in one call: `load_tool(tool_names=["file_read","file_edit"])` (up to 8). Each loaded tool brings its own tool skill, so no separate `load_skill` is needed for it. Refused names are listed in the result. Visible or already selected tools return an acknowledgment without changing selection.
 
 A new successful selection lasts for this conversation, selected agent and authenticated requester. Rust supplies the current authorized schema and applicable current guidance in each working model call. Its identity survives normal messages, compaction and restart until unloaded with `context_assets`. Source edits and schema replacements are resolved live; an unavailable or revoked tool is withdrawn without reviving an old schema.

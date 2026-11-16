@@ -1,5 +1,10 @@
 # Conversation context selections
 
+## Usage
+
+- List or unload this requester's dynamically selected conversation tools and skills.
+- Changes selection only; never changes permissions, files or configured visible guidance.
+
 Use context_assets(action="list") to inspect dynamically selected abilities, tools and skills for this conversation, selected agent and authenticated requester. It returns identity selectors and a revision, without instruction text.
 
 Use context_assets(action="unload", selector=<exact listed selector>, expected_revision=<listed revision>, request_id=<stable unique ID>) to remove one dynamic selection. Retain that request ID and exact arguments if reconciling or retrying the same request. A revision conflict requires a fresh list and a new deliberate request.

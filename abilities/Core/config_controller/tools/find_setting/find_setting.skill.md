@@ -1,5 +1,10 @@
 # find_setting
 
+## Usage
+
+- Find which setting a plain-language request means on a layer (the user's own, an agent the user manages, or the whole app) and what it would change: a card with current and proposed values, or a short described pick list.
+- Changes nothing.
+
 Answer kinds:
 
 - `card`: one setting with `review.current`, `review.proposed` and `review.revision`. Tell the user the setting's description, the current value and the proposed value, then save it with the tool for that layer.

@@ -1,6 +1,6 @@
 {
   "name": "source_site_create",
-  "description": "Configure a caller-owned site connection with public metadata, create a private GitHub repository and static Cloudflare Worker, or connect an existing static site. Configure returns private vault request names; tokens are never tool arguments.",
+  "description": "Configure a site connection, create a private GitHub repository and static Cloudflare Worker, or connect an existing static site.",
   "effect": "write",
   "default_policy": {
     "operator": "require_approval",

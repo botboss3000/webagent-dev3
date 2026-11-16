@@ -1,6 +1,6 @@
 {
   "name": "set_app_view",
-  "description": "Request a registered app destination in this caller's active conversation browser. Existing page permissions still apply. No browser means the request remains unapplied.",
+  "description": "Request a registered app destination in this caller's active conversation browser.",
   "effect": "write",
   "default_policy": {
     "operator": "allow",

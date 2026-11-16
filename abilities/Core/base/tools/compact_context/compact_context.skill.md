@@ -1,5 +1,11 @@
 # Ask to compact an earlier task
 
+## Usage
+
+- Ask the user whether to summarize an earlier, finished task now that the conversation has moved to a new one.
+- Shows a Compact/Keep panel and returns at once; keep working and do not wait for the answer.
+- On Compact the earlier task folds into a summary in the background; the new task's messages stay word for word and the originals stay encrypted for recall_compacted. new_task_quote is the opening words of the user message that began the new task, quoted exactly; earlier_task names the finished task in a few words; focus (optional) says what the summary must keep.
+
 `compact_context` never compacts by itself. It shows the user a Compact/Keep panel and
 returns at once. Keep working on the new task; never wait for the answer, never mention the
 panel again, and never ask the user in a message whether to compact.

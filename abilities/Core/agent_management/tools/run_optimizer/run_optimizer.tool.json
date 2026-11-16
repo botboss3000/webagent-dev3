@@ -1,6 +1,6 @@
 {
   "name": "run_optimizer",
-  "description": "Ask this agent's assigned System model to propose a clearer prompt for a stated purpose. Returns a proposal only; never applies prompt edits, grants tools or changes model assignments.",
+  "description": "Ask this agent's System model to propose a clearer prompt; returns a proposal only.",
   "effect": "read",
   "default_policy": {
     "operator": "require_approval",

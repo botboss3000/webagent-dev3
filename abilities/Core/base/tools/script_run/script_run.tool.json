@@ -1,6 +1,6 @@
 {
   "name": "script_run",
-  "description": "Run a session or saved script's steps in order as ordinary tool calls; stops at the first failed step and returns every step's result. Without scope, a session script of that name runs before a saved one",
+  "description": "Run a session or saved script's steps in order as ordinary tool calls.",
   "parameters": {
     "type": "object",
     "properties": {

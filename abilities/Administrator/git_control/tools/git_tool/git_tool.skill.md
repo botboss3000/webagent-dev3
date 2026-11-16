@@ -1,5 +1,9 @@
 # git_tool
 
+## Usage
+
+- Typed Git operations in a workspace repository, or administrator inspection and push of the published V3 checkout with repo=__root__; mutations need approval and an exact HEAD fence
+
 Use operation status first. Select repo=__root__ to inspect or push the published
 V3 checkout as an administrator. It is separate from the current session workspace.
 The live checkout accepts status, diff, log, show, branch_list, tag_list and push;
