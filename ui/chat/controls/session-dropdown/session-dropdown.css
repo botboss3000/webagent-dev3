@@ -2,8 +2,11 @@
 @import url("/ui/chat/controls/session-dropdown/row.css");
 /* Keeps configured rows scrollable and the optional footer reachable. */
 #session-dropdown-menu:not([hidden]) { display:flex; flex-direction:column; overflow:hidden; }
-#session-dropdown-menu[data-state="open"] { max-height:min(var(--session-menu-open-height, 66vh),var(--session-dropdown-max-height, 66vh)); }
-#session-dropdown-menu .session-dropdown-rows { flex:0 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; }
+#session-dropdown-menu .session-dropdown-rows { flex:0 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable; }
+/* Closed pill: room after the avatar, and space before the flag and time it carries on the right. */
+.chat-header-zone > [data-header-control="session_dropdown"] { padding-right:14px!important; }
+#session-dropdown .session-dropdown-trigger { column-gap:7px; }
+#session-dropdown #session-dropdown-block { padding-right:4px; }
 #session-dropdown-menu > .session-manage-row,
 #session-dropdown-menu > .session-dropdown-sync { flex-shrink:0; }
 #session-dropdown .session-dropdown-trigger,
@@ -13,3 +16,130 @@
 /* The session-tab row collapses until the open session has a family (list.js renderTabs),
    Broker tasks (broker-chip.js sets data-broker) or Main Notes (main-notes/index.js sets data-notes). */
 #chat-header .chat-header-row:has(#chat-sub-header[data-empty]:not([data-broker]):not([data-notes])) { display:none; }
+
+/* The pill and the list are one surface. Opening uncovers the full-size panel
+   with an edge that travels down from the pill; the rows run that same edge a
+   beat later, so each row appears chasing it. Closing runs the edge back up
+   into the pill, which keeps the panel's surface until the edge reaches it. */
+#session-dropdown,
+#session-dropdown-menu {
+  --sd-r:var(--session-selector-cap-radius, 22px);
+  --sd-ease:cubic-bezier(.4, 0, .2, 1);
+  --sd-edge:720ms;
+  --sd-lag:180ms;
+}
+
+/* Full-size panel, cut off at the pill edge. */
+html body #session-dropdown-menu:not([hidden]) {
+  padding:0;
+  opacity:1;
+  transform:none;
+  max-height:none;
+  box-shadow:none;
+  clip-path:inset(0 0 100% 0 round 0 0 var(--sd-r) var(--sd-r));
+  transition:clip-path var(--sd-edge) var(--sd-ease);
+}
+html body #session-dropdown-menu:not([hidden]).flip-up {
+  clip-path:inset(100% 0 0 0 round var(--sd-r) var(--sd-r) 0 0);
+}
+/* Open: the height is final at once so rows never move; the edge is the only
+   thing that travels. */
+html body #session-dropdown-menu[data-state="open"] {
+  max-height:var(--session-dropdown-max-height, 66vh);
+  border-radius:0 0 var(--sd-r) var(--sd-r);
+  clip-path:inset(0 0 0 0 round 0 0 var(--sd-r) var(--sd-r));
+  transition:clip-path var(--sd-edge) var(--sd-ease), max-height 0s;
+}
+html body #session-dropdown-menu[data-state="open"].flip-up {
+  border-radius:var(--sd-r) var(--sd-r) 0 0;
+  clip-path:inset(0 0 0 0 round var(--sd-r) var(--sd-r) 0 0);
+}
+
+/* Rows trail that edge: same speed, one beat behind it. */
+html body #session-dropdown-menu .session-dropdown-rows {
+  clip-path:inset(0 0 100% 0);
+  transition:clip-path var(--sd-edge) var(--sd-ease) var(--sd-lag);
+}
+html body #session-dropdown-menu[data-state="open"] .session-dropdown-rows { clip-path:inset(0 0 0 0); }
+html body #session-dropdown-menu.flip-up .session-dropdown-rows { clip-path:inset(100% 0 0 0); }
+html body #session-dropdown-menu[data-state="open"].flip-up .session-dropdown-rows { clip-path:inset(0 0 0 0); }
+
+/* Close: the script's own fade and height collapse are cancelled, so the panel
+   stays solid and full height while its clip animation runs the edge back up
+   into the pill. Nothing else moves. */
+html body #session-dropdown-menu[data-state="closing"] {
+  max-height:var(--session-dropdown-max-height, 66vh)!important;
+  opacity:1!important;
+  transform:none!important;
+  border-radius:0 0 var(--sd-r) var(--sd-r)!important;
+  border-top:none!important;
+  transition:clip-path var(--sd-edge) var(--sd-ease)!important;
+}
+html body #session-dropdown-menu[data-state="closing"].flip-up {
+  border-radius:var(--sd-r) var(--sd-r) 0 0!important;
+  border-top:var(--border-width) solid var(--border)!important;
+  border-bottom:none!important;
+}
+/* Content keeps its height while the edge passes over it, so rows are covered
+   from the bottom up instead of the panel re-laying itself out. */
+html body #session-dropdown-menu[data-state="closing"] > .session-dropdown-rows { flex:0 0 auto; }
+
+/* The pill is the panel's title row for as long as the menu holds a state, so
+   its own corners only come back once the menu is finished with. The profile
+   writes the chip's border-radius as an inline value that reads this. */
+#chat-header #session-dropdown.open {
+  --session-selector-open-radius:var(--sd-r) var(--sd-r) 0 0;
+}
+#chat-header #session-dropdown.open.flip-up {
+  --session-selector-open-radius:0 0 var(--sd-r) var(--sd-r);
+}
+body:has(#session-dropdown-menu[data-state]) #session-dropdown {
+  background:var(--bg-elev)!important;
+  border-color:var(--border)!important;
+  border-bottom-color:transparent!important;
+  --session-selector-open-radius:var(--sd-r) var(--sd-r) 0 0;
+  transition:none!important;
+}
+body.light-mode:has(#session-dropdown-menu[data-state]) #session-dropdown { background:var(--bg-0)!important; }
+body:has(#session-dropdown-menu[data-state].flip-up) #session-dropdown {
+  --session-selector-open-radius:0 0 var(--sd-r) var(--sd-r);
+  border-top-color:transparent!important;
+  border-bottom-color:var(--border)!important;
+}
+
+/* Rows hold still: the moving edge uncovers or covers them, in order. */
+html body #session-dropdown-menu .session-dropdown-rows > .session-row,
+html body #session-dropdown-menu > .session-dropdown-loading-row,
+html body #session-dropdown-menu > .session-dropdown-empty,
+html body #session-dropdown-menu > .session-manage-row {
+  opacity:1!important;
+  transform:none!important;
+  animation:none!important;
+}
+
+/* Rounded capsule rows with space from the panel edges. */
+html body #session-dropdown-menu .session-dropdown-rows { display:flex; flex-direction:column; gap:4px; padding:4px 6px 6px; }
+html body #session-dropdown-menu .session-row {
+  min-height:44px; padding:6px 10px; border-radius:var(--sd-r); box-sizing:border-box;
+  transition:background-color .3s var(--sd-ease), border-radius .3s var(--sd-ease);
+}
+html body #session-dropdown-menu .session-row:hover { background:var(--bg-tint); }
+html body #session-dropdown-menu .session-row.selected { background:rgba(var(--brand-rgb), .14); }
+html body #session-dropdown-menu .session-row:focus-visible { outline:2px solid var(--brand); outline-offset:-2px; }
+/* An expanded parent tightens its corners and tints, as the reference row does. */
+html body #session-dropdown-menu .session-row:has(.sess-title-agent-toggle[aria-expanded="true"]) { border-radius:10px; background:var(--bg-tint); }
+/* Sub-agent rows hang off a thin rail under their parent. */
+html body #session-dropdown-menu .session-child-row { margin-left:18px; border-radius:10px; min-height:40px; }
+html body #session-dropdown-menu .session-child-row::before {
+  content:''; position:absolute; left:-10px; top:-4px; bottom:-4px; width:var(--border-width, 1px); background:var(--border);
+}
+/* Loading placeholders and the footer share the capsule spacing. */
+html body #session-dropdown-menu > .session-dropdown-loading-row { margin:2px 6px; min-height:44px; border-radius:var(--sd-r); padding:6px 10px; }
+html body #session-dropdown-menu > .session-dropdown-sync { padding:4px 10px 0; }
+html body #session-dropdown-menu > .session-manage-row { padding:4px 8px 8px; }
+@media (prefers-reduced-motion: reduce) {
+  html body #session-dropdown-menu:not([hidden]),
+  html body #session-dropdown-menu[data-state="open"],
+  html body #session-dropdown-menu[data-state="closing"],
+  html body #session-dropdown-menu .session-dropdown-rows { transition:none; clip-path:none; }
+}

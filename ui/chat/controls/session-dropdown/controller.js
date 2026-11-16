@@ -4,7 +4,7 @@
 export function mountSessionDropdown(root, {refresh, select, guard, resetSearch = () => {}, paintCached = () => false}) {
  const dropdown=root, menu=root.querySelector('.session-dropdown-menu');
  const app={currentUserId:true};
- let _openRequestId=0,_keyboardDismissRequested=false,_closeAnimationTimer=0,_openAnimationTimer=0;
+ let _openRequestId=0,_keyboardDismissRequested=false,_closeAnimationTimer=0,_openAnimationTimer=0,_openPromoteTimer=0;
  const abort=new AbortController();
  // V2-only reset hooks are inert because V3 list.js owns these controls/states.
  const _resetAllDeleteButtons=()=>{}, _cancelPendingSearchCommit=()=>{}, _clearMsgSearch=()=>{};
@@ -292,8 +292,12 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
       // Match the tool-call disclosure: establish the collapsed frame, then
       // transition to the measured list height on the following frame.
       menu.offsetHeight;
-      requestAnimationFrame(() => {
+      // A backgrounded or busy tab can skip frames; without this timer the chip
+      // opened while the panel stayed collapsed.
+      const promote = () => {
         if (requestId !== _openRequestId || menu.dataset.state !== 'opening') return;
+        clearTimeout(_openPromoteTimer);
+        _openPromoteTimer = 0;
         menu.classList.add('opening');
         menu.dataset.state = 'open';
         // DEBUG-TAG: drop-down has actually opened
@@ -306,7 +310,9 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
           // Without cached rows, load after the opening animation has settled.
           if (!cached && requestId === _openRequestId && menu.dataset.state === 'open') _loadSessionList();
         }, totalMs);
-      });
+      };
+      requestAnimationFrame(promote);
+      _openPromoteTimer = setTimeout(promote, 120);
     });
   }
 
@@ -420,7 +426,7 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
             transform: `translateY(${endTranslate})`,
           },
         ], {
-          duration: 340,
+          duration: 720,
           easing: 'cubic-bezier(.4, 0, .2, 1)',
           fill: 'forwards',
         });
@@ -428,7 +434,7 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
         menu._closeAnimation.oncancel = () => {};
         // Fallback for embedded browsers that expose animate() but fail to
         // deliver the finish callback when the tab loses visibility.
-        _closeAnimationTimer = setTimeout(_finishMenuClose, 450);
+        _closeAnimationTimer = setTimeout(_finishMenuClose, 840);
       }
     }
     _resetAllDeleteButtons();
@@ -470,6 +476,8 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
    if(!Number.isFinite(height))return;
    // Expanded corners end at the side tangents; straight borders continue to the menu.
    root.style.setProperty('--session-selector-cap-radius', `${height / 2}px`);
+   // The menu is detached to <body> while open, so it cannot inherit that radius.
+   menu?.style.setProperty('--session-selector-cap-radius', `${height / 2}px`);
    // More owns the right cap unless an explicitly enabled Delete button follows it.
    const endAction=capActions.filter(node=>node.getClientRects().length).pop();
    for(const [property,node,borderProperty] of [['padding-left',avatar,'borderLeftWidth'],['padding-right',endAction,'borderRightWidth']]){
