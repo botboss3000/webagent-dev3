@@ -26,6 +26,9 @@ it, naming exactly its tool folders. `tool.json` holds:
   `["operator"]`. A hard limit: no level setting widens it, and the tool is hidden from
   other roles. Without it the ability's list applies, then every role. A custom level
   counts as the built-in role it starts from.
+- `pre_loaded` (optional, default false; null counts as false): `true` offers the tool
+  in every session without loading it, and skips ability and tier gating. Its own
+  policy still applies. The Base loaders and `background_cancel` set it.
 - `repeat_guard` (optional): `risk` (`none`, `low`, `high`; a write defaults to high),
   `hint` (what the agent verifies before repeating) and `warning` (what the user is told).
 - `usage_hint` (optional): one line added to argument errors to guide the next call.

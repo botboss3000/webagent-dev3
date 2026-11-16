@@ -13,6 +13,7 @@
     ],
     "additionalProperties": false
   },
+  "pre_loaded": true,
   "effect": "read",
   "default_policy": {
     "operator": "allow",

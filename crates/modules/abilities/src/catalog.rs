@@ -1383,8 +1383,8 @@ impl<H: Host> Catalog<H> {
     }
 
     fn tool_mode<'a>(visibility: &'a Value, name: &str) -> &'a str {
-        // Abilities are groups: tools load one by one, so the loaders themselves stay visible.
-        if BOOTSTRAP_TOOLS.contains(&name) {
+        // Abilities are groups: tools load one by one, so pre-loaded tools stay visible.
+        if crate::tool_definitions::is_pre_loaded(name) {
             return "visible";
         }
         Self::exposure(visibility, "tool_modes", name, "discoverable")
@@ -2189,9 +2189,6 @@ impl<H: Host> Catalog<H> {
     }
 }
 
-/// Always-supplied tools that find and load everything else.
-pub const BOOTSTRAP_TOOLS: [&str; 4] = ["list_tools", "load_tool", "list_skills", "load_skill"];
-
 pub fn is_discovery(name: &str) -> bool {
     matches!(name, "list_abilities" | "load_ability")
 }
@@ -2341,7 +2338,7 @@ pub mod registered_tests {
             assert!(!catalog.tool_available("file_search", &v, &state, &picked));
             // Off stays hidden even when selected.
             assert!(!catalog.tool_available("file_edit", &v, &state, &picked));
-            for name in BOOTSTRAP_TOOLS {
+            for name in ["list_tools", "load_tool", "list_skills", "load_skill"] {
                 assert_eq!(Catalog::<H>::tool_mode(&v, name), "visible");
             }
             let names = |loaded: &Value, state: &Value| {

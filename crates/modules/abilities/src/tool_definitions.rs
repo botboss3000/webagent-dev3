@@ -74,6 +74,10 @@ pub struct ToolDefinition {
     /// `role_access` (every role when that has none). No level setting widens it.
     #[serde(default)]
     pub role_access: Option<Vec<String>>,
+    /// Offered in every session without loading, and exempt from ability and tier gating;
+    /// the tool's own policy still applies. Absent or null means false.
+    #[serde(default)]
+    pub pre_loaded: Option<bool>,
     #[serde(default)]
     pub repeat_guard: RepeatGuard,
     /// One line added to argument errors to guide the agent's next call.
@@ -418,6 +422,11 @@ pub fn get(name: &str) -> Option<&'static ToolDefinition> {
     definitions().get(name)
 }
 
+/// Whether `name`'s tool.json sets `pre_loaded: true`.
+pub fn is_pre_loaded(name: &str) -> bool {
+    get(name).is_some_and(|definition| definition.pre_loaded == Some(true))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,6 +489,35 @@ mod tests {
         write.as_object_mut().unwrap().remove("default_policy");
         let write = ToolDefinition::parse(&serde_json::to_vec(&write).unwrap(), "lookup").unwrap();
         assert_eq!(write.default_for(&rungs(&["operator"])), Permission::Ask);
+    }
+
+    #[test]
+    fn pre_loaded_defaults_to_false_when_absent_or_null() {
+        let parse = |value: Option<Value>| {
+            let mut tool = body("lookup");
+            if let Some(value) = value {
+                tool["pre_loaded"] = value;
+            }
+            ToolDefinition::parse(&serde_json::to_vec(&tool).unwrap(), "lookup")
+                .unwrap()
+                .pre_loaded
+                == Some(true)
+        };
+        assert!(!parse(None));
+        assert!(!parse(Some(Value::Null)));
+        assert!(!parse(Some(json!(false))));
+        assert!(parse(Some(json!(true))));
+        // The base loaders and background_cancel ship pre-loaded.
+        for name in [
+            "list_tools",
+            "load_tool",
+            "list_skills",
+            "load_skill",
+            "background_cancel",
+        ] {
+            assert!(is_pre_loaded(name), "{name}");
+        }
+        assert!(!is_pre_loaded("file_write"));
     }
 
     #[test]

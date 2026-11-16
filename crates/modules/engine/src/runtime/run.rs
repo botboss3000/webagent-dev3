@@ -25,10 +25,10 @@ use webagent_access as access;
 
 /// Number of the run's latest model turn. Unlike `turns`, the turn budget that a resume
 /// resets, it never repeats, so it keys the run's durable model steps.
-/// Tools offered and authorized in every session without loading their ability; tool
-/// policy still applies. `background_cancel` stops work the user sent a message about.
+/// Tools offered and authorized in every session without loading their ability
+/// (tool.json `pre_loaded`); tool policy still applies.
 fn always_on(name: &str) -> bool {
-    name == "background_cancel"
+    webagent_abilities::tool_definitions::is_pre_loaded(name)
 }
 /// The first model call's suggestion line: likely items from the user's message that were not
 /// preloaded or loaded since. Call-scoped; it never enters durable history.
@@ -2021,7 +2021,7 @@ impl<
                     &visibility,
                     &ability_state,
                 );
-                // Always-on controls are offered without loading their ability.
+                // Pre-loaded tools are offered without loading their ability.
                 for schema in app.abilities.all_schemas() {
                     let name = schema["name"].as_str().unwrap_or("");
                     if always_on(name) && !schemas.iter().any(|s| s["name"] == name) {

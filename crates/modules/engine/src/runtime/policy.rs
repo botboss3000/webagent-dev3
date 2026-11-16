@@ -236,10 +236,9 @@ impl<
                 reason: access::Reason::CallerDenied,
             };
         }
-        // The loaders only list and select tools the caller may already use, so like the
-        // former ability loaders they skip ability and tier gating; each listed tool is
-        // still decided here on its own.
-        if webagent_abilities::BOOTSTRAP_TOOLS.contains(&name) {
+        // Pre-loaded tools (tool.json `pre_loaded`) skip ability and tier gating; the
+        // loaders among them only list tools that are still decided here on their own.
+        if webagent_abilities::tool_definitions::is_pre_loaded(name) {
             return access.tool_decision(name, true, true);
         }
         let (available, visible) = self.abilities.tool_gate(name, visibility, state, loaded);
