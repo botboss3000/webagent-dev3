@@ -4,7 +4,8 @@
   padding: 0;
   max-height: 250px;
   overflow: auto;
-  overscroll-behavior: contain;
+  /* Keep the default so a wheel or drag that reaches either end continues in the chat transcript behind the panel. */
+  overscroll-behavior: auto;
   border: none;
   background: transparent;
   color: var(--fg-2);

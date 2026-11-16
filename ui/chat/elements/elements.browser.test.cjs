@@ -183,3 +183,39 @@ test('agent reply screenshots use the attachment tile row and scroll sideways at
  const box=await row.evaluate(node=>({wrap:getComputedStyle(node).flexWrap,overflow:getComputedStyle(node).overflowX,scrolls:node.scrollWidth>node.clientWidth,fits:node.getBoundingClientRect().right<=innerWidth}));
  assert.deepEqual(box,{wrap:'nowrap',overflow:'auto',scrolls:true,fits:true});
 });
+
+test('scrolling past a mini transcript end continues in the transcript behind it',async t=>{
+ const p=await fixture(t);
+ await p.evaluate(async()=>{
+  view.disconnect();
+  // Stand-in for #chat-messages: the panel sits inside a scroller that can move both ways.
+  const stage=document.createElement('div');stage.style.cssText='position:absolute;inset:0;overflow:auto';
+  stage.id='stage';document.body.append(stage);
+  const {createMiniTranscript}=await import('/ui/chat/elements/mini-transcript/index.js');
+  const call=index=>({id:'tool:'+index,category:'tools',label:'file_read · done',events:[
+   {kind:'tool_call',run_id:'r',turn:1,payload:{tool:'file_read',tool_call_id:'t'+index}},
+   {kind:'tool_result',run_id:'r',turn:null,payload:{tool_call_id:'t'+index,output:'ok'}}]});
+  window.panel=createMiniTranscript();stage.append(panel.element);
+  panel.update({rows:Array.from({length:16},(_,index)=>call(index)),events:[]});panel.open();
+  const tail=document.createElement('div');tail.style.height='1200px';stage.append(tail);
+  // The centre of the panel's visible part, so the wheel lands on the panel itself.
+  window.aim=()=>{const r=panel.element.getBoundingClientRect();
+   const top=Math.max(r.top,0),bottom=Math.min(r.bottom,innerHeight);
+   return {x:r.left+r.width/2,y:(top+bottom)/2,visible:bottom-top};};
+  window.settled=()=>({stage:stage.scrollTop,panel:panel.element.scrollTop});
+ });
+ const loosen=await p.evaluate(()=>getComputedStyle(panel.element).overscrollBehaviorY);
+ assert.equal(loosen,'auto','the panel lets a finished gesture continue in the transcript behind it');
+ // Down: the panel is already at its end, so the wheel moves the transcript behind it.
+ const down=await p.evaluate(()=>{stage.scrollTop=0;panel.element.scrollTop=panel.element.scrollHeight;return aim();});
+ assert.ok(down.visible>200,'the whole panel is on screen');
+ await p.mouse.move(down.x,down.y);await p.mouse.wheel(0,300);await p.waitForTimeout(300);
+ assert.ok((await p.evaluate(()=>settled())).stage>0,'wheel past the panel end scrolls the transcript behind it');
+ // Up: same the other way, with room left above so the panel stays on screen.
+ const up=await p.evaluate(()=>{stage.scrollTop=60;panel.element.scrollTop=0;return {...aim(),stage:stage.scrollTop};});
+ assert.ok(up.visible>100,'the panel start is on screen');
+ await p.mouse.move(up.x,up.y);await p.mouse.wheel(0,-300);await p.waitForTimeout(300);
+ const end=await p.evaluate(()=>settled());
+ assert.ok(end.stage<up.stage,'wheel past the panel start scrolls the transcript behind it');
+ assert.equal(end.panel,0,'the panel stays at its own start');
+});
