@@ -2775,8 +2775,12 @@ TERMINAL_JOB_STATUS = {"completed", "cancelled"}
 PINNED_JOB = "4f605f3b-4444-4447-a511-3a9d4b9677df"
 
 
-def terminal_scratch_jobs(jobs, work):
-    """Return terminal jobs whose rebuildable scratch is unreferenced and unpinned."""
+def terminal_scratch_jobs(jobs, work, now=None, failed_after=86400):
+    """Return terminal jobs whose rebuildable scratch is unreferenced and unpinned.
+
+    A failed job counts once it finished failed_after seconds ago, past any same-task retry.
+    A finished job whose task the registry has since trimmed has no item and counts too."""
+    now = time.time() if now is None else now
     retained = {PINNED_JOB}
     completed = sorted((job for job in jobs.values() if job.get("status") == "completed"),
         key=lambda job: job.get("created_at", 0), reverse=True)[:2]
@@ -2790,11 +2794,12 @@ def terminal_scratch_jobs(jobs, work):
                 source = ((jobs.get(source) or {}).get("packaging_resume") or {}).get("source_job_id")
     output = []
     for job_id, job in jobs.items():
-        if job.get("status") not in TERMINAL_JOB_STATUS or job_id in retained:
+        expired_failure = job.get("status") == "failed" and now - job.get("finished_at", now) >= failed_after
+        if (job.get("status") not in TERMINAL_JOB_STATUS and not expired_failure) or job_id in retained:
             continue
         item = next((value for value in work.values() if value.get("job_id") == job_id
-            or (job.get("task_id") and value.get("task_id") == job.get("task_id"))), None)
-        if item is None or item.get("status") == "open":
+            or (job.get("task_id") and value.get("task_id") == job.get("task_id"))), {})
+        if item.get("status") == "open":
             continue
         notice = item.get("leftover_notice") or {}
         if notice and notice.get("reviewed_at") is None:
@@ -3123,9 +3128,32 @@ class Broker:
                 if not checkout_target.is_symlink():
                     for name in ("debug", "release", "cargo-home", "session-naming-check/debug"):
                         candidates.append((checkout_target / name, {}, "rebuildable_checkout_cache"))
-                for job_id, item in terminal_scratch_jobs(self.jobs, self.work):
+                policy = CONFIG.get("scheduler", {})
+                for job_id, item in terminal_scratch_jobs(self.jobs, self.work, now,
+                        policy.get("failed_scratch_retention_seconds", 86400)):
                     for area in ("execution", "checks"):
                         candidates.append((self.state / area / job_id, item, "terminal_job_scratch"))
+                # Engine build folders outside seed_cache's receipt window are never read again.
+                builds = self.state / "engine-component-builds"
+                if builds.is_dir() and not builds.is_symlink():
+                    keep = set()
+                    for receipt in engine_components.selectable_receipts(ASSET_ROOT):
+                        keep.add(json.loads(receipt.read_bytes()).get("input_key"))
+                    for folder in sorted(builds.iterdir()):
+                        if folder.name not in keep:
+                            candidates.append((folder, {}, "unselectable_engine_build"))
+                # Shared Cargo downloads: keep the two most recently used and any used lately.
+                downloads = self.state / "cargo-dependencies"
+                if downloads.is_dir() and not downloads.is_symlink():
+                    def last_used(folder):
+                        receipt = folder / "receipt.json"
+                        return (receipt if receipt.is_file() and not receipt.is_symlink() else folder).lstat().st_mtime
+                    sets = sorted((f for f in downloads.iterdir() if f.is_dir() and not f.is_symlink()),
+                        key=last_used, reverse=True)
+                    unused_after = policy.get("cargo_download_retention_seconds", 14 * 86400)
+                    for folder in sets[2:]:
+                        if now - last_used(folder) >= unused_after:
+                            candidates.append((folder, {}, "unused_cargo_downloads"))
                 for key, item in self.work.items():
                     if not self.scheduler.retention_allowed(key):
                         continue
@@ -3159,8 +3187,8 @@ class Broker:
                     resolved = cache.resolve()
                     if any(resolved == m or resolved in m.parents or m in resolved.parents for m in mounts):
                         continue
-                    if kind == "terminal_job_scratch":
-                        # Terminal builds never write here again; a stat replaces the walk.
+                    if kind in {"terminal_job_scratch", "unselectable_engine_build", "unused_cargo_downloads"}:
+                        # Nothing writes here again (selection or job status decided that); a stat replaces the walk.
                         job = self.jobs.get(cache.name) or {}
                         newest = max(cache.stat().st_mtime, job.get("finished_at", 0),
                             item.get("last_activity_at", 0))

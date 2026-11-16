@@ -522,6 +522,8 @@ class Executor:
                 if inventory(shared)!=saved["inventory"]or {p:sha for p,sha in inventory(cargo).items()if p.startswith("registry/")}!=saved["inventory"]:
                     raise ValueError("Dependency copy verification failed")
                 persist({"decision":"hit","reason":"matching_lock_manifests_toolchain","archives":saved["archives"]})
+                # The receipt's mtime records the last reuse; the broker prunes long-unused download sets.
+                os.utime(receipt)
                 log="Verified shared Cargo downloads reused: "+key+"\n"
             else:
                 persist({"decision":"miss","reason":"no_verified_dependency_entry","preparation_required":not prepare})

@@ -240,9 +240,13 @@ def seal_catalog(root,job_id,assets,base_release_id=None):
     path.write_text(encoded);path.chmod(0o444)
     return payload
 
+def selectable_receipts(assets):
+    """Receipts whose engine-component-builds folder seed_cache may still copy from; the broker prunes the rest."""
+    return sorted((assets/"artifacts").glob("*/engine-receipt.json"),key=lambda path:path.stat().st_mtime,reverse=True)[:32]
+
 def seed_cache(cache,assets,state,inputs,recipe,executor):
     """Reuse only integrity-checked Cargo caches from the same locked manifests and pinned recipe."""
-    for receipt in sorted((assets/"artifacts").glob("*/engine-receipt.json"),key=lambda path:path.stat().st_mtime,reverse=True)[:32]:
+    for receipt in selectable_receipts(assets):
         if receipt.is_symlink():raise ValueError("Engine cache receipt symlink")
         previous=json.loads(receipt.read_bytes());key=previous.get("input_key","")
         if not re.fullmatch(r"[a-f0-9]{64}",key)or previous.get("recipe")!=recipe:continue

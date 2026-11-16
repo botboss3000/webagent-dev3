@@ -118,3 +118,26 @@ class CacheRetentionTests(unittest.TestCase):
         self.assertFalse(root.exists()); self.assertFalse(artifact.exists())
         self.assertEqual(job["status"],"uncertain")
         self.assertIn(key,self.broker.work)
+    def old(self,path):
+        for entry in (*path.rglob("*"),path):os.utime(entry,(time.time()-8000,)*2)
+    def test_unselectable_engine_builds_removed(self):
+        from unittest.mock import patch
+        assets=self.state/"assets";builds=self.state/"engine-component-builds";keys=[c*64 for c in "abcde"]
+        for index,key in enumerate(keys):
+            (builds/key/"target").mkdir(parents=True);(builds/key/"target/lib").write_text("compiled");self.old(builds/key)
+            if index:
+                receipt=assets/"artifacts"/key/"engine-receipt.json";receipt.parent.mkdir(parents=True)
+                receipt.write_text(json.dumps({"input_key":key}));os.utime(receipt,(1000+index,)*2)
+        selectable=fixtures.host.engine_components.selectable_receipts
+        with patch.object(fixtures.host,"ASSET_ROOT",assets),patch.object(fixtures.host.engine_components,"selectable_receipts",lambda a:selectable(a)[:2]):
+            removed=self.broker.prune_check_caches()["removed"]
+        self.assertEqual({r["kind"]for r in removed},{"unselectable_engine_build"})
+        self.assertEqual(sorted(p.name for p in builds.iterdir()),sorted(keys[3:]))
+    def test_unused_cargo_downloads_removed_newest_kept(self):
+        root=self.state/"cargo-dependencies";now=time.time()
+        for index,age in enumerate((0,20,30,40)):
+            folder=root/(str(index)*64);(folder/"cargo").mkdir(parents=True);(folder/"receipt.json").write_text("{}")
+            self.old(folder);os.utime(folder/"receipt.json",(now-age*86400,)*2)
+        removed=self.broker.prune_check_caches()["removed"]
+        self.assertEqual([r["kind"]for r in removed],["unused_cargo_downloads"]*2)
+        self.assertEqual(sorted(p.name[0]for p in root.iterdir()),["0","1"])

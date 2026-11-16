@@ -2654,3 +2654,10 @@ class TerminalScratchRetentionTests(unittest.TestCase):
    noticed["job_id"]:self.item(noticed["job_id"],leftover_notice={"id":"n"*64,"reviewed_at":None}),
    failed["job_id"]:self.item(failed["job_id"]),running["job_id"]:self.item(running["job_id"])}
   self.assertEqual([],self.eligible(jobs,work))
+ def test_expired_failure_and_trimmed_task_are_eligible(self):
+  old=self.job("11111111-1111-1111-1111-111111111111",status="failed");old["finished_at"]=1000
+  recent=self.job("22222222-2222-2222-2222-222222222222",status="failed");recent["finished_at"]=90000
+  trimmed=self.job("33333333-3333-3333-3333-333333333333",status="cancelled")
+  jobs={job["job_id"]:job for job in (old,recent,trimmed)}
+  work={old["job_id"]:self.item(old["job_id"]),recent["job_id"]:self.item(recent["job_id"])}
+  self.assertEqual([old["job_id"],trimmed["job_id"]],[pair[0]for pair in self.host.terminal_scratch_jobs(jobs,work,100000,86400)])
