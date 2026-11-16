@@ -15,20 +15,21 @@
 #chat-action-panel{padding:0 4px}
 /* Credential and sign-in panels: the page reset removes dialog centering and theme text colour. */
 dialog[data-core-credential]{margin:auto;max-width:min(420px,calc(100vw - 32px));color:var(--fg-1)}dialog[data-core-credential]::backdrop{background:rgba(0,0,0,.5)}
-/* Mode and tool approvals use one compact composer notification surface. */
-.chat-action{box-sizing:border-box;width:fit-content;max-width:min(100%,var(--chat-pill-current-width,var(--chat-pill-width,500px)));margin:6px auto;padding:8px 12px;border:var(--border-width) solid color-mix(in oklab,var(--fg-1) 22%,transparent);border-radius:22px;background:var(--chat-pill-bg,color-mix(in oklab,var(--bg-elev) 82%,transparent));color:var(--fg-2);backdrop-filter:blur(12px) saturate(140%);-webkit-backdrop-filter:blur(12px) saturate(140%);font-size:13px;line-height:1.45;text-align:center;overflow-wrap:anywhere}
-body.light-mode .chat-action{background:var(--chat-pill-bg,color-mix(in oklab,var(--bg-elev) 85%,transparent))}
-.chat-action-heading{display:flex;align-items:center;justify-content:center;gap:6px;min-width:0}
-.chat-action-heading strong{font-weight:600;color:var(--fg-1)}
+/* Mode and tool approvals, errors and notices share one card: title, muted body, then a right-aligned
+   footer of pill buttons that match the reply panel (approve is the filled primary, others are outlined). */
+.chat-action{position:relative;box-sizing:border-box;width:min(100%,420px);max-width:min(100%,var(--chat-pill-current-width,var(--chat-pill-width,500px)));margin:6px auto;padding:14px 16px 12px;border:var(--border-width) solid var(--border-soft,var(--border));border-radius:16px;background:var(--bg-elev);color:var(--fg-2);box-shadow:0 6px 20px color-mix(in oklab,black 22%,transparent);font-size:13px;line-height:1.5;text-align:left;overflow-wrap:anywhere}
+.chat-action-heading{display:flex;align-items:center;justify-content:flex-start;gap:6px;min-width:0}
+.chat-action-heading strong{font-size:14px;font-weight:600;color:var(--fg-1)}
 .chat-action-detail-toggle{display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:100%;margin:0;padding:3px 0;border:0;background:transparent;color:var(--fg-1);font:inherit;font-weight:600;overflow-wrap:anywhere;text-align:left;cursor:pointer}
 .chat-action-detail-toggle::after{content:'';width:6px;height:6px;flex-shrink:0;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);margin:0 3px 3px}
 .chat-action-detail-toggle[aria-expanded=true]::after{transform:rotate(225deg);margin-top:5px}
-.chat-action p{margin:5px 0}
-.chat-action-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px;margin-top:5px}
-.chat-action-action{margin:0;min-height:28px;padding:3px 10px;border:var(--border-width) solid color-mix(in oklab,currentColor 22%,transparent);border-radius:999px;background:color-mix(in oklab,var(--fg-1) 5%,transparent);color:var(--fg-2);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
-.chat-action-approve{color:var(--brand);background:color-mix(in oklab,var(--brand) 10%,transparent)}
-.chat-action-deny{color:var(--danger);background:color-mix(in oklab,var(--danger) 8%,transparent)}
-.chat-action-action:hover{background:color-mix(in oklab,currentColor 15%,transparent)}
+.chat-action p{margin:6px 0 0}
+.chat-action-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;margin-top:12px}
+.chat-action-action{margin:0;min-height:32px;padding:0 14px;border:var(--border-width) solid var(--border);border-radius:999px;background:transparent;color:var(--fg-1);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.chat-action-approve{background:var(--accent,var(--brand));border-color:var(--accent,var(--brand));color:#fff}
+.chat-action-deny{color:var(--danger)}
+@media (hover:hover){.chat-action-action:not(.chat-action-approve):hover:not(:disabled){background:color-mix(in oklab,var(--fg-1) 8%,transparent)}.chat-action-approve:hover:not(:disabled){filter:brightness(1.08)}}
+.chat-action-action:active:not(:disabled){transform:scale(.97)}
 .chat-action-action:disabled{opacity:.5;cursor:wait}
 .chat-action-detail-toggle:focus-visible,.chat-action-action:focus-visible{outline:2px solid var(--brand);outline-offset:3px}
 .chat-action pre{box-sizing:border-box;max-width:100%;max-height:120px;margin:8px 0;padding:8px 10px;border:var(--border-width) solid var(--border);border-radius:12px;background:var(--bg-1);color:var(--fg-1);font-size:12px;line-height:1.45;white-space:pre-wrap;overflow:auto;text-align:left}
