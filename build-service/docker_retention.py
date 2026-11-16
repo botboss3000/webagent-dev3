@@ -5,6 +5,10 @@ from pathlib import Path
 IMAGE=r"sha256:[a-f0-9]{64}"
 UUID=r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}"
 DONE={"completed","cancelled"}
+TERMINAL=DONE|{"failed"}
+# Stopped containers deploys leave behind: the previous live set (pre-build) and failed candidates.
+ROLLBACK=r"webagent-dev-v3(?:-loop|-browser)?-(?:pre|failed)-build-("+UUID+r")"
+ARCHIVE_FILES={"container-config.json","manifest.json","rollback-images.tar"}
 FLOORS={"compile_test":6*1024**3,"compile_linked":6*1024**3,"compile_release":6*1024**3,"package":8*1024**3}
 # Root-owned exact-artifact retention and disk admission. Config: build-service/scheduler-defaults.json -> disk_min_free_bytes, disk_grace_seconds, disk_cleanup_batch.
 class Retention:
@@ -16,11 +20,12 @@ class Retention:
         self.folder=Path(config["install_root"]).parent/"docker-retention";self.folder.mkdir(mode=0o700,exist_ok=True)
         s=self.folder.lstat()
         if not stat.S_ISDIR(s.st_mode)or s.st_uid!=os.geteuid()or s.st_mode&0o077:raise PermissionError("Protected retention directory required")
-        self.path=self.folder/"registry.json"
+        self.path=self.folder/"registry.json";self.receipts={}
     @staticmethod
     def command(*args):
         """Keep Docker inspect bodies private and bound engine calls."""
-        p=subprocess.run(["docker",*args],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=3)
+        # Removing a large image can take longer than a lookup.
+        p=subprocess.run(["docker",*args],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=60 if "rm"in args[:2]else 3)
         if p.returncode:
             if b"No such image:"in p.stderr or b"No such object:"in p.stderr:raise FileNotFoundError("Artifact absent")
             raise RuntimeError("Docker retention operation failed")
@@ -66,14 +71,21 @@ class Retention:
     def jobs(self):
         """Reconcile bounded durable job receipts; inconsistency prevents all deletion."""
         paths=[p for p in Path(self.config["state_root"]).glob("*.json")if re.fullmatch(UUID,p.stem)]
-        if len(paths)>8192:raise ValueError("Job reconciliation bound exceeded")
-        result={};total=0
+        if len(paths)>65536:raise ValueError("Job reconciliation bound exceeded")
+        # Receipts total hundreds of MiB, so keep only the fields retention reads and
+        # re-parse a receipt only when it changes; later calls under the lock stay short.
+        result={};seen={}
         for p in paths:
-            total+=p.stat().st_size
-            if total>64*1024*1024:raise ValueError("Job reconciliation byte bound exceeded")
-            j=self.read(p,8*1024*1024)
-            if j.get("job_id")!=p.stem or not isinstance(j.get("status"),str):raise ValueError("Job receipt inconsistent")
-            result[p.stem]=j
+            s=p.lstat();key=(s.st_mtime_ns,s.st_size,s.st_ino)
+            cached=self.receipts.get(p.stem)
+            if cached and cached[0]==key:j=cached[1]
+            else:
+                full=self.read(p,8*1024*1024)
+                if full.get("job_id")!=p.stem or not isinstance(full.get("status"),str):raise ValueError("Job receipt inconsistent")
+                j={k:full[k]for k in("job_id","status","operation","finished_at","ownership_id")if k in full}
+                if full["status"]not in DONE:j["_hashes"]=self.hashes(full)
+            seen[p.stem]=(key,j);result[p.stem]=dict(j)
+        self.receipts=seen
         ownership=Path(self.config["state_root"])/"coordination/ownership.sqlite"
         if ownership.is_symlink():raise PermissionError("Ownership database symlink")
         completed=set()
@@ -180,6 +192,7 @@ class Retention:
         """Recheck each exact deletion under the retention lock; never prune shared Docker caches."""
         usage=self.usage();pct=100*(usage.total-usage.free)//usage.total
         report={"applied":apply,"usage_percent":pct,"removed":[],"eligible":[],"protected":[],"preserved":[],"cache_cleanup":"shared builders preserved"}
+        report["rollbacks"]=self.rollbacks(apply)
         if pct<80 and not force:return report
         report["reconciled_disk_phases"]=self.reconcile_phases(apply)
         with self.locked():
@@ -199,7 +212,7 @@ class Retention:
                     if apply:d[kind+"s"].pop(identity);d.pop("intent",None);self.save(d)
                     continue
                 if kind=="image":
-                    if any(j["status"]not in DONE and identity in self.hashes(j)for j in jobs.values()):
+                    if any(identity in j.get("_hashes",())for j in jobs.values()):
                         report["preserved"].append({"id":identity,"reason":"durable job reference"});continue
                     if v.get("Id")!=identity or not self.output(v):
                         report["preserved"].append({"id":identity,"reason":"unknown or shared image ownership"});continue
@@ -219,6 +232,58 @@ class Retention:
         usage=self.usage();report["target_reached"]=100*(usage.total-usage.free)//usage.total<70
         with self.locked():
             d=self.load();d["last_cleanup"]=report;d["cleanup_history"]=(d.get("cleanup_history",[])+[report])[-128:];self.save(d)
+        return report
+    def rollbacks(self,apply=False):
+        """Keep rollback containers of the newest releases and image archives of fewer; remove older finished ones."""
+        policy=self.config["scheduler"];grace=policy.get("disk_grace_seconds",7200)
+        # Stopped containers are the rollback; an archive only guards against losing Docker's image store.
+        keep=policy.get("rollback_keep_releases",5);keep_archives=policy.get("rollback_keep_archives",2)
+        report={"kept_releases":keep,"kept_archives":keep_archives,"removed_containers":0,"removed_images":0,"removed_archives":0,"removed_bytes":0,"pending_releases":0}
+        groups={}
+        for line in self.docker("ps","-a","--no-trunc","--format","{{.ID}} {{.Names}}").splitlines():
+            identity,_,name=line.partition(" ");m=re.fullmatch(ROLLBACK,name)
+            if m and re.fullmatch(r"[a-f0-9]{64}",identity):groups.setdefault(m[1],{"containers":[],"archive":None})["containers"].append((identity,name))
+        archives=Path(self.config["state_root"]).parent/"rollback/administrator"
+        if archives.is_dir()and not archives.is_symlink():
+            for d in archives.iterdir():
+                if re.fullmatch(UUID,d.name)and d.is_dir()and not d.is_symlink():groups.setdefault(d.name,{"containers":[],"archive":None})["archive"]=d
+        jobs=self.jobs()
+        def finished(key):return jobs.get(key,{}).get("finished_at",float("inf"))
+        # A job without a receipt sorts newest, so it is kept and counts toward the newest set.
+        order=sorted(groups,key=lambda k:(finished(k),k),reverse=True)
+        def expired(keys):return [k for k in keys if jobs.get(k,{}).get("status")in TERMINAL and self.clock()-finished(k)>=grace]
+        stale=expired(k for k in order[keep:]if groups[k]["containers"])
+        stale_archives=expired([k for k in order if groups[k]["archive"]is not None][keep_archives:])
+        building=any(j["status"]in {"queued","running"}for j in jobs.values())
+        report["pending_releases"]=max(0,len(stale)-24)+max(0,len(stale_archives)-24)
+        for key in stale[:24]:
+            images=set()
+            for identity,name in groups[key]["containers"]:
+                try:v=json.loads(self.docker("inspect",identity))[0]
+                except FileNotFoundError:continue
+                if v.get("Id")!=identity or v.get("Name","").lstrip("/")!=name or v.get("State",{}).get("Status")not in {"exited","created","dead"}:continue
+                images.add(v.get("Image",""))
+                if apply:self.docker("rm",identity)
+                report["removed_containers"]+=1
+            # Image removal waits for an idle broker: a build may reuse an old release image.
+            for image in sorted(images):
+                if building or not re.fullmatch(IMAGE,image):continue
+                with self.locked():
+                    if any(image in j.get("_hashes",())for j in self.jobs().values()):continue
+                    try:v=json.loads(self.docker("image","inspect",image))[0]
+                    except FileNotFoundError:continue
+                    if v.get("Id")!=image or not self.output(v):continue
+                    if apply and self.docker("ps","-aq","--no-trunc","--filter","ancestor="+image).strip():continue
+                    if apply:
+                        self.docker("image","rm",image);d=self.load()
+                        if d["images"].pop(image,None)is not None:self.save(d)
+                    report["removed_images"]+=1
+        for key in stale_archives[:24]:
+            folder=groups[key]["archive"];files=list(folder.iterdir())
+            if all(f.name in ARCHIVE_FILES and f.is_file()and not f.is_symlink()for f in files):
+                report["removed_bytes"]+=sum(f.lstat().st_size for f in files)
+                if apply:shutil.rmtree(folder)
+                report["removed_archives"]+=1
         return report
     def acceptance_probe(self):
         """Exercise real exact-ID deletion against isolated synthetic jobs, never real release metadata."""
@@ -280,6 +345,8 @@ def main():
             result=guard.acceptance_probe()
         elif args.apply and not config.get("scheduler",{}).get("task_aware_cleanup",False):result={"applied":False,"deferred":"Task-aware cleanup is disabled"}
         else:result=guard.cleanup(args.apply,args.force)
-    except (OSError,ValueError,RuntimeError,TimeoutError,sqlite3.Error,subprocess.SubprocessError):result={"applied":False,"deferred":"retention or engine reconciliation required"}
+    except (OSError,ValueError,RuntimeError,TimeoutError,sqlite3.Error,subprocess.SubprocessError)as error:
+        # Name the failed check; messages here are fixed strings or paths, never Docker output.
+        result={"applied":False,"deferred":"retention or engine reconciliation required","reason":(type(error).__name__+": "+str(error))[:200]}
     print(json.dumps(result))
 if __name__=="__main__":main()

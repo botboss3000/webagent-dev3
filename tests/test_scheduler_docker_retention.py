@@ -1,5 +1,5 @@
 """Safety contracts for the prepared V3 retention implementation."""
-import concurrent.futures,contextlib,importlib.util,json,os,sqlite3,tempfile,threading,time,unittest,uuid
+import concurrent.futures,contextlib,re,importlib.util,json,os,sqlite3,tempfile,threading,time,unittest,uuid
 from pathlib import Path
 from collections import namedtuple
 spec=importlib.util.spec_from_file_location("retention",os.environ.get("WEBAGENT_RETENTION_TEST_MODULE",str(Path(__file__).resolve().parents[1]/"build-service/docker_retention.py")))
@@ -110,7 +110,8 @@ class CleanupTests(unittest.TestCase):
         from unittest.mock import patch
         with patch.object(self.guard,"jobs",wraps=self.guard.jobs)as jobs:
             self.assertEqual(self.guard.cleanup(True)["removed"],[])
-            self.assertEqual(jobs.call_count,1)
+            # Rollback retention reads once more; unchanged receipts come from the cache.
+            self.assertEqual(jobs.call_count,2)
         self.assertIn(identity,self.containers);self.assertIn(self.image,self.images)
     def test_expired_phase_container_removed_then_image(self):
         identity=self.container();self.now+=7201;r=self.guard.cleanup(True)
@@ -281,5 +282,62 @@ class CleanupLockAdmissionTests(unittest.TestCase):
         module,control=self.control(TimeoutError("Retention lock busy"))
         with patch.object(module.os,"geteuid",return_value=0),self.assertRaises(TimeoutError):
             control.handle({"operation":"disk_finish"})
+
+class RollbackTests(unittest.TestCase):
+    """Rollback containers, their images and archives beyond the newest releases."""
+    setUp=CleanupTests.setUp;tearDown=CleanupTests.tearDown;receipt=CleanupTests.receipt;add_image=CleanupTests.add_image
+    def docker(self,*args):
+        if args[:2]==("ps","-a")and"--format"in args:return "\n".join(i+" "+v["Name"].lstrip("/")for i,v in self.containers.items())
+        if args[:2]==("ps","-aq")and"--filter"in args:
+            image=args[-1].split("=",1)[1];return "\n".join(i for i,v in self.containers.items()if v["Image"]==image)
+        return CleanupTests.docker(self,*args)
+    def release(self,n,status="completed",archive=True):
+        key=str(uuid.UUID(int=n));image="sha256:"+format(n,"064x");self.receipt(key,status,finished_at=1000+n)
+        self.images[image]={"Id":image,"RepoTags":["webagent-v3-api-"+key+":latest"]}
+        for role in ("","-loop","-browser"):
+            identity=format(n,"x")+role.strip("-")+"c"*(63-len(format(n,"x"))-len(role.strip("-")))+"0"
+            identity=(identity*2)[:64];identity=re.sub("[^a-f0-9]","0",identity)
+            self.containers[identity]={"Id":identity,"Name":"/webagent-dev-v3"+role+"-pre-build-"+key,"Image":image,"State":{"Status":"exited"}}
+        if archive:
+            folder=self.root/"rollback/administrator"/key;folder.mkdir(parents=True)
+            for name in ("container-config.json","manifest.json","rollback-images.tar"):(folder/name).write_text("x")
+        return key,image
+    def names(self):return {v["Name"]for v in self.containers.values()}
+    def test_keeps_newest_releases_and_removes_older(self):
+        made=[self.release(n)for n in range(1,8)];self.now+=7201
+        r=self.guard.cleanup(True)["rollbacks"]
+        self.assertEqual((r["removed_containers"],r["removed_images"],r["removed_archives"]),(6,2,5))
+        for key,image in made[:2]:
+            self.assertFalse(any(key in n for n in self.names()));self.assertNotIn(image,self.images)
+        for key,image in made[2:]:
+            self.assertTrue(any(key in n for n in self.names()));self.assertIn(image,self.images)
+        archives=self.root/"rollback/administrator"
+        self.assertEqual(sorted(p.name for p in archives.iterdir()),sorted(k for k,_ in made[5:]))
+    def test_unfinished_or_recent_jobs_keep_rollbacks(self):
+        old=self.release(1,"uncertain");self.release(2);[self.release(n)for n in range(3,8)];self.now=2000
+        r=self.guard.cleanup(True)["rollbacks"]
+        self.assertEqual(r["removed_containers"],0)
+        self.now+=7201;r=self.guard.cleanup(True)["rollbacks"]
+        self.assertEqual(r["removed_containers"],3);self.assertTrue(any(old[0]in n for n in self.names()))
+        self.assertTrue((self.root/"rollback/administrator"/old[0]).exists())
+    def test_dry_run_and_building_keep_images(self):
+        made=[self.release(n)for n in range(1,7)];self.now+=7201
+        r=self.guard.cleanup(False)["rollbacks"]
+        self.assertEqual(r["removed_archives"],4);self.assertEqual(len(self.containers),18)
+        self.receipt(str(uuid.uuid4()),"running");r=self.guard.cleanup(True)["rollbacks"]
+        self.assertEqual((r["removed_containers"],r["removed_images"]),(3,0));self.assertIn(made[0][1],self.images)
+    def test_shared_image_and_unknown_archive_files_kept(self):
+        key,image=self.release(1);[self.release(n)for n in range(2,7)];self.now+=7201
+        (self.root/"rollback/administrator"/key/"notes.txt").write_text("x")
+        self.containers["e"*64]={"Id":"e"*64,"Name":"/other","Image":image,"State":{"Status":"exited"}}
+        r=self.guard.cleanup(True)["rollbacks"]
+        self.assertEqual((r["removed_containers"],r["removed_images"],r["removed_archives"]),(3,0,3))
+        self.assertIn(image,self.images);self.assertTrue((self.root/"rollback/administrator"/key).exists())
+    def test_large_receipts_parse_once(self):
+        for n in range(80):self.receipt(str(uuid.uuid4()),log="x"*1024*1024)
+        from unittest.mock import patch
+        with patch.object(self.guard,"read",wraps=self.guard.read)as read:
+            self.guard.jobs();first=read.call_count;self.guard.jobs()
+            self.assertEqual(read.call_count,first)
 
 if __name__=="__main__":unittest.main(verbosity=2)

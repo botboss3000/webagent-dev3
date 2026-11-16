@@ -1072,14 +1072,27 @@ refreshes the old draft nor transfers edits into a fresh task.
 The installed docker_retention.py replaces host-wide container/image/builder
 prune calls. The host guard keeps its 80 percent trigger and 70 percent best-effort
 target, but deletes only a bounded batch of registered expired V3 artifacts.
-Unknown/foreign images, shared builder caches, referenced images and rollback
-containers remain untouched. Root-owned exact-image/phase records share a short
+Unknown/foreign images, shared builder caches and referenced images remain
+untouched. Root-owned exact-image/phase records share a short
 cleanup lock with registration and deletion; missing or inconsistent evidence
 defers deletion. Job receipts retain queued, running, review-waiting and unresolved
 work. Completed/cancelled jobs retain a minimum two-hour grace period.
 
+Rollback retention runs on every guard pass, whatever the disk usage. Each
+deploy leaves stopped `-pre-build-`/`-failed-build-` containers and a
+`rollback/administrator/<job>/` image archive. The stopped containers are the
+rollback; an archive only covers loss of Docker's image store. The guard keeps the
+containers of the newest rollback_keep_releases jobs and the archives of the newest
+rollback_keep_archives (by finish time; a job without a receipt counts as newest),
+and removes the rest once their job is completed, cancelled or failed and past the
+grace period, up to 24 jobs of each a pass. It then removes each removed
+container's image if the image carries only canonical V3 job tags, no container
+uses it, no unfinished job names it and no build is queued or running. An archive
+folder holding anything besides its three known files is kept.
+
 Config: scheduler-defaults.json -> task_aware_cleanup, disk_min_free_bytes,
-disk_grace_seconds, disk_cleanup_batch, merged with protected installation JSON.
+disk_grace_seconds, disk_cleanup_batch, rollback_keep_releases,
+rollback_keep_archives, merged with protected installation JSON.
 Disk admission preserves 8 GiB free plus outstanding phase reservations. Cold
 compiler/package floors are 6/8 GiB; other phases reserve 1 GiB. Recipe-bound
 measured output footprints may raise these estimates. Resource waits identify
