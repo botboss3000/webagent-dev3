@@ -449,6 +449,8 @@ struct RequestBody<'a> {
     max_output_tokens: Option<usize>,
     model: &'a str,
     input: &'a [Value],
+    // An agent with no prompt slots whose skills are placed in the input has none.
+    #[serde(skip_serializing_if = "str::is_empty")]
     instructions: &'a str,
     stream: bool,
     store: bool,

@@ -259,8 +259,7 @@ fn public_assembly_attempt(event: &Value) -> Value {
         .filter(|c| {
             matches!(
                 *c,
-                "instruction_limit"
-                    | "invalid_contribution"
+                "invalid_contribution"
                     | "overhead_exceeds_budget"
                     | "summary_reserve_unavailable"
                     | "envelope_exceeds_budget"

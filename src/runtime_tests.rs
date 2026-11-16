@@ -2085,7 +2085,8 @@ async fn long_run_compacts_before_model_and_keeps_full_message_history() {
     // The durable report must describe the envelope actually sent after compaction.
     let report = &finished["context_assembly_report"];
     let request = &requests[1];
-    let envelope = json!({"instructions":request["instructions"],
+    // The wire leaves empty instructions out; the logical envelope counts them as "".
+    let envelope = json!({"instructions":request["instructions"].as_str().unwrap_or_default(),
         "tools":request["tools"],"input":request["input"]});
     assert_eq!(
         report["envelope_bytes"],
@@ -2111,7 +2112,7 @@ async fn long_run_compacts_before_model_and_keeps_full_message_history() {
     assert!(native_call_suffix(request).contains("Current session mode revision:"));
     assert!(!request["instructions"]
         .as_str()
-        .unwrap()
+        .unwrap_or_default()
         .contains("Current session mode revision:"));
     assert!(!report.to_string().contains("Earlier conversation summary"));
     let summaries: Vec<_> = request["input"]
@@ -3279,7 +3280,7 @@ async fn enabled_tool_inspects_only_its_current_session() {
     assert!(guidance[0].contains("Codebase Admin"));
     assert!(!requests[0]["instructions"]
         .as_str()
-        .unwrap()
+        .unwrap_or_default()
         .contains("## Untrusted live guidance: ability:codebase_admin\n"));
     assert!(!app.run(&id).await.unwrap()["input"]
         .to_string()
@@ -3324,7 +3325,7 @@ async fn prompt_slot_instructions_reload_after_a_message_is_accepted() {
     let first_id = queued(&app, &sid).await;
     assert!(app.run(&first_id).await.unwrap()["instructions"]
         .as_str()
-        .unwrap()
+        .unwrap_or_default()
         .contains("Use the first instruction."));
     app.store
         .upsert_prompt_slot(
@@ -4798,7 +4799,7 @@ async fn current_mode_contribution_changes_per_call_without_entering_history() {
     for request in requests.iter() {
         assert!(!request["instructions"]
             .as_str()
-            .unwrap()
+            .unwrap_or_default()
             .contains("Current session mode revision:"));
     }
     for id in [&first, &second] {
@@ -5603,7 +5604,7 @@ async fn model_selection_admission_pins_agent_model_prompt_and_credentials() {
         assert_eq!(run["provider_selection"]["model"], expected_model);
         assert!(run["instructions"]
             .as_str()
-            .unwrap()
+            .unwrap_or_default()
             .contains(expected_prompt));
         assert!(!run["instructions"].as_str().unwrap().contains(excluded));
         let selection =
@@ -8168,7 +8169,7 @@ async fn removed_manifest_withdraws_cached_schemas_and_guidance_within_run() {
     for request in requests.iter() {
         assert!(!request["instructions"]
             .as_str()
-            .unwrap()
+            .unwrap_or_default()
             .contains("CACHE_WITHDRAWAL_GUIDANCE_SENTINEL"));
     }
     assert!(!app.run(&id).await.unwrap()["input"]
@@ -9979,18 +9980,12 @@ async fn live_context_default_stack_journey() {
     let skill = abilities.join("Web/web_access/skills/live_refresh.skill.md");
     std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
     std::fs::write(&skill, live_context_fixture_skill("LIVE_SKILL_FIRST")).unwrap();
-    // The catalog source carries its own prompt files; edits to them are adopted live.
+    // The catalog source carries its own prompt files.
     let prompt = source.join(webagent_configuration::prompts::PROMPTS);
     copy_live_context_fixture(
         &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(webagent_configuration::prompts::PROMPTS),
         &prompt,
     );
-    for (name, text) in [
-        ("base_instructions", "LIVE_MAIN_FIRST"),
-        ("closing_reporting", "LIVE_CLOSING"),
-    ] {
-        std::fs::write(prompt.join(format!("{name}.md")), text).unwrap();
-    }
     crate::api::live_configuration::validate_source_prompts(
         &serde_json::from_slice(&crate::live_assets::prompt_defaults_at(Some(&source)).unwrap())
             .unwrap(),
@@ -10014,7 +10009,7 @@ async fn live_context_default_stack_journey() {
     let captured = requests.clone();
     let callback_store = app.store.clone();
     let mock=Router::new().route("/responses",post(move |Json(body):Json<Value>| {
-        let captured=captured.clone();let store=callback_store.clone();let prompt=prompt.clone();let skill=skill.clone();
+        let captured=captured.clone();let store=callback_store.clone();let skill=skill.clone();
         Box::pin(async move {
             let mut captured=captured.lock().await;
             captured.push(body);
@@ -10022,7 +10017,6 @@ async fn live_context_default_stack_journey() {
                 1=>json!([{"type":"function_call","call_id":"select-live-skill","name":"load_skill",
                     "arguments":"{\"ability_id\":\"web_access\",\"kind\":\"selectable\",\"skill_id\":\"live_refresh\"}"}]),
                 2=>{
-                    std::fs::write(prompt.join("base_instructions.md"),"LIVE_MAIN_CURRENT").unwrap();
                     std::fs::write(&skill,live_context_fixture_skill("LIVE_SKILL_CURRENT")).unwrap();
                     Box::pin(store.upsert_prompt_slot("live_refresh","LIVE_SLOT_CURRENT",None,None,None,slot_revision)).await.unwrap();
                     json!([{"type":"function_call","call_id":"refresh-native-round","name":"get_time","arguments":"{}"}])
@@ -10065,15 +10059,11 @@ async fn live_context_default_stack_journey() {
     assert_eq!(requests.len(), 3);
     for request in &requests[..2] {
         let instructions = request["instructions"].as_str().unwrap();
-        assert!(instructions.contains("LIVE_MAIN_FIRST"));
         assert!(instructions.contains("LIVE_SLOT_FIRST"));
-        assert!(!instructions.contains("LIVE_MAIN_CURRENT"));
         assert!(!instructions.contains("LIVE_SLOT_CURRENT"));
     }
     let instructions = requests[2]["instructions"].as_str().unwrap();
-    assert!(instructions.contains("LIVE_MAIN_CURRENT"));
     assert!(instructions.contains("LIVE_SLOT_CURRENT"));
-    assert!(!instructions.contains("LIVE_MAIN_FIRST"));
     assert!(!instructions.contains("LIVE_SLOT_FIRST"));
     for request in requests.iter() {
         // Assert the actual Responses wire, where omitted strict defaults can make
@@ -10090,8 +10080,6 @@ async fn live_context_default_stack_journey() {
             control["parameters"]["properties"]["selector"]["anyOf"][1]["required"],
             json!(["type", "tool_name"])
         );
-        let instructions = request["instructions"].as_str().unwrap();
-        assert!(instructions.contains("LIVE_CLOSING"));
     }
     assert!(!requests[0]["input"]
         .to_string()

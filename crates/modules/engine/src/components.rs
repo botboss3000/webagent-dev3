@@ -2192,9 +2192,6 @@ pub async fn prepare<'a>(
                 (Some("invalid_contribution"), Some("selection")) => {
                     ("invalid_contribution", "selection")
                 }
-                (Some("instruction_limit"), Some("instructions")) => {
-                    ("instruction_limit", "instructions")
-                }
                 (Some("overhead_exceeds_budget"), Some("budget")) => {
                     ("overhead_exceeds_budget", "budget")
                 }

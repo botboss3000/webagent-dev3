@@ -1980,6 +1980,8 @@ impl<H: Host> Catalog<H> {
             .filter_map(|schema| schema["name"].as_str())
             .collect::<HashSet<_>>();
         let mut guidance = Vec::new();
+        // Core skills lead the skills section, whatever the ability order.
+        let mut core = HashSet::new();
         for ability in &self.abilities {
             let id = ability.id.as_str();
             let Some(entry) = entries.iter().find(|entry| entry["id"] == id) else {
@@ -2041,6 +2043,9 @@ impl<H: Host> Catalog<H> {
             }
             if Self::skill_mode(visibility, ability) != "off" {
                 if let Some(body) = Self::core_skill(ability) {
+                    if Self::skill_mode(visibility, ability) == "core" {
+                        core.insert(format!("ability:{id}"));
+                    }
                     guidance.push(Guidance {
                         id: format!("ability:{id}"),
                         kind: GuidanceKind::Ability,
@@ -2058,6 +2063,9 @@ impl<H: Host> Catalog<H> {
                     continue;
                 };
                 let mode = Self::tool_mode(visibility, name);
+                if mode == "core" {
+                    core.insert(format!("tool:{id}:{name}"));
+                }
                 guidance.push(Guidance {
                     id: format!("tool:{id}:{name}"),
                     kind: GuidanceKind::Tool,
@@ -2087,6 +2095,7 @@ impl<H: Host> Catalog<H> {
                 });
             }
         }
+        guidance.sort_by_key(|item| !core.contains(&item.id));
         guidance
     }
 

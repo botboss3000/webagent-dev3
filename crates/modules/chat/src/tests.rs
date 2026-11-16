@@ -217,7 +217,6 @@ mod naming {
         let dir = tempfile::tempdir().unwrap();
         let prompts = dir.path().join(webagent_configuration::prompts::PROMPTS);
         std::fs::create_dir_all(prompts.join("session_naming")).unwrap();
-        std::fs::write(prompts.join("base_instructions.md"), "base\n").unwrap();
         std::fs::write(prompts.join("session_naming/prompt.md"), "Name it\n").unwrap();
         std::fs::write(
             prompts.join("session_naming.json"),

@@ -48,9 +48,6 @@ pub fn prepare_incremental<'a>(
             instructions.push_str(&decision.item.content);
         }
     }
-    if instructions.is_empty() {
-        return Err(Failure::new("instruction_limit", "instructions").into());
-    }
     // Keep the existing logical-envelope budget semantics, without allocating JSON buffers.
     let instruction_json_bytes = size(&instructions)?;
     let schemas_json_bytes = size(request.schemas)?;

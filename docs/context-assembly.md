@@ -18,9 +18,10 @@ bounded and pause for review rather than dispatching stale context.
 
 src/live_assets.rs::resolved_prompts_at assembles the live Markdown prompt files under
 crates/modules/configuration/prompts (`name.md` text, `name.json` settings, folders
-nest). Provider::instructions_for_snapshot composes base_instructions,
-closing_reporting and jev_guidance. Agent prompt slots are host-owned encrypted
-records, read again by prepare_capability. The legacy last-good provider helper
+nest) for features such as session naming. There is no base prompt file: an agent's
+instructions are its prompt slots (Provider::instructions_for_snapshot only strips old
+compiled seeds), and general rules live in the core Base skill. Agent prompt slots are
+host-owned encrypted records, read again by prepare_capability. The legacy last-good provider helper
 is not the strict dispatch freshness authority. There are no saved overrides.
 
 src/storage/context_assets.rs keeps encrypted conversation selections scoped by

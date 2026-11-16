@@ -170,13 +170,6 @@ impl<'a> CallDraft<'a> {
             &self.selection.model,
             self.reasoning_effort,
         )?;
-        if self.instructions.is_empty() {
-            return Err(typed_failure(
-                crate::model_selection::FailureKind::MalformedRequest,
-                false,
-                "Invalid provider instructions",
-            ));
-        }
         for item in &mut self.input {
             if let Some(object) = item.as_object_mut() {
                 if self.selection.provider != ProviderId::Deepseek {
@@ -509,35 +502,6 @@ mod tests {
         }
     }
 
-    /// Verify invalid instructions fail as malformed input before unsupported transport or missing credential checks.
-    #[test]
-    fn instruction_failure_precedes_transport_and_credentials() {
-        for provider in [
-            ProviderId::OpenaiSubscription,
-            ProviderId::Deepseek,
-            ProviderId::Typesafe,
-        ] {
-            let selection = ProviderSelection {
-                provider,
-                model: "fixture".into(),
-            };
-            for instructions in ["".to_owned()] {
-                let error = CallDraft::new(&selection, vec![], vec![], "s", &instructions)
-                    .validate()
-                    .err()
-                    .unwrap();
-                assert_eq!(kind(&error), FailureKind::MalformedRequest);
-                assert!(
-                    !error
-                        .downcast_ref::<ProviderFailure>()
-                        .unwrap()
-                        .response_started
-                );
-            }
-        }
-    }
-
-    /// Verify Decision-only selections retain malformed-input precedence before their unsupported chat error.
     #[test]
     fn compatible_body_failure_precedes_unsupported_transport() {
         let selection = ProviderSelection {
@@ -804,9 +768,6 @@ mod tests {
                 provider: transport,
                 model: "fixture".into(),
             };
-            assert!(CallDraft::new(&selection, vec![], vec![], "s", "")
-                .validate()
-                .is_err());
             if transport == ProviderId::Typesafe {
                 assert!(CallDraft::new(&selection, vec![], vec![], "s", "help")
                     .validate()

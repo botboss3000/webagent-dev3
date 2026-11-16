@@ -176,12 +176,6 @@ mod tests {
             std::path::Path::new("/nonexistent"),
         )
         .unwrap();
-        for key in ["base_instructions", "closing_reporting"] {
-            assert!(
-                value[key].as_str().is_some_and(|text| !text.is_empty()),
-                "{key}"
-            );
-        }
         assert!(value["session_naming"]["prompt"].is_string());
         assert!(value["tool_result_deduplication"]["placeholder"].is_string());
     }

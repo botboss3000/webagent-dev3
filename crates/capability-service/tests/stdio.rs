@@ -122,7 +122,6 @@ fn executable_rejects_malformed_frames_and_invalid_capability_inputs() {
         rejected.push(wire);
     }
     for (key, value) in [
-        ("base_prompt", json!("")),
         ("source_fingerprint", json!("invalid")),
         ("unknown", json!(true)),
         ("permitted_schemas", json!(["file_read", "file_read"])),

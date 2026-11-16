@@ -4,15 +4,13 @@ pub use webagent_engine::model_client::*;
 mod tests {
     use super::*;
     #[test]
-    // Registered by name in the broker's focused host checks; last-good recovery is covered by webagent_configuration::live.
+    // Registered by name in the broker's focused host checks, so the name stays. There are
+    // no base prompt files any more: instructions are the agent's prompt slots (the engine's
+    // instructions tests cover stripping old compiled seeds).
     fn configured_base_instructions_loads_and_recovers_from_file_changes() {
-        let composed = Provider::configured_base_instructions();
-        for name in ["base_instructions", "closing_reporting"] {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join(webagent_configuration::prompts::PROMPTS)
-                .join(format!("{name}.md"));
-            let text = std::fs::read_to_string(path).unwrap();
-            assert!(composed.contains(text.trim()), "{name}");
-        }
+        assert_eq!(
+            Provider::instructions_for_turn("\n\nYou are a tester."),
+            "You are a tester."
+        );
     }
 }

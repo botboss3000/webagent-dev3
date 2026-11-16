@@ -149,7 +149,6 @@ pub fn validate_request(request: &PrepareRequest) -> Result<()> {
             .source_fingerprint
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        || request.base_prompt.trim().is_empty()
         || request.guidance.len() > MAX_GUIDANCE
         || request.permitted_schemas.len() > MAX_SCHEMAS
         || request.prior_schema_order.len() > MAX_SCHEMAS
@@ -363,9 +362,10 @@ mod tests {
     #[test]
     fn rejects_invalid_inputs_and_unknown_authority_fields() {
         let (request, _) = fixture();
-        let mut bad = request.clone();
-        bad.base_prompt = "  ".into();
-        assert!(validate_request(&bad).is_err());
+        // An agent with no prompt slots has an empty base prompt; that is valid.
+        let mut empty = request.clone();
+        empty.base_prompt = String::new();
+        assert!(validate_request(&empty).is_ok());
         let mut bad = request.clone();
         bad.guidance[0].body.clear();
         assert!(validate_request(&bad).is_err());

@@ -47,9 +47,6 @@ impl Provider {
     ) -> Result<String> {
         crate::context::instructions::instructions_for_snapshot(pinned, root, source)
     }
-    pub fn configured_base_instructions() -> String {
-        crate::context::instructions::configured_base_instructions()
-    }
 }
 struct EngineProjection<'a>(&'a std::path::Path);
 impl webagent_models::transport::Projection for EngineProjection<'_> {

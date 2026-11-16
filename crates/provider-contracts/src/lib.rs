@@ -237,15 +237,11 @@ pub fn validate_request(request: &RequestV1) -> Result<()> {
     bounded(request)?;
     if let RequestV1::Project {
         provider,
-        instructions,
         input,
         tools,
         ..
     } = request
     {
-        if instructions.is_empty() {
-            bail!("Invalid provider instructions");
-        }
         if input.len() > u32::MAX as usize || tools.len() > u32::MAX as usize {
             bail!("Provider reference bounds");
         }
@@ -570,7 +566,12 @@ pub fn materialize(request: &RequestV1, result: &ResultV1) -> Result<Materialize
         });
     }
     let preserve_reasoning = *provider == ProviderIdV1::Deepseek;
-    let mut messages = vec![json!({"role":"system","content":instructions})];
+    // An agent with no prompt slots and no skills in the instructions sends no system message.
+    let mut messages = if instructions.is_empty() {
+        Vec::new()
+    } else {
+        vec![json!({"role":"system","content":instructions})]
+    };
     for group in &projection.groups {
         match group {
             SourceGroupV1::Message { source_index } => messages.push(compatible_message(
