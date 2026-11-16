@@ -18,6 +18,8 @@
 #tab-app .agent-config-topics{padding:0}
 #tab-app .agent-config-star{align-self:center;margin-right:18px;padding:0;border:0;background:transparent;color:var(--agent-config-icon);cursor:pointer}
 #tab-app .agent-config-star:focus-visible{outline:2px solid var(--agent-config-icon);outline-offset:2px}
+/* Pin the page tab strip to the top of #main-panel while the page scrolls (as on Agents). */
+#tab-app .app-page-framework>.agent-card.active{position:sticky;top:-1px;z-index:3}
 #tab-app .agent-card-tabs{display:flex;gap:7px;overflow-x:auto}
 #tab-app .agent-card-tabs [role=tab]{touch-action:pan-x;user-select:none;cursor:grab;border:0;background:transparent;color:var(--fg-2);padding:8px 14px;white-space:nowrap;flex-shrink:0}
 #tab-app .agent-card-tabs [aria-selected=true]{color:var(--accent);border-bottom:2px solid var(--accent)}

@@ -249,8 +249,12 @@ body.light-mode .agent-clones-status { background: rgba(60, 44, 46, 0.08); color
 /* Mobile / narrow screens: the side inset is 0 everywhere (flat edge-to-edge
    layout), so no override is needed. 800px matches the app-wide breakpoint. */
 #agents-grid.carousel {
-  overflow-y: auto;
-  overflow-x: hidden;
+  /* #main-panel is the real page scroller (the grid grows to its content), so
+     the grid must not be a scroll container itself or the sticky tab header
+     below would stick to a box that never scrolls. clip trims sideways
+     overflow without creating one. */
+  overflow-y: visible;
+  overflow-x: clip;
   /* Keep the parent carousel scrollable without showing a competing scrollbar.
      The Sessions table retains its own visible scrollbar. */
   scrollbar-width: none;

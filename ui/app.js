@@ -482,9 +482,11 @@ let agentTabsRevision=0;
 let agentTabsReady=false;
 let agentTabsGeneration=0;
 let agentTabsQueue=Promise.resolve();
-const validAgentTabs=new Set(['config',...agentPages.map(page=>page.id)]);
 function applyAgentTabs(snapshot){
-  agentTabOrder=[...new Set(snapshot.page_ids||[])].filter(id=>validAgentTabs.has(id));
+  // agentPages fills in when the agents page mounts, often after favorites load,
+  // so filter only once the page list is known; until then keep every saved id.
+  const known=agentPages.length?new Set(['config',...agentPages.map(page=>page.id)]):null;
+  agentTabOrder=[...new Set(snapshot.page_ids||[])].filter(id=>!known||known.has(id));
   if(!agentTabOrder.includes('config'))agentTabOrder.push('config');
   agentTabsRevision=snapshot.revision;
   syncAgentTabs();
@@ -500,7 +502,7 @@ function syncAgentTabs(){
   const strip=document.querySelector('#agents-detail-region .agent-card-tabs');
   // Favorites can land before the agents page mounts; the tab order is applied again on load.
   if(!strip)return;
-  for(const id of agentTabOrder)strip.append($('agent-tab-'+id));
+  for(const id of agentTabOrder){const tab=$('agent-tab-'+id);if(tab)strip.append(tab);}
   for(const page of [configPage,...agentPages])$('agent-tab-'+page.id).hidden=!agentTabOrder.includes(page.id);
   renderAgentDirectory($('config-page'),agentPages,view=>guard(()=>showAgentView(view))(),agentTabOrder,id=>{
     if(!agentTabsReady){note('Agent page preferences are unavailable. Reload to retry.');return;}
