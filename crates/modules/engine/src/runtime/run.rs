@@ -585,6 +585,7 @@ impl<
                                 | "compact_context"
                                 | "v3_build_work"
                                 | "build_work"
+                                | "set_execution_mode"
                         )
                     )
                 })
@@ -594,8 +595,9 @@ impl<
         }) {
             // NATIVE-GATE-SERIAL: private controls keep provider order and
             // never enter a parallel batch or the Python tool worker.
-            // Discovery changes what later calls may use, so a batch that
-            // contains it runs serially and each call sees the result.
+            // Discovery changes what later calls may use, and a mode change how
+            // they are authorized (entering Auto needs its human checkpoint), so
+            // a batch that contains either runs serially.
             Self::execute_parallel_batch(
                 &app,
                 &id,

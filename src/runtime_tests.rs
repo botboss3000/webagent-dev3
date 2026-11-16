@@ -1631,6 +1631,8 @@ async fn image_capable_candidates_receive_sent_images_and_others_keep_text() {
     server.abort();
 }
 
+/// The Auto request shares its model step with another call, which must not bypass
+/// the human checkpoint through a parallel batch.
 #[tokio::test]
 async fn plan_auto_request_can_continue_in_ask_mode() {
     use axum::routing::post;
@@ -1647,7 +1649,8 @@ async fn plan_auto_request_can_continue_in_ask_mode() {
         let output = if requests.len() == 1 {
             json!([{"type":"function_call","call_id":"load","name":"load_tool","arguments":"{\"tool_name\":\"set_execution_mode\"}"}])
         } else if requests.len() == 2 {
-            json!([{"type":"function_call","call_id":"call","name":"set_execution_mode","arguments":"{\"mode\":\"auto\",\"expected_revision\":1}"}])
+            json!([{"type":"function_call","call_id":"call","name":"set_execution_mode","arguments":"{\"mode\":\"auto\",\"expected_revision\":1}"},
+                {"type":"function_call","call_id":"time","name":"get_time","arguments":"{}"}])
         } else {
             json!([{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Executing in Ask mode."}]}])
         };

@@ -10,7 +10,7 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{Mutex, OnceLock},
 };
 use webagent_access::Permission;
 
@@ -356,26 +356,39 @@ pub fn use_root(abilities: PathBuf) {
 }
 
 /// The abilities folder definitions are read from, matching the catalog's: a root chosen
-/// with `use_root`, else the app's `V3_ABILITIES_ROOT`, else the first live root that has
-/// one (the checkout, the published release, then this source tree for tests).
+/// with `use_root`, else the selected publication (so an ability publish takes effect
+/// without a restart), else the app's `V3_ABILITIES_ROOT`, else the first live root that
+/// has one (the checkout, the published release, then this source tree for tests).
 pub fn root() -> Option<PathBuf> {
     if let Some(root) = ROOT.get() {
         return Some(root.clone());
     }
-    std::env::var_os("V3_ABILITIES_ROOT")
-        .map(PathBuf::from)
-        .filter(|path| path.is_dir())
-        .or_else(|| {
-            webagent_configuration::live::roots()
-                .into_iter()
-                .map(|root| root.join("abilities"))
-                .find(|path| path.is_dir())
-        })
+    let published = webagent_configuration::prompts::default_source(None)
+        .ok()
+        .flatten()
+        .map(|source| source.join("abilities"))
+        .filter(|path| path.is_dir());
+    published.or_else(|| {
+        std::env::var_os("V3_ABILITIES_ROOT")
+            .map(PathBuf::from)
+            .filter(|path| path.is_dir())
+            .or_else(|| {
+                webagent_configuration::live::roots()
+                    .into_iter()
+                    .map(|root| root.join("abilities"))
+                    .find(|path| path.is_dir())
+            })
+    })
 }
 
-static DEFINITIONS: OnceLock<(BTreeMap<String, ToolDefinition>, Vec<String>)> = OnceLock::new();
+type Loaded = (BTreeMap<String, ToolDefinition>, Vec<String>);
 
-/// Process-wide definitions, read once on first use.
+/// The definitions read from the current root. Publications are immutable, so each root is
+/// read once; a switch to a new publication reads it and keeps the old one alive, since
+/// callers hold `'static` references. Publishes are rare, so this grows by one small map each.
+static DEFINITIONS: Mutex<Option<(Option<PathBuf>, &'static Loaded)>> = Mutex::new(None);
+
+/// Process-wide definitions from the current root.
 pub fn definitions() -> &'static BTreeMap<String, ToolDefinition> {
     &loaded().0
 }
@@ -385,11 +398,20 @@ pub fn problems() -> &'static [String] {
     &loaded().1
 }
 
-fn loaded() -> &'static (BTreeMap<String, ToolDefinition>, Vec<String>) {
-    DEFINITIONS.get_or_init(|| match root() {
-        Some(root) => load_all(&root),
+fn loaded() -> &'static Loaded {
+    let root = root();
+    let mut held = DEFINITIONS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((read_from, loaded)) = held.as_ref() {
+        if *read_from == root {
+            return loaded;
+        }
+    }
+    let loaded: &'static Loaded = Box::leak(Box::new(match &root {
+        Some(root) => load_all(root),
         None => (BTreeMap::new(), vec!["No abilities folder found".into()]),
-    })
+    }));
+    *held = Some((root, loaded));
+    loaded
 }
 
 pub fn get(name: &str) -> Option<&'static ToolDefinition> {
