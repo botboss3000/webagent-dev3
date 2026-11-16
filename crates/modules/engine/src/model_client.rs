@@ -85,6 +85,9 @@ impl<'a> CallDraft<'a> {
     pub fn with_bridge_fork(self, fork: bool) -> Self {
         Self(self.0.with_bridge_fork(fork))
     }
+    pub fn with_bridge_closing(self, closing: bool) -> Self {
+        Self(self.0.with_bridge_closing(closing))
+    }
     pub async fn prepare(
         self,
         root: &std::path::Path,

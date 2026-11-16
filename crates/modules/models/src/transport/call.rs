@@ -15,6 +15,7 @@ pub struct CallDraft<'a> {
     session: &'a str,
     instructions: &'a str,
     bridge_fork: bool,
+    bridge_closing: bool,
 }
 
 pub struct ValidatedCall<'a> {
@@ -89,6 +90,7 @@ impl<'a> CallDraft<'a> {
             session,
             instructions,
             bridge_fork: false,
+            bridge_closing: false,
         }
     }
 
@@ -100,6 +102,13 @@ impl<'a> CallDraft<'a> {
     /// Ask a bridge to answer from a fork of the chat's harness session (ignored elsewhere).
     pub fn with_bridge_fork(mut self, fork: bool) -> Self {
         self.bridge_fork = fork;
+        self
+    }
+
+    /// Mark a run's closing call, whose last message is the private closer kept out of
+    /// history, so a bridge does not record that message as part of the conversation.
+    pub fn with_bridge_closing(mut self, closing: bool) -> Self {
+        self.bridge_closing = closing;
         self
     }
 
@@ -277,6 +286,9 @@ impl<'a> CallDraft<'a> {
                 let mut body = compatible_body(self.selection, messages, tools);
                 if let Some(effort) = self.reasoning_effort {
                     body["reasoning_effort"] = json!(effort);
+                }
+                if self.bridge_closing {
+                    body["webagent_closing"] = json!(true);
                 }
                 PreparedRequest::Bridge {
                     body,

@@ -462,7 +462,8 @@ impl<
         );
         app.save(run).await?;
         let sid = request.sid.to_owned();
-        let mut job = json!({"state":"running","plan":plan,"step":step,"summarizer":summarizer});
+        let mut job = json!({"state":"running","plan":plan,"step":step,"summarizer":summarizer,
+            "reason":reason});
         app.store
             .put(&background_compaction::key(&sid), &job)
             .await?;
@@ -2556,12 +2557,28 @@ impl<
                         json!({"error":job["error"],"summarizer":job["summarizer"],
                             "mode":"background"}),
                     );
-                    run["compaction_only_note"] = json!(format!(
-                        "Compaction failed ({}); the conversation is unchanged.",
-                        job["error"].as_str().unwrap_or("summary unavailable")
-                    ));
-                    // After a same-model failure the next summary uses System.
-                    job = json!({"state":"idle","system_next":job["summarizer"] == "self"});
+                    // After a same-model failure the next summary uses System. A requested
+                    // fold (Compact click, `/compact`) is queued again so System retries it
+                    // now; the user sees a failure only when System fails too.
+                    let same_model = job["summarizer"] == "self";
+                    let request_key = background_compaction::request_key(&sid);
+                    let retried = same_model
+                        && job["reason"] == "requested"
+                        && match app.store.get(&request_key).await? {
+                            Some(mut request) if request["state"] == "started" => {
+                                request["state"] = json!("pending");
+                                app.store.put(&request_key, &request).await?;
+                                true
+                            }
+                            _ => false,
+                        };
+                    if !retried {
+                        run["compaction_only_note"] = json!(format!(
+                            "Compaction failed ({}); the conversation is unchanged.",
+                            job["error"].as_str().unwrap_or("summary unavailable")
+                        ));
+                    }
+                    job = json!({"state":"idle","system_next":same_model});
                     app.store.put(&job_key, &job).await?;
                 }
                 // BACKGROUND COMPACTION RESULT: history is append-only, so the plan made at
@@ -3386,6 +3403,7 @@ impl<
                     &instructions,
                 )
                 .with_reasoning_effort(core_effort.as_deref())
+                .with_bridge_closing(run["closing_turn"].is_object())
                 .prepare(
                     crate::ports::AgentMetadata::root(app.store.records()),
                     &cancel,

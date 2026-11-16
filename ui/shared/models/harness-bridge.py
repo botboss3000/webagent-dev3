@@ -640,10 +640,13 @@ def changes(folder, state, body, count):
         # The previous call's conversation, for a checkpoint after a rewrite.
         "previous": seen, "digests": digests,
     }
+    # A run's closing call ends with a private closer message that WebAgent keeps out of history: the
+    # session holds it, but the next call (or a fork) must still read as an append, not a rewrite.
+    recorded = digests[:-1] if body.get("webagent_closing") and digests else digests
     state.update(instructions=digest(instructions), tools=sorted(tools), tools_digest=digest(body.get("tools")),
                  instructions_text=[text_of(m.get("content"), folder) for m in instructions],
                  tool_schemas={n: digest(t) for n, t in tools.items()},
-                 conversation=digests)
+                 conversation=recorded)
     return delta
 
 
@@ -1464,6 +1467,16 @@ def selftest():
     _, _, delta = fork_delta({"id": "f", "session": "s", "body": fork_body})
     assert delta["new"] == [{"role": "user", "content": "summarize"}] and not delta["rewritten"]
     assert (SESSIONS / "s" / "state.json").read_text() == saved
+    # A closing call's private closer stays out of the recorded conversation, so the next turn and a
+    # fork still append to the session instead of rewriting it.
+    closing = {**body, "messages": body["messages"] + [{"role": "user", "content": "label this run"}],
+               "webagent_closing": True}
+    _, state, delta = remember({"id": "k", "session": "s", "body": closing})
+    save_state(SESSIONS / "s", state)
+    assert delta["new"] == [{"role": "user", "content": "label this run"}] and not delta["rewritten"]
+    later = {**body, "messages": body["messages"] + [{"role": "user", "content": "next task"}]}
+    _, _, delta = fork_delta({"id": "f2", "session": "s", "body": later})
+    assert delta["new"] == [{"role": "user", "content": "next task"}] and not delta["rewritten"]
     body["messages"] = body["messages"][:1] + [{"role": "user", "content": "summary"}]
     _, _, delta = remember({"id": "c", "session": "s", "body": body})
     assert delta["rewritten"] and len(delta["new"]) == 1
