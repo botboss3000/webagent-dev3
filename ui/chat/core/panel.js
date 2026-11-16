@@ -300,13 +300,14 @@ function renderComponent(row){
       // A choice panel is one required round single-choice list; its recorded answer names the option id.
       const options=reply?(Array.isArray(data.options)?data.options.slice(0,8):[]).filter(option=>typeof option?.label==='string'&&option.label):[];
       const fields=reply?[{name:'choice',label:'',type:'radio',options:options.map(option=>option.label),required:true}]:(Array.isArray(data.fields)?data.fields.slice(0,20):[]).filter(field=>typeof field?.name==='string');
+      const comments=!reply&&answer.comments&&typeof answer.comments==='object'?answer.comments:{};
       const values=reply?{choice:options.find(option=>option.id===answer.option_id)?.label||''}:answer.values&&typeof answer.values==='object'?answer.values:{};
-      const form=buildReplyForm({fields,paged:!reply&&data.paged===true,state,values,dismiss,
+      const form=buildReplyForm({fields,paged:!reply&&data.paged===true,state,values,comments,dismiss,
         // A panel's + stages files on the composer, so they go out with the answer message.
         addFiles:async files=>{await media.add(files);return media.count;},
         // A submitted panel is one user message: "Title: value", or the title then one "Label: value" line per field.
         send:async answers=>{
-          const submitted=reply?{option_id:options.find(option=>option.label===answers[0].value)?.id}:{values:Object.fromEntries(answers.map(item=>[item.name,item.value]))};
+          const submitted=reply?{option_id:options.find(option=>option.label===answers[0].value)?.id}:{values:Object.fromEntries(answers.map(item=>[item.name,item.value])),comments:Object.fromEntries(answers.filter(item=>item.comment).map(item=>[item.name,item.comment]))};
           try{await submit(answerText(title,answers),false,{componentId:id});}catch(error){note(error.message);throw error;}
           void client.dismissComponent(session,id,submitted).catch(()=>{});settle(submitted);
         }});

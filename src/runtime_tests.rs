@@ -1632,6 +1632,106 @@ async fn image_capable_candidates_receive_sent_images_and_others_keep_text() {
 }
 
 #[tokio::test]
+async fn plan_auto_request_can_continue_in_ask_mode() {
+    use axum::routing::post;
+    let (_root, mut app) = fixture().await;
+    settings(State(app.clone()), Json(json!({"model":"pinned-model"})))
+        .await
+        .unwrap();
+    fixture_model(&app, "pinned-model").await;
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let captured = requests.clone();
+    let mock = Router::new().route("/responses", post(|AxumState(requests): AxumState<Arc<Mutex<Vec<Value>>>>, Json(body): Json<Value>| async move {
+        let mut requests = requests.lock().await;
+        requests.push(body);
+        let output = if requests.len() == 1 {
+            json!([{"type":"function_call","call_id":"load","name":"load_tool","arguments":"{\"tool_name\":\"set_execution_mode\"}"}])
+        } else if requests.len() == 2 {
+            json!([{"type":"function_call","call_id":"call","name":"set_execution_mode","arguments":"{\"mode\":\"auto\",\"expected_revision\":1}"}])
+        } else {
+            json!([{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Executing in Ask mode."}]}])
+        };
+        let event = json!({"type":"response.completed","response":{"status":"completed","output":output}});
+        ([("content-type","text/event-stream")], format!("data: {event}\n\n"))
+    })).with_state(captured);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, mock).await.unwrap();
+    });
+    app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+    let sid = conversation(&app).await;
+    session_mode_set(
+        State(app.clone()),
+        Path(sid.clone()),
+        Json(SessionModeBody {
+            mode: "plan".into(),
+            expected_revision: Some(0),
+            confirm_write: true,
+        }),
+    )
+    .await
+    .unwrap();
+    let id = queued(&app, &sid).await;
+    running(&app, &id, "first").await;
+    execute_run(
+        app.clone(),
+        id.clone(),
+        "first".into(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let waiting = app.run(&id).await.unwrap();
+    assert_eq!(waiting["status"], "waiting_approval");
+    assert_eq!(waiting["pending"]["name"], "set_execution_mode");
+    let approval_id = waiting["pending"]["id"].as_str().unwrap().to_owned();
+    // The Ask alternative only applies to denying the switch.
+    assert!(approval(
+        State(app.clone()),
+        Path(approval_id.clone()),
+        Json(json!({"client_request_id":"bad","decision":"approve","alternate_mode":"ask"}))
+    )
+    .await
+    .is_err());
+    approval(
+        State(app.clone()),
+        Path(approval_id),
+        Json(json!({"client_request_id":"ask","decision":"deny","alternate_mode":"ask"})),
+    )
+    .await
+    .unwrap();
+    let mode = session_mode(&app, &sid).await.unwrap();
+    assert_eq!(
+        (&mode["execution_mode"], &mode["revision"]),
+        (&json!("ask"), &json!(2))
+    );
+    running(&app, &id, "second").await;
+    execute_run(
+        app.clone(),
+        id.clone(),
+        "second".into(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
+    let requests = requests.lock().await;
+    assert_eq!(requests.len(), 3);
+    let tool_output = requests[2]["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["type"] == "function_call_output" && v["call_id"] == "call")
+        .unwrap();
+    assert!(tool_output["output"]
+        .as_str()
+        .unwrap()
+        .contains("now in Ask mode"));
+    server.abort();
+}
+
+#[tokio::test]
 async fn agent_loop_gates_tool_and_denial_continues_without_worker() {
     use axum::routing::post;
     let (_root, mut app) = fixture().await;

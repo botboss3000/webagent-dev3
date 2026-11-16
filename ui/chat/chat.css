@@ -394,6 +394,7 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 .v3-reply-form :is(input:not([type=radio],[type=checkbox],[type=file]),select,textarea){font:inherit;color:var(--fg-1);border:var(--border-width) solid var(--border);border-radius:8px;padding:10px 12px;min-height:44px;box-sizing:border-box;width:100%;min-width:0}
 .v3-reply-form textarea{resize:vertical;min-height:88px;line-height:1.4}
 .v3-reply-form .v3-reply-options input.v3-reply-other{width:auto;margin:0 14px 12px}
+.v3-reply-form textarea.v3-reply-comment{margin-top:10px;min-height:56px}
 .v3-reply-form :is(input,select,textarea):disabled{opacity:.7}
 .v3-reply-attach{flex:none;width:44px;height:44px;border-radius:50%;border:var(--border-width) solid var(--border);color:var(--fg-1);font:inherit;font-size:22px;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent}
 .v3-reply-files{color:var(--fg-2);font-size:13px}

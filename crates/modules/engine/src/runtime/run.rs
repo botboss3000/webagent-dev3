@@ -931,7 +931,13 @@ impl<
             app.actions
                 .not_dispatched(app.store.records(), &run, &run["pending"])
                 .await?;
-            let message = if run["pending"]["decision"] == "deny" {
+            let message = if run["pending"]["denied_to_mode"] == "ask" {
+                // The user kept approvals on instead of entering Auto; the approval moved the
+                // session to Ask in the same write.
+                "The user chose Ask mode instead of Auto: the session is now in Ask mode. \
+                 Continue executing the agreed plan; tools that need approval will ask the user."
+                    .to_owned()
+            } else if run["pending"]["decision"] == "deny" {
                 "Tool invocation denied: the user denied this call".to_owned()
             } else {
                 super::batch::denial_message(
@@ -940,6 +946,9 @@ impl<
                 )
             };
             let result = match tools::retry_guard::declined(&run["pending"]) {
+                _ if run["pending"]["denied_to_mode"] == "ask" => {
+                    json!({"status":"success","execution_mode":"ask","output":message})
+                }
                 Some(result) if run["pending"]["decision"] == "deny" => result,
                 _ => json!({"status":"denied","output":message}),
             };

@@ -1,6 +1,7 @@
 // Builds an agent's reply panel (present_chat_component choice or form) as a card form: round
 // single-choice rows (tap a chosen row again to clear it), checkbox rows, an optional "Something
-// else…" row, text and free-text fields with + inside the box to stage files on the answer, and an
+// else…" row, an optional comment box under each pick list (on unless the field sets comment:false),
+// text and free-text fields with + inside the box to stage files on the answer, and an
 // optional one-question-per-page flow with "N of M" between back/forward chevrons. Dismiss sits at
 // the card's top right; the main button reads Continue, Skip (optional page left empty) or Submit.
 // The answer only ever goes out as the user's own message; a panel never authorizes anything.
@@ -16,17 +17,17 @@ function chevron(left){const svg=document.createElementNS('http://www.w3.org/200
 /** Formats one answer for the user's message: lists join with commas and an empty answer reads "skipped". */
 export function shownAnswer(value){if(Array.isArray(value))return value.length?value.join(', '):'skipped';return value===''||value==null?'skipped':String(value);}
 
-/** Builds the reply text: "Title: value" for one field, else the title then one "Label: value" line per field. */
-export function answerText(title,answers){return answers.length===1?title+': '+shownAnswer(answers[0].value):[title,...answers.map(item=>item.label+': '+shownAnswer(item.value))].join('\n');}
+/** Builds the reply text: "Title: value" for one uncommented field, else the title then one "Label: value" line per field, each comment on its own "Label — comment: text" line. */
+export function answerText(title,answers){if(answers.length===1&&!answers[0].comment)return title+': '+shownAnswer(answers[0].value);return [title,...answers.flatMap(item=>[item.label+': '+shownAnswer(item.value),...(item.comment?[item.label+' — comment: '+item.comment]:[])])].join('\n');}
 
 /** Builds one question: its label, hint, control, inline error, and how to read, check and clear it. */
-function question(field,saved,locked,addFiles,key){
+function question(field,saved,locked,addFiles,key,savedComment){
   const label=typeof field.label==='string'?field.label:field.name;
   const page=el('div','v3-reply-field');
   if(label)page.append(el('div','v3-reply-q',label));
   if(field.hint)page.append(el('p','v3-reply-hint',field.hint));
   const error=el('p','v3-reply-error');error.hidden=true;error.setAttribute('role','alert');
-  let read,check,clear;
+  let read,check,clear,comment=()=>'',clearComment=()=>{};
   if(field.type==='radio'||field.type==='multi'){
     const single=field.type==='radio',options=(Array.isArray(field.options)?field.options:[]).slice(0,8);
     const picked=Array.isArray(saved)?saved:typeof saved==='string'&&saved?[saved]:[];
@@ -50,9 +51,14 @@ function question(field,saved,locked,addFiles,key){
       for(const box of boxes)box.addEventListener('click',()=>{if(box===chosen){box.checked=false;chosen=null;box.dispatchEvent(new Event('change',{bubbles:true}));}else chosen=box;});
     }
     page.append(list);
+    if(field.comment!==false&&(!locked||savedComment)){
+      // The comment box sits on the same step as its decision, so a paged form keeps one page per question.
+      const box=document.createElement('textarea');box.className='v3-reply-comment';box.rows=2;box.maxLength=1000;box.placeholder='Comments (optional)';box.setAttribute('aria-label',(label||'Answer')+': comments');box.disabled=locked;if(typeof savedComment==='string')box.value=savedComment;
+      page.append(box);comment=()=>box.value.trim();clearComment=()=>{box.value='';};
+    }
     read=()=>{const values=boxes.filter(box=>box.checked).map(box=>box===otherBox?other.value.trim():box.value).filter(Boolean);return single?values[0]||'':values;};
     check=()=>{if(otherBox?.checked&&!other.value.trim())return 'Type your answer or pick another option.';if(field.required===true&&!boxes.some(box=>box.checked))return single?'Choose one option.':'Choose at least one option.';return '';};
-    clear=()=>{for(const box of boxes)box.checked=false;if(other){other.value='';other.hidden=true;}};
+    clear=()=>{for(const box of boxes)box.checked=false;if(other){other.value='';other.hidden=true;}clearComment();};
   }else{
     const wrap=el('div','v3-reply-input');
     let input;
@@ -75,20 +81,20 @@ function question(field,saved,locked,addFiles,key){
     clear=()=>{input.value='';};
   }
   page.append(error);
-  const filled=()=>{const value=read();return Array.isArray(value)?value.length>0:value!=='';};
-  return {field,label:label||field.name,page,read,clear,filled,valid(){const message=check();error.textContent=message;error.hidden=!message;return !message;}};
+  const filled=()=>{const value=read();return Array.isArray(value)?value.length>0||comment()!=='':value!==''||comment()!=='';};
+  return {field,label:label||field.name,page,read,comment,clear,filled,valid(){const message=check();error.textContent=message;error.hidden=!message;return !message;}};
 }
 
 /**
  * Builds the panel's form. fields are server-validated field specs; state is 'answered', 'dismissed'
- * or empty; values holds a recorded answer by field name; dismiss is the panel's Dismiss button;
+ * or empty; values holds a recorded answer by field name and comments a recorded comment by field name; dismiss is the panel's Dismiss button;
  * addFiles(files) stages files and resolves with the staged count; send(answers) sends the answer
  * and rejects to keep the panel open. A paged form shows one question per page.
  */
-export function buildReplyForm({fields,paged=false,state='',values={},dismiss,addFiles,send}){
+export function buildReplyForm({fields,paged=false,state='',values={},comments={},dismiss,addFiles,send}){
   const form=el('form','v3-reply-form');form.noValidate=true;
   const locked=Boolean(state),key='v3r-'+Math.random().toString(36).slice(2);
-  const items=fields.map((field,index)=>question(field,values[field.name],locked,addFiles,key+'-'+index));
+  const items=fields.map((field,index)=>question(field,values[field.name],locked,addFiles,key+'-'+index,comments[field.name]));
   for(const item of items)form.append(item.page);
   if(locked)return form;
   // Dismiss sits at the card's top right, away from the answer buttons.
@@ -116,7 +122,7 @@ export function buildReplyForm({fields,paged=false,state='',values={},dismiss,ad
     if(pages&&index<items.length-1){advance();return;}
     const bad=items.findIndex(item=>!item.valid());if(bad>=0){if(pages){index=bad;show();}return;}
     const controls=[prev,fwd,main,done,dismiss];for(const node of controls)node.disabled=true;
-    try{await send(items.map(item=>({name:item.field.name,label:item.label,value:item.read()})));}
+    try{await send(items.map(item=>({name:item.field.name,label:item.label,value:item.read(),comment:item.comment()})));}
     catch{for(const node of controls)node.disabled=false;show();}
   };
   show();return form;

@@ -349,14 +349,17 @@ fn component(args: ComponentArgs, fallback_id: &str) -> Result<(String, Value, u
                     }
                 }
                 // `other` adds a "Something else…" row to a pick list; `attach` adds a + button
-                // that stages files on the answer message. Both are ignored on other types.
+                // that stages files on the answer message; `comment` (on unless false) adds an
+                // optional comment box under a pick list. All are ignored on other types.
                 let flag = |key: &str| field[key].as_bool().unwrap_or(false);
+                let comment = picks && field["comment"].as_bool() != Some(false);
                 let attaches = matches!(field_type, "text" | "textarea");
                 clean.push(
                     json!({"name":name,"label":text(field["label"].as_str().unwrap_or(name),120)?,
                     "type":field_type,"required":flag("required"),"options":choices,
                     "hint":text(field["hint"].as_str().unwrap_or(""),200)?,
-                    "other":picks && flag("other"),"attach":attaches && flag("attach")}),
+                    "other":picks && flag("other"),"attach":attaches && flag("attach"),
+                    "comment":comment}),
                 );
             }
             // A paged form shows one field per page with a step counter, Back and Skip.
@@ -656,7 +659,8 @@ mod tests {
             {"name":"layout","type":"radio","options":["A","B"],"other":true,"attach":true,
              "required":true,"hint":"Pick one"},
             {"name":"notes","type":"textarea","attach":true,"other":true},
-            {"name":"when","type":"select","options":["Now"],"attach":true}
+            {"name":"when","type":"select","options":["Now"],"attach":true},
+            {"name":"tools","type":"multi","options":["X"],"comment":false}
         ]))
         .unwrap();
         let fields = &spec["data"]["fields"];
@@ -673,6 +677,15 @@ mod tests {
             (&json!(false), &json!(true))
         );
         assert_eq!(fields[2]["attach"], false);
+        // Pick lists carry a comment box unless it is turned off; other types never do.
+        assert_eq!(
+            (
+                &fields[0]["comment"],
+                &fields[1]["comment"],
+                &fields[3]["comment"]
+            ),
+            (&json!(true), &json!(false), &json!(false))
+        );
         assert!(form(json!([{"name":"layout","type":"radio","options":[]}])).is_err());
         assert!(form(json!([{"name":"layout","type":"radio","options":["A\nB"]}])).is_err());
         assert!(form(json!([{"name":"x","type":"html"}])).is_err());

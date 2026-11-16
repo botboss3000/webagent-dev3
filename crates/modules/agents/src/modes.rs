@@ -1,10 +1,12 @@
 //! Agent-owned named mode definitions; Engine retains permission enforcement.
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
+/// Plan mode: question rounds in panels, a final plan, then a request to enter Auto.
+const PLAN_PROMPT: &str = include_str!("plan_mode.md");
 pub fn defaults() -> Value {
     json!([
      {"id":"ask","label":"Ask","description":"Investigate, answer and recommend; tools that need approval ask first.","prompt":"Investigate, answer, and recommend; tools that require approval ask first.","builtin":true},
-     {"id":"plan","label":"Plan","description":"Investigate deeply and deliver an execution-ready plan.","prompt":"Research and deliver an execution-ready plan. Maintain Plan Overview and canonical Task Progress. Then ask the user to approve it or to switch to Auto before executing changes.","builtin":true},
+     {"id":"plan","label":"Plan","description":"Grill the user on every decision in rounds of question panels, then request Auto to execute.","prompt":PLAN_PROMPT,"builtin":true},
      {"id":"auto","label":"Auto","description":"Work autonomously; tool calls do not ask for approval.","prompt":"Execute the requested work autonomously. Denied tools and access limits still apply; tool calls that would otherwise ask for approval proceed automatically. Verify results before claiming completion.","builtin":true}
     ])
 }
