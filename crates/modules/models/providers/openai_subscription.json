@@ -26,6 +26,7 @@
       "id": "gpt-6-sol",
       "name": "GPT-6 Sol",
       "input": ["text", "image"],
+      "context": 256000,
       "efforts": ["none", "low", "medium", "high", "xhigh", "max"],
       "default_effort": "medium"
     },

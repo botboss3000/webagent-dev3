@@ -68,3 +68,12 @@ with user-approved deletions. Its own session.
 Diagnostics, optimization and MCP packages live under the checkout (Git-ignored,
 root-owned binaries). Before production, move installed packages and their data
 to an installed-plugins location; until then leave them.
+
+## Model context limits (2026-11-15)
+
+Every model without a published context limit got a placeholder `context` of
+256000 in its provider file (`crates/modules/models/providers/*.json`):
+Claude Bridge, Muse Bridge, OpenCode Bridge and GPT-6 Sol. Compaction treats
+this as the hard limit. Validate each value against the provider's real limit
+(bridge harnesses may differ from the API) and correct the file; until then do
+not raise compaction triggers or ceilings above it.
