@@ -104,10 +104,15 @@ class Helper:
         os.chmod(temporary, 0o600)
         os.replace(temporary, path)
 
-    def allow_window(self, session):
+    def windows(self):
         path = self.state / "allow.json"
         windows = json.loads(path.read_text()) if path.exists() else {}
-        return windows.get(session or "", 0) > self.clock()
+        return {k: v for k, v in windows.items() if v > self.clock()}
+
+    def allow_window(self, session):
+        """Covered by this requester's window or the page-wide one (key "*")."""
+        windows = self.windows()
+        return bool(session) and session in windows or "*" in windows
 
     # Actions ---------------------------------------------------------------------------
     def matches(self, path, key):
@@ -455,7 +460,7 @@ class Helper:
                 records = [self.load(p.stem) for p in sorted((self.state / "requests").glob("*.json"))]
             pending = [r for r in records if r["state"] == "pending"]
             recent = sorted((r for r in records if r["state"] != "pending"), key=lambda r: -r.get("decided_at", 0))[:50]
-            return {"pending": pending, "recent": recent}
+            return {"pending": pending, "recent": recent, "windows": self.windows()}
         if op == "decide" and app:
             return self.decide(message)
         if op == "allow" and app:

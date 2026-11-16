@@ -60,6 +60,9 @@ class HelperTests(unittest.TestCase):
         self.assertEqual("done", self.request()["state"])  # SSH identity t480
         self.now += 601
         self.assertEqual("pending", app("s1")["state"])
+        self.helper.handle(APP, {"op": "allow", "session": "*", "seconds": 600, "admin": "admin"})  # page-wide
+        self.assertEqual(("done", "done"), (app("s9")["state"], self.request()["state"]))
+        self.assertIn("*", self.helper.handle(APP, {"op": "list"})["windows"])
         with self.assertRaises(ValueError):
             self.helper.handle(APP, {"op": "allow", "session": "s1", "seconds": 86401, "admin": "admin"})
 

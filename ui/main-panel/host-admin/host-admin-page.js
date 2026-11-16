@@ -103,10 +103,36 @@ export function start(mount) {
     return item;
   }
 
+  // Page-wide allow-all: every requester's ordinary actions run without a card until it ends,
+  // for example overnight work. Boot, disk and no-undo actions still wait here.
+  function allowAll(windows) {
+    const box = el('div', 'host-allow-all');
+    const until = windows['*'];
+    const label = el('label', 'host-allow-toggle');
+    const toggle = el('input');
+    toggle.type = 'checkbox';
+    toggle.checked = !!until;
+    label.append(toggle, el('span', '', 'Allow all requesters'));
+    const select = el('select');
+    select.setAttribute('aria-label', 'Allow-all duration');
+    for (const [seconds, text] of WINDOWS.slice(1)) select.append(new Option('for ' + text, String(seconds)));
+    select.value = '86400';
+    select.hidden = !!until;
+    toggle.onchange = () => post('/api/v3/admin/host/allow', {requester: '*', seconds: toggle.checked ? Number(select.value) : 0}, toggle);
+    box.append(label, select, el('span', 'host-meta', until
+      ? 'On until ' + when(until) + '. Boot, disk and no-undo actions still ask.'
+      : 'Off. Turn on for unattended work, such as overnight tasks.'));
+    const others = Object.entries(windows).filter(([key]) => key !== '*');
+    if (others.length) box.append(el('span', 'host-meta', 'Per-requester windows: ' + others
+      .map(([key, end]) => (key.startsWith('ssh:') ? 'SSH key ' + key.slice(4) : 'app session ' + key.slice(0, 8)) + ' until ' + when(end)).join(', ')));
+    return box;
+  }
+
   function render(page) {
     const wrap = el('div', 'host-wrap');
     wrap.append(el('h2', '', 'Waiting for approval' + (page.pending.length ? ' (' + page.pending.length + ')' : '')));
     wrap.append(el('p', 'host-help', 'Host actions from agents and SSH release keys wait here until you decide. An allow-all window approves one requester\'s ordinary actions until it ends; boot, disk and no-undo actions always ask.'));
+    wrap.append(allowAll(page.windows || {}));
     const pending = el('ul', 'host-list');
     for (const request of page.pending) pending.append(card(request, true));
     wrap.append(page.pending.length ? pending : el('p', 'host-empty', 'Nothing is waiting.'));
