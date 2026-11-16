@@ -339,9 +339,10 @@ export function mountChatActionPanel({root,guard,request,note}) {
   }
   // The plan an agent hands over when leaving Plan mode: its title, goal and numbered steps, as text.
   function planSummary(plan){
-    const box=document.createElement('div');box.className='chat-action-plan';
+    // Collapsed to its title; the summary row expands the goal, criteria, notes and steps.
+    const box=document.createElement('details');box.className='chat-action-plan';
     const text=(tag,value)=>{const el=document.createElement(tag);el.textContent=String(value);return el;};
-    if(typeof plan.title==='string'&&plan.title)box.append(text('strong',plan.title));
+    const head=text('summary',typeof plan.title==='string'&&plan.title?plan.title:'Plan');head.append(text('span',' · details'));head.lastChild.className='chat-action-plan-more';box.append(head);
     for(const [label,key] of [['Goal','goal'],['Done when','criteria'],['Notes','notes']])if(typeof plan[key]==='string'&&plan[key])box.append(text('p',label+': '+plan[key]));
     const steps=document.createElement('ol');
     for(const step of Array.isArray(plan.checklist)?plan.checklist.slice(0,32):[])if(typeof step?.label==='string')steps.append(text('li',step.label));

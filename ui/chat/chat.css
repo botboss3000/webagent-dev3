@@ -26,6 +26,10 @@ dialog[data-core-credential]{margin:auto;max-width:min(420px,calc(100vw - 32px))
 .chat-action-detail-toggle[aria-expanded=true]::after{transform:rotate(225deg);margin-top:5px}
 .chat-action p{margin:6px 0 0}
 .chat-action-plan{margin:8px 0 0;padding:10px 12px;border:var(--border-width) solid var(--border-soft,var(--border));border-radius:10px;color:var(--fg-1)}
+.chat-action-plan summary{font-weight:600;cursor:pointer;min-height:32px;display:flex;align-items:center;-webkit-tap-highlight-color:transparent}
+.chat-action-plan summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+.chat-action-plan-more{color:var(--fg-3);font-weight:500;margin-left:4px}
+.chat-action-plan[open] .chat-action-plan-more{display:none}
 .chat-action-plan ol{margin:6px 0 0;padding-left:20px}
 .chat-action-plan li+li{margin-top:2px}
 .chat-action-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;margin-top:12px}
@@ -44,6 +48,9 @@ dialog[data-core-credential]{margin:auto;max-width:min(420px,calc(100vw - 32px))
    This overrides the shared idle-mode and .expanded rules, which are kept for the compact progress note only. */
 #chat-panel #chat-input-area #chat-above-pill:has(.chat-action:not([hidden])){max-height:none!important;overflow:visible!important;opacity:1;pointer-events:auto}
 #chat-action-panel .chat-action{max-height:min(35dvh,var(--chat-action-room,35dvh));overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;user-select:text;-webkit-user-select:text}
+/* The progress note is transparent over the transcript; beside an action card it gets the card's surface as a
+   centered pill so transcript text behind the band does not show through it. */
+#chat-panel #chat-above-pill:has(.chat-action:not([hidden])) .chat-activity-wrapper[data-presentation="progress-note"] #chat-activity-bar{align-self:center;width:auto;padding:2px 12px;border-radius:999px;background:var(--bg-elev)!important}
 /* Raw code surface: capped, internally scrolling, selectable, with a Copy control pinned top-right. */
 .chat-action-code{position:relative;box-sizing:border-box;max-width:100%;margin:8px 0;text-align:left}
 .chat-action-code[hidden]{display:none}
