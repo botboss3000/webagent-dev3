@@ -48,8 +48,9 @@ export function createSessionList(root, {guard, refresh, select, client, archive
     const members = [], walk = id => { for (const child of kids.get(id) || []) { members.push(child); walk(child.id); } };
     walk(rootId);
     const wrap = tabs.querySelector('#chat-sub-scroll-wrap');
-    // The Broker (broker-chip.js) and Main Notes chips keep their place after Spawns.
-    wrap.replaceChildren(...[...wrap.children].filter(node => node.id === 'chat-broker-chip' || node.id === 'chat-main-notes-chip'));
+    // The Broker (broker-chip.js), Artifacts and Main Notes chips keep their place after Spawns.
+    const kept = new Set(['chat-broker-chip', 'chat-artifacts-chip', 'chat-main-notes-chip']);
+    wrap.replaceChildren(...[...wrap.children].filter(node => kept.has(node.id)));
     tabs.toggleAttribute('data-empty', !members.length);
     if (!members.length) return;
     const chip = button(`${members.length} sub-agent session${members.length === 1 ? '' : 's'}`,'git-branch',() => familyMenu(chip,items.find(s => s.id === rootId),members),'sub-chip chip-spawn-menu');
