@@ -17,6 +17,14 @@ class Fake:
         if operation=="reclaim":self.memory-=min(value["bytes"],self.memory);self.swap+=value["bytes"]
         return {"container_id":"container","frozen":self.frozen,"memory":self.memory,"peak_memory":G,"swap":self.swap,"cpu_usec":10,"pids":1}
 class ResourceTests(unittest.TestCase):
+    def test_host_sample_reports_root_disk_use(self):
+        from collections import namedtuple
+        from unittest.mock import patch
+        Usage=namedtuple("Usage","total used free")
+        with patch.object(m.shutil,"disk_usage",return_value=Usage(100,59,41)):
+            self.assertEqual(m.host_sample()["disk_percent"],59)
+        with patch.object(m.shutil,"disk_usage",side_effect=OSError("gone")):
+            self.assertIsNone(m.host_sample()["disk_percent"])
     def setUp(self):
         self.root=tempfile.TemporaryDirectory();self.time=100;self.sample={"available":5*G,"total":7*G,"swap_free":10*G,"swap_total":12*G,"pressure":{"cpu":0,"memory":0,"io":0}}
         self.runner=Fake();self.scheduler=m.Resources(self.root.name,self.runner,{"mode":"enforce"},lambda:self.time,lambda:dict(self.sample))

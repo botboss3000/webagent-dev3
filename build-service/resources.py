@@ -3,7 +3,7 @@
 Config: protected build-service.json -> scheduler. Estimates guide uncapped admission; explicit compiler ceilings reserve their full
 approved budget. Insufficient reclaim waits for intervention.
 """
-import copy,json,math,os,threading,time,re
+import copy,json,math,os,shutil,threading,time,re
 from pathlib import Path
 PARKABLE={"compile_test","compile_release","compile_linked","plugin_compile"}
 ESTIMATES={"ui_test":1024**3,"index":1024**3,"engine":4*1024**3,"plugin":2*1024**3,"test":512*1024**2,"package":512*1024**2,"dependency":512*1024**2}
@@ -25,7 +25,10 @@ def host_sample():
         ticks=[int(value)for value in row[1:9]]
         if len(ticks)==8 and all(value>=0 for value in ticks):cpu={"count":os.cpu_count()or 1,"ticks":ticks}
     except (OSError,ValueError,StopIteration):pass
-    return {"available":memory["MemAvailable"],"total":memory["MemTotal"],"swap_free":memory.get("SwapFree",0),"swap_total":memory.get("SwapTotal",0),"pressure":pressure,"cpu":cpu}
+    # Root filesystem use, shown on the Builds page; build state, images and caches all live there.
+    try:disk=shutil.disk_usage("/");disk_percent=round(100*(disk.total-disk.free)/disk.total)
+    except (OSError,ZeroDivisionError):disk_percent=None
+    return {"available":memory["MemAvailable"],"total":memory["MemTotal"],"swap_free":memory.get("SwapFree",0),"swap_total":memory.get("SwapTotal",0),"pressure":pressure,"cpu":cpu,"disk_percent":disk_percent}
 # Measured admission and compiler parking. Config: build-service/scheduler-defaults.json -> reserve_bytes, reserve_percent, max_phases, max_parked, memory_pressure_percent; protected overrides.
 class AdmissionTimeout(TimeoutError):
     """A pre-effect admission wait can resume through normal host authorization."""

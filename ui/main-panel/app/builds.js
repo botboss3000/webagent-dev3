@@ -251,19 +251,22 @@ export function mountBuilds(panel, onStatus = () => {}) {
   more.append(...scheduler.root.querySelectorAll(':scope > details.build-retained'), leftovers);
   panel.append(toolbar, resources, status, synchronization, list, scheduler.root, more);
 
-  // Draws the scheduler mode, free memory, reserve and pressure as small tiles at the top.
+  // Draws the scheduler mode, free memory, reserve, pressure and disk use as small tiles at the top.
   function renderResources() {
     const mib = bytes => Number.isFinite(bytes) ? (bytes / 1024 ** 3).toFixed(1) + ' GiB' : '—';
     const res = snapshot.resources || {};
     const host = res.host || {};
     const tone = value => !Number.isFinite(value) ? '' : value >= 80 ? 'danger' : value >= 40 ? 'warning' : 'success';
     const percent = value => Number.isFinite(value) ? value + '%' : '—';
+    // The Docker guard starts deleting at 80% disk use.
+    const diskTone = value => !Number.isFinite(value) ? '' : value >= 90 ? 'danger' : value >= 80 ? 'warning' : 'success';
     const tiles = [
       ['Scheduler', snapshot.scheduler?.mode || 'unavailable', ''],
       ['Available RAM', mib(host.available), ''],
       ['Host reserve', mib(res.reserve), ''],
       ['Memory pressure', percent(host.pressure?.memory), tone(host.pressure?.memory)],
-      ['CPU pressure', percent(host.pressure?.cpu), tone(host.pressure?.cpu)]
+      ['CPU pressure', percent(host.pressure?.cpu), tone(host.pressure?.cpu)],
+      ['Disk used', percent(host.disk_percent), diskTone(host.disk_percent)]
     ];
     resources.replaceChildren();
     for (const [label, value, level] of tiles) {
