@@ -16,6 +16,7 @@
     "crates/modules/context/tool-output-retention.json",
     "crates/modules/engine/engine-components.json",
     "crates/modules/engine/gates/*.json",
+    "crates/modules/engine/gates/*.md",
     "crates/modules/engine/loop-runtime.json",
     "crates/modules/files/storage-policy.json",
     "crates/modules/media/voice.json",

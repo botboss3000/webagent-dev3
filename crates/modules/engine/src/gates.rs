@@ -253,9 +253,9 @@ mod tests {
 pub mod controls {
     //! The loop calls gate behavior through these two integral modules.
     pub use super::closing::{
-        agent_closing, closing_schema, closing_status, fallback_status,
-        guidance as closing_guidance, reminder as closing_reminder, AgentClosing, ClosingConfig,
-        FlagSource, FlagSpec, SYSTEM_FLAGS,
+        agent_closing, closer_message, closer_prompt, closing_status, fallback_status,
+        parse_closer, AgentClosing, CloserSettings, ClosingConfig, FlagSource, FlagSpec,
+        SYSTEM_FLAGS,
     };
     pub use super::initial::{
         agent_visibility, working_schema, working_text, AgentVisibility, PromotionMode,
@@ -447,8 +447,11 @@ mod initial {
     }
 }
 mod closing {
-    //! The closing gate records the agent's status flag and short notification before
-    //! publication. `closing_status.json` defines every session flag, agent and system.
+    //! The closing status: a status flag and short notification for the session list. After a
+    //! final reply the run makes one private closing turn on the run's own model: the same
+    //! request plus the reply and `closing_status.md`, so the provider can reuse its cache.
+    //! The answer is never published or kept in history. `closing_status.json` defines every
+    //! session flag, agent and system, and the closing turn's attempts.
     use crate::ports::AgentMetadata;
     use anyhow::{anyhow, bail, Result};
     use serde::{Deserialize, Serialize};
@@ -460,7 +463,7 @@ mod closing {
         ["running", "queued", "awaiting_approval", "stopped", "error"];
     const TONES: [&str; 5] = ["success", "warning", "danger", "info", "neutral"];
 
-    /// Who sets a flag: the agent through the closing call, or the runtime.
+    /// Who sets a flag: the closer from the agent's final reply, or the runtime.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
     #[serde(rename_all = "snake_case")]
     pub enum FlagSource {
@@ -492,12 +495,30 @@ mod closing {
         pub max_chars: usize,
     }
 
+    /// The closing turn: model calls allowed before the fallback status.
+    #[derive(Debug, Clone, Deserialize, Serialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct CloserSettings {
+        pub attempts: u32,
+    }
+    impl Default for CloserSettings {
+        fn default() -> Self {
+            Self { attempts: 2 }
+        }
+    }
+
     #[derive(Debug, Clone, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct ClosingConfig {
-        pub tool_name: String,
+        /// Missing in a config written before the closing turn: two attempts.
+        #[serde(default)]
+        pub closer: CloserSettings,
+        /// The retired closing tool's name. A release reads the live file before promotion
+        /// replaces it, so the old key is accepted and ignored.
+        #[serde(default, rename = "tool_name", skip_serializing)]
+        pub retired_tool_name: Option<String>,
         pub notification: NotificationLimits,
-        /// Flag shown when the agent still sets no valid flag after its reminder; `null`
+        /// Flag shown when the closer gives no valid status within its attempts; `null`
         /// shows none.
         pub fallback_flag: Option<String>,
         /// Share of distinct words a final reply must have in common with the kept closing
@@ -522,8 +543,8 @@ mod closing {
 
         /// Reject a config the runtime or the session list could misread.
         pub fn validate(&self) -> Result<()> {
-            if self.tool_name != "set_closer_status" {
-                bail!("closing tool must be set_closer_status");
+            if !(1..=3).contains(&self.closer.attempts) {
+                bail!("closer attempts must be 1 to 3");
             }
             if !(1..=50).contains(&self.notification.target_words)
                 || !(20..=1000).contains(&self.notification.max_chars)
@@ -606,13 +627,8 @@ mod closing {
             }
         }
     }
-    /// Text written beside the call is published, so the run's final reply must not restate it.
-    const NO_REPEAT: &str = "Text you write in the same response as this call is shown to the \
-        user. If it already gives your full reply, end the run with one short line (for example \
-        pointing to a panel) and never restate it. Do not mention this control tool in the reply.";
-
     impl AgentClosing {
-        /// The status call is offered and checked only when it requires at least one part.
+        /// The closer runs only when the agent requires at least one part.
         pub fn active(&self) -> bool {
             self.enabled && (self.require_flag || self.require_notification)
         }
@@ -643,74 +659,85 @@ mod closing {
         Ok(settings)
     }
 
-    /// The call's instruction, built from the configured agent flags and notification target.
-    pub fn guidance(config: &ClosingConfig, settings: &AgentClosing) -> String {
-        let flags = config
-            .flags
-            .iter()
-            .filter(|flag| flag.source == FlagSource::Agent)
-            .map(|flag| format!("{} = {}", flag.key, flag.meaning.as_deref().unwrap_or("")))
-            .collect::<Vec<_>>()
-            .join("; ");
-        let note = format!(
-            "a notification of about {} words: a glance-sized status or next step shown in the \
-             session list",
-            config.notification.target_words
-        );
-        let parts = match (settings.require_flag, settings.require_notification) {
-            (true, true) => format!("one status flag and {note}"),
-            (true, false) => "one status flag".to_owned(),
-            _ => note.clone(),
-        };
-        let mut text = format!(
-            "Before a final reply, call {} with {parts}.",
-            config.tool_name
-        );
-        if settings.require_flag {
-            text.push_str(&format!(" Flags: {flags}."));
+    /// The closer's live prompt file, beside `closing_status.json`.
+    pub fn closer_prompt() -> Result<String> {
+        let text = webagent_configuration::live::parsed(
+            &format!("{}/closing_status.md", crate::gates::GATE_FOLDER),
+            16 * 1024,
+            webagent_configuration::live::utf8,
+        )?;
+        if text.trim().is_empty() {
+            bail!("closer prompt is empty");
         }
-        text.push(' ');
-        text.push_str(NO_REPEAT);
-        if settings.require_notification && !settings.notification_guidance.trim().is_empty() {
-            text.push_str(
-                "\nFor the private closing notification only, follow this agent guidance:\n",
-            );
-            text.push_str(&settings.notification_guidance);
+        Ok(text)
+    }
+
+    /// The closing turn's private message: the prompt, the agent flags and note target this
+    /// agent requires, its own note guidance, the exact answer format, and, on a retry, what
+    /// was wrong with the previous answer.
+    pub fn closer_message(
+        prompt: &str,
+        config: &ClosingConfig,
+        settings: &AgentClosing,
+        error: Option<&str>,
+    ) -> String {
+        let mut text = prompt.trim().to_owned();
+        let mut format = Vec::new();
+        if settings.require_flag {
+            text.push_str("\n\nFlags:");
+            for flag in config
+                .flags
+                .iter()
+                .filter(|f| f.source == FlagSource::Agent)
+            {
+                let meaning = flag.meaning.as_deref().unwrap_or("");
+                text.push_str(&format!("\n- {}: {meaning}", flag.key));
+            }
+            format.push("flag: <one flag key>");
+        }
+        if settings.require_notification {
+            text.push_str(&format!(
+                "\n\nThe note is about {} words: a glance-sized status or next step shown in \
+                 the session list.",
+                config.notification.target_words
+            ));
+            if !settings.notification_guidance.trim().is_empty() {
+                text.push_str("\nAgent guidance for the note:\n");
+                text.push_str(settings.notification_guidance.trim());
+            }
+            format.push("note: <the note>");
+        }
+        text.push_str("\n\nAnswer with exactly these lines and nothing else, and call no tool:\n");
+        text.push_str(&format.join("\n"));
+        if let Some(error) = error {
+            text.push_str(&format!("\n\nYour previous answer was invalid: {error}."));
         }
         text
     }
 
-    /// The private one-time reminder after a final reply that recorded no valid status.
-    pub fn reminder(config: &ClosingConfig) -> String {
-        format!(
-            "Your reply above recorded no valid closing status. Call {} now. Your reply stands \
-             as written; add text only if it must change, and never repeat it.",
-            config.tool_name
-        )
-    }
-
-    pub fn closing_schema(config: &ClosingConfig, settings: &AgentClosing) -> Value {
-        let mut properties = serde_json::Map::new();
-        let mut required = Vec::new();
-        if settings.require_flag {
-            properties.insert(
-                "flag".into(),
-                json!({"type":"string","enum":config.agent_flags()}),
-            );
-            required.push("flag");
+    /// Read the closer's `flag:` and `note:` lines and validate them like a status.
+    pub fn parse_closer(
+        text: &str,
+        config: &ClosingConfig,
+        settings: &AgentClosing,
+    ) -> Result<Value> {
+        let mut args = serde_json::Map::new();
+        for line in text.lines() {
+            // Models sometimes add list markers, bold or code quotes around keys and values.
+            let mark = |c: char| c.is_whitespace() || matches!(c, '*' | '`' | '"' | '-');
+            let line = line.trim_matches(mark);
+            let Some((key, value)) = line.split_once(':') else {
+                continue;
+            };
+            let field = match key.trim_matches(mark).to_ascii_lowercase().as_str() {
+                "flag" if settings.require_flag => "flag",
+                "note" if settings.require_notification => "notification",
+                _ => continue,
+            };
+            let value = value.trim_matches(mark);
+            args.entry(field).or_insert_with(|| json!(value));
         }
-        if settings.require_notification {
-            let description = format!("About {} words", config.notification.target_words);
-            properties.insert(
-                "notification".into(),
-                json!({"type":"string","description":description}),
-            );
-            required.push("notification");
-        }
-        json!({"type":"function","name":config.tool_name,
-        "description":"Record the final reply status and a short notification before finishing.",
-        "parameters":{"type":"object","additionalProperties":false,
-            "properties":properties,"required":required}})
+        closing_status(&Value::Object(args), config, settings)
     }
 
     /// Validate exactly the parts this agent requires; parts it does not require are absent.
@@ -767,7 +794,7 @@ mod closing {
         Ok(status)
     }
 
-    /// The status recorded when the agent sets none: the configured fallback flag, only for
+    /// The status recorded when the closer gives none: the configured fallback flag, only for
     /// agents that require a flag.
     pub fn fallback_status(config: &ClosingConfig, settings: &AgentClosing) -> Value {
         let mut status = json!({"fallback":true});
@@ -842,6 +869,15 @@ mod closing {
         fn config_rejects_missing_system_flags_and_bad_fallbacks() {
             let config = crate::gates::closing_config().unwrap();
             config.validate().unwrap();
+            // The live file a release reads before promotion has the old shape.
+            let mut old = crate::gates::manifest(crate::gates::CLOSING_STATUS)
+                .unwrap()
+                .config;
+            old.as_object_mut().unwrap().remove("closer");
+            old["tool_name"] = json!("set_closer_status");
+            let old: ClosingConfig = serde_json::from_value(old).unwrap();
+            old.validate().unwrap();
+            assert_eq!(old.closer.attempts, 2);
             let mut missing = config.clone();
             missing.flags.retain(|flag| flag.key != "awaiting_approval");
             assert!(missing.validate().is_err());
@@ -867,11 +903,9 @@ mod closing {
                 require_notification: false,
                 ..AgentClosing::default()
             };
-            let schema = closing_schema(&config, &flag_only);
-            assert_eq!(schema["parameters"]["required"], json!(["flag"]));
             assert_eq!(
-                schema["parameters"]["properties"]["flag"]["enum"],
-                json!(["complete", "needs_input", "waiting", "unverified", "failed"])
+                config.agent_flags(),
+                ["complete", "needs_input", "waiting", "unverified", "failed"]
             );
             let status = closing_status(&json!({"flag":"complete"}), &config, &flag_only).unwrap();
             assert_eq!(status["flag"], "complete");
@@ -882,7 +916,7 @@ mod closing {
                 &flag_only
             )
             .is_err());
-            assert!(!guidance(&config, &flag_only).contains("notification"));
+            assert!(!closer_message("P", &config, &flag_only, None).contains("note:"));
             let note_only = AgentClosing {
                 require_flag: false,
                 ..AgentClosing::default()
@@ -890,7 +924,7 @@ mod closing {
             let status =
                 closing_status(&json!({"notification":"Done"}), &config, &note_only).unwrap();
             assert!(status.get("flag").is_none());
-            assert!(!guidance(&config, &note_only).contains("Flags:"));
+            assert!(!closer_message("P", &config, &note_only, None).contains("Flags:"));
             assert!(!AgentClosing {
                 enabled: false,
                 ..AgentClosing::default()
@@ -907,25 +941,56 @@ mod closing {
             assert!(saved.active() && saved.require_flag && saved.require_notification);
         }
         #[test]
-        fn agent_guidance_lists_flag_meanings_and_appends_agent_text() {
+        fn closer_message_lists_flag_meanings_and_appends_agent_text() {
             let config = crate::gates::closing_config().unwrap();
             let settings = AgentClosing {
                 notification_guidance: "Name the next step".into(),
                 ..AgentClosing::default()
             };
             settings.validate().unwrap();
-            let combined = guidance(&config, &settings);
-            assert!(combined.starts_with("Before a final reply, call set_closer_status"));
+            let prompt = closer_prompt().unwrap();
+            let combined = closer_message(&prompt, &config, &settings, None);
+            assert!(combined.starts_with(prompt.trim()));
             assert!(combined.contains("about 5 words"));
-            assert!(combined.contains("waiting = you are waiting on background work"));
+            assert!(combined.contains("- waiting: you are waiting on background work"));
             assert!(!combined.contains("unflagged"));
             assert!(combined.contains("Name the next step"));
+            assert!(combined.ends_with("flag: <one flag key>\nnote: <the note>"));
+            let retry = closer_message(&prompt, &config, &settings, Some("flag is missing"));
+            assert!(retry.ends_with("Your previous answer was invalid: flag is missing."));
             assert!(AgentClosing {
                 notification_guidance: "x".repeat(4097),
                 ..AgentClosing::default()
             }
             .validate()
             .is_err());
+        }
+        #[test]
+        fn closer_answers_parse_strictly() {
+            let config = crate::gates::closing_config().unwrap();
+            let all = AgentClosing::default();
+            let status =
+                parse_closer("flag: needs_input\nnote: Links shared", &config, &all).unwrap();
+            assert_eq!(status["flag"], "needs_input");
+            assert_eq!(status["notification"], "Links shared");
+            assert_eq!(status["fallback"], false);
+            let marked = parse_closer("**Flag:** `complete`\n- Note: \"Done\"", &config, &all);
+            assert_eq!(marked.unwrap()["notification"], "Done");
+            for bad in [
+                "note: Done",
+                "flag: complete",
+                "flag: done\nnote: x",
+                "",
+                "flag: complete\nnote:",
+            ] {
+                assert!(parse_closer(bad, &config, &all).is_err(), "{bad}");
+            }
+            let flag_only = AgentClosing {
+                require_notification: false,
+                ..AgentClosing::default()
+            };
+            let status = parse_closer("flag: complete\nnote: ignored", &config, &flag_only);
+            assert!(status.unwrap().get("notification").is_none());
         }
     }
 }

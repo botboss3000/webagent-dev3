@@ -169,16 +169,10 @@ pub(super) async fn grant_ceiling(
 }
 /// Chat controls the run loop owns, shown under Base as fixed. They are exempt from the
 /// repeat guard and have no permission, execution or retry settings.
-const RUNTIME_CONTROLS: &[(&str, &str)] = &[
-    (
-        "set_closer_status",
-        "Record how the agent's turn ends (complete or needs input) before the final reply.",
-    ),
-    (
-        "publish_main_message",
-        "Publish the agent's reply to the main chat.",
-    ),
-];
+const RUNTIME_CONTROLS: &[(&str, &str)] = &[(
+    "publish_main_message",
+    "Publish the agent's reply to the main chat.",
+)];
 
 async fn catalog(app: &App, identity: &Value, id: &str, params: &HashMap<String, String>) -> Api {
     // The Abilities page is operator-only; members get abilities through their sessions.

@@ -559,14 +559,6 @@ const COMPILED: &[(&str, &[&str], &[&str])] = &[
         &["vault", "keys"],
     ),
     (
-        "set_closer_status",
-        &[
-            "mark the turn complete",
-            "say the task needs the user's input",
-        ],
-        &["complete", "needs input"],
-    ),
-    (
         "publish_main_message",
         &[
             "post a progress message to the main chat",

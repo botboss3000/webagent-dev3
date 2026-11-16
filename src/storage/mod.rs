@@ -2775,7 +2775,7 @@ mod tests {
             .unwrap();
         run["model_turn"] = json!(2);
         store
-            .save_run(&mut run, "model_output", &call("set_closer_status"))
+            .save_run(&mut run, "model_output", &call("present_chat_component"))
             .await
             .unwrap();
         run["model_turn"] = json!(3);

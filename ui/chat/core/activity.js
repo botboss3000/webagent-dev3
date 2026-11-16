@@ -75,7 +75,7 @@ export function preloadRow(event) {
   return {id:event.event_id,category:'preloads',preload:true,label,text,events:[event]};
 }
 
-/** Projects journal events into grouped tool, message, mode, compaction, retry and preload rows for activityGroups. */
+/** Projects journal events into grouped tool, message, mode, compaction, retry, preload and closer rows for activityGroups. */
 export function activityRows(events) {
   const rows=[], tools=new Map(), messages=new Map(), controls=new Set();
   let compaction=null;
@@ -119,6 +119,12 @@ export function activityRows(events) {
     } else if (kind === 'preload') {
       // What the matcher preloaded or suggested for a user message before the agent's next call.
       rows.push(preloadRow(event));
+    } else if (kind === 'closing_status') {
+      // The System-role closer's session status; a failed attempt reads like a failed tool call.
+      const text=p.error?'Attempt '+p.attempt+' of '+p.of+' failed: '+p.error+(p.fallback?'\n\nFallback status recorded.':'')
+        :[p.flag,p.notification].filter(Boolean).join(' · ');
+      rows.push({id:event.event_id,category:'closers',closer:true,failed:!!p.error,model:p.model||'',
+        label:'Closing status'+(p.error?'':p.flag?' · '+p.flag:''),text,events:[event]});
     } else if (kind === 'compaction_call') {
       // One expandable row per compaction: the call opens it and its result fills it.
       const reason={automatic:' · automatic, context limit',requested:' · requested by agent'}[p.reason]||'';

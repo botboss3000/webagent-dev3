@@ -10630,10 +10630,12 @@ async fn provider_recovery_retries_stream_failure_and_publishes_one_final_reply(
     server.abort();
 }
 
-/// A final reply without a closing status gets one private reminder. A status-only answer
-/// publishes the reminded reply with the agent's flag; a second miss uses the fallback flag.
+/// A final reply is followed by one private closing turn on the same model. Its request
+/// repeats the final call's request (for the provider cache) plus the reply and the closer
+/// message; the answer sets the session status and is never published. An invalid answer is
+/// retried with its error, then the fallback applies. Each run publishes its reply once.
 #[tokio::test]
-async fn closing_reminder_runs_once_then_publishes_with_flag_or_fallback() {
+async fn closing_turn_reuses_the_request_and_sets_the_status() {
     use axum::{routing::post, Router};
     use std::sync::atomic::AtomicUsize;
     let (_root, mut app) = fixture().await;
@@ -10642,35 +10644,45 @@ async fn closing_reminder_runs_once_then_publishes_with_flag_or_fallback() {
     runtime["workflow"]["modules"] = json!({"publication":["closing_status"]});
     std::fs::write(&app.runtime_path, serde_json::to_vec(&runtime).unwrap()).unwrap();
     let count = Arc::new(AtomicUsize::new(0));
-    let bodies = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
     let (seen, kept) = (count.clone(), bodies.clone());
-    let mock = Router::new().route("/responses", post(move |body: String| {
-        let (seen, kept) = (seen.clone(), kept.clone());
-        async move {
-            kept.lock().unwrap().push(body);
-            let text = |text: &str| json!({"type":"message","role":"assistant",
+    let mock = Router::new().route(
+        "/responses",
+        post(move |body: String| {
+            let (seen, kept) = (seen.clone(), kept.clone());
+            async move {
+                kept.lock()
+                    .unwrap()
+                    .push(serde_json::from_str(&body).unwrap_or(Value::Null));
+                let text = match seen.fetch_add(1, Ordering::SeqCst) {
+                    0 => "Final answer",
+                    1 => "flag: complete\nnote: All done",
+                    2 => "Second answer",
+                    3 => "I think it went well",
+                    _ => "flag: finished",
+                };
+                let output = json!({"type":"message","role":"assistant",
                 "content":[{"type":"output_text","text":text}]});
-            let output = match seen.fetch_add(1, Ordering::SeqCst) {
-                0 => text("Final answer"),
-                1 => json!({"type":"function_call","call_id":"close-1","name":"set_closer_status",
-                    "arguments":"{\"flag\":\"complete\",\"notification\":\"All done\"}"}),
-                2 => text("Second answer"),
-                _ => text("Second answer again"),
-            };
-            let event = json!({"type":"response.completed",
+                let event = json!({"type":"response.completed",
                 "response":{"status":"completed","output":[output]}});
-            ([("content-type","text/event-stream")], format!("data: {event}\n\n"))
-        }
-    }));
+                (
+                    [("content-type", "text/event-stream")],
+                    format!("data: {event}\n\n"),
+                )
+            }
+        }),
+    );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         axum::serve(listener, mock).await.unwrap();
     });
     app.provider = provider::Provider::for_test(format!("http://{address}/responses"));
+    // Both runs share one session: from its second run on, the request's opening items
+    // are already placed, as in any ongoing conversation.
+    let sid = conversation(&app).await;
     let mut sessions = Vec::new();
     for attempt in ["first", "second"] {
-        let sid = conversation(&app).await;
         let id = queued(&app, &sid).await;
         running(&app, &id, attempt).await;
         execute_run(
@@ -10681,45 +10693,79 @@ async fn closing_reminder_runs_once_then_publishes_with_flag_or_fallback() {
         )
         .await
         .unwrap();
-        assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
-        sessions.push(sid);
+        let run = app.run(&id).await.unwrap();
+        assert_eq!(run["status"], "completed");
+        assert!(run["closing_turn"].is_null());
+        sessions.push((sid.clone(), id));
     }
-    assert_eq!(count.load(Ordering::SeqCst), 4, "one reminder call per run");
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        5,
+        "reply, closer; reply, two closers"
+    );
     let bodies = bodies.lock().unwrap();
-    assert!(bodies[1].contains("recorded no valid closing status"));
-    assert!(!bodies[0].contains("recorded no valid closing status"));
-    let replies = |rows: &[Value]| {
-        rows.iter()
-            .filter(|row| row["role"] == "assistant")
-            .map(|row| row["content"].to_string())
-            .collect::<Vec<_>>()
-    };
-    let (first_chat, _) = app.store.chat_snapshot(&sessions[0]).await.unwrap();
-    let first_replies = replies(&first_chat);
-    assert_eq!(first_replies.len(), 1);
-    assert!(first_replies[0].contains("Final answer"));
-    let first = app
+    let input = |i: usize| bodies[i]["input"].as_array().unwrap().clone();
+    // The second run's closing request repeats its final request's opening (instructions,
+    // tools and placed guidance, which providers cache by prefix); the per-call tool menu
+    // follows the history, so it comes after the reply, then the closer message.
+    let (final_input, closing_input) = (input(2), input(3));
+    let opening = closing_input[0]["content"].as_str().unwrap();
+    assert!(opening.len() > 1000);
+    assert!(final_input[0]["content"]
+        .as_str()
+        .unwrap()
+        .starts_with(opening));
+    assert_eq!(final_input[1..], closing_input[1..final_input.len()]);
+    let shared = final_input.len();
+    assert_eq!(bodies[2]["instructions"], bodies[3]["instructions"]);
+    assert_eq!(bodies[2]["tools"], bodies[3]["tools"]);
+    assert!(closing_input[shared].to_string().contains("Second answer"));
+    let message = closing_input.last().unwrap().to_string();
+    assert!(
+        message.contains("Your reply above is final") && message.contains("flag: <one flag key>")
+    );
+    assert!(!message.contains("previous answer was invalid"));
+    assert!(input(4)
+        .last()
+        .unwrap()
+        .to_string()
+        .contains("previous answer was invalid"));
+    assert!(!bodies
+        .iter()
+        .any(|body| body.to_string().contains("set_closer_status")));
+    // Each run published its own reply once; closing answers were never published.
+    let (chat, _) = app.store.chat_snapshot(&sid).await.unwrap();
+    let replies = chat
+        .iter()
+        .filter(|row| row["role"] == "assistant")
+        .map(|row| row["content"].to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(replies.len(), 2);
+    assert!(replies[0].contains("Final answer") && replies[1].contains("Second answer"));
+    let first = app.run(&sessions[0].1).await.unwrap();
+    assert_eq!(first["closing"]["flag"], "complete");
+    assert_eq!(first["closing"]["notification"], "All done");
+    let session = app
         .store
-        .get(&format!("session:{}", sessions[0]))
+        .get(&format!("session:{sid}"))
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(first["flag"], "complete");
-    assert_eq!(first["flag_source"], "agent");
-    assert_eq!(first["notification"], "All done");
-    assert_eq!(first["flag_dismissed"], false);
-    let (second_chat, _) = app.store.chat_snapshot(&sessions[1]).await.unwrap();
-    let second_replies = replies(&second_chat);
-    assert_eq!(second_replies.len(), 1);
-    assert!(second_replies[0].contains("Second answer again"));
-    let second = app
+    assert_eq!(
+        (session["flag"].as_str(), session["flag_source"].as_str()),
+        (Some("unflagged"), Some("system"))
+    );
+    // Closing answers stay out of later context; their attempts are activity rows.
+    let (sid, rid) = &sessions[1];
+    let activity = app
         .store
-        .get(&format!("session:{}", sessions[1]))
+        .private_run_activity(sid, rid, 0)
         .await
         .unwrap()
-        .unwrap();
-    assert_eq!(second["flag"], "unflagged");
-    assert_eq!(second["flag_source"], "system");
+        .to_string();
+    assert!(activity.contains("closing_status") && activity.contains("fallback"));
+    let run = app.run(rid).await.unwrap();
+    assert!(!run["input"].to_string().contains("went well"));
     server.abort();
 }
 
@@ -11671,7 +11717,7 @@ async fn cancelling_a_finished_run_is_a_conflict_not_a_storage_failure() {
     assert_eq!(app.run(&id).await.unwrap()["status"], "completed");
 }
 
-/// A closing status answered in the same model response is saved after its call, so
+/// A tool result answered in the same model response is saved after its call, so
 /// the next turn's history pairs every tool result with an earlier call.
 #[tokio::test]
 async fn same_response_tool_result_is_saved_after_its_call() {
@@ -11680,7 +11726,7 @@ async fn same_response_tool_result_is_saved_after_its_call() {
     let id = queued(&app, &sid).await;
     let mut run = app.run(&id).await.unwrap();
     run["turns"] = json!(1);
-    let call = json!({"type":"function_call","call_id":"closer-call","name":"set_closer_status","arguments":"{}"});
+    let call = json!({"type":"function_call","call_id":"closer-call","name":"present_chat_component","arguments":"{}"});
     let output = json!({"type":"function_call_output","call_id":"closer-call","output":"{}"});
     run["input"]
         .as_array_mut()

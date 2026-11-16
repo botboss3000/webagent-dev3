@@ -680,16 +680,22 @@ the run continues; without `text` it publishes the assistant message written
 before the call in the same reply, so the model never retypes it. Its chat ID
 names the repeated reply messages (`:echo:<ordinals>`; automatic promotion uses
 `:auto:<turn>:<ordinal>`), and the activity log hides those messages, each
-completed run's final reply and the control call. The closing module offers private `set_closer_status`
-with one of the agent flags `closing_status.json` defines and a notification
-of about its `target_words` (cut silently at `max_chars`). The same file defines
-the system flags, each flag's label and colour role, and `fallback_flag`. A
-final reply without a valid status gets one private reminder turn; after that
-the run publishes with the fallback flag (or none when it is `null`). When a run
-ends, Rust writes the session's `flag`, `flag_source`, `notification`,
-`flag_run_id`, `flag_set_at` and `flag_dismissed`: the agent's status after a
-normal finish, otherwise `error` or `stopped`. Its status does not itself
-publish a reply.
+completed run's final reply and the control call. The agent sets no closing
+status while it works. After its final reply the run makes one private closing
+turn on the same model: the final call's request plus the reply and the closer
+message `gates/closing_status.md`, so the provider can reuse its cached prefix
+(the per-call tool menu follows the history, so it comes after the reply). The
+answer must be `flag:` (one of the agent flags `closing_status.json` defines)
+and `note:` (about `target_words`, cut silently at `max_chars`). It is never
+published or kept in history; an invalid answer, a tool call or a failed call is
+retried with its error up to `closer.attempts`, then the run records
+`fallback_flag` (or none when it is `null`). Each attempt is a `closing:`
+activity row. The reply then publishes exactly as written. A sent-now message
+waits for the short closing call instead of cancelling it. The same file defines
+the system flags and each flag's label and colour role. When a run ends, Rust
+writes the session's `flag`, `flag_source`, `notification`, `flag_run_id`,
+`flag_set_at` and `flag_dismissed`: the closing status after a normal finish,
+otherwise `error` or `stopped`.
 
 The optional `publication_size_guard_v1` descriptor and handler live in
 `v3/plugins/gates/publication_size_guard_v1/` and are packaged with the isolated Python gate. A

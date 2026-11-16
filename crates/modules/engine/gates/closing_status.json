@@ -4,7 +4,9 @@
   "checkpoint": "publication",
   "runtime": "rust",
   "config": {
-    "tool_name": "set_closer_status",
+    "closer": {
+      "attempts": 2
+    },
     "notification": {
       "target_words": 5,
       "max_chars": 200

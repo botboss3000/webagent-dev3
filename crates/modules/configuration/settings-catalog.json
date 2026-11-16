@@ -69,6 +69,7 @@
     "crates/modules/configuration/prompts/tool_result_deduplication/*.md": "Prompts are never offered by the composer (Q1).",
     "crates/modules/engine/engine-components.json": "Engine component wiring; not offered in v1.",
     "crates/modules/engine/gates/*.json": "Gate manifests; changed only with the gates themselves.",
+    "crates/modules/engine/gates/*.md": "Gate prompts (the closing turn's message); prompts are never offered by the composer (Q1).",
     "crates/modules/models/providers/*.json": "Provider definitions and connections; credentials are never offered (Q1).",
     "src/plugin_packages/diagnostics/diagnostics.json": "Diagnostics package configuration; not offered in v1."
   }

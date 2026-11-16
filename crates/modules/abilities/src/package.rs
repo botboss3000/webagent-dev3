@@ -474,10 +474,7 @@ impl Package {
                 || !names.insert(name)
                 || native.iter().any(|s| s["name"] == name)
                 || crate::is_discovery(name)
-                || matches!(
-                    name,
-                    "publish_main_message" | "set_closer_status" | "codebase_admin_protocol"
-                )
+                || matches!(name, "publish_main_message" | "codebase_admin_protocol")
                 || ["administrator_", "v3_", "ability_plugin", "mcp_"]
                     .iter()
                     .any(|prefix| name.starts_with(prefix))

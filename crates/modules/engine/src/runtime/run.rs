@@ -149,10 +149,6 @@ pub fn pair_unresolved_calls(input: &mut Vec<Value>) {
         index = end + added;
     }
 }
-/// Identical lone closing statuses tolerated before the run stops; models have
-/// looped on the closer for the whole turn budget without ever replying.
-const CLOSER_REPEAT_LIMIT: u64 = 2;
-/// Consecutive repeats of the same closing status; any other tool clears `closing`.
 /// Serialized request bytes per provider token for this call. A previous call in the run
 /// that reported usage for the same model gives the measured ratio; otherwise the model's
 /// provider file may set one. `None` keeps the app-wide `characters_per_token`.
@@ -192,51 +188,6 @@ fn history_shape(history: &[Value]) -> String {
         })
         .collect::<Vec<_>>()
         .join(",")
-}
-
-/// Whether the run's one closing reminder is due on the next model call.
-fn closing_reminder_pending(run: &Value) -> bool {
-    run["closing_reminder"]["text"].is_string() && run["closing_reminder"]["done"] != true
-}
-
-/// Queue an activity row saying the run reminded the agent to set its closing status.
-fn closing_reminder_activity(run: &mut Value) {
-    let entry = json!({"step":format!("closing:reminder:{}", model_turn(run)),
-        "item":{"type":"closing_reminder"}});
-    match run["_activity_items"].as_array_mut() {
-        Some(items) => items.push(entry),
-        None => run["_activity_items"] = json!([entry]),
-    }
-}
-
-fn closer_repeats(run: &Value, status: &Value) -> u64 {
-    if run["closing"] == *status {
-        run["closing_repeats"].as_u64().unwrap_or(0) + 1
-    } else {
-        0
-    }
-}
-
-#[cfg(test)]
-mod closer_repeat_tests {
-    use super::*;
-    #[test]
-    fn only_consecutive_identical_closing_statuses_count_as_repeats() {
-        let done = json!({"flag":"complete","notification":"Done"});
-        let mut run = json!({});
-        for expected in 0..=CLOSER_REPEAT_LIMIT {
-            let repeats = closer_repeats(&run, &done);
-            assert_eq!(repeats, expected);
-            run["closing_repeats"] = json!(repeats);
-            run["closing"] = done.clone();
-        }
-        assert_eq!(
-            closer_repeats(&run, &json!({"flag":"blocked","notification":"Waiting"})),
-            0
-        );
-        run["closing"] = Value::Null; // another tool ran in between
-        assert_eq!(closer_repeats(&run, &done), 0);
-    }
 }
 
 #[cfg(test)]
@@ -631,7 +582,6 @@ impl<
                         call["name"].as_str(),
                         Some(
                             "publish_main_message"
-                                | "set_closer_status"
                                 | "compact_context"
                                 | "v3_build_work"
                                 | "build_work"
@@ -646,7 +596,6 @@ impl<
             // never enter a parallel batch or the Python tool worker.
             // Discovery changes what later calls may use, so a batch that
             // contains it runs serially and each call sees the result.
-            run["closing"] = Value::Null;
             Self::execute_parallel_batch(
                 &app,
                 &id,
@@ -678,12 +627,7 @@ impl<
             Some(Ok(v)) if v.is_object() => v,
             _ => json!({"invalid_arguments":true}),
         };
-        if name != "set_closer_status" {
-            // A later tool means the earlier closer no longer describes
-            // the eventual final reply.
-            run["closing"] = Value::Null;
-        }
-        if matches!(name.as_str(), "publish_main_message" | "set_closer_status") {
+        if name == "publish_main_message" {
             // NATIVE-CONTROL-DISPATCH: reserved calls never request approval
             // or enter the Python worker. Rust checks activation and arguments.
             let call_id = call["call_id"].as_str().filter(|value| {
@@ -695,23 +639,11 @@ impl<
                 app.save(&mut run).await?;
                 return Ok(std::ops::ControlFlow::Break(()));
             };
-            let checkpoint = if name == "publish_main_message" {
-                workflow::Checkpoint::ModelDispatch
-            } else {
-                workflow::Checkpoint::Publication
-            };
-            let module_id = if name == "publish_main_message" {
-                gate_registry::MESSAGE_VISIBILITY
-            } else {
-                gate_registry::CLOSING_STATUS
-            };
-            let closing: gate_controls::AgentClosing =
-                serde_json::from_value(run["closing_settings"].clone()).unwrap_or_default();
-            let enabled = gate_registry::selected(&workflow_policy, checkpoint)?
-                .iter()
-                .any(|item| item.id == module_id)
-                && (name != "publish_main_message" || run["promotion_mode"] == "manual")
-                && (name != "set_closer_status" || closing.active());
+            let enabled =
+                gate_registry::selected(&workflow_policy, workflow::Checkpoint::ModelDispatch)?
+                    .iter()
+                    .any(|item| item.id == gate_registry::MESSAGE_VISIBILITY)
+                    && run["promotion_mode"] == "manual";
             workflow::record(
                 &mut run,
                 &workflow_policy,
@@ -729,9 +661,8 @@ impl<
             let mut working_text = None;
             let mut echoed = Vec::new();
             let result = if !enabled {
-                run["closing"] = Value::Null;
                 json!({"status":"denied","output":"Private control is not enabled"})
-            } else if name == "publish_main_message" {
+            } else {
                 let (preceding, ordinals) = engine_output::preceding_message(
                     run["input"].as_array().map_or(&[][..], Vec::as_slice),
                     call_id,
@@ -747,33 +678,8 @@ impl<
                     Err(error) => json!({"status":"denied",
                         "output":format!("Invalid working message: {error}")}),
                 }
-            } else {
-                let config = gate_registry::closing_config()?;
-                match gate_controls::closing_status(&args, &config, &closing) {
-                    Ok(status) => {
-                        let repeats = closer_repeats(&run, &status);
-                        run["closing_repeats"] = json!(repeats);
-                        run["closing"] = status;
-                        json!({"status":"ok","output":if repeats==0 {"Closing status recorded"}
-                                else {"Closing status already recorded; reply to the user now in plain text without tool calls"}})
-                    }
-                    Err(error) => {
-                        run["closing"] = gate_controls::fallback_status(&config, &closing);
-                        json!({"status":"denied","output":format!(
-                                "Invalid closing status: {error}. No status recorded; call again with a valid status")})
-                    }
-                }
             };
             Self::append_tool(&mut run, &result)?;
-            if name == "set_closer_status"
-                && run["closing_repeats"].as_u64().unwrap_or(0) >= CLOSER_REPEAT_LIMIT
-            {
-                run["status"] = json!("failed");
-                run["error"] =
-                    json!("Model kept repeating its closing status without a final reply");
-                app.save(&mut run).await?;
-                return Ok(std::ops::ControlFlow::Break(()));
-            }
             if let Some(text) = working_text {
                 let mut message_id = format!("working:{id}:{}:{idx}", model_turn(&run));
                 // `:echo:<ordinals>` names the reply messages this bubble repeats word for word,
@@ -2218,30 +2124,8 @@ impl<
                     // Agent Identity selects whether the status runs and which parts it requires.
                     let closing =
                         gate_controls::agent_closing(app.store.records(), &agent_id).await?;
-                    // Publication and the status control reuse these settings for this call.
+                    // A final reply reuses these settings to queue the closer.
                     run["closing_settings"] = serde_json::to_value(&closing)?;
-                    if closing.active() {
-                        let config = gate_registry::closing_config()?;
-                        gate_schemas.push(gate_controls::closing_schema(&config, &closing));
-                        contributions.push(context_input::Contribution {
-                            id: "gate_closing_status".into(),
-                            source: "native_gate_config".into(),
-                            lifetime: context_input::Lifetime::Call,
-                            content: gate_controls::closing_guidance(&config, &closing),
-                            turn: run["turns"].as_u64().unwrap_or(0),
-                            call: call_number,
-                        });
-                        if closing_reminder_pending(&run) {
-                            contributions.push(context_input::Contribution {
-                                id: "gate_closing_reminder".into(),
-                                source: "native_gate_config".into(),
-                                lifetime: context_input::Lifetime::Call,
-                                content: gate_controls::closing_reminder(&config),
-                                turn: run["turns"].as_u64().unwrap_or(0),
-                                call: call_number,
-                            });
-                        }
-                    }
                 }
                 // COMPACTION CONFIG: reread the single external JSON at each call boundary.
                 // Agent Identity can override the two history thresholds. Hold the
@@ -3075,6 +2959,19 @@ impl<
                         bridge,
                     );
                 }
+                // CLOSING TURN: the same request plus a private closer message, kept out of
+                // history, so the provider can reuse its cached prefix.
+                if run["closing_turn"].is_object() {
+                    let settings: gate_controls::AgentClosing =
+                        serde_json::from_value(run["closing_settings"].clone()).unwrap_or_default();
+                    let message = gate_controls::closer_message(
+                        &gate_controls::closer_prompt().unwrap_or_default(),
+                        &gate_registry::closing_config()?,
+                        &settings,
+                        run["closing_turn"]["error"].as_str(),
+                    );
+                    projected_input.push(json!({"role":"user","content":message}));
+                }
                 let prepared_provider = match crate::provider::CallDraft::new(
                     &selection,
                     projected_input,
@@ -3249,6 +3146,9 @@ impl<
                 // Response handling below reloads authoritative state under the gate.
                 // "Send now" cancels only this model call; the run token stays live.
                 let model_cancel = cancel.child_token();
+                // A closing turn is short and its reply is already final: a sent-now message
+                // waits for it rather than cancelling it.
+                let closing_turn = current["closing_turn"].is_object();
                 let steer_probe = json!({"session_id":current["session_id"],
                     "requester_user_id":current["requester_user_id"]});
                 drop(current);
@@ -3279,7 +3179,7 @@ impl<
                             _=cancel.cancelled()=>break Err(anyhow!("Execution cancelled")),
                             r=&mut completion=>break r,
                             _=tokio::time::sleep(Duration::from_millis(250))=>{
-                                if app.message_forced(&steer_probe).await.unwrap_or(false) {
+                                if !closing_turn && app.message_forced(&steer_probe).await.unwrap_or(false) {
                                     model_cancel.cancel();
                                     break Err(anyhow!("Model call replaced by a sent-now message"));
                                 }
@@ -3323,6 +3223,13 @@ impl<
                 // Reset the bounded freshness retries only after the provider was polled.
                 // A change detected by the final source fence must retain its prior count.
                 run["context_rebuilds"] = json!(0);
+                // A failed closing call never pauses or fails the run: it counts as an attempt.
+                let response = match response {
+                    Err(error) if run["closing_turn"].is_object() && !cancel.is_cancelled() => {
+                        Ok(json!({"output":[],"closer_error":error.to_string()}))
+                    }
+                    other => other,
+                };
                 match response {
                     Err(error) => {
                         if cancel.is_cancelled() {
@@ -3374,7 +3281,28 @@ impl<
                             );
                         }
                         let output = &output;
-                        let mut calls =
+                        let closing_reply = if run["closing_turn"].is_object() {
+                            match closing_answer(&mut run, output, &response, &selection)? {
+                                Some(reply) => Some(reply),
+                                None => {
+                                    // Ask again with the error; nothing enters history.
+                                    run["phase"] = json!("model");
+                                    app.save(&mut run).await?;
+                                    continue;
+                                }
+                            }
+                        } else {
+                            None
+                        };
+                        // The closing answer is never published or kept: the run finishes
+                        // with the reply it already wrote.
+                        let no_output = Vec::new();
+                        let output = if closing_reply.is_some() {
+                            &no_output
+                        } else {
+                            output
+                        };
+                        let calls =
                             engine_output::tool_calls(output, crate::tool_output::CONTROL_NAME);
                         for item in output {
                             run["input"]
@@ -3382,7 +3310,7 @@ impl<
                                 .expect("run input is an array")
                                 .push(item.clone());
                         }
-                        let mut text = engine_output::text(output);
+                        let text = closing_reply.unwrap_or_else(|| engine_output::text(output));
                         let publication_policy = app.current_workflow_policy().await?;
                         workflow::record(
                             &mut run,
@@ -3407,65 +3335,6 @@ impl<
                             )?
                             .iter()
                             .any(|item| item.id == gate_registry::CLOSING_STATUS);
-                        // This output answers the one closing reminder; it is never sent again.
-                        let reminded = closing_reminder_pending(&run);
-                        if reminded {
-                            run["closing_reminder"]["done"] = json!(true);
-                        }
-                        // CLOSING-SAME-RESPONSE: the private status tool may accompany
-                        // the final prose. Validate it here, then let the existing
-                        // terminal transaction publish that prose exactly once. After a
-                        // reminder the call may come alone: the reminded reply stands.
-                        if closing_enabled
-                            && calls.len() == 1
-                            && calls[0]["name"] == "set_closer_status"
-                            && (!text.trim().is_empty() || reminded)
-                        {
-                            let config = gate_registry::closing_config()?;
-                            let call_id = calls[0]["call_id"].as_str().filter(|value| {
-                                !value.is_empty()
-                                    && value.len() <= 128
-                                    && !value.chars().any(char::is_control)
-                            });
-                            let arguments = calls[0]["arguments"]
-                                .as_str()
-                                .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
-                            let checked = arguments
-                                .as_ref()
-                                .ok_or_else(|| {
-                                    anyhow!("Closing status arguments must be a JSON object")
-                                })
-                                .and_then(|args| {
-                                    gate_controls::closing_status(args, &config, &closing)
-                                });
-                            let rejection = checked.as_ref().err().map(ToString::to_string);
-                            let accepted = call_id.and(checked.ok());
-                            run["closing"] = accepted.clone().unwrap_or_else(|| {
-                                gate_controls::fallback_status(&config, &closing)
-                            });
-                            if let Some(call_id) = call_id {
-                                let result = json!({"status":if accepted.is_some() {"ok"} else {"denied"},
-                                "output":match rejection {
-                                    None=>"Closing status recorded".to_owned(),
-                                    Some(error)=>format!("Invalid closing status: {error}"),
-                                }});
-                                run["input"]
-                                    .as_array_mut()
-                                    .expect("run input is a JSON array")
-                                    .push(json!({
-                                "type":"function_call_output","call_id":call_id,
-                                "output":result.to_string()}));
-                            }
-                            calls.clear();
-                            run["calls"] = json!([]);
-                        }
-                        // A reminder answered with no new text publishes the reminded reply.
-                        if reminded && calls.is_empty() && text.trim().is_empty() {
-                            text = run["closing_reminder"]["text"]
-                                .as_str()
-                                .unwrap_or_default()
-                                .to_owned();
-                        }
                         if calls.is_empty() {
                             if text.trim().is_empty() {
                                 let continuations =
@@ -3503,46 +3372,19 @@ impl<
                                     .await?;
                                 return Ok(());
                             }
-                            if closing_enabled {
-                                // CLOSING-REMINDER: a reply without a valid status gets one
-                                // private reminder turn; after that it publishes with the
-                                // configured fallback, never blocking a valid final reply.
-                                let config = gate_registry::closing_config()?;
-                                let valid = run["closing"]["fallback"] == false
-                                    && gate_controls::closing_status(
-                                        &run["closing"]
-                                            .as_object()
-                                            .map(|status| {
-                                                status
-                                                    .iter()
-                                                    .filter(|(key, _)| *key != "fallback")
-                                                    .map(|(key, value)| {
-                                                        (key.clone(), value.clone())
-                                                    })
-                                                    .collect::<serde_json::Map<_, _>>()
-                                            })
-                                            .map_or(Value::Null, Value::Object),
-                                        &config,
-                                        &closing,
+                            // CLOSING TURN: the reply is final; before it publishes, one more
+                            // call on this model asks for the status (see `closing_answer`).
+                            if closing_enabled && run["closing"].is_null() {
+                                run["closing_turn"] = json!({"text":text,"attempts":0});
+                                run["phase"] = json!("model");
+                                app.store
+                                    .save_run_observed(
+                                        &mut run,
+                                        "model_output",
+                                        &json!({"output":output}),
                                     )
-                                    .is_ok();
-                                if !valid && run["closing_reminder"].is_null() {
-                                    run["closing_reminder"] = json!({"text":text,"done":false});
-                                    closing_reminder_activity(&mut run);
-                                    run["phase"] = json!("model");
-                                    app.store
-                                        .save_run_observed(
-                                            &mut run,
-                                            "model_output",
-                                            &json!({"output":output}),
-                                        )
-                                        .await?;
-                                    continue;
-                                }
-                                if !valid {
-                                    run["closing"] =
-                                        gate_controls::fallback_status(&config, &closing);
-                                }
+                                    .await?;
+                                continue;
                             }
                             if text.len() > publication_policy.max_publication_bytes {
                                 workflow::record(
@@ -3714,6 +3556,60 @@ fn compaction_activity(run: &mut Value, step: String, item: Value) {
         Some(items) => items.push(entry),
         None => run["_activity_items"] = json!([entry]),
     }
+}
+
+/// Read one closing-turn answer. A valid `flag:`/`note:` answer, or the last attempt's
+/// fallback, sets `closing` and returns the reply to publish; otherwise the next attempt
+/// carries the error. Each attempt is a `closing:` activity row, never model context.
+fn closing_answer(
+    run: &mut Value,
+    output: &[Value],
+    response: &Value,
+    selection: &provider::ProviderSelection,
+) -> Result<Option<String>> {
+    let config = gate_registry::closing_config()?;
+    let settings: gate_controls::AgentClosing =
+        serde_json::from_value(run["closing_settings"].clone()).unwrap_or_default();
+    let attempt = run["closing_turn"]["attempts"].as_u64().unwrap_or(0) + 1;
+    let of = u64::from(config.closer.attempts);
+    let answer = if let Some(error) = response["closer_error"].as_str() {
+        Err(error.to_owned())
+    } else if output.iter().any(|item| item["type"] == "function_call") {
+        Err("a tool was called instead of answering".to_owned())
+    } else {
+        gate_controls::parse_closer(&engine_output::text(output), &config, &settings)
+            .map_err(|error| error.to_string())
+    };
+    let mut item = json!({"type":"closing_status","attempt":attempt,"of":of,
+        "model":selection.model});
+    let step = format!("closing:status:{}:{attempt}", model_turn(run));
+    let status = match answer {
+        Ok(status) => {
+            item["flag"] = status["flag"].clone();
+            item["notification"] = status["notification"].clone();
+            status
+        }
+        Err(error) if attempt < of => {
+            item["error"] = json!(error);
+            compaction_activity(run, step, item);
+            run["closing_turn"]["attempts"] = json!(attempt);
+            run["closing_turn"]["error"] = json!(error);
+            return Ok(None);
+        }
+        Err(error) => {
+            item["error"] = json!(error);
+            item["fallback"] = json!(true);
+            gate_controls::fallback_status(&config, &settings)
+        }
+    };
+    compaction_activity(run, step, item);
+    let reply = run["closing_turn"]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    run["closing"] = status;
+    run["closing_turn"] = Value::Null;
+    Ok(Some(reply))
 }
 
 /// Leave the compacting phase with a result row; `outcome` holds `summary` or `error`.

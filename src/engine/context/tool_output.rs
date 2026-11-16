@@ -41,7 +41,7 @@ pub async fn dedup_config_fingerprint(app:&crate::App,agent:&str,sid:&str)->Resu
         let rid=crate::runtime_tests::queued(&app,&sid).await;
         let mut run=app.run(&rid).await.unwrap();let cancel=tokio_util::sync::CancellationToken::new();
         dedup_prepare(&app,&mut run,8192,&cancel).await.unwrap();
-        for (turn,name) in ["set_closer_status","publish_main_message"].into_iter().enumerate() {
+        for (turn,name) in ["compact_context","publish_main_message"].into_iter().enumerate() {
             run["turns"]=json!(turn+1);
             let id=format!("native-{name}");
             let call=json!({"type":"function_call","call_id":id,"name":name,"arguments":"{}"});

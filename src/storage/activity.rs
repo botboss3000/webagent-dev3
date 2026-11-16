@@ -141,6 +141,12 @@ fn event(
             json!({"preloaded":item["preloaded"],"suggested":item["suggested"],"skipped":item["skipped"]}),
         ),
         "closing_reminder" => ("closing_reminder", json!({})),
+        "closing_status" => (
+            "closing_status",
+            json!({"attempt":item["attempt"],"of":item["of"],"model":item["model"],
+                "flag":item["flag"],"notification":item["notification"],
+                "error":item["error"],"fallback":item["fallback"]}),
+        ),
         "retry_scheduled" => (
             "retry_scheduled",
             json!({"attempt":item["attempt"],"of":item["of"],"wait_seconds":item["wait_seconds"],

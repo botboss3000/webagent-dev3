@@ -110,7 +110,6 @@ mod tests {
         use webagent_engine::tools::execution::ActionCatalog;
         use webagent_engine::tools::retry_guard::Risk;
         assert_eq!(NativeActions::retry("file_read").risk, Risk::None);
-        assert_eq!(NativeActions::retry("set_closer_status").risk, Risk::Exempt);
         assert_eq!(
             NativeActions::retry("publish_main_message").risk,
             Risk::Exempt

@@ -97,3 +97,14 @@ test('a skipped preload names its reason and is not counted in the group summary
   assert.equal(groups[0].rows.length,1);
   assert.equal(Object.values(groups[0].counts).reduce((a,b)=>a+b,0),0);
 });
+
+test('closer attempts are system rows: a status names its flag, a failure reads as failed',()=>{
+  const event=(id,payload)=>({kind:'closing_status',event_id:id,run_id:'r1',payload});
+  const done=activityRows([event('e1',{attempt:1,of:3,model:'sys',flag:'needs_input',notification:'Pick an option'})]);
+  assert.deepEqual(done.map(r=>[r.category,r.closer,r.failed,r.label,r.text,r.model]),
+    [['closers',true,false,'Closing status · needs_input','needs_input · Pick an option','sys']]);
+  const failed=activityRows([event('e2',{attempt:3,of:3,model:'sys',error:'flag is missing',fallback:true})]);
+  assert.equal(failed[0].failed,true);
+  assert.equal(failed[0].label,'Closing status');
+  assert.equal(failed[0].text,'Attempt 3 of 3 failed: flag is missing\n\nFallback status recorded.');
+});

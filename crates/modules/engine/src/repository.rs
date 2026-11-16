@@ -569,8 +569,8 @@ impl<
                 .as_str()
                 .ok_or_else(|| anyhow!("Run has no session"))?;
             let rid = run["id"].as_str().ok_or_else(|| anyhow!("Run has no id"))?;
-            // A model output's own tool result (a same-response closing status) answers a
-            // call saved below, so it is saved after that call.
+            // A model output's own tool results answer calls saved below, so they are
+            // saved after those calls.
             if kind != "model_output" {
                 crate::send_future(self.insert_tool_output(&mut tx, run, sid, rid)).await?;
             }
@@ -658,14 +658,10 @@ impl<
                         }
                     }
                 }
-                // A closer or chat panel ends the agent's turn, so the newest live message,
-                // however many tool calls came between, is its closing word: publish it.
+                // A chat panel ends the agent's turn, so the newest live message, however
+                // many tool calls came between, is its closing word: publish it.
                 let closing = output.iter().any(|item| {
-                    item["type"] == "function_call"
-                        && matches!(
-                            item["name"].as_str(),
-                            Some("set_closer_status" | "present_chat_component")
-                        )
+                    item["type"] == "function_call" && item["name"] == "present_chat_component"
                 });
                 if closing && run["module_silent"] != true {
                     crate::send_future(self.chat.keep_live_message(&mut tx, sid, rid)).await?;

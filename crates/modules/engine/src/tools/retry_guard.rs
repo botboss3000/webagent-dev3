@@ -17,7 +17,6 @@ const MAX_DECISIONS: usize = 64;
 /// The chat's own control tools. They keep the conversation working, so they are never
 /// repeat-guarded and no `tool.json` or admin setting can change that.
 pub const EXEMPT: &[&str] = &[
-    "set_closer_status",
     "publish_main_message",
     "compact_context",
     "set_execution_mode",
@@ -559,14 +558,14 @@ mod tests {
         let done = json!({"status":"ok"});
         record(
             &mut run,
-            "set_closer_status",
+            "publish_main_message",
             &args,
             "c1",
             Some(&done),
             &exempt,
         );
         assert_eq!(
-            admit(&mut run, "set_closer_status", &args, "c2", &exempt, None),
+            admit(&mut run, "publish_main_message", &args, "c2", &exempt, None),
             Admission::Run
         );
         let none = Retry {

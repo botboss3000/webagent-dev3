@@ -105,20 +105,21 @@ export function chipHead(head,{icon,label,chip='',title='',preview='',note=''}) 
 // Construct a tool or message row with stable control nodes; patchTranscriptRow supplies current data.
 export function createTranscriptRow(row) {
   const tool=row.category==='tools',compaction=row.compaction===true,retry=row.retry===true,preload=row.preload===true;
+  const closer=row.closer===true;
   const node=el('div','','v2-mini-row '+(tool?'v2-mini-tool tc-tool':compaction?'v2-mini-tool v2-mini-compaction tc-system'
-    :retry?'v2-mini-tool v2-mini-retry tc-system':preload?'v2-mini-tool v2-mini-preload tc-system':'v2-mini-message tc-message'));
+    :closer?'v2-mini-tool v2-mini-closer tc-system':retry?'v2-mini-tool v2-mini-retry tc-system':preload?'v2-mini-tool v2-mini-preload tc-system':'v2-mini-message tc-message'));
   const content=el('div','','v2-mini-content');
   const footer=el('div','','turn-gutter ca-activity-entry-footer notice-gutter');
   const raw=diagnostic();
-  node._parts={content,footer,raw,tool,compaction,retry,preload};
-  if(preload || retry || compaction) {
-    // A system row (preload list, provider retry, compaction summary) is a compact row like a tool call;
+  node._parts={content,footer,raw,tool,compaction,retry,preload,closer};
+  if(preload || retry || compaction || closer) {
+    // A system row (preload list, provider retry, compaction summary, closing status) is a compact row like a tool call;
     // expanding shows its detail behind the same left border.
     const disclosure=el('details','','v2-mini-tool-disclosure');
     const head=el('summary','','tc-row-head');const detail=el('div','','tc-detail');
     detail.append(content,footer,raw);disclosure.append(head,detail);node.append(disclosure);
     node._parts.head=head;
-    footer.append(copy(preload?'Copy preload list':retry?'Copy error':'Copy summary',()=>node._text));
+    footer.append(copy(preload?'Copy preload list':retry?'Copy error':closer?'Copy status':'Copy summary',()=>node._text));
   } else if(tool) {
     // One compact row; its detail (arguments, result, copy, diagnostics) sits behind a left border.
     const disclosure=el('details','','v2-mini-tool-disclosure');
@@ -165,6 +166,10 @@ export function patchTranscriptRow(node,row) {
   } else if(p.retry) {
     chipHead(p.head,{icon:'rotate-ccw',label:row.label});node.dataset.status='retry';
     markdown(p.content,row.text || 'No provider detail.');
+  } else if(p.closer) {
+    chipHead(p.head,{icon:'flag',label:row.label,chip:row.model,note:row.failed?'failed':''});
+    node.dataset.status=row.failed?'error':'done';
+    markdown(p.content,row.text || row.label);
   } else if(p.compaction) {
     const result=row.events.find(e=>e.kind==='compaction_result');
     const status=!result?'running':result.payload?.error?'error':'done';
