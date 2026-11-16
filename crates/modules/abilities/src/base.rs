@@ -38,7 +38,6 @@ pub const TOOLS: &[&str] = &[
     "get_task_checkpoint",
     "background_status",
     "background_cancel",
-    "present_plan",
     "present_chat_component",
     "manage_agent_profiles",
     "rate_skill",

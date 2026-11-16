@@ -469,14 +469,6 @@ const COMPILED: &[(&str, &[&str], &[&str])] = &[
         &["cancel", "stop background"],
     ),
     (
-        "present_plan",
-        &[
-            "show the user a plan with a checklist",
-            "lay out the steps before starting",
-        ],
-        &["plan", "checklist"],
-    ),
-    (
         "present_chat_component",
         &[
             "show the user buttons to choose from",

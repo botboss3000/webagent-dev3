@@ -793,6 +793,29 @@ impl<
         {
             effective.permission = access::Permission::Ask;
         }
+        // Leaving Plan hands over the agreed plan, which the user sees on the approval
+        // card; a call without one is returned to the agent and never reaches the user.
+        if name == "set_execution_mode"
+            && authorization_mode["execution_mode"] == "plan"
+            && args["mode"] != "plan"
+            && !args["plan"].is_object()
+        {
+            app.actions
+                .not_dispatched(app.store.records(), &run, &run["pending"])
+                .await?;
+            let result = json!({"status":"rejected","error_kind":"plan_required",
+                "output":"Leaving Plan mode needs the agreed plan: call set_execution_mode again \
+                    with plan (title, goal, criteria, notes and checklist)."});
+            Self::append_tool(&mut run, &result)?;
+            app.store
+                .save_run_observed(
+                    &mut run,
+                    "tool_result",
+                    &json!({"run_id":id,"name":name,"result":result}),
+                )
+                .await?;
+            return Ok(std::ops::ControlFlow::Continue(()));
+        }
         if run["pending"]["access_revision"] != json!(access.revision)
             || run["pending"]["mode_revision"].as_u64().unwrap_or(0) != mode_revision
             || run["pending"]["visibility_revision"].as_u64().unwrap_or(0)
@@ -933,13 +956,7 @@ impl<
             app.actions
                 .not_dispatched(app.store.records(), &run, &run["pending"])
                 .await?;
-            let message = if run["pending"]["denied_to_mode"] == "ask" {
-                // The user kept approvals on instead of entering Auto; the approval moved the
-                // session to Ask in the same write.
-                "The user chose Ask mode instead of Auto: the session is now in Ask mode. \
-                 Continue executing the agreed plan; tools that need approval will ask the user."
-                    .to_owned()
-            } else if run["pending"]["decision"] == "deny" {
+            let message = if run["pending"]["decision"] == "deny" {
                 "Tool invocation denied: the user denied this call".to_owned()
             } else {
                 super::batch::denial_message(
@@ -948,9 +965,6 @@ impl<
                 )
             };
             let result = match tools::retry_guard::declined(&run["pending"]) {
-                _ if run["pending"]["denied_to_mode"] == "ask" => {
-                    json!({"status":"success","execution_mode":"ask","output":message})
-                }
                 Some(result) if run["pending"]["decision"] == "deny" => result,
                 _ => json!({"status":"denied","output":message}),
             };

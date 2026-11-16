@@ -1414,17 +1414,17 @@ pub(crate) async fn approval(
     } else if body.get("remember_messaging_route").is_some() {
         return Err(bad("Messaging route choice is not applicable"));
     }
-    // "Continue in Ask mode" on an Auto request: denying the switch and moving the session to
-    // Ask commit together, so the agent continues with approvals still on.
+    // "Continue in Ask mode" on an Auto request approves the call with Ask as its target:
+    // the mode tool then enters Ask instead, so the agent continues with approvals on.
     let to_ask = match body.get("alternate_mode") {
         None => false,
         Some(mode) if mode == "ask" => {
-            if decision != "deny"
+            if decision != "approve"
                 || run["pending"]["name"] != "set_execution_mode"
                 || run["pending"]["arguments"]["mode"] != "auto"
             {
                 return Err(bad(
-                    "Alternate mode applies only when denying a switch to Auto",
+                    "Alternate mode applies only when approving a switch to Auto",
                 ));
             }
             true
@@ -1451,7 +1451,6 @@ pub(crate) async fn approval(
     let mode_revision = session_mode(&app, sid).await?["revision"]
         .as_u64()
         .unwrap_or(0);
-    let mode_key = key("session_mode", sid);
     let visibility = session_agent_abilities(&app, sid).await?;
     let ability_state = session_ability_state(&app, sid).await?;
     if run["pending"]["access_revision"] != json!(access.revision)
@@ -1501,16 +1500,8 @@ pub(crate) async fn approval(
             json!(body["remember_messaging_route"] == true);
     }
     run["pending"]["decision"] = json!(decision);
-    let mut docs = Vec::new();
     if to_ask {
-        // The call's own revision moves with the mode, so the engine applies this denial
-        // instead of asking again.
-        docs.push((
-            mode_key,
-            json!({"execution_mode":"ask","revision":mode_revision + 1}),
-        ));
-        run["pending"]["mode_revision"] = json!(mode_revision + 1);
-        run["pending"]["denied_to_mode"] = json!("ask");
+        run["pending"]["alternate_mode"] = json!("ask");
     }
     run["status"] = json!(if app.shutoff().await? {
         "stopped"
@@ -1518,17 +1509,18 @@ pub(crate) async fn approval(
         "queued"
     });
     let result = public_run(&run);
-    docs.push((
-        key(
-            "run",
-            run["id"].as_str().expect("stored runs carry their ID"),
-        ),
-        run.clone(),
-    ));
-    docs.push((receipt_key, json!({"digest":digest(&body),"result":result})));
     app.store
         .atomic_docs_event(
-            docs,
+            vec![
+                (
+                    key(
+                        "run",
+                        run["id"].as_str().expect("stored runs carry their ID"),
+                    ),
+                    run.clone(),
+                ),
+                (receipt_key, json!({"digest":digest(&body),"result":result})),
+            ],
             run["session_id"]
                 .as_str()
                 .expect("stored runs carry their session"),

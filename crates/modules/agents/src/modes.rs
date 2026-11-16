@@ -1,14 +1,33 @@
 //! Agent-owned named mode definitions; Engine retains permission enforcement.
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
-/// Plan mode: question rounds in panels, a final plan, then a request to enter Auto.
-const PLAN_PROMPT: &str = include_str!("plan_mode.md");
+/// The built-in modes' live file, in the prompts folder.
+const DEFAULTS_FILE: &str = "crates/modules/configuration/prompts/execution_modes.json";
+/// The same file as built, used only when the live one is missing or invalid.
+const PACKAGED_DEFAULTS: &str = include_str!("../../configuration/prompts/execution_modes.json");
+const BUILTIN: [&str; 3] = ["ask", "plan", "auto"];
+/// The built-in Ask, Plan and Auto modes from the live prompts file.
 pub fn defaults() -> Value {
-    json!([
-     {"id":"ask","label":"Ask","description":"Investigate, answer and recommend; tools that need approval ask first.","prompt":"Investigate, answer, and recommend; tools that require approval ask first.","builtin":true},
-     {"id":"plan","label":"Plan","description":"Grill the user on every decision in rounds of question panels, then request Auto to execute.","prompt":PLAN_PROMPT,"builtin":true},
-     {"id":"auto","label":"Auto","description":"Work autonomously; tool calls do not ask for approval.","prompt":"Execute the requested work autonomously. Denied tools and access limits still apply; tool calls that would otherwise ask for approval proceed automatically. Verify results before claiming completion.","builtin":true}
-    ])
+    webagent_configuration::live::parsed(DEFAULTS_FILE, 256 * 1024, parse_defaults)
+        .or_else(|_| parse_defaults(PACKAGED_DEFAULTS.as_bytes()))
+        .expect("the packaged execution modes are valid")
+}
+/// Read the modes file: an object keyed by mode id, each with label, description and prompt.
+fn parse_defaults(bytes: &[u8]) -> Result<Value> {
+    let file: Value = serde_json::from_slice(bytes)?;
+    let mut modes = Vec::with_capacity(BUILTIN.len());
+    for id in BUILTIN {
+        let entry = &file[id];
+        let field = |name: &str, limit: usize| {
+            entry[name]
+                .as_str()
+                .filter(|value| !value.trim().is_empty() && value.chars().count() <= limit)
+                .ok_or_else(|| anyhow!("Execution mode {id} needs a {name} of 1..{limit}"))
+        };
+        modes.push(json!({"id":id,"label":field("label",40)?,
+            "description":field("description",240)?,"prompt":field("prompt",30000)?,"builtin":true}));
+    }
+    Ok(json!(modes))
 }
 pub fn normalize(raw: &Value) -> Result<Value> {
     let mut modes = defaults().as_array().unwrap().clone();
@@ -44,7 +63,7 @@ pub fn normalize(raw: &Value) -> Result<Value> {
         {
             bail!("Invalid mode fields");
         }
-        let builtin = matches!(id, "ask" | "plan" | "auto");
+        let builtin = BUILTIN.contains(&id);
         let value = json!({"id":id,"label":label,"description":description,"prompt":prompt,"builtin":builtin});
         if let Some(i) = modes.iter().position(|m| m["id"] == id) {
             modes[i] = value;
@@ -77,4 +96,28 @@ pub fn resolve(config: &Value, id: &str) -> Result<Value> {
         .and_then(|modes| modes.iter().find(|m| m["id"] == id))
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("Unknown execution mode"))
+}
+
+#[cfg(test)]
+mod defaults_tests {
+    use super::*;
+    #[test]
+    fn packaged_file_defines_the_builtin_modes_and_bad_files_are_refused() {
+        let modes = parse_defaults(PACKAGED_DEFAULTS.as_bytes()).unwrap();
+        let ids: Vec<_> = modes
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].clone())
+            .collect();
+        assert_eq!(ids, [json!("ask"), json!("plan"), json!("auto")]);
+        assert!(modes[1]["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("set_execution_mode"));
+        assert!(
+            parse_defaults(br#"{"ask":{"label":"Ask","description":"d","prompt":"p"}}"#).is_err()
+        );
+        assert!(parse_defaults(b"[]").is_err());
+    }
 }

@@ -315,24 +315,38 @@ export function mountChatActionPanel({root,guard,request,note}) {
       else expanded.add(approval.id);
       toggle.setAttribute('aria-expanded',String(!details.hidden));
     };
-    // A request to enter Auto (Plan mode's hand-off) offers Auto, Ask with approvals kept on, or more planning.
+    // A request to enter Auto offers Auto or Ask with approvals kept on; leaving Plan carries the
+    // agreed plan, shown here, and denying it keeps planning.
     const toAuto=approval.name==='set_execution_mode'&&approval.arguments?.mode==='auto'&&!approval.repeat_of;
+    const plan=toAuto&&approval.arguments?.plan&&typeof approval.arguments.plan==='object'?approval.arguments.plan:null;
     const actions=toAuto?[
       {label:'Authorize Auto and continue',kind:'approve',run:()=>decide('approve')},
-      {label:'Continue in Ask mode',kind:'neutral',run:()=>decide('deny',{alternate_mode:'ask'})},
-      {label:'Keep planning',kind:'deny',run:()=>decide('deny')}
+      {label:'Continue in Ask mode',kind:'neutral',run:()=>decide('approve',{alternate_mode:'ask'})},
+      {label:plan?'Keep planning':'Deny',kind:'deny',run:()=>decide('deny')}
     ]:[
       // Decision callbacks are supplied by the panel and perform the authenticated API action.
       {label:approval.repeat_of ? 'Approve repeat' : approval.new_intent_confirmation ? 'Approve additional action' : 'Approve',kind:'approve',run:()=>decide('approve',approval.messaging_can_remember?{remember_messaging_route:remembered.checked}:{})},
       {label:'Deny',kind:'deny',run:()=>decide('deny')}
     ];
     if(active?.id===run.id)actions.push({label:'Cancel run',kind:'neutral',run:cancel});
-    const node=card({title:toAuto?'Switch to Auto mode? Tools will no longer ask for approval.':approval.messaging_binding?'Approve agent message':approval.repeat_of ? 'Repeat an action the agent already ran?' : approval.new_intent_confirmation ? 'Confirm a separate action after '+approval.separate_from+':' : 'Need approval:',details:{toggle,body:details},actions});
+    const node=card({title:plan?'Start this plan? Auto stops asking for tool approvals; Ask keeps them.':toAuto?'Switch to Auto mode? Tools will no longer ask for approval.':approval.messaging_binding?'Approve agent message':approval.repeat_of ? 'Repeat an action the agent already ran?' : approval.new_intent_confirmation ? 'Confirm a separate action after '+approval.separate_from+':' : 'Need approval:',details:{toggle,body:details},actions});
     // The tool's repeat warning tells the user what approving may duplicate.
     if(approval.repeat_of&&typeof approval.repeat_warning==='string'){const text=document.createElement('p');text.textContent=approval.repeat_warning;node.insertBefore(text,node.lastChild);}
     if(approval.messaging_binding){const text=document.createElement('p');const b=approval.messaging_binding;text.textContent='From '+(b.source_title||b.source_session_id)+' to '+(b.target_title||b.target_session_id)+' · '+b.target_agent_id+' · '+b.delivery;node.insertBefore(text,node.lastChild);}
     if(approval.messaging_can_remember)node.insertBefore(rememberLabel,node.lastChild);
+    if(plan)node.insertBefore(planSummary(plan),node.lastChild);
     return node;
+  }
+  // The plan an agent hands over when leaving Plan mode: its title, goal and numbered steps, as text.
+  function planSummary(plan){
+    const box=document.createElement('div');box.className='chat-action-plan';
+    const text=(tag,value)=>{const el=document.createElement(tag);el.textContent=String(value);return el;};
+    if(typeof plan.title==='string'&&plan.title)box.append(text('strong',plan.title));
+    for(const [label,key] of [['Goal','goal'],['Done when','criteria'],['Notes','notes']])if(typeof plan[key]==='string'&&plan[key])box.append(text('p',label+': '+plan[key]));
+    const steps=document.createElement('ol');
+    for(const step of Array.isArray(plan.checklist)?plan.checklist.slice(0,32):[])if(typeof step?.label==='string')steps.append(text('li',step.label));
+    if(steps.children.length)box.append(steps);
+    return box;
   }
   // Remove tool-approval cards without affecting a mode confirmation.
   function clearTools(){toolSlot.replaceChildren();toolCards.clear();pendingApprovals=false;updateRoutesVisibility();}

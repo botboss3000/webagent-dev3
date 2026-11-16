@@ -12,7 +12,6 @@ use webagent_host_core::{digest, key};
 pub const TOOLS: &[&str] = &[
     "get_task_checkpoint",
     "update_task_checkpoint",
-    "present_plan",
     "present_chat_component",
 ];
 /// Whether this module executes tool `name`.
@@ -20,10 +19,7 @@ pub const TOOLS: &[&str] = &[
 pub fn owns(name: &str) -> bool {
     matches!(
         name,
-        "get_task_checkpoint"
-            | "update_task_checkpoint"
-            | "present_plan"
-            | "present_chat_component"
+        "get_task_checkpoint" | "update_task_checkpoint" | "present_chat_component"
     )
 }
 #[derive(Deserialize)]
@@ -78,10 +74,10 @@ struct ComponentArgs {
     #[serde(default)]
     dismiss: bool,
 }
+/// The agreed plan an agent hands over when it leaves Plan mode (`set_execution_mode`).
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct PlanArgs {
-    expected_revision: u64,
+pub struct Plan {
     #[serde(default)]
     goal: String,
     #[serde(default)]
@@ -92,6 +88,11 @@ struct PlanArgs {
     title: String,
     checklist: Vec<Step>,
 }
+/// Id of the pinned card that shows a session's agreed plan.
+pub const PLAN_CARD: &str = "plan-overview";
+/// Hard limit for panel prompts and hints; the tool skill asks for 200 or fewer. The margin
+/// only protects against runaway text.
+const PANEL_TEXT: usize = 400;
 fn empty_object() -> Value {
     json!({})
 }
@@ -102,7 +103,7 @@ fn text(value: &str, limit: usize) -> Result<String> {
             .chars()
             .any(|ch| ch.is_control() && ch != '\n' && ch != '\t')
     {
-        bail!("Text exceeds bounds or contains control characters");
+        bail!("Text exceeds {limit} bytes or contains control characters");
     }
     Ok(value.to_owned())
 }
@@ -279,7 +280,7 @@ fn component(args: ComponentArgs, fallback_id: &str) -> Result<(String, Value, u
                 .or_else(|| data.get("question"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            json!({"prompt":text(prompt,200)?,"options":clean})
+            json!({"prompt":text(prompt,PANEL_TEXT)?,"options":clean})
         }
         "form" => {
             let fields = data
@@ -357,14 +358,14 @@ fn component(args: ComponentArgs, fallback_id: &str) -> Result<(String, Value, u
                 clean.push(
                     json!({"name":name,"label":text(field["label"].as_str().unwrap_or(name),120)?,
                     "type":field_type,"required":flag("required"),"options":choices,
-                    "hint":text(field["hint"].as_str().unwrap_or(""),200)?,
+                    "hint":text(field["hint"].as_str().unwrap_or(""),PANEL_TEXT)?,
                     "other":picks && flag("other"),"attach":attaches && flag("attach"),
                     "comment":comment}),
                 );
             }
             // A paged form shows one field per page with a step counter, Back and Skip.
             let paged = data.get("paged").and_then(Value::as_bool).unwrap_or(false);
-            json!({"prompt":text(data.get("prompt").and_then(Value::as_str).unwrap_or(""),200)?,
+            json!({"prompt":text(data.get("prompt").and_then(Value::as_str).unwrap_or(""),PANEL_TEXT)?,
                 "fields":clean,"paged":paged})
         }
         _ => unreachable!(),
@@ -383,12 +384,14 @@ fn component(args: ComponentArgs, fallback_id: &str) -> Result<(String, Value, u
     }
     Ok((id, spec, args.expected_revision))
 }
-fn plan(args: PlanArgs) -> Result<(String, Value, u64)> {
+/// The pinned status card for an agreed `plan`: goal, criteria and notes, then the numbered
+/// checklist. Validates every field, so a bad plan is refused before anything changes.
+pub fn plan_card(args: &Plan) -> Result<Value> {
     let steps = validate_steps(&args.checklist)?;
     let mut sections = Vec::new();
     for (label, value) in [
         ("Goal", &args.goal),
-        ("Criteria", &args.criteria),
+        ("Done when", &args.criteria),
         ("Notes", &args.notes),
     ] {
         let value = text(value, 1200)?;
@@ -413,12 +416,12 @@ fn plan(args: PlanArgs) -> Result<(String, Value, u64)> {
         .join("\n");
     sections.push(json!({"label":"Checklist","value":list,"status":null}));
     let title = short_title(&args.title, "Plan")?;
-    let spec = json!({"id":"plan-overview","type":"status","title":title,"placement":"sticky",
+    let spec = json!({"id":PLAN_CARD,"type":"status","title":title,"placement":"sticky",
         "data":{"sections":sections},"lifecycle":{},"authority":"display_only"});
     if serde_json::to_vec(&spec)?.len() > 24 * 1024 {
         bail!("Plan exceeds 24 KiB");
     }
-    Ok(("plan-overview".to_owned(), spec, args.expected_revision))
+    Ok(spec)
 }
 /// Fresh live authority for the task call `pending_id`: the run generation, or an error
 /// when the call, its recorded revisions or the caller's live access no longer admit it.
@@ -540,17 +543,6 @@ async fn work(
                 .await?;
             Ok(json!({"status":"success","output":saved}))
         }
-        "present_plan" => {
-            let request: PlanArgs = serde_json::from_value(args.clone())?;
-            let (id, spec, revision) = plan(request)?;
-            if authorize(host, sid, rid, pending_id, name).await? != generation {
-                bail!("Task run generation changed");
-            }
-            let saved = host
-                .write_artifact(call, "component", &id, revision, &spec)
-                .await?;
-            Ok(json!({"status":"success","output":saved}))
-        }
         _ => bail!("Unknown Base task tool"),
     }
 }
@@ -582,6 +574,26 @@ pub async fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn plan_card_pins_the_plan_and_refuses_bad_steps() {
+        let plan: Plan = serde_json::from_value(json!({"title":"Standup note","goal":"Daily note",
+            "checklist":[{"label":"Write it"},{"label":"Schedule it","status":"done"}]}))
+        .unwrap();
+        let card = plan_card(&plan).unwrap();
+        assert_eq!(
+            (&card["id"], &card["placement"]),
+            (&json!(PLAN_CARD), &json!("sticky"))
+        );
+        assert_eq!(
+            card["data"]["sections"][1]["value"],
+            "1. [ ] Write it\n2. [x] Schedule it"
+        );
+        let short: Plan = serde_json::from_value(json!({"checklist":[{"label":"x"}]})).unwrap();
+        assert!(plan_card(&short).is_err());
+        assert!(
+            serde_json::from_value::<Plan>(json!({"checklist":[],"expected_revision":0})).is_err()
+        );
+    }
     #[test]
     fn checkpoint_and_components_are_bounded_and_declarative() {
         let valid = json!({"summary":"Worked through implementation; next verify persistence.",

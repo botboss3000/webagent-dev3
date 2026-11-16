@@ -2447,6 +2447,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "webagent-access",
+ "webagent-configuration",
 ]
 
 [[package]]
