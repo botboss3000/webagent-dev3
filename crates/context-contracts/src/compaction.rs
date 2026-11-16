@@ -679,16 +679,21 @@ fn plan_measured(
         bail!("Compaction trigger cannot fit fixed request overhead");
     }
     let request_triggered = rolling && total.saturating_add(request_overhead) >= trigger_bytes;
+    let blocks = leading_blocks(input, config);
+    // The System budget caps what one System summary may read. It folds early only when
+    // the System model writes the summaries and the history since the last block would
+    // outgrow it; a same-model summary reads the request itself, so only the trigger counts.
     let system_triggered = match config.system_input_budget {
-        Some(budget) => config.summary_envelope_bytes(input)? > budget,
-        None => false,
+        Some(budget) if config.summarizer == Summarizer::System => {
+            config.summary_envelope_bytes(&input[blocks..])? > budget
+        }
+        _ => false,
     };
     if total <= max_bytes && !request_triggered && !system_triggered && !force {
         return Ok(None);
     }
     // Earlier summaries stay as separate blocks ahead of new history. Once together they
     // outgrow `merge_tokens`, the oldest fold into one block first; the newest two stay.
-    let blocks = leading_blocks(input, config);
     if !force && blocks >= 3 {
         let drop_until = blocks - 2;
         let block_bytes = sizes[..blocks].iter().sum::<usize>();

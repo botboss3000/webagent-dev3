@@ -2869,6 +2869,16 @@ export function mountModelTable(host, opts = {}) {
       flagsCell.appendChild(flag);
     });
     if (flagsCell.childElementCount) label.querySelector('.ac-saved-model-name').appendChild(flagsCell);
+    // The model's context limit (its hard cap for compaction), filled once its catalog info loads.
+    const ctxCell = document.createElement('span');
+    ctxCell.className = 'ac-saved-ctx';
+    ctxCell.title = 'Context limit';
+    label.querySelector('.ac-saved-model-name').appendChild(ctxCell);
+    const ctxKey = `${p.provider || ''}|${p.model || ''}`;
+    Promise.resolve(metaCache[ctxKey] || fetchModelInfo(p.model, p.provider)).then(info => {
+      metaCache[ctxKey] = info;
+      ctxCell.textContent = (typeof info?.context === 'number') ? fmtContext(info.context).replace(' ctx', '') : '';
+    });
 
     // Roles more-button — opens a floating popover with the roster-role toggles
     // (Standard · Premium · Vision · Image · System · Voice). The account-level

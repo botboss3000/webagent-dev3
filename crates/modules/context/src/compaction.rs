@@ -347,6 +347,7 @@ mod tests {
     #[test]
     fn system_budget_triggers_before_configured_history_threshold() {
         let mut c = Config::configured().unwrap();
+        c.summarizer = Summarizer::System;
         c.trigger_tokens = 150_000;
         c.tail_tokens = 40_000;
         c.summary_reserve_bytes = 300;
@@ -368,6 +369,30 @@ mod tests {
             .unwrap()
             .get("system_input_budget")
             .is_none());
+    }
+
+    /// Live regression (session 0678c11e): with the same model summarizing, a System
+    /// budget smaller than the history started folds far below the trigger. The budget
+    /// only caps a System summary; a same-model fold waits for the trigger.
+    #[test]
+    fn system_budget_does_not_trigger_same_model_folds() {
+        let mut c = Config::configured().unwrap();
+        c.summarizer = Summarizer::SameModel;
+        c.trigger_tokens = 150_000;
+        c.tail_tokens = 40_000;
+        c.summary_reserve_bytes = 300;
+        let input = vec![
+            user(&"old".repeat(500)),
+            assistant("done"),
+            user(&"recent".repeat(500)),
+            assistant("done"),
+            user("continue"),
+        ];
+        c.system_input_budget = Some(c.summary_envelope_bytes(&input[..2]).unwrap() + 100);
+        assert!(plan_rolling(&input, 262144, &c).unwrap().is_none());
+        // The same history folds early when the System model writes the summaries.
+        c.summarizer = Summarizer::System;
+        assert!(plan_rolling(&input, 262144, &c).unwrap().is_some());
     }
 
     #[test]

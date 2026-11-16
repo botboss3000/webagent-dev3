@@ -73,11 +73,14 @@ pub(crate) mod inference;
 pub(crate) mod live_configuration;
 mod loop_settings;
 pub(crate) mod media_lane;
+#[path = "../../crates/modules/chat/host/api/message_admission.rs"]
+pub(crate) mod message_admission;
 #[path = "../../crates/modules/models/host/api/platform_catalog.rs"]
 mod model_catalog;
 mod model_usage;
 #[path = "../../crates/modules/notifications/host/api.rs"]
 pub(crate) mod notifications;
+#[path = "../../crates/modules/chat/host/api/panel_answer.rs"]
 pub(crate) mod panel_answer;
 pub(crate) mod repository;
 mod service_admin;

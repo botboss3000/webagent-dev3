@@ -32,6 +32,36 @@ async fn busy(app: &App, sid: &str) -> Result<bool> {
         .any(|run| run["session_id"] == sid && !terminal(status(run))))
 }
 
+/// How long `/compact` waits for a run that is ending: a reply is streamed before its run
+/// turns terminal, so a command typed right after it would otherwise be scheduled for a
+/// model call that never comes.
+const SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
+const SETTLE_STEP: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Whether `sid` is still busy after waiting up to [`SETTLE`] for its runs to finish.
+async fn busy_after_settling(app: &App, sid: &str) -> Result<bool> {
+    let deadline = tokio::time::Instant::now() + SETTLE;
+    while busy(app, sid).await? {
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(true);
+        }
+        tokio::time::sleep(SETTLE_STEP).await;
+    }
+    Ok(false)
+}
+
+/// The compaction settings `/compact` plans with: the app file plus the session agent's
+/// Identity override, as the run loop resolves them.
+async fn effective_compaction(app: &App, sid: &str) -> Result<crate::context_compaction::Config> {
+    let defaults = crate::context_compaction::Config::read(&app.compaction_config_path)?;
+    let agent = super::session_agent_id(app, sid).await?;
+    let store = app.store.for_agent(&agent).await?;
+    match crate::context_compaction::agent_thresholds(&store, &agent).await? {
+        Some(thresholds) => thresholds.apply(&defaults),
+        None => Ok(defaults),
+    }
+}
+
 /// Refuses a second fold while one is requested or running.
 async fn compaction_free(app: &App, sid: &str) -> std::result::Result<(), ApiError> {
     let request = app
@@ -184,11 +214,13 @@ pub(crate) async fn compact(app: App, sid: String, body: Value) -> Answer {
     if focus.chars().count() > MAX_FOCUS || focus.contains('\n') {
         return Err(bad("focus must be one line of 300 characters or fewer"));
     }
+    // Settle before taking the gate: the ending run needs it to finish.
+    busy_after_settling(&app, &sid).await?;
     let _guard = app.gate.lock().await;
     compaction_free(&app, &sid).await?;
     let running = busy(&app, &sid).await?;
     if !running {
-        let config = crate::context_compaction::Config::read(&app.compaction_config_path)?;
+        let config = effective_compaction(&app, &sid).await?;
         let history = app.store.context(&sid).await?;
         let plan = crate::context_compaction::plan_command(&history, &config.0);
         if !matches!(plan, Ok(Some(_))) {
@@ -326,6 +358,62 @@ mod tests {
         assert!(last_user_text(&context).contains("[dismissed note]"));
         let notes = app.store.get(&format!("panel_notes:{sid}")).await.unwrap();
         assert_eq!(notes.unwrap()["notes"], json!([]));
+    }
+
+    /// A reply is streamed before its run turns terminal: `/compact` sent in that moment
+    /// waits for the run to end and answers as on an idle chat, rather than scheduling a
+    /// fold for a model call that never comes.
+    #[tokio::test]
+    async fn compact_right_after_a_reply_waits_for_the_ending_run() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let sid = crate::runtime_tests::conversation(&app).await;
+        let id = crate::runtime_tests::queued(&app, &sid).await;
+        let ending = app.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let mut run = ending.run(&id).await.unwrap();
+            run["status"] = json!("completed");
+            ending
+                .store
+                .save_run(&mut run, "run_status", &json!({}))
+                .await
+                .unwrap();
+        });
+        let (_, Json(answer)) =
+            compact(app.clone(), sid.clone(), json!({"client_request_id":"c1"}))
+                .await
+                .unwrap();
+        assert_eq!(answer["status"], "nothing_to_fold");
+        assert!(app
+            .store
+            .get(&format!("compaction_request:{sid}"))
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// `/compact` plans with the session agent's Identity override, not the app file alone.
+    #[tokio::test]
+    async fn compact_uses_the_agents_compaction_override() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let sid = crate::runtime_tests::conversation(&app).await;
+        let agent = super::super::session_agent_id(&app, &sid).await.unwrap();
+        let store = app.store.for_agent(&agent).await.unwrap();
+        let raw: Vec<u8> = sqlx::query_scalar("SELECT metadata FROM agents WHERE id=?")
+            .bind(&agent)
+            .fetch_one(&store.agent_pool)
+            .await
+            .unwrap();
+        let mut metadata = store.unseal_agent(&raw).unwrap();
+        metadata["compaction_thresholds"] = json!({"trigger_tokens":60000,"tail_tokens":1234});
+        sqlx::query("UPDATE agents SET metadata=? WHERE id=?")
+            .bind(store.seal_agent(&metadata).unwrap())
+            .bind(&agent)
+            .execute(&store.agent_pool)
+            .await
+            .unwrap();
+        let config = effective_compaction(&app, &sid).await.unwrap();
+        assert_eq!((config.trigger_tokens, config.tail_tokens), (60000, 1234));
     }
 
     /// `/compact` on a short idle chat reports that nothing can fold; on a busy chat it is

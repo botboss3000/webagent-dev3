@@ -10,7 +10,7 @@ export function renderCompaction(host, agent, persist) {
   hint.textContent = 'Older completed exchanges are summarized when the estimated whole model request reaches the trigger. The summary runs in the background while the agent keeps working; the agent stops to wait for it only at the ceiling. Each summary is added as a new block, and earlier blocks stay unchanged. The newest tail stays verbatim when a safe boundary permits. Changes apply at the next model call.';
   const fallback = document.createElement('p');
   fallback.className = 'ac-hint';
-  fallback.textContent = 'Context-limit fallback: if the summary trigger is higher than the System model’s effective input budget, compaction starts earlier at that budget, allowing for instructions and summary-request overhead. Your saved trigger stays unchanged. Each summary chunk must fit the System budget; if even the required instructions and minimum summary request cannot fit, the run pauses with a budget error.';
+  fallback.textContent = 'Context-limit fallback: when the System model writes the summaries and the history since the last summary would outgrow its input budget, compaction starts earlier at that budget. Your saved trigger stays unchanged. Each System summary chunk must fit that budget; if even the required instructions and minimum summary request cannot fit, the run pauses with a budget error.';
   const estimate = document.createElement('p');
   estimate.className = 'ac-hint';
   estimate.textContent = 'Token sizing is estimated, so actual provider counts can differ. Set per-model input and output budgets on Primary Models.';
@@ -75,13 +75,16 @@ export function renderCompaction(host, agent, persist) {
   host.append(summarizerWrap);
   const inherited = document.createElement('p');
   inherited.className = 'ac-hint';
-  inherited.textContent = agent.compaction_valid === false
-    ? 'Saved thresholds conflict with current app limits. Update them before the next model call.'
-    : agent.compaction_overridden ? 'Agent override saved.'
-    : 'Using app defaults: ' + agent.compaction_defaults.trigger_tokens.toLocaleString() +
-      ' trigger, ' + agent.compaction_defaults.tail_tokens.toLocaleString() + ' tail, ' +
-      (agent.compaction_defaults.ceiling_tokens ?? agent.compaction_defaults.trigger_tokens).toLocaleString() +
-      ' ceiling.';
+  const describe = () => {
+    inherited.textContent = agent.compaction_valid === false
+      ? 'Saved thresholds conflict with current app limits. Update them before the next model call.'
+      : agent.compaction_overridden ? 'Agent override saved.'
+      : 'Using app defaults: ' + agent.compaction_defaults.trigger_tokens.toLocaleString() +
+        ' trigger, ' + agent.compaction_defaults.tail_tokens.toLocaleString() + ' tail, ' +
+        (agent.compaction_defaults.ceiling_tokens ?? agent.compaction_defaults.trigger_tokens).toLocaleString() +
+        ' ceiling.';
+  };
+  describe();
   host.append(inherited);
   if (!agent.can_manage) return;
   const status = document.createElement('p');
@@ -112,7 +115,8 @@ export function renderCompaction(host, agent, persist) {
     try {
       const saved = await persist({compaction_thresholds: thresholds});
       agent = saved;
-      inherited.textContent = 'Agent override saved.';
+      describe();
+      reset.disabled = !agent.compaction_overridden;
       status.textContent = 'Saved. New model calls use these thresholds.';
     } catch (error) {
       status.textContent = 'Save failed: ' + error.message;
@@ -120,5 +124,32 @@ export function renderCompaction(host, agent, persist) {
       save.disabled = false;
     }
   });
-  host.append(save, status);
+  // Drops this agent's override so later changes to the app defaults reach it again.
+  const reset = document.createElement('button');
+  reset.type = 'button';
+  reset.className = 'ac-btn ac-btn-ghost';
+  reset.textContent = 'Use app defaults';
+  reset.disabled = !agent.compaction_overridden;
+  reset.addEventListener('click', async () => {
+    reset.disabled = true;
+    status.textContent = 'Saving…';
+    try {
+      agent = await persist({reset_compaction_thresholds: true});
+      for (const [key, input] of inputs) {
+        input.value = String(agent.compaction_thresholds[key] ?? agent.compaction_defaults[key] ??
+          agent.compaction_thresholds.trigger_tokens);
+      }
+      summarizer.value = agent.compaction_thresholds.summarizer || agent.compaction_defaults.summarizer || 'system';
+      describe();
+      status.textContent = 'Saved. New model calls use the app defaults.';
+    } catch (error) {
+      status.textContent = 'Reset failed: ' + error.message;
+    } finally {
+      reset.disabled = !agent.compaction_overridden;
+    }
+  });
+  const actions = document.createElement('div');
+  actions.className = 'ac-actions';
+  actions.append(save, reset);
+  host.append(actions, status);
 }

@@ -219,6 +219,8 @@ struct IdentityUpdate {
     manager_incoming_message: Option<crate::manager::config::IncomingMessage>,
     tool_output_policy: Option<crate::tool_output::Policy>,
     reset_tool_output_policy: Option<bool>,
+    /// Drop the agent's compaction override so the app defaults apply again.
+    reset_compaction_thresholds: Option<bool>,
 }
 async fn identity_put(
     State(app): State<App>,
@@ -232,6 +234,11 @@ async fn identity_put(
         .map_err(|message| ApiError(StatusCode::PAYLOAD_TOO_LARGE, message))?;
     if body.tool_output_policy.is_some() && body.reset_tool_output_policy.is_some() {
         return Err(crate::bad("Set a tool output policy or reset it, not both"));
+    }
+    if body.compaction_thresholds.is_some() && body.reset_compaction_thresholds.is_some() {
+        return Err(crate::bad(
+            "Set compaction thresholds or reset them, not both",
+        ));
     }
     if let Some(policy) = body.tool_output_policy.as_ref() {
         policy
@@ -247,6 +254,7 @@ async fn identity_put(
             && body.closing_message.is_none()
             && body.voice_output.is_none()
             && body.compaction_thresholds.is_none()
+            && body.reset_compaction_thresholds.is_none()
             && body.manager_incoming_message.is_none()
             && body.tool_output_policy.is_none()
             && body.reset_tool_output_policy.is_none()
@@ -309,6 +317,10 @@ async fn identity_put(
         })?;
         metadata["compaction_thresholds"] =
             serde_json::to_value(thresholds).map_err(anyhow::Error::from)?;
+    } else if body.reset_compaction_thresholds == Some(true) {
+        if let Some(fields) = metadata.as_object_mut() {
+            fields.remove("compaction_thresholds");
+        }
     }
     if let Some(policy) = body.tool_output_policy {
         metadata["tool_output_policy"] =
@@ -945,6 +957,7 @@ mod tests {
             compaction_thresholds: None,
             tool_output_policy: None,
             reset_tool_output_policy: None,
+            reset_compaction_thresholds: None,
         };
         let revision = before["revision"].as_i64().unwrap();
         let Json(saved) = identity_put(
@@ -1184,6 +1197,7 @@ mod tests {
             }),
             tool_output_policy: None,
             reset_tool_output_policy: None,
+            reset_compaction_thresholds: None,
         };
         let revision = before["revision"].as_i64().unwrap();
         let Json(saved) = identity_put(
@@ -1234,6 +1248,25 @@ mod tests {
             .0,
             StatusCode::BAD_REQUEST
         );
+        // "Use app defaults" drops the override.
+        let mut reset = update(saved["revision"].as_i64().unwrap(), trigger, tail);
+        reset.compaction_thresholds = None;
+        reset.reset_compaction_thresholds = Some(true);
+        let Json(restored) = identity_put(
+            State(app.clone()),
+            Extension(identity.clone()),
+            Path("shared_default".into()),
+            Json(reset),
+        )
+        .await
+        .unwrap();
+        assert_eq!(restored["compaction_overridden"], false);
+        assert!(
+            crate::context_compaction::agent_thresholds(&store, "shared_default")
+                .await
+                .unwrap()
+                .is_none()
+        );
         let outsider = tenant_user(&app, "compaction-outsider").await;
         assert_eq!(
             identity_put(
@@ -1280,6 +1313,7 @@ mod tests {
             manager_incoming_message: None,
             tool_output_policy: None,
             reset_tool_output_policy: None,
+            reset_compaction_thresholds: None,
         };
         let revision = before["revision"].as_i64().unwrap();
         let Json(saved) = identity_put(
@@ -1358,6 +1392,7 @@ mod tests {
             manager_incoming_message: None,
             tool_output_policy,
             reset_tool_output_policy,
+            reset_compaction_thresholds: None,
         };
         let revision = before["revision"].as_i64().unwrap();
         let Json(saved) = identity_put(
@@ -1571,6 +1606,7 @@ mod tests {
             compaction_thresholds: None,
             tool_output_policy: None,
             reset_tool_output_policy: None,
+            reset_compaction_thresholds: None,
         };
         let Json(saved) = identity_put(
             State(app.clone()),
@@ -1651,6 +1687,7 @@ mod tests {
                 compaction_thresholds: None,
                 tool_output_policy: None,
                 reset_tool_output_policy: None,
+                reset_compaction_thresholds: None,
             }),
         )
         .await
@@ -1696,6 +1733,7 @@ mod tests {
                 compaction_thresholds: None,
                 tool_output_policy: None,
                 reset_tool_output_policy: None,
+                reset_compaction_thresholds: None,
             }),
         )
         .await
@@ -1746,6 +1784,7 @@ mod tests {
                 compaction_thresholds: None,
                 tool_output_policy: None,
                 reset_tool_output_policy: None,
+                reset_compaction_thresholds: None,
             }),
         )
         .await
@@ -1771,7 +1810,8 @@ mod tests {
                 manager_incoming_message: None,
                 compaction_thresholds: None,
                 tool_output_policy: None,
-                reset_tool_output_policy: None
+                reset_tool_output_policy: None,
+                reset_compaction_thresholds: None
             })
         )
         .await
@@ -1795,7 +1835,8 @@ mod tests {
                 manager_incoming_message: None,
                 compaction_thresholds: None,
                 tool_output_policy: None,
-                reset_tool_output_policy: None
+                reset_tool_output_policy: None,
+                reset_compaction_thresholds: None
             })
         )
         .await
@@ -1820,7 +1861,8 @@ mod tests {
                 manager_incoming_message: None,
                 compaction_thresholds: None,
                 tool_output_policy: None,
-                reset_tool_output_policy: None
+                reset_tool_output_policy: None,
+                reset_compaction_thresholds: None
             })
         )
         .await

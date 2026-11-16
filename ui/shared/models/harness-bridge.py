@@ -1010,9 +1010,11 @@ def opencode_turn(command, prompt, work, model):
             elif event.get("type") == "step_finish":
                 tokens = part.get("tokens") or {}
                 cache = tokens.get("cache") or {}
-                usage["input"] += tokens.get("input", 0) + cache.get("read", 0) + cache.get("write", 0)
+                # Each step is one request; the last one's prompt is the size WebAgent's request
+                # reached (earlier steps repeat it), so prompt counts are kept, not summed.
+                usage["input"] = tokens.get("input", 0) + cache.get("read", 0) + cache.get("write", 0)
                 usage["output"] += tokens.get("output", 0)
-                usage["cached"] += cache.get("read", 0)
+                usage["cached"] = cache.get("read", 0)
                 if (work / "calls.jsonl").exists() and (work / "calls.jsonl").stat().st_size:
                     stopped = True
                     stop()
@@ -1035,10 +1037,11 @@ def opencode_turn(command, prompt, work, model):
     return session, "\n\n".join("".join(parts) for parts in texts.values() if "".join(parts).strip()), usage
 
 
-def opencode_usage(*usages):
-    """Chat-completions usage for one or more `opencode run`s; None when none reported any (some models
-    report no step usage). Cache reads are reported apart so WebAgent records them."""
-    total = {k: sum(u[k] for u in usages) for k in ("input", "output", "cached")}
+def opencode_usage(usage):
+    """Chat-completions usage for the `opencode run` that answered the call (its last step's prompt; checkpoint
+    runs are not the call's request); None when it reported none (some models report no step usage). Cache
+    reads are reported apart so WebAgent records them."""
+    total = usage
     if not (total["input"] or total["output"]):
         return None
     return {"prompt_tokens": total["input"], "completion_tokens": total["output"],
@@ -1068,7 +1071,6 @@ def answer_opencode(call, folder, state, delta):
     run = [OPENCODE, "run", "--server", opencode_server(work, model), "--agent", "webagent-bridge",
            "-m", model, "--format", "json"]
     command = run + ([] if fresh else ["-s", state["opencode_session"]])
-    usages = []
     plan = checkpoint_plan(state, "opencode_checkpoint", delta, body) \
         if fresh and "opencode_bridge" in fork_support() else None
     # The work folder is outside this repository: OpenCode would otherwise load the enclosing git project.
@@ -1079,9 +1081,8 @@ def answer_opencode(call, folder, state, delta):
             base = plan["base"]
             if plan["extend"]:
                 text = checkpoint_prompt(call, plan, folder)
-                made, _, usage = opencode_turn(
+                made, _, _ = opencode_turn(
                     with_images(run + (["-s", base["session"], "--fork"] if base else []), text), text, work, model)
-                usages.append(usage)
                 base = state["opencode_checkpoint"] = checkpoint_record(plan, state, delta, body, made)
                 (work / "calls.jsonl").unlink(missing_ok=True)
             command = run + ["-s", base["session"], "--fork"]
@@ -1103,11 +1104,10 @@ def answer_opencode(call, folder, state, delta):
         (work / "calls.jsonl").unlink(missing_ok=True)
         prompt = prompt_for(call, delta, True)
         session, text, usage = opencode_turn(with_images(run, prompt), prompt, work, model)
-    usages.append(usage)
     ended = time.time()
     calls = opencode_calls(work)
     message = parse_reply(json.dumps({"content": text, "tool_calls": calls}), body)
-    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": opencode_usage(*usages)})
+    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": opencode_usage(usage)})
     record(call, state, delta, started, ended)
     state["opencode_session"] = session
     save_state(folder, state)
@@ -1238,14 +1238,18 @@ def run_claude(command, prompt, folder):
     return output
 
 
-def claude_usage(*outputs):
-    """Chat-completions usage for one or more `claude -p` runs; cache reads are reported apart."""
-    usages = [output.get("usage") or {} for output in outputs]
-    prompt = sum(u.get(k, 0) for u in usages for k in ("input_tokens", "cache_read_input_tokens",
-                                                        "cache_creation_input_tokens"))
-    completion = sum(u.get("output_tokens", 0) for u in usages)
+def claude_usage(output):
+    """Chat-completions usage for the `claude -p` run that answered the call; cache reads are reported apart.
+    WebAgent sizes its compaction trigger from the prompt it sent, so the prompt is one request's: the CLI
+    sums every request of a run (a tool call and the reply after it are two), so its total is divided by
+    the run's request count. Checkpoint runs are not the call's request and are left out."""
+    u = output.get("usage") or {}
+    requests = max(1, int(output.get("num_turns") or 1))
+    prompt = sum(u.get(k, 0) for k in ("input_tokens", "cache_read_input_tokens",
+                                       "cache_creation_input_tokens")) // requests
+    completion = u.get("output_tokens", 0)
     return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion,
-            "prompt_tokens_details": {"cached_tokens": sum(u.get("cache_read_input_tokens", 0) for u in usages)}}
+            "prompt_tokens_details": {"cached_tokens": u.get("cache_read_input_tokens", 0) // requests}}
 
 
 def stub_calls(stub):
@@ -1262,7 +1266,6 @@ def answer_claude(call, folder, state, delta):
     (folder / "calls.jsonl").unlink(missing_ok=True)
     command = claude_command(body, folder)
     prompt = prompt_for(call, delta, fresh)
-    outputs = []
     plan = checkpoint_plan(state, "claude_checkpoint", delta, body) \
         if fresh and "claude_bridge" in fork_support() else None
     started = time.time()
@@ -1271,9 +1274,9 @@ def answer_claude(call, folder, state, delta):
             base = plan["base"]
             if plan["extend"]:
                 start = ["--resume", base["session"], "--fork-session"] if base else ["--session-id", str(uuid.uuid4())]
-                outputs.append(run_claude(command + start, checkpoint_prompt(call, plan, folder), folder))
+                made = run_claude(command + start, checkpoint_prompt(call, plan, folder), folder)
                 base = state["claude_checkpoint"] = checkpoint_record(plan, state, delta, body,
-                                                                      outputs[-1].get("session_id"))
+                                                                      made.get("session_id"))
                 (folder / "calls.jsonl").unlink(missing_ok=True)
             if not base["session"]:
                 raise RuntimeError("claude reported no checkpoint session")
@@ -1300,14 +1303,40 @@ def answer_claude(call, folder, state, delta):
         session = str(uuid.uuid4())
         output = run_claude(claude_command(body, folder) + ["--session-id", session],
                             prompt_for(call, delta, True), folder)
-    outputs.append(output)
     ended = time.time()
     message = parse_reply(json.dumps({"content": output.get("result") or "", "tool_calls": stub_calls(folder)}), body)
-    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": claude_usage(*outputs)})
+    post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": claude_usage(output)})
     record(call, state, delta, started, ended, output)
     state["claude_session"] = output.get("session_id") or session
     save_state(folder, state)
+    prune_claude_sessions(folder, state)
     print(f"{call['id']}: answered chat {call.get('session')} ({'fresh' if fresh else 'resumed'} session {state['claude_session']})")
+
+
+# The CLI keeps every session it writes, so each fork and checkpoint leaves one behind.
+CLI_SESSION_KEEP_SECS = 24 * 3600
+
+
+def claude_project(folder):
+    """Where `claude` stores the sessions of runs started in `folder` (it names the folder after the path)."""
+    return Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(folder))
+
+
+def prune_claude_sessions(folder, state, project=None, now=None):
+    """Delete this chat's Claude sessions older than CLI_SESSION_KEEP_SECS: spent forks, superseded
+    checkpoints and sessions dropped after a rewrite. The live session and current checkpoint always stay."""
+    keep = {state.get("claude_session"), (state.get("claude_checkpoint") or {}).get("session")}
+    project = project or claude_project(folder)
+    cutoff = (now or time.time()) - CLI_SESSION_KEEP_SECS
+    for path in project.glob("*.jsonl"):
+        try:
+            if path.stem in keep or path.stat().st_mtime > cutoff:
+                continue
+            path.unlink()
+        except OSError:
+            continue
+        # A session's large tool results sit beside it in a folder of the same name.
+        shutil.rmtree(project / path.stem, ignore_errors=True)
 
 
 def fork_claude(call):
@@ -1465,6 +1494,19 @@ def selftest():
     assert claude_usage({"usage": {"input_tokens": 1, "cache_read_input_tokens": 10, "output_tokens": 2}}) == \
         {"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13, "prompt_tokens_details": {"cached_tokens": 10}}
     assert opencode_usage({"input": 0, "output": 0, "cached": 0}) is None
+    # Old fork and checkpoint sessions go; the live session, the checkpoint and recent ones stay.
+    project = folder / "claude-project"
+    project.mkdir()
+    for name, age in (("live", 9e5), ("point", 9e5), ("spent", 9e5), ("recent", 60)):
+        (project / f"{name}.jsonl").write_text("{}")
+        os.utime(project / f"{name}.jsonl", (time.time() - age, time.time() - age))
+    (project / "spent").mkdir()
+    prune_claude_sessions(folder, {"claude_session": "live", "claude_checkpoint": {"session": "point"}}, project)
+    assert sorted(p.name for p in project.iterdir()) == ["live.jsonl", "point.jsonl", "recent.jsonl"]
+    assert claude_project(Path("/home/a/x.y/s-1")).name == "-home-a-x-y-s-1"
+    # A run that called a tool made two requests: the prompt is one request's, not their sum.
+    assert claude_usage({"num_turns": 2, "usage": {"input_tokens": 2, "cache_read_input_tokens": 198_000,
+                                                   "output_tokens": 30}})["prompt_tokens"] == 99_001
     message = parse_reply('{"content":"","tool_calls":[{"name":"file_list","arguments":{}}]}', body)
     assert message["tool_calls"][0]["function"] == {"name": "file_list", "arguments": "{}"}
     assert classify("Upstream request failed: [prefill_cap_refused] the cell is at capacity; retry shortly (after 30 s)") \

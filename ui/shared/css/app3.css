@@ -2454,6 +2454,16 @@ live/scheduled) */
   border: var(--border-width) solid var(--border);
   cursor: default;
 }
+/* Context limit after the role flags; empty until the model's catalog info loads. */
+.ac-saved-ctx {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-3);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.ac-saved-ctx:empty { display: none; }
 .ac-saved-cap { display: flex; align-items: center; justify-content: center; position: relative; }
 /* Save-status overlay for a saved-model box (capability checkbox / Default radio):
    the shared `.ac-save-overlay` fills its container, but a cap cell is a wide

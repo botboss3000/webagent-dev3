@@ -2330,6 +2330,14 @@ impl<
                     };
                 // Thresholds count provider tokens: convert them with this model's measured ratio.
                 compaction_config.bytes_per_token = bytes_per_token(&run, &selection);
+                // A bridge that cannot fork its session cannot summarize itself, so its folds
+                // are System folds and are planned as such (including the System budget).
+                if compaction_config.summarizer == context_compaction::Summarizer::SameModel
+                    && selection.provider.is_bridge()
+                    && !selection.provider.bridge_forks()
+                {
+                    compaction_config.summarizer = context_compaction::Summarizer::System;
+                }
                 // SYSTEM-COMPACTION-BUDGET: cap automatic/manual folds by the
                 // current pinned System candidate, including after backup selection.
                 // Missing System still pauses only when compaction is needed.

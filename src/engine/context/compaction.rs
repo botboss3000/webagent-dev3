@@ -218,6 +218,7 @@ mod tests {
     #[test]
     fn system_budget_triggers_before_configured_history_threshold() {
         let mut c = Config::configured().unwrap();
+        c.summarizer = Summarizer::System;
         c.trigger_tokens = 150_000;
         c.tail_tokens = 40_000;
         c.summary_reserve_bytes = 300;
