@@ -32,7 +32,15 @@ class CleanupTests(unittest.TestCase):
             return json.dumps([value])
         if args==("ps","-aq","--no-trunc"):return "\n".join(self.containers)
         if args[0]=="ps":return "reference"if args[-1].split("=",1)[-1]in self.refs else""
-        if args[:2]==("image","rm"):self.images.pop(args[2]);return""
+        if args[:2]==("image","rm"):
+            # Like Docker: by ID only with a single tag; each tag removed, the image with its last.
+            if args[2]in self.images:
+                if len(self.images[args[2]]["RepoTags"])>1:raise RuntimeError("Docker retention operation failed")
+                self.images.pop(args[2]);return""
+            for tag in args[2:]:
+                key=next(k for k,v in self.images.items()if tag in v["RepoTags"]);self.images[key]["RepoTags"].remove(tag)
+                if not self.images[key]["RepoTags"]:self.images.pop(key)
+            return""
         if args[0]=="rm":self.containers.pop(args[1]);return""
         raise AssertionError(args)
     def pin_old(self):
@@ -40,7 +48,7 @@ class CleanupTests(unittest.TestCase):
     def test_unknown_image_is_never_adopted_or_deleted(self):
         self.assertEqual(self.guard.cleanup(True)["removed"],[]);self.assertIn(self.image,self.images)
     def test_expired_registered_output_deleted_exactly_without_force(self):
-        self.pin_old();r=self.guard.cleanup(True);self.assertEqual(r["removed"],[{"kind":"image","id":self.image}]);self.assertIn(("image","rm",self.image),self.calls)
+        self.pin_old();r=self.guard.cleanup(True);self.assertEqual(r["removed"],[{"kind":"image","id":self.image}]);self.assertIn(("image","rm","webagent-v3-api-"+self.job+":latest"),self.calls)
         self.assertFalse(any("prune"in c for c in self.calls))
     def test_dry_run_has_candidates_but_no_docker_deletion(self):
         self.pin_old();r=self.guard.cleanup();self.assertEqual(len(r["eligible"]),1);self.assertIn(self.image,self.images)
@@ -140,7 +148,7 @@ class CleanupTests(unittest.TestCase):
     def test_delete_intent_survives_uncertain_engine_response(self):
         self.pin_old();old=self.guard.docker
         def fail(*args):
-            if args[:2]==("image","rm"):self.images.pop(args[2]);raise TimeoutError("Response lost")
+            if args[:2]==("image","rm"):self.images.pop(self.image);raise TimeoutError("Response lost")
             return old(*args)
         self.guard.docker=fail
         with self.assertRaises(TimeoutError):self.guard.cleanup(True)
@@ -333,6 +341,11 @@ class RollbackTests(unittest.TestCase):
         r=self.guard.cleanup(True)["rollbacks"]
         self.assertEqual((r["removed_containers"],r["removed_images"],r["removed_archives"]),(3,0,3))
         self.assertIn(image,self.images);self.assertTrue((self.root/"rollback/administrator"/key).exists())
+    def test_reused_image_removed_by_its_tags(self):
+        made=[self.release(n)for n in range(1,7)];key,image=made[0]
+        self.images[image]["RepoTags"].append("webagent-v3-loop-"+str(uuid.uuid4())+":latest");self.now+=7201
+        r=self.guard.cleanup(True)["rollbacks"]
+        self.assertEqual(r["removed_images"],1);self.assertNotIn(image,self.images)
     def test_large_receipts_parse_once(self):
         for n in range(80):self.receipt(str(uuid.uuid4()),log="x"*1024*1024)
         from unittest.mock import patch

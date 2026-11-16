@@ -108,6 +108,8 @@ class Retention:
         return result
     @staticmethod
     def output(value):
+        # Reused images carry one tag per release, and Docker refuses to remove such an
+        # image by ID without force; callers remove it by these checked tags instead.
         """Only exclusively canonical V3 job tags authorize image deletion."""
         tags=value.get("RepoTags")or[]
         pattern=r"(?:webagent-v3-(?:api|loop)-|webagent-dev-v3(?:-loop)?:job-)"+UUID+r"(?::latest)?"
@@ -224,7 +226,7 @@ class Retention:
                 report["eligible"].append({"kind":kind,"id":identity})
                 if apply:
                     d["intent"]={"kind":kind,"id":identity,"at":self.clock()};self.save(d)
-                    self.docker(*(["image","rm",identity]if kind=="image"else["rm",identity]))
+                    self.docker(*(["image","rm",*v["RepoTags"]]if kind=="image"else["rm",identity]))
                     d[kind+"s"].pop(identity);d.pop("intent",None);self.save(d);report["removed"].append({"kind":kind,"id":identity})
             usage=self.usage()
             if 100*(usage.total-usage.free)//usage.total<70:break
@@ -275,7 +277,7 @@ class Retention:
                     if v.get("Id")!=image or not self.output(v):continue
                     if apply and self.docker("ps","-aq","--no-trunc","--filter","ancestor="+image).strip():continue
                     if apply:
-                        self.docker("image","rm",image);d=self.load()
+                        self.docker("image","rm",*v["RepoTags"]);d=self.load()
                         if d["images"].pop(image,None)is not None:self.save(d)
                     report["removed_images"]+=1
         for key in stale_archives[:24]:
