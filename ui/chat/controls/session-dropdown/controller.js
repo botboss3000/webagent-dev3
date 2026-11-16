@@ -406,7 +406,6 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
         _closeAnimationTimer = setTimeout(_finishMenuClose, 380);
       } else {
         const startHeight = menu.getBoundingClientRect().height;
-        const endTranslate = menu.classList.contains('flip-up') ? '4px' : '-4px';
         // Suppress CSS transitions so they don't fight the WAAPI animation.
         menu.style.transition = 'none';
         const cornerRadius = getComputedStyle(menu).borderTopLeftRadius || '14px';
@@ -418,12 +417,14 @@ export function mountSessionDropdown(root, {refresh, select, guard, resetSearch 
             transform: 'translateY(0)',
           },
           {
-            maxHeight: '0px',
+            // Only the edge moves: the box keeps its size and full opacity, so the
+            // panel is covered upward instead of shrinking into a rounded stub.
+            maxHeight: `${startHeight}px`,
             clipPath: menu.classList.contains('flip-up')
               ? `inset(100% 0 0 0 round ${cornerRadius})`
               : `inset(0 0 100% 0 round ${cornerRadius})`,
-            opacity: 0,
-            transform: `translateY(${endTranslate})`,
+            opacity: 1,
+            transform: 'translateY(0)',
           },
         ], {
           duration: 720,
