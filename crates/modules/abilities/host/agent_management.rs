@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 /// Tool folders of the ability the plugin serves; their schemas live in
-/// `tools/<tool>/tool.json`. The session and sub agent tools in the same folder are served
+/// `tools/<tool>/<tool>.tool.json`. The session and sub agent tools in the same folder are served
 /// by Chat and Orchestration and listed in `orchestration::TOOLS`.
 pub const TOOLS: &[&str] = &[
     "list_agent_templates",

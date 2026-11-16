@@ -19,12 +19,12 @@ picks one up.
 - Repeat boundary: a repeat matches only within one run. After the v2 task
   progress ability is ported, consider grouping by task instead.
 - Agent-written approval wording at the approval gate, beside the fixed
-  `tool.json` warning.
+  `<tool>.tool.json` warning.
 - Abilities page: show each tool's retry-risk level, agent hint and user warning.
 - Tool audit UI: track repeat approvals/declines per tool to review risk levels.
 - Policy change requests: a "Request policy change" button; requests appear in
   the tool audit with requester, note and an admin-set status. The change itself
-  is an ordinary coding request editing `tool.json`.
+  is an ordinary coding request editing `<tool>.tool.json`.
 - Reset by citing a fix: let an agent clear the repeat guard by naming the fix.
 - Intent check: a small model judges whether an unasked write matches what the
   user asked (user messages only count as authority) and returns allow, ask or

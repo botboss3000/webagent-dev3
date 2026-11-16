@@ -147,7 +147,7 @@ const AUTOMATION_ASSETS: [&str; 6] = [
     "service/page.js",
     "service/page.css",
 ];
-/// Every runtime asset, each tool's `tools/<tool>/tool.json` included, so a definition edit
+/// Every runtime asset, each tool's `tools/<tool>/<tool>.tool.json` included, so a definition edit
 /// changes the package's runtime identity without changing its build key.
 fn automation_assets() -> Vec<String> {
     AUTOMATION_ASSETS
@@ -156,7 +156,7 @@ fn automation_assets() -> Vec<String> {
         .chain(
             AUTOMATION_TOOLS
                 .iter()
-                .map(|tool| format!("tools/{tool}/tool.json")),
+                .map(|tool| format!("tools/{tool}/{tool}.tool.json")),
         )
         .collect()
 }
@@ -906,7 +906,7 @@ pub mod registered_tests {
                 let tool = json!({"name":name,"description":"private schema fixture","effect":effect,
                 "parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}});
                 std::fs::write(
-                    root.join(format!("tools/{name}/tool.json")),
+                    root.join(format!("tools/{name}/{name}.tool.json")),
                     serde_json::to_vec(&tool).unwrap(),
                 )
                 .unwrap();

@@ -155,7 +155,12 @@ fn ability(
     for path in paths {
         if old.get(path) == new.get(path)
             || in_tool_folder(path).is_some_and(|tool| {
-                old_tools.contains(tool) && new_tools.contains(tool) && path.ends_with("/tool.json")
+                old_tools.contains(tool)
+                    && new_tools.contains(tool)
+                    && path.ends_with(&format!(
+                        "/{}",
+                        crate::tool_definitions::definition_file(tool)
+                    ))
             })
         {
             continue;
@@ -210,7 +215,7 @@ fn ability(
     }
 }
 
-/// A changed `tool.json`: adopt it when only the description or role defaults changed,
+/// A changed `<tool>.tool.json`: adopt it when only the description or role defaults changed,
 /// otherwise turn the tool off.
 fn definition(
     drift: &mut Drift,
@@ -219,7 +224,7 @@ fn definition(
     old: &BTreeMap<String, Vec<u8>>,
     new: &BTreeMap<String, Vec<u8>>,
 ) {
-    let path = format!("tools/{tool}/tool.json");
+    let path = format!("tools/{tool}/{tool}.tool.json");
     if old.get(&path) == new.get(&path) {
         return;
     }
@@ -398,7 +403,8 @@ fn guidance_file(id: &str, path: &str) -> Option<(&'static str, String)> {
         return Some(("ability", id.to_owned()));
     }
     if let Some(tool) = in_tool_folder(path) {
-        return (path == format!("tools/{tool}/tool.skill.md")).then(|| ("tool", tool.to_owned()));
+        return (path == format!("tools/{tool}/{tool}.skill.md"))
+            .then(|| ("tool", tool.to_owned()));
     }
     let name = |prefix: &str| {
         path.strip_prefix(prefix)
@@ -440,17 +446,17 @@ mod tests {
             write(root, "Core/files/adapter.rs", "fn main() {}");
             write(
                 root,
-                "Core/files/tools/read_file/tool.json",
+                "Core/files/tools/read_file/read_file.tool.json",
                 &tool("read_file", "Read", "read", "allow"),
             );
             write(
                 root,
-                "Core/files/tools/read_file/tool.skill.md",
+                "Core/files/tools/read_file/read_file.skill.md",
                 "Read guidance",
             );
             write(
                 root,
-                "Core/files/tools/write_file/tool.json",
+                "Core/files/tools/write_file/write_file.tool.json",
                 &tool("write_file", "Write", "write", "allow"),
             );
             write(
@@ -479,12 +485,12 @@ mod tests {
         let (_temp, old, new) = trees();
         write(
             &new,
-            "Core/files/tools/read_file/tool.json",
+            "Core/files/tools/read_file/read_file.tool.json",
             &tool("read_file", "Read a file", "read", "require_approval"),
         );
         write(
             &new,
-            "Core/files/tools/read_file/tool.skill.md",
+            "Core/files/tools/read_file/read_file.skill.md",
             "New read guidance",
         );
         write(
@@ -500,7 +506,7 @@ mod tests {
         );
         assert_eq!(
             drift.guidance("files", "tool", "read_file").unwrap(),
-            new.join("Core/files/tools/read_file/tool.skill.md")
+            new.join("Core/files/tools/read_file/read_file.skill.md")
         );
         assert_eq!(
             drift.guidance("files", "ability", "files").unwrap(),
@@ -514,10 +520,14 @@ mod tests {
         let (_temp, old, new) = trees();
         write(
             &new,
-            "Core/files/tools/read_file/tool.json",
+            "Core/files/tools/read_file/read_file.tool.json",
             &tool("read_file", "Read", "write", "allow"),
         );
-        write(&new, "Core/files/tools/write_file/tool.json", "{");
+        write(
+            &new,
+            "Core/files/tools/write_file/write_file.tool.json",
+            "{",
+        );
         fs::remove_dir_all(new.join("Core/notes")).unwrap();
         let drift = compare(&old, &new).unwrap();
         assert!(
@@ -547,7 +557,7 @@ mod tests {
         let (_temp, old, new) = trees();
         write(
             &new,
-            "Core/files/tools/move_file/tool.json",
+            "Core/files/tools/move_file/move_file.tool.json",
             &tool("move_file", "Move", "write", "allow"),
         );
         write(&new, "Core/files/adapter.rs", "fn main() { changed() }");
@@ -590,10 +600,13 @@ mod tests {
     #[test]
     fn a_symlinked_definition_reads_as_missing() {
         let (_temp, old, new) = trees();
-        let path = new.join("Core/files/tools/read_file/tool.json");
+        let path = new.join("Core/files/tools/read_file/read_file.tool.json");
         fs::remove_file(&path).unwrap();
-        std::os::unix::fs::symlink(old.join("Core/files/tools/read_file/tool.json"), &path)
-            .unwrap();
+        std::os::unix::fs::symlink(
+            old.join("Core/files/tools/read_file/read_file.tool.json"),
+            &path,
+        )
+        .unwrap();
         let drift = compare(&old, &new).unwrap();
         assert!(drift.disabled("read_file"));
         assert_eq!(drift.notices[0].change, Change::InvalidTool);

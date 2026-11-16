@@ -270,7 +270,7 @@ export async function renderAbilities(host, request, options) {
         const level = data.capability_levels?.levels?.[levelId];
         const policy = structuredClone(level || data.permissions || {});
         policy.tool_permissions ||= {};
-        // Choosing the tool.json default clears this level's override.
+        // Choosing the <tool>.tool.json default clears this level's override.
         if (mode === effectiveTool.default) delete policy.tool_permissions[tool.name];
         else policy.tool_permissions[tool.name] = mode;
         try {

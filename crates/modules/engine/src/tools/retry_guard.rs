@@ -15,7 +15,7 @@ const DEFAULT_WARNING: &str =
 const MAX_DECISIONS: usize = 64;
 
 /// The chat's own control tools. They keep the conversation working, so they are never
-/// repeat-guarded and no `tool.json` or admin setting can change that.
+/// repeat-guarded and no `<tool>.tool.json` or admin setting can change that.
 pub const EXEMPT: &[&str] = &[
     "publish_main_message",
     "compact_context",

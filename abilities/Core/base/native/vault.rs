@@ -17,7 +17,7 @@ pub fn owns(name: &str) -> bool {
     )
 }
 /// Built-in Base tools this module executes; each one's schema and effect live in its
-/// `abilities/Core/base/tools/<tool>/tool.json`.
+/// `abilities/Core/base/tools/<tool>/<tool>.tool.json`.
 pub const TOOLS: &[&str] = &["check_credential", "request_credential", "list_vault_keys"];
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

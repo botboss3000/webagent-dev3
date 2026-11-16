@@ -1,4 +1,4 @@
-//! Per-tool folders: `<ability>/tools/<tool>/tool.json` plus an optional `tool.skill.md`.
+//! Per-tool folders: `<ability>/tools/<tool>/<tool>.tool.json` plus an optional `<tool>.skill.md`.
 //! A definition holds the model-facing schema, the tool's effect and its default access
 //! per built-in role. The executable handler stays compiled Rust and is matched by name;
 //! a definition never selects code. An invalid folder disables only that tool.
@@ -77,7 +77,7 @@ pub struct ToolDefinition {
     /// Offered in every session without loading, and exempt from ability and tier gating;
     /// the tool's own policy still applies. Absent or null means false.
     #[serde(default)]
-    pub pre_loaded: Option<bool>,
+    pub core: Option<bool>,
     #[serde(default)]
     pub repeat_guard: RepeatGuard,
     /// One line added to argument errors to guide the agent's next call.
@@ -99,10 +99,10 @@ pub struct ToolMatch {
 }
 
 impl ToolDefinition {
-    /// Parse and validate one `tool.json`; `folder` is the tool folder's name.
+    /// Parse and validate one `<tool>.tool.json`; `folder` is the tool folder's name.
     pub fn parse(bytes: &[u8], folder: &str) -> Result<Self> {
-        let definition: Self = serde_json::from_slice(bytes)
-            .with_context(|| format!("Invalid tool.json: {folder}"))?;
+        let definition: Self =
+            serde_json::from_slice(bytes).with_context(|| format!("Invalid {folder}.tool.json"))?;
         definition.validate(folder)?;
         Ok(definition)
     }
@@ -216,11 +216,21 @@ impl ToolDefinition {
     }
 }
 
-/// Where a tool's skill text lives: its folder's `tool.skill.md`, or the legacy flat file.
+/// A tool folder's definition file name: `<tool>.tool.json`.
+pub fn definition_file(name: &str) -> String {
+    format!("{name}.tool.json")
+}
+
+/// A tool folder's skill file name: `<tool>.skill.md`.
+pub fn skill_file(name: &str) -> String {
+    format!("{name}.skill.md")
+}
+
+/// Where a tool's skill text lives: its folder's `<tool>.skill.md`, or the legacy flat file.
 pub fn skill_path(ability: &Path, name: &str) -> PathBuf {
     let folder = ability.join("tools").join(name);
     if folder.is_dir() {
-        folder.join("tool.skill.md")
+        folder.join(skill_file(name))
     } else {
         ability.join("tools").join(format!("{name}.skill.md"))
     }
@@ -295,12 +305,13 @@ fn read_tool(folder: &Path) -> Result<FolderTool> {
         .ok_or_else(|| anyhow!("Invalid tool folder: {}", folder.display()))?
         .to_owned();
     let mut hasher = Sha256::new();
-    let definition = crate::catalog::read_bytes(&folder.join("tool.json"), MAX_DEFINITION_BYTES)
-        .and_then(|bytes| {
-            hasher.update(&bytes);
-            ToolDefinition::parse(&bytes, &name)
-        });
-    let skill = crate::catalog::optional_skill(&folder.join("tool.skill.md"))?;
+    let definition =
+        crate::catalog::read_bytes(&folder.join(definition_file(&name)), MAX_DEFINITION_BYTES)
+            .and_then(|bytes| {
+                hasher.update(&bytes);
+                ToolDefinition::parse(&bytes, &name)
+            });
+    let skill = crate::catalog::optional_skill(&folder.join(skill_file(&name)))?;
     if let Some(text) = &skill {
         hasher.update(text.as_bytes());
     }
@@ -312,8 +323,8 @@ fn read_tool(folder: &Path) -> Result<FolderTool> {
     })
 }
 
-/// The manifest digest with every tool folder folded in, so an edited `tool.json` or
-/// `tool.skill.md` changes the ability's identity like an edited manifest does.
+/// The manifest digest with every tool folder folded in, so an edited `<tool>.tool.json` or
+/// `<tool>.skill.md` changes the ability's identity like an edited manifest does.
 pub fn folded_digest(manifest_digest: &str, tools: &[FolderTool]) -> String {
     let mut digest = Sha256::new();
     digest.update(manifest_digest.as_bytes());
@@ -422,9 +433,9 @@ pub fn get(name: &str) -> Option<&'static ToolDefinition> {
     definitions().get(name)
 }
 
-/// Whether `name`'s tool.json sets `pre_loaded: true`.
-pub fn is_pre_loaded(name: &str) -> bool {
-    get(name).is_some_and(|definition| definition.pre_loaded == Some(true))
+/// Whether `name`'s `<tool>.tool.json` sets `core: true`.
+pub fn is_core(name: &str) -> bool {
+    get(name).is_some_and(|definition| definition.core == Some(true))
 }
 
 #[cfg(test)]
@@ -434,7 +445,11 @@ mod tests {
     fn write(folder: &Path, name: &str, body: &Value) {
         let path = folder.join("tools").join(name);
         fs::create_dir_all(&path).unwrap();
-        fs::write(path.join("tool.json"), serde_json::to_vec(body).unwrap()).unwrap();
+        fs::write(
+            path.join(definition_file(name)),
+            serde_json::to_vec(body).unwrap(),
+        )
+        .unwrap();
     }
     fn body(name: &str) -> Value {
         json!({"name":name,"description":"Look something up","effect":"read",
@@ -451,7 +466,7 @@ mod tests {
         let mut extra = body("extra");
         extra["effect"] = json!("delete");
         write(&ability, "extra", &extra);
-        fs::write(ability.join("tools/lookup/tool.skill.md"), "Use it well.").unwrap();
+        fs::write(ability.join("tools/lookup/lookup.skill.md"), "Use it well.").unwrap();
         let tools = read_folder(&ability).unwrap().unwrap();
         assert_eq!(
             tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
@@ -492,32 +507,36 @@ mod tests {
     }
 
     #[test]
-    fn pre_loaded_defaults_to_false_when_absent_or_null() {
+    fn core_defaults_to_false_when_absent_or_null() {
         let parse = |value: Option<Value>| {
             let mut tool = body("lookup");
             if let Some(value) = value {
-                tool["pre_loaded"] = value;
+                tool["core"] = value;
             }
             ToolDefinition::parse(&serde_json::to_vec(&tool).unwrap(), "lookup")
                 .unwrap()
-                .pre_loaded
+                .core
                 == Some(true)
         };
         assert!(!parse(None));
         assert!(!parse(Some(Value::Null)));
         assert!(!parse(Some(json!(false))));
         assert!(parse(Some(json!(true))));
-        // The base loaders and background_cancel ship pre-loaded.
+        // The harness basics ship as core.
         for name in [
-            "list_tools",
-            "load_tool",
-            "list_skills",
             "load_skill",
+            "list_skills",
             "background_cancel",
+            "background_status",
+            "present_chat_component",
+            "search_this_session",
+            "read_attachment",
+            "compact_context",
+            "recall_compacted",
         ] {
-            assert!(is_pre_loaded(name), "{name}");
+            assert!(is_core(name), "{name}");
         }
-        assert!(!is_pre_loaded("file_write"));
+        assert!(!is_core("file_write"));
     }
 
     #[test]

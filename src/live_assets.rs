@@ -118,17 +118,19 @@ pub(crate) mod native_schema_file_tests {
         let Ok(abilities) = std::fs::read_dir(&checkout) else {
             return root;
         };
+        let file =
+            |tool: &std::fs::DirEntry| format!("{}.tool.json", tool.file_name().to_string_lossy());
         for ability in abilities.flatten() {
             let Ok(tools) = std::fs::read_dir(ability.path().join("tools")) else {
                 continue;
             };
             for tool in tools
                 .flatten()
-                .filter(|tool| tool.path().join("tool.json").is_file())
+                .filter(|tool| tool.path().join(file(tool)).is_file())
             {
                 let folder = target.join(tool.file_name());
                 std::fs::create_dir_all(&folder).unwrap();
-                std::fs::copy(tool.path().join("tool.json"), folder.join("tool.json")).unwrap();
+                std::fs::copy(tool.path().join(file(&tool)), folder.join(file(&tool))).unwrap();
             }
         }
         root
@@ -136,7 +138,7 @@ pub(crate) mod native_schema_file_tests {
     fn definition(root: &std::path::Path, name: &str) -> PathBuf {
         root.join("abilities/Administrator/native_tools/tools")
             .join(name)
-            .join("tool.json")
+            .join(format!("{name}.tool.json"))
     }
     pub(crate) fn change_parameter(root: &std::path::Path) {
         let path = definition(root, "build_work");

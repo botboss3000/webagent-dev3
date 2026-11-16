@@ -14,7 +14,7 @@ const FILE_LIMIT: usize = 100;
 pub fn owns(name: &str) -> bool {
     TOOLS.contains(&name)
 }
-/// Tools this module executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+/// Tools this module executes; their schemas live in the ability's `tools/<tool>/<tool>.tool.json`.
 pub const TOOLS: &[&str] = &[
     "knowledge_file_list",
     "knowledge_file_search",

@@ -12,7 +12,7 @@ const USER_AGENT: &str = "WebAgent-v3/1.0 (+https://webagent.live)";
 pub fn owns(name: &str) -> bool {
     matches!(name, "get_weather" | "maps_geocode")
 }
-/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/<tool>.tool.json`.
 pub const TOOLS: &[&str] = &["get_weather", "maps_geocode"];
 fn five() -> usize {
     5

@@ -17,7 +17,7 @@ use crate::{api, digest, model_selection, shared_chat, App, State};
 pub fn owns(name: &str) -> bool {
     name == image::TOOL
 }
-/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/<tool>.tool.json`.
 pub const TOOLS: &[&str] = &[image::TOOL];
 /// Model-facing schemas for [`TOOLS`].
 pub fn schemas() -> Vec<Value> {

@@ -42,7 +42,7 @@ pub fn owns(name: &str) -> bool {
     )
 }
 
-/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/<tool>.tool.json`.
 pub const TOOLS: &[&str] = &[
     "start_spawn",
     "start_session",

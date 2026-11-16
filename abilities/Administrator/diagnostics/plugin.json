@@ -32,10 +32,10 @@
       "diagnostics.json",
       "skills/diagnostics.skill.md",
       "skills/journey_testing.skill.md",
-      "tools/read_diagnostics/tool.json",
-      "tools/read_diagnostics/tool.skill.md",
-      "tools/agent_review/tool.json",
-      "tools/agent_review/tool.skill.md"
+      "tools/read_diagnostics/read_diagnostics.tool.json",
+      "tools/read_diagnostics/read_diagnostics.skill.md",
+      "tools/agent_review/agent_review.tool.json",
+      "tools/agent_review/agent_review.skill.md"
     ]
   }
 }

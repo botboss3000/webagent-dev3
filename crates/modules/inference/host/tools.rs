@@ -13,7 +13,7 @@ use webagent_accounts_host::AccountsStore;
 
 use crate::{api, shared_chat, App, State};
 
-/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/<tool>.tool.json`.
 pub const TOOLS: &[&str] = &[
     "find_setting",
     "change_user_setting",

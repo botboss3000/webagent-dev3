@@ -46,6 +46,7 @@
     ],
     "additionalProperties": false
   },
+  "core": true,
   "effect": "read",
   "default_policy": {
     "operator": "allow",

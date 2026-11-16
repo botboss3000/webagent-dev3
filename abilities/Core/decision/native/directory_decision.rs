@@ -21,7 +21,7 @@ pub fn owns(name: &str) -> bool {
     name == "score_directory_with_jev"
 }
 
-/// Tools this module executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+/// Tools this module executes; their schemas live in the ability's `tools/<tool>/<tool>.tool.json`.
 pub const TOOLS: &[&str] = &["score_directory_with_jev"];
 
 #[derive(Deserialize)]

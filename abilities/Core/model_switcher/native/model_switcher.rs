@@ -15,7 +15,7 @@ pub fn owns(name: &str) -> bool {
         "list_models" | "set_model" | "use_premium_model" | "set_effort" | "reset_to_default"
     )
 }
-/// Tools this module executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+/// Tools this module executes; their schemas live in the ability's `tools/<tool>/<tool>.tool.json`.
 pub const TOOLS: &[&str] = &[
     "list_models",
     "set_model",

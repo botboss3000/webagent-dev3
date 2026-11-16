@@ -236,9 +236,9 @@ impl<
                 reason: access::Reason::CallerDenied,
             };
         }
-        // Pre-loaded tools (tool.json `pre_loaded`) skip ability and tier gating; the
+        // Core tools (`core: true` in `<tool>.tool.json`) skip ability and tier gating; the
         // loaders among them only list tools that are still decided here on their own.
-        if webagent_abilities::tool_definitions::is_pre_loaded(name) {
+        if webagent_abilities::tool_definitions::is_core(name) {
             return access.tool_decision(name, true, true);
         }
         let (available, visible) = self.abilities.tool_gate(name, visibility, state, loaded);

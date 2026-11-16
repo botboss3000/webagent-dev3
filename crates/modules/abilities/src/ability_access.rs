@@ -1,4 +1,4 @@
-//! What each ability declares about access, as tools declare theirs in `tool.json`: its
+//! What each ability declares about access, as tools declare theirs in `<tool>.tool.json`: its
 //! manifest's `default_policy` by capability level, `owner_tier` (the app tiers whose
 //! owners' agents may have it) and `role_access` (the built-in roles that may ever have
 //! it). Read once per process from the same abilities folder as the tool definitions. The
@@ -299,7 +299,11 @@ mod tests {
             for group in fs::read_dir(&root).unwrap().flatten() {
                 let tools = group.path().join(id).join("tools");
                 for tool in fs::read_dir(tools).into_iter().flatten().flatten() {
-                    let Ok(bytes) = fs::read(tool.path().join("tool.json")) else {
+                    let Ok(bytes) =
+                        fs::read(tool.path().join(crate::tool_definitions::definition_file(
+                            &tool.file_name().to_string_lossy(),
+                        )))
+                    else {
                         continue;
                     };
                     let manifest: Value = serde_json::from_slice(&bytes).unwrap();

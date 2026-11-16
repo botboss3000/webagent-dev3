@@ -5,7 +5,7 @@ use crate::{App, CancellationToken};
 use anyhow::Result;
 use serde_json::Value;
 
-/// Tool folders of the ability; their schemas live in `tools/<tool>/tool.json`.
+/// Tool folders of the ability; their schemas live in `tools/<tool>/<tool>.tool.json`.
 pub const TOOLS: &[&str] = &["web_search", "web_read"];
 
 /// Whether the plugin serves `name`.

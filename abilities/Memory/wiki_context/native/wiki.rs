@@ -17,7 +17,7 @@ const ARTICLE_LIMIT: usize = 1000;
 pub fn owns(name: &str) -> bool {
     TOOLS.contains(&name)
 }
-/// Tools this module executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+/// Tools this module executes; their schemas live in the ability's `tools/<tool>/<tool>.tool.json`.
 pub const TOOLS: &[&str] = &[
     "wiki_search",
     "wiki_list",

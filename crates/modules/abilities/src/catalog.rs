@@ -1383,8 +1383,8 @@ impl<H: Host> Catalog<H> {
     }
 
     fn tool_mode<'a>(visibility: &'a Value, name: &str) -> &'a str {
-        // Abilities are groups: tools load one by one, so pre-loaded tools stay visible.
-        if crate::tool_definitions::is_pre_loaded(name) {
+        // Abilities are groups: tools load one by one, so core tools stay visible.
+        if crate::tool_definitions::is_core(name) {
             return "visible";
         }
         Self::exposure(visibility, "tool_modes", name, "discoverable")

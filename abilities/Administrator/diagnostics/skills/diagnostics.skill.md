@@ -9,6 +9,6 @@ With `issues: true`, `read_diagnostics` returns the conversation tree's grouped 
 
 ## Tool folder layout and review notes
 
-A tool folder may hold only `tool.skill.md`; placeholder `dev_*` folders can be empty. Read the folder before assuming a `tool.json` exists.
+A tool folder may hold only `<tool>.skill.md`; placeholder `dev_*` folders can be empty. Read the folder before assuming a `<tool>.tool.json` exists.
 
 If a review step names `agent_review` but the tool is not in this session, activate the diagnostics ability first; the notice can arrive before that ability is loaded.

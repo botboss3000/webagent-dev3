@@ -10,7 +10,7 @@ use webagent_host_core::{digest, now};
 pub fn owns(name: &str) -> bool {
     name == "set_app_view"
 }
-/// Tools this module executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+/// Tools this module executes; their schemas live in the ability's `tools/<tool>/<tool>.tool.json`.
 pub const TOOLS: &[&str] = &["set_app_view"];
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

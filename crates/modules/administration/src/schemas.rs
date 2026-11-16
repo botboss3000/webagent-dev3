@@ -101,7 +101,11 @@ mod tests {
         let definition = json!({"name":name,"description":description,"effect":"read",
             "default_policy":{"operator":"allow"},
             "parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}});
-        fs::write(folder.join("tool.json"), definition.to_string()).expect("tool.json");
+        fs::write(
+            folder.join(format!("{name}.tool.json")),
+            definition.to_string(),
+        )
+        .expect("tool definition");
     }
 
     #[test]

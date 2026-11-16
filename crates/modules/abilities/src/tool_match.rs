@@ -188,7 +188,7 @@ pub fn rank(
     ranked
 }
 
-/// Hints for compiled tools that have no `tool.json`: `(name, examples, keywords)`.
+/// Hints for compiled tools that have no `<tool>.tool.json`: `(name, examples, keywords)`.
 const COMPILED: &[(&str, &[&str], &[&str])] = &[
     (
         "file_list",
@@ -560,7 +560,7 @@ const COMPILED: &[(&str, &[&str], &[&str])] = &[
     ),
 ];
 
-/// A tool's discovery hints: its `tool.json` `match` block, else the compiled table.
+/// A tool's discovery hints: its `<tool>.tool.json` `match` block, else the compiled table.
 pub fn hints(name: &str) -> (Vec<String>, Vec<String>) {
     let owned = |items: &[&str]| items.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
     if let Some(found) = crate::tool_definitions::get(name).and_then(|d| d.match_data.as_ref()) {

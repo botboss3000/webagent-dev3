@@ -43,7 +43,7 @@ pub(crate) use dispatch::call_raw;
 pub(crate) use dispatch::{call, call_foreground};
 use serde_json::{json, Value};
 use std::sync::OnceLock;
-/// A tool's repeat policy: reads are never repeat-guarded; a write uses its `tool.json`
+/// A tool's repeat policy: reads are never repeat-guarded; a write uses its `<tool>.tool.json`
 /// retry fields. Without them, workspace-confined coding tools (shell, python) are low
 /// risk, since their effects can be inspected and reverted, and every other write is high.
 pub fn retry(name: &str) -> webagent_engine::tools::retry_guard::Retry {

@@ -10,7 +10,7 @@ The first general-loader migration requires an engine release.
 A compiled ability declares each tool in its own folder,
 `abilities/<Group>/<ability_id>/tools/<tool>/`, and leaves `tools` out of
 its manifest; a packaged ability whose package contract checks the manifest list keeps
-it, naming exactly its tool folders. `tool.json` holds:
+it, naming exactly its tool folders. `<tool>.tool.json` holds:
 
 - `name` (the folder name), `description`, JSON-schema `parameters`, optional `strict`.
 - `effect`: `read` or `write`. It says whether the tool changes anything and drives
@@ -26,33 +26,34 @@ it, naming exactly its tool folders. `tool.json` holds:
   `["operator"]`. A hard limit: no level setting widens it, and the tool is hidden from
   other roles. Without it the ability's list applies, then every role. A custom level
   counts as the built-in role it starts from.
-- `pre_loaded` (optional, default false; null counts as false): `true` offers the tool
+- `core` (optional, default false; null counts as false): `true` offers the tool
   in every session without loading it, and skips ability and tier gating. Its own
-  policy still applies. The Base loaders and `background_cancel` set it.
+  policy still applies. Base's harness tools (loaders, background control, chat panels,
+  session search, attachments and compaction) set it.
 - `repeat_guard` (optional): `risk` (`none`, `low`, `high`; a write defaults to high),
   `hint` (what the agent verifies before repeating) and `warning` (what the user is told).
 - `usage_hint` (optional): one line added to argument errors to guide the next call.
 
-`tool.skill.md` is its optional guidance. The handler stays compiled Rust and lists the
+`<tool>.skill.md` is its optional guidance. The handler stays compiled Rust and lists the
 tool in its adapter's `TOOLS`. At startup every listed handler must have a valid folder
 and every folder a handler; a missing or invalid folder disables only that tool. Every
-tool an ability lists has a `tool.json`; a tool not built yet keeps a skeleton (empty
+tool an ability lists has a `<tool>.tool.json`; a tool not built yet keeps a skeleton (empty
 `parameters`, no handler) so its access is declared.
 Abilities not yet moved keep the manifest `tools` list and flat `tools/<tool>.skill.md`.
 
 ## Ability access defaults and app tiers
 
-An ability's manifest may declare `default_policy` per role, like `tool.json`. It is
+An ability's manifest may declare `default_policy` per role, like `<tool>.tool.json`. It is
 shown on the Abilities page ("Default: …") but grants nothing: a level with no saved
 permission for the ability (and no `*`) keeps it off, so a new ability stays off for
 existing agents until an Operator switches it on. Once on, its tools without a saved
-permission use their `tool.json` defaults and its skills their `default_mode`.
+permission use their `<tool>.tool.json` defaults and its skills their `default_mode`.
 
 Every ability manifest must declare `owner_tier`, the app tiers whose owners' agents may
 have it (for example `["free", "administrator"]`); a manifest without it is reported and
 the ability works for no one. The agent owner's tier decides: an ability the owner's
 tier lacks stays offered but its tools fail with the tier reason (its saved settings are
-kept and return on an upgrade). A `tool.json` may declare its own `owner_tier`, which
+kept and return on an upgrade). A `<tool>.tool.json` may declare its own `owner_tier`, which
 overrides its ability's list; a tool several abilities provide works through any the
 owner's tier allows. A manifest may also declare `role_access`, a hard limit on which
 built-in roles may have the ability. Administrator-group abilities must list exactly
@@ -63,8 +64,8 @@ administrator caller (`crates/modules/abilities/src/ability_access.rs`,
 The running app compares `/code/abilities` with the published release
 it runs (`crates/modules/abilities/src/drift.rs`, rechecked at most every five seconds).
 Edits to a tool's description or `default_policy`, and changed guidance text
-(`tool.skill.md`, `<id>.skill.md`, `skills/*.skill.md`), apply at once with no notice.
-A removed tool or ability, an invalid `tool.json`, or a `tool.json` whose name,
+(`<tool>.skill.md`, `<id>.skill.md`, `skills/*.skill.md`), apply at once with no notice.
+A removed tool or ability, an invalid `<tool>.tool.json`, or a `<tool>.tool.json` whose name,
 parameters, effect or `strict` changed turns that tool off at once. Added abilities and
 tools stay inactive, and changed code or manifests keep the last build running. Every
 change that needs a rebuild is listed in an administrator-only popup

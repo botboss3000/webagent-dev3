@@ -11,7 +11,7 @@ use webagent_host_core::digest;
 pub fn owns(name: &str) -> bool {
     name == "offer_choices"
 }
-/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/<tool>.tool.json`.
 pub const TOOLS: &[&str] = &["offer_choices"];
 
 fn choices(id: &str, prompt: &str, options: &[Value]) -> Result<Value> {

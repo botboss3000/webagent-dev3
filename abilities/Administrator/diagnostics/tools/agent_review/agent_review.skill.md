@@ -19,8 +19,8 @@ do not reconstruct it from the transcript.
    note `unrecovered_runs` — failures that never succeeded — the `rework` counts
    (`rewritten_files`, `repeated_screenshots`, `other_workspace_writes`), and the
    `artifacts` against `artifact_calls` ratio, which shows captures that produced nothing.
-3. Find the likely cause read-only: the tool's `tool.json` description and schema, its
-   `tool.skill.md`, the skill that told the agent to call it, and the tool's source when
+3. Find the likely cause read-only: the tool's `<tool>.tool.json` description and schema, its
+   `<tool>.skill.md`, the skill that told the agent to call it, and the tool's source when
    the template points at mechanics. Distinguish an agent misunderstanding (unclear
    description or skill), a missing tool capability, a tool bug, and engine behaviour
    (retry guard, timeouts, limits).

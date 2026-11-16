@@ -15,7 +15,7 @@ const MESSAGE_STATUSES: [&str; 4] = ["new", "contacted", "resolved", "closed"];
 pub fn owns(name: &str) -> bool {
     TOOLS.contains(&name)
 }
-/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/<tool>.tool.json`.
 pub const TOOLS: &[&str] = &[
     "request_human",
     "staff_message_send",

@@ -17,7 +17,7 @@ pub fn owns(name: &str) -> bool {
         "save_file" | "list_user_files" | "read_user_file" | "attach_file"
     )
 }
-/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/tool.json`.
+/// Tools this adapter executes; their schemas live in the ability's `tools/<tool>/<tool>.tool.json`.
 pub const TOOLS: &[&str] = &[
     "save_file",
     "list_user_files",
