@@ -1,4 +1,4 @@
-import {createSettingsRow} from './settings-row.js';
+import {createSettingsRow} from '../../../../shared/settings-register.js';
 import {requestTouchVibration} from '../../../../shared/vibrate.js';
 const node=(tag,text='',cls='')=>{const el=document.createElement(tag);el.textContent=text;el.className=cls;return el;};
 const select=(label,options,value)=>{const input=node('select','','ac-input');input.setAttribute('aria-label',label);for(const [id,text]of options){const option=node('option',text);option.value=id;input.append(option);}input.value=value;return input;};

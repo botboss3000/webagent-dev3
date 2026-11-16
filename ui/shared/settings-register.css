@@ -1,11 +1,11 @@
-/* Identity settings register: a category list whose rows open one panel at a time. */
-/* empty section anchors: keep live sections connected, never display them */
-.ir-anchors {
+/* Settings register: a category list whose rows open one page at a time. */
+/* Empty section anchors: keep live sections connected, never display them. */
+.sr-anchors {
   display: none;
 }
 
-/* staging for sections while they load; never visible, never in flow */
-.ir-stage {
+/* Staging for sections while they load; never visible, never in flow. */
+.sr-stage {
   position: fixed;
   top: 0;
   left: -200vw;
@@ -14,27 +14,32 @@
   pointer-events: none;
 }
 
-.ir-shell {
+/* A category's section is only a mount point for its page. */
+.sr-section {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.sr-shell {
   padding: 6px 0 16px;
 }
-.ir-stack {
+.sr-stack {
   display: grid;
   grid-template-areas: "stack";
   min-width: 0;
 }
-.ir-stack > * {
+.sr-stack > * {
   grid-area: stack;
   min-width: 0;
 }
 
 /* ---- category list ---- */
-.ir-menu {
+.sr-menu {
   display: flex;
   flex-direction: column;
   gap: 2px;
   transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.24s ease;
 }
-.ir-row {
+.sr-row {
   display: flex;
   align-items: center;
   gap: 14px;
@@ -50,17 +55,17 @@
   -webkit-tap-highlight-color: transparent;
   transition: background-color 0.18s ease;
 }
-.ir-row:hover {
+.sr-row:hover {
   background: color-mix(in srgb, var(--fg-1) 4%, transparent);
 }
-.ir-row:active {
+.sr-row:active {
   background: color-mix(in srgb, var(--fg-1) 7%, transparent);
 }
-.ir-row:focus-visible {
+.sr-row:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
-.ir-tile {
+.sr-tile {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -72,22 +77,22 @@
   background: color-mix(in srgb, var(--fg-1) 3%, transparent);
   color: var(--fg-2);
 }
-.ir-tile svg {
+.sr-icon {
   width: 16px;
   height: 16px;
 }
-.ir-text {
+.sr-text {
   flex: 1;
   min-width: 0;
 }
-.ir-title {
+.sr-title {
   display: block;
   font-size: 13px;
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--fg-1);
 }
-.ir-hint {
+.sr-hint {
   display: block;
   margin-top: 2px;
   overflow: hidden;
@@ -97,7 +102,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ir-state {
+.sr-state {
   flex: none;
   font-size: 10px;
   font-weight: 600;
@@ -105,23 +110,24 @@
   text-transform: uppercase;
   color: var(--fg-3);
 }
+
 /* ---- one category ---- */
-.ir-detail {
+.sr-detail {
   display: flex;
   flex-direction: column;
   transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.24s ease;
 }
-.ir-detail[hidden] {
+.sr-detail[hidden] {
   display: none;
 }
-.ir-detail-head {
+.sr-detail-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 4px;
 }
-.ir-back {
+.sr-back {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -140,125 +146,86 @@
   -webkit-tap-highlight-color: transparent;
   transition: background-color 0.18s ease;
 }
-.ir-back:hover {
+.sr-back:hover {
   background: color-mix(in srgb, var(--fg-1) 4%, transparent);
 }
-.ir-back:focus-visible {
+.sr-back:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
-.ir-chev-back {
+.sr-chev-back {
   flex: none;
   width: 14px;
   height: 14px;
   color: var(--fg-3);
   transition: transform 0.2s ease;
 }
-.ir-back:hover .ir-chev-back {
+.sr-back:hover .sr-chev-back {
   transform: translateX(-2px);
 }
-.ir-toggle-slot {
+.sr-toggle-slot {
   display: flex;
   align-items: center;
   flex: none;
 }
-.ir-detail-body {
+.sr-detail-body {
   min-width: 0;
   padding: 2px 2px 4px;
 }
-.ir-detail-body .ir-page-body {
+.sr-detail-body .sr-page-body {
   padding: 0;
   border: 0;
   background: transparent;
 }
-.ir-detail-body .ac-hint:first-child {
+.sr-detail-body .ac-hint:first-child {
   margin-top: 0;
 }
 
 /* ---- slide between the list and one category ---- */
-.ir-menu.is-out-left {
+.sr-menu.is-out-left {
   opacity: 0;
   transform: translateX(-24px);
   pointer-events: none;
 }
-.ir-menu.is-in-left {
+.sr-menu.is-in-left {
   opacity: 0;
   transform: translateX(-24px);
 }
-.ir-detail.is-in-right {
+.sr-detail.is-in-right {
   opacity: 0;
   transform: translateX(24px);
 }
-.ir-detail.is-out-right {
+.sr-detail.is-out-right {
   opacity: 0;
   transform: translateX(24px);
   pointer-events: none;
 }
 
 /* the rows arrive once, staggered, when the page first paints */
-@keyframes ir-row-in {
+@keyframes sr-row-in {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: none; }
 }
-.ir-menu.is-intro .ir-row {
-  animation: ir-row-in 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+.sr-menu.is-intro .sr-row {
+  animation: sr-row-in 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
   animation-delay: calc(var(--i, 0) * 45ms);
-}
-
-/* ---- profile card inside the Profile category ---- */
-.ir-profile {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 2px 2px 14px;
-}
-.ir-avatar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 36px;
-  height: 36px;
-  border: var(--border-width) solid var(--border);
-  border-radius: 50%;
-  background: var(--accent-soft);
-  color: var(--fg-1);
-  font-size: 11px;
-  font-weight: 600;
-}
-.ir-profile-text {
-  min-width: 0;
-}
-.ir-profile-name {
-  display: block;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--fg-1);
-}
-.ir-profile-sub {
-  display: block;
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--fg-3);
-  overflow-wrap: anywhere;
 }
 
 /* Touch: the way back is a primary control, so give it a full finger target. */
 @media (pointer: coarse) {
-  .ir-back {
+  .sr-back {
     min-height: 44px;
     padding-inline: 10px 12px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ir-menu,
-  .ir-detail,
-  .ir-chev-back {
+  .sr-menu,
+  .sr-detail,
+  .sr-chev-back {
     transition: none;
   }
-  .ir-menu.is-intro .ir-row {
+  .sr-menu.is-intro .sr-row {
     animation: none;
   }
 }

@@ -1,4 +1,4 @@
-import {createSettingsRow} from './settings-row.js';
+import {createSettingsRow} from '../../../../shared/settings-register.js';
 'use strict';
 // Working-message publication belongs to one agent-wide mode; chat-mode prompts
 // continue to provide call-scoped message formatting.

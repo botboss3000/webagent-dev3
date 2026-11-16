@@ -7,7 +7,7 @@ const root=path.resolve(new URL('../../../../../',import.meta.url).pathname);
 const server=http.createServer(async(req,res)=>{
  try{
   const u=new URL(req.url,'http://localhost').pathname;
-  if(u==='/'){res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/shared/ui/shared/css/design-system.css"><link rel="stylesheet" href="/shared/ui/main-panel/agents/agents.css"><link rel="stylesheet" href="/ui/app.css"><link rel="stylesheet" href="/ui/shared/models/reference.css"><main id="host" style="padding:12px;max-width:650px"></main>');return;}
+  if(u==='/'){res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/shared/ui/shared/css/design-system.css"><link rel="stylesheet" href="/shared/ui/shared/settings-register.css"><link rel="stylesheet" href="/shared/ui/main-panel/agents/agents.css"><link rel="stylesheet" href="/shared/ui/main-panel/agents/pages/identity/identity.css"><link rel="stylesheet" href="/ui/app.css"><link rel="stylesheet" href="/ui/shared/models/reference.css"><main id="host" style="padding:12px;max-width:650px"></main>');return;}
   if(u==='/ui/vibrate.json'){res.setHeader('content-type','application/json');res.end('{"enabled":true,"duration_ms":17}');return;}
   const file=u.startsWith('/shared/')?path.resolve(root,u.slice(8)):path.resolve(root,'.'+u);
   if(!file.startsWith(root+'/ui/')&&!file.startsWith(path.join(root,'ui')+'/'))throw Error('outside');
@@ -41,31 +41,30 @@ try{
    window.remount=async()=>{await renderIdentity(document.querySelector('#host'),request,{agentId:'one'});};await remount();
   },light);
   const titles=['Profile','Member access','Website chat widget','Shared conversations','Main Chat','Context compaction','Duplicate tool results','Lifetime/budget retention','Chat modes','Review incoming messages','Working-message promotion','Final response','Voice output'];
-  const rowFor=title=>page.locator('.ir-row',{hasText:title}).first();
+  const rowFor=title=>page.locator('.sr-row',{hasText:title}).first();
   const openRow=async title=>{
    await rowFor(title).click();
-   await page.waitForFunction(()=>{const menu=document.querySelector('.ir-menu');const detail=document.querySelector('.ir-detail');return detail&&!detail.hidden&&menu&&menu.hidden;});
+   await page.waitForFunction(()=>{const menu=document.querySelector('.sr-menu');const detail=document.querySelector('.sr-detail');return detail&&!detail.hidden&&menu&&menu.hidden;});
   };
   const backToList=async()=>{
-   await page.locator('.ir-back').click();
-   await page.waitForFunction(()=>{const menu=document.querySelector('.ir-menu');return document.querySelector('.ir-detail').hidden&&!menu.hidden;});
+   await page.locator('.sr-back').click();
+   await page.waitForFunction(()=>{const menu=document.querySelector('.sr-menu');return document.querySelector('.sr-detail').hidden&&!menu.hidden;});
   };
-  const toList=async()=>{if(await page.evaluate(()=>!document.querySelector('.ir-detail').hidden))await backToList();};
-  assert.equal(await page.locator('.ir-row').count(),titles.length);
-  assert.equal(await page.locator('.ir-menu .ir-title').first().textContent(),'Profile');
+  const toList=async()=>{if(await page.evaluate(()=>!document.querySelector('.sr-detail').hidden))await backToList();};
+  assert.equal(await page.locator('.sr-row').count(),titles.length);
+  assert.equal(await page.locator('.sr-menu .sr-title').first().textContent(),'Profile');
   // Each category opens its own panel, back returns focus to its row, and opening never writes.
   for(const title of titles){
    await openRow(title);
-   assert.equal(await page.locator('.ir-detail-body').evaluate(node=>node.children.length>0),true);
+   assert.equal(await page.locator('.sr-detail-body').evaluate(node=>node.children.length>0),true);
    await backToList();
    assert.equal(await rowFor(title).evaluate(node=>node===document.activeElement),true);
   }
   assert.equal(await page.evaluate(()=>fixture.writes.length),0);
-  assert.equal(await page.locator('.ir-section-head').count(),0);
-  assert.equal(await page.locator('.ir-toggle-slot .conn-toggle-wrap').count(),0);
+  assert.equal(await page.locator('.sr-toggle-slot .conn-toggle-wrap').count(),0);
   await openRow('Review incoming messages');
-  const reviewPanel=page.locator('.ir-detail-body');
-  await page.locator('.ir-toggle-slot .conn-toggle-wrap').click();
+  const reviewPanel=page.locator('.sr-detail-body');
+  await page.locator('.sr-toggle-slot .conn-toggle-wrap').click();
   assert.equal(await page.getByLabel('Enable incoming-message review',{exact:true}).isChecked(),false);
   assert.match(await reviewPanel.innerText(),/Enter an acceptance prompt/);
   assert.equal(await page.getByLabel('Acceptance prompt',{exact:true}).evaluate(node=>node===document.activeElement),true);
@@ -73,13 +72,13 @@ try{
   await page.getByLabel('Acceptance prompt',{exact:true}).fill('Accept relevant requests');
   await page.getByRole('button',{name:'Save prompt',exact:true}).click();await page.waitForFunction(()=>fixture.agent.manager_incoming_message.criteria==='Accept relevant requests');
   assert.equal(await page.evaluate(()=>fixture.agent.manager_incoming_message.enabled),false);
-  await page.locator('.ir-toggle-slot .conn-toggle-wrap').click();await page.waitForFunction(()=>fixture.agent.manager_incoming_message.enabled);
-  await page.evaluate(()=>fixture.fail=true);await page.locator('.ir-toggle-slot .conn-toggle-wrap').click();
-  await page.waitForFunction(()=>document.querySelector('.ir-toggle-slot input[type=checkbox]').checked===true);
+  await page.locator('.sr-toggle-slot .conn-toggle-wrap').click();await page.waitForFunction(()=>fixture.agent.manager_incoming_message.enabled);
+  await page.evaluate(()=>fixture.fail=true);await page.locator('.sr-toggle-slot .conn-toggle-wrap').click();
+  await page.waitForFunction(()=>document.querySelector('.sr-toggle-slot input[type=checkbox]').checked===true);
   assert.match(await reviewPanel.innerText(),/Save failed: stale revision/);
   await toList();
   await openRow('Website chat widget');
-  await page.locator('.ir-toggle-slot .conn-toggle-wrap').click();
+  await page.locator('.sr-toggle-slot .conn-toggle-wrap').click();
   assert.equal(await page.evaluate(()=>fixture.widget.config.enabled),false);
   await page.getByRole('button',{name:'Save widget settings',exact:true}).click();await page.waitForFunction(()=>fixture.widget.config.enabled);assert.equal(await page.evaluate(()=>fixture.writes.at(-1).body.expected_revision),5);
   await toList();
@@ -100,24 +99,24 @@ try{
   await page.getByLabel('Working-message promotion',{exact:true}).selectOption('manual');await page.waitForFunction(()=>fixture.agent.message_visibility.mode==='manual');
   await toList();
   await openRow('Final response');
-  await page.getByLabel('Notification guidance',{exact:true}).fill('Updated closing');await page.locator('.ir-detail-body').getByRole('button',{name:'Save',exact:true}).click();await page.waitForFunction(()=>fixture.agent.closing_message.notification_guidance==='Updated closing');
+  await page.getByLabel('Notification guidance',{exact:true}).fill('Updated closing');await page.locator('.sr-detail-body').getByRole('button',{name:'Save',exact:true}).click();await page.waitForFunction(()=>fixture.agent.closing_message.notification_guidance==='Updated closing');
   await page.locator('[data-closing-key="require_flag"]').uncheck();await page.waitForFunction(()=>fixture.agent.closing_message.require_flag===false);
   assert.equal(await page.evaluate(()=>fixture.agent.closing_message.notification_guidance),'Updated closing');
-  await page.locator('.ir-toggle-slot .conn-toggle-wrap').click();await page.waitForFunction(()=>fixture.agent.closing_message.enabled===false);
+  await page.locator('.sr-toggle-slot .conn-toggle-wrap').click();await page.waitForFunction(()=>fixture.agent.closing_message.enabled===false);
   assert.equal(await page.locator('[data-closing-key="require_notification"]').isDisabled(),true);assert.equal(await page.getByLabel('Notification guidance',{exact:true}).isDisabled(),true);
-  await page.locator('.ir-toggle-slot .conn-toggle-wrap').click();await page.waitForFunction(()=>fixture.agent.closing_message.enabled===true);
+  await page.locator('.sr-toggle-slot .conn-toggle-wrap').click();await page.waitForFunction(()=>fixture.agent.closing_message.enabled===true);
   await page.evaluate(()=>remount());
-  assert.equal(await page.locator('.ir-row').count(),titles.length);
+  assert.equal(await page.locator('.sr-row').count(),titles.length);
   await openRow('Chat modes');assert.equal(await page.locator('[data-field="default_execution_mode"]').inputValue(),'auto');await toList();
   await openRow('Final response');assert.equal(await page.getByLabel('Notification guidance',{exact:true}).inputValue(),'Updated closing');assert.equal(await page.locator('[data-closing-key="require_flag"]').isChecked(),false);await toList();
   if(touch){
    const before=await page.evaluate(()=>pulses.length);
    await rowFor('Shared conversations').tap();
-   await page.waitForFunction(()=>!document.querySelector('.ir-detail').hidden&&document.querySelector('.ir-menu').hidden);
+   await page.waitForFunction(()=>!document.querySelector('.sr-detail').hidden&&document.querySelector('.sr-menu').hidden);
    assert.equal(await page.evaluate(()=>pulses.length),before+1);
    // The way back is a touch control too: one tap, one request.
-   await page.locator('.ir-back').tap();
-   await page.waitForFunction(()=>document.querySelector('.ir-detail').hidden&&!document.querySelector('.ir-menu').hidden);
+   await page.locator('.sr-back').tap();
+   await page.waitForFunction(()=>document.querySelector('.sr-detail').hidden&&!document.querySelector('.sr-menu').hidden);
    assert.equal(await page.evaluate(()=>pulses.length),before+2);
   }
   await openRow('Member access');
@@ -125,8 +124,8 @@ try{
   await page.waitForFunction(()=>fixture.ladder?.ladder.levels.member.daily_turns===5&&fixture.ladder.ladder.levels.visitor.daily_turns===undefined);
   await toList();
   await page.evaluate(async()=>{fixture.agent.can_manage=false;await remount();});
-  assert.equal(await page.locator('[data-identity-section="website-chat-widget"]').count(),0);
-  assert.equal(await page.locator('.ir-row').count(),titles.length-1);
+  assert.equal(await page.locator('[data-register-section="website-chat-widget"]').count(),0);
+  assert.equal(await page.locator('.sr-row').count(),titles.length-1);
   await openRow('Chat modes');assert.equal(await page.locator('[data-field="default_execution_mode"]').isDisabled(),true);await toList();
   await openRow('Review incoming messages');assert.equal(await page.getByLabel('Enable incoming-message review',{exact:true}).isDisabled(),true);await toList();
   await openRow('Working-message promotion');assert.equal(await page.getByLabel('Working-message promotion',{exact:true}).isDisabled(),true);await toList();

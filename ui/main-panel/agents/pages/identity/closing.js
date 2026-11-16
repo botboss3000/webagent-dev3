@@ -1,4 +1,4 @@
-import {createSettingsRow} from './settings-row.js';
+import {createSettingsRow} from '../../../../shared/settings-register.js';
 'use strict';
 // Agent-local closing status: whether it runs, which parts it requires, and notification guidance.
 // The flag vocabulary and word limit stay app-wide in the closing gate configuration.

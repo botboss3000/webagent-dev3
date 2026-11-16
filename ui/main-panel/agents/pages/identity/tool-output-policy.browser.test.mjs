@@ -47,7 +47,7 @@ try {
   await page.goto('http://127.0.0.1:'+server.address().port+'/');await setup();
   // The register owns the disclosure now: these rows render their fields openly and rendering never saves.
   assert.deepEqual(await page.evaluate(()=>fixture.writes),[]);
-  assert.equal(await page.locator('[data-identity-section=context-compaction] input[type=checkbox]').count(),0);
+  assert.equal(await page.locator('[data-register-section=context-compaction] input[type=checkbox]').count(),0);
   await page.getByLabel('Summary trigger',{exact:true}).fill('10000');
   await page.getByRole('button',{name:'Save compaction thresholds',exact:true}).click();
   await page.getByText('Trigger must exceed the tail plus the summary target (5,000).',{exact:true}).waitFor();
@@ -66,13 +66,13 @@ try {
   await page.evaluate(()=>{fixture.writes=[];pulses.length=0;});
   const toggle=page.getByLabel('Suppress identical tool results',{exact:true});
   assert.equal(await toggle.isChecked(),true);
-  if(touch)await page.locator('[data-identity-section=duplicate-tool-results] .conn-toggle-wrap').tap();else {await toggle.focus();await page.keyboard.press('Space');}
+  if(touch)await page.locator('[data-register-section=duplicate-tool-results] .conn-toggle-wrap').tap();else {await toggle.focus();await page.keyboard.press('Space');}
   await page.getByText('Saved. Future results use this setting; existing references stay unchanged.',{exact:true}).waitFor();
   assert.equal(await toggle.isChecked(),false);
   assert.deepEqual(await page.evaluate(()=>pulses),touch?[17]:[]);
   assert.deepEqual(await page.evaluate(()=>fixture.writes),[{tool_result_deduplication:{enabled:false}}]);
   await page.reload();await setup();assert.equal(await toggle.isChecked(),false);
-  await page.evaluate(()=>fixture.fail=true);await page.locator('[data-identity-section=duplicate-tool-results] .conn-toggle-wrap').click();
+  await page.evaluate(()=>fixture.fail=true);await page.locator('[data-register-section=duplicate-tool-results] .conn-toggle-wrap').click();
   await page.getByText('Identity changed elsewhere. Reload this page before saving.',{exact:true}).waitFor();
   assert.equal(await toggle.isChecked(),false);
   await setup(false);assert.equal(await toggle.isDisabled(),true);

@@ -1,0 +1,38 @@
+/* Identity page: the profile card shown at the top of the Profile category. */
+.identity-profile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 2px 14px;
+}
+.identity-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border: var(--border-width) solid var(--border);
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--fg-1);
+  font-size: 11px;
+  font-weight: 600;
+}
+.identity-profile-text {
+  min-width: 0;
+}
+.identity-profile-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--fg-1);
+}
+.identity-profile-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--fg-3);
+  overflow-wrap: anywhere;
+}

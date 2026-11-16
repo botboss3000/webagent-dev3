@@ -4,7 +4,7 @@ import {requestTouchVibration} from '../../../../shared/vibrate.js';
 export async function renderMainChat(host, request, {agentId,canManage=false}={}) {
   if(!agentId)throw Error('Agent identity is required');
   const path='/models/agents/'+encodeURIComponent(agentId)+'/main-chat';
-  const section=document.createElement('section');section.className='main-chat-settings conn-card ac-row';section.dataset.agentId=agentId;section.style.webkitTapHighlightColor='transparent';host.append(section);
+  const section=document.createElement('section');section.className='main-chat-settings conn-card ac-row';section.dataset.agentId=agentId;section.dataset.registerSection='main-chat';section.dataset.registerTitle='Main Chat';section.style.webkitTapHighlightColor='transparent';host.append(section);
   const header=document.createElement('div');header.className='conn-card-header ac-ability-row';section.append(header);
   const expand=document.createElement('button');expand.type='button';expand.className='ac-ability-label';expand.setAttribute('aria-label','Expand Main Chat');expand.setAttribute('aria-expanded','false');expand.setAttribute('aria-controls','main-chat-body-'+agentId);
   expand.style.cssText='display:flex;align-items:center;gap:8px;flex:1;min-width:0;min-height:36px;text-align:left;border:0;background:transparent;color:inherit;cursor:pointer';
@@ -13,7 +13,7 @@ export async function renderMainChat(host, request, {agentId,canManage=false}={}
   const toggleWrap=document.createElement('label');toggleWrap.className='conn-toggle-wrap ac-ability-toggle-wrap';
   const enabled=document.createElement('input');enabled.type='checkbox';enabled.className='conn-toggle';enabled.setAttribute('aria-label','Enable Main Chat');enabled.disabled=true;
   const track=document.createElement('span');track.className='conn-toggle-track';track.setAttribute('aria-hidden','true');toggleWrap.append(enabled,track);header.append(toggleWrap);
-  const body=document.createElement('div');body.className='conn-fields ac-ability-body';body.id='main-chat-body-'+agentId;body.hidden=true;body.style.cssText='display:none;padding:12px;min-width:0';section.append(body);
+  const body=document.createElement('div');body.className='conn-fields ac-ability-body';body.id='main-chat-body-'+agentId;body.dataset.registerBody='';body.hidden=true;body.style.cssText='display:none;padding:12px;min-width:0';section.append(body);
   /** Expand only presentation; toggling or expanding never silently saves configuration. */
   function expanded(open){body.hidden=!open;body.style.display=open?'block':'none';section.classList.toggle('expanded',open);expand.setAttribute('aria-expanded',String(open));expand.setAttribute('aria-label',(open?'Collapse':'Expand')+' Main Chat');chevron.style.transform=open?'rotate(90deg)':'';}
   expand.addEventListener('click',()=>expanded(body.hidden));

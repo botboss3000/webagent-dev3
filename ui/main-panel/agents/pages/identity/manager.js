@@ -1,4 +1,4 @@
-import {createSettingsRow} from './settings-row.js';
+import {createSettingsRow} from '../../../../shared/settings-register.js';
 'use strict';
 // Expansion and enablement are independent; prompt saves retain the saved enabled state.
 export function renderManager(content, agent, persist) {

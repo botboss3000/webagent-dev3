@@ -1,5 +1,5 @@
 'use strict';
-import {createSettingsRow} from './settings-row.js';
+import {createSettingsRow} from '../../../../shared/settings-register.js';
 
 const scopeOptions = [
   ['selected', 'Selected tools'],
