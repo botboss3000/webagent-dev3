@@ -209,7 +209,7 @@ impl<
             .get(&format!("session:{sid}"))
             .await?
             .ok_or_else(|| anyhow::anyhow!("Context session missing"))?;
-        let notes = Box::pin(self.native.main_notes(
+        let (notes, updates) = Box::pin(self.native.main_notes(
             self.store.records(),
             &agent,
             &sid,
@@ -217,6 +217,26 @@ impl<
             &webagent_context::assets::history_basis(&session),
         ))
         .await?;
+        // Another session's Main Notes changes join the history as main_notes_update rows,
+        // once each, where they stay (and stay cached) until compaction.
+        let mut extended;
+        let history = if updates.is_empty() {
+            history
+        } else {
+            extended = history.to_vec();
+            for text in updates {
+                let id = format!("main-notes-update-{}", uuid::Uuid::new_v4());
+                let rows = [
+                    json!({"type":"function_call","call_id":id,"name":"main_notes_update","arguments":"{}"}),
+                    json!({"type":"function_call_output","call_id":id,"output":text}),
+                ];
+                if let Some(input) = run["input"].as_array_mut() {
+                    input.extend(rows.iter().cloned());
+                }
+                extended.extend(rows);
+            }
+            extended.as_slice()
+        };
         webagent_context::assets::project_context(
             run,
             cap,

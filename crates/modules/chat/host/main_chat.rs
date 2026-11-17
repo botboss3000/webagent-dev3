@@ -6,7 +6,7 @@ use axum::Extension;
 pub(crate) use webagent_chat::main_chat::{
     action_intent, empty, review_id, scheduled_entry_current, Contribution, Settings,
 };
-use webagent_chat::main_chat::{public, render_changes, render_notes, request_fields, target};
+use webagent_chat::main_chat::{public, render_notes, render_updates, request_fields, target};
 // The Main Notes state machine is Chat-owned; the host supplies the clock.
 fn apply(state: &mut Value, c: &Contribution, origin: &str, approved: bool) -> Result<Value> {
     webagent_chat::main_chat::apply(state, c, origin, approved, now())
@@ -70,26 +70,25 @@ pub(crate) async fn guidance_store(
         .map(str::to_owned)
         .or_else(|| fallback_store(&store, name)))
 }
-/// Update definitions one session keeps before its whole-notes snapshot is rebuilt.
-const MAX_NOTE_UPDATES: usize = 32;
-/// Main Notes context for one model call of session `sid`: the whole notes, pinned until
-/// the history basis changes (compaction), then one update per later notes version that
-/// another session wrote. A recorded body never changes, so its placement in the
-/// transcript keeps the provider's prompt cache.
+/// Main Notes context for one model call of session `sid`: the section definitions (how to
+/// use the notes, then the whole notes, pinned until the history basis changes at
+/// compaction) and the updates this session has not received yet, one diff per later notes
+/// version another session wrote. The caller adds each update to the session's history,
+/// where it stays (and stays cached) until compaction rebuilds the snapshot.
 pub(crate) async fn notes_context_store(
     store: &Store,
     agent: &str,
     sid: &str,
     requester: &str,
     basis: &str,
-) -> Result<Vec<(String, String)>> {
+) -> Result<(Vec<(String, String)>, Vec<String>)> {
     // Same boundary as the tools: shared chat membership never receives the notes.
     if requester != store.current_user_id() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let store = store.for_agent(agent).await?;
     if !store.live_access(requester, agent).await?.admitted() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let state = Box::pin(store.main_chat_state()).await?;
     let version = state["notes_version"].as_u64().unwrap_or(0);
@@ -99,27 +98,24 @@ pub(crate) async fn notes_context_store(
         Some(view)
             if view["agent_id"] == agent
                 && view["history_basis"] == basis
-                && view["version"].as_u64().is_some_and(|seen| seen <= version)
-                && view["updates"]
-                    .as_array()
-                    .is_some_and(|u| u.len() < MAX_NOTE_UPDATES) =>
+                && view["version"].as_u64().is_some_and(|seen| seen <= version) =>
         {
             view
         }
         _ => {
-            json!({"agent_id":agent,"history_basis":basis,"version":version,"snapshot":render_notes(&state),"updates":[]})
+            json!({"agent_id":agent,"history_basis":basis,"version":version,"snapshot":render_notes(&state)})
         }
     };
     let seen = view["version"].as_u64().unwrap_or(0);
-    if version > seen {
-        if let Some(text) = render_changes(&state, seen, sid) {
-            view["updates"]
-                .as_array_mut()
-                .ok_or_else(|| anyhow!("Main Notes view"))?
-                .push(json!({"version":version,"text":text}));
-        }
+    let updates = if version > seen {
         view["version"] = json!(version);
-    }
+        render_updates(&state, seen, sid)
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect()
+    } else {
+        Vec::new()
+    };
     if saved.as_ref() != Some(&view) {
         store.put(&key, &view).await?;
     }
@@ -132,13 +128,7 @@ pub(crate) async fn notes_context_store(
     if let Some(snapshot) = view["snapshot"].as_str() {
         definitions.push(("main-notes".to_owned(), snapshot.to_owned()));
     }
-    for update in view["updates"].as_array().into_iter().flatten() {
-        definitions.push((
-            format!("main-notes-update-{}", update["version"]),
-            update["text"].as_str().unwrap_or("").to_owned(),
-        ));
-    }
-    Ok(definitions)
+    Ok((definitions, updates))
 }
 async fn agent_scope(
     app: &App,
@@ -512,7 +502,8 @@ mod tests {
                     .unwrap()
             }
         };
-        assert!(defs("s1", "b1").await.is_empty());
+        let (sections, updates) = defs("s1", "b1").await;
+        assert!(sections.is_empty() && updates.is_empty());
         let c = contribution();
         store
             .main_chat_change(0, "from-s2", "a", vec![], |s| {
@@ -520,11 +511,13 @@ mod tests {
             })
             .await
             .unwrap();
-        let first = defs("s1", "b1").await;
-        assert_eq!(first.len(), 1);
-        assert_eq!(first[0].0, "main-notes-update-1");
-        assert!(first[0].1.contains("Review the blocker"));
-        // The session's own write adds nothing; recorded bodies stay as they were.
+        // Another session's change arrives once, as a diff for the caller's history.
+        let (sections, updates) = defs("s1", "b1").await;
+        assert!(sections.is_empty());
+        assert_eq!(updates.len(), 1);
+        assert!(updates[0].contains("+ [entry next] (open) Review the blocker"));
+        assert!(defs("s1", "b1").await.1.is_empty());
+        // The session's own write adds nothing.
         let mut own = c.clone();
         own.entry.state = "done".into();
         store
@@ -533,18 +526,18 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(defs("s1", "b1").await, first);
+        assert!(defs("s1", "b1").await.1.is_empty());
         // A new history basis (compaction) folds everything into one snapshot.
-        let rebuilt = defs("s1", "b2").await;
+        let (rebuilt, updates) = defs("s1", "b2").await;
+        assert!(updates.is_empty());
         assert_eq!(rebuilt.len(), 1);
         assert_eq!(rebuilt[0].0, "main-notes");
         assert!(rebuilt[0].1.contains("(done) Review the blocker"));
-        assert!(
+        let (sections, updates) =
             notes_context_store(&store, "shared_default", "s1", "someone-else", "b2")
                 .await
-                .unwrap()
-                .is_empty()
-        );
+                .unwrap();
+        assert!(sections.is_empty() && updates.is_empty());
     }
     #[tokio::test]
     async fn storage_receipts_isolation_events_and_restart() {

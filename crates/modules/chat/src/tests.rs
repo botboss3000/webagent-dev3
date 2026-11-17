@@ -778,16 +778,42 @@ mod main_chat {
         assert!(whole.find("## Goal").unwrap() < whole.find("## Plans").unwrap());
         assert!(whole.contains("Untrusted notes"));
         // Session a sees only b's change; b sees only a's; nothing after the latest version.
-        let for_a = render_changes(&state, 0, "a").unwrap();
-        assert!(for_a.contains("Book the cabin") && !for_a.contains("Review the blocker"));
-        assert!(render_changes(&state, 0, "b")
-            .unwrap()
-            .contains("Review the blocker"));
-        assert!(render_changes(&state, 2, "a").is_none());
-        c.entry.state = "done".into();
+        let for_a = render_updates(&state, 0, "a");
+        assert_eq!(for_a.len(), 1);
+        assert_eq!(for_a[0].0, 2);
+        assert!(for_a[0].1.contains("+ [entry trip] (open) Book the cabin"));
+        assert!(!for_a[0].1.contains("Review the blocker"));
+        assert!(render_updates(&state, 0, "b")[0]
+            .1
+            .contains("+ [entry next] (open) Review the blocker"));
+        assert!(render_updates(&state, 2, "a").is_empty());
+        // An edit from another session arrives as a diff: the old line, then the new one.
+        c.entry.text = "Review the second blocker".into();
         contribute(&mut state, &c, "b", "p3", false).unwrap();
-        let update = render_changes(&state, 2, "a").unwrap();
-        assert!(update.contains("version 2 to 3") && update.contains("(done) Review the blocker"));
+        c.entry.state = "done".into();
+        contribute(&mut state, &c, "b", "p4", false).unwrap();
+        let updates = render_updates(&state, 2, "a");
+        assert_eq!(
+            updates.iter().map(|(v, _)| *v).collect::<Vec<_>>(),
+            vec![3, 4]
+        );
+        assert!(
+            updates[0].1.contains("version 3")
+                && updates[0]
+                    .1
+                    .contains("- [entry next] (open) Review the blocker")
+                && updates[0]
+                    .1
+                    .contains("+ [entry next] (open) Review the second blocker")
+        );
+        assert!(
+            updates[1]
+                .1
+                .contains("- [entry next] (open) Review the second blocker")
+                && updates[1]
+                    .1
+                    .contains("+ [entry next] (done) Review the second blocker")
+        );
     }
 
     #[test]

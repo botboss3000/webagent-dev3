@@ -148,6 +148,7 @@ mod tests {
                 )
                 .await
                 .unwrap()
+                .0
             }
         };
         let first = Box::pin(bridge_capability(&app, &run)).await;

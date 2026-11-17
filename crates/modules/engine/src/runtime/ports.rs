@@ -166,8 +166,8 @@ pub trait MainGuidance<S>: Clone + Send + Sync + 'static {
         agent: &'a str,
         sid: &'a str,
     ) -> impl Future<Output = Result<Option<String>>> + Send + 'a;
-    /// Main Notes context definitions `(id, body)` for one model call of `requester` in
-    /// session `sid` at history `basis`.
+    /// Main Notes context for one model call of `requester` in session `sid` at history
+    /// `basis`: section definitions `(id, body)` and updates (diffs) not yet in the history.
     fn main_notes<'a>(
         &'a self,
         store: &'a S,
@@ -175,7 +175,7 @@ pub trait MainGuidance<S>: Clone + Send + Sync + 'static {
         sid: &'a str,
         requester: &'a str,
         basis: &'a str,
-    ) -> impl Future<Output = Result<Vec<(String, String)>>> + Send + 'a;
+    ) -> impl Future<Output = Result<(Vec<(String, String)>, Vec<String>)>> + Send + 'a;
 }
 
 pub trait ModelDiagnostics<S>: Clone + Send + Sync + 'static {

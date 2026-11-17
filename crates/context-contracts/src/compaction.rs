@@ -238,8 +238,9 @@ impl Config {
     }
 }
 
-/// Drop the skill text from `load_skill` results so a summary never keeps a skill body;
-/// after compaction the loaded selector places the current text among the skills.
+/// Drop the skill text from `load_skill` results and the diffs from `main_notes_update`
+/// results so a summary never keeps them; after compaction the loaded selector places the
+/// current skill text among the skills and the rebuilt snapshot carries the notes.
 pub fn omit_skill_bodies(input: &mut [Value]) {
     let loads = input
         .iter()
@@ -247,6 +248,22 @@ pub fn omit_skill_bodies(input: &mut [Value]) {
         .filter_map(call_id)
         .map(str::to_owned)
         .collect::<HashSet<_>>();
+    // Main Notes updates are omitted too: the snapshot rebuilt after compaction carries them.
+    let notes = input
+        .iter()
+        .filter(|item| item["type"] == "function_call" && item["name"] == "main_notes_update")
+        .filter_map(call_id)
+        .map(str::to_owned)
+        .collect::<HashSet<_>>();
+    for item in input.iter_mut() {
+        if item["type"] == "function_call_output"
+            && item["call_id"]
+                .as_str()
+                .is_some_and(|id| notes.contains(id))
+        {
+            item["output"] = json!("Main Notes update omitted; the rebuilt notes carry it.");
+        }
+    }
     for item in input {
         if item["type"] != "function_call_output"
             || !item["call_id"]
@@ -1151,5 +1168,22 @@ mod tests {
         let plan = super::plan_command(&input, &config).unwrap().unwrap();
         assert_eq!((plan.first, plan.drop_until), (0, 2));
         assert!(super::plan_command(&input[2..], &config).unwrap().is_none());
+    }
+    #[test]
+    fn summaries_omit_skill_text_and_main_notes_updates() {
+        let mut input = vec![
+            json!({"type":"function_call","call_id":"s","name":"load_skill","arguments":"{}"}),
+            json!({"type":"function_call_output","call_id":"s",
+                "output":json!({"status":"success","output":{"status":"loaded","text":"SKILL"}}).to_string()}),
+            json!({"type":"function_call","call_id":"n","name":"main_notes_update","arguments":"{}"}),
+            json!({"type":"function_call_output","call_id":"n","output":"- old line\n+ new line"}),
+            json!({"type":"function_call","call_id":"f","name":"file_read","arguments":"{}"}),
+            json!({"type":"function_call_output","call_id":"f","output":"kept"}),
+        ];
+        super::omit_skill_bodies(&mut input);
+        let text = json!(input).to_string();
+        assert!(!text.contains("SKILL") && text.contains("text_omitted"));
+        assert!(!text.contains("new line") && text.contains("Main Notes update omitted"));
+        assert_eq!(input[5]["output"], "kept");
     }
 }
