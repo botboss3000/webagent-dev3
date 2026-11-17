@@ -650,6 +650,9 @@ def changes(folder, state, body, count):
         "new": conversation[len(seen):] if append else conversation,
         # The previous call's conversation, for a checkpoint after a rewrite.
         "previous": seen, "digests": digests, "notes": notes,
+        # The harness session keeps every prompt it is given, so step guidance identical to what it
+        # was given on the previous step is not sent again. A rewrite or a fresh session shows it.
+        "notes_repeated": bool(notes) and bool(seen) and append and digest(notes) == state.get("notes_digest"),
     }
     # A run's closing call ends with a private closer message that WebAgent keeps out of history: the
     # session holds it, but the next call (or a fork) must still read as an append, not a rewrite.
@@ -657,7 +660,7 @@ def changes(folder, state, body, count):
     state.update(instructions=digest(instructions), tools=sorted(tools), tools_digest=digest(body.get("tools")),
                  instructions_text=[text_of(m.get("content"), folder) for m in instructions],
                  tool_schemas={n: digest(t) for n, t in tools.items()},
-                 conversation=recorded)
+                 conversation=recorded, notes_digest=digest(notes))
     return delta
 
 
@@ -774,7 +777,9 @@ def prompt_for(call, delta, fresh, listed=True):
         messages = delta["new"]
     lines.append("## Conversation" if fresh else "## New since your last turn")
     lines += [render(m, folder, full=True) for m in messages]
-    if delta.get("notes"):
+    if delta.get("notes") and delta.get("notes_repeated") and not fresh:
+        lines.append("## Notes for this step only\nUnchanged from your previous step.")
+    elif delta.get("notes"):
         lines.append("## Notes for this step only\n" + "\n\n".join(text_of(m.get("content"), folder)
                                                                 for m in delta["notes"]))
     return "\n\n".join(lines)
@@ -1510,6 +1515,11 @@ def selftest():
     assert not nxt["rewritten"] and [m["content"] for m in nxt["new"]] == ["b"]
     shown = prompt_for({"body": {"model": "m", "messages": []}}, nxt, False)
     assert shown.endswith("## Notes for this step only\nstep two") and "step one" not in shown
+    # The same guidance on the next step is not given to the harness session again.
+    again = changes(folder, noted, {"model": "m", "messages": [system, tail, {"role": "user", "content": "b"},
+                                                               {"role": "user", "content": "c"}, note("step two")]}, 3)
+    shown = prompt_for({"body": {"model": "m", "messages": []}}, again, False)
+    assert again["notes_repeated"] and shown.endswith("Unchanged from your previous step.") and "step two" not in shown
     blocks = [{"role": "user", "content": f"Summary block {n} " + "x" * CHECKPOINT_MIN_CHARS} for n in (1, 2)]
     chat = {}
     changes(folder, chat, {"model": "m", "messages": [system, blocks[0], {"role": "user", "content": "a"}]}, 1)
