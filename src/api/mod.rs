@@ -59,6 +59,8 @@ mod chat_controls;
 pub(crate) mod composer;
 #[cfg(test)]
 mod composer_tests;
+#[path = "../../crates/modules/chat/host/api/context_remedy.rs"]
+pub(crate) mod context_remedy;
 pub(crate) mod direct_messages;
 mod engine_components;
 #[path = "../../crates/modules/files/host/api/file_manager.rs"]

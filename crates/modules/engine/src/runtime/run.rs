@@ -307,6 +307,65 @@ fn assembly_failure_message(
     text
 }
 
+/// Agent operators (owner or administrator member) may change the agent's compaction settings.
+fn agent_operator(access: &access::authority::LiveAccess) -> bool {
+    access.relationship == access::Relationship::Owner
+        || (access.agent_administrator && access.relationship == access::Relationship::Member)
+}
+
+/// The trigger an operator may approve after `trigger_overhead_exceeds_budget`: the measured
+/// fixed overhead plus tail and summary, rounded up to the next 5,000 tokens for growth as
+/// skills load. None when it would not fit the model limit or the setting's 1,000,000 cap.
+fn trigger_remedy(report: &Value, compaction: &context_compaction::Config) -> Option<u64> {
+    let field = |name: &str| report[name].as_u64();
+    let overhead = field("instructions_json_bytes")?
+        + field("schemas_json_bytes")?
+        + field("framing_bytes").unwrap_or(0);
+    let ratio = compaction
+        .bytes_per_token
+        .unwrap_or(compaction.characters_per_token as f64)
+        .max(1.0);
+    let needed = (overhead as f64 / ratio).ceil() as u64
+        + (compaction.tail_tokens + compaction.summary_tokens) as u64;
+    let proposed = needed.div_ceil(5000) * 5000;
+    let fits = (compaction.token_bytes(proposed as usize) as u64) < field("max_bytes")?;
+    (fits && proposed <= 1_000_000).then_some(proposed)
+}
+
+/// Leave the agent's staff a message (the `staff_message_send` store) asking an operator to
+/// approve a proposed trigger. One message per run; a repeat failure does not add another.
+async fn notify_trigger_operators<S: ScopedStorage>(
+    store: &S,
+    run: &Value,
+    agent: &str,
+    from: usize,
+    to: u64,
+) -> Result<()> {
+    let rid = run["id"].as_str().unwrap_or("");
+    let sid = run["session_id"].as_str().unwrap_or("");
+    let id = digest(&json!(["context_remedy", agent, rid]))[..24].to_owned();
+    let key = format!("agent:{agent}:staff_message:{id}");
+    if store.get(&key).await?.is_some() {
+        return Ok(());
+    }
+    let message = format!(
+        "A chat with this agent stopped with a context error: the compaction trigger ({} \
+         tokens) is below the fixed instructions and tool overhead every model call resends. \
+         An agent operator can approve raising this agent's compaction trigger to {} tokens \
+         in the chat (/app?session_id={sid}) or set it in the agent's settings.",
+        grouped(from as u64),
+        grouped(to)
+    );
+    store
+        .put(
+            &key,
+            &json!({"id":id,"revision":1,"status":"new","kind":"other","name":"WebAgent",
+                "email":"","phone":"","message":message,"session_id":sid,
+                "visitor_id":run["requester_user_id"],"created_at":now(),"notes":[]}),
+        )
+        .await
+}
+
 #[cfg(test)]
 mod assembly_failure_tests {
     use super::*;
@@ -339,6 +398,17 @@ mod assembly_failure_tests {
         ] {
             assert!(text.contains(part), "{part} missing from {text}");
         }
+    }
+    #[test]
+    fn remedy_rounds_overhead_tail_and_summary_up_to_5000() {
+        let report = json!({"instructions_json_bytes":139609,"schemas_json_bytes":101499,
+            "framing_bytes":35,"max_bytes":991232});
+        // 60,286 overhead + 2,000 tail + 4,000 summary = 66,286 -> 70,000.
+        assert_eq!(trigger_remedy(&report, &config()), Some(70000));
+        let mut small = report.clone();
+        small["max_bytes"] = json!(280000);
+        assert_eq!(trigger_remedy(&small, &config()), None);
+        assert_eq!(trigger_remedy(&Value::Null, &config()), None);
     }
     #[test]
     fn missing_report_and_other_codes_stay_short() {
@@ -2774,6 +2844,36 @@ impl<
                             &run["latest_context_assembly"]["report"],
                             &assembly_compaction,
                         ));
+                        let proposed = (code == "trigger_overhead_exceeds_budget")
+                            .then(|| {
+                                trigger_remedy(
+                                    &run["latest_context_assembly"]["report"],
+                                    &assembly_compaction,
+                                )
+                            })
+                            .flatten();
+                        if let Some(to) = proposed {
+                            // Only an agent operator may approve; anyone else's chat says
+                            // an operator was notified through the staff message store.
+                            let operator = agent_operator(&access);
+                            run["context_remedy"] = json!({"kind":"raise_compaction_trigger",
+                                "agent_id":agent_id,"from_tokens":assembly_compaction.trigger_tokens,
+                                "to_tokens":to,"state":"proposed","operator_notified":!operator});
+                            if !operator {
+                                if let Err(error) = notify_trigger_operators(
+                                    app.store.records(),
+                                    &run,
+                                    &agent_id,
+                                    assembly_compaction.trigger_tokens,
+                                    to,
+                                )
+                                .await
+                                {
+                                    tracing::warn!(run_id=%id, "Operator notice not saved: {error}");
+                                    run["context_remedy"]["operator_notified"] = json!(false);
+                                }
+                            }
+                        }
                         app.save(&mut run).await?;
                         return Ok(());
                     }

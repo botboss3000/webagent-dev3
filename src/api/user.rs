@@ -848,6 +848,10 @@ pub(crate) fn router() -> Router<App> {
             post(component_answer),
         )
         .route("/sessions/{id}/compact", post(session_compact))
+        .route(
+            "/sessions/{id}/runs/{run}/context-remedy",
+            post(context_remedy_decision),
+        )
         .route("/sessions/{id}/voice/capabilities", get(voice_capabilities))
         .route(
             "/sessions/{id}/voice/reply",
@@ -997,6 +1001,21 @@ async fn component_answer(
         return e.into_response();
     }
     crate::api::panel_answer::answer(app, sid, cid, body)
+        .await
+        .into_response()
+}
+/// An agent operator approves or denies raising the agent's compaction trigger after a
+/// context error; read access to the conversation suffices, operator authority is checked.
+async fn context_remedy_decision(
+    Extension(app): Extension<App>,
+    Path((sid, rid)): Path<(String, String)>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let app = match session_app(app, &sid).await {
+        Ok(app) => app,
+        Err(e) => return e.into_response(),
+    };
+    crate::api::context_remedy::decide(app, sid, rid, body)
         .await
         .into_response()
 }

@@ -33,14 +33,41 @@ export function updateAdmission(bubble, admission) {
     acceptable:'Accepted by the manager',unacceptable:'Not sent: this is outside the topics this assistant can help with. Try asking about its services instead.',
     review_error:admission.error||'Review failed. This message was not sent to the agent.'})[admission.status]||'';
 }
+// A context error with an operator-approvable fix (raise this agent's compaction trigger):
+// operators approve or deny it here; anyone else is told an operator was notified.
+function remedyAction(title,notice,item,{client,getSession,getAccess,note}){
+  const fix=notice.remedy;if(fix?.kind!=='raise_compaction_trigger'||!Number.isSafeInteger(fix.to_tokens))return null;
+  const count=value=>Number(value||0).toLocaleString('en-US'),to=count(fix.to_tokens);
+  const outcome={approved:'Approved: this agent\'s compaction trigger is now '+to+' tokens. To continue, write a new message in the chat.',
+    denied:'Declined. To continue, write a new message in the chat.'};
+  if(outcome[fix.state])return createChatAction({title,message:outcome[fix.state]});
+  if(getAccess()?.agent_operator!==true)return createChatAction({title,message:fix.operator_notified
+    ?'An agent operator has been notified and can raise this agent\'s compaction trigger to '+to+' tokens. After that, write a new message to continue.'
+    :'Ask an agent operator to raise this agent\'s compaction trigger to '+to+' tokens, then write a new message to continue.'});
+  let card;
+  const decide=decision=>async()=>{
+    card.querySelectorAll('button').forEach(button=>{button.disabled=true;});
+    try{await client.contextRemedy(getSession(),item.run_id,{decision});}
+    catch(error){card.querySelectorAll('button').forEach(button=>{button.disabled=false;});note(error.message);return;}
+    const done=createChatAction({title,message:outcome[decision==='approve'?'approved':'denied']});card.replaceWith(card=done);
+    // The requester's own run resumes with the new trigger; otherwise a new message continues.
+    if(decision!=='approve')return;
+    try{await client.resume(item.run_id,{client_request_id:'context-remedy:'+item.run_id});
+      done.querySelector('.chat-action-message').textContent='Approved: this agent\'s compaction trigger is now '+to+' tokens. Resuming the run.';}catch{}
+  };
+  card=createChatAction({title,message:'Fix: raise this agent\'s compaction trigger from '+count(fix.from_tokens)+' to '+to+' tokens.',
+    actions:[{label:'Approve',kind:'approve',run:decide('approve')},{label:'Deny',kind:'deny',run:decide('deny')}]});
+  return card;
+}
 /** Builds one published bubble; rejects malformed identity data and wires attachments, actions and user-text expansion. */
-export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSession=()=>null,note=()=>{},showContext=()=>{},historyAction=null}={}){
+export function createMessage(item,{getRun=()=>null,client,resolveAsset,getSession=()=>null,getAccess=()=>null,note=()=>{},showContext=()=>{},historyAction=null}={}){
   if(!['user','assistant','system','notice'].includes(item.role)||!Number.isSafeInteger(item.seq)||item.seq<=0||typeof item.id!=='string')return null;
   // A stored run-status notice keeps its transcript position; the agent never sees these rows.
   if(item.role==='notice'){
     const notice=item.content&&typeof item.content==='object'?item.content:{};
     const row=document.createElement('article');row.className='v3-message system';row.dataset.publicId=item.id;row.dataset.seq=String(item.seq);row.dataset.noticeRunId=item.run_id;
-    row.append(createChatAction({title:(notice.status==='failed'?'Run failed':'Stopped')+(notice.error?' — '+notice.error:''),message:'To continue, write a new message in the chat.'}));return row;
+    const title=(notice.status==='failed'?'Run failed':'Stopped')+(notice.error?' — '+notice.error:'');
+    row.append(remedyAction(title,notice,item,{client,getSession,getAccess,note})||createChatAction({title,message:'To continue, write a new message in the chat.'}));return row;
   }
   // Background notices (sub-agents, broker builds, background tool calls) show as compact activity rows, not user bubbles.
   const notices=item.message_kind==='agent_message'&&Array.isArray(item.platform_notice?.notices)?item.platform_notice.notices.slice(0,20):null;

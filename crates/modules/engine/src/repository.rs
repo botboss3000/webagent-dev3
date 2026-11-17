@@ -218,7 +218,11 @@ impl<
                 && (status == "failed"
                     || (matches!(status, "paused" | "stopped") && error.is_some()));
             if shown {
-                let content = serde_json::json!({"status": status, "error": error});
+                // An operator-approvable fix travels with the notice so a reload shows it.
+                let mut content = serde_json::json!({"status": status, "error": error});
+                if run["context_remedy"].is_object() {
+                    content["remedy"] = run["context_remedy"].clone();
+                }
                 crate::send_future(sqlx::query("INSERT INTO chat(id,session_id,run_id,role,content,created_at) VALUES(?,?,?,'notice',?,strftime('%s','now')) ON CONFLICT(id) DO UPDATE SET content=excluded.content")
                     .bind(id.clone()).bind(run["session_id"].as_str().unwrap_or("").to_owned()).bind(rid.to_owned())
                     .bind(self.records.encode_user_record(&content)?).execute(&mut **tx)).await?;

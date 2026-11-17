@@ -406,6 +406,62 @@ async fn identity_put(
     identity_get(State(app.clone()), Extension(identity), Path(id)).await
 }
 
+/// Raise one agent's compaction trigger (and an agent ceiling below it) to at least `tokens`
+/// after an operator approved the fix in chat. The caller checks operator authority; the
+/// app-wide defaults never change.
+pub(crate) async fn raise_compaction_trigger(
+    app: &App,
+    id: &str,
+    tokens: usize,
+) -> Result<crate::context_compaction::AgentThresholds, ApiError> {
+    let _guard = app.gate.lock().await;
+    let store = app.store.for_agent(id).await?;
+    let (blob, revision): (Vec<u8>, i64) =
+        sqlx::query_as("SELECT metadata,revision FROM agents WHERE id=?")
+            .bind(id)
+            .fetch_one(&store.agent_pool)
+            .await
+            .map_err(anyhow::Error::from)?;
+    let mut metadata = store.unseal(&blob)?;
+    let defaults = crate::context_compaction::Config::read(&app.compaction_config_path)?;
+    let mut thresholds = if metadata["compaction_thresholds"].is_object() {
+        serde_json::from_value(metadata["compaction_thresholds"].clone())
+            .map_err(anyhow::Error::from)?
+    } else {
+        crate::context_compaction::AgentThresholds {
+            trigger_tokens: defaults.trigger_tokens,
+            tail_tokens: defaults.tail_tokens,
+            ceiling_tokens: None,
+            summarizer: None,
+        }
+    };
+    thresholds.trigger_tokens = thresholds.trigger_tokens.max(tokens);
+    thresholds.ceiling_tokens = thresholds.ceiling_tokens.map(|c| c.max(tokens));
+    thresholds.apply(&defaults).map_err(|_| {
+        crate::bad("Invalid compaction thresholds: tail plus summary must be below trigger")
+    })?;
+    metadata["compaction_thresholds"] =
+        serde_json::to_value(&thresholds).map_err(anyhow::Error::from)?;
+    let update = webagent_agents::IdentityUpdate {
+        revision,
+        name: None,
+        description: None,
+        execution_modes: None,
+        default_execution_mode: None,
+    };
+    let mut transaction = store
+        .agent_pool
+        .begin()
+        .await
+        .map_err(anyhow::Error::from)?;
+    webagent_agents::repository::Repository::new(&store.agent_pool, id, &store)?
+        .save_in(&mut transaction, &update, &metadata, crate::now() as i64)
+        .await
+        .map_err(|_| crate::conflict("Agent settings changed; try again"))?;
+    transaction.commit().await.map_err(anyhow::Error::from)?;
+    Ok(thresholds)
+}
+
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AgentStatusChange {

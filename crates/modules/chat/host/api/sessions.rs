@@ -417,6 +417,16 @@ pub(crate) async fn snapshot(State(app): State<App>, Path(id): Path<String>) -> 
     uploads::message_files(&app, &mut messages).await?;
     crate::shared_projection::messages(&app, &mut messages).await?;
     crate::manager::decorate(&app, &mut messages).await?;
+    crate::api::context_remedy::decorate(&app, &mut messages).await?;
+    // Agent operators decide fixes such as raising the compaction trigger after a context error.
+    let agent_operator = app
+        .store
+        .agent_authority(
+            crate::shared_chat::actor(&app),
+            _session["agent_id"].as_str().unwrap_or("shared_default"),
+        )
+        .await
+        .is_ok_and(|rights| rights["can_manage"] == true);
     let usage = crate::usage::public(
         &app.store
             .get(&format!("session_usage:{id}"))
@@ -431,7 +441,7 @@ pub(crate) async fn snapshot(State(app): State<App>, Path(id): Path<String>) -> 
     let queue = crate::followup_queue::public(&app.store.followup_queue(&id).await?);
     Ok(Json(
         json!({"access":{"observer":crate::shared_projection::observer(&app),"operator_reply":crate::shared_projection::observer(&app)&&_session["conversation_privacy"]=="operator_reviewable"&&_session["operator_joined"][crate::shared_chat::actor(&app)]==true,
-        "can_send":!crate::shared_projection::observer(&app)||(_session["conversation_privacy"]=="operator_reviewable"&&_session["operator_joined"][crate::shared_chat::actor(&app)]==true),"can_control":!crate::shared_projection::observer(&app),"can_manage_queue":crate::shared_chat::actor(&app)==app.store.current_user_id()},"usage":usage,"session":app.store.session_read_summary(&id).await?,
+        "can_send":!crate::shared_projection::observer(&app)||(_session["conversation_privacy"]=="operator_reviewable"&&_session["operator_joined"][crate::shared_chat::actor(&app)]==true),"can_control":!crate::shared_projection::observer(&app),"can_manage_queue":crate::shared_chat::actor(&app)==app.store.current_user_id(),"agent_operator":agent_operator},"usage":usage,"session":app.store.session_read_summary(&id).await?,
         "conversation_privacy":_session["conversation_privacy"],"messages":messages,"runs":runs,"components":components,"artifacts":artifacts,"component_revision":component_revision,"app_view":app_view,"last_seq":last_seq,"queue":queue["queue"],"queue_state":queue["queue_state"],"repeat_similarity":webagent_engine::gates::repeat_similarity()}),
     ))
 }

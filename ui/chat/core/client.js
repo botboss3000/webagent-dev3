@@ -205,6 +205,8 @@ export function createChatClient({request, note, issues, clearNoticeFrom = () =>
     decide: (id, body) => request('/approvals/' + id + '/decision', 'POST', body),
     /** Resolves an uncertain run through its recovery endpoint. */
     recover: (id, body) => request('/runs/' + id + '/recovery', 'POST', body),
+    /** An agent operator's approve/deny of the compaction-trigger fix proposed on a failed run. */
+    contextRemedy: (id, run, body) => request('/sessions/' + encodeURIComponent(id) + '/runs/' + encodeURIComponent(run) + '/context-remedy', 'POST', body),
     /** Resumes a paused or stopped run. */
     resume: (id, body) => request('/runs/' + id + '/resume', 'POST', body)
   };
