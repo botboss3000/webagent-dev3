@@ -1291,6 +1291,8 @@ body.light-mode .agent-card-chat-btn:hover { background: rgba(var(--brand-rgb), 
   box-shadow: 0 8px 20px rgba(var(--ink-rgb), .05);
 }
 .agent-config-topic { min-width: 0; }
+/* Config rows use the shared settings register, so the star sits flush in its slot. */
+#tab-agents .sr-trailing .agent-config-star { margin-right: 0; }
 .agent-config-topic + .agent-config-topic { border-top: var(--border-width) solid var(--border); }
 /* CONFIG-FAVORITE ROW: mirrors App Settings. The row button navigates; its
    sibling star toggles permanent Agent-card header visibility without navigation. */

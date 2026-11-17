@@ -41,6 +41,55 @@ export function createSettingsRow(host, {id, title, toggleLabel}) {
   return {section, body, toggle, setExpanded};
 }
 
+/** A list of rows that each open a page elsewhere instead of revealing one here. */
+export function createSettingsMenu(host, {label = 'Settings', items = []} = {}) {
+  const shell = document.createElement('div');
+  shell.className = 'sr-shell';
+  const menu = document.createElement('div');
+  menu.className = 'sr-menu is-intro';
+  menu.setAttribute('aria-label', label);
+  for (const [index, item] of items.entries()) {
+    const row = document.createElement('div');
+    row.className = 'sr-item';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'sr-row';
+    button.dataset.registerLink = item.id;
+    button.style.setProperty('--i', String(index));
+    button.setAttribute('aria-label', 'Open ' + item.title);
+    const tile = document.createElement('span');
+    tile.className = 'sr-tile';
+    tile.setAttribute('aria-hidden', 'true');
+    tile.innerHTML = item.icon ? '<i data-lucide="' + item.icon + '"></i>' : iconMarkup('');
+    const text = document.createElement('span');
+    text.className = 'sr-text';
+    const title = document.createElement('span');
+    title.className = 'sr-title';
+    title.textContent = item.title;
+    const hint = document.createElement('span');
+    hint.className = 'sr-hint';
+    hint.textContent = item.hint || '';
+    text.append(title, hint);
+    button.append(tile, text);
+    button.addEventListener('click', event => {
+      requestTouchVibration(event);
+      item.onSelect?.(item.id);
+    });
+    row.append(button);
+    if (item.trailing) {
+      const slot = document.createElement('span');
+      slot.className = 'sr-trailing';
+      slot.append(item.trailing);
+      row.append(slot);
+    }
+    menu.append(row);
+  }
+  shell.append(menu);
+  host.append(shell);
+  window.lucide?.createIcons();
+  return {menu};
+}
+
 /** A list of setting categories that opens one category's page at a time. */
 export function createSettingsRegister(host, {label = 'Settings', categories = []}) {
   const shell = document.createElement('div');

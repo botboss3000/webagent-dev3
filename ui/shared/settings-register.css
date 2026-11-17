@@ -211,6 +211,27 @@
   animation-delay: calc(var(--i, 0) * 45ms);
 }
 
+/* A link list: the row opens another page, so a secondary control rides beside it. */
+.sr-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.sr-item > .sr-row {
+  flex: 1;
+  min-width: 0;
+}
+.sr-trailing {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+.sr-tile .lucide-icon {
+  width: 16px;
+  height: 16px;
+}
+
 /* Touch: the way back is a primary control, so give it a full finger target. */
 @media (pointer: coarse) {
   .sr-back {
