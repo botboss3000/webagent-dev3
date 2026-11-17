@@ -1648,10 +1648,10 @@ async fn plan_exit_needs_a_plan_and_can_continue_in_ask_mode() {
             "checklist":[{"label":"Write the note"},{"label":"Schedule it"}]});
         let output = match requests.len() {
             1 => json!([{"type":"function_call","call_id":"load","name":"get_time","arguments":"{}"}]),
-            2 => json!([{"type":"function_call","call_id":"noplan","name":"set_execution_mode","arguments":"{\"mode\":\"auto\",\"expected_revision\":1}"},
+            2 => json!([{"type":"function_call","call_id":"noplan","name":"set_execution_mode","arguments":"{\"mode\":\"auto\"}"},
                 {"type":"function_call","call_id":"time","name":"get_time","arguments":"{}"}]),
             3 => json!([{"type":"function_call","call_id":"call","name":"set_execution_mode",
-                "arguments":json!({"mode":"auto","expected_revision":1,"plan":plan}).to_string()}]),
+                "arguments":json!({"mode":"auto","plan":plan}).to_string()}]),
             _ => json!([{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Executing in Ask mode."}]}]),
         };
         let event = json!({"type":"response.completed","response":{"status":"completed","output":output}});
@@ -1888,7 +1888,7 @@ async fn agent_loop_gates_tool_and_denial_continues_without_worker() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|v| v["type"] == "function_call_output")
+        .find(|v| v["type"] == "function_call_output" && !mode_entry(v))
         .unwrap();
     assert_eq!(tool_output["call_id"], "call");
     assert!(tool_output["output"].as_str().unwrap().contains("denied"));
@@ -1960,6 +1960,24 @@ async fn catalog_change_revokes_loaded_ability_before_pending_tool() {
         .unwrap();
     assert!(output["output"].as_str().unwrap().contains("denied"));
     server.abort();
+}
+
+/// True for the set_execution_mode entries the server adds to show the current mode.
+fn mode_entry(item: &Value) -> bool {
+    item["call_id"]
+        .as_str()
+        .is_some_and(|id| id.starts_with("set_execution_mode-"))
+}
+
+/// `input` without the server's set_execution_mode entries.
+fn without_mode_entries(input: &Value) -> Vec<Value> {
+    input
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| !mode_entry(item))
+        .cloned()
+        .collect()
 }
 
 /// Inspect the final call-scoped Responses developer suffix, never durable history or main instructions.
@@ -2111,8 +2129,9 @@ async fn long_run_compacts_before_model_and_keeps_full_message_history() {
         finished["workflow"]["receipts"]["model_dispatch"]["turn"]
     );
     assert_eq!(report["transport"], "responses");
-    // Compaction pins the current mode ahead of the history again.
-    assert!(request["instructions"]
+    // The mode rides in this step's guidance message, never in the instructions.
+    assert!(native_call_suffix(request).contains("Execution mode:"));
+    assert!(!request["instructions"]
         .as_str()
         .unwrap_or_default()
         .contains("Execution mode:"));
@@ -2196,7 +2215,10 @@ async fn failed_context_summary_keeps_original_input_for_resume() {
         paused["error"],
         "Context summary paused: summary_validation/summary_length; review this run"
     );
-    assert_eq!(paused["input"], json!(original));
+    assert_eq!(
+        without_mode_entries(&paused["input"]),
+        without_mode_entries(&json!(original))
+    );
     let session = app.store.get(&key("session", &sid)).await.unwrap().unwrap();
     assert_eq!(session["checkpoint_through"], 0);
     assert_eq!(
@@ -2362,7 +2384,13 @@ async fn runtime_restart_resumes_model_once_but_preserves_intentional_stops() {
             .unwrap();
         app.active.lock().await.remove(&id);
         let interrupted = app.run(&id).await.unwrap();
-        assert_eq!(interrupted["input"], original, "{action}");
+        // The first step adds the session's starting set_execution_mode entry; everything
+        // else in the input is unchanged by the interruption.
+        assert_eq!(
+            without_mode_entries(&interrupted["input"]),
+            without_mode_entries(&original),
+            "{action}"
+        );
         let published = app.store.chat_snapshot(&sid).await.unwrap().0;
         assert_eq!(
             published
@@ -2499,7 +2527,7 @@ async fn runtime_restart_retains_pending_read_for_startup_retry() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|item| item["type"] == "function_call_output"));
+        .any(|item| item["type"] == "function_call_output" && !mode_entry(item)));
     let mut restarted = app.clone();
     restarted.stop = CancellationToken::new();
     restarted.store = Store::open(root.path()).await.unwrap();
@@ -3550,7 +3578,7 @@ async fn prompt_slot_tool_in_auto_writes_once_without_approval() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|item| item["type"] == "function_call_output")
+        .find(|item| item["type"] == "function_call_output" && !mode_entry(item))
         .unwrap();
     let result: Value = serde_json::from_str(output["output"].as_str().unwrap()).unwrap();
     assert_eq!(result["status"], "success");
@@ -4721,8 +4749,8 @@ fn late_known_write_result_resolves_cancel_and_shutoff_without_replay() {
 }
 
 #[tokio::test]
-/// Verify the starting mode is pinned in the instructions and a change joins the durable history once.
-async fn mode_change_joins_history_and_starting_mode_stays_pinned() {
+/// Verify the full mode guidance enters the history once per mode and each step carries a one-line status.
+async fn mode_guidance_enters_history_once_and_each_step_has_a_status() {
     use axum::routing::post;
     let (_root, mut app) = fixture().await;
     let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
@@ -4789,15 +4817,15 @@ async fn mode_change_joins_history_and_starting_mode_stays_pinned() {
     assert_eq!(app.run(&second).await.unwrap()["status"], "completed");
     let requests = requests.lock().await;
     assert_eq!(requests.len(), 2);
-    // The mode the session started in is pinned in the instructions; a later change
-    // joins the history once as a mode_guidance row, leaving the instructions cached.
-    for request in requests.iter() {
-        let instructions = request["instructions"].as_str().unwrap_or_default();
-        assert!(instructions.contains("Execution mode: Ask"));
-        assert!(!instructions.contains("Execution mode: Plan"));
-        assert!(!native_call_suffix(request).contains("Execution mode:"));
-    }
-    let rows = |request: &Value| -> Vec<String> {
+    // By default (mode_guidance.json "both") each step's guidance message carries a one-line
+    // status, and the full guidance is a set_execution_mode result in the history: the starting
+    // mode once, then the user's change once.
+    let first_suffix = native_call_suffix(&requests[0]);
+    let second_suffix = native_call_suffix(&requests[1]);
+    assert!(first_suffix.contains("Execution mode: Ask."));
+    assert!(second_suffix.contains("Execution mode: Plan."));
+    assert!(!second_suffix.contains("Plan mode is"));
+    let results = |request: &Value| -> Vec<Value> {
         request["input"]
             .as_array()
             .unwrap()
@@ -4806,18 +4834,21 @@ async fn mode_change_joins_history_and_starting_mode_stays_pinned() {
                 item["type"] == "function_call_output"
                     && item["call_id"]
                         .as_str()
-                        .is_some_and(|id| id.starts_with("mode_guidance-"))
+                        .is_some_and(|id| id.starts_with("set_execution_mode-"))
             })
-            .map(|item| item["output"].as_str().unwrap().to_owned())
+            .map(|item| serde_json::from_str(item["output"].as_str().unwrap()).unwrap())
             .collect()
     };
-    assert!(rows(&requests[0]).is_empty());
-    let changed = rows(&requests[1]);
-    assert_eq!(changed.len(), 1);
-    assert!(changed[0].contains("Execution mode: Plan"));
-    assert!(json!(app.store.context(&sid).await.unwrap())
-        .to_string()
-        .contains("Execution mode: Plan"));
+    let starting = results(&requests[0]);
+    assert_eq!(starting.len(), 1);
+    assert_eq!(starting[0]["revision"], 0);
+    let changed = results(&requests[1]);
+    assert!(!changed.is_empty());
+    assert_eq!(changed[changed.len() - 1]["mode"], "plan");
+    assert!(changed[changed.len() - 1]["guidance"]
+        .as_str()
+        .unwrap()
+        .starts_with("Execution mode: Plan"));
     for request in requests.iter() {
         assert!(!request["instructions"]
             .as_str()

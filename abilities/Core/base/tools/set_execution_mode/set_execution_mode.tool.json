@@ -4,10 +4,6 @@
   "parameters": {
     "type": "object",
     "properties": {
-      "expected_revision": {
-        "minimum": 0,
-        "type": "integer"
-      },
       "mode": {
         "maxLength": 32,
         "type": "string"
@@ -75,8 +71,7 @@
       }
     },
     "required": [
-      "mode",
-      "expected_revision"
+      "mode"
     ],
     "additionalProperties": false
   },

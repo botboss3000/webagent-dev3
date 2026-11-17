@@ -52,6 +52,23 @@ pub mod defaults {
     pub fn prompt_defaults() -> Result<Vec<u8>> {
         prompt_defaults_at(None)
     }
+
+    /// Where execution mode guidance goes (`mode_guidance.json`): `history`, `both` or
+    /// `per_step`, and the one-line status `both` adds to each step's guidance message.
+    pub fn mode_guidance() -> (String, String) {
+        let file = runtime_prompts_at(None)
+            .map(|prompts| prompts["mode_guidance"].clone())
+            .unwrap_or_default();
+        let placement = match file["placement"].as_str() {
+            Some(value @ ("history" | "per_step")) => value,
+            _ => "both",
+        };
+        let status = file["status_line"]
+            .as_str()
+            .unwrap_or("Execution mode: {label}.")
+            .to_owned();
+        (placement.to_owned(), status)
+    }
 }
 #[cfg(test)]
 mod tests;

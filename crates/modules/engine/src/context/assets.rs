@@ -156,44 +156,6 @@ impl<
             controls
         ])))
     }
-    /// The session's mode guidance: the text pinned ahead of the history (set when the
-    /// history basis changes, so at the start and after each compaction) and, when the mode
-    /// changed since the last call, the new guidance to add to the history.
-    async fn mode_guidance(
-        &self,
-        sid: &str,
-        basis: &str,
-    ) -> Result<(Option<String>, Option<String>)> {
-        let mode = self.session_mode(sid).await?;
-        let revision = mode["revision"].as_u64().unwrap_or(0);
-        let text = mode["definition"]["label"].as_str().map(|label| {
-            format!(
-                "Execution mode: {label}\n{}",
-                mode["definition"]["prompt"].as_str().unwrap_or("").trim()
-            )
-        });
-        let key = format!("session_mode_view:{sid}");
-        let saved = self.store.get(&key).await?;
-        let (view, change) = match &saved {
-            Some(view) if view["history_basis"] == basis => {
-                if view["revision"].as_u64() == Some(revision) {
-                    (view.clone(), None)
-                } else {
-                    let mut next = view.clone();
-                    next["revision"] = json!(revision);
-                    (next, text.clone())
-                }
-            }
-            _ => (
-                json!({"history_basis":basis,"revision":revision,"pinned":text}),
-                None,
-            ),
-        };
-        if saved.as_ref() != Some(&view) {
-            self.store.put(&key, &view).await?;
-        }
-        Ok((view["pinned"].as_str().map(str::to_owned), change))
-    }
     pub async fn prepare_capability(
         &self,
         run: &Value,
@@ -248,7 +210,7 @@ impl<
             .await?
             .ok_or_else(|| anyhow::anyhow!("Context session missing"))?;
         let basis = webagent_context::assets::history_basis(&session);
-        let (mut notes, updates) = Box::pin(self.native.main_notes(
+        let (notes, updates) = Box::pin(self.native.main_notes(
             self.store.records(),
             &agent,
             &sid,
@@ -256,25 +218,45 @@ impl<
             &basis,
         ))
         .await?;
-        let (mode_pinned, mode_change) = self.mode_guidance(&sid, &basis).await?;
-        if let Some(text) = mode_pinned {
-            // Instruction sections are joined as they are, so each ends with its own break.
-            notes.insert(0, ("mode-guidance".to_owned(), format!("{}\n\n", text.trim_end())));
-        }
-        // Another session's Main Notes changes and this session's mode changes join the
-        // history as tool-call rows, once each, where they stay (and stay cached) until
-        // compaction pins the current notes and mode ahead of the history again.
+        // Another session's Main Notes changes join the history as tool-call rows, once each,
+        // where they stay (and stay cached) until compaction rebuilds the notes.
         let mut rows = Vec::new();
         let mut row = |name: &str, text: String| {
             let id = format!("{name}-{}", uuid::Uuid::new_v4());
             rows.push(json!({"type":"function_call","call_id":id,"name":name,"arguments":"{}"}));
             rows.push(json!({"type":"function_call_output","call_id":id,"output":text}));
         };
-        if let Some(text) = mode_change {
-            row("mode_guidance", text);
-        }
         for text in updates {
             row("main_notes_update", text);
+        }
+        // The history always shows the current execution mode: at the start, after the user
+        // changes it, and after compaction the server adds a set_execution_mode result, unless
+        // the latest one in the history (the agent's own call included) already shows it.
+        let mode = self.session_mode(&sid).await?;
+        let revision = mode["revision"].as_u64().unwrap_or(0);
+        let shown = latest_mode_revision(history);
+        if shown != Some(revision) {
+            let id = mode["definition"]["id"].as_str().unwrap_or("ask");
+            let reason = match shown {
+                Some(_) => "The user changed the execution mode; you did not call this.",
+                None if revision == 0 => "The session's starting execution mode.",
+                None => "The session's current execution mode.",
+            };
+            let mut output =
+                json!({"status":"success","mode":id,"revision":revision,"reason":reason});
+            if webagent_context::defaults::mode_guidance().0 != "per_step" {
+                output["guidance"] = json!(format!(
+                    "Execution mode: {}\n{}",
+                    mode["definition"]["label"].as_str().unwrap_or(id),
+                    mode["definition"]["prompt"].as_str().unwrap_or("").trim()
+                ));
+            }
+            let call_id = format!("set_execution_mode-{}", uuid::Uuid::new_v4());
+            rows.push(
+                json!({"type":"function_call","call_id":call_id,"name":"set_execution_mode",
+                "arguments":json!({"mode":id}).to_string()}),
+            );
+            rows.push(json!({"type":"function_call_output","call_id":call_id,"output":output.to_string()}));
         }
         let mut extended;
         let history = if rows.is_empty() {
@@ -291,7 +273,13 @@ impl<
                 .await?;
             extended.as_slice()
         };
-        webagent_context::assets::project_context(
+        // The size report measured the history before these entries; count them as projection
+        // growth (each array item plus its separating comma).
+        let added: usize = rows
+            .iter()
+            .map(|row| serde_json::to_vec(row).map_or(0, |bytes| bytes.len() + 1))
+            .sum();
+        let mut projected = webagent_context::assets::project_context(
             run,
             cap,
             profile,
@@ -308,6 +296,33 @@ impl<
             &crate::context::bridge::Planner,
             cancel,
         )
-        .await
+        .await?;
+        projected.extra_json_bytes += added;
+        Ok(projected)
     }
+}
+
+/// The mode revision in the latest successful set_execution_mode result in `history`.
+fn latest_mode_revision(history: &[Value]) -> Option<u64> {
+    let calls: std::collections::HashSet<&str> = history
+        .iter()
+        .filter(|item| item["type"] == "function_call" && item["name"] == "set_execution_mode")
+        .filter_map(|item| item["call_id"].as_str())
+        .collect();
+    history.iter().rev().find_map(|item| {
+        if item["type"] != "function_call_output"
+            || !item["call_id"]
+                .as_str()
+                .is_some_and(|id| calls.contains(id))
+        {
+            return None;
+        }
+        let output: Value = serde_json::from_str(item["output"].as_str()?).ok()?;
+        if output["status"] != "success" {
+            return None;
+        }
+        output["revision"]
+            .as_u64()
+            .or_else(|| output["output"]["revision"].as_u64())
+    })
 }

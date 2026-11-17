@@ -2427,9 +2427,32 @@ impl<
                     }
                 }
                 let call_number = run["attempt"].as_u64().unwrap_or(0) + 1;
-                // The session mode is pinned in the instructions and its changes join the
-                // history (context assets), so this call's note carries only one-off items.
-                let mut contributions: Vec<context_input::Contribution> = Vec::new();
+                // The mode's full guidance is in the history (set_execution_mode results);
+                // mode_guidance.json picks what this step's guidance message adds: nothing, a
+                // one-line status, or the full guidance. set_execution_mode uses the revision
+                // recorded here when the agent changes the mode.
+                let mut contributions = Vec::new();
+                run["mode_revision_shown"] = mode["revision"].clone();
+                let (placement, status_line) = webagent_context::defaults::mode_guidance();
+                let label = mode["definition"]["label"].as_str().unwrap_or("Unknown");
+                let mode_text = match placement.as_str() {
+                    "per_step" => Some(format!(
+                        "Execution mode: {label}\n{}",
+                        mode["definition"]["prompt"].as_str().unwrap_or("").trim()
+                    )),
+                    "both" => Some(status_line.replace("{label}", label)),
+                    _ => None,
+                };
+                if let Some(content) = mode_text {
+                    contributions.push(context_input::Contribution {
+                        id: "session_mode".into(),
+                        source: "native_session_mode".into(),
+                        lifetime: context_input::Lifetime::Call,
+                        content,
+                        turn: run["turns"].as_u64().unwrap_or(0),
+                        call: call_number,
+                    });
+                }
                 // A newly seen issue group gets one call-scoped chance to be explained.
                 let review_entry = run["run_health"]["review_pending"].clone();
                 if review_entry.is_null() {

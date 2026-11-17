@@ -192,6 +192,18 @@ mod tests {
         let profile: ProfileV1 = serde_json::from_value(json!({"instruction_role":"developer",
    "transport":"responses","reasoning_replay":"responses_items","cache_control":"implicit_prefix"}))
         .unwrap();
+        // As in a real session, the history already shows the current mode, so the
+        // projection adds no set_execution_mode entry of its own.
+        if let Some(input) = run["input"].as_array_mut() {
+            input.push(
+                json!({"type":"function_call","call_id":"set_execution_mode-start",
+                "name":"set_execution_mode","arguments":"{\"mode\":\"ask\"}"}),
+            );
+            input.push(
+                json!({"type":"function_call_output","call_id":"set_execution_mode-start",
+                "output":json!({"status":"success","mode":"ask","revision":0}).to_string()}),
+            );
+        }
         let original = run["input"].as_array().unwrap().clone();
         let schemas =
             vec![json!({"type":"function","name":"file_read","parameters":{"type":"object"}})];
@@ -278,7 +290,7 @@ mod tests {
         assert_eq!(ledger.placements[0].after_input, 0);
         run["input"] = json!([{"role":"assistant","content":"canonical summary"}]);
         run["compactions"] = json!(1);
-        app.store.save_run(&mut run,"context_compacted",&json!({"source":original,"source_digest":crate::digest(&original),"dropped_items":1,"segment_id":"assets-run-1"})).await.unwrap();
+        app.store.save_run(&mut run,"context_compacted",&json!({"source":original,"source_digest":crate::digest(&original),"dropped_items":original.len(),"segment_id":"assets-run-1"})).await.unwrap();
         let rebased = hydrate(&app, &mut run).await.unwrap();
         assert_eq!(rebased.selectors, vec![selected.clone()]);
         assert!(rebased.placements.is_empty());

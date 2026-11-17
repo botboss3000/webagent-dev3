@@ -256,7 +256,7 @@ pub fn omit_skill_bodies(input: &mut [Value]) {
             item["type"] == "function_call"
                 && matches!(
                     item["name"].as_str(),
-                    Some("main_notes_update" | "mode_guidance")
+                    Some("main_notes_update" | "mode_guidance" | "set_execution_mode")
                 )
         })
         .filter_map(call_id)

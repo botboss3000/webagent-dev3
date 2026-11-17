@@ -18,7 +18,9 @@ pub fn owns(name: &str) -> bool {
 #[serde(deny_unknown_fields)]
 struct Args {
     mode: String,
-    expected_revision: u64,
+    /// Filled by the server from the mode last shown to this run; accepted for compatibility.
+    #[serde(default)]
+    expected_revision: Option<u64>,
     #[serde(default)]
     reason: Option<String>,
     #[serde(default)]
@@ -59,15 +61,41 @@ pub async fn execute(
             && run["pending"]["id"] == call.pending_id
             && run["pending"]["alternate_mode"] == "ask";
         let mode = if to_ask { "ask" } else { query.mode.as_str() };
+        // The revision is the one in the mode guidance this run last saw, so a mode the user
+        // changed since then is never overwritten by a change the agent decided on earlier.
+        let current = host.session_mode(call.sid).await?;
+        let seen = query
+            .expected_revision
+            .or_else(|| run["mode_revision_shown"].as_u64())
+            .or_else(|| current["revision"].as_u64())
+            .unwrap_or(0);
         let response = host
-            .change_session_mode(&agent, call, mode, query.expected_revision)
+            .change_session_mode(&agent, call, mode, seen)
             .await?
-            .map_err(|_| anyhow::anyhow!("Session mode revision or access changed"))?;
+            .map_err(|_| {
+                if current["revision"].as_u64().is_some_and(|now| now != seen) {
+                    anyhow::anyhow!(
+                        "The user changed the execution mode to {} since your last step, so \
+                         this change was not made. The current mode guidance is in this step; \
+                         ask the user before changing the mode again.",
+                        current["execution_mode"].as_str().unwrap_or("another mode")
+                    )
+                } else {
+                    anyhow::anyhow!("Session mode access changed")
+                }
+            })?;
         if let Some(artifact) = artifact {
             host.write_session_artifact(call, PLAN_ARTIFACT, PLAN_ARTIFACT, &artifact)
                 .await?;
         }
-        let mut result = json!({"status":"success","output":response});
+        // The result carries the new mode's guidance, so the conversation history holds it from
+        // the step it changed (unless mode_guidance.json puts the guidance in each step instead).
+        let now = host.session_mode(call.sid).await?;
+        let mut result = json!({"status":"success","output":response,
+            "mode":now["definition"]["id"].as_str().unwrap_or(mode),"revision":now["revision"]});
+        if webagent_context::defaults::mode_guidance().0 != "per_step" {
+            result["guidance"] = json!(guidance_text(&now));
+        }
         if to_ask {
             result["note"] = json!(
                 "The user chose Ask mode instead of Auto: execute the agreed plan now; \
@@ -83,6 +111,15 @@ pub async fn execute(
             "output":error.to_string()}),
     })
 }
+/// The guidance text for `mode`: its label and prompt.
+#[must_use]
+pub fn guidance_text(mode: &Value) -> String {
+    format!(
+        "Execution mode: {}\n{}",
+        mode["definition"]["label"].as_str().unwrap_or("Unknown"),
+        mode["definition"]["prompt"].as_str().unwrap_or("").trim()
+    )
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,5 +128,6 @@ mod tests {
         assert!(serde_json::from_value::<Args>(json!({"mode":"auto",
             "expected_revision":0,"session_id":"other"}))
         .is_err());
+        assert!(serde_json::from_value::<Args>(json!({"mode":"plan"})).is_ok());
     }
 }

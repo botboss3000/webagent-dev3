@@ -6,7 +6,7 @@
 - Entering Auto needs human approval.
 - Leaving Plan needs plan: the agreed plan, shown to the user on the approval card and saved as the session's plan artifact when they let the work start.
 
-Call with `{"mode":"<id>","expected_revision":<current mode revision>}`. The current revision is in the session mode note of every step. Use a short `reason` when it helps the user.
+Call with `{"mode":"<id>"}`. The current mode and its guidance are in every step's guidance message. If the user changed the mode since your last step, the call is refused and says so; ask the user before changing it again. Use a short `reason` when it helps the user.
 
 ## Leaving Plan
 
