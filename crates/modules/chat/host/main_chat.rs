@@ -124,6 +124,11 @@ pub(crate) async fn notes_context_store(
         store.put(&key, &view).await?;
     }
     let mut definitions = Vec::new();
+    // How to use the notes leads the notes section (default from the prompt files, the
+    // agent's own override when set).
+    if let Some(guidance) = Box::pin(guidance_store(&store, agent, sid)).await? {
+        definitions.push(("main-notes-guidance".to_owned(), guidance));
+    }
     if let Some(snapshot) = view["snapshot"].as_str() {
         definitions.push(("main-notes".to_owned(), snapshot.to_owned()));
     }

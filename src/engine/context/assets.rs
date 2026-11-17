@@ -117,7 +117,8 @@ mod tests {
         .await
         .unwrap()
     }
-    /// Main Chat skills refresh with the base prompt, without modifying transcript documents.
+    /// The Main Notes guidance leads the Main Notes section (not the prompt section), follows
+    /// live overrides, and never modifies transcript documents.
     #[cfg(feature = "linked-context")]
     #[tokio::test]
     async fn main_chat_skill_is_live_prefix_without_transcript_accumulation() {
@@ -134,9 +135,27 @@ mod tests {
             })
             .await
             .unwrap();
+        let notes = |app: &App| {
+            let app = app.clone();
+            let sid = sid.to_owned();
+            async move {
+                crate::main_chat::notes_context_store(
+                    &app.store,
+                    "shared_default",
+                    &sid,
+                    app.store.current_user_id(),
+                    "basis",
+                )
+                .await
+                .unwrap()
+            }
+        };
         let first = Box::pin(bridge_capability(&app, &run)).await;
-        assert!(first.main.contains("review prefix sentinel"));
-        assert!(!first.main.contains("working sentinel"));
+        assert!(!first.main.contains("review prefix sentinel"));
+        let section = Box::pin(notes(&app)).await;
+        assert_eq!(section[0].0, "main-notes-guidance");
+        assert!(section[0].1.contains("review prefix sentinel"));
+        assert!(!section[0].1.contains("working sentinel"));
         app.store
             .main_chat_change(1, "skill-updated", "skill-updated", vec![], |state| {
                 state["skill_overrides"]["review"] = json!("updated prefix sentinel");
@@ -144,9 +163,9 @@ mod tests {
             })
             .await
             .unwrap();
-        let second = Box::pin(bridge_capability(&app, &run)).await;
-        assert!(second.main.contains("updated prefix sentinel"));
-        assert!(!second.main.contains("review prefix sentinel"));
+        let section = Box::pin(notes(&app)).await;
+        assert!(section[0].1.contains("updated prefix sentinel"));
+        assert!(!section[0].1.contains("review prefix sentinel"));
         assert_eq!(
             app.store.get(&format!("session:{sid}")).await.unwrap(),
             before

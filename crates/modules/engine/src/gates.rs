@@ -109,10 +109,7 @@ pub fn validate_manifest(id: &str, item: &Manifest) -> Result<()> {
                 bail!("Invalid message-visibility gate binding");
             }
             let config: VisibilityConfig = serde_json::from_value(item.config.clone())?;
-            if config.tool_name != "publish_main_message"
-                || config.guidance.is_empty()
-                || config.guidance.len() > 4096
-            {
+            if config.tool_name != "publish_main_message" {
                 bail!("Invalid message-visibility gate config");
             }
         }
@@ -141,6 +138,16 @@ pub use self::controls::{ClosingConfig, VisibilityConfig};
 #[serde(deny_unknown_fields)]
 pub struct SizeConfig {
     pub max_text_bytes: usize,
+}
+
+/// The default publishing guidance, from the live prompt files (`publish_guidance.md`).
+pub fn default_publish_guidance() -> Result<String> {
+    crate::defaults::runtime_prompts_at(None)?["publish_guidance"]
+        .as_str()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("Publishing guidance prompt missing"))
 }
 
 pub fn visibility_config() -> Result<VisibilityConfig> {
@@ -203,7 +210,9 @@ mod tests {
     fn packaged_manifests_are_bounded_and_typed() {
         let visibility = visibility_config().unwrap();
         assert_eq!(visibility.tool_name, "publish_main_message");
-        assert!(visibility.guidance.contains("publish_main_message"));
+        assert!(default_publish_guidance()
+            .unwrap()
+            .contains("publish_main_message"));
         let closer = closing_config().unwrap();
         assert_eq!(closer.fallback_flag.as_deref(), Some("unflagged"));
         assert!(closer.notification.max_chars <= 1000);
@@ -222,7 +231,10 @@ mod tests {
         close.config["fallback_flag"] = json!("complete");
         assert!(validate_manifest(CLOSING_STATUS, &close).is_err());
         let mut visibility = manifest(MESSAGE_VISIBILITY).unwrap();
-        visibility.config["guidance"] = json!("");
+        // A gate file from before the default moved to the prompt files still loads.
+        visibility.config["guidance"] = json!("older guidance");
+        assert!(validate_manifest(MESSAGE_VISIBILITY, &visibility).is_ok());
+        visibility.config["tool_name"] = json!("publish_something_else");
         assert!(validate_manifest(MESSAGE_VISIBILITY, &visibility).is_err());
         let mut size = manifest(PUBLICATION_SIZE).unwrap();
         size.config["max_text_bytes"] = json!(262145);
@@ -273,7 +285,10 @@ mod initial {
     #[serde(deny_unknown_fields)]
     pub struct VisibilityConfig {
         pub tool_name: String,
-        pub guidance: String,
+        /// Gate files from before the default moved to the prompt files still carry it;
+        /// it is read and ignored.
+        #[serde(default, rename = "guidance")]
+        _retired_guidance: Option<String>,
     }
 
     /// The agent selects one publication path; the server still owns the manual protocol.
@@ -302,7 +317,7 @@ mod initial {
     impl AgentVisibility {
         pub fn validate(&self) -> Result<()> {
             if self.guidance.len() > 4096 {
-                bail!("Additional guidance must be at most 4096 bytes");
+                bail!("Publishing guidance must be at most 4096 bytes");
             }
             Ok(())
         }

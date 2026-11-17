@@ -172,17 +172,8 @@ impl<
         let slots = app.native.prompt_slots(scoped.records(), &agent).await?;
         let live_slots = context_assembly::pinned_instructions("", &slots)?;
         // There is no base prompt: instructions are the agent's prompt slots and skills.
-        let mut base_prompt = String::new();
-        // Automatic agent skills belong with current base instructions, ahead of history.
-        // They never become selected/transcript assets or accumulate across calls.
-        if let Some(skill) =
-            Box::pin(app.native.main_guidance(app.store.records(), &agent, &sid)).await?
-        {
-            if !base_prompt.is_empty() {
-                base_prompt.push_str("\n\n");
-            }
-            base_prompt.push_str(&skill);
-        }
+        // The Main Notes guidance leads the Main Notes section instead.
+        let base_prompt = String::new();
         let ledger = scoped.context_assets(&sid, &agent, &requester).await?;
         let request = webagent_context::assets::capability_request(
             base_prompt,

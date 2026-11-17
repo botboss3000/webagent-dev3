@@ -20,8 +20,8 @@ export function renderVisibility(content, agent, persist) {
   const note=document.createElement('p'); note.className='ac-hint'; body.append(note);
   const fields=document.createElement('div'); body.append(fields);
   const field=(title,rows)=>{const label=document.createElement('label');label.className='agent-closing-message-guidance';const span=document.createElement('span');span.textContent=title;const input=document.createElement('textarea');input.className='ac-input';input.rows=rows;label.append(span,input);fields.append(label);return input;};
-  const fixed=field('Fixed promotion protocol',5); fixed.readOnly=true; fixed.value=settings.fixed_protocol||'';
-  const guidance=field('Additional promotion guidance',2); guidance.value=settings.guidance||''; guidance.disabled=!agent.can_manage; guidance.placeholder='Optional guidance for selecting a standalone working message.';
+  const fixed=field('Default publishing guidance',5); fixed.readOnly=true; fixed.value=settings.fixed_protocol||'';
+  const guidance=field('This agent\'s publishing guidance (replaces the default when set)',4); guidance.value=settings.guidance||''; guidance.disabled=!agent.can_manage; guidance.placeholder='Leave empty to use the default above.';
   const save=document.createElement('button');save.type='button';save.className='ac-btn ac-btn-ghost';save.textContent='Save guidance';save.disabled=!agent.can_manage;fields.append(save);
   const status=document.createElement('span');status.setAttribute('role','status');status.setAttribute('aria-live','polite');fields.append(status);
   const applyMode=()=>{fields.hidden=mode.value!=='manual';note.textContent=mode.value==='auto'

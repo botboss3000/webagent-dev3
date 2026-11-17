@@ -170,7 +170,8 @@ async fn identity_get(
     let manager = crate::manager::config::incoming(&store, &id).await?;
     let closing_protocol = crate::gate_registry::closing_config()?;
     let voice_output = voice_output(&store, &id).await?;
-    let fixed = crate::gate_registry::visibility_config()?.guidance;
+    // The default publishing guidance, which an agent's own guidance replaces.
+    let fixed = crate::gate_registry::default_publish_guidance()?;
     Ok(Json(
         json!({"member_access":store.access_repository().member_access(&id).await?,"capability_levels":store.capability_levels(&id).await?,"shared_chat":crate::shared_chat::policy(&store,&id).await?,"manager_incoming_message":manager,"closing_message":closing,"voice_output":voice_output.to_value(),"voice_catalog":webagent_media::speech::voice_catalog(),"closing_protocol":{"flags":closing_protocol.agent_flags(),"notification_target_words":closing_protocol.notification.target_words},"message_visibility":{"mode":settings.mode,"guidance":settings.guidance,"fixed_protocol":fixed},"execution_modes":config["execution_modes"],"default_execution_mode":config["default_execution_mode"],"id":id,"name":owned["name"],
         "compaction_thresholds":{"trigger_tokens":effective.trigger_tokens,"tail_tokens":effective.tail_tokens,"ceiling_tokens":ceiling,"summarizer":summarizer},

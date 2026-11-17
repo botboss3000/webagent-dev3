@@ -1095,11 +1095,15 @@ pub(crate) async fn tool_call(
         let run = app.run(rid).await?;
         if run["module_binding"]["id"] != "automation"
             || run["requester_user_id"] != shared_chat::actor(app)
-            || run["module_binding"]["occurrence_id"] != args["occurrence_id"]
-            || run["module_binding"]["automation_id"] != args["id"]
+            || !run["module_binding"]["automation_id"].is_string()
+            || !run["module_binding"]["occurrence_id"].is_string()
         {
             return Err(anyhow!("Automation occurrence unavailable"));
         }
+        // The run that an automation started names its own automation and occurrence; the
+        // model never passes them.
+        args["id"] = run["module_binding"]["automation_id"].clone();
+        args["occurrence_id"] = run["module_binding"]["occurrence_id"].clone();
         scope["origin_occurrence"] = run["module_binding"]["occurrence_id"].clone();
     }
     perform(

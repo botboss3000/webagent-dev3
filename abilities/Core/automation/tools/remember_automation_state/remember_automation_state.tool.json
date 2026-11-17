@@ -1,6 +1,6 @@
 {
   "name": "remember_automation_state",
-  "description": "remember automation state through the optional Automation service. Changes use revision checks; external adapters are unavailable.",
+  "description": "Remember state for the automation that started this run; the server supplies its automation and occurrence. Uses revision checks.",
   "effect": "write",
   "default_policy": {
     "operator": "require_approval",
@@ -10,22 +10,14 @@
   "parameters": {
     "type": "object",
     "properties": {
-      "id": {
-        "type": "string"
-      },
       "expected_revision": {
         "type": "integer",
         "minimum": 1
       },
-      "occurrence_id": {
-        "type": "string"
-      },
       "memory": {}
     },
     "required": [
-      "id",
       "expected_revision",
-      "occurrence_id",
       "memory"
     ],
     "additionalProperties": false

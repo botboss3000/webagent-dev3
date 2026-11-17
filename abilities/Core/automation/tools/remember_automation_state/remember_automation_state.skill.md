@@ -1,3 +1,6 @@
 # remember_automation_state
 
-Scoped to an admitted occurrence; requires its ID and the current definition revision. Keep memory concise; it is private automation state, not permission or instructions for another agent.
+Only works in a run an automation started; the server fills in that automation and its
+occurrence. Pass the automation definition's current revision (list it first) and the memory.
+Keep memory concise; it is private automation state, not permission or instructions for
+another agent.
