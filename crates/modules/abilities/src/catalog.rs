@@ -348,18 +348,46 @@ pub(crate) fn primary_skill_path(ability: &Path, id: &str) -> PathBuf {
     ability.join("skills").join(format!("{id}.skill.md"))
 }
 
+/// Skill text keyed by path and file identity (inode, size, change time). Per-call
+/// preparation checks every selected skill; this keeps that to one `stat` per file
+/// while any change (edit, replace, rename over) still reads the new text.
+type SkillKey = (u64, u64, i64, i64);
+static SKILL_TEXT: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, (SkillKey, String)>>,
+> = std::sync::LazyLock::new(Default::default);
+
 pub(crate) fn optional_skill(path: &Path) -> Result<Option<String>> {
-    match fs::symlink_metadata(path) {
+    use std::os::unix::fs::MetadataExt;
+    let meta = match fs::symlink_metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
-        Ok(_) => {}
+        Ok(meta) => meta,
+    };
+    let key = (meta.ino(), meta.len(), meta.ctime(), meta.ctime_nsec());
+    if meta.file_type().is_file() {
+        let cache = SKILL_TEXT
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((cached, text)) = cache.get(path) {
+            if *cached == key {
+                return Ok(Some(text.clone()));
+            }
+        }
     }
-    let bytes = read_bytes(path, fs::symlink_metadata(path)?.len())?;
+    let bytes = read_bytes(path, meta.len())?;
     let text = String::from_utf8(bytes)
         .with_context(|| format!("Invalid ability skill text: {}", path.display()))?;
     if text.trim().is_empty() {
         bail!("Empty ability skill: {}", path.display());
     }
+    let mut cache = SKILL_TEXT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Skill paths are a bounded set; clear rather than grow if that ever stops holding.
+    if cache.len() >= 4096 {
+        cache.clear();
+    }
+    cache.insert(path.to_path_buf(), (key, text.clone()));
     Ok(Some(text))
 }
 
