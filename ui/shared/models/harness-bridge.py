@@ -87,7 +87,8 @@ call, so a later fold forks that checkpoint instead of resending them. Muse neve
 Files live in ../work/harness-bridge/ relative to this script's folder (below: work/harness-bridge/).
 Client secret and server: work/harness-bridge/client.json (mode 0600), written by `pair`.
 Server override: $HARNESS_BRIDGE_URL.
-Per-chat files: work/harness-bridge/sessions/<webagent-session>/.
+Per-chat files: work/harness-bridge/sessions/<webagent-session>/. `usage [--json]` reports what the
+bridge keeps on this computer (per-chat folders and the harnesses' session stores).
 """
 import base64, difflib, hashlib, json, os, re, secrets, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request, uuid
 from pathlib import Path
@@ -1106,6 +1107,7 @@ def opencode_turn_once(command, prompt, work, model):
                 usage["input"] = tokens.get("input", 0) + cache.get("read", 0) + cache.get("write", 0)
                 usage["output"] += tokens.get("output", 0)
                 usage["cached"] = cache.get("read", 0)
+                usage["cache_write"] = cache.get("write", 0)
                 if (work / "calls.jsonl").exists() and (work / "calls.jsonl").stat().st_size:
                     stopped = True
                     stop()
@@ -1136,7 +1138,8 @@ def opencode_usage(usage):
     if not (total["input"] or total["output"]):
         return None
     return {"prompt_tokens": total["input"], "completion_tokens": total["output"],
-            "total_tokens": total["input"] + total["output"], "prompt_tokens_details": {"cached_tokens": total["cached"]}}
+            "total_tokens": total["input"] + total["output"],
+            "prompt_tokens_details": {"cached_tokens": total["cached"], "cache_write_tokens": total.get("cache_write", 0)}}
 
 
 def opencode_calls(work):
@@ -1347,7 +1350,8 @@ def claude_usage(output):
                                        "cache_creation_input_tokens")) // requests
     completion = u.get("output_tokens", 0)
     return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion,
-            "prompt_tokens_details": {"cached_tokens": u.get("cache_read_input_tokens", 0) // requests}}
+            "prompt_tokens_details": {"cached_tokens": u.get("cache_read_input_tokens", 0) // requests,
+                                      "cache_write_tokens": u.get("cache_creation_input_tokens", 0) // requests}}
 
 
 def stub_calls(stub):
@@ -1639,7 +1643,7 @@ def selftest():
     assert checkpoint_plan(chat, "claude_checkpoint", changes(folder, dict(chat), other, 3), other)["base"] is None
     assert checkpoint_plan(chat, "claude_checkpoint", dict(later, rewritten=False), third) is None
     assert claude_usage({"usage": {"input_tokens": 1, "cache_read_input_tokens": 10, "output_tokens": 2}}) == \
-        {"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13, "prompt_tokens_details": {"cached_tokens": 10}}
+        {"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13, "prompt_tokens_details": {"cached_tokens": 10, "cache_write_tokens": 0}}
     assert opencode_usage({"input": 0, "output": 0, "cached": 0}) is None
     # Old fork and checkpoint sessions go; the live session, the checkpoint and recent ones stay.
     project = folder / "claude-project"
@@ -1723,6 +1727,73 @@ def selftest():
     print("selftest ok")
 
 
+def tree_bytes(path):
+    """Bytes of the files under path (0 when it does not exist)."""
+    if not path.exists():
+        return 0
+    if path.is_file():
+        return path.stat().st_size
+    return sum(p.stat().st_size for p in path.rglob("*") if p.is_file() and not p.is_symlink())
+
+
+def usage_report():
+    """What this bridge keeps on this computer: its per-chat folders (saved request copies,
+    extracted images, state) and the harnesses' own session stores."""
+    chats, requests, images, other, idle = 0, 0, 0, 0, []
+    for chat in SESSIONS.iterdir() if SESSIONS.is_dir() else []:
+        if not chat.is_dir():
+            continue
+        chats += 1
+        newest = chat.stat().st_mtime
+        for path in chat.rglob("*"):
+            if not path.is_file() or path.is_symlink():
+                continue
+            size = path.stat().st_size
+            newest = max(newest, path.stat().st_mtime)
+            if path.parent.name == "requests":
+                requests += size
+            elif path.name.startswith("image-"):
+                images += size
+            else:
+                other += size
+        idle.append((time.time() - newest) / 86400)
+    report = {"bridge": str(ROOT), "chats": chats, "request_copies_bytes": requests,
+              "image_bytes": images, "other_chat_bytes": other,
+              "chats_idle_over_1_day": sum(1 for days in idle if days >= 1),
+              "oldest_idle_days": round(max(idle), 1) if idle else 0}
+    database = Path.home() / ".local/share/opencode/opencode.db"
+    if database.exists():
+        report["opencode_database_bytes"] = sum(
+            tree_bytes(Path(str(database) + suffix)) for suffix in ("", "-wal", "-shm"))
+        try:
+            import sqlite3
+            db = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+            report["opencode_sessions"] = db.execute("select count(*) from session_v2").fetchone()[0]
+            report["opencode_messages"] = db.execute("select count(*) from session_message").fetchone()[0]
+        except Exception:
+            pass
+        report["opencode_work_bytes"] = tree_bytes(OPENCODE_HOME)
+    projects = Path.home() / ".claude/projects"
+    prefix = str(SESSIONS).replace("/", "-")
+    claude = [p for p in projects.iterdir() if p.name.startswith(prefix)] if projects.is_dir() else []
+    if claude:
+        report["claude_session_folders"] = len(claude)
+        report["claude_session_bytes"] = sum(tree_bytes(p) for p in claude)
+    report["total_bytes"] = sum(v for k, v in report.items() if k.endswith("_bytes"))
+    return report
+
+
+def cmd_usage(as_json=False):
+    """`usage`: what this bridge keeps on this computer (sizes and counts); `--json` for machines."""
+    report = usage_report()
+    if as_json:
+        print(json.dumps(report))
+        return
+    for key, value in report.items():
+        shown = f"{value / 2**20:,.1f} MB" if key.endswith("_bytes") else value
+        print(f"{key:28} {shown}")
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
     session = None
@@ -1742,6 +1813,8 @@ if __name__ == "__main__":
         mcp_stub(args[1])
     elif args[:1] == ["stats"] and len(args) <= 2:
         cmd_stats(float(args[1]) if len(args) == 2 else 24)
+    elif args[:1] == ["usage"] and len(args) <= 2:
+        cmd_usage("--json" in args)
     elif args[:1] == ["selftest"]:
         selftest()
     else:
