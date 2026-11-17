@@ -189,10 +189,8 @@ mod tests {
         let state = hydrate(&app, &mut run).await.unwrap();
         assert_eq!(state.selectors, vec![selected.clone()]);
         let cap = Box::pin(bridge_capability(&app, &run)).await;
-        let profile: ProfileV1 = serde_json::from_value(
-            json!({"append_instructions":true,"instruction_role":"developer",
-   "transport":"responses","reasoning_replay":"responses_items","cache_control":"implicit_prefix"}),
-        )
+        let profile: ProfileV1 = serde_json::from_value(json!({"instruction_role":"developer",
+   "transport":"responses","reasoning_replay":"responses_items","cache_control":"implicit_prefix"}))
         .unwrap();
         let original = run["input"].as_array().unwrap().clone();
         let schemas =
@@ -207,11 +205,10 @@ mod tests {
             turn: 1,
             call: 1,
         };
-        let instructions_profile: ProfileV1 = serde_json::from_value(
-            json!({"append_instructions":false,"instruction_role":"system",
-   "transport":"chat_completions","reasoning_replay":"none","cache_control":"none"}),
-        )
-        .unwrap();
+        let instructions_profile: ProfileV1 =
+            serde_json::from_value(json!({"instruction_role":"system",
+   "transport":"chat_completions","reasoning_replay":"none","cache_control":"none"}))
+            .unwrap();
         for (profile, role) in [(&profile, "developer"), (&instructions_profile, "system")] {
             let mut probe = run.clone();
             let working = Box::pin(project(

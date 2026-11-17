@@ -69,7 +69,6 @@ pub enum CacheControlV1 {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProfileV1 {
-    pub append_instructions: bool,
     pub instruction_role: InstructionRoleV1,
     pub transport: TransportV1,
     pub reasoning_replay: ReasoningReplayV1,
@@ -165,28 +164,24 @@ pub enum MaterializedV1 {
 pub fn profile_for(provider: ProviderIdV1) -> ProfileV1 {
     match provider {
         ProviderIdV1::OpenaiSubscription => ProfileV1 {
-            append_instructions: true,
             instruction_role: InstructionRoleV1::Developer,
             transport: TransportV1::Responses,
             reasoning_replay: ReasoningReplayV1::ResponsesItems,
             cache_control: CacheControlV1::SubscriptionSessionKey,
         },
         ProviderIdV1::Deepseek => ProfileV1 {
-            append_instructions: true,
             instruction_role: InstructionRoleV1::System,
             transport: TransportV1::ChatCompletions,
             reasoning_replay: ReasoningReplayV1::DeepseekContent,
             cache_control: CacheControlV1::ImplicitPrefix,
         },
         ProviderIdV1::Typesafe => ProfileV1 {
-            append_instructions: false,
             instruction_role: InstructionRoleV1::System,
             transport: TransportV1::Decision,
             reasoning_replay: ReasoningReplayV1::None,
             cache_control: CacheControlV1::None,
         },
         _ => ProfileV1 {
-            append_instructions: false,
             instruction_role: InstructionRoleV1::System,
             transport: TransportV1::ChatCompletions,
             reasoning_replay: ReasoningReplayV1::None,

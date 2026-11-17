@@ -1095,7 +1095,8 @@ async fn smoke_drain(process: &Service, key: &str) -> Result<()> {
     }
     Ok(())
 }
-/// Prove permanent append/prefix boundaries and temporary suffixes with metadata only.
+/// Prove prefix definitions and temporary suffixes with metadata only, on the same and on a
+/// changed history basis (the broker requires two cases per component).
 async fn assets_smoke() -> Result<Vec<Value>> {
     use webagent_assets_contracts::{Placement, Plan, Request, State};
     #[cfg(feature = "live-context")]
@@ -1103,7 +1104,7 @@ async fn assets_smoke() -> Result<Vec<Value>> {
     #[cfg(feature = "live-context")]
     let mut pid = None;
     let mut cases = Vec::new();
-    for append in [true, false] {
+    for basis in ["smoke-epoch", "rebased-epoch"] {
         let history = vec![
             json!({"role":"user","content":"public inspection"}),
             json!({"type":"function_call","call_id":"smoke-call","name":"file_read","arguments":"{}"}),
@@ -1126,8 +1127,7 @@ async fn assets_smoke() -> Result<Vec<Value>> {
             definitions: vec!["main".into(), "verification".into()],
             temporary: vec!["current-mode".into()],
             schema_names: vec!["file_read".into(), "file_write".into()],
-            history_basis: "smoke-epoch".into(),
-            append,
+            history_basis: basis.into(),
         };
         #[cfg(feature = "linked-context")]
         let plan = webagent_context_assets::plan(&input)?;
@@ -1143,7 +1143,6 @@ async fn assets_smoke() -> Result<Vec<Value>> {
         )
         .await?;
         webagent_assets_contracts::validate_plan(&input, &plan)?;
-        let at = if append { 3 } else { 0 };
         let expected = Plan::Place {
             placements: vec![
                 Placement {
@@ -1153,12 +1152,8 @@ async fn assets_smoke() -> Result<Vec<Value>> {
                 },
                 Placement {
                     id: "verification".into(),
-                    after_input: at,
-                    anchor: if append {
-                        Some("call:smoke-call".into())
-                    } else {
-                        None
-                    },
+                    after_input: 0,
+                    anchor: None,
                 },
                 Placement {
                     id: "current-mode".into(),
@@ -1167,7 +1162,7 @@ async fn assets_smoke() -> Result<Vec<Value>> {
                 },
             ],
             schema_order: vec!["file_write".into(), "file_read".into()],
-            rebased: false,
+            rebased: basis != "smoke-epoch",
             input_digest: webagent_assets_contracts::digest(&input)?,
         };
         if plan != expected {
@@ -2648,7 +2643,6 @@ mod tests {
             temporary: vec![],
             schema_names: vec![],
             history_basis: "epoch".into(),
-            append: true,
         };
         let assets_plan = webagent_assets_contracts::Plan::Place {
             placements: vec![],

@@ -314,7 +314,6 @@ pub async fn project_context(
         temporary: Vec::new(),
         schema_names: cap.schema_order.clone(),
         history_basis: history_basis.clone(),
-        append: false,
     };
     let plan = planner.assets_plan(root, &request, cancel).await?;
     webagent_assets_contracts::validate_plan(&request, &plan)?;

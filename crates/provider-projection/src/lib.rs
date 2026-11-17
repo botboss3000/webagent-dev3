@@ -138,7 +138,6 @@ mod tests {
             };
             match provider {
                 ProviderIdV1::OpenaiSubscription => {
-                    assert!(profile.append_instructions);
                     assert_eq!(profile.instruction_role, InstructionRoleV1::Developer);
                     assert_eq!(
                         profile.cache_control,
@@ -146,11 +145,10 @@ mod tests {
                     );
                 }
                 ProviderIdV1::Deepseek => {
-                    assert!(profile.append_instructions);
                     assert_eq!(profile.instruction_role, InstructionRoleV1::System);
                     assert_eq!(profile.cache_control, CacheControlV1::ImplicitPrefix);
                 }
-                _ => assert!(!profile.append_instructions),
+                _ => {}
             }
         }
     }
