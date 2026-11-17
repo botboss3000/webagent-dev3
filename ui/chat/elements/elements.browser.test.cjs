@@ -118,6 +118,45 @@ test('each agent loop is its own step, even when the loop sent no message',async
  assert.deepEqual(heads,['Step 12 tool calls','Step 21 tool call','Step 31 tool call']);
 });
 
+test('back closes the last opened call of the active group before that group',async t=>{
+ const p=await fixture(t);
+ await p.evaluate(async()=>{
+  view.disconnect();
+  // app.js hands every popstate to consumeBack; the fixture stands in for that listener.
+  const {consumeBack}=await import('/ui/shared/history-back.js');
+  window.addEventListener('popstate',()=>consumeBack());
+  const {createActivityGroup}=await import('/ui/chat/elements/activity-group/index.js');
+  const {createMiniTranscript}=await import('/ui/chat/elements/mini-transcript/index.js');
+  const call=id=>({id:'tool:'+id,category:'tools',label:'file_read · done',events:[
+   {kind:'tool_call',run_id:'r',turn:1,payload:{tool:'file_read',tool_call_id:id}},
+   {kind:'tool_result',run_id:'r',turn:null,payload:{tool_call_id:id,output:'ok'}}]});
+  window.group=createActivityGroup({transcript:createMiniTranscript()});
+  document.querySelector('#messages').replaceChildren(group.element);
+  group.update({id:'g',state:'completed',counts:{tools:2},rows:[call('a'),call('b')],events:[]});
+  group.element.open=true;
+ });
+ // The tool row's own disclosure, not the raw diagnostics nested inside it.
+ const calls=p.locator('.v2-mini-tool > details.v2-mini-tool-disclosure > summary');
+ await calls.first().waitFor();
+ await calls.first().click();
+ await p.waitForFunction(()=>document.querySelectorAll('.v2-mini-tool > details.v2-mini-tool-disclosure[open]').length===1);
+ // consumeBack is the same press app.js sends on popstate.
+ const presses=await p.evaluate(async()=>{
+  const {consumeBack}=await import('/ui/shared/history-back.js');
+  const state=()=>({group:group.element.open,
+   tools:document.querySelectorAll('.v2-mini-tool > details.v2-mini-tool-disclosure[open]').length});
+  const before=state();
+  const first=consumeBack();const afterFirst=state();
+  const second=consumeBack();const afterSecond=state();
+  return {before,first,afterFirst,second,afterSecond};
+ });
+ assert.deepEqual(presses.before,{group:true,tools:1});
+ assert.equal(presses.first,true,'the first press is consumed');
+ assert.deepEqual(presses.afterFirst,{group:true,tools:0},'one press closes the call and leaves the group open');
+ assert.equal(presses.second,true,'the next press is consumed');
+ assert.deepEqual(presses.afterSecond,{group:false,tools:0},'the next press closes the group');
+});
+
 test('broker metadata renders inside expanded tool details with inert values',async t=>{
  const p=await fixture(t);
  await p.evaluate(async()=>{

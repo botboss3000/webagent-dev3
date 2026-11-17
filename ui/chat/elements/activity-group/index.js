@@ -173,11 +173,33 @@ export function createActivityGroup({transcript}) {
   const diffs=document.createElement('div');diffs.className='tc-diffs';diffs.hidden=true;
   node.append(summary,transcript.element,diffs);
   // Native details supplies pointer and keyboard disclosure semantics.
-  // An open group claims the back press, so back collapses it before it leaves the chat.
+  // Back closes this group's newest open tool call first, then the group itself, so the
+  // nearest group answers the press and a group with no open call closes in one press.
   let groupBack=null;
+  let lastTool=null;
+  // Remember the tool disclosure the user opened last, and fall back to any still-open one.
+  node.addEventListener('toggle',event=>{
+    const row=event.target;
+    if(!row.matches?.('.v2-mini-tool-disclosure'))return;
+    if(row.open){lastTool=row;return;}
+    if(lastTool!==row)return;
+    lastTool=[...node.querySelectorAll('.v2-mini-tool-disclosure[open]')].pop()||null;
+  },true);
+  const stepBack=()=>{
+    // Closing a call leaves the group to close, so the press is claimed again for it.
+    if(lastTool&&lastTool.open&&node.contains(lastTool)){
+      const tool=lastTool;lastTool=null;tool.open=false;
+      groupBack=pushBackHandler(stepBack);
+      return true;
+    }
+    groupBack=null;
+    if(!node.isConnected)return false;
+    node.open=false;
+    return true;
+  };
   const toggle=()=>{
     if(node.open){
-      if(!groupBack)groupBack=pushBackHandler(()=>{groupBack=null;if(!node.isConnected)return false;node.open=false;return true;});
+      if(!groupBack)groupBack=pushBackHandler(stepBack);
       transcript.open();
       return;
     }
