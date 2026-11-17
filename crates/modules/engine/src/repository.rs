@@ -575,7 +575,9 @@ impl<
             let rid = run["id"].as_str().ok_or_else(|| anyhow!("Run has no id"))?;
             // A model output's own tool results answer calls saved below, so they are
             // saved after those calls.
-            if kind != "model_output" {
+            // History entries the server adds end the input with their own result; they are
+            // saved below, call first, so the latest-result save is skipped for them.
+            if kind != "model_output" && kind != "history_rows" {
                 crate::send_future(self.insert_tool_output(&mut tx, run, sid, rid)).await?;
             }
             if kind == "working_message" && run["module_silent"] != true {
@@ -607,14 +609,17 @@ impl<
                 {
                     let call_id = item["call_id"]
                         .as_str()
-                        .ok_or_else(|| anyhow!("Main Notes update row has no call ID"))?;
-                    crate::send_future(self.chat.insert_interaction(
-                        &mut tx,
-                        sid,
-                        rid,
-                        &format!("rows:{call_id}:{ordinal}"),
-                        item,
-                    ))
+                        .ok_or_else(|| anyhow!("History entry has no call ID"))?;
+                    // A result uses the latest-result key, so a later save that finds it last in
+                    // the input sees it saved already and does not add it again.
+                    let step = if item["type"] == "function_call_output" {
+                        format!("tool:{call_id}")
+                    } else {
+                        format!("rows:{call_id}:{ordinal}")
+                    };
+                    crate::send_future(
+                        self.chat.insert_interaction(&mut tx, sid, rid, &step, item),
+                    )
                     .await?;
                 }
             }

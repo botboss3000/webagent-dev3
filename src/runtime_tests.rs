@@ -4625,6 +4625,16 @@ async fn mode_guidance_enters_history_once_and_each_step_has_a_status() {
     let changed = results(&requests[1]);
     assert!(!changed.is_empty());
     assert_eq!(changed[changed.len() - 1]["mode"], "plan");
+    // The saved history holds each entry once, its call before its result, so the compaction
+    // planner sees a well-formed exchange.
+    let saved = app.store.context(&sid).await.unwrap();
+    let mode_items: Vec<&Value> = saved.iter().filter(|item| mode_entry(item)).collect();
+    assert_eq!(mode_items.len() % 2, 0, "{}", json!(mode_items));
+    for pair in mode_items.chunks(2) {
+        assert_eq!(pair[0]["type"], "function_call");
+        assert_eq!(pair[1]["type"], "function_call_output");
+        assert_eq!(pair[0]["call_id"], pair[1]["call_id"]);
+    }
     assert!(changed[changed.len() - 1]["guidance"]
         .as_str()
         .unwrap()
