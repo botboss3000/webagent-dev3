@@ -12,7 +12,7 @@ function privateVisible(visible){document.body.classList.toggle('app-restricted'
 import { initHeaderCarousel } from './shared/header-carousel.js';
 initHeaderCarousel();
 import { holdTabScroll, wirePageTabCarousel, wirePageTabDrag } from './shared/page-tabs.js';
-import { consumeBack } from './shared/history-back.js';
+import { consumeBack, pushBackHandler } from './shared/history-back.js';
 import { purgeAllBrowserData } from './browser-data-reset.js';
 import { showNotification } from './chat/core/chat-action-panel.js';
 import { createFloatingChat,createChatLauncher } from './chat/widget/window.js';
@@ -902,6 +902,8 @@ $('account-password-form').onsubmit=async event=>{
 }
 const mobileLayout=matchMedia('(max-width:800px)');
 let mobileView=initialTab==='account'?'main':new URL(location.href).searchParams.has('session_id')?'chat':'main';
+/* The back press the chat view holds on a phone; waits for the view that must be left. */
+let mobileChatBack=null;
 let desktopChatVisible=true;
 const widget=mountNativeWidget({chat,createFloatingChat,createChatLauncher,onChange:()=>syncLayout(),onDock:()=>{desktopChatVisible=true;syncLayout();},note});
 // The floating shell is a chat trigger too: the panel may still be unmounted.
@@ -910,7 +912,11 @@ widget.open=()=>{widgetOpen();void openChatSurface().catch(error=>note(error.mes
 widget.float=()=>{widgetFloat();void openChatSurface().catch(error=>note(error.message));};
 const chatResize=mountChatResize({enabled:()=>!mobileLayout.matches&&!widget.floating&&desktopChatVisible});
 function updateChatControl(visible){$('chat-toggle-btn').classList.toggle('active',visible);$('chat-toggle-btn').setAttribute('aria-expanded',String(visible));}
-function showMobileView(view){mobileView=view;$('app').dataset.mobileView=view;updateChatControl(view==='chat');updateMainPageState();}
+function showMobileView(view){mobileView=view;$('app').dataset.mobileView=view;updateChatControl(view==='chat');updateMainPageState();
+  // On a phone the chat view claims one back press; leaving it drops the claim.
+  if(view==='chat'&&mobileLayout.matches){if(!mobileChatBack)mobileChatBack=pushBackHandler(()=>{mobileChatBack=null;showMobileView('main');return true;});}
+  else if(mobileChatBack){const release=mobileChatBack;mobileChatBack=null;release();}
+}
 function syncLayout(){
   document.body.classList.toggle('mobile-mode',mobileLayout.matches);
   $('mobile-nav-toggle').hidden=!mobileLayout.matches;
@@ -939,7 +945,19 @@ document.addEventListener('click',event=>{if(!mobileNav.hidden&&!event.target.cl
 document.addEventListener('keydown',event=>{if(event.key==='Escape')closeMobileNav();});
 mobileLayout.addEventListener('change',syncLayout);syncLayout();
 // An open in-place page claims the first back press; anything else reloads to match the URL.
-window.addEventListener('popstate',()=>{if(!consumeBack())location.reload();});
+/* A back press inside the app re-renders the agent page the restored URL names instead of reloading. */
+function restoreAgentRoute(){
+  if(!accountMe||location.pathname!=='/app')return false;
+  const params=new URL(location.href).searchParams;
+  if((params.get('tab')||'')!=='agents'||params.get('agentScope'))return false;
+  if((params.get('agent')||'shared_default')!==agentId)return false;
+  const view=params.get('agentView')||'config';
+  if(![configPage,...agentPages].some(page=>page&&page.id===view))return false;
+  void showAgentView(view,'replace').catch(error=>note(error.message));
+  return true;
+}
+// The top layer takes the press first, then the restored page; only a foreign URL reloads.
+window.addEventListener('popstate',()=>{if(consumeBack())return;if(restoreAgentRoute())return;location.reload();});
 $('chat-float-btn').onclick=()=>{widget.float();syncLayout();};
 // The chat toggle also mounts the panel and runs the deferred open before switching views.
 $('chat-toggle-btn').onclick=()=>{if(widget.floating){widget.open();syncLayout();return;}if(mobileLayout.matches){void ensureChat().then(()=>{showMobileView('chat');void openChatSurface().catch(error=>note(error.message));},error=>note(error.message));}else{desktopChatVisible=!desktopChatVisible;syncLayout();if(desktopChatVisible)void openChatSurface().catch(error=>note(error.message));}};

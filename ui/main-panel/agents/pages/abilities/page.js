@@ -11,6 +11,7 @@ import { buildPolicyControls, effectiveLabel, readinessLabel } from './policy.js
 import { _buildMoreButton, _buildToolRow, _buildAbilitySettingsList, closeFloatingMenu } from '../../../../shared/ability-row-controls.js';
 import { buildSkillRow } from './rows.js';
 import { createSettingsRegister, createSettingsRow } from '../../../../shared/settings-register.js';
+import { pushBackHandler } from '../../../../shared/history-back.js';
 import { _markSaving, _flashSaveCheck } from '../../../../shared/models/dom-utils.js';
 
 const node = (tag, className = '', text = '') => {
@@ -468,11 +469,24 @@ export async function renderAbilities(host, request, options) {
       header.append(chevron, icon, label, toggleWrap);
       header.title = availability.title + ' · ' + availability.textContent;
       const detail = node('div', 'ac-ability-body');
-      const open = () => {
+      // An expanded row owns the back press, so the next press closes its group page.
+      let rowBack = null;
+      const open = (claim = true) => {
         const expanded = row.classList.toggle('expanded');
         row.classList.toggle('conn-card-expanded', expanded);
         header.setAttribute('aria-expanded', String(expanded));
-        if (expanded) buildAbilityBody(detail, ability);
+        if (!expanded) {
+          if (rowBack) { const release = rowBack; rowBack = null; release(); }
+          return;
+        }
+        buildAbilityBody(detail, ability);
+        // A restored row claims nothing, so reloading never adds a history entry.
+        if (claim && !rowBack) rowBack = pushBackHandler(() => {
+          rowBack = null;
+          if (!row.isConnected || !row.classList.contains('expanded')) return false;
+          open(false);
+          return true;
+        });
       };
       header.tabIndex = 0;
       header.setAttribute('role', 'button');
@@ -539,7 +553,8 @@ export async function renderAbilities(host, request, options) {
   if (promptsSection) promptsSection.body.append(prompts);
   filter();
   const restored = abilityPages.get(expandedAbility);
-  if (restored) { register.open('g-' + restored.groupId); restored.open(); }
+  // Reopening after a rerender is not a user action, so it adds no back press.
+  if (restored) { register.open('g-' + restored.groupId); restored.open(false); }
   // LIVE-CONTEXT-CHART: poll the cheap revision stamp every two seconds while the
   // tab is visible and the chart is on screen, and re-read the estimate only when
   // the stamp moved. Hidden tabs and unmounted pages poll nothing; returning to the

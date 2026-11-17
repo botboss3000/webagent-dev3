@@ -154,6 +154,37 @@ test('a save repaints only the chart, not the abilities page', async () => {
   }
 });
 
+test('an expanded ability row takes the back press before its group page', async () => {
+  const server = await serve();
+  let browser;
+  try {
+    const {chromium} = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+    browser = await chromium.launch({executablePath: process.env.CHROMIUM_PATH || '/snap/bin/chromium', headless: true, args: ['--no-sandbox']});
+    const page = await browser.newPage();
+    page.setDefaultTimeout(8000);
+    await page.goto('http://127.0.0.1:' + server.address().port + '/');
+    await waitForChart(page, '1,000 tokens');
+    // app.js answers a popstate through consumeBack, so calling it is the same press.
+    const pressed = await page.evaluate(async () => {
+      const {consumeBack} = await import('/ui/shared/history-back.js');
+      const row = document.querySelector('.v3-ability[data-ability-id="web_access"]');
+      row.querySelector('.conn-card-header').click();
+      const expanded = row.classList.contains('expanded');
+      const first = consumeBack();
+      const collapsed = !row.classList.contains('expanded');
+      const second = consumeBack();
+      return {expanded, first, collapsed, second};
+    });
+    assert.equal(pressed.expanded, true, 'the header click expands the row');
+    assert.equal(pressed.first, true, 'the expanded row claims the press');
+    assert.equal(pressed.collapsed, true, 'one press collapses the row');
+    assert.equal(pressed.second, false, 'no claim is left behind for the page');
+  } finally {
+    await browser?.close();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 test('a repaint waits while the chart is focused, then catches up', async () => {
   const server = await serve();
   let browser;
