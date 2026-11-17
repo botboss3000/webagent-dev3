@@ -133,13 +133,18 @@ test('back closes the last opened call of the active group before that group',as
   window.group=createActivityGroup({transcript:createMiniTranscript()});
   document.querySelector('#messages').replaceChildren(group.element);
   group.update({id:'g',state:'completed',counts:{tools:2},rows:[call('a'),call('b')],events:[]});
+  window.__lenBefore=history.length;
   group.element.open=true;
  });
  // The tool row's own disclosure, not the raw diagnostics nested inside it.
  const calls=p.locator('.v2-mini-tool > details.v2-mini-tool-disclosure > summary');
  await calls.first().waitFor();
+ // An open layer owns one real entry, so a device press pops it instead of leaving the app.
+ await p.waitForFunction(()=>history.length===window.__lenBefore+1);
  await calls.first().click();
  await p.waitForFunction(()=>document.querySelectorAll('.v2-mini-tool > details.v2-mini-tool-disclosure[open]').length===1);
+ // The open call must own a second entry: re-pushing inside popstate is ignored on Android.
+ await p.waitForFunction(()=>history.length===window.__lenBefore+2&&history.state?.webagentBack===true);
  // consumeBack is the same press app.js sends on popstate.
  const presses=await p.evaluate(async()=>{
   const {consumeBack}=await import('/ui/shared/history-back.js');

@@ -173,25 +173,34 @@ export function createActivityGroup({transcript}) {
   const diffs=document.createElement('div');diffs.className='tc-diffs';diffs.hidden=true;
   node.append(summary,transcript.element,diffs);
   // Native details supplies pointer and keyboard disclosure semantics.
-  // Back closes this group's newest open tool call first, then the group itself, so the
-  // nearest group answers the press and a group with no open call closes in one press.
+  // Every open layer owns its own history entry, so each press pops a real entry: a tool
+  // call first, then the group. Nothing is pushed while a press is handled, because
+  // Android Chrome ignores a push made inside the popstate it is already committing.
   let groupBack=null;
-  let lastTool=null;
-  // Remember the tool disclosure the user opened last, and fall back to any still-open one.
+  const toolBacks=new Map();
+  const claimTool=row=>{
+    if(toolBacks.has(row))return;
+    toolBacks.set(row,pushBackHandler(()=>{
+      // The press consumed this entry, so closing the row must not drop it again.
+      toolBacks.delete(row);
+      if(!row.isConnected||!row.open)return false;
+      row.open=false;
+      return true;
+    }));
+  };
+  const releaseTool=row=>{
+    const release=toolBacks.get(row);
+    if(!release)return;
+    toolBacks.delete(row);
+    release();
+  };
+  // Each call claims the press while it is open and drops its entry when it closes.
   node.addEventListener('toggle',event=>{
     const row=event.target;
     if(!row.matches?.('.v2-mini-tool-disclosure'))return;
-    if(row.open){lastTool=row;return;}
-    if(lastTool!==row)return;
-    lastTool=[...node.querySelectorAll('.v2-mini-tool-disclosure[open]')].pop()||null;
+    if(row.open)claimTool(row);else releaseTool(row);
   },true);
-  const stepBack=()=>{
-    // Closing a call leaves the group to close, so the press is claimed again for it.
-    if(lastTool&&lastTool.open&&node.contains(lastTool)){
-      const tool=lastTool;lastTool=null;tool.open=false;
-      groupBack=pushBackHandler(stepBack);
-      return true;
-    }
+  const closeGroup=()=>{
     groupBack=null;
     if(!node.isConnected)return false;
     node.open=false;
@@ -199,10 +208,12 @@ export function createActivityGroup({transcript}) {
   };
   const toggle=()=>{
     if(node.open){
-      if(!groupBack)groupBack=pushBackHandler(stepBack);
+      if(!groupBack)groupBack=pushBackHandler(closeGroup);
       transcript.open();
       return;
     }
+    // A call left open inside a closing group must not keep its entry.
+    for(const row of [...toolBacks.keys()])releaseTool(row);
     const release=groupBack;groupBack=null;release?.();
     transcript.close();popAnchor && diffs.contains(popAnchor) && hidePop();
   };
@@ -219,5 +230,6 @@ export function createActivityGroup({transcript}) {
   }
   return {element:node,update,
     // Remove the listener and all transcript-owned resources on session teardown.
-    dispose(){if(popAnchor && diffs.contains(popAnchor))hidePop();node.removeEventListener('toggle',toggle);transcript.dispose();node.remove();}};
+    // Teardown drops every claim this group still holds, so the next session starts clean.
+    dispose(){for(const row of [...toolBacks.keys()])releaseTool(row);const release=groupBack;groupBack=null;release?.();if(popAnchor && diffs.contains(popAnchor))hidePop();node.removeEventListener('toggle',toggle);transcript.dispose();node.remove();}};
 }
