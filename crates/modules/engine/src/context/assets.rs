@@ -258,7 +258,8 @@ impl<
         .await?;
         let (mode_pinned, mode_change) = self.mode_guidance(&sid, &basis).await?;
         if let Some(text) = mode_pinned {
-            notes.insert(0, ("mode-guidance".to_owned(), text));
+            // Instruction sections are joined as they are, so each ends with its own break.
+            notes.insert(0, ("mode-guidance".to_owned(), format!("{}\n\n", text.trim_end())));
         }
         // Another session's Main Notes changes and this session's mode changes join the
         // history as tool-call rows, once each, where they stay (and stay cached) until
