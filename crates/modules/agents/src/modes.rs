@@ -25,12 +25,13 @@ fn parse_defaults(bytes: &[u8]) -> Result<Value> {
                 .ok_or_else(|| anyhow!("Execution mode {id} needs a {name} of 1..{limit}"))
         };
         let turn = entry["turn_guidance"].as_str().unwrap_or("");
-        if turn.chars().count() > 1000 {
-            bail!("Execution mode {id} needs a turn_guidance of up to 1000");
+        let turn_label = entry["turn_label"].as_str().unwrap_or("");
+        if turn.chars().count() > 4000 || turn_label.chars().count() > 60 {
+            bail!("Execution mode {id} needs a turn_label up to 60 and turn_guidance up to 4000");
         }
         modes.push(json!({"id":id,"label":field("label",40)?,
             "description":field("description",240)?,"prompt":field("prompt",30000)?,
-            "turn_guidance":turn,"builtin":true}));
+            "turn_label":turn_label,"turn_guidance":turn,"builtin":true}));
     }
     Ok(json!(modes))
 }
@@ -61,29 +62,31 @@ pub fn normalize(raw: &Value) -> Result<Value> {
         let label = entry["label"].as_str().unwrap_or(id).trim();
         let description = entry["description"].as_str().unwrap_or("");
         let prompt = entry["prompt"].as_str().unwrap_or("");
-        // A saved override from before Turn guidance existed keeps the built-in one.
-        let turn = entry["turn_guidance"]
-            .as_str()
-            .map(str::to_owned)
-            .unwrap_or_else(|| {
+        // A saved override without the per-turn fields keeps the built-in ones.
+        let inherited = |name: &str| {
+            entry[name].as_str().map(str::to_owned).unwrap_or_else(|| {
                 modes
                     .iter()
                     .find(|m| m["id"] == id)
-                    .and_then(|m| m["turn_guidance"].as_str())
+                    .and_then(|m| m[name].as_str())
                     .unwrap_or("")
                     .to_owned()
-            });
+            })
+        };
+        let turn = inherited("turn_guidance");
+        let turn_label = inherited("turn_label");
         if label.is_empty()
             || label.chars().count() > 40
             || description.chars().count() > 240
             || prompt.chars().count() > 30000
-            || turn.chars().count() > 1000
+            || turn.chars().count() > 4000
+            || turn_label.chars().count() > 60
         {
             bail!("Invalid mode fields");
         }
         let builtin = BUILTIN.contains(&id);
         let value = json!({"id":id,"label":label,"description":description,"prompt":prompt,
-            "turn_guidance":turn,"builtin":builtin});
+            "turn_label":turn_label,"turn_guidance":turn,"builtin":builtin});
         if let Some(i) = modes.iter().position(|m| m["id"] == id) {
             modes[i] = value;
         } else {

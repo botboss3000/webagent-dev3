@@ -171,9 +171,8 @@ async fn identity_get(
     let closing_protocol = crate::gate_registry::closing_config()?;
     let voice_output = voice_output(&store, &id).await?;
     // The default publishing guidance, which an agent's own guidance replaces.
-    let fixed = crate::gate_registry::default_publish_guidance()?;
     Ok(Json(
-        json!({"member_access":store.access_repository().member_access(&id).await?,"capability_levels":store.capability_levels(&id).await?,"shared_chat":crate::shared_chat::policy(&store,&id).await?,"manager_incoming_message":manager,"closing_message":closing,"voice_output":voice_output.to_value(),"voice_catalog":webagent_media::speech::voice_catalog(),"closing_protocol":{"flags":closing_protocol.agent_flags(),"notification_target_words":closing_protocol.notification.target_words},"message_visibility":{"mode":settings.mode,"guidance":settings.guidance,"fixed_protocol":fixed},"execution_modes":config["execution_modes"],"default_execution_mode":config["default_execution_mode"],"id":id,"name":owned["name"],
+        json!({"member_access":store.access_repository().member_access(&id).await?,"capability_levels":store.capability_levels(&id).await?,"shared_chat":crate::shared_chat::policy(&store,&id).await?,"manager_incoming_message":manager,"closing_message":closing,"voice_output":voice_output.to_value(),"voice_catalog":webagent_media::speech::voice_catalog(),"closing_protocol":{"flags":closing_protocol.agent_flags(),"notification_target_words":closing_protocol.notification.target_words},"message_visibility":{"mode":settings.mode},"execution_modes":config["execution_modes"],"default_execution_mode":config["default_execution_mode"],"id":id,"name":owned["name"],
         "compaction_thresholds":{"trigger_tokens":effective.trigger_tokens,"tail_tokens":effective.tail_tokens,"ceiling_tokens":ceiling,"summarizer":summarizer},
         "compaction_defaults":{"trigger_tokens":defaults.trigger_tokens,"tail_tokens":defaults.tail_tokens,"summary_tokens":defaults.summary_tokens,"ceiling_tokens":defaults.ceiling(),"summarizer":defaults.summarizer},
         "tool_result_deduplication":crate::tool_output::dedup_policy(&store,&id).await?,"tool_output_policy":tool_output_policy,"tool_output_defaults":tool_output_defaults,
@@ -984,7 +983,7 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn visibility_preferences_preserve_fixed_protocol_and_revision_fence() {
+    async fn visibility_preferences_save_mode_with_revision_fence() {
         let (_root, app) = fixture().await;
         let identity = json!({"_user_id":"admin"});
         let Json(before) = identity_get(
@@ -1005,7 +1004,7 @@ mod tests {
             execution_modes: None,
             default_execution_mode: None,
             message_visibility: Some(crate::gate_controls::AgentVisibility {
-                mode: crate::gate_controls::PromotionMode::None,
+                mode: crate::gate_controls::PromotionMode::Auto,
                 guidance: guidance.into(),
             }),
             closing_message: None,
@@ -1025,16 +1024,12 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(
-            saved["message_visibility"]["fixed_protocol"],
-            before["message_visibility"]["fixed_protocol"]
-        );
-        assert_eq!(saved["message_visibility"]["mode"], "none");
+        assert_eq!(saved["message_visibility"]["mode"], "auto");
         assert!(saved["message_visibility"].get("format").is_none());
         let settings = crate::gate_controls::agent_visibility(&app.store, "shared_default")
             .await
             .unwrap();
-        assert_eq!(settings.mode, crate::gate_controls::PromotionMode::None);
+        assert_eq!(settings.mode, crate::gate_controls::PromotionMode::Auto);
         assert_eq!(settings.guidance, "Keep progress concise");
         let Json(reloaded) = identity_get(
             State(app.clone()),

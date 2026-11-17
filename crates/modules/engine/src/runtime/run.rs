@@ -1161,7 +1161,7 @@ impl<
                 gate_registry::selected(&workflow_policy, workflow::Checkpoint::ModelDispatch)?
                     .iter()
                     .any(|item| item.id == gate_registry::MESSAGE_VISIBILITY)
-                    && run["promotion_mode"] == "manual";
+                    && matches!(run["promotion_mode"].as_str(), Some("manual" | "auto"));
             workflow::record(
                 &mut run,
                 &workflow_policy,
@@ -1180,6 +1180,9 @@ impl<
             let mut echoed = Vec::new();
             let result = if !enabled {
                 json!({"status":"denied","output":"Private control is not enabled"})
+            } else if run["promotion_mode"] == "auto" {
+                // Every message is already shown to the user; the call changes nothing.
+                json!({"status":"ok","output":"Every message is already shown to the user; nothing to publish."})
             } else {
                 let (preceding, ordinals) = engine_output::preceding_message(
                     run["input"].as_array().map_or(&[][..], Vec::as_slice),
@@ -2435,18 +2438,31 @@ impl<
                 run["mode_revision_shown"] = mode["revision"].clone();
                 let placement = webagent_context::defaults::mode_guidance();
                 let label = mode["definition"]["label"].as_str().unwrap_or("Unknown");
-                let mode_text = match placement.as_str() {
-                    "per_step" => Some(format!(
-                        "Execution mode: {label}\n{}",
+                // The per-step guidance message: the mode's per-turn label, then its per-turn
+                // guidance ("per_step" adds the full mode guidance before it).
+                let turn = mode["definition"]["turn_guidance"]
+                    .as_str()
+                    .unwrap_or("")
+                    .trim();
+                let body = match placement.as_str() {
+                    "per_step" => format!(
+                        "Execution mode: {label}\n{}\n\n{turn}",
                         mode["definition"]["prompt"].as_str().unwrap_or("").trim()
-                    )),
-                    "both" => mode["definition"]["turn_guidance"]
-                        .as_str()
-                        .map(str::trim)
-                        .filter(|text| !text.is_empty())
-                        .map(str::to_owned),
-                    _ => None,
+                    ),
+                    "both" => turn.to_owned(),
+                    _ => String::new(),
                 };
+                let turn_label = mode["definition"]["turn_label"]
+                    .as_str()
+                    .unwrap_or("")
+                    .trim();
+                let mode_text = (!body.trim().is_empty()).then(|| {
+                    if turn_label.is_empty() {
+                        body.trim().to_owned()
+                    } else {
+                        format!("{turn_label} {}", body.trim())
+                    }
+                });
                 if let Some(content) = mode_text {
                     contributions.push(context_input::Contribution {
                         id: "session_mode".into(),
@@ -2520,23 +2536,12 @@ impl<
                 } else {
                     gate_controls::PromotionMode::None
                 };
-                if promotion_mode == gate_controls::PromotionMode::Manual {
+                // The publish tool is offered the same way whether or not every message is
+                // promoted (no schema change when the toggle flips); its guidance is part of
+                // the mode's per-turn guidance.
+                if promotion_mode != gate_controls::PromotionMode::None {
                     let config = gate_registry::visibility_config()?;
-                    // The agent's own publishing guidance replaces the default.
-                    let guidance = if agent_visibility.guidance.trim().is_empty() {
-                        gate_registry::default_publish_guidance()?
-                    } else {
-                        agent_visibility.guidance.clone()
-                    };
                     gate_schemas.push(gate_controls::working_schema(&config));
-                    contributions.push(context_input::Contribution {
-                        id: "gate_message_visibility".into(),
-                        source: "native_gate_config".into(),
-                        lifetime: context_input::Lifetime::Call,
-                        content: guidance,
-                        turn: run["turns"].as_u64().unwrap_or(0),
-                        call: call_number,
-                    });
                 }
                 let before_publication =
                     gate_registry::selected(&workflow_policy, workflow::Checkpoint::Publication)?;

@@ -30,7 +30,7 @@ try{
    const {consumeBack}=await import('/ui/shared/history-back.js');
    window.__unclaimed=0;window.__alive=true;
    window.addEventListener('popstate',()=>{if(!consumeBack())window.__unclaimed+=1;});
-   const agent={name:'Fixture',description:'',revision:3,can_manage:true,member_access:{visitor_access:false,app_login_members:true,conversation_privacy:'operator_reviewable'},capability_levels:{revision:0,order:['operator','member','visitor'],levels:Object.fromEntries([['operator','Operator'],['member','Member'],['visitor','Visitor']].map(([id,name])=>[id,{id,name,revision:1,ability_permissions:{},tool_permissions:{},ability_exposure:{},tool_exposure:{},skill_exposure:{}}]))},default_execution_mode:'ask',execution_modes:[{id:'ask',label:'Ask',description:'Ask first',prompt:'Ask prompt',builtin:true},{id:'auto',label:'Auto',description:'Act',prompt:'Auto prompt',builtin:true}],shared_chat:{shareable:false,admin_view:false,admin_join:false,help:false,initial_active:true},compaction_thresholds:{trigger_tokens:150000,tail_tokens:40000},compaction_defaults:{trigger_tokens:150000,tail_tokens:40000},manager_incoming_message:{enabled:false,criteria:''},message_visibility:{mode:'manual',guidance:'Saved guidance',fixed_protocol:'Fixed protocol'},closing_message:{notification_guidance:'Saved closing'},closing_protocol:{flags:['complete'],notification_target_words:5},voice_output:{enabled:false,voice:'af_heart'},voice_catalog:[{id:'af_heart',name:'Heart',group:'English'}]};
+   const agent={name:'Fixture',description:'',revision:3,can_manage:true,member_access:{visitor_access:false,app_login_members:true,conversation_privacy:'operator_reviewable'},capability_levels:{revision:0,order:['operator','member','visitor'],levels:Object.fromEntries([['operator','Operator'],['member','Member'],['visitor','Visitor']].map(([id,name])=>[id,{id,name,revision:1,ability_permissions:{},tool_permissions:{},ability_exposure:{},tool_exposure:{},skill_exposure:{}}]))},default_execution_mode:'ask',execution_modes:[{id:'ask',label:'Ask',description:'Ask first',prompt:'Ask prompt',builtin:true},{id:'auto',label:'Auto',description:'Act',prompt:'Auto prompt',builtin:true}],shared_chat:{shareable:false,admin_view:false,admin_join:false,help:false,initial_active:true},compaction_thresholds:{trigger_tokens:150000,tail_tokens:40000},compaction_defaults:{trigger_tokens:150000,tail_tokens:40000},manager_incoming_message:{enabled:false,criteria:''},message_visibility:{mode:'manual'},closing_message:{notification_guidance:'Saved closing'},closing_protocol:{flags:['complete'],notification_target_words:5},voice_output:{enabled:false,voice:'af_heart'},voice_catalog:[{id:'af_heart',name:'Heart',group:'English'}]};
    const widget={revision:5,config:{enabled:false,guest_access:false,allowed_origins:['https://example.com']}};
    window.fixture={agent,widget,writes:[],fail:false};
    const request=async(url,method='GET',body)=>{
@@ -44,7 +44,7 @@ try{
    };
    window.remount=async()=>{await renderIdentity(document.querySelector('#host'),request,{agentId:'one'});};await remount();
   },light);
-  const titles=['Profile','Member access','Website chat widget','Shared conversations','Main Chat','Context compaction','Duplicate tool results','Lifetime/budget retention','Chat modes','Review incoming messages','Working-message promotion','Final response','Voice output'];
+  const titles=['Profile','Member access','Website chat widget','Shared conversations','Main Chat','Context compaction','Duplicate tool results','Lifetime/budget retention','Chat modes','Review incoming messages','Final response','Voice output'];
   const rowFor=title=>page.locator('.sr-row',{hasText:title}).first();
   const openRow=async title=>{
    await rowFor(title).click();
@@ -104,21 +104,19 @@ try{
   await page.locator('[data-field="default_execution_mode"]').selectOption('auto');await page.waitForFunction(()=>fixture.agent.default_execution_mode==='auto');
   await page.locator('[data-mode-id="ask"] summary').click();await page.locator('[data-mode-id="ask"] [data-mode-field="prompt"]').fill('Updated prompt');await page.locator('[data-mode-id="ask"] [data-mode-card-save]').click();await page.waitForFunction(()=>fixture.agent.execution_modes[0].prompt==='Updated prompt');
   await toList();
-  await openRow('Working-message promotion');
-  await page.getByLabel('Working-message promotion',{exact:true}).selectOption('none');await page.waitForFunction(()=>fixture.agent.message_visibility.mode==='none');assert.equal(await page.getByLabel("This agent's publishing guidance (replaces the default when set)",{exact:true}).isVisible(),false);
-  await page.getByLabel('Working-message promotion',{exact:true}).selectOption('manual');await page.waitForFunction(()=>fixture.agent.message_visibility.mode==='manual');
-  await toList();
   await openRow('Final response');
   await page.getByLabel('Notification guidance',{exact:true}).fill('Updated closing');await page.locator('.sr-detail-body').getByRole('button',{name:'Save',exact:true}).click();await page.waitForFunction(()=>fixture.agent.closing_message.notification_guidance==='Updated closing');
-  await page.locator('[data-closing-key="require_flag"]').uncheck();await page.waitForFunction(()=>fixture.agent.closing_message.require_flag===false);
+  await page.locator('label:has([data-final-key="require_flag"]) .conn-toggle-track').click();await page.waitForFunction(()=>fixture.agent.closing_message.require_flag===false);
   assert.equal(await page.evaluate(()=>fixture.agent.closing_message.notification_guidance),'Updated closing');
-  await page.locator('.sr-toggle-slot .conn-toggle-wrap').click();await page.waitForFunction(()=>fixture.agent.closing_message.enabled===false);
-  assert.equal(await page.locator('[data-closing-key="require_notification"]').isDisabled(),true);assert.equal(await page.getByLabel('Notification guidance',{exact:true}).isDisabled(),true);
-  await page.locator('.sr-toggle-slot .conn-toggle-wrap').click();await page.waitForFunction(()=>fixture.agent.closing_message.enabled===true);
+  await page.locator('label:has([data-final-key="promote_all"]) .conn-toggle-track').click();await page.waitForFunction(()=>fixture.agent.message_visibility.mode==='auto');
+  await page.locator('label:has([data-final-key="promote_all"]) .conn-toggle-track').click();await page.waitForFunction(()=>fixture.agent.message_visibility.mode==='manual');
+  await page.locator('label:has([data-final-key="require_notification"]) .conn-toggle-track').click();await page.waitForFunction(()=>fixture.agent.closing_message.enabled===false);
+  assert.equal(await page.getByLabel('Notification guidance',{exact:true}).isVisible(),false);
+  await page.locator('label:has([data-final-key="require_notification"]) .conn-toggle-track').click();await page.waitForFunction(()=>fixture.agent.closing_message.enabled===true&&fixture.agent.closing_message.require_notification===true);
   await page.evaluate(()=>remount());
   assert.equal(await page.locator('.sr-row').count(),titles.length);
   await openRow('Chat modes');assert.equal(await page.locator('[data-field="default_execution_mode"]').inputValue(),'auto');await toList();
-  await openRow('Final response');assert.equal(await page.getByLabel('Notification guidance',{exact:true}).inputValue(),'Updated closing');assert.equal(await page.locator('[data-closing-key="require_flag"]').isChecked(),false);await toList();
+  await openRow('Final response');assert.equal(await page.getByLabel('Notification guidance',{exact:true}).inputValue(),'Updated closing');assert.equal(await page.locator('[data-final-key="require_flag"]').isChecked(),false);await toList();
   if(touch){
    const before=await page.evaluate(()=>pulses.length);
    await rowFor('Shared conversations').tap();
@@ -193,7 +191,6 @@ try{
   assert.equal(await page.locator('.sr-row').count(),titles.length-1);
   await openRow('Chat modes');assert.equal(await page.locator('[data-field="default_execution_mode"]').isDisabled(),true);await toList();
   await openRow('Review incoming messages');assert.equal(await page.getByLabel('Enable incoming-message review',{exact:true}).isDisabled(),true);await toList();
-  await openRow('Working-message promotion');assert.equal(await page.getByLabel('Working-message promotion',{exact:true}).isDisabled(),true);await toList();
   await openRow('Final response');assert.equal(await page.getByLabel('Notification guidance',{exact:true}).isDisabled(),true);await toList();
   await openRow('Member access');assert.equal(await page.getByLabel('Conversation privacy',{exact:true}).isDisabled(),true);assert.equal(await page.getByRole('radio',{name:/^Authorized/}).isDisabled(),true);await toList();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
@@ -202,5 +199,5 @@ try{
   if(touch)assert.equal(await page.evaluate(()=>window.__unclaimed),0);
   assert.deepEqual(errors,[]);await context.close();
  }
- console.log('Identity settings register: thirteen categories, one panel at a time, focus returns to the row, touch pulse per tap, review validation focus, explicit saves, revision fences, shared policy, modes, promotion, closing, remount persistence, read-only, both themes.');
+ console.log('Identity settings register: twelve categories, one panel at a time, focus returns to the row, touch pulse per tap, review validation focus, explicit saves, revision fences, shared policy, modes, promotion, closing, remount persistence, read-only, both themes.');
 }finally{await browser?.close();await new Promise(r=>server.close(r));}

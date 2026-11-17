@@ -170,7 +170,8 @@ export function createSettingsRegister(host, {label = 'Settings', categories = [
       const body = section.querySelector('[data-register-body]')
         || section.querySelector('.ac-ability-body')
         || section;
-      const toggleWrap = section.querySelector('.conn-toggle-wrap');
+      // The row's own switch; switches marked data-inline-switch stay inside the page.
+      const toggleWrap = section.querySelector('.conn-toggle-wrap:not([data-inline-switch])');
       const toggle = toggleWrap?.querySelector('input.conn-toggle') || null;
       const category = meta.get(id) || {};
       section.querySelector('.sr-section-head')?.remove();

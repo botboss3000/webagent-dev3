@@ -5,7 +5,6 @@ import {renderMemberAccess} from './member-access.js';
 'use strict';
 import { renderSharedChat } from './shared-chat.js';
 import { renderEmbedSettings } from './embed.js';
-import { renderVisibility } from './visibility.js';
 import { renderClosing } from './closing.js';
 import { renderVoiceOutput } from './voice.js';
 import { renderManager } from './manager.js';
@@ -24,7 +23,6 @@ const ICONS = {
   'lifetime-budget-retention': '<ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
   'chat-modes': '<path d="M4 7h16"/><circle cx="9" cy="7" r="2.5"/><path d="M4 17h16"/><circle cx="15" cy="17" r="2.5"/>',
   'review-incoming-messages': '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.4 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.4-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.8 1.1z"/>',
-  'working-message-promotion': '<path d="m3 11 18-6v14L3 13z"/><path d="M7 12v4.5a2.5 2.5 0 0 0 5 0V13"/>',
   'final-response': '<circle cx="12" cy="12" r="9"/><path d="m8.5 12.5 2.5 2.5 4.5-5"/>',
   'voice-output': '<path d="M11 5 6.5 9H3v6h3.5L11 19z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/>',
 };
@@ -40,8 +38,7 @@ const HINTS = {
   'lifetime-budget-retention': 'Experimental lifetime and size budgets for tool results.',
   'chat-modes': 'Default mode and the instructions each mode adds.',
   'review-incoming-messages': 'Screen visitors’ messages before the agent answers.',
-  'working-message-promotion': 'How working messages become standalone bubbles.',
-  'final-response': 'Completion flags and notification guidance.',
+  'final-response': 'Promote all messages, completion flag and statement.',
   'voice-output': 'Choose the voice that reads replies aloud.',
 };
 
@@ -150,17 +147,17 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
       const save=document.createElement('button');save.type='button';save.className='ac-btn ac-btn-ghost';save.textContent='SAVE CHANGES';save.disabled=!mode._new;save.dataset.modeCardSave='';
       const status=document.createElement('span');status.setAttribute('role','status');
       const updateSummary=()=>{nameText.textContent=(mode.label||mode.id)+(mode._deleted?' (will be removed)':'');};updateSummary();
-      for(const [key,label] of [['label','Name'],['description','Footer description'],['prompt','Prompt injection'],['turn_guidance','Turn guidance']]){
+      for(const [key,label] of [['label','Name'],['description','Footer description'],['prompt','Prompt injection'],['turn_label','Per-turn label'],['turn_guidance','Per-turn guidance']]){
         const wrap=document.createElement('label');wrap.className='ac-label';wrap.textContent=label;
         const multiline=key==='prompt'||key==='turn_guidance';
         const input=document.createElement(multiline?'textarea':'input');input.className='ac-input';input.dataset.modeField=key;
-        if(key==='prompt')input.rows=6;if(key==='turn_guidance'){input.rows=2;input.maxLength=1000;}
+        if(key==='prompt')input.rows=6;if(key==='turn_guidance'){input.rows=6;input.maxLength=4000;}if(key==='turn_label')input.maxLength=60;
         input.value=mode[key]||'';input.disabled=!agent.can_manage;
         if(key==='turn_guidance'){
-          wrap.append(' ',tipBadge('Sent to the model with every turn while the session is in this mode, after the conversation history. It is never saved in the history. Through a bridge (Claude Code, OpenCode), it is added once per run, and again at the next step when it changes.'));
+          wrap.append(' ',tipBadge('The per-turn label and this text are sent to the model with every turn while the session is in this mode, after the conversation history, and never saved in it. Include guidance on publish_main_message here. Through a bridge (Claude Code, OpenCode), they are added once per run, and again at the next step when they change.'));
         }
         input.addEventListener('input',()=>{mode[key]=input.value;save.disabled=false;status.textContent='Unsaved changes';updateSummary();});wrap.append(input);
-        if(key==='turn_guidance'){const note=document.createElement('span');note.className='ac-hint';note.textContent='A short reminder sent with every turn in this mode. Leave empty to send nothing.';wrap.append(note);}
+        if(key==='turn_guidance'){const note=document.createElement('span');note.className='ac-hint';note.textContent='Sent with every turn in this mode, after the per-turn label. Leave both empty to send nothing.';wrap.append(note);}
         fields.append(wrap);
       }
       if(!mode.builtin&&agent.can_manage){const remove=document.createElement('button');remove.type='button';remove.className='ac-btn ac-btn-ghost';remove.textContent='Remove mode';remove.addEventListener('click',()=>{mode._deleted=true;fields.querySelectorAll('input,textarea,select').forEach(el=>el.disabled=true);save.disabled=false;remove.disabled=true;updateSummary();});fields.append(remove);}
@@ -172,10 +169,9 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
       });}
       editor.append(card);
     });
-    if(agent.can_manage){const add=document.createElement('button');add.type='button';add.className='ac-btn ac-btn-ghost';add.textContent='Add mode';add.addEventListener('click',()=>{let n=1;while(modes.some(m=>m.id==='custom-'+n))n++;modes.push({id:'custom-'+n,label:'New mode',description:'',prompt:'',turn_guidance:'',builtin:false,_new:true});renderModes();});editor.append(add);}
+    if(agent.can_manage){const add=document.createElement('button');add.type='button';add.className='ac-btn ac-btn-ghost';add.textContent='Add mode';add.addEventListener('click',()=>{let n=1;while(modes.some(m=>m.id==='custom-'+n))n++;modes.push({id:'custom-'+n,label:'New mode',description:'',prompt:'',turn_label:'Harness guidance:',turn_guidance:'',builtin:false,_new:true});renderModes();});editor.append(add);}
   };renderModes();
   renderManager(stage, agent, persist);
-  renderVisibility(stage, agent, persist);
 
   renderClosing(stage, agent, persist);
   renderVoiceOutput(stage, agent, persist);

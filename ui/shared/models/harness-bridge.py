@@ -782,8 +782,8 @@ def prompt_for(call, delta, fresh, listed=True):
     lines.append("## Conversation" if fresh else "## New since your last turn")
     lines += [render(m, folder, full=True) for m in messages]
     if delta.get("notes") and (fresh or not delta.get("notes_repeated")):
-        lines.append("Harness guidance: " + "\n\n".join(text_of(m.get("content"), folder)
-                                                         for m in delta["notes"]))
+        # The text starts with the mode's per-turn label (for example "Harness guidance:").
+        lines.append("\n\n".join(text_of(m.get("content"), folder) for m in delta["notes"]))
     return "\n\n".join(lines)
 
 
@@ -1516,12 +1516,12 @@ def selftest():
                                                              note("step two")]}, 2)
     assert not nxt["rewritten"] and [m["content"] for m in nxt["new"]] == ["b"]
     shown = prompt_for({"body": {"model": "m", "messages": []}}, nxt, False)
-    assert shown.endswith("Harness guidance: step two") and "step one" not in shown
+    assert shown.endswith("step two") and "step one" not in shown
     # The same guidance on the next step is not given to the harness session again.
     again = changes(folder, noted, {"model": "m", "messages": [system, tail, {"role": "user", "content": "b"},
                                                                {"role": "user", "content": "c"}, note("step two")]}, 3)
     shown = prompt_for({"body": {"model": "m", "messages": []}}, again, False)
-    assert again["notes_repeated"] and "Harness guidance" not in shown
+    assert again["notes_repeated"] and "step two" not in shown
     # A closing call carries no guidance and does not count as a change.
     changes(folder, noted, {"model": "m", "webagent_closing": True, "messages": [system, tail,
             {"role": "user", "content": "b"}, {"role": "user", "content": "c"}, {"role": "user", "content": "label"}]}, 4)
@@ -1533,7 +1533,7 @@ def selftest():
                                      {"role": "user", "content": "c"}, {"role": "user", "content": "d"},
                                      {"role": "user", "content": "e"}, note("step three")]}, 6)
     shown = prompt_for({"body": {"model": "m", "messages": []}}, changed, False)
-    assert shown.endswith("Harness guidance: step three")
+    assert shown.endswith("step three")
     blocks = [{"role": "user", "content": f"Summary block {n} " + "x" * CHECKPOINT_MIN_CHARS} for n in (1, 2)]
     chat = {}
     changes(folder, chat, {"model": "m", "messages": [system, blocks[0], {"role": "user", "content": "a"}]}, 1)

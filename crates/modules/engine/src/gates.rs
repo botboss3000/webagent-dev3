@@ -140,16 +140,6 @@ pub struct SizeConfig {
     pub max_text_bytes: usize,
 }
 
-/// The default publishing guidance, from the live prompt files (`publish_guidance.md`).
-pub fn default_publish_guidance() -> Result<String> {
-    crate::defaults::runtime_prompts_at(None)?["publish_guidance"]
-        .as_str()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| anyhow::anyhow!("Publishing guidance prompt missing"))
-}
-
 pub fn visibility_config() -> Result<VisibilityConfig> {
     Ok(serde_json::from_value(
         manifest(MESSAGE_VISIBILITY)?.config,
@@ -210,9 +200,6 @@ mod tests {
     fn packaged_manifests_are_bounded_and_typed() {
         let visibility = visibility_config().unwrap();
         assert_eq!(visibility.tool_name, "publish_main_message");
-        assert!(default_publish_guidance()
-            .unwrap()
-            .contains("publish_main_message"));
         let closer = closing_config().unwrap();
         assert_eq!(closer.fallback_flag.as_deref(), Some("unflagged"));
         assert!(closer.notification.max_chars <= 1000);
@@ -304,6 +291,9 @@ mod initial {
     #[serde(deny_unknown_fields)]
     pub struct AgentVisibility {
         pub mode: PromotionMode,
+        /// Retired: publishing guidance is part of each execution mode's per-turn guidance.
+        /// Kept so saved agents still load.
+        #[serde(default)]
         pub guidance: String,
     }
     impl Default for AgentVisibility {
@@ -326,7 +316,12 @@ mod initial {
                 return Ok(Self::default());
             }
             if value.get("mode").is_some() {
-                return Ok(serde_json::from_value(value.clone())?);
+                let mut stored: Self = serde_json::from_value(value.clone())?;
+                // "No promotion" is retired: the publish tool is always offered.
+                if stored.mode == PromotionMode::None {
+                    stored.mode = PromotionMode::Manual;
+                }
+                return Ok(stored);
             }
             // Existing agents used a boolean. The retired format field is intentionally
             // ignored: Ask/Plan/Auto prompts now supply call-scoped formatting.
@@ -339,13 +334,9 @@ mod initial {
                 format: String,
             }
             let legacy: Legacy = serde_json::from_value(value.clone())?;
-            let _ = legacy.format;
+            let _ = (legacy.format, legacy.enabled);
             Ok(Self {
-                mode: if legacy.enabled {
-                    PromotionMode::Manual
-                } else {
-                    PromotionMode::None
-                },
+                mode: PromotionMode::Manual,
                 guidance: legacy.guidance,
             })
         }
@@ -428,13 +419,20 @@ mod initial {
                 AgentVisibility::from_stored(&json!({"enabled":false,"guidance":"ok"}))
                     .unwrap()
                     .mode,
-                PromotionMode::None
+                PromotionMode::Manual
             );
             assert_eq!(
                 AgentVisibility::from_stored(&json!({"mode":"auto","guidance":"ok"}))
                     .unwrap()
                     .mode,
                 PromotionMode::Auto
+            );
+            // "No promotion" is retired and loads as the publish tool, and guidance is optional.
+            assert_eq!(
+                AgentVisibility::from_stored(&json!({"mode":"none"}))
+                    .unwrap()
+                    .mode,
+                PromotionMode::Manual
             );
             assert!(AgentVisibility::from_stored(
                 &json!({"mode":"auto","guidance":"ok","format":"retired"})
