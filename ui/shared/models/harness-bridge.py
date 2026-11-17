@@ -114,12 +114,12 @@ BARE = ["--setting-sources=", "--settings", '{"autoMemoryEnabled":false}', "--st
         "--disable-slash-commands", "--no-chrome"]
 AUTO_PROMPT = ("You are the language model behind a WebAgent agent. Act exactly as that model: follow the "
     "agent instructions and conversation you are given and decide the next assistant turn. WebAgent's tools are "
-    "your mcp__harness__* tools (mcp__harness__<name> for a tool listed as <name>). Calling one hands it to "
+    "your mcp__harness__* tools (mcp__harness__<name> for the WebAgent tool <name>). Calling one hands it to "
     "WebAgent, which runs it and sends the result in your next message, so after your tool calls end your turn "
     "without waiting. Images are saved as files you may Read. Your final text is the agent's reply.")
 OPENCODE_PROMPT = ("You are the language model behind a WebAgent agent. Act exactly as that model: follow the "
     "agent instructions and conversation you are given and decide the next assistant turn. WebAgent's tools are "
-    "your webagent_* tools (webagent_<name> for a tool listed as <name>). Calling one hands it to WebAgent, which "
+    "your webagent_* tools (webagent_<name> for the WebAgent tool <name>). Calling one hands it to WebAgent, which "
     "runs it and sends the result in your next message, so after your tool calls end your turn without waiting. "
     "To run a command use webagent_shell, never bash; to read or write files use WebAgent's file tools. "
     "Never use your other tools: every use is rejected, and this computer is not the agent's workspace.")
@@ -745,24 +745,27 @@ def cmd_reply(call_id, source):
                                                 "message": parse_reply(raw, call["body"])}))
 
 
-def prompt_for(call, delta, fresh):
-    """The text the headless session sees: everything on a fresh session, otherwise only what is new."""
+def prompt_for(call, delta, fresh, listed=True):
+    """The text the headless session sees: everything on a fresh session, otherwise only what is new.
+    A harness that serves WebAgent's tools over MCP already holds every schema; `listed=False` keeps
+    them out of the text (only muse, which has no MCP, reads them from the prompt)."""
     folder, body = delta["folder"], call["body"]
     lines = []
     if fresh:
         instructions, conversation = split(body)
         lines.append("## Agent instructions\n" + "\n\n".join(text_of(m.get("content"), folder) for m in instructions))
-        lines.append("## Tools you may call\n" + json.dumps([t["function"] for t in tools_of(body).values()], indent=1))
+        if listed:
+            lines.append("## Tools you may call\n" + json.dumps([t["function"] for t in tools_of(body).values()], indent=1))
         messages = conversation
     else:
-        lines += updates(delta, folder)
+        lines += updates(delta, folder, listed)
         messages = delta["new"]
     lines.append("## Conversation" if fresh else "## New since your last turn")
     lines += [render(m, folder, full=True) for m in messages]
     return "\n\n".join(lines)
 
 
-def updates(delta, folder):
+def updates(delta, folder, listed=True):
     """On a resumed session: what changed in the instructions and tools, appended rather than restarting."""
     lines = []
     if delta["instructions"] is not None:
@@ -777,7 +780,7 @@ def updates(delta, folder):
                          + "\n".join(diff))
     if delta["tools_removed"]:
         lines.append("## Tools no longer available\n" + ", ".join(delta["tools_removed"]))
-    if delta["tool_updates"]:
+    if delta["tool_updates"] and listed:
         lines.append("## Tools added or changed\n" + json.dumps(delta["tool_updates"], indent=1))
     return lines
 
@@ -830,8 +833,8 @@ def checkpoint_prompt(call, plan, folder):
     lines = []
     if not plan["base"]:
         instructions = split(body)[0]
+        # Checkpoints are claude and opencode sessions, which hold the tools over MCP.
         lines.append("## Agent instructions\n" + "\n\n".join(text_of(m.get("content"), folder) for m in instructions))
-        lines.append("## Tools you may call\n" + json.dumps([t["function"] for t in tools_of(body).values()], indent=1))
         lines.append("## Conversation")
     else:
         lines.append("## Conversation, continued")
@@ -1067,7 +1070,7 @@ def answer_opencode(call, folder, state, delta):
     body = call["body"]
     model = body.get("model", "")
     fresh = not resumable(state, "opencode_session", delta)
-    prompt = prompt_for(call, delta, fresh)
+    prompt = prompt_for(call, delta, fresh, listed=False)
     work = OPENCODE_HOME / folder.name
     work.mkdir(parents=True, exist_ok=True)
     (work / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
@@ -1105,7 +1108,7 @@ def answer_opencode(call, folder, state, delta):
         print(f"{call['id']}: checkpoint fork failed ({str(error)[:200]}); starting fresh", file=sys.stderr)
         state.pop("opencode_checkpoint", None)
         (work / "calls.jsonl").unlink(missing_ok=True)
-        prompt = prompt_for(call, delta, True)
+        prompt = prompt_for(call, delta, True, listed=False)
         session, text, usage = opencode_turn(with_images(run, prompt), prompt, work, model)
     ended = time.time()
     calls = opencode_calls(work)
@@ -1142,7 +1145,7 @@ def fork_opencode(call):
     server = opencode_server(work, model)
     if not opencode_session_exists(server, work, session):
         raise RuntimeError("the chat's OpenCode session is not visible to its fork server")
-    prompt = prompt_for(call, delta, False)
+    prompt = prompt_for(call, delta, False, listed=False)
     command = [OPENCODE, "run", "--server", server, "--agent", "webagent-bridge", "-m", model, "--format", "json",
                "-s", session, "--fork"]
     forked, text, usage = opencode_turn(with_images(command, prompt), prompt, work, model)
@@ -1268,7 +1271,7 @@ def answer_claude(call, folder, state, delta):
     (folder / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
     (folder / "calls.jsonl").unlink(missing_ok=True)
     command = claude_command(body, folder)
-    prompt = prompt_for(call, delta, fresh)
+    prompt = prompt_for(call, delta, fresh, listed=False)
     plan = checkpoint_plan(state, "claude_checkpoint", delta, body) \
         if fresh and "claude_bridge" in fork_support() else None
     started = time.time()
@@ -1305,7 +1308,7 @@ def answer_claude(call, folder, state, delta):
         (folder / "calls.jsonl").unlink(missing_ok=True)
         session = str(uuid.uuid4())
         output = run_claude(claude_command(body, folder) + ["--session-id", session],
-                            prompt_for(call, delta, True), folder)
+                            prompt_for(call, delta, True, listed=False), folder)
     ended = time.time()
     message = parse_reply(json.dumps({"content": output.get("result") or "", "tool_calls": stub_calls(folder)}), body)
     post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": claude_usage(output)})
@@ -1356,7 +1359,7 @@ def fork_claude(call):
     try:
         (stub / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
         output = run_claude(claude_command(body, stub) + ["--resume", session, "--fork-session"],
-                            prompt_for(call, delta, False), folder)
+                            prompt_for(call, delta, False, listed=False), folder)
         calls = stub_calls(stub)
     finally:
         shutil.rmtree(stub, ignore_errors=True)
