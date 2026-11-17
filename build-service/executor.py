@@ -106,7 +106,7 @@ def test_filter(value):
 # Protected registrations; source paths select fixed assertions, never shell text.
 HOST_FOCUSED_POLICY="registered-host-v2"
 HOST_FOCUSED_REGISTRY=(
- {"id":"host-prompt-restoration","test":"provider::tests::configured_base_instructions_loads_and_recovers_from_file_changes",
+ {"id":"host-prompt-restoration","test":"provider::tests::instructions_for_turn_strips_leading_blank_lines",
   "paths":("src/engine/","crates/modules/engine/","src/models/provider/","crates/modules/models/","config/prompts.json","src/agent_loop/","src/context/","src/engine_components.rs","src/main.rs","Cargo.toml","Cargo.lock","build.rs","crates/context-contracts/","crates/context-assembly/","crates/context-service/","plugins/engine/context-assembly/")},
  {"id":"host-offline-descriptor-identity","test":"components::offline_smoke_uses_frozen_descriptor_versions",
   "package":"webagent-engine","target":"webagent_engine","target_kind":"lib","source_path":"/build/crates/modules/engine/src/lib.rs",
