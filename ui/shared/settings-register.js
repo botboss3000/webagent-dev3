@@ -133,6 +133,24 @@ export function createSettingsRegister(host, {label = 'Settings', categories = [
     stack.style.minHeight = menu.offsetHeight + 'px';
   }
 
+  /* Switching pages starts the new page at the top; a pinned tab header above it stays pinned. */
+  function alignPageTop() {
+    const scroller = host.closest('#main-panel') || host.ownerDocument.scrollingElement;
+    if (!scroller) return;
+    const scrollerTop = scroller === host.ownerDocument.scrollingElement ? 0 : scroller.getBoundingClientRect().top;
+    // A sticky box already covering the scroller's top edge is a pinned header the page sits below.
+    let cover = 0;
+    for (let node = host; node && node !== scroller; node = node.parentElement) {
+      for (let prev = node.previousElementSibling; prev; prev = prev.previousElementSibling) {
+        if (getComputedStyle(prev).position !== 'sticky') continue;
+        const rect = prev.getBoundingClientRect();
+        if (rect.top <= scrollerTop + 1 && rect.bottom > scrollerTop) cover = Math.max(cover, rect.bottom - scrollerTop);
+      }
+    }
+    if (!cover) { scroller.scrollTop = 0; return; }
+    scroller.scrollTop = Math.max(0, host.getBoundingClientRect().top - scrollerTop + scroller.scrollTop - cover);
+  }
+
   /* Rows are built once every category has mounted its section into the stage. */
   function present() {
     const meta = new Map(categories.map(category => [category.id, category]));
@@ -186,7 +204,7 @@ export function createSettingsRegister(host, {label = 'Settings', categories = [
       } else {
         entry.state.remove();
       }
-      row.addEventListener('click', event => { requestTouchVibration(event); open(entry.id); });
+      row.addEventListener('click', event => { requestTouchVibration(event); open(entry.id, {align: true}); });
       menu.append(row);
     });
 
@@ -196,7 +214,7 @@ export function createSettingsRegister(host, {label = 'Settings', categories = [
     setTimeout(() => menu.classList.remove('is-intro'), entries.length * 45 + 500);
   }
 
-  function open(id) {
+  function open(id, {align = false} = {}) {
     const entry = pages.get(id);
     if (!entry || animating) return;
     // A section that asks to open while its own page is showing only needs the focus kept.
@@ -210,6 +228,7 @@ export function createSettingsRegister(host, {label = 'Settings', categories = [
     detail.hidden = false;
     detail.classList.add('is-in-right');
     void detail.offsetWidth;
+    if (align) alignPageTop();
     requestAnimationFrame(() => detail.classList.remove('is-in-right'));
     setTimeout(() => {
       menu.hidden = true;
@@ -219,13 +238,14 @@ export function createSettingsRegister(host, {label = 'Settings', categories = [
     }, 220);
   }
 
-  function close() {
+  function close({align = false} = {}) {
     if (animating || detail.hidden) return;
     animating = true;
     detail.classList.add('is-out-right');
     menu.hidden = false;
     menu.classList.add('is-in-left');
     void menu.offsetWidth;
+    if (align) alignPageTop();
     requestAnimationFrame(() => menu.classList.remove('is-in-left'));
     setTimeout(() => {
       detail.hidden = true;
@@ -236,9 +256,9 @@ export function createSettingsRegister(host, {label = 'Settings', categories = [
     }, 220);
   }
 
-  back.addEventListener('click', event => { requestTouchVibration(event); close(); });
+  back.addEventListener('click', event => { requestTouchVibration(event); close({align: true}); });
   detail.addEventListener('keydown', event => {
-    if (event.key === 'Escape') { event.preventDefault(); close(); }
+    if (event.key === 'Escape') { event.preventDefault(); close({align: true}); }
   });
 
   return api;

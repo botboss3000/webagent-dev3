@@ -122,6 +122,54 @@ try{
   await openRow('Member access');
   await page.getByLabel('Member messages per 24 hours',{exact:true}).fill('5');await page.getByRole('button',{name:'Save limits'}).first().click();
   await page.waitForFunction(()=>fixture.ladder?.ladder.levels.member.daily_turns===5&&fixture.ladder.ladder.levels.visitor.daily_turns===undefined);
+  // Switching pages starts the new page at the top; a pinned tab header stays pinned above it.
+  await toList();
+  await page.evaluate(() => {
+   const host = document.querySelector('#host');
+   const scroller = document.createElement('div');
+   scroller.id = 'main-panel';
+   // app.css pins #main-panel to position:relative; the fixture needs a real scroller.
+   const style = document.createElement('style');
+   style.textContent = '#main-panel{position:fixed!important;inset:0!important;width:auto!important;overflow:auto!important}';
+   document.head.append(style);
+   const lead = document.createElement('div');
+   lead.style.height = '300px';
+   const stick = document.createElement('div');
+   stick.id = 'fixture-stick';
+   stick.style.cssText = 'position:sticky;top:-1px;height:80px;background:var(--bg-0)';
+   const panel = document.createElement('div');
+   const tail = document.createElement('div');
+   tail.style.height = '1200px';
+   panel.append(host, tail);
+   scroller.append(lead, stick, panel);
+   document.body.append(scroller);
+  });
+  const scrollState = () => page.evaluate(() => {
+   const scroller = document.querySelector('#main-panel'), top = scroller.getBoundingClientRect().top;
+   const at = selector => document.querySelector(selector).getBoundingClientRect().top - top;
+   return {scrollTop: scroller.scrollTop, pageTop: at('#host'), detailTop: at('.sr-detail'), stickTop: at('#fixture-stick')};
+  });
+  const scrollRowsTo = value => page.evaluate(v => { document.querySelector('#main-panel').scrollTop = v; }, value);
+  await scrollRowsTo(100);
+  await openRow('Member access');
+  assert.equal((await scrollState()).scrollTop, 0);
+  await backToList();
+  await scrollRowsTo(600);
+  const beforeOpen = await scrollState();
+  // A plain DOM click keeps the scroll where it is; a pointer click would scroll the row into view first.
+  await page.evaluate(() => [...document.querySelectorAll('.sr-row')].find(row => row.textContent.trim().startsWith('Chat modes')).click());
+  await page.waitForFunction(()=>!document.querySelector('.sr-detail').hidden&&document.querySelector('.sr-menu').hidden);
+  const openedPage = await scrollState();
+  assert.ok(Math.abs(beforeOpen.stickTop) <= 1, JSON.stringify({beforeOpen}));
+  assert.ok(openedPage.scrollTop > 0 && Math.abs(openedPage.stickTop) <= 1, JSON.stringify({beforeOpen, openedPage}));
+  assert.ok(Math.abs(openedPage.pageTop - (openedPage.stickTop + 80)) < 2);
+  assert.ok(openedPage.detailTop - openedPage.pageTop >= 0 && openedPage.detailTop - openedPage.pageTop < 20);
+  await page.evaluate(() => document.querySelector('.sr-back').click());
+  await page.waitForFunction(()=>document.querySelector('.sr-detail').hidden&&!document.querySelector('.sr-menu').hidden);
+  const closedPage = await scrollState();
+  assert.ok(Math.abs(closedPage.stickTop) <= 1);
+  assert.ok(Math.abs(closedPage.pageTop - (closedPage.stickTop + 80)) < 2);
+  await page.evaluate(() => { document.body.append(document.querySelector('#host')); document.querySelector('#main-panel').remove(); });
   await toList();
   await page.evaluate(async()=>{fixture.agent.can_manage=false;await remount();});
   assert.equal(await page.locator('[data-register-section="website-chat-widget"]').count(),0);
