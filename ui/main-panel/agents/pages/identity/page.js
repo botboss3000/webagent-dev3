@@ -11,6 +11,7 @@ import { renderVoiceOutput } from './voice.js';
 import { renderManager } from './manager.js';
 import { renderCompaction } from './compaction.js';
 import { renderToolOutputPolicy } from './tool-output-policy.js';
+import { tipBadge } from '../../../../shared/models/field-tip.js';
 
 const ICONS = {
   profile: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/>',
@@ -149,11 +150,18 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
       const save=document.createElement('button');save.type='button';save.className='ac-btn ac-btn-ghost';save.textContent='SAVE CHANGES';save.disabled=!mode._new;save.dataset.modeCardSave='';
       const status=document.createElement('span');status.setAttribute('role','status');
       const updateSummary=()=>{nameText.textContent=(mode.label||mode.id)+(mode._deleted?' (will be removed)':'');};updateSummary();
-      for(const [key,label] of [['label','Name'],['description','Footer description'],['prompt','Prompt injection']]){
+      for(const [key,label] of [['label','Name'],['description','Footer description'],['prompt','Prompt injection'],['turn_guidance','Turn guidance']]){
         const wrap=document.createElement('label');wrap.className='ac-label';wrap.textContent=label;
-        const input=document.createElement(key==='prompt'?'textarea':'input');input.className='ac-input';input.dataset.modeField=key;
-        if(key==='prompt')input.rows=6;input.value=mode[key]||'';input.disabled=!agent.can_manage;
-        input.addEventListener('input',()=>{mode[key]=input.value;save.disabled=false;status.textContent='Unsaved changes';updateSummary();});wrap.append(input);fields.append(wrap);
+        const multiline=key==='prompt'||key==='turn_guidance';
+        const input=document.createElement(multiline?'textarea':'input');input.className='ac-input';input.dataset.modeField=key;
+        if(key==='prompt')input.rows=6;if(key==='turn_guidance'){input.rows=2;input.maxLength=1000;}
+        input.value=mode[key]||'';input.disabled=!agent.can_manage;
+        if(key==='turn_guidance'){
+          wrap.append(' ',tipBadge('Sent to the model with every turn while the session is in this mode, after the conversation history. It is never saved in the history. Through a bridge (Claude Code, OpenCode), it is added once per run, and again at the next step when it changes.'));
+        }
+        input.addEventListener('input',()=>{mode[key]=input.value;save.disabled=false;status.textContent='Unsaved changes';updateSummary();});wrap.append(input);
+        if(key==='turn_guidance'){const note=document.createElement('span');note.className='ac-hint';note.textContent='A short reminder sent with every turn in this mode. Leave empty to send nothing.';wrap.append(note);}
+        fields.append(wrap);
       }
       if(!mode.builtin&&agent.can_manage){const remove=document.createElement('button');remove.type='button';remove.className='ac-btn ac-btn-ghost';remove.textContent='Remove mode';remove.addEventListener('click',()=>{mode._deleted=true;fields.querySelectorAll('input,textarea,select').forEach(el=>el.disabled=true);save.disabled=false;remove.disabled=true;updateSummary();});fields.append(remove);}
       if(agent.can_manage){fields.append(save,status);save.addEventListener('click',async()=>{
@@ -164,7 +172,7 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
       });}
       editor.append(card);
     });
-    if(agent.can_manage){const add=document.createElement('button');add.type='button';add.className='ac-btn ac-btn-ghost';add.textContent='Add mode';add.addEventListener('click',()=>{let n=1;while(modes.some(m=>m.id==='custom-'+n))n++;modes.push({id:'custom-'+n,label:'New mode',description:'',prompt:'',builtin:false,_new:true});renderModes();});editor.append(add);}
+    if(agent.can_manage){const add=document.createElement('button');add.type='button';add.className='ac-btn ac-btn-ghost';add.textContent='Add mode';add.addEventListener('click',()=>{let n=1;while(modes.some(m=>m.id==='custom-'+n))n++;modes.push({id:'custom-'+n,label:'New mode',description:'',prompt:'',turn_guidance:'',builtin:false,_new:true});renderModes();});editor.append(add);}
   };renderModes();
   renderManager(stage, agent, persist);
   renderVisibility(stage, agent, persist);

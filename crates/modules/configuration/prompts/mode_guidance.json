@@ -1,5 +1,4 @@
 {
-  "_instructions": "Where the execution mode's guidance goes. placement: \"history\" puts the full guidance in set_execution_mode results in the conversation history and nothing in each step's guidance message; \"both\" (default) does the same plus the one-line status_line in each step's guidance message; \"per_step\" puts the full guidance in each step's guidance message and set_execution_mode results carry only the mode and revision. status_line may use {label}.",
-  "placement": "per_step",
-  "status_line": "Execution mode: {label}. Its full guidance is in the latest set_execution_mode result."
+  "_instructions": "Where the execution mode's guidance goes. placement: \"history\" puts the mode's full guidance in set_execution_mode results in the conversation history and nothing in each step's guidance message; \"both\" (default) does the same plus the mode's Turn guidance (turn_guidance in execution_modes.json, or the agent's own) in each step's guidance message; \"per_step\" puts the full guidance in each step's guidance message and set_execution_mode results carry only the mode and revision.",
+  "placement": "both"
 }

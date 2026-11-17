@@ -244,7 +244,7 @@ impl<
             };
             let mut output =
                 json!({"status":"success","mode":id,"revision":revision,"reason":reason});
-            if webagent_context::defaults::mode_guidance().0 != "per_step" {
+            if webagent_context::defaults::mode_guidance() != "per_step" {
                 output["guidance"] = json!(format!(
                     "Execution mode: {}\n{}",
                     mode["definition"]["label"].as_str().unwrap_or(id),

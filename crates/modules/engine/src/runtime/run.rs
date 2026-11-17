@@ -2433,14 +2433,18 @@ impl<
                 // recorded here when the agent changes the mode.
                 let mut contributions = Vec::new();
                 run["mode_revision_shown"] = mode["revision"].clone();
-                let (placement, status_line) = webagent_context::defaults::mode_guidance();
+                let placement = webagent_context::defaults::mode_guidance();
                 let label = mode["definition"]["label"].as_str().unwrap_or("Unknown");
                 let mode_text = match placement.as_str() {
                     "per_step" => Some(format!(
                         "Execution mode: {label}\n{}",
                         mode["definition"]["prompt"].as_str().unwrap_or("").trim()
                     )),
-                    "both" => Some(status_line.replace("{label}", label)),
+                    "both" => mode["definition"]["turn_guidance"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                        .map(str::to_owned),
                     _ => None,
                 };
                 if let Some(content) = mode_text {

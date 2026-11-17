@@ -93,7 +93,7 @@ pub async fn execute(
         let now = host.session_mode(call.sid).await?;
         let mut result = json!({"status":"success","output":response,
             "mode":now["definition"]["id"].as_str().unwrap_or(mode),"revision":now["revision"]});
-        if webagent_context::defaults::mode_guidance().0 != "per_step" {
+        if webagent_context::defaults::mode_guidance() != "per_step" {
             result["guidance"] = json!(guidance_text(&now));
         }
         if to_ask {
