@@ -177,6 +177,54 @@ mod tests {
         let original = run["input"].as_array().unwrap().clone();
         let schemas =
             vec![json!({"type":"function","name":"file_read","parameters":{"type":"object"}})];
+        // Every profile keeps skills and the menu in the instructions; only the call's own
+        // notes follow the history, for this call only.
+        let note = context_input::Contribution {
+            id: "mode".into(),
+            source: "native".into(),
+            lifetime: context_input::Lifetime::Call,
+            content: "call note sentinel".into(),
+            turn: 1,
+            call: 1,
+        };
+        let instructions_profile: ProfileV1 = serde_json::from_value(
+            json!({"append_instructions":false,"instruction_role":"system",
+   "transport":"chat_completions","reasoning_replay":"none","cache_control":"none"}),
+        )
+        .unwrap();
+        for (profile, role) in [(&profile, "developer"), (&instructions_profile, "system")] {
+            let mut probe = run.clone();
+            let working = Box::pin(project(
+                &app,
+                &mut probe,
+                &cap,
+                profile,
+                &schemas,
+                &original,
+                std::slice::from_ref(&note),
+                context_input::CallIdentity { turn: 1, call: 1 },
+                &CancellationToken::new(),
+            ))
+            .await
+            .unwrap();
+            assert!(working.contributions_projected);
+            assert!(working.guidance.contains("file guidance sentinel"));
+            assert!(working.guidance.contains("temporary menu sentinel"));
+            assert!(!working.guidance.contains("call note sentinel"));
+            assert_eq!(working.input.len(), original.len() + 1);
+            assert_eq!(working.input[..original.len()], original[..]);
+            assert_eq!(working.input[original.len()]["role"], role);
+            assert_eq!(
+                working.input[original.len()]["content"],
+                "call note sentinel"
+            );
+            assert_eq!(
+                working.extra_json_bytes,
+                serde_json::to_vec(&working.input).unwrap().len()
+                    - serde_json::to_vec(&original).unwrap().len()
+            );
+        }
+        // A projection with no call notes leaves the history exactly as it is.
         let working = Box::pin(project(
             &app,
             &mut run,
@@ -185,56 +233,12 @@ mod tests {
             &schemas,
             &original,
             &[],
-            context_input::CallIdentity { turn: 1, call: 1 },
-            &CancellationToken::new(),
-        ))
-        .await
-        .unwrap();
-        assert_eq!(working.input.len(), 3);
-        assert_eq!(working.input[1], original[0]);
-        assert!(working.input[0]["content"]
-            .as_str()
-            .unwrap()
-            .contains("file guidance sentinel"));
-        assert!(working.input[2]["content"]
-            .as_str()
-            .unwrap()
-            .contains("temporary menu sentinel"));
-        assert_eq!(
-            working.extra_json_bytes,
-            serde_json::to_vec(&working.input).unwrap().len()
-                - serde_json::to_vec(&original).unwrap().len()
-        );
-        // The default profile keeps skills in the instructions but still puts the call's
-        // notes after the history, for this call only.
-        let instructions_profile: ProfileV1 = serde_json::from_value(
-            json!({"append_instructions":false,"instruction_role":"system",
-   "transport":"chat_completions","reasoning_replay":"none","cache_control":"none"}),
-        )
-        .unwrap();
-        let mut probe = run.clone();
-        let plain = Box::pin(project(
-            &app,
-            &mut probe,
-            &cap,
-            &instructions_profile,
-            &schemas,
-            &original,
-            &[],
             context_input::CallIdentity { turn: 1, call: 2 },
             &CancellationToken::new(),
         ))
         .await
         .unwrap();
-        assert!(plain.contributions_projected);
-        assert!(!plain.guidance.contains("temporary menu sentinel"));
-        assert_eq!(plain.input.len(), original.len() + 1);
-        assert_eq!(plain.input[..original.len()], original[..]);
-        assert_eq!(plain.input[original.len()]["role"], "system");
-        assert!(plain.input[original.len()]["content"]
-            .as_str()
-            .unwrap()
-            .contains("temporary menu sentinel"));
+        assert_eq!(working.input, original);
         app.save(&mut run).await.unwrap();
         assert_eq!(run["input"], json!(original));
         assert_eq!(
@@ -250,8 +254,11 @@ mod tests {
             )
             .await
             .unwrap();
+        // The ledger still records each included definition (at input 0), as bookkeeping;
+        // its body is in the instructions, not in the history.
         assert_eq!(ledger.placements.len(), 1);
         assert_eq!(ledger.placements[0].id, "fixture-skill");
+        assert_eq!(ledger.placements[0].after_input, 0);
         run["input"] = json!([{"role":"assistant","content":"canonical summary"}]);
         run["compactions"] = json!(1);
         app.store.save_run(&mut run,"context_compacted",&json!({"source":original,"source_digest":crate::digest(&original),"dropped_items":1,"segment_id":"assets-run-1"})).await.unwrap();

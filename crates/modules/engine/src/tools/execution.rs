@@ -170,15 +170,20 @@ pub fn guidance<C: ActionCatalog>(
     agent_abilities: &Value,
     tool_names: &[String],
 ) -> Result<String> {
+    // Only tools whose settings differ from their defaults are listed: the full table for
+    // every enabled tool would be thousands of characters on every call.
     let mut flags = serde_json::Map::new();
     for name in tool_names {
-        flags.insert(
-            name.clone(),
-            serde_json::to_value(resolve::<C>(agent_abilities, name)?)?,
-        );
+        let effective = serde_json::to_value(resolve::<C>(agent_abilities, name)?)?;
+        if effective != serde_json::to_value(resolve::<C>(&Value::Null, name)?)? {
+            flags.insert(name.clone(), effective);
+        }
+    }
+    if flags.is_empty() {
+        return Ok(format!("\n{SEMANTICS}\n"));
     }
     Ok(format!(
-        "\nTool execution (effective): {}\n{}\n",
+        "\nTool execution (changed from defaults): {}\n{}\n",
         Value::Object(flags),
         SEMANTICS
     ))

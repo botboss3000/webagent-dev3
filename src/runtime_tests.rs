@@ -1972,16 +1972,20 @@ fn native_call_suffix(request: &Value) -> &str {
 }
 
 /// Locate current ability guidance only in explicitly labelled Responses developer frames.
+/// The ability's guidance block in the request's instructions, where every profile puts skills.
 fn native_ability_frames<'a>(request: &'a Value, ability: &str) -> Vec<&'a str> {
     let header = format!("## Untrusted live guidance: ability:{ability}\n");
-    request["input"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|item| item["role"] == "developer")
-        .filter_map(|item| item["content"].as_str())
-        .filter(|body| body.contains(&header))
-        .collect()
+    let instructions = request["instructions"].as_str().unwrap_or_default();
+    instructions
+        .find(&header)
+        .map(|start| {
+            let body = &instructions[start..];
+            let end = body[header.len()..]
+                .find("## Untrusted live guidance: ")
+                .map_or(body.len(), |next| next + header.len());
+            vec![&body[..end]]
+        })
+        .unwrap_or_default()
 }
 
 #[tokio::test]
@@ -3278,7 +3282,8 @@ async fn enabled_tool_inspects_only_its_current_session() {
     let guidance = native_ability_frames(&requests[0], "codebase_admin");
     assert_eq!(guidance.len(), 1);
     assert!(guidance[0].contains("Codebase Admin"));
-    assert!(!requests[0]["instructions"]
+    // Skills sit in the instructions for every profile.
+    assert!(requests[0]["instructions"]
         .as_str()
         .unwrap_or_default()
         .contains("## Untrusted live guidance: ability:codebase_admin\n"));
@@ -8166,12 +8171,11 @@ async fn removed_manifest_withdraws_cached_schemas_and_guidance_within_run() {
         .iter()
         .any(|schema| schema["name"] == "state_inspect"));
     assert!(native_ability_frames(&requests[1], "codebase_admin").is_empty());
-    for request in requests.iter() {
-        assert!(!request["instructions"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("CACHE_WITHDRAWAL_GUIDANCE_SENTINEL"));
-    }
+    // The withdrawn guidance left the instructions on the next call.
+    assert!(!requests[1]["instructions"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("CACHE_WITHDRAWAL_GUIDANCE_SENTINEL"));
     assert!(!app.run(&id).await.unwrap()["input"]
         .to_string()
         .contains("CACHE_WITHDRAWAL_GUIDANCE_SENTINEL"));
@@ -10710,17 +10714,12 @@ async fn closing_turn_reuses_the_request_and_sets_the_status() {
     let bodies = bodies.lock().unwrap();
     let input = |i: usize| bodies[i]["input"].as_array().unwrap().clone();
     // The second run's closing request repeats its final request's opening (instructions,
-    // tools and placed guidance, which providers cache by prefix); the per-call tool menu
-    // follows the history, so it comes after the reply, then the closer message.
+    // tools and history, which providers cache by prefix); the final request's call note is
+    // not part of the history, so the closing request continues after the reply.
     let (final_input, closing_input) = (input(2), input(3));
-    let opening = closing_input[0]["content"].as_str().unwrap();
-    assert!(opening.len() > 1000);
-    assert!(final_input[0]["content"]
-        .as_str()
-        .unwrap()
-        .starts_with(opening));
-    assert_eq!(final_input[1..], closing_input[1..final_input.len()]);
-    let shared = final_input.len();
+    let history = final_input.len() - 1;
+    assert_eq!(final_input[..history], closing_input[..history]);
+    let shared = history;
     assert_eq!(bodies[2]["instructions"], bodies[3]["instructions"]);
     assert_eq!(bodies[2]["tools"], bodies[3]["tools"]);
     assert!(closing_input[shared].to_string().contains("Second answer"));

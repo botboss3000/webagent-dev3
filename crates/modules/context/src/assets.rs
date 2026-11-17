@@ -294,33 +294,27 @@ pub async fn project_context(
         }
         definitions.push(id.clone());
     }
-    let mut native = cap.temporary_menu.clone();
+    // Only the call's own contributions (mode, publish guidance) change per call; they follow
+    // the history. Everything else, the menu included, stays in the instructions.
+    let mut native = String::new();
     for selected in context_input::select(contributions, call)? {
         if selected.disposition == "included" {
-            native.push('\n');
+            if !native.is_empty() {
+                native.push('\n');
+            }
             native.push_str(&selected.item.content);
         }
     }
-    let temporary = if profile.append_instructions && !native.is_empty() {
-        if bodies
-            .insert("native-call".into(), native.clone())
-            .is_some()
-        {
-            bail!("Reserved native definition ID");
-        }
-        vec!["native-call".into()]
-    } else {
-        Vec::new()
-    };
+    // Every profile keeps definitions in the instructions; the planner only fixes schema order.
     let request = Request::Place {
         version: 1,
         state: ledger.clone(),
         history: history.to_vec(),
         definitions: definitions.clone(),
-        temporary,
+        temporary: Vec::new(),
         schema_names: cap.schema_order.clone(),
         history_basis: history_basis.clone(),
-        append: profile.append_instructions,
+        append: false,
     };
     let plan = planner.assets_plan(root, &request, cancel).await?;
     webagent_assets_contracts::validate_plan(&request, &plan)?;
@@ -349,45 +343,29 @@ pub async fn project_context(
    "expected_revision":ledger.revision,"state":next});
     }
     let schemas = schemas_in_order(schemas, schema_order)?;
-    if profile.append_instructions {
-        let projected = webagent_assets_contracts::project(
-            &request,
-            &plan,
-            &bodies,
-            profile.instruction_role.as_str(),
-        )?;
-        Ok(Working {
-            instructions: cap.main.clone(),
-            guidance: String::new(),
-            input: projected.input,
-            schemas,
-            extra_json_bytes: projected.extra_json_bytes,
-            contributions_projected: true,
-        })
-    } else {
-        let guidance = definitions
-            .iter()
-            .map(|id| bodies[id].as_str())
-            .collect::<Vec<_>>()
-            .join("");
-        // Call-scoped notes (menu, mode, publish guidance) follow the history as one message
-        // for this call only, so the cached instructions and history stay unchanged.
-        let mut input = history.to_vec();
-        let mut extra_json_bytes = 0;
-        if !native.is_empty() {
-            let note = json!({"role":profile.instruction_role.as_str(),"content":native});
-            extra_json_bytes = serde_json::to_vec(&note)?.len() + 1;
-            input.push(note);
-        }
-        Ok(Working {
-            instructions: cap.main.clone(),
-            guidance,
-            input,
-            schemas,
-            extra_json_bytes,
-            contributions_projected: true,
-        })
+    let mut guidance = definitions
+        .iter()
+        .map(|id| bodies[id].as_str())
+        .collect::<Vec<_>>()
+        .join("");
+    guidance.push_str(&cap.temporary_menu);
+    // The call's notes follow the history as one message, for this call only, so the cached
+    // instructions and history stay unchanged.
+    let mut input = history.to_vec();
+    let mut extra_json_bytes = 0;
+    if !native.is_empty() {
+        let note = json!({"role":profile.instruction_role.as_str(),"content":native});
+        extra_json_bytes = serde_json::to_vec(&note)?.len() + 1;
+        input.push(note);
     }
+    Ok(Working {
+        instructions: cap.main.clone(),
+        guidance,
+        input,
+        schemas,
+        extra_json_bytes,
+        contributions_projected: true,
+    })
 }
 #[cfg(test)]
 mod tests {
