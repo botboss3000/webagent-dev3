@@ -695,10 +695,27 @@ impl<
             reason,
             focus,
         } = fold;
-        let same_model = config.summarizer == context_compaction::Summarizer::SameModel
+        // When the System model is the chat's own model, its summary is a same-model summary:
+        // it forks the chat's (cached) session rather than starting a fresh one, also on the
+        // retry after a failed attempt.
+        let system_is_chat_model = system_dispatch_run(run)
+            .ok()
+            .and_then(|system| {
+                provider::ProviderSelection::parse(
+                    &system["provider_selection"],
+                    X::default_model(),
+                )
+                .ok()
+            })
+            .is_some_and(|system| {
+                system.provider == request.selection.provider
+                    && system.model == request.selection.model
+            });
+        let same_model = (config.summarizer == context_compaction::Summarizer::SameModel
+            || system_is_chat_model)
             && (!request.selection.provider.is_bridge()
                 || request.selection.provider.bridge_forks())
-            && !request.system_next
+            && (!request.system_next || system_is_chat_model)
             && request.envelope_bytes + message.len() + config.token_bytes(config.summary_tokens)
                 <= request.ceiling;
         let (selection, input, tools, instructions, effort, token_run) = if same_model {
@@ -774,7 +791,8 @@ impl<
             run,
             format!("{step}:call"),
             json!({"type":"compaction_call","model":selection.model,"input_bytes":input_bytes,
-                "reason":reason,"focus":focus,"mode":"background","summarizer":summarizer}),
+                "reason":reason,"focus":focus,"mode":"background","summarizer":summarizer,
+                "fork":bridge_fork}),
         );
         app.save(run).await?;
         let sid = request.sid.to_owned();
@@ -3005,7 +3023,8 @@ impl<
                         &mut run,
                         format!("{compaction_step}:call"),
                         json!({"type":"compaction_call","model":selection.model,
-                            "input_bytes":input_bytes,"reason":"automatic"}),
+                            "input_bytes":input_bytes,"reason":"automatic","mode":"hard_limit",
+                            "summarizer":"system","fork":false}),
                     );
                     app.save(&mut run).await?;
                     let prepared_system = match crate::provider::CallDraft::new(

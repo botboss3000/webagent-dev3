@@ -130,7 +130,8 @@ fn event(
         }
         "compaction_call" => (
             "compaction_call",
-            json!({"model":item["model"],"input_bytes":item["input_bytes"],"reason":item["reason"]}),
+            json!({"model":item["model"],"input_bytes":item["input_bytes"],"reason":item["reason"],
+                "mode":item["mode"],"summarizer":item["summarizer"],"fork":item["fork"]}),
         ),
         "compaction_result" => (
             "compaction_result",
