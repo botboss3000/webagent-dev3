@@ -18,35 +18,35 @@ use webagent_host_core::StoreCore;
 use webagent_models::account_catalog::PlatformPin;
 use webagent_models::model_selection::{Catalog, ModelRole, SelectionPlan};
 
-#[path = "../../../../../abilities/Core/app_control/native/app_control.rs"]
+#[path = "../../../../../abilities/Core/app_control/tools/set_app_view/set_app_view.rs"]
 pub mod app_control;
 #[path = "../../../../../abilities/Core/base/native/base_extras.rs"]
 pub mod base_extras;
-#[path = "../../../../../abilities/Core/base/native/compaction.rs"]
+#[path = "../../../../../abilities/Core/base/tools/compact_context/compact_context.rs"]
 pub mod compaction;
-#[path = "../../../../../abilities/Core/base/native/context_assets.rs"]
+#[path = "../../../../../abilities/Core/base/tools/context_assets/context_assets.rs"]
 pub mod context_assets;
-#[path = "../../../../../abilities/Core/decision/native/decision.rs"]
+#[path = "../../../../../abilities/Core/decision/tools/decide_with_jev/decide_with_jev.rs"]
 pub mod decision;
-#[path = "../../../../../abilities/Core/decision/native/directory_decision.rs"]
+#[path = "../../../../../abilities/Core/decision/tools/score_directory_with_jev/score_directory_with_jev.rs"]
 pub mod directory_decision;
 #[path = "../../../../../abilities/Core/human_escalation/native/human_escalation.rs"]
 pub mod human_escalation;
-#[path = "../../../../../abilities/Core/image_vision/native/image_vision.rs"]
+#[path = "../../../../../abilities/Core/image_vision/tools/process_image/process_image.rs"]
 pub mod image_vision;
 #[path = "../../../../../abilities/Memory/managed_knowledge_files/native/knowledge_files.rs"]
 pub mod knowledge_files;
-#[path = "../../../../../abilities/Core/base/native/mode.rs"]
+#[path = "../../../../../abilities/Core/base/tools/set_execution_mode/set_execution_mode.rs"]
 pub mod mode;
 #[path = "../../../../../abilities/Core/model_switcher/native/model_switcher.rs"]
 pub mod model_switcher;
 #[path = "../../../../../abilities/Core/agent_management/native/orchestration.rs"]
 pub mod orchestration;
-#[path = "../../../../../abilities/Core/base/native/prompt.rs"]
+#[path = "../../../../../abilities/Core/base/tools/read_own_prompt/read_own_prompt.rs"]
 pub mod prompt;
-#[path = "../../../../../abilities/Core/base/native/recall.rs"]
+#[path = "../../../../../abilities/Core/base/tools/recall_compacted/recall_compacted.rs"]
 pub mod recall;
-#[path = "../../../../../abilities/Core/reply_buttons/native/reply_buttons.rs"]
+#[path = "../../../../../abilities/Core/reply_buttons/tools/offer_choices/offer_choices.rs"]
 pub mod reply_buttons;
 #[path = "../../../../../abilities/Core/base/native/self_edit.rs"]
 pub mod self_edit;
@@ -54,7 +54,7 @@ pub mod self_edit;
 pub mod session;
 #[path = "../../../../../abilities/Core/base/native/task.rs"]
 pub mod task;
-#[path = "../../../../../abilities/Core/base/native/text_search.rs"]
+#[path = "../../../../../abilities/Core/base/tools/shared/text_search.rs"]
 pub mod text_search;
 #[path = "../../../../../abilities/Core/user_files/native/user_files.rs"]
 pub mod user_files;
@@ -68,7 +68,7 @@ pub mod web_access;
 pub mod webhooks;
 #[path = "../../../../../abilities/Memory/wiki_context/native/wiki.rs"]
 pub mod wiki;
-#[path = "../../../../../abilities/Memory/wiki_context/native/wiki_markdown.rs"]
+#[path = "../../../../../abilities/Memory/wiki_context/tools/shared/wiki_markdown.rs"]
 pub mod wiki_markdown;
 
 /// A boxed `Send` future borrowed from the host.
