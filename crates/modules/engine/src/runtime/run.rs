@@ -3393,6 +3393,7 @@ impl<
                     None => None,
                 };
                 // Past the trigger with no summary pending: plan one to run beside this call.
+                let mut trigger_notice = None;
                 let background_plan = if let Some((plan, request)) = requested {
                     let focus = request["focus"]
                         .as_str()
@@ -3408,15 +3409,31 @@ impl<
                     );
                     Some((plan, message, "requested", focus))
                 } else if background && job_free {
-                    context_compaction::plan_trigger(
+                    let planned = context_compaction::plan_trigger(
                         envelope.input,
                         envelope.report.history_budget_bytes,
                         &compaction_config,
                         envelope.report.max_bytes - envelope.report.history_budget_bytes,
-                    )
-                    .ok()
-                    .flatten()
-                    .map(|plan| {
+                    );
+                    // A trigger below the fixed instructions and tools can never start a
+                    // background summary; say so once per run (the ceiling still folds).
+                    if let Err(error) = &planned {
+                        if error.to_string()
+                            == "Compaction trigger cannot fit fixed request overhead"
+                            && run["compaction_trigger_notice"] != true
+                        {
+                            let report = assembly_diagnostic
+                                .as_ref()
+                                .map_or(&Value::Null, |report| &report["report"]);
+                            trigger_notice = Some(assembly_failure_message(
+                                "trigger_overhead_exceeds_budget",
+                                "compaction_plan",
+                                report,
+                                &compaction_config,
+                            ));
+                        }
+                    }
+                    planned.ok().flatten().map(|plan| {
                         let message = background_compaction::fork_message(
                             &plan,
                             envelope.input,
@@ -3433,6 +3450,14 @@ impl<
                 // Durable input remains intact; this local run is reloaded after dispatch.
                 let input_digest = digest(&projected_input);
                 let schemas = envelope.schemas.to_vec();
+                if let Some(error) = trigger_notice {
+                    run["compaction_trigger_notice"] = json!(true);
+                    compaction_result(
+                        &mut run,
+                        &format!("compaction:trigger:{}", uuid::Uuid::new_v4()),
+                        json!({"mode":"background","error":error}),
+                    );
+                }
                 if let Some(report) = assembly_diagnostic {
                     run["latest_context_assembly"] = report;
                 }

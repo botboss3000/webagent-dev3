@@ -2,7 +2,7 @@
 import {createSettingsRow} from '../../../../shared/settings-register.js';
 
 // Identity owns agent thresholds; the app-wide JSON retains hard safety limits.
-export function renderCompaction(host, agent, persist) {
+export function renderCompaction(host, agent, persist, request) {
   const row = createSettingsRow(host, {id:'context-compaction', title:'Context compaction'});
   host = row.body;
   const hint = document.createElement('p');
@@ -17,7 +17,42 @@ export function renderCompaction(host, agent, persist) {
   const scope = document.createElement('p');
   scope.className = 'ac-hint';
   scope.textContent = 'The trigger counts instructions, tool definitions, history and the verbatim tail together. Only eligible older history is summarized. For example, at a 150,000-token trigger, 50,000 tokens of instructions, tools and retained recent history leave about 100,000 tokens eligible for compaction.';
-  host.append(hint, scope, fallback, estimate);
+  // What every model call resends (instructions, skills, Main Notes, tool schemas), so the
+  // trigger can be set above it with room left for history.
+  const fixed = document.createElement('p');
+  fixed.className = 'ac-hint';
+  fixed.textContent = 'Measuring the fixed context…';
+  const room = document.createElement('p');
+  room.className = 'ac-hint';
+  room.setAttribute('role', 'status');
+  host.append(hint, scope, fixed, room, fallback, estimate);
+  let fixedTokens = null;
+  const checkRoom = () => {
+    const trigger = Number(inputs.get('trigger_tokens')?.value);
+    const tail = Number(inputs.get('tail_tokens')?.value);
+    if (fixedTokens === null || !Number.isFinite(trigger) || !Number.isFinite(tail)) {
+      room.textContent = '';
+      return;
+    }
+    const needed = fixedTokens + tail + agent.compaction_defaults.summary_tokens;
+    room.textContent = trigger >= needed
+      ? 'About ' + (trigger - fixedTokens).toLocaleString() + ' tokens of the trigger are left for history.'
+      : 'The trigger is below the fixed context plus the verbatim tail and summary (' +
+        needed.toLocaleString() + ' tokens): background summaries cannot start, and only the ceiling folds.';
+  };
+  if (request) {
+    request('/agents/' + encodeURIComponent(agent.id) + '/context-composition').then((data) => {
+      const part = (name) => Number(data?.breakdown?.[name]?.tokens) || 0;
+      fixedTokens = Number(data?.tokens) || 0;
+      fixed.textContent = 'Fixed context on every call (estimated): ' +
+        fixedTokens.toLocaleString() + ' tokens (prompt ' + part('system_prompt').toLocaleString() +
+        ', skills ' + part('skills').toLocaleString() + ', tools ' +
+        part('tools').toLocaleString() + ').';
+      checkRoom();
+    }).catch(() => { fixed.textContent = 'The fixed context size is unavailable.'; });
+  } else {
+    fixed.hidden = true;
+  }
   const fields = [
     ['trigger_tokens', 'Summary trigger', 'Estimated total request tokens, including instructions, tools and the verbatim tail'],
     ['tail_tokens', 'Verbatim tail', 'Recent estimated tokens to keep word for word'],
@@ -48,6 +83,7 @@ export function renderCompaction(host, agent, persist) {
     wrap.append(labelEl, input, help);
     host.append(wrap);
     inputs.set(key, input);
+    input.addEventListener('input', checkRoom);
   }
   // Same model reuses the running request's cached prefix; Claude and OpenCode bridges answer from a
   // fork of the chat's session, Muse uses System.

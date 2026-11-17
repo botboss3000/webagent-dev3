@@ -126,7 +126,7 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
   if(agent.can_manage)await renderEmbedSettings(stage,request,{agentId});
   renderSharedChat(stage, agent, persist);
   await renderMainChat(stage, request, {agentId,canManage:agent.can_manage});
-  renderCompaction(stage, agent, persist);
+  renderCompaction(stage, agent, persist, request);
   renderToolOutputPolicy(stage, agent, persist);
   const {body:modeBody}=createSettingsRow(stage,{id:'chat-modes',title:'Chat modes'});
   const hint = document.createElement('p'); hint.className = 'ac-hint';
