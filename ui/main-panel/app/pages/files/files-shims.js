@@ -1,6 +1,6 @@
 'use strict';
 
-import { pushBackHandler } from '../../../../../shared/history-back.js';
+import { pushBackHandler } from '../../../../shared/history-back.js';
 
 let menu = null;
 let cleanup = null;
