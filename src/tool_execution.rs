@@ -33,15 +33,17 @@ pub fn guidance(value: &Value, names: &[String]) -> Result<String> {
     webagent_engine::tools::execution::guidance::<NativeActions>(value, names)
 }
 pub async fn acquire(
+    scope: &std::path::Path,
     user: &str,
     agent: &str,
     name: &str,
     settings: &Settings,
     cancel: &CancellationToken,
 ) -> Result<Permit> {
-    webagent_engine::tools::execution::acquire(user, agent, name, settings, cancel).await
+    webagent_engine::tools::execution::acquire(scope, user, agent, name, settings, cancel).await
 }
 pub async fn acquire_with_budget(
+    scope: &std::path::Path,
     user: &str,
     agent: &str,
     name: &str,
@@ -50,7 +52,7 @@ pub async fn acquire_with_budget(
     max_total: usize,
 ) -> Result<Permit> {
     webagent_engine::tools::execution::acquire_with_budget(
-        user, agent, name, settings, cancel, max_total,
+        scope, user, agent, name, settings, cancel, max_total,
     )
     .await
 }

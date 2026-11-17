@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::{Notify, OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -204,9 +205,18 @@ struct Limiter {
     resource: Arc<RwLock<()>>,
 }
 
-fn shared() -> &'static Arc<Limiter> {
-    static LIMITER: OnceLock<Arc<Limiter>> = OnceLock::new();
-    LIMITER.get_or_init(|| Arc::new(Limiter::default()))
+/// One limiter per app, keyed by its runtime path. Production runs one app per process, so
+/// this is the process limit; parallel test fixtures each get their own instead of
+/// starving one another's tool calls.
+fn shared(scope: &Path) -> Arc<Limiter> {
+    static LIMITERS: OnceLock<Mutex<HashMap<PathBuf, Arc<Limiter>>>> = OnceLock::new();
+    LIMITERS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .entry(scope.to_owned())
+        .or_default()
+        .clone()
 }
 
 pub struct Permit {
@@ -241,16 +251,18 @@ impl Drop for Permit {
 }
 
 pub async fn acquire<C: ActionCatalog>(
+    scope: &Path,
     user_id: &str,
     agent_id: &str,
     name: &str,
     settings: &Settings<C>,
     cancel: &CancellationToken,
 ) -> Result<Permit> {
-    acquire_with(shared().clone(), user_id, agent_id, name, settings, cancel).await
+    acquire_with(shared(scope), user_id, agent_id, name, settings, cancel).await
 }
 
 pub async fn acquire_with_budget<C: ActionCatalog>(
+    scope: &Path,
     user_id: &str,
     agent_id: &str,
     name: &str,
@@ -262,7 +274,7 @@ pub async fn acquire_with_budget<C: ActionCatalog>(
         bail!("Invalid installation tool concurrency");
     }
     acquire_limited(
-        shared().clone(),
+        shared(scope),
         user_id,
         agent_id,
         name,
@@ -601,6 +613,32 @@ mod tests {
         .unwrap();
         drop(permit);
         assert_eq!(limiter.counters.lock().unwrap().total, 0);
+    }
+
+    #[tokio::test]
+    async fn each_app_scope_has_its_own_limiter() {
+        let cancel = CancellationToken::new();
+        let write = resolve(&json!({}), "shell").unwrap();
+        let (one, two) = (Path::new("/scope-test/one"), Path::new("/scope-test/two"));
+        let held = acquire(one, "user", "agent", "shell", &write, &cancel)
+            .await
+            .unwrap();
+        // Another app's exclusive write is not blocked by this one's.
+        let other = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            acquire(two, "user", "agent", "shell", &write, &cancel),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        // The same app still serializes its writes.
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            acquire(one, "user", "agent", "shell", &write, &cancel),
+        )
+        .await
+        .is_err());
+        drop((held, other));
     }
 
     #[tokio::test]

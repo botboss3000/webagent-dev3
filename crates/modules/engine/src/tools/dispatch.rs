@@ -318,7 +318,7 @@ impl<
         // A session script holds no permit itself: each of its steps takes its own, and
         // holding an exclusive one here would block them.
         let _permit=if name=="script_run" {None} else {
-            Some(tool_execution::acquire_with_budget::<A>(app.store.current_user_id(),&agent_id,&name,&settings,&cancel,total_budget).await?)
+            Some(tool_execution::acquire_with_budget::<A>(&app.runtime_path,app.store.current_user_id(),&agent_id,&name,&settings,&cancel,total_budget).await?)
         };
         if config::Config::<C>::read(&app.runtime_path)?.tools.max_parallel_calls!=total_budget
             || tool_execution::resolve::<A>(&app.session_agent_abilities(&sid).await?,&name)?!=settings

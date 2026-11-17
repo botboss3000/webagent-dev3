@@ -9292,6 +9292,7 @@ async fn foreground_queue_revocation_denies_before_worker_dispatch() {
     let blocker = tokio::time::timeout(
         TEST_TIMEOUT,
         tool_execution::acquire(
+            &app.runtime_path,
             app.store.current_user_id(),
             "shared_default",
             "file_list",
