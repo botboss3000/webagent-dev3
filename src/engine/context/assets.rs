@@ -205,6 +205,36 @@ mod tests {
             serde_json::to_vec(&working.input).unwrap().len()
                 - serde_json::to_vec(&original).unwrap().len()
         );
+        // The default profile keeps skills in the instructions but still puts the call's
+        // notes after the history, for this call only.
+        let instructions_profile: ProfileV1 = serde_json::from_value(
+            json!({"append_instructions":false,"instruction_role":"system",
+   "transport":"chat_completions","reasoning_replay":"none","cache_control":"none"}),
+        )
+        .unwrap();
+        let mut probe = run.clone();
+        let plain = Box::pin(project(
+            &app,
+            &mut probe,
+            &cap,
+            &instructions_profile,
+            &schemas,
+            &original,
+            &[],
+            context_input::CallIdentity { turn: 1, call: 2 },
+            &CancellationToken::new(),
+        ))
+        .await
+        .unwrap();
+        assert!(plain.contributions_projected);
+        assert!(!plain.guidance.contains("temporary menu sentinel"));
+        assert_eq!(plain.input.len(), original.len() + 1);
+        assert_eq!(plain.input[..original.len()], original[..]);
+        assert_eq!(plain.input[original.len()]["role"], "system");
+        assert!(plain.input[original.len()]["content"]
+            .as_str()
+            .unwrap()
+            .contains("temporary menu sentinel"));
         app.save(&mut run).await.unwrap();
         assert_eq!(run["input"], json!(original));
         assert_eq!(

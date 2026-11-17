@@ -591,6 +591,16 @@ def split(body):
     return messages[:count], messages[count:]
 
 
+def step_notes(conversation):
+    """WebAgent ends a call with its call-scoped notes (mode, publish guidance) as system/developer
+    messages after the history; they are new each call and never part of it. Returns the history
+    and those notes, so the notes never make the next call look like a rewrite."""
+    count = len(conversation)
+    while count and conversation[count - 1].get("role") in ("system", "developer"):
+        count -= 1
+    return conversation[:count], conversation[count:]
+
+
 def remember(call):
     """Save the full request and work out what is new for this chat."""
     folder = SESSIONS / (call.get("session") or "unknown")
@@ -620,6 +630,7 @@ def fork_delta(call):
 def changes(folder, state, body, count):
     """What is new in `body` since the call `state` records; `state` is updated to this call."""
     instructions, conversation = split(body)
+    conversation, notes = step_notes(conversation)
     tools = tools_of(body)
     seen = state.get("conversation", [])
     old_schemas = state.get("tool_schemas", {})
@@ -638,7 +649,7 @@ def changes(folder, state, body, count):
         "rewritten": bool(seen) and not append,
         "new": conversation[len(seen):] if append else conversation,
         # The previous call's conversation, for a checkpoint after a rewrite.
-        "previous": seen, "digests": digests,
+        "previous": seen, "digests": digests, "notes": notes,
     }
     # A run's closing call ends with a private closer message that WebAgent keeps out of history: the
     # session holds it, but the next call (or a fork) must still read as an append, not a rewrite.
@@ -753,6 +764,7 @@ def prompt_for(call, delta, fresh, listed=True):
     lines = []
     if fresh:
         instructions, conversation = split(body)
+        conversation = step_notes(conversation)[0]
         lines.append("## Agent instructions\n" + "\n\n".join(text_of(m.get("content"), folder) for m in instructions))
         if listed:
             lines.append("## Tools you may call\n" + json.dumps([t["function"] for t in tools_of(body).values()], indent=1))
@@ -762,6 +774,9 @@ def prompt_for(call, delta, fresh, listed=True):
         messages = delta["new"]
     lines.append("## Conversation" if fresh else "## New since your last turn")
     lines += [render(m, folder, full=True) for m in messages]
+    if delta.get("notes"):
+        lines.append("## Notes for this step only\n" + "\n\n".join(text_of(m.get("content"), folder)
+                                                                for m in delta["notes"]))
     return "\n\n".join(lines)
 
 
@@ -829,7 +844,7 @@ def checkpoint_plan(state, key, delta, body):
 def checkpoint_prompt(call, plan, folder):
     """The text that turns `plan`'s base (or a new session) into the new checkpoint."""
     body, held = call["body"], len(plan["base"]["messages"]) if plan["base"] else 0
-    messages = split(body)[1][held:plan["keep"]]
+    messages = step_notes(split(body)[1])[0][held:plan["keep"]]
     lines = []
     if not plan["base"]:
         instructions = split(body)[0]
@@ -1486,6 +1501,15 @@ def selftest():
     # After a fold the summary blocks it shares with the previous call go into a checkpoint session;
     # the next fold extends that checkpoint, a short addition reuses it, a new model starts over.
     system, tail = {"role": "system", "content": "i"}, {"role": "user", "content": "tail"}
+    # A call-scoped note after the history is shown at the end and never counts as history.
+    noted = {}
+    note = lambda text: {"role": "system", "content": text}
+    changes(folder, noted, {"model": "m", "messages": [system, tail, note("step one")]}, 1)
+    nxt = changes(folder, noted, {"model": "m", "messages": [system, tail, {"role": "user", "content": "b"},
+                                                             note("step two")]}, 2)
+    assert not nxt["rewritten"] and [m["content"] for m in nxt["new"]] == ["b"]
+    shown = prompt_for({"body": {"model": "m", "messages": []}}, nxt, False)
+    assert shown.endswith("## Notes for this step only\nstep two") and "step one" not in shown
     blocks = [{"role": "user", "content": f"Summary block {n} " + "x" * CHECKPOINT_MIN_CHARS} for n in (1, 2)]
     chat = {}
     changes(folder, chat, {"model": "m", "messages": [system, blocks[0], {"role": "user", "content": "a"}]}, 1)

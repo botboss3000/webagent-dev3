@@ -365,19 +365,27 @@ pub async fn project_context(
             contributions_projected: true,
         })
     } else {
-        let mut guidance = definitions
+        let guidance = definitions
             .iter()
             .map(|id| bodies[id].as_str())
             .collect::<Vec<_>>()
             .join("");
-        guidance.push_str(&cap.temporary_menu);
+        // Call-scoped notes (menu, mode, publish guidance) follow the history as one message
+        // for this call only, so the cached instructions and history stay unchanged.
+        let mut input = history.to_vec();
+        let mut extra_json_bytes = 0;
+        if !native.is_empty() {
+            let note = json!({"role":profile.instruction_role.as_str(),"content":native});
+            extra_json_bytes = serde_json::to_vec(&note)?.len() + 1;
+            input.push(note);
+        }
         Ok(Working {
             instructions: cap.main.clone(),
             guidance,
-            input: history.to_vec(),
+            input,
             schemas,
-            extra_json_bytes: 0,
-            contributions_projected: false,
+            extra_json_bytes,
+            contributions_projected: true,
         })
     }
 }
