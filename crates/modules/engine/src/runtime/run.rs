@@ -155,6 +155,16 @@ fn attach_review_request(run: &mut Value, tool: &str, request: &str) -> bool {
     true
 }
 
+/// Remove the call-scoped note (system/developer messages with no item type) that ends a
+/// projected request, before a fork or closing message is appended in its place.
+fn drop_call_note(input: &mut Vec<Value>) {
+    while input.last().is_some_and(|item| {
+        item.get("type").is_none() && matches!(item["role"].as_str(), Some("system" | "developer"))
+    }) {
+        input.pop();
+    }
+}
+
 pub fn model_turn(run: &Value) -> u64 {
     run["model_turn"]
         .as_u64()
@@ -497,6 +507,19 @@ mod history_journal_tests {
         assert!(skills_in_history(&other).is_empty());
     }
     #[test]
+    fn call_note_is_dropped_before_a_fork_or_closing_message() {
+        let mut input = vec![
+            json!({"role":"user","content":"hi"}),
+            json!({"type":"function_call_output","call_id":"a","output":"x"}),
+            json!({"role":"system","content":"publish guidance"}),
+        ];
+        drop_call_note(&mut input);
+        assert_eq!(input.len(), 2);
+        // Nothing else is removed: a history ending in a result or user message stays.
+        drop_call_note(&mut input);
+        assert_eq!(input.len(), 2);
+    }
+    #[test]
     fn review_request_rides_on_the_newest_result_of_the_failed_tool() {
         let call = |id: &str, name: &str| json!({"type":"function_call","call_id":id,"name":name});
         let out = |id: &str| {
@@ -725,6 +748,9 @@ impl<
                 <= request.ceiling;
         let (selection, input, tools, instructions, effort, token_run) = if same_model {
             let mut input = request.input.to_vec();
+            // The call's own note ends the request; the summary prompt replaces it, so a
+            // bridge fork sees the same history its session recorded.
+            drop_call_note(&mut input);
             // The summary must not keep skill bodies; selectors re-place them afterwards.
             context_compaction::omit_skill_bodies(&mut input);
             input.push(json!({"role":"user","content":message}));
@@ -3575,6 +3601,9 @@ impl<
                         &settings,
                         run["closing_turn"]["error"].as_str(),
                     );
+                    // The closer replaces the call's note, so the history before it stays the
+                    // final request's (bridges compare that prefix).
+                    drop_call_note(&mut projected_input);
                     projected_input.push(json!({"role":"user","content":message}));
                 }
                 if let Some((plan, message, reason, focus)) = background_plan {
