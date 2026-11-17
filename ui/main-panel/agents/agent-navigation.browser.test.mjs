@@ -21,6 +21,7 @@ const configPage={id:'config',panelId:'config-page'},sessionsDescriptor={id:'ses
 const agentPages=['model','identity','abilities','members','artifacts'].map(id=>({id,panelId:id+'-page',operator:id!=='artifacts'})),agentTabOrder=['config','model','identity','abilities','members'];
 const accountMe={is_admin:false},activeMainPage='agents',api=async()=>({}),chat={sessionId:'keep'};
 let explicitAssignment=false;
+const holdTabScroll=()=>()=>{};
 const note=text=>{if(text)window.fixture.errors.push(text);};
 const guard=fn=>async event=>{event?.preventDefault();try{await fn(event);note('');}catch(error){note(error.message);}};
 const renderIdentity=async(host,request,{agentId})=>{fixture.identityRenders.push(agentId);host.replaceChildren();await new Promise(r=>setTimeout(r,10));const name=document.createElement('p');name.textContent='Identity '+agentId;host.append(name);};

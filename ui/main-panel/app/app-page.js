@@ -10,7 +10,7 @@ import { mountAppSettings } from './pages/settings/page.js';
 import { mountFunctions } from './pages/functions/page.js';
 import { mountModules } from './pages/modules/page.js';
 import { mountAppModels } from './pages/models/page.js';
-import { wirePageTabCarousel, wirePageTabDrag } from '../../shared/page-tabs.js';
+import { holdTabScroll, wirePageTabCarousel, wirePageTabDrag } from '../../shared/page-tabs.js';
 import { startView as startFiles, stopView as stopFiles, resetExplorerForRemount } from './pages/files/page.js';
 
 export async function start(mount) {
@@ -116,6 +116,7 @@ export async function start(mount) {
     }
   }
   function show(id, route = true) {
+    const restoreScroll=holdTabScroll(strip.closest('.agent-card'));
     selected=id;
     for (const page of all) {
       mount.querySelector('#'+page.panelId).hidden=page.id!==id;
@@ -128,6 +129,8 @@ export async function start(mount) {
     }
     if (route) { const url=new URL(location.href);url.searchParams.set('appView',id);if(url.href!==location.href)history.pushState({},'',url); }
     ensurePanel(id);
+    restoreScroll(false);
+    void Promise.resolve(panelMounts.get(id)).finally(()=>restoreScroll());
     if (id==='files') void ensureFiles(); else if (filesMounted) stopFiles();
   }
   function sync() {

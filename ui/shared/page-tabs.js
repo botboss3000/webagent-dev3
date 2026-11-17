@@ -38,6 +38,29 @@ export function wirePageTabCarousel(strip) {
   requestAnimationFrame(update);
 }
 
+// Switching subpages swaps the panel below the sticky tab header, and a new page
+// is short or empty until it renders, which would clamp #main-panel's scroll.
+// Keep the header where it was: pinned stays pinned with the new page at its top,
+// otherwise the offset is kept. Call the result once panels are swapped
+// (restore(false)) and again when the new page has rendered (restore()).
+export function holdTabScroll(card) {
+  const scroller = card?.closest('#main-panel'), panel = card?.nextElementSibling;
+  if (!scroller || !panel || !card.offsetParent) return () => {};
+  const top = scroller.scrollTop;
+  // The panel follows the header in flow, so its top gives the header's unpinned offset.
+  const pinAt = panel.getBoundingClientRect().top - scroller.getBoundingClientRect().top + top - card.offsetHeight;
+  const pinned = top > 0 && top >= pinAt - 1;
+  panel.style.minHeight = scroller.clientHeight + 'px';
+  return (done = true) => {
+    scroller.scrollTop = pinned ? Math.max(0, pinAt) : top;
+    if (!done) return;
+    // A viewport-tall panel keeps the pinned position reachable on short pages;
+    // fill layouts (File Manager) do not scroll the panel at all.
+    panel.style.minHeight = getComputedStyle(scroller).overflowY === 'hidden' ? '' : Math.max(0, scroller.clientHeight - card.offsetHeight) + 'px';
+    scroller.scrollTop = pinned ? Math.max(0, pinAt) : top;
+  };
+}
+
 // Shared Agents/App interaction: a 500ms hold arms reorder; a short tap navigates.
 export function wirePageTabDrag(strip, { getOrder, save, prefix }) {
   let press = null, suppress = false;

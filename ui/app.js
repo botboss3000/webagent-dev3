@@ -11,7 +11,7 @@ privateReveal.onclick=()=>{privateHost.hidden=false;privateReveal.hidden=true;pr
 function privateVisible(visible){document.body.classList.toggle('app-restricted',visible);document.getElementById('app-restricted-overlay').setAttribute('aria-hidden',String(!visible));privateHost.hidden=true;privateReveal.hidden=false;privateReveal.setAttribute('aria-expanded','false');}
 import { initHeaderCarousel } from './shared/header-carousel.js';
 initHeaderCarousel();
-import { wirePageTabCarousel, wirePageTabDrag } from './shared/page-tabs.js';
+import { holdTabScroll, wirePageTabCarousel, wirePageTabDrag } from './shared/page-tabs.js';
 import { purgeAllBrowserData } from './browser-data-reset.js';
 import { showNotification } from './chat/core/chat-action-panel.js';
 import { createFloatingChat,createChatLauncher } from './chat/widget/window.js';
@@ -428,6 +428,10 @@ async function showAgentView(view,routeMode='push'){
   if(sessionsScope){await showSessions(routeMode);return;}
   if(createScope){await showCreateAgent(routeMode);return;}
   disposeSessionsPage();$('sessions-region').hidden=true;$('create-region').hidden=true;
+  const restoreScroll=holdTabScroll(document.querySelector('#agents-detail-region .agent-card.active'));
+  try{await renderAgentView(view,routeMode,restoreScroll);}finally{restoreScroll();}
+}
+async function renderAgentView(view,routeMode,restoreScroll){
   const pages=[configPage,...agentPages];
   const canManage=agentRoster.find(agent=>agent.id===agentId)?.can_manage===true;
   // Operator pages (catalog "operator": true) stay hidden from members and visitors.
@@ -445,6 +449,7 @@ async function showAgentView(view,routeMode='push'){
   const route=new URL(location.href);
   route.searchParams.set('agentView',selected);
   if(route.href!==location.href)history[routeMode==='replace'?'replaceState':'pushState']({},'',route);
+  restoreScroll(false);
   if(selected==='identity')await renderIdentity($('identity-page'),api,{agentId,onSaved:agent=>{const saved=agentRoster.find(item=>item.id===agentId);if(saved)saved.name=agent.name;renderAgentCards();}});
   if(selected==='abilities')await renderAbilities($('abilities-page'),api,{agentId});
   if(selected==='members')await renderMembers($('members-page'),api,{agentId});
