@@ -706,9 +706,12 @@ impl<
             // The call's own note ends the request; the summary prompt replaces it, so a
             // bridge fork sees the same history its session recorded.
             drop_call_note(&mut input);
-            // The summary must not keep skill bodies; selectors re-place them afterwards.
-            context_compaction::omit_skill_bodies(&mut input);
-            input.push(json!({"role":"user","content":message}));
+            // The history stays exactly as the chat sent it (a changed prefix loses the provider's
+            // cache and a bridge refuses to fork it); the request says what to leave out instead.
+            input.push(json!({"role":"user","content":format!(
+                "{message}\n\nDo not copy loaded skill texts, Main Notes updates or execution mode \
+                 guidance into the summary: they are restored after compaction."
+            )}));
             (
                 request.selection.clone(),
                 input,

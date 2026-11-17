@@ -1056,8 +1056,17 @@ def opencode_turn(command, prompt, work, model):
         if recorded or not any(text in str(error) or isinstance(error, BrokenPipeError) and text == "Broken pipe"
                                for text in DROPPED):
             raise
-        print(f"opencode dropped its connection ({str(error)[:120]}); retrying once", file=sys.stderr)
-        time.sleep(2)
+        print(f"opencode dropped its connection ({str(error)[:120]}); restarting its server and retrying once",
+              file=sys.stderr)
+        # The server process can stay alive with its connection gone, so it is replaced, not reused.
+        if "--server" in command:
+            at = command.index("--server") + 1
+            with SERVERS_LOCK:
+                for key, server in list(SERVERS.items()):
+                    if server["url"] == command[at]:
+                        server["handle"].stop()
+                        del SERVERS[key]
+            command = command[:at] + [opencode_server(work, model)] + command[at + 1:]
         return opencode_turn_once(command, prompt, work, model)
 
 
