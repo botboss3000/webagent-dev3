@@ -26,6 +26,10 @@ try{
    const {renderIdentity}=await import('/ui/main-panel/agents/pages/identity/page.js');
    const {vibrationConfigReady}=await import('/ui/shared/vibrate.js');await vibrationConfigReady;
    window.pulses=[];Object.defineProperty(navigator,'vibrate',{configurable:true,value:n=>{pulses.push(n);return true;}});
+   // app.js answers a back press through consumeBack; the fixture stands in for that listener.
+   const {consumeBack}=await import('/ui/shared/history-back.js');
+   window.__unclaimed=0;window.__alive=true;
+   window.addEventListener('popstate',()=>{if(!consumeBack())window.__unclaimed+=1;});
    const agent={name:'Fixture',description:'',revision:3,can_manage:true,member_access:{visitor_access:false,app_login_members:true,conversation_privacy:'operator_reviewable'},capability_levels:{revision:0,order:['operator','member','visitor'],levels:Object.fromEntries([['operator','Operator'],['member','Member'],['visitor','Visitor']].map(([id,name])=>[id,{id,name,revision:1,ability_permissions:{},tool_permissions:{},ability_exposure:{},tool_exposure:{},skill_exposure:{}}]))},default_execution_mode:'ask',execution_modes:[{id:'ask',label:'Ask',description:'Ask first',prompt:'Ask prompt',builtin:true},{id:'auto',label:'Auto',description:'Act',prompt:'Auto prompt',builtin:true}],shared_chat:{shareable:false,admin_view:false,admin_join:false,help:false,initial_active:true},compaction_thresholds:{trigger_tokens:150000,tail_tokens:40000},compaction_defaults:{trigger_tokens:150000,tail_tokens:40000},manager_incoming_message:{enabled:false,criteria:''},message_visibility:{mode:'manual',guidance:'Saved guidance',fixed_protocol:'Fixed protocol'},closing_message:{notification_guidance:'Saved closing'},closing_protocol:{flags:['complete'],notification_target_words:5},voice_output:{enabled:false,voice:'af_heart'},voice_catalog:[{id:'af_heart',name:'Heart',group:'English'}]};
    const widget={revision:5,config:{enabled:false,guest_access:false,allowed_origins:['https://example.com']}};
    window.fixture={agent,widget,writes:[],fail:false};
@@ -62,6 +66,12 @@ try{
   }
   assert.equal(await page.evaluate(()=>fixture.writes.length),0);
   assert.equal(await page.locator('.sr-toggle-slot .conn-toggle-wrap').count(),0);
+  // Only a phone claims the back press; a desktop open leaves the page's history alone.
+  if(!touch){
+   await openRow('Chat modes');
+   assert.equal(await page.evaluate(()=>Boolean(history.state&&history.state.webagentBack)),false);
+   await backToList();
+  }
   await openRow('Review incoming messages');
   const reviewPanel=page.locator('.sr-detail-body');
   await page.locator('.sr-toggle-slot .conn-toggle-wrap').click();
@@ -118,6 +128,13 @@ try{
    await page.locator('.sr-back').tap();
    await page.waitForFunction(()=>document.querySelector('.sr-detail').hidden&&!document.querySelector('.sr-menu').hidden);
    assert.equal(await page.evaluate(()=>pulses.length),before+2);
+   // The phone's back press returns to the list instead of leaving the page.
+   await openRow('Chat modes');
+   assert.equal(await page.evaluate(()=>Boolean(history.state&&history.state.webagentBack)),true);
+   await page.evaluate(()=>history.back());
+   await page.waitForFunction(()=>document.querySelector('.sr-detail').hidden&&!document.querySelector('.sr-menu').hidden);
+   assert.equal(await page.evaluate(()=>window.__alive===true),true);
+   assert.equal(await page.evaluate(()=>window.__unclaimed),0);
   }
   await openRow('Member access');
   await page.getByLabel('Member messages per 24 hours',{exact:true}).fill('5');await page.getByRole('button',{name:'Save limits'}).first().click();
@@ -181,6 +198,8 @@ try{
   await openRow('Member access');assert.equal(await page.getByLabel('Conversation privacy',{exact:true}).isDisabled(),true);assert.equal(await page.getByRole('radio',{name:/^Authorized/}).isDisabled(),true);await toList();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   if(touch)assert.equal(await page.evaluate(()=>innerWidth===390&&matchMedia('(pointer: coarse)').matches),true);
+  // A back press the phone did not claim would have reloaded the page instead.
+  if(touch)assert.equal(await page.evaluate(()=>window.__unclaimed),0);
   assert.deepEqual(errors,[]);await context.close();
  }
  console.log('Identity settings register: thirteen categories, one panel at a time, focus returns to the row, touch pulse per tap, review validation focus, explicit saves, revision fences, shared policy, modes, promotion, closing, remount persistence, read-only, both themes.');

@@ -12,6 +12,7 @@ function privateVisible(visible){document.body.classList.toggle('app-restricted'
 import { initHeaderCarousel } from './shared/header-carousel.js';
 initHeaderCarousel();
 import { holdTabScroll, wirePageTabCarousel, wirePageTabDrag } from './shared/page-tabs.js';
+import { consumeBack } from './shared/history-back.js';
 import { purgeAllBrowserData } from './browser-data-reset.js';
 import { showNotification } from './chat/core/chat-action-panel.js';
 import { createFloatingChat,createChatLauncher } from './chat/widget/window.js';
@@ -937,7 +938,8 @@ $('mobile-back-main-btn').onclick=()=>showMainPage(activeMainPage);
 document.addEventListener('click',event=>{if(!mobileNav.hidden&&!event.target.closest('#mobile-nav-menu, #mobile-nav-toggle, #user-dropdown-menu'))closeMobileNav();});
 document.addEventListener('keydown',event=>{if(event.key==='Escape')closeMobileNav();});
 mobileLayout.addEventListener('change',syncLayout);syncLayout();
-window.addEventListener('popstate',()=>location.reload());
+// An open in-place page claims the first back press; anything else reloads to match the URL.
+window.addEventListener('popstate',()=>{if(!consumeBack())location.reload();});
 $('chat-float-btn').onclick=()=>{widget.float();syncLayout();};
 // The chat toggle also mounts the panel and runs the deferred open before switching views.
 $('chat-toggle-btn').onclick=()=>{if(widget.floating){widget.open();syncLayout();return;}if(mobileLayout.matches){void ensureChat().then(()=>{showMobileView('chat');void openChatSurface().catch(error=>note(error.message));},error=>note(error.message));}else{desktopChatVisible=!desktopChatVisible;syncLayout();if(desktopChatVisible)void openChatSurface().catch(error=>note(error.message));}};

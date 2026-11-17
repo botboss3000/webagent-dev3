@@ -1,4 +1,5 @@
 import {requestTouchVibration} from './vibrate.js';
+import {pushBackHandler} from './history-back.js';
 
 const FALLBACK_ICON = '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/>';
 const CHEV_BACK = '<svg class="sr-chev-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>';
@@ -124,6 +125,14 @@ export function createSettingsRegister(host, {label = 'Settings', categories = [
   const pages = new Map();
   let currentId = null;
   let animating = false;
+  let releaseBack = null;
+  /* The phone's back button returns to the list instead of leaving the page. */
+  const handleBack = () => {
+    if (detail.hidden || !shell.getClientRects().length) return false;
+    releaseBack = null;
+    close({align: true});
+    return true;
+  };
 
   const api = {stage, open, close, present};
   stage.__settingsRegister = api;
@@ -229,6 +238,8 @@ export function createSettingsRegister(host, {label = 'Settings', categories = [
     detail.classList.add('is-in-right');
     void detail.offsetWidth;
     if (align) alignPageTop();
+    // On a phone the back press returns to the list here instead of reloading the page.
+    if (!releaseBack && window.matchMedia?.('(max-width: 800px)').matches) releaseBack = pushBackHandler(handleBack);
     requestAnimationFrame(() => detail.classList.remove('is-in-right'));
     setTimeout(() => {
       menu.hidden = true;
@@ -240,6 +251,8 @@ export function createSettingsRegister(host, {label = 'Settings', categories = [
 
   function close({align = false} = {}) {
     if (animating || detail.hidden) return;
+    // The list is back, so the history entry this page claimed is no longer needed.
+    if (releaseBack) { const release = releaseBack; releaseBack = null; release(); }
     animating = true;
     detail.classList.add('is-out-right');
     menu.hidden = false;
