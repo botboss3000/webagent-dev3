@@ -776,16 +776,18 @@ mod main_chat {
                 && whole.contains("[entry trip] (open) Book the cabin | progress: Dates chosen")
         );
         assert!(whole.find("## Goal").unwrap() < whole.find("## Plans").unwrap());
-        assert!(whole.contains("Untrusted notes"));
+        assert!(whole.contains("across its sessions"));
         // Session a sees only b's change; b sees only a's; nothing after the latest version.
         let for_a = render_updates(&state, 0, "a");
         assert_eq!(for_a.len(), 1);
         assert_eq!(for_a[0].0, 2);
-        assert!(for_a[0].1.contains("+ [entry trip] (open) Book the cabin"));
+        assert!(for_a[0]
+            .1
+            .contains("Added: Book the cabin | progress: Dates chosen"));
         assert!(!for_a[0].1.contains("Review the blocker"));
         assert!(render_updates(&state, 0, "b")[0]
             .1
-            .contains("+ [entry next] (open) Review the blocker"));
+            .contains("Added: Review the blocker"));
         assert!(render_updates(&state, 2, "a").is_empty());
         // An edit from another session arrives as a diff: the old line, then the new one.
         c.entry.text = "Review the second blocker".into();
@@ -798,22 +800,30 @@ mod main_chat {
             vec![3, 4]
         );
         assert!(
-            updates[0].1.contains("version 3")
-                && updates[0]
-                    .1
-                    .contains("- [entry next] (open) Review the blocker")
-                && updates[0]
-                    .1
-                    .contains("+ [entry next] (open) Review the second blocker")
+            updates[0].1.contains("(v3)")
+                && updates[0].1.contains("Removed: Review the blocker")
+                && updates[0].1.contains("Added: Review the second blocker")
         );
         assert!(
             updates[1]
                 .1
-                .contains("- [entry next] (open) Review the second blocker")
+                .contains("Removed: Review the second blocker\n")
                 && updates[1]
                     .1
-                    .contains("+ [entry next] (done) Review the second blocker")
+                    .contains("Added: Review the second blocker (done)")
         );
+        assert!(updates[0]
+            .1
+            .starts_with("Main notes update from another session (v3):\n## "));
+        // Deleting a topic reaches other sessions as removed lines.
+        state["topics"]["plans"]["entries"]["next"]["timing"] = serde_json::Value::Null;
+        let topic = target(&state, &c);
+        delete_topic(&mut state, &topic).unwrap();
+        let deleted = render_updates(&state, 4, "a");
+        assert_eq!(deleted.len(), 1);
+        assert!(deleted[0]
+            .1
+            .contains("Removed: Review the second blocker (done)"));
     }
 
     #[test]

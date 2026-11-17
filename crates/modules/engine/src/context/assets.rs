@@ -237,10 +237,15 @@ impl<
         let shown = latest_mode_revision(history);
         if shown != Some(revision) {
             let id = mode["definition"]["id"].as_str().unwrap_or("ask");
-            let reason = match shown {
-                Some(_) => "The user changed the execution mode; you did not call this.",
-                None if revision == 0 => "The session's starting execution mode.",
-                None => "The session's current execution mode.",
+            let (changed_by, reason) = match shown {
+                Some(_) => (
+                    "user",
+                    "The user changed the execution mode; you did not call this.",
+                ),
+                None if revision == 0 => {
+                    ("session_start", "The session's starting execution mode.")
+                }
+                None => ("session", "The session's current execution mode."),
             };
             let mut output =
                 json!({"status":"success","mode":id,"revision":revision,"reason":reason});
@@ -254,7 +259,7 @@ impl<
             let call_id = format!("set_execution_mode-{}", uuid::Uuid::new_v4());
             rows.push(
                 json!({"type":"function_call","call_id":call_id,"name":"set_execution_mode",
-                "arguments":json!({"mode":id}).to_string()}),
+                "arguments":json!({"mode":id,"changed_by":changed_by}).to_string()}),
             );
             rows.push(json!({"type":"function_call_output","call_id":call_id,"output":output.to_string()}));
         }

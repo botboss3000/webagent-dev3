@@ -515,7 +515,7 @@ mod tests {
         let (sections, updates) = defs("s1", "b1").await;
         assert!(sections.is_empty());
         assert_eq!(updates.len(), 1);
-        assert!(updates[0].contains("+ [entry next] (open) Review the blocker"));
+        assert!(updates[0].contains("Added: Review the blocker"));
         assert!(defs("s1", "b1").await.1.is_empty());
         // The session's own write adds nothing.
         let mut own = c.clone();
