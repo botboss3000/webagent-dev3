@@ -3,6 +3,7 @@
 import {_refreshLucideIcons} from '../../core/presentation.js';
 import {toolFailure} from '../../core/activity.js';
 import {lineCount} from '../mini-transcript/rows.js';
+import {pushBackHandler} from '../../../shared/history-back.js';
 /** Compact group label: nonzero counts, any extra parts (such as sub-agent notices), then status. */
 export function activityLabel(group,{error='',extra=[]}={}) {
     // Summarize nonzero category counts without changing the underlying journal rows.
@@ -172,7 +173,17 @@ export function createActivityGroup({transcript}) {
   const diffs=document.createElement('div');diffs.className='tc-diffs';diffs.hidden=true;
   node.append(summary,transcript.element,diffs);
   // Native details supplies pointer and keyboard disclosure semantics.
-  const toggle=()=>{node.open?transcript.open():(transcript.close(),popAnchor && diffs.contains(popAnchor) && hidePop());};
+  // An open group claims the back press, so back collapses it before it leaves the chat.
+  let groupBack=null;
+  const toggle=()=>{
+    if(node.open){
+      if(!groupBack)groupBack=pushBackHandler(()=>{groupBack=null;if(!node.isConnected)return false;node.open=false;return true;});
+      transcript.open();
+      return;
+    }
+    const release=groupBack;groupBack=null;release?.();
+    transcript.close();popAnchor && diffs.contains(popAnchor) && hidePop();
+  };
   node.addEventListener('toggle',toggle);
   // Refresh counts/status without replacing the focused summary or open transcript.
   function update(group,{error='',active=false}={}) {

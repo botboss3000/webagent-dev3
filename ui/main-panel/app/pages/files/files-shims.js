@@ -1,7 +1,10 @@
 'use strict';
 
+import { pushBackHandler } from '../../../../../shared/history-back.js';
+
 let menu = null;
 let cleanup = null;
+let releaseBack = null;
 
 export function authHeaders() {
   const token = window.__v3FilesCsrf || '';
@@ -20,7 +23,9 @@ export async function copyText(value) {
 export function _refreshLucideIcons() {
   window.lucide?.createIcons?.();
 }
-export function closeFloatingMenu() {
+/** Closes the menu; keepBack leaves the back press claimed when the same menu is only repainted. */
+export function closeFloatingMenu(keepBack = false) {
+  if (!keepBack && releaseBack) { const release = releaseBack; releaseBack = null; release(); }
   cleanup?.();
   cleanup = null;
   menu?.remove();
@@ -30,7 +35,10 @@ function onMenuKey(event) {
   if (event.key === 'Escape') closeFloatingMenu();
 }
 export function openFloatingMenu(items, top, left) {
-  closeFloatingMenu();
+  // A repaint replaces the same menu, so the claim it already holds carries over.
+  const claimed = Boolean(releaseBack);
+  closeFloatingMenu(true);
+  if (!claimed) releaseBack = pushBackHandler(() => { closeFloatingMenu(); return true; });
   const host = document.createElement('div');
   host.className = 'files-tab-menu';
   host.id = 'files-floating-menu';

@@ -1,4 +1,7 @@
 'use strict';
+
+import { pushBackHandler } from '../../shared/history-back.js';
+
 // Shared full-screen image viewer for composer attachment tiles and published
 // message attachments. A click is delegated per root so tiles opened from any
 // re-render still work. The dialog mounts in the browser's top layer and carries
@@ -43,6 +46,8 @@ export function closeChatImagePreview() {
   const state = _activePreview;
   if (!state) return;
   _activePreview = null;
+  // The viewer is gone, so the back press it claimed returns to the chat.
+  state.releaseBack?.();
   state.pointers.clear();
   document.removeEventListener('keydown', state.onKeyDown);
   if (state.backdrop.open) state.backdrop.close();
@@ -341,6 +346,8 @@ export function openChatImageGallery(items, startIndex = 0, returnFocus = null) 
   backdrop.showModal();
 
   _activePreview = state;
+  // Back closes the viewer before it leaves the chat.
+  state.releaseBack = pushBackHandler(() => { closeChatImagePreview(); return true; });
   state.onKeyDown = onKeyDown;
   document.addEventListener('keydown', onKeyDown);
   // Escape is the dialog's native cancel; prevent it so closeChatImagePreview owns focus return.

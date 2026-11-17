@@ -6,15 +6,20 @@
 // Shows a cloned chat element in an accessible modal dialog Trigger config: ui/chat/chat.json -> chat_common.message_gutters.user.controls.full_view and…
 
 import { _refreshLucideIcons } from './presentation.js';
+import { pushBackHandler } from '../../shared/history-back.js';
 
 let _activeFullView = null;
 let _viewerId = 0;
+
+let _releaseBack = null;
 
 /** Closes the singleton viewer, removes its Escape listener/backdrop, and restores focus when possible. */
 export function closeChatElementFullView() {
   const state = _activeFullView;
   if (!state) return;
   _activeFullView = null;
+  // The viewer is gone, so the back press it claimed returns to the page.
+  if (_releaseBack) { const release = _releaseBack; _releaseBack = null; release(); }
   document.removeEventListener('keydown', state.onKeyDown);
   state.backdrop.remove();
   if (state.returnFocus?.isConnected) state.returnFocus.focus();
@@ -59,6 +64,8 @@ export function openChatElementFullView(source, returnFocus, title = 'Full view'
     if (event.key === 'Escape') closeChatElementFullView();
   };
   _activeFullView = { backdrop, returnFocus, onKeyDown };
+  // Back closes the viewer before it leaves the page.
+  _releaseBack = pushBackHandler(() => { closeChatElementFullView(); return true; });
   document.addEventListener('keydown', onKeyDown);
   close.addEventListener('click', closeChatElementFullView);
   backdrop.addEventListener('click', (event) => {

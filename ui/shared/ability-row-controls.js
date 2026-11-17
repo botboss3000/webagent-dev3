@@ -4,6 +4,7 @@
 // Credential and tool-editor workflows remain unported; callers do not enable their options.
 import { _markSaving, _flashSaveCheck } from './models/dom-utils.js';
 import {requestTouchVibration} from './vibrate.js';
+import {pushBackHandler} from './history-back.js';
 const _noop = () => {};
 function _moreDotsSvg() {
   return '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>';
@@ -592,15 +593,21 @@ const _EYE_OFF_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none
 const _DOWNLOAD_SVG = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg>';
 
 let floatingMenuCleanup = null;
+let releaseBack = null;
 
-export function closeFloatingMenu() {
+/** Closes the row menu; keepBack leaves the back press claimed when the same menu is only repainted. */
+export function closeFloatingMenu(keepBack = false) {
+  if (!keepBack && releaseBack) { const release = releaseBack; releaseBack = null; release(); }
   if (floatingMenuCleanup) { floatingMenuCleanup(); floatingMenuCleanup = null; }
   const m = document.getElementById('files-floating-menu');
   if (m) m.remove();
 }
 
 export function openFloatingMenu(items, top, left, owner = null) {
-  closeFloatingMenu();
+  // A repaint replaces the same menu, so the claim it already holds carries over.
+  const claimed = Boolean(releaseBack);
+  closeFloatingMenu(true);
+  if (!claimed) releaseBack = pushBackHandler(() => { closeFloatingMenu(); return true; });
 
   const menu = document.createElement('div');
   menu.className = 'files-tab-menu';
