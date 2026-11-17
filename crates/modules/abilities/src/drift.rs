@@ -367,7 +367,7 @@ fn ignored(name: &str) -> bool {
 fn in_tool_folder(path: &str) -> Option<&str> {
     let rest = path.strip_prefix("tools/")?;
     let (tool, _) = rest.split_once('/')?;
-    Some(tool)
+    (tool != crate::tool_definitions::SHARED_FOLDER).then_some(tool)
 }
 
 fn tool_folders(files: &BTreeMap<String, Vec<u8>>) -> BTreeSet<String> {

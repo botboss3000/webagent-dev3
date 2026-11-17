@@ -1530,9 +1530,9 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 if path.is_symlink()or not path.is_file()or path.stat().st_size>16*1024*1024:raise ValueError("Invalid build input")
                 inputs[name]=hashlib.sha256(path.read_bytes()).hexdigest()
             for source in package.rglob("*.rs"):
-                # native/ is the ability's in-app tool code (compiled into the engine); only
-                # declared inputs are copied into the plugin builder, so it never compiles here.
-                if source.relative_to(package).parts[0]=="native":continue
+                # native/, tools/ and tests/ hold the ability's in-app tool code and tests (compiled
+                # into the engine); only declared inputs enter the plugin builder, so they never compile here.
+                if source.relative_to(package).parts[0]in("native","tools","tests"):continue
                 if str(source.relative_to(package))not in inputs:raise ValueError("Undeclared Rust source")
                 text=source.read_text()
                 for match in re.finditer(r"include(?:_str|_bytes)?!\s*\(\s*([^)]+)\)",text):

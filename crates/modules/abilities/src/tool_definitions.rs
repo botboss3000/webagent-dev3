@@ -216,6 +216,9 @@ impl ToolDefinition {
     }
 }
 
+/// `tools/shared/` holds Rust code the ability's tools share; it is never a tool folder.
+pub const SHARED_FOLDER: &str = "shared";
+
 /// A tool folder's definition file name: `<tool>.tool.json`.
 pub fn definition_file(name: &str) -> String {
     format!("{name}.tool.json")
@@ -258,7 +261,9 @@ pub fn read_folder(ability: &Path) -> Result<Option<Vec<FolderTool>>> {
         let entry = entry?;
         let kind = entry.file_type()?;
         if kind.is_dir() {
-            folders.push(entry.path());
+            if entry.file_name() != SHARED_FOLDER {
+                folders.push(entry.path());
+            }
         } else if kind.is_file() {
             flat = true;
         } else {
@@ -291,6 +296,7 @@ pub fn folder_names(ability: &Path) -> Option<Vec<String>> {
         .ok()?
         .flatten()
         .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter(|entry| entry.file_name() != SHARED_FOLDER)
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
         .collect();
     names.sort();
@@ -455,6 +461,23 @@ mod tests {
         json!({"name":name,"description":"Look something up","effect":"read",
             "parameters":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"],"additionalProperties":false},
             "default_policy":{"operator":"allow","member":"require_approval"}})
+    }
+
+    #[test]
+    fn shared_code_and_rust_files_are_not_tools() {
+        let root = tempfile::tempdir().unwrap();
+        let ability = root.path().join("Web/lookup");
+        write(&ability, "lookup", &body("lookup"));
+        fs::write(ability.join("tools/lookup/lookup.rs"), "pub fn run() {}").unwrap();
+        fs::create_dir_all(ability.join("tools/shared")).unwrap();
+        fs::write(ability.join("tools/shared/store.rs"), "pub fn open() {}").unwrap();
+        let tools = read_folder(&ability).unwrap().unwrap();
+        assert_eq!(
+            tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            ["lookup"]
+        );
+        assert!(tools[0].definition.is_ok());
+        assert_eq!(folder_names(&ability).unwrap(), ["lookup"]);
     }
 
     #[test]
