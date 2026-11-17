@@ -51,10 +51,17 @@ pub struct Config {
     /// Who writes summaries: the running model (cache-friendly fork) or the System role.
     #[serde(default)]
     pub summarizer: Summarizer,
+    /// Failed bridge forks in a row before the next summary starts a new session with the
+    /// selected model instead (it cannot fail on a history mismatch, but reuses no cache).
+    #[serde(default = "default_fork_attempts")]
+    pub fork_attempts: u64,
     /// Call-scoped measured serialized bytes per provider token (the model's calibrated
     /// ratio). Thresholds stay in provider tokens; absent uses `characters_per_token`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytes_per_token: Option<f64>,
+}
+fn default_fork_attempts() -> u64 {
+    3
 }
 /// Who writes a summary. `SameModel` forks the running request so its cached prefix is
 /// reused; providers that cannot fork fall back to the System role.
@@ -98,6 +105,7 @@ impl Config {
     /// Summary prefixes remain fixed provenance markers, not user-editable instructions.
     pub fn validate(&self) -> Result<()> {
         if self.schema_version != 1
+            || !(1..=20).contains(&self.fork_attempts)
             || self.tail_tokens == 0
             || self.summary_tokens == 0
             || self

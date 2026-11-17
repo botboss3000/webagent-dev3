@@ -6634,6 +6634,8 @@ async fn rolling_compaction_uses_explicit_system_model_and_persists_checkpoint()
     config.ceiling_tokens = None;
     config.tail_tokens = 100;
     config.summary_tokens = 100;
+    // The explicit System model writes the summary: the setting picks that path.
+    config.summarizer = context_compaction::Summarizer::System;
     config.persist(&config_path).unwrap();
     let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
     let captured = requests.clone();

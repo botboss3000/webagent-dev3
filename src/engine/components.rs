@@ -109,6 +109,8 @@ mod lifecycle_tests {
                 config.tail_tokens = 50;
                 config.summary_tokens = 30;
                 config.summary_reserve_bytes = 300;
+                // This test covers the System fold's dispatch; the setting picks that path.
+                config.summarizer = context_compaction::Summarizer::System;
                 config.persist(&app.compaction_config_path).unwrap();
                 let mut history:Vec<Value>=(0..24).map(|index|json!({"role":if index%2==0{"user"}else{"assistant"},"content":"old".repeat(1400)})).collect();
                 history.push(json!({"role":"user","content":"latest"}));

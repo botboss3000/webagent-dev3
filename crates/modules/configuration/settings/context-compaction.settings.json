@@ -100,7 +100,7 @@
       ],
       "agent_pointer": "/compaction_thresholds/summarizer",
       "bounds": "validator",
-      "notes": "Claude and OpenCode bridges fork the chat's session when their client reports fork support; Muse, bridges without such a client and failed same-model summaries use System."
+      "notes": "Applies to the trigger, a requested fold, a retry and the hard limit alike. Claude and OpenCode bridges fork the chat's session when their client reports fork support; after fork_attempts failed forks in a row the selected model gets a new session instead. Muse and bridges without fork support use System."
     },
     {
       "id": "context.compaction.merge_tokens",
@@ -142,6 +142,26 @@
       "unit": "tokens",
       "min": 1,
       "max": 1000000,
+      "bounds": "validator"
+    },
+    {
+      "id": "context.compaction.fork_attempts",
+      "description": "How many failed bridge forks in a row a session allows before its next summary starts a new session with the selected model instead of forking.",
+      "type": "integer",
+      "pointer": "/fork_attempts",
+      "layers": [
+        "app"
+      ],
+      "examples": [
+        "stop retrying failed compaction forks sooner",
+        "try forking the session more times before giving up"
+      ],
+      "areas": [
+        "context",
+        "memory"
+      ],
+      "min": 1,
+      "max": 20,
       "bounds": "validator"
     }
   ],

@@ -695,29 +695,21 @@ impl<
             reason,
             focus,
         } = fold;
-        // When the System model is the chat's own model, its summary is a same-model summary:
-        // it forks the chat's (cached) session rather than starting a fresh one, also on the
-        // retry after a failed attempt.
-        let system_is_chat_model = system_dispatch_run(run)
-            .ok()
-            .and_then(|system| {
-                provider::ProviderSelection::parse(
-                    &system["provider_selection"],
-                    X::default_model(),
-                )
-                .ok()
-            })
-            .is_some_and(|system| {
-                system.provider == request.selection.provider
-                    && system.model == request.selection.model
-            });
-        let same_model = (config.summarizer == context_compaction::Summarizer::SameModel
-            || system_is_chat_model)
+        // The Identity page's summarizer setting decides, for the trigger, a requested fold, a
+        // retry and the hard limit alike: same model forks the chat's (cached) session.
+        // On a bridge, after `fork_attempts` failed forks in a row the selected model gets a
+        // new session with the summary request instead of another fork.
+        let forks_exhausted =
+            request.selection.provider.is_bridge() && request.fork_failures >= config.fork_attempts;
+        let same_model = config.summarizer == context_compaction::Summarizer::SameModel
+            && !forks_exhausted
             && (!request.selection.provider.is_bridge()
                 || request.selection.provider.bridge_forks())
-            && (!request.system_next || system_is_chat_model)
             && request.envelope_bytes + message.len() + config.token_bytes(config.summary_tokens)
                 <= request.ceiling;
+        let fresh_same_model = config.summarizer == context_compaction::Summarizer::SameModel
+            && !same_model
+            && forks_exhausted;
         let (selection, input, tools, instructions, effort, token_run) = if same_model {
             let mut input = request.input.to_vec();
             // The call's own note ends the request; the summary prompt replaces it, so a
@@ -738,13 +730,20 @@ impl<
                 run.clone(),
             )
         } else {
-            let Ok(system_run) = system_dispatch_run(run) else {
-                return Ok(());
+            // The selected model: System, or the chat's own model in a new session once its
+            // forks keep failing.
+            let (system_run, selection) = if fresh_same_model {
+                (run.clone(), request.selection.clone())
+            } else {
+                let Ok(system_run) = system_dispatch_run(run) else {
+                    return Ok(());
+                };
+                let selection = provider::ProviderSelection::parse(
+                    &system_run["provider_selection"],
+                    X::default_model(),
+                )?;
+                (system_run, selection)
             };
-            let selection = provider::ProviderSelection::parse(
-                &system_run["provider_selection"],
-                X::default_model(),
-            )?;
             let summary_source = app.dedup_summary_source(run, &plan.source).await?;
             let Ok(prompt) = config
                 .prompt_for(&plan, &summary_source)
@@ -776,7 +775,11 @@ impl<
         if !app.run_model_authorized(&token_run).await {
             return Ok(());
         }
-        let summarizer = if same_model { "self" } else { "system" };
+        let summarizer = if same_model || fresh_same_model {
+            "self"
+        } else {
+            "system"
+        };
         let bridge_fork = same_model && selection.provider.is_bridge();
         let step = format!(
             "compaction:{}:{}",
@@ -792,11 +795,13 @@ impl<
             format!("{step}:call"),
             json!({"type":"compaction_call","model":selection.model,"input_bytes":input_bytes,
                 "reason":reason,"focus":focus,"mode":"background","summarizer":summarizer,
+                "new_session":fresh_same_model,
                 "fork":bridge_fork}),
         );
         app.save(run).await?;
         let sid = request.sid.to_owned();
         let mut job = json!({"state":"running","plan":plan,"step":step,"summarizer":summarizer,
+            "fork":bridge_fork,"fork_failures":request.fork_failures,
             "reason":reason});
         app.store
             .put(&background_compaction::key(&sid), &job)
@@ -2708,7 +2713,17 @@ impl<
                 // beside the main call, so the main call assembles with the ceiling as its
                 // fold limit. The model's hard limit (`model_ceiling`) still bounds both.
                 let background = compaction_config.ceiling() > compaction_config.trigger_tokens;
-                let assembly_compaction = if background {
+                // HARD-LIMIT FORK: with the same-model setting, a history past the configured
+                // ceiling is summarized from a fork too. This pass assembles against the
+                // model's own limit, starts that summary and waits for it.
+                let hard_limit_fork = run["hard_limit_fork"] == "trying";
+                let assembly_compaction = if hard_limit_fork {
+                    let mut at_model = compaction_config.at_ceiling();
+                    let tokens = model_ceiling / compaction_config.token_bytes(1).max(1);
+                    at_model.trigger_tokens = tokens;
+                    at_model.ceiling_tokens = Some(tokens);
+                    context_compaction::Config(at_model)
+                } else if background {
                     context_compaction::Config(compaction_config.at_ceiling())
                 } else {
                     compaction_config.clone()
@@ -2750,7 +2765,11 @@ impl<
                             job["error"].as_str().unwrap_or("summary unavailable")
                         ));
                     }
-                    job = json!({"state":"idle","system_next":same_model});
+                    // A failed bridge fork counts toward `fork_attempts`; any other outcome
+                    // keeps the count as it was.
+                    let failures =
+                        job["fork_failures"].as_u64().unwrap_or(0) + u64::from(job["fork"] == true);
+                    job = json!({"state":"idle","system_next":same_model,"fork_failures":failures});
                     app.store.put(&job_key, &job).await?;
                 }
                 // BACKGROUND COMPACTION RESULT: history is append-only, so the plan made at
@@ -2910,8 +2929,22 @@ impl<
                         continue;
                     }
                 }
+                // With the same-model setting, the hard limit first tries a fork (next pass);
+                // past even the model's own limit, or when the fork could not start, the System
+                // fold below is the only way on.
+                if matches!(assembled, context_assembly::Prepared::Compact(_))
+                    && compaction_config.summarizer == context_compaction::Summarizer::SameModel
+                    && (!selection.provider.is_bridge() || selection.provider.bridge_forks())
+                    && run["hard_limit_fork"].is_null()
+                {
+                    drop(assembled);
+                    run["hard_limit_fork"] = json!("trying");
+                    app.save(&mut run).await?;
+                    continue;
+                }
                 // The assembler only plans; the loop owns summarization and persistence.
                 if let context_assembly::Prepared::Compact(plan) = assembled {
+                    run["hard_limit_fork"] = Value::Null;
                     if let Some(report) = assembly_diagnostic {
                         run["latest_context_assembly"] = report;
                     }
@@ -3375,7 +3408,7 @@ impl<
                         focus.as_deref(),
                     );
                     Some((plan, message, "requested", focus))
-                } else if background && job_free {
+                } else if (background || hard_limit_fork) && job_free {
                     let planned = context_compaction::plan_trigger(
                         envelope.input,
                         envelope.report.history_budget_bytes,
@@ -3557,7 +3590,7 @@ impl<
                         effort: core_effort.as_deref(),
                         envelope_bytes,
                         ceiling: model_ceiling,
-                        system_next: job["system_next"] == true,
+                        fork_failures: job["fork_failures"].as_u64().unwrap_or(0),
                     };
                     Self::start_background_compaction(
                         &app,
@@ -3574,6 +3607,24 @@ impl<
                         &cancel,
                     )
                     .await?;
+                }
+                // A hard-limit fork holds the main call until its summary is done; it applies
+                // on the next pass. When it did not start, the next pass uses the System fold.
+                if hard_limit_fork {
+                    run["hard_limit_fork"] = Value::Null;
+                    if let Some(mut finished) = background_compaction::running(&sid) {
+                        run["phase"] = json!("compacting");
+                        app.save(&mut run).await?;
+                        drop(_guard);
+                        tokio::select! {
+                            _ = cancel.cancelled() => return Ok(()),
+                            _ = finished.wait_for(|done| *done) => {}
+                        }
+                    } else {
+                        run["hard_limit_fork"] = json!("system");
+                        app.save(&mut run).await?;
+                    }
+                    continue;
                 }
                 // COMPACTION-ONLY RUN: `/compact` (or a Compact click) on an idle chat makes
                 // no model call. It waits for its summary, applies it on the next pass and
@@ -4218,7 +4269,8 @@ struct BackgroundRequest<'a> {
     effort: Option<&'a str>,
     envelope_bytes: usize,
     ceiling: usize,
-    system_next: bool,
+    /// Failed bridge forks in a row for this session (reset by a finished summary).
+    fork_failures: u64,
 }
 
 /// One background summary to start: its plan, the private message a same-model fork adds,

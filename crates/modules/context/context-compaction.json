@@ -18,5 +18,6 @@
   "summary_tokens": 4000,
   "tail_tokens": 40000,
   "tool_result_preview_bytes": 8192,
-  "trigger_tokens": 200000
+  "trigger_tokens": 200000,
+  "fork_attempts": 3
 }
