@@ -427,6 +427,8 @@ def post(path, body, timeout=60, url=None):
 
 # Harness processes by call id, so a Stop from WebAgent can interrupt the one running that call.
 RUNNING, STOPPED, CURRENT = {}, set(), threading.local()
+# Calls WebAgent no longer holds (its heartbeat answered 404): their failures are not reported.
+GONE = set()
 
 
 class HarnessFailure(RuntimeError):
@@ -625,6 +627,38 @@ def fork_delta(call):
     folder = SESSIONS / (call.get("session") or "unknown")
     state = load_state(folder)
     return folder, state, changes(folder, dict(state), call["body"], 0)
+
+
+def fork_plan(state, delta, body, session):
+    """Whether a fork call can be answered from a fork of the chat's harness session, and with what delta.
+    A background summary is planned at one step, but the chat's own calls go on while it waits: by the
+    time the fork runs, the session may already hold later steps. When the fork's history (everything
+    but its final summary request) is the start of what the session holds, the fork still works; the
+    prompt then names where the planned summary ends, so later steps stay out of it. Refusals name
+    their reason so they can be told apart."""
+    if not session:
+        raise RuntimeError("the chat's session cannot be forked: no harness session yet")
+    if delta["instructions"] is not None:
+        raise RuntimeError("the chat's session cannot be forked: the instructions changed")
+    if delta["tools_changed"]:
+        raise RuntimeError("the chat's session cannot be forked: the tools changed")
+    if not delta["rewritten"]:
+        return delta
+    _, conversation = split(body)
+    conversation, _ = step_notes(conversation)
+    seen, digests = delta["previous"], delta["digests"]
+    history = len(digests) - 1
+    if history < 1 or len(seen) <= history or digests[:history] != seen[:history]:
+        raise RuntimeError("the chat's session cannot be forked: its history differs from this request")
+    behind = len(seen) - history
+    item = conversation[history - 1]
+    content = item.get("content")
+    last = content if isinstance(content, str) else json.dumps(content or item.get("tool_calls") or "")
+    marker = {"role": "user", "content": (
+        f"(Your session continued for {behind} more item(s) after the point this summary covers. Summarize "
+        "only the conversation up to and including the item that reads: \"" + " ".join(str(last).split())[:200]
+        + "\". Leave everything after it out of the summary.)")}
+    return {**delta, "rewritten": False, "new": [marker, conversation[-1]]}
 
 
 def changes(folder, state, body, count):
@@ -1007,7 +1041,27 @@ class StallWatch:
                 pass
 
 
+# OpenCode's own server sometimes drops a connection ("socket connection was closed unexpectedly"); the
+# next `opencode run` on it then fails writing its prompt (broken pipe). One retry gets a fresh connection.
+DROPPED = ("socket connection was closed unexpectedly", "Broken pipe")
+
+
 def opencode_turn(command, prompt, work, model):
+    """`opencode_turn_once`, run again once when OpenCode dropped its connection before any tool call was
+    recorded (the stub only records calls; WebAgent runs them, so a retry repeats no effect)."""
+    try:
+        return opencode_turn_once(command, prompt, work, model)
+    except (BrokenPipeError, RuntimeError) as error:
+        recorded = (work / "calls.jsonl").exists() and (work / "calls.jsonl").stat().st_size
+        if recorded or not any(text in str(error) or isinstance(error, BrokenPipeError) and text == "Broken pipe"
+                               for text in DROPPED):
+            raise
+        print(f"opencode dropped its connection ({str(error)[:120]}); retrying once", file=sys.stderr)
+        time.sleep(2)
+        return opencode_turn_once(command, prompt, work, model)
+
+
+def opencode_turn_once(command, prompt, work, model):
     """Run one `opencode run`; return its session id, the final text and token usage.
 
     The run stops at the end of the first step that called a WebAgent tool: the stub only records the call,
@@ -1158,8 +1212,7 @@ def fork_opencode(call):
     body = call["body"]
     model = body.get("model", "")
     session = state.get("opencode_session")
-    if not session or delta["rewritten"] or delta["instructions"] is not None or delta["tools_changed"]:
-        raise RuntimeError("the chat's session cannot be forked for this request")
+    delta = fork_plan(state, delta, body, session)
     work = OPENCODE_HOME / (folder.name + ".fork")
     work.mkdir(parents=True, exist_ok=True)
     (work / "tools.json").write_text(json.dumps([t["function"] for t in tools_of(body).values()]))
@@ -1189,6 +1242,7 @@ def heartbeat(call, done):
         try:
             post("/api/v3/harness-bridge/progress", {"id": call})
         except Gone:
+            GONE.add(call)
             return
         except Transient:
             pass
@@ -1223,14 +1277,21 @@ def answer(call):
         print(f"{call['id']}: {detail}", file=sys.stderr)
         source = {"source": error.source, "category": error.category, "retry_after": error.retry_after} \
             if isinstance(error, HarnessFailure) else {"source": "harness"}
-        try:
-            post("/api/v3/harness-bridge/reply", {"id": call["id"], "error": detail, **source})
-        except (Transient, Gone) as failure:
-            print(f"{call['id']}: could not report the failure ({failure})", file=sys.stderr)
+        if call["id"] in GONE:
+            # WebAgent already gave up on this call (its own retry is running); nothing to report.
+            print(f"{call['id']}: WebAgent no longer waits for this call; failure not reported", file=sys.stderr)
+        else:
+            try:
+                post("/api/v3/harness-bridge/reply", {"id": call["id"], "error": detail, **source})
+            except Gone:
+                print(f"{call['id']}: WebAgent no longer waits for this call; failure not reported", file=sys.stderr)
+            except Transient as failure:
+                print(f"{call['id']}: could not report the failure ({failure})", file=sys.stderr)
     finally:
         done.set()
         RUNNING.pop(call["id"], None)
         STOPPED.discard(call["id"])
+        GONE.discard(call["id"])
 
 
 def claude_command(body, stub):
@@ -1374,8 +1435,7 @@ def fork_claude(call):
     folder, state, delta = fork_delta(call)
     body = call["body"]
     session = state.get("claude_session")
-    if not session or delta["rewritten"] or delta["instructions"] is not None or delta["tools_changed"]:
-        raise RuntimeError("the chat's session cannot be forked for this request")
+    delta = fork_plan(state, delta, body, session)
     stub = folder / "forks" / call["id"]
     stub.mkdir(parents=True, exist_ok=True)
     try:
@@ -1534,6 +1594,20 @@ def selftest():
                                      {"role": "user", "content": "e"}, note("step three")]}, 6)
     shown = prompt_for({"body": {"model": "m", "messages": []}}, changed, False)
     assert shown.endswith("step three")
+    # A fork planned before the chat's later steps still forks, and names where its summary ends.
+    raced = {}
+    history = [system, tail, {"role": "user", "content": "b"}]
+    changes(folder, raced, {"model": "m", "messages": history + [{"role": "user", "content": "later"}]}, 1)
+    fork = changes(folder, dict(raced), {"model": "m", "messages": history + [{"role": "user", "content": "summarize"}]}, 0)
+    planned = fork_plan(raced, fork, {"model": "m", "messages": history + [{"role": "user", "content": "summarize"}]}, "s")
+    assert not planned["rewritten"] and planned["new"][-1]["content"] == "summarize"
+    assert "1 more item" in planned["new"][0]["content"] and "\"b\"" in planned["new"][0]["content"]
+    try:
+        fork_plan(raced, fork, {"model": "m", "messages": [system, {"role": "user", "content": "other"},
+                                                          {"role": "user", "content": "summarize"}]}, None)
+        raise AssertionError("a fork without a session must be refused")
+    except RuntimeError as error:
+        assert "no harness session" in str(error)
     blocks = [{"role": "user", "content": f"Summary block {n} " + "x" * CHECKPOINT_MIN_CHARS} for n in (1, 2)]
     chat = {}
     changes(folder, chat, {"model": "m", "messages": [system, blocks[0], {"role": "user", "content": "a"}]}, 1)
