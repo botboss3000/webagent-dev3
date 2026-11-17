@@ -410,65 +410,6 @@ pub(crate) fn apply_selection(run: &mut Value, result: &Value) {
     );
     run["loaded_skills"] = json!(selections);
 }
-/// Preload the tools and skills a new user message clearly needs and keep the next few as
-/// call-scoped suggestions. Best effort: any failure preloads nothing and never stops the run.
-/// The engine stages `preload.selectors` as ordinary activation selectors, so preloads persist
-/// like `load_skill`; live policy and approval checks still decide.
-pub(crate) async fn preload(app: &App, sid: &str, run: &mut Value) {
-    if run["preload_checked"] == true
-        || !webagent_abilities::tool_match::PRELOAD_ENABLED
-            .load(std::sync::atomic::Ordering::Relaxed)
-    {
-        return;
-    }
-    run["preload_checked"] = json!(true);
-    let text = crate::optimization_prompt::user_text(run);
-    if text.trim().is_empty() || text.trim_start().starts_with('/') {
-        run["preload"] = json!({"skipped":"no_request_text"});
-        return;
-    }
-    let picked = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        preload_candidates(app, sid, run, &text),
-    )
-    .await;
-    let (preload, suggest) = match picked {
-        Ok(Ok(Some(picked))) => picked,
-        other => {
-            let reason = match other {
-                Err(_) => "timeout",
-                Ok(Err(_)) => "catalog_unavailable",
-                _ => "matcher_unavailable",
-            };
-            tracing::warn!(reason, "Preload skipped");
-            run["preload"] = json!({"skipped":reason});
-            return;
-        }
-    };
-    let mut selectors = Vec::new();
-    for item in &preload {
-        let selector = if item.kind == "tool" {
-            json!({"type":"tool","tool_name":item.name})
-        } else {
-            let (ability, kind, skill) = split_skill_key(&item.name);
-            json!({"type":"skill","ability_id":ability,"kind":kind,"skill_id":skill})
-        };
-        if webagent_assets_contracts::validate_selector(&selector).is_ok() {
-            selectors.push(selector);
-        }
-    }
-    let row = |c: &webagent_abilities::tool_match::Candidate| json!({"kind":c.kind,"name":c.name,"score":(c.score * 100.0).round() / 100.0});
-    run["preload"] = json!({"preloaded":preload.iter().map(row).collect::<Vec<_>>(),
-        "suggested":suggest.iter().map(row).collect::<Vec<_>>(),"selectors":selectors});
-}
-
-/// The texts `rank` embeds for a tool, its description capped at 1024 characters.
-fn tool_texts(name: &str, description: &str) -> Vec<String> {
-    let (examples, _) = webagent_abilities::tool_match::hints(name);
-    let description: String = description.chars().take(1024).collect();
-    webagent_abilities::tool_match::texts(name, &description, &examples)
-}
-
 /// The texts `rank` embeds for an ability or selectable skill row.
 fn skill_texts(skill: &Value) -> Vec<String> {
     let examples: Vec<String> = skill["examples"]
@@ -488,21 +429,11 @@ fn skill_texts(skill: &Value) -> Vec<String> {
     )
 }
 
-/// Embed every tool and skill text once, so the first preload or `list_skills` after a restart
+/// Embed every skill text once, so the first `list_skills` after a restart
 /// finds the model loaded and the catalog cached. Permissions are not applied: nothing is
 /// returned to anyone. `Some(item count)` when the service answered.
 pub(crate) async fn warm_inference(app: &App) -> Option<usize> {
-    let mut items: Vec<Vec<String>> = app
-        .abilities
-        .all_schemas()
-        .iter()
-        .map(|schema| {
-            tool_texts(
-                schema["name"].as_str().unwrap_or_default(),
-                schema["description"].as_str().unwrap_or_default(),
-            )
-        })
-        .collect();
+    let mut items: Vec<Vec<String>> = Vec::new();
     for id in app.abilities.ids() {
         let skills = app
             .abilities
@@ -519,166 +450,6 @@ pub(crate) async fn warm_inference(app: &App) -> Option<usize> {
     crate::api::inference::warm(items).await.then_some(count)
 }
 
-/// Skill candidates are keyed `ability:kind:skill_id`.
-fn split_skill_key(key: &str) -> (&str, &str, &str) {
-    let mut parts = key.splitn(3, ':');
-    (
-        parts.next().unwrap_or(""),
-        parts.next().unwrap_or(""),
-        parts.next().unwrap_or(""),
-    )
-}
-
-/// Score every permitted tool and ability or selectable skill against each part of the message,
-/// keeping each one's best score. `None` when the matcher does not answer.
-async fn preload_candidates(
-    app: &App,
-    sid: &str,
-    run: &Value,
-    text: &str,
-) -> Result<
-    Option<(
-        Vec<webagent_abilities::tool_match::Candidate>,
-        Vec<webagent_abilities::tool_match::Candidate>,
-    )>,
-> {
-    use webagent_abilities::tool_match::{self, Candidate};
-    let current = view(
-        app,
-        sid,
-        run["id"].as_str().unwrap_or_default(),
-        "list_skills",
-    )
-    .await?;
-    let schemas = current.app.abilities.all_schemas();
-    let mut tools = std::collections::BTreeMap::new();
-    let mut skills = Vec::new();
-    let allow_ability = |id: &str| current.access.ability_offered(id);
-    let allow_tool = |tool: &str| skill_tool_allowed(&current, tool);
-    for entry in current
-        .app
-        .abilities
-        .catalog_with(&current.visibility, &current.state)
-    {
-        let Some(id) = entry["id"].as_str() else {
-            continue;
-        };
-        if !allow_ability(id) {
-            continue;
-        }
-        // Every offered tool's schema is already sent, so tools rank but never need loading.
-        for name in entry["tools"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|tool| tool["name"].as_str())
-        {
-            if live_tool_decision(
-                &current.app,
-                &current.access,
-                name,
-                &current.visibility,
-                &current.state,
-                &current.loaded,
-            )
-            .offered()
-            {
-                let description = schemas
-                    .iter()
-                    .find(|schema| schema["name"] == name)
-                    .and_then(|schema| schema["description"].as_str())
-                    .unwrap_or_default();
-                tools.insert(name.to_owned(), description.to_owned());
-            }
-        }
-        // Tool skills arrive with their tool, so only ability and selectable skills count.
-        for mut skill in current
-            .app
-            .abilities
-            .bundled_skill_list(
-                id,
-                &current.visibility,
-                &current.state,
-                allow_ability,
-                allow_tool,
-            )
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|skill| skill["kind"] != "tool")
-        {
-            mark_availability(&mut skill, &current.loaded_skills, &current.loaded);
-            skills.push(skill);
-        }
-    }
-    let list = |value: &Value, key: &str| {
-        value[key]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|item| item.as_str().map(str::to_owned))
-            .collect::<Vec<_>>()
-    };
-    // (kind, key, name for exact matching, keywords, loadable, texts)
-    let mut items = Vec::new();
-    for (name, description) in &tools {
-        let (_, keywords) = tool_match::hints(name);
-        let texts = tool_texts(name, description);
-        items.push(("tool", name.clone(), name.clone(), keywords, false, texts));
-    }
-    for skill in &skills {
-        let id = skill["skill_id"].as_str().unwrap_or_default();
-        let key = format!(
-            "{}:{}:{id}",
-            skill["ability_id"].as_str().unwrap_or_default(),
-            skill["kind"].as_str().unwrap_or_default()
-        );
-        let texts = skill_texts(skill);
-        let loadable = skill["requires_activation"] == true;
-        items.push((
-            "skill",
-            key,
-            id.to_owned(),
-            list(skill, "keywords"),
-            loadable,
-            texts,
-        ));
-    }
-    if items.is_empty() {
-        return Ok(None);
-    }
-    let texts: Vec<Vec<String>> = items.iter().map(|item| item.5.clone()).collect();
-    let mut best = vec![0.0_f32; items.len()];
-    let mut ranked = false;
-    for clause in tool_match::clauses(text) {
-        // A clause the service refuses is skipped; only a request with no ranked clause fails.
-        let Some(scores) = crate::api::inference::rank(&clause, texts.clone()).await else {
-            continue;
-        };
-        if scores.len() != items.len() {
-            continue;
-        }
-        ranked = true;
-        for (index, score) in scores.into_iter().enumerate() {
-            let item = &items[index];
-            best[index] = best[index].max(tool_match::adjusted(&clause, &item.2, &item.3, score));
-        }
-    }
-    if !ranked {
-        return Ok(None);
-    }
-    let candidates = items
-        .into_iter()
-        .zip(best)
-        .map(|((kind, key, _, _, loadable, _), score)| Candidate {
-            kind,
-            name: key,
-            score,
-            loadable,
-        })
-        .collect();
-    Ok(Some(tool_match::choose(candidates)))
-}
-/// Validate a lowercase digest receipt without granting future source authority.
 fn valid_hash(hash: &str) -> bool {
     hash.len() == 64
         && hash

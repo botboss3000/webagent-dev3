@@ -123,13 +123,7 @@ impl<
             .native
             .followup_consume(self.store.records(), &s, "steer", run)
             .await?;
-        if joined {
-            // A message that joins the run gets its own preload before the next call.
-            run["preload_checked"] = json!(false);
-            run["preload_staged"] = json!(false);
-            run["preload_round"] = json!(run["preload_round"].as_u64().unwrap_or(0) + 1);
-            run["preload_turn"] = json!(crate::runtime::run::model_turn(run));
-        }
+        if joined {}
         Ok(joined)
     }
 }

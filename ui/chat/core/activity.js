@@ -57,25 +57,8 @@ function compactionSize(input,summary) {
   return ' · '+kb(input)+(Number.isFinite(summary)?' → '+kb(summary)+' summary':' input');
 }
 
-// Skills arrive as ability:kind:skill; the row shows the skill name.
-const preloadName=item=>item.kind==='skill'?'skill '+String(item.name).split(':').pop():String(item.name);
 
-/** One preload row: a one-line summary, and the scores when expanded. Names only, never message text. */
-export function preloadRow(event) {
-  const p=event.payload || {};
-  const preloaded=Array.isArray(p.preloaded)?p.preloaded:[], suggested=Array.isArray(p.suggested)?p.suggested:[];
-  const skipped=typeof p.skipped==='string'?p.skipped.replace(/_/g,' '):'';
-  const list=items=>items.map(preloadName).join(', ');
-  const label=skipped?'Preload skipped: '+skipped
-    :[preloaded.length?'Preloaded: '+list(preloaded):'Preloaded nothing',
-      suggested.length?'Suggested: '+list(suggested):''].filter(Boolean).join(' · ');
-  const lines=(title,items)=>items.length?['**'+title+'**',...items.map(i=>'- '+preloadName(i)+' — '+Number(i.score??0).toFixed(2))]:[];
-  const text=skipped?'The matcher was not used for this message ('+skipped+').'
-    :[...lines('Preloaded',preloaded),...lines('Suggested',suggested)].join('\n') || 'No tool or skill scored high enough.';
-  return {id:event.event_id,category:'preloads',preload:true,label,text,events:[event]};
-}
-
-/** Projects journal events into grouped tool, message, mode, compaction, retry, preload and closer rows for activityGroups. */
+/** Projects journal events into grouped tool, message, mode, compaction, retry and closer rows for activityGroups. */
 export function activityRows(events) {
   const rows=[], tools=new Map(), messages=new Map(), controls=new Set();
   let compaction=null;
@@ -116,9 +99,6 @@ export function activityRows(events) {
         :'Retrying connection in '+wait+' · attempt '+p.attempt+' of '+p.of;
       rows.push({id:event.event_id,category:'retries',retry:true,autoResume:!!p.auto_resume,label,
         text:p.error||'',events:[event]});
-    } else if (kind === 'preload') {
-      // What the matcher preloaded or suggested for a user message before the agent's next call.
-      rows.push(preloadRow(event));
     } else if (kind === 'closing_status') {
       // The System-role closer's session status; a failed attempt reads like a failed tool call.
       const text=p.error?'Attempt '+p.attempt+' of '+p.of+' failed: '+p.error+(p.fallback?'\n\nFallback status recorded.':'')

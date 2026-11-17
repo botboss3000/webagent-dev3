@@ -1001,8 +1001,8 @@ async fn run_process() -> Result<()> {
         restore_worker_control(&app).await?;
         recover(&app, true).await?;
         app.ready.store(true, Ordering::Release);
-        // Load the local inference model and embed the tool catalog before the first message;
-        // best effort, so a failure only costs that message its preload.
+        // Load the local inference model and embed the skill catalog before the first message;
+        // best effort, so a failure only slows the first list_skills.
         let warm = app.clone();
         tokio::spawn(async move {
             let started = std::time::Instant::now();

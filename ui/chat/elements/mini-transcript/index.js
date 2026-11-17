@@ -6,9 +6,9 @@ function textNode(tag, text, className='') {
   const node=document.createElement(tag);node.className=className;node.textContent=text;
   return node;
 }
-// System rows (compaction, retry, preload, mode change, notices) are never part of a model step:
+// System rows (compaction, retry, mode change, notices) are never part of a model step:
 // each gets its own block styled like a step, titled by its kind.
-const SYSTEM_TITLES={compactions:'Compaction',retries:'Retry',preloads:'Preload',modes:'Mode change'};
+const SYSTEM_TITLES={compactions:'Compaction',retries:'Retry',modes:'Mode change'};
 // A compaction's reason (automatic or requested) joins its block head; other kinds have none.
 const systemMeta=row=>row.category==='compactions'?row.label.split(' · ').find(part=>/^(automatic|requested)/.test(part))||'':'';
 // Write a system block head (kind, reason, failed or running) and put its one row on the rail.

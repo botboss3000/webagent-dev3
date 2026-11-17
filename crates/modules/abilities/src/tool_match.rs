@@ -1,4 +1,4 @@
-//! Ranking rules for `list_skills` queries and preload. Scores come from the matcher's
+//! Ranking rules for `list_skills` queries. Scores come from the matcher's
 //! `rank` operation (each candidate's closest text to the query); these rules add exact-name and
 //! keyword evidence, pick the best match and keep a result list from ever being empty.
 use crate::catalog::search_words;
@@ -17,23 +17,6 @@ pub const MAX_KEYWORD_HITS: usize = 2;
 /// Rows a query returns at most, and when nothing clears [`WEAK`].
 pub const LIMIT: usize = 8;
 pub const WEAK_ROWS: usize = 3;
-// shortcut: preload gates start near BEST/SKILL_BEST; tune with the discovery trace.
-/// At or above: a tool is loaded from the user's message before the first model call.
-pub const PRELOAD_TOOL: f32 = 0.80;
-/// Most tools and skills preloaded per message, and suggestions shown after them.
-pub const PRELOAD_TOOLS: usize = 6;
-pub const PRELOAD_SKILLS: usize = 2;
-pub const SUGGESTIONS: usize = 5;
-/// Preloading and suggestions are off: they could load tools, or steer a working agent, on
-/// feedback that needed no new tool. Its runtime tests are ignored until it is switched back on.
-pub static PRELOAD_ENABLED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-/// Message characters ranked, and parts scored on their own besides the whole message.
-/// The cap matches the inference service's runaway guard; the model itself keeps the first 512
-/// tokens of each query.
-pub const PRELOAD_TEXT: usize = 20_000;
-pub const PRELOAD_CLAUSES: usize = 12;
-
 /// One ranked candidate, by its index in the caller's list.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ranked {
@@ -94,61 +77,6 @@ pub fn adjusted(query: &str, name: &str, keywords: &[String], score: f32) -> f32
     } else {
         (score + KEYWORD_BONUS * keyword_hits(query, keywords) as f32).min(0.99)
     }
-}
-
-/// The parts of a user message scored on their own: the whole (capped) message first, then
-/// its sentences and clauses, so one request among several still matches strongly.
-pub fn clauses(text: &str) -> Vec<String> {
-    let text: String = text.chars().take(PRELOAD_TEXT).collect();
-    let mut parts = vec![text.trim().to_owned()];
-    for sentence in text.split(['.', ';', '?', '!', '\n']) {
-        for part in std::iter::once(sentence).chain(sentence.split(" and ")) {
-            let part = part.trim();
-            if part.split_whitespace().count() >= 3 && !parts.iter().any(|p| p == part) {
-                parts.push(part.to_owned());
-            }
-        }
-    }
-    parts.retain(|part| !part.is_empty());
-    parts.truncate(PRELOAD_CLAUSES + 1);
-    parts
-}
-
-/// One preload candidate: `kind` is "tool" or "skill"; only `loadable` ones are picked.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Candidate {
-    pub kind: &'static str,
-    pub name: String,
-    pub score: f32,
-    pub loadable: bool,
-}
-
-/// Split candidates into preloads (tools at [`PRELOAD_TOOL`], skills at [`SKILL_BEST`], capped)
-/// and the next [`SUGGESTIONS`] loadable ones at or above [`WEAK`], best first.
-pub fn choose(mut candidates: Vec<Candidate>) -> (Vec<Candidate>, Vec<Candidate>) {
-    candidates.retain(|c| c.loadable);
-    candidates.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.name.cmp(&b.name)));
-    let (mut tools, mut skills) = (0, 0);
-    let (mut preload, mut rest) = (Vec::new(), Vec::new());
-    for candidate in candidates {
-        let pick = match candidate.kind {
-            "tool" if candidate.score >= PRELOAD_TOOL && tools < PRELOAD_TOOLS => {
-                tools += 1;
-                true
-            }
-            "skill" if candidate.score >= SKILL_BEST && skills < PRELOAD_SKILLS => {
-                skills += 1;
-                true
-            }
-            _ => false,
-        };
-        if pick {
-            preload.push(candidate);
-        } else if candidate.score >= WEAK && rest.len() < SUGGESTIONS {
-            rest.push(candidate);
-        }
-    }
-    (preload, rest)
 }
 
 /// Rank candidates `(name, keywords)` by `scores` (one per candidate). A named candidate always
@@ -624,59 +552,5 @@ mod tests {
         let candidates = [("page_text", &none[..]), ("capture", &shot[..])];
         let ranked = rank("take a screenshot", &candidates, &[0.70, 0.68], BEST);
         assert_eq!(ranked[0].index, 1);
-    }
-
-    #[test]
-    fn clauses_split_sentences_and_long_and_joins() {
-        let parts =
-            clauses("Change the activity group. Show phone and desktop screenshots; let me choose");
-        assert_eq!(
-            parts[0],
-            "Change the activity group. Show phone and desktop screenshots; let me choose"
-        );
-        assert!(parts.contains(&"Change the activity group".to_owned()));
-        assert!(parts.contains(&"let me choose".to_owned()));
-        // "phone and desktop" is too short to split into its own parts.
-        assert!(parts.contains(&"Show phone and desktop screenshots".to_owned()));
-        assert!(clauses("").is_empty());
-        let long = "word ".repeat(PRELOAD_TEXT);
-        assert!(clauses(&long)[0].chars().count() <= PRELOAD_TEXT);
-        let many = "one two three. ".repeat(20).replace("three", "three x");
-        assert!(clauses(&many).len() <= PRELOAD_CLAUSES + 1);
-    }
-
-    #[test]
-    fn choose_applies_thresholds_caps_and_loadability() {
-        let c = |kind: &'static str, name: &str, score: f32, loadable: bool| Candidate {
-            kind,
-            name: name.into(),
-            score,
-            loadable,
-        };
-        let mut candidates: Vec<_> = (0..8)
-            .map(|i| c("tool", &format!("t{i}"), 0.95 - i as f32 * 0.01, true))
-            .collect();
-        candidates.push(c("tool", "loaded", 0.99, false));
-        candidates.push(c("skill", "s1", 0.90, true));
-        candidates.push(c("skill", "s2", 0.85, true));
-        candidates.push(c("skill", "s3", 0.84, true));
-        candidates.push(c("skill", "low", 0.81, true));
-        candidates.push(c("tool", "weak", 0.70, true));
-        candidates.push(c("tool", "none", 0.40, true));
-        let (preload, suggest) = choose(candidates);
-        let names = |v: &[Candidate]| v.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
-        assert_eq!(
-            preload.iter().filter(|c| c.kind == "tool").count(),
-            PRELOAD_TOOLS
-        );
-        assert_eq!(
-            preload.iter().filter(|c| c.kind == "skill").count(),
-            PRELOAD_SKILLS
-        );
-        assert!(!names(&preload).contains(&"loaded".to_owned()));
-        assert!(!names(&preload).contains(&"low".to_owned()));
-        assert_eq!(suggest.len(), SUGGESTIONS);
-        assert!(!names(&suggest).contains(&"none".to_owned()));
-        assert!(suggest.windows(2).all(|w| w[0].score >= w[1].score));
     }
 }

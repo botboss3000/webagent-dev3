@@ -720,7 +720,7 @@ impl<
                     }
                 }
             }
-            // Activity-only rows (compaction call/result, scheduled retries, preloads, closing
+            // Activity-only rows (compaction call/result, scheduled retries, retired preloads, closing
             // reminders); context assembly skips their steps.
             for entry in run["_activity_items"].as_array().into_iter().flatten() {
                 let step = entry["step"]

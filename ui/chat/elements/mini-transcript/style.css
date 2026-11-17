@@ -140,7 +140,7 @@
   border-left: 2px solid var(--border);
 }
 /* The rail stays neutral: the head's failed/running count and the call's own colour mark the state. */
-/* System rows (compaction, retry, preload) use the step look: a titled head and one row on the rail. */
+/* System rows (compaction, retry) use the step look: a titled head and one row on the rail. */
 .v2-activity-body .v2-mini-row.tc-system { margin: 0; padding: 0; border: none; border-radius: 0; background: transparent; }
 .v2-activity-body .tc-system > details > summary.tc-row-head { color: var(--fg-2); }
 .v2-activity-body .tc-step[data-kind="system"] .v2-mini-notice { margin: 0; padding: 2px 0 2px 4px; }

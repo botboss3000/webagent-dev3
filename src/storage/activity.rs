@@ -136,10 +136,6 @@ fn event(
             "compaction_result",
             json!({"summary":item["summary"],"error":item["error"]}),
         ),
-        "preload" => (
-            "preload",
-            json!({"preloaded":item["preloaded"],"suggested":item["suggested"],"skipped":item["skipped"]}),
-        ),
         "closing_reminder" => ("closing_reminder", json!({})),
         "closing_status" => (
             "closing_status",

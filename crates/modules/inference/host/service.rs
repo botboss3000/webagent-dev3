@@ -118,7 +118,7 @@ async fn ask_within(request: Value, within: Duration) -> Result<Value, ApiError>
     let mut slot = matcher_slot().lock().await;
     if !usable(&mut slot) {
         drop(slot);
-        // Start in a task of its own: a caller with a short deadline (preload) may give up
+        // Start in a task of its own: a caller with a short deadline may give up
         // waiting, but the service still finishes starting and the next request finds it.
         let _ = tokio::spawn(async {
             let mut slot = matcher_slot().lock().await;
