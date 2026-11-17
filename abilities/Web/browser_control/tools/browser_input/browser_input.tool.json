@@ -1,6 +1,6 @@
 {
   "name": "browser_input",
-  "description": "Click, type or press a key in the private server browser, or save the site's sign-in.",
+  "description": "Click, type or press a key in the private server browser, scroll it with the wheel, pinch or hover, or save the site's sign-in.",
   "effect": "write",
   "repeat_guard": {
     "risk": "none",
@@ -21,13 +21,16 @@
           "type",
           "press",
           "touch",
+          "wheel",
+          "pinch",
+          "hover",
           "save_login",
           "script"
         ]
       },
       "selector": {
         "type": "string",
-        "description": "The target; it must lie inside the region your last browser_read read covered. press: optional, defaults to the focused element; touch: required, the element touched"
+        "description": "The target; it must lie inside the region your last browser_read read covered. press: optional, defaults to the focused element; touch, wheel, pinch and hover: required, the element whose centre is touched, scrolled over, pinched or hovered"
       },
       "text": {
         "type": "string",
@@ -64,13 +67,13 @@
         "type": "integer",
         "minimum": -2000,
         "maximum": 2000,
-        "description": "touch only: drag this many pixels horizontally after touching (negative is left); omit dx and dy for a tap"
+        "description": "touch, wheel or pinch only: touch drags this many pixels horizontally after touching (negative is left); wheel scrolls this far horizontally (negative is left); pinch is how far each of the two fingers travels outward (positive spreads and zooms in). Omit dx and dy for a tap"
       },
       "dy": {
         "type": "integer",
         "minimum": -2000,
         "maximum": 2000,
-        "description": "touch only: drag this many pixels vertically (negative is up)"
+        "description": "touch, wheel or pinch only: vertical travel in pixels (negative is up or scroll up)"
       },
       "origin": {
         "type": "string",
@@ -85,7 +88,7 @@
           "properties": {
             "action": {
               "type": "string",
-              "description": "a browser_read action (navigate, read, wait_for, scroll, ...) or click, type, press, touch"
+              "description": "a browser_read action (navigate, read, wait_for, scroll, ...) or click, type, press, touch, wheel, pinch, hover"
             },
             "timeout_ms": {
               "type": "integer",
@@ -103,13 +106,13 @@
               "type": "integer",
               "minimum": -20000,
               "maximum": 20000,
-              "description": "scroll or touch: horizontal pixels"
+              "description": "scroll, touch, wheel or pinch: horizontal pixels"
             },
             "dy": {
               "type": "integer",
               "minimum": -20000,
               "maximum": 20000,
-              "description": "scroll or touch: vertical pixels"
+              "description": "scroll, touch, wheel or pinch: vertical pixels"
             },
             "offset": {
               "type": "integer",
@@ -147,7 +150,7 @@
             "action"
           ]
         },
-        "description": "script only: up to 20 steps run in order in one call and approved once. Each step is an object with a browser_read action (navigate, read, wait_for, viewport, screenshot, ...) or click/type/press and their fields. Add \"screenshot\": true to a step to get an image after it; no other step returns one. A failed step stops the script and returns a screenshot of that moment. A step's \"label\" names its screenshot in the chat."
+        "description": "script only: up to 20 steps run in order in one call and approved once. Each step is an object with a browser_read action (navigate, read, wait_for, viewport, screenshot, ...) or click/type/press/touch/wheel/pinch/hover and their fields. Add \"screenshot\": true to a step to get an image after it; no other step returns one. A failed step stops the script and returns a screenshot of that moment. A step's \"label\" names its screenshot in the chat."
       }
     },
     "required": [
@@ -164,7 +167,11 @@
     "keywords": [
       "click",
       "type",
-      "form"
+      "form",
+      "scroll",
+      "hover",
+      "pinch",
+      "zoom"
     ]
   }
 }

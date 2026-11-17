@@ -1838,6 +1838,15 @@ impl Service {
                 self.touch(state, args, selector.unwrap_or_default())
                     .await?
             }
+            "wheel" => {
+                self.wheel(state, args, selector.unwrap_or_default())
+                    .await?
+            }
+            "pinch" => {
+                self.pinch(state, args, selector.unwrap_or_default())
+                    .await?
+            }
+            "hover" => self.hover(state, selector.unwrap_or_default()).await?,
             "emulate" => {
                 for key in ["color_scheme", "reduced_motion"] {
                     if let Some(value) = args.get(key).and_then(Value::as_str) {
@@ -2012,6 +2021,163 @@ impl Service {
         Ok(
             json!({"action":"touch","applied":true,"target":used,"focused":focused,
             "scroll_before":scroll(&before),"scroll_after":scroll(&after),"gesture":gesture,
+            "read_required":true}),
+        )
+    }
+
+    /// A trusted wheel scroll at the element's centre: the page's own wheel handlers run, so
+    /// pointer-anchored zoom and wheel-hijacked strips behave as with a mouse.
+    async fn wheel(
+        &self,
+        state: &mut State,
+        args: &Map<String, Value>,
+        selector: &str,
+    ) -> Result<Value, Fault> {
+        let (_target, used) = self.fresh_target(state, selector, false, true).await?;
+        state.observed = false;
+        let before =
+            wd::execute(state.driver(), scripts::TOUCH_TARGET, vec![json!(selector)]).await?;
+        if !before.is_object() {
+            return Err(Fault::rejected("No rendered element matches the selector"));
+        }
+        let (x, y) = (
+            before["x"].as_f64().unwrap_or(0.0),
+            before["y"].as_f64().unwrap_or(0.0),
+        );
+        let dx = args.get("dx").and_then(Value::as_f64).unwrap_or(0.0);
+        let dy = args.get("dy").and_then(Value::as_f64).unwrap_or(0.0);
+        let applied = wd::cdp(
+            state.driver(),
+            "Input.dispatchMouseEvent",
+            json!({"type":"mouseWheel","x":x,"y":y,"deltaX":dx,"deltaY":dy,
+                "pointerType":"mouse"}),
+        )
+        .await;
+        if applied.is_err() {
+            return Err(Fault::Uncertain(
+                "Wheel outcome is uncertain; inspect the page before another action".into(),
+            ));
+        }
+        state.acted("wheel");
+        self.safe_url(state).await?;
+        state.step(json!({"action":"wheel","selector":selector,"dx":dx,"dy":dy}));
+        let after =
+            wd::execute(state.driver(), scripts::TOUCH_TARGET, vec![json!(selector)]).await?;
+        Ok(
+            json!({"action":"wheel","applied":true,"target":used,"delta":{"x":dx,"y":dy},
+            "scroll_before":{"left":before["scroll_left"],"top":before["scroll_top"]},
+            "scroll_after":{"left":after["scroll_left"],"top":after["scroll_top"]},
+            "read_required":true}),
+        )
+    }
+
+    /// A trusted mouse move to the element's centre, so :hover styles, tooltips and pointer
+    /// handlers react as with a mouse.
+    async fn hover(&self, state: &mut State, selector: &str) -> Result<Value, Fault> {
+        let (_target, used) = self.fresh_target(state, selector, false, true).await?;
+        state.observed = false;
+        let before =
+            wd::execute(state.driver(), scripts::TOUCH_TARGET, vec![json!(selector)]).await?;
+        if !before.is_object() {
+            return Err(Fault::rejected("No rendered element matches the selector"));
+        }
+        let (x, y) = (
+            before["x"].as_f64().unwrap_or(0.0),
+            before["y"].as_f64().unwrap_or(0.0),
+        );
+        let applied = wd::cdp(
+            state.driver(),
+            "Input.dispatchMouseEvent",
+            json!({"type":"mouseMoved","x":x,"y":y,"button":"none","buttons":0,
+                "pointerType":"mouse"}),
+        )
+        .await;
+        if applied.is_err() {
+            return Err(Fault::Uncertain(
+                "Hover outcome is uncertain; inspect the page before another action".into(),
+            ));
+        }
+        state.acted("hover");
+        self.safe_url(state).await?;
+        let hovered = wd::execute(state.driver(), scripts::HOVER, Vec::new()).await?;
+        Ok(
+            json!({"action":"hover","applied":true,"target":used,"hovered":hovered,
+            "read_required":true}),
+        )
+    }
+
+    /// A real two-finger pinch around the element's centre, sent as trusted touch events so the
+    /// page's own pointer handlers zoom at that point. The fingers start 40 px apart and each
+    /// travels `dx`/`dy`, so the spread changes by twice that distance.
+    async fn pinch(
+        &self,
+        state: &mut State,
+        args: &Map<String, Value>,
+        selector: &str,
+    ) -> Result<Value, Fault> {
+        if !matches!(state.viewport, Some("phone" | "phone_small" | "tablet")) {
+            return Err(Fault::rejected(
+                "pinch needs a touch viewport: set viewport phone or tablet first",
+            ));
+        }
+        let (_target, used) = self.fresh_target(state, selector, false, true).await?;
+        state.observed = false;
+        let before =
+            wd::execute(state.driver(), scripts::TOUCH_TARGET, vec![json!(selector)]).await?;
+        if !before.is_object() {
+            return Err(Fault::rejected("No rendered element matches the selector"));
+        }
+        let (x, y) = (
+            before["x"].as_f64().unwrap_or(0.0),
+            before["y"].as_f64().unwrap_or(0.0),
+        );
+        let dx = args.get("dx").and_then(Value::as_f64).unwrap_or(0.0);
+        let dy = args.get("dy").and_then(Value::as_f64).unwrap_or(0.0);
+        let start = 20.0;
+        let points = |step: i32| {
+            let share = f64::from(step) / 10.0;
+            let (out_x, out_y) = (dx * share, dy * share);
+            json!([
+                {"x":x - start - out_x,"y":y - out_y},
+                {"x":x + start + out_x,"y":y + out_y}
+            ])
+        };
+        let applied = async {
+            let driver = state.driver();
+            wd::cdp(
+                driver,
+                "Input.dispatchTouchEvent",
+                json!({"type":"touchStart","touchPoints":points(0)}),
+            )
+            .await?;
+            for step in 1..=10 {
+                wd::cdp(
+                    driver,
+                    "Input.dispatchTouchEvent",
+                    json!({"type":"touchMove","touchPoints":points(step)}),
+                )
+                .await?;
+            }
+            wd::cdp(
+                driver,
+                "Input.dispatchTouchEvent",
+                json!({"type":"touchEnd","touchPoints":[]}),
+            )
+            .await?;
+            Ok::<(), Fault>(())
+        }
+        .await;
+        if applied.is_err() {
+            return Err(Fault::Uncertain(
+                "Pinch outcome is uncertain; inspect the page before another action".into(),
+            ));
+        }
+        state.acted("pinch");
+        self.safe_url(state).await?;
+        state.step(json!({"action":"pinch","selector":selector,"dx":dx,"dy":dy}));
+        Ok(
+            json!({"action":"pinch","applied":true,"target":used,"fingers":2,
+            "spread_before":start * 2.0,"spread_after":(start + dx) * 2.0,
             "read_required":true}),
         )
     }

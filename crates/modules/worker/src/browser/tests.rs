@@ -730,6 +730,118 @@ async fn touch_drags_with_trusted_events_and_reports_focus() {
 }
 
 #[tokio::test]
+async fn wheel_hover_and_pinch_send_trusted_events() {
+    let f = fixture();
+    f.call(json!({"action":"navigate","url":"/app"})).await;
+    let driver = f.driver(0);
+    driver.on_script(Box::new(|source, _args| {
+        if source.contains("V3_TOUCH_TARGET") {
+            Some(Ok(json!({"x":100,"y":700,"scroll_left":0,"scroll_top":0})))
+        } else if source.contains("V3_HOVER") {
+            Some(Ok(json!({"tag":"button","id":"pop","label":"Details"})))
+        } else {
+            None
+        }
+    }));
+    f.call(json!({"action":"read"})).await;
+    let start = driver.page().cdp.len();
+    let wheel = f
+        .tool(
+            "browser_input",
+            json!({"action":"wheel","selector":"#button","dy":-120}),
+            &f.trusted,
+        )
+        .await;
+    assert_eq!(wheel["applied"], true, "{wheel}");
+    assert_eq!(wheel["delta"]["y"].as_f64(), Some(-120.0), "{wheel}");
+    let events: Vec<(String, Value)> = driver.page().cdp[start..].to_vec();
+    let wheel_event = events
+        .iter()
+        .find(|(command, params)| {
+            command == "Input.dispatchMouseEvent" && params["type"] == "mouseWheel"
+        })
+        .expect("a wheel event");
+    assert_eq!(wheel_event.1["x"].as_f64(), Some(100.0), "{wheel}");
+    assert_eq!(wheel_event.1["y"].as_f64(), Some(700.0), "{wheel}");
+    assert_eq!(wheel_event.1["deltaY"].as_f64(), Some(-120.0), "{wheel}");
+
+    f.call(json!({"action":"read"})).await;
+    let start = driver.page().cdp.len();
+    let hover = f
+        .tool(
+            "browser_input",
+            json!({"action":"hover","selector":"#button"}),
+            &f.trusted,
+        )
+        .await;
+    assert_eq!(hover["hovered"]["label"], "Details", "{hover}");
+    assert!(
+        driver.page().cdp[start..]
+            .iter()
+            .any(|(command, params)| command == "Input.dispatchMouseEvent"
+                && params["type"] == "mouseMoved"),
+        "a mouse move reached the page"
+    );
+
+    let desktop = f
+        .tool(
+            "browser_input",
+            json!({"action":"pinch","selector":"#button","dx":60}),
+            &f.trusted,
+        )
+        .await;
+    assert!(output(&desktop).contains("touch viewport"), "{desktop}");
+    f.call(json!({"action":"viewport","preset":"phone"})).await;
+    f.call(json!({"action":"read"})).await;
+    let start = driver.page().cdp.len();
+    let pinch = f
+        .tool(
+            "browser_input",
+            json!({"action":"pinch","selector":"#button","dx":60}),
+            &f.trusted,
+        )
+        .await;
+    assert_eq!(pinch["applied"], true, "{pinch}");
+    assert_eq!(pinch["spread_before"].as_f64(), Some(40.0), "{pinch}");
+    assert_eq!(pinch["spread_after"].as_f64(), Some(160.0), "{pinch}");
+    let touches: Vec<(String, Value)> = driver.page().cdp[start..].to_vec();
+    let kinds: Vec<&str> = touches
+        .iter()
+        .filter(|(command, _)| command == "Input.dispatchTouchEvent")
+        .map(|(_, params)| params["type"].as_str().unwrap_or(""))
+        .collect();
+    assert_eq!(kinds.len(), 12, "{kinds:?}");
+    assert_eq!(kinds.first().copied(), Some("touchStart"));
+    assert_eq!(kinds.last().copied(), Some("touchEnd"));
+    let points = |kind: &str, index: usize| -> Value {
+        touches
+            .iter()
+            .filter(|(command, params)| {
+                command == "Input.dispatchTouchEvent" && params["type"] == kind
+            })
+            .map(|(_, params)| params["touchPoints"].clone())
+            .nth(index)
+            .expect("a touch event")
+    };
+    let first = points("touchStart", 0);
+    assert_eq!(first.as_array().map(Vec::len), Some(2));
+    assert_eq!(first[0]["x"].as_f64(), Some(80.0), "{first}");
+    assert_eq!(first[1]["x"].as_f64(), Some(120.0), "{first}");
+    let last = points("touchMove", 9);
+    assert_eq!(last[0]["x"].as_f64(), Some(20.0), "{last}");
+    assert_eq!(last[1]["x"].as_f64(), Some(180.0), "{last}");
+
+    let still = f
+        .tool(
+            "browser_input",
+            json!({"action":"wheel","selector":"#button"}),
+            &f.trusted,
+        )
+        .await;
+    assert!(output(&still).contains("needs a distance"), "{still}");
+}
+
+#[tokio::test]
 async fn keyboard_shrinks_the_touch_viewport_from_the_bottom() {
     let f = fixture();
     f.call(json!({"action":"navigate","url":"/app"})).await;

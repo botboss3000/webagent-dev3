@@ -301,3 +301,14 @@ pub const UNMASK: &str = r#"
 /* V3_UNMASK */
 document.querySelectorAll('[data-v3-private-mask]').forEach(node=>node.remove());
 "#;
+
+/// The innermost element under the pointer that matches :hover, with its visible label.
+pub const HOVER: &str = r#"
+/* V3_HOVER */
+// The deepest hovered element, so a hover style, tooltip or pointer handler can be attributed.
+const chain=[...document.querySelectorAll(':hover')];
+const n=chain[chain.length-1];
+if (!n) return {tag:'body',id:null,label:''};
+return {tag:n.tagName.toLowerCase(),id:n.id||null,
+ label:(n.getAttribute('aria-label')||n.getAttribute('title')||(n.matches('input,textarea,select')?'':n.innerText)||'').trim().replace(/\s+/g,' ').slice(0,60)};
+"#;

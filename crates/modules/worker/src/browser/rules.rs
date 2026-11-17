@@ -41,7 +41,16 @@ pub(crate) const READ_ACTIONS: [&str; 14] = [
     "viewport",
     "wait_for",
 ];
-const INPUT_ACTIONS: [&str; 5] = ["click", "type", "press", "touch", "save_login"];
+const INPUT_ACTIONS: [&str; 8] = [
+    "click",
+    "type",
+    "press",
+    "touch",
+    "wheel",
+    "pinch",
+    "hover",
+    "save_login",
+];
 const WAIT_CONDITIONS: [&str; 6] = [
     "animations_done",
     "hidden",
@@ -700,6 +709,9 @@ fn permitted(action: &str) -> &'static [&'static str] {
         "scroll" => &["selector", "dx", "dy"],
         "press" => &["key", "selector"],
         "touch" => &["selector", "dx", "dy"],
+        "wheel" => &["selector", "dx", "dy"],
+        "pinch" => &["selector", "dx", "dy"],
+        "hover" => &["selector"],
         "emulate" => &["color_scheme", "reduced_motion"],
         "screenshot" => &["label"],
         _ => &[],
@@ -750,7 +762,7 @@ pub fn validate_args(name: &str, args: &mut Map<String, Value>) -> Result<&'stat
         "browser_input" => {
             let Some(found) = INPUT_ACTIONS.iter().find(|known| **known == action) else {
                 return Err(Fault::rejected(
-                    "browser_input actions: click, type, press, touch, save_login; everything else uses browser_read",
+                    "browser_input actions: click, type, press, touch, wheel, pinch, hover, save_login; everything else uses browser_read",
                 ));
             };
             (
@@ -960,19 +972,29 @@ pub fn validate_args(name: &str, args: &mut Map<String, Value>) -> Result<&'stat
             "keyboard needs height: whole pixels 0 (closed) to 600",
         ));
     }
-    if action == "touch" {
+    if matches!(action, "touch" | "wheel" | "pinch" | "hover") {
         if blank(args.get("selector")) {
-            return Err(Fault::rejected("touch needs a selector"));
+            return Err(Fault::rejected(format!("{action} needs a selector")));
         }
-        for key in ["dx", "dy"] {
-            if let Some(value) = args.get(key) {
-                if !is_int(value) || value.as_i64().is_none_or(|v| v.abs() > 2000) {
-                    return Err(Fault::rejected(
-                        "Touch distances must be whole pixels within 2000",
-                    ));
+        if action != "hover" {
+            for key in ["dx", "dy"] {
+                if let Some(value) = args.get(key) {
+                    if !is_int(value) || value.as_i64().is_none_or(|v| v.abs() > 2000) {
+                        return Err(Fault::rejected(
+                            "Touch, wheel and pinch distances must be whole pixels within 2000",
+                        ));
+                    }
                 }
             }
         }
+    }
+    if action == "wheel" && !truthy(args.get("dx")) && !truthy(args.get("dy")) {
+        return Err(Fault::rejected("wheel needs a distance: dx or dy"));
+    }
+    if action == "pinch" && !truthy(args.get("dx")) && !truthy(args.get("dy")) {
+        return Err(Fault::rejected(
+            "pinch needs a distance: dx or dy, how far each finger travels",
+        ));
     }
     if action == "press"
         && !args
