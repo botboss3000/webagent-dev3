@@ -51,13 +51,20 @@ export function holdTabScroll(card) {
   const pinAt = panel.getBoundingClientRect().top - scroller.getBoundingClientRect().top + top - card.offsetHeight;
   const pinned = top > 0 && top >= pinAt - 1;
   panel.style.minHeight = scroller.clientHeight + 'px';
-  return (done = true) => {
+  const place = () => {
     scroller.scrollTop = pinned ? Math.max(0, pinAt) : top;
+    // Margins between header and panel are not in pinAt: scroll the rest of the
+    // way until the header reaches its pinned edge.
+    const gap = card.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    if (pinned && gap > 0) scroller.scrollTop += gap;
+  };
+  return (done = true) => {
+    place();
     if (!done) return;
     // A viewport-tall panel keeps the pinned position reachable on short pages;
     // fill layouts (File Manager) do not scroll the panel at all.
     panel.style.minHeight = getComputedStyle(scroller).overflowY === 'hidden' ? '' : Math.max(0, scroller.clientHeight - card.offsetHeight) + 'px';
-    scroller.scrollTop = pinned ? Math.max(0, pinAt) : top;
+    place();
   };
 }
 
