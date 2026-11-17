@@ -56,7 +56,7 @@ function remedyAction(title,notice,item,{client,getSession,getAccess,note}){
       done.querySelector('.chat-action-message').textContent='Approved: this agent\'s compaction trigger is now '+to+' tokens. Resuming the run.';}catch{}
   };
   card=createChatAction({title,message:'Fix: raise this agent\'s compaction trigger from '+count(fix.from_tokens)+' to '+to+' tokens.',
-    actions:[{label:'Approve',kind:'approve',run:decide('approve')},{label:'Deny',kind:'deny',run:decide('deny')}]});
+    actions:[{label:'Deny',kind:'deny',run:decide('deny')},{label:'Approve',kind:'approve',run:decide('approve')}]});
   return card;
 }
 /** Builds one published bubble; rejects malformed identity data and wires attachments, actions and user-text expansion. */

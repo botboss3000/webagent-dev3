@@ -34,7 +34,8 @@ dialog[data-core-credential]{margin:auto;max-width:min(420px,calc(100vw - 32px))
 .chat-action-plan li+li{margin-top:2px}
 .chat-action-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;margin-top:12px}
 .chat-action-action{margin:0;min-height:32px;padding:0 14px;border:var(--border-width) solid var(--border);border-radius:999px;background:transparent;color:var(--fg-1);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent}
-.chat-action-approve{background:var(--accent,var(--brand));border-color:var(--accent,var(--brand));color:#fff}
+/* Page background as text: --brand is white in dark mode and black in light. */
+.chat-action-approve{background:var(--accent,var(--brand));border-color:var(--accent,var(--brand));color:var(--bg-0)}
 .chat-action-deny{color:var(--danger)}
 @media (hover:hover){.chat-action-action:not(.chat-action-approve):hover:not(:disabled){background:color-mix(in oklab,var(--fg-1) 8%,transparent)}.chat-action-approve:hover:not(:disabled){filter:brightness(1.08)}}
 .chat-action-action:active:not(:disabled){transform:scale(.97)}
