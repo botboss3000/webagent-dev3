@@ -11,7 +11,7 @@ export const AGENT_ACTIONS = [
   '#model-page .v3-pending-feature > .ac-ability-row',
   '#sessions-table tbody tr[data-session-id]', 'th.col-sortable[data-sort-key]', '.session-row-id[tabindex="0"]'
 ].join(', ');
-const PORTALS = '#files-floating-menu, .v3-tool-skill-dialog, .ac-model-dropdown, .ac-directive-overlay, .ac-tip-pop, .ac-tip-lightbox, .session-row-actions[data-source="sessions-page"]';
+const PORTALS = '#files-floating-menu, .ac-model-dropdown, .ac-directive-overlay, .ac-tip-pop, .ac-tip-lightbox, .session-row-actions[data-source="sessions-page"]';
 
 /** Registers the whole dynamic page and its known detached surfaces, sharing chat/header gesture ownership.
  * Native toggles include their labels; text/select edits, drag handles and charts are not actions.

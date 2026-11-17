@@ -11,6 +11,8 @@ import { buildPolicyControls, effectiveLabel, readinessLabel } from './policy.js
 import { _buildMoreButton, _buildToolRow, _buildAbilitySettingsList, closeFloatingMenu } from '../../../../shared/ability-row-controls.js';
 import { buildSkillRow } from './rows.js';
 import { createSettingsRegister, createSettingsRow } from '../../../../shared/settings-register.js';
+import { createConfigPage } from '../../../../shared/config-page.js';
+import { createRichTextEditor } from '../../../../shared/rich-text-editor.js';
 import { pushBackHandler } from '../../../../shared/history-back.js';
 import { _markSaving, _flashSaveCheck } from '../../../../shared/models/dom-utils.js';
 
@@ -241,24 +243,34 @@ export async function renderAbilities(host, request, options) {
     if (anchorOnly) trigger.classList.add('ac-ability-more-anchor');
     return trigger;
   };
-  const openToolSkill = async (ability, tool) => {
-    const dialog = node('dialog', 'v3-tool-skill-dialog');
-    const heading = node('h3', '', tool + '.skill.md');
-    const pre = node('pre', '', 'Loading tool skill…');
-    const close = node('button', 'ac-btn ac-btn-sm', 'Close');
-    close.type = 'button';
-    close.addEventListener('click', () => dialog.close());
-    dialog.append(heading, pre, close);
-    dialog.addEventListener('close', () => dialog.remove(), { once: true });
-    document.body.append(dialog);
-    dialog.showModal();
-    try {
-      const result = await request(scope + '/abilities/' + encodeURIComponent(ability.id) +
-        '/tools/' + encodeURIComponent(tool) + '/skill-content');
-      if (dialog.isConnected) pre.textContent = result.content || 'No skill text.';
-    } catch (error) {
-      if (dialog.isConnected) pre.textContent = error.message || 'Could not load tool skill.';
+  // A tool's skill opens in place under its own row, in the shared editor, so the
+  // tool page never leaves for a modal. A second press closes it again.
+  const toggleToolSkill = (row, ability, tool) => {
+    const link = row.querySelector('.ac-tool-skill-link');
+    const open = row.nextElementSibling;
+    if (open && open.classList.contains('ab-tool-skill')) {
+      open.remove();
+      row.classList.remove('skill-open');
+      link?.setAttribute('aria-expanded', 'false');
+      return;
     }
+    // One skill at a time: a tool page is short, and two editors would push the
+    // rest of its settings off screen.
+    for (const stale of row.parentElement?.querySelectorAll('.ab-tool-skill') || []) stale.remove();
+    const band = node('div', 'ab-tool-skill');
+    const editor = createRichTextEditor({
+      value: '', label: tool + ' skill', placeholder: 'Loading tool skill…',
+    });
+    band.append(editor.element);
+    row.after(band);
+    row.classList.add('skill-open');
+    link?.setAttribute('aria-expanded', 'true');
+    request(scope + '/abilities/' + encodeURIComponent(ability.id) + '/tools/' +
+      encodeURIComponent(tool) + '/skill-content').then(result => {
+        if (band.isConnected) editor.setValue(result.content || 'No skill text.');
+      }).catch(error => {
+        if (band.isConnected) editor.setValue(error.message || 'Could not load tool skill.');
+      });
   };
   const toolPolicy = () => data.capability_levels?.levels?.[levelId] || data.permissions;
   // Read-only mark: the access a manifest declares for this level, applied only once the
@@ -273,7 +285,11 @@ export async function renderAbilities(host, request, options) {
   };
   const buildAbilityBody = (detail, ability) => {
     if (detail.childElementCount) return;
-    if (ability.id === 'mcp') detail.append(buildMcpControls({ ability, request, scope,
+    // The tool page is the shared config page: one shell owns the back control and
+    // the list itself, so every setting that opens at this level looks the same.
+    const config = createConfigPage({ title: ability.name,
+      onBack: () => abilityPages.get(ability.id)?.open(false) });
+    if (ability.id === 'mcp') config.body.append(buildMcpControls({ ability, request, scope,
       canManage, levelId, status }));
     const tools = _buildAbilitySettingsList();
     tools.classList.add('v3-ability-tools');
@@ -350,7 +366,7 @@ export async function renderAbilities(host, request, options) {
         showPerm: true,
         abilityId: ability.id,
         hasToolSkill: tool.has_tool_skill === true,
-        onOpenToolSkill: name => openToolSkill(ability, name),
+        onOpenToolSkill: name => toggleToolSkill(toolRow, ability, name),
         onExecutionChange: async (_, settings) => {
           try {
             const saved = await request(scope + '/abilities/' + encodeURIComponent(ability.id) +
@@ -387,9 +403,10 @@ export async function renderAbilities(host, request, options) {
       toolRow.title = [tool.supported ? '' : 'Unavailable in v3', effectiveLabel(effectiveTool)].filter(Boolean).join(' · ');
       tools.append(toolRow);
     }
-    detail.append(tools);
-    if (administrator) detail.append(administrator);
-    if (ability.migration_note) detail.append(node('p', 'v3-ability-note', ability.migration_note));
+    config.body.append(tools);
+    if (administrator) config.body.append(administrator);
+    if (ability.migration_note) config.body.append(node('p', 'v3-ability-note', ability.migration_note));
+    detail.append(config.element);
   };
   // Two-stage register: the list shows one row per ability group, and a group's page
   // lists the abilities inside that group (each still expands to its own settings).
@@ -539,7 +556,13 @@ export async function renderAbilities(host, request, options) {
     + '.v3-abilities-page .sr-detail-body .v3-ability{margin-bottom:8px}'
     + '.v3-abilities-page .sr-detail-body .v3-ability:last-child{margin-bottom:0}'
     + '.v3-abilities-page .v3-register-prompts{border:0;background:transparent}'
-    + '.v3-abilities-page .v3-register-prompts>.ac-group-body{padding:0}';
+    + '.v3-abilities-page .v3-register-prompts>.ac-group-body{padding:0}'
+    // The tool page sits at the register's side inset, so its rows line up with
+    // the rows it opened from instead of being indented into the card.
+    + '.v3-abilities-page .ac-ability-body{padding:8px 4px 10px}'
+    + '.v3-abilities-page .ac-ability-body .cfg-page{padding-top:2px}'
+    + '.v3-abilities-page .ab-tool-skill{padding:2px 0 10px}'
+    + '.v3-abilities-page .ab-tool-skill .rte-doc{max-height:300px}';
   page.append(style);
   const reload = node('button', 'ac-btn ac-btn-sm', 'Reload abilities');
   reload.type = 'button';

@@ -29,7 +29,7 @@ const abilityRows = () => [
    has_skill:true,skill_visibility:'loaded',default:'on',default_mode:'loaded',
    general_skills:[{skill_id:'core',title:'Skill',when_to_use:'',mode:'loaded'}],
    tools:[{name:'get_weather',description:'Forecast',policy:'allow',mode:'loaded',supported:true,
-     default:'allow',has_tool_skill:false}]},
+     default:'allow',has_tool_skill:true}]},
 ];
 const data = () => ({
   authority:{can_manage:true},
@@ -63,6 +63,7 @@ const request = async (url, method = 'GET', body) => {
     if (path.endsWith('/slots')) return {slots:[{slot_name:'system',content:'Configured prompt'}]};
     if (path.endsWith('/repository-connections')) return {load_failed:true};
     if (path.endsWith('/source-control/sites')) return {load_failed:true};
+    if (path.endsWith('/tools/get_weather/skill-content')) return {content:'Use the weather tool for forecasts.'};
     throw new Error('Unexpected GET ' + url);
   }
   const visibility = path.match(/\\/abilities\\/([^/]+)\\/visibility$/);
@@ -228,6 +229,47 @@ test('a revision poll re-reads the estimate only when the stamp moves', async ()
     await waitForChart(page, '1,400 tokens');
     await page.waitForTimeout(2200);
     assert.equal(await page.evaluate(() => window.fixture.reads()), 2);
+  } finally {
+    await browser?.close();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+// The tool page is the shared config page, and a tool's skill opens in place in the
+// shared editor instead of a modal.
+test("a tool's skill opens in the shared editor under its row", async () => {
+  const server = await serve();
+  let browser;
+  try {
+    const {chromium} = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+    browser = await chromium.launch({executablePath: process.env.CHROMIUM_PATH || '/snap/bin/chromium', headless: true, args: ['--no-sandbox']});
+    const page = await browser.newPage();
+    page.setDefaultTimeout(8000);
+    await page.goto('http://127.0.0.1:' + server.address().port + '/');
+    await waitForChart(page, '1,000 tokens');
+    const result = await page.evaluate(async () => {
+      const row = document.querySelector('.v3-ability[data-ability-id="web_access"]');
+      row.querySelector('.conn-card-header').click();
+      const shell = !!row.querySelector('.ac-ability-body > .cfg-page');
+      const link = row.querySelector('.ac-tool-skill-link');
+      link.click();
+      const band = () => document.querySelector('.ab-tool-skill');
+      for (let i = 0; i < 60 && !(band()?.querySelector('.rte-doc')?.innerText || '').trim(); i += 1) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      const opened = {bands: document.querySelectorAll('.ab-tool-skill').length,
+        text: band()?.querySelector('.rte-doc')?.innerText || '',
+        toolbar: band()?.querySelectorAll('.rte-btn').length || 0,
+        expanded: link.getAttribute('aria-expanded')};
+      link.click();
+      return {...opened, shell, after: document.querySelectorAll('.ab-tool-skill').length};
+    });
+    assert.equal(result.shell, true, 'the tool page body is the shared config page');
+    assert.equal(result.bands, 1, 'one editor opens under the clicked tool row: ' + JSON.stringify(result));
+    assert.equal(result.text, 'Use the weather tool for forecasts.');
+    assert.ok(result.toolbar > 0, 'the editor keeps its formatting toolbar');
+    assert.equal(result.expanded, 'true');
+    assert.equal(result.after, 0, 'a second press closes the editor');
   } finally {
     await browser?.close();
     await new Promise(resolve => server.close(resolve));
