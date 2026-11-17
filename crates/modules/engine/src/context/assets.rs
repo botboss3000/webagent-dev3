@@ -224,17 +224,20 @@ impl<
             history
         } else {
             extended = history.to_vec();
+            let mut rows = Vec::new();
             for text in updates {
                 let id = format!("main-notes-update-{}", uuid::Uuid::new_v4());
-                let rows = [
-                    json!({"type":"function_call","call_id":id,"name":"main_notes_update","arguments":"{}"}),
-                    json!({"type":"function_call_output","call_id":id,"output":text}),
-                ];
-                if let Some(input) = run["input"].as_array_mut() {
-                    input.extend(rows.iter().cloned());
-                }
-                extended.extend(rows);
+                rows.push(json!({"type":"function_call","call_id":id,"name":"main_notes_update","arguments":"{}"}));
+                rows.push(json!({"type":"function_call_output","call_id":id,"output":text}));
             }
+            if let Some(input) = run["input"].as_array_mut() {
+                input.extend(rows.iter().cloned());
+            }
+            extended.extend(rows.iter().cloned());
+            // Journal them so later runs of this session rebuild them from its history.
+            self.store
+                .save_run_observed(run, "main_notes_update", &json!({"items":rows}))
+                .await?;
             extended.as_slice()
         };
         webagent_context::assets::project_context(

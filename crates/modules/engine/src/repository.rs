@@ -596,6 +596,28 @@ impl<
                 )
                 .await?;
             }
+            // Main Notes updates join the session's history like any tool exchange, so later
+            // runs rebuild them from the journal until compaction.
+            if kind == "main_notes_update" {
+                for (ordinal, item) in payload["items"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                {
+                    let call_id = item["call_id"]
+                        .as_str()
+                        .ok_or_else(|| anyhow!("Main Notes update row has no call ID"))?;
+                    crate::send_future(self.chat.insert_interaction(
+                        &mut tx,
+                        sid,
+                        rid,
+                        &format!("notes:{call_id}:{ordinal}"),
+                        item,
+                    ))
+                    .await?;
+                }
+            }
             if kind == "model_output" {
                 let output = payload["output"]
                     .as_array()
