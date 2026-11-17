@@ -229,6 +229,139 @@ fn history_shape(history: &[Value]) -> String {
         .join(",")
 }
 
+/// Group digits in threes so byte and token counts read at a glance.
+fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Explain a context assembly failure. A trigger below the fixed overhead gets the measured
+/// sizes from the content-free assembly report; other codes keep the short form.
+fn assembly_failure_message(
+    code: &str,
+    stage: &str,
+    report: &Value,
+    compaction: &context_compaction::Config,
+) -> String {
+    let short = format!("Context error: {stage}/{code}; review this run");
+    if code != "trigger_overhead_exceeds_budget" {
+        return short;
+    }
+    // Same bytes-per-token ratio the planner used for this call.
+    let ratio = compaction
+        .bytes_per_token
+        .unwrap_or(compaction.characters_per_token as f64)
+        .max(1.0);
+    let tokens = |bytes: u64| (bytes as f64 / ratio).ceil() as u64;
+    let sized = |bytes: u64| {
+        format!(
+            "{} bytes (~{} tokens)",
+            grouped(bytes),
+            grouped(tokens(bytes))
+        )
+    };
+    let trigger = compaction.trigger_tokens as u64;
+    let mut text = format!(
+        "Context error: {stage}/{code}. The compaction trigger ({} tokens, {} bytes) is below \
+         the fixed overhead every model call resends (instructions, skill guidance and tool \
+         schemas). Compaction only summarizes conversation history, so even an empty history \
+         would stay over the trigger and no summary was attempted.",
+        grouped(trigger),
+        grouped(compaction.token_bytes(compaction.trigger_tokens) as u64)
+    );
+    let field = |name: &str| report[name].as_u64();
+    let (Some(instructions), Some(schemas)) = (
+        field("instructions_json_bytes"),
+        field("schemas_json_bytes"),
+    ) else {
+        return text;
+    };
+    let framing = field("framing_bytes").unwrap_or(0);
+    let overhead = instructions + schemas + framing;
+    text.push_str(&format!(
+        " Fixed overhead: {} = instructions and skill guidance {} + tool schemas {} + framing {} bytes.",
+        sized(overhead),
+        sized(instructions),
+        sized(schemas),
+        grouped(framing)
+    ));
+    if let Some(history) = field("history_json_bytes") {
+        text.push_str(&format!(" History: {}.", sized(history)));
+    }
+    if let Some(max) = field("max_bytes") {
+        text.push_str(&format!(" Model limit: {}.", sized(max)));
+    }
+    let needed = tokens(overhead) + (compaction.tail_tokens + compaction.summary_tokens) as u64;
+    text.push_str(&format!(
+        " Raise the compaction trigger to at least {} tokens (overhead + tail + summary) \
+         or load fewer skills and tools, then send a new message.",
+        grouped(needed)
+    ));
+    text
+}
+
+#[cfg(test)]
+mod assembly_failure_tests {
+    use super::*;
+    fn config() -> context_compaction::Config {
+        serde_json::from_value(json!({"schema_version":1,"trigger_tokens":60000,
+            "tail_tokens":2000,"summary_tokens":4000,"characters_per_token":4,
+            "summary_reserve_bytes":16384,"max_source_bytes":262144,"max_summary_bytes":65536,
+            "summary_prefix":"","active_summary_prefix":"","summary_prompt":""}))
+        .expect("compaction config fixture")
+    }
+    #[test]
+    fn trigger_below_overhead_lists_measured_sizes() {
+        let report = json!({"instructions_json_bytes":139609,"schemas_json_bytes":101499,
+            "framing_bytes":35,"history_json_bytes":193265,"max_bytes":991232});
+        let text = assembly_failure_message(
+            "trigger_overhead_exceeds_budget",
+            "compaction_plan",
+            &report,
+            &config(),
+        );
+        for part in [
+            "Context error: compaction_plan/trigger_overhead_exceeds_budget.",
+            "compaction trigger (60,000 tokens, 240,000 bytes)",
+            "Fixed overhead: 241,143 bytes (~60,286 tokens)",
+            "instructions and skill guidance 139,609 bytes (~34,903 tokens)",
+            "tool schemas 101,499 bytes (~25,375 tokens)",
+            "History: 193,265 bytes (~48,317 tokens).",
+            "Model limit: 991,232 bytes (~247,808 tokens).",
+            "at least 66,286 tokens",
+        ] {
+            assert!(text.contains(part), "{part} missing from {text}");
+        }
+    }
+    #[test]
+    fn missing_report_and_other_codes_stay_short() {
+        let text = assembly_failure_message(
+            "trigger_overhead_exceeds_budget",
+            "compaction_plan",
+            &Value::Null,
+            &config(),
+        );
+        assert!(text.contains("(60,000 tokens, 240,000 bytes)"));
+        assert!(!text.contains("Fixed overhead"));
+        assert_eq!(
+            assembly_failure_message(
+                "no_safe_boundary",
+                "compaction_plan",
+                &Value::Null,
+                &config()
+            ),
+            "Context error: compaction_plan/no_safe_boundary; review this run"
+        );
+    }
+}
+
 #[cfg(test)]
 mod history_journal_tests {
     use super::*;
@@ -2632,9 +2765,14 @@ impl<
                             return Ok(());
                         }
                         let (code, stage) = context_assembly::failure_code(&error);
-                        run["status"] = json!("paused");
-                        run["error"] = json!(format!(
-                            "Context assembly paused: {stage}/{code}; review this run"
+                        // A budget or configuration fault, not a pause: the run ends
+                        // failed and a new message (or resume) starts over.
+                        run["status"] = json!("failed");
+                        run["error"] = json!(assembly_failure_message(
+                            code,
+                            stage,
+                            &run["latest_context_assembly"]["report"],
+                            &assembly_compaction,
                         ));
                         app.save(&mut run).await?;
                         return Ok(());
