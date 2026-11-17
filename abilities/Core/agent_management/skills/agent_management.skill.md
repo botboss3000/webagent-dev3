@@ -17,6 +17,11 @@ Sub agents and sessions:
   using your summary. promote_spawn turns a sub agent into a reusable saved
   agent. run_optimizer returns a prompt proposal only.
 
+Delegation: message_session, start_session and start_spawn work through the
+recipient agent's own configured capabilities; they never grant this session
+other abilities. Messaging needs an approved route or exact owner approval, and
+every new session needs exact owner approval, even in Auto mode.
+
 Agents: use list_my_agents/get_agent before updates and provide the current
 owning API revision. create_agent uses safe platform defaults; models and
 permissions remain separate. One call changes only its named ability or tool.

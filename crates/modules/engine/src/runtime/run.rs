@@ -2426,26 +2426,10 @@ impl<
                         schema["parameters"]["properties"]["_execution_mode"] = json!({"type":"string","enum":["foreground","background"],"description":"Return a durable task handle immediately when background is selected"});
                     }
                 }
-                let mut mode_content = format!("Current session mode revision: {}. Recheck authorization before every tool call.",
-                mode["revision"].as_u64().expect("a mode has a revision"));
-                if let Some(label) = mode["definition"]["label"].as_str() {
-                    mode_content.push_str(&format!(
-                        "\nExecution mode: {label}\n{}",
-                        mode["definition"]["prompt"].as_str().unwrap_or("")
-                    ));
-                }
-                if access.ability_permission("agent_management") != access::Permission::Deny {
-                    mode_content.push_str("\nDelegation: where tool visibility and permissions allow, message_session, start_session and start_spawn delegate through the recipient agent\'s normal configured capabilities. They do not grant this session other abilities. Messaging uses its own approval controls: an approved route or exact owner approval is required, and every new session requires exact owner approval even in Auto mode.");
-                }
                 let call_number = run["attempt"].as_u64().unwrap_or(0) + 1;
-                let mut contributions = vec![context_input::Contribution {
-                    id: "session_mode".into(),
-                    source: "native_session_mode".into(),
-                    lifetime: context_input::Lifetime::Call,
-                    content: mode_content,
-                    turn: run["turns"].as_u64().unwrap_or(0),
-                    call: call_number,
-                }];
+                // The session mode is pinned in the instructions and its changes join the
+                // history (context assets), so this call's note carries only one-off items.
+                let mut contributions: Vec<context_input::Contribution> = Vec::new();
                 // A newly seen issue group gets one call-scoped chance to be explained.
                 let review_entry = run["run_health"]["review_pending"].clone();
                 if review_entry.is_null() {

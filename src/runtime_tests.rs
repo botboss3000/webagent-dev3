@@ -1964,11 +1964,11 @@ async fn catalog_change_revokes_loaded_ability_before_pending_tool() {
 
 /// Inspect the final call-scoped Responses developer suffix, never durable history or main instructions.
 fn native_call_suffix(request: &Value) -> &str {
-    let last = request["input"].as_array().unwrap().last().unwrap();
-    assert_eq!(last["role"], "developer");
-    let body = last["content"].as_str().unwrap();
-    assert!(body.contains("Current session mode revision:"));
-    body
+    // A call with no one-off items has no suffix.
+    match request["input"].as_array().unwrap().last() {
+        Some(last) if last["role"] == "developer" => last["content"].as_str().unwrap(),
+        _ => "",
+    }
 }
 
 /// Locate current ability guidance only in explicitly labelled Responses developer frames.
@@ -2111,13 +2111,11 @@ async fn long_run_compacts_before_model_and_keeps_full_message_history() {
         finished["workflow"]["receipts"]["model_dispatch"]["turn"]
     );
     assert_eq!(report["transport"], "responses");
-    assert_eq!(report["overlays"][0]["id"], "session_mode");
-    assert_eq!(report["overlays"][0]["disposition"], "included");
-    assert!(native_call_suffix(request).contains("Current session mode revision:"));
-    assert!(!request["instructions"]
+    // Compaction pins the current mode ahead of the history again.
+    assert!(request["instructions"]
         .as_str()
         .unwrap_or_default()
-        .contains("Current session mode revision:"));
+        .contains("Execution mode:"));
     assert!(!report.to_string().contains("Earlier conversation summary"));
     let summaries: Vec<_> = request["input"]
         .as_array()
@@ -4723,8 +4721,8 @@ fn late_known_write_result_resolves_cancel_and_shutoff_without_replay() {
 }
 
 #[tokio::test]
-/// Verify each call receives its current mode suffix while durable transcript and base instructions remain free of that call-scoped contribution.
-async fn current_mode_contribution_changes_per_call_without_entering_history() {
+/// Verify the starting mode is pinned in the instructions and a change joins the durable history once.
+async fn mode_change_joins_history_and_starting_mode_stays_pinned() {
     use axum::routing::post;
     let (_root, mut app) = fixture().await;
     let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
@@ -4791,16 +4789,35 @@ async fn current_mode_contribution_changes_per_call_without_entering_history() {
     assert_eq!(app.run(&second).await.unwrap()["status"], "completed");
     let requests = requests.lock().await;
     assert_eq!(requests.len(), 2);
-    let first_suffix = native_call_suffix(&requests[0]);
-    let second_suffix = native_call_suffix(&requests[1]);
-    assert!(first_suffix.contains("Current session mode revision: 0."));
-    assert!(!first_suffix.contains("Current session mode revision: 1."));
-    assert!(second_suffix.contains("Current session mode revision: 1."));
-    assert!(!second_suffix.contains("Current session mode revision: 0."));
-    assert!(first_suffix.contains("Execution mode: Ask"));
-    assert!(!first_suffix.contains("Execution mode: Plan"));
-    assert!(second_suffix.contains("Execution mode: Plan"));
-    assert!(!second_suffix.contains("Execution mode: Ask"));
+    // The mode the session started in is pinned in the instructions; a later change
+    // joins the history once as a mode_guidance row, leaving the instructions cached.
+    for request in requests.iter() {
+        let instructions = request["instructions"].as_str().unwrap_or_default();
+        assert!(instructions.contains("Execution mode: Ask"));
+        assert!(!instructions.contains("Execution mode: Plan"));
+        assert!(!native_call_suffix(request).contains("Execution mode:"));
+    }
+    let rows = |request: &Value| -> Vec<String> {
+        request["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| {
+                item["type"] == "function_call_output"
+                    && item["call_id"]
+                        .as_str()
+                        .is_some_and(|id| id.starts_with("mode_guidance-"))
+            })
+            .map(|item| item["output"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert!(rows(&requests[0]).is_empty());
+    let changed = rows(&requests[1]);
+    assert_eq!(changed.len(), 1);
+    assert!(changed[0].contains("Execution mode: Plan"));
+    assert!(json!(app.store.context(&sid).await.unwrap())
+        .to_string()
+        .contains("Execution mode: Plan"));
     for request in requests.iter() {
         assert!(!request["instructions"]
             .as_str()
@@ -10717,7 +10734,10 @@ async fn closing_turn_reuses_the_request_and_sets_the_status() {
     // tools and history, which providers cache by prefix); the final request's call note is
     // not part of the history, so the closing request continues after the reply.
     let (final_input, closing_input) = (input(2), input(3));
-    let history = final_input.len() - 1;
+    let note = final_input
+        .last()
+        .is_some_and(|item| item["role"] == "developer");
+    let history = final_input.len() - usize::from(note);
     assert_eq!(final_input[..history], closing_input[..history]);
     let shared = history;
     assert_eq!(bodies[2]["instructions"], bodies[3]["instructions"]);

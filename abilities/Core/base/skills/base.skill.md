@@ -20,7 +20,9 @@ Rules for every tool call. Each tool's own skill states how it runs.
 - A tool runs in the foreground, one call at a time, unless its own skill says
   otherwise. Tools that require approval ask the user first; Auto mode runs them
   without asking.
-- Never retry an uncertain external write; inspect its result first.
+- Never retry an uncertain external write; inspect its result first. When a
+  write's result is uncertain (for example edit_own_prompt, save_own_skill or
+  remove_own_skill after a restart), `get_task_checkpoint` shows its status.
 - Never put passwords, device codes or tokens in tool text; credentials go
   through the protected credential card.
 

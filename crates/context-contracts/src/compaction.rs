@@ -248,10 +248,17 @@ pub fn omit_skill_bodies(input: &mut [Value]) {
         .filter_map(call_id)
         .map(str::to_owned)
         .collect::<HashSet<_>>();
-    // Main Notes updates are omitted too: the snapshot rebuilt after compaction carries them.
+    // Main Notes updates and mode changes are omitted too: compaction pins the current notes
+    // and mode ahead of the history again.
     let notes = input
         .iter()
-        .filter(|item| item["type"] == "function_call" && item["name"] == "main_notes_update")
+        .filter(|item| {
+            item["type"] == "function_call"
+                && matches!(
+                    item["name"].as_str(),
+                    Some("main_notes_update" | "mode_guidance")
+                )
+        })
         .filter_map(call_id)
         .map(str::to_owned)
         .collect::<HashSet<_>>();
@@ -261,7 +268,7 @@ pub fn omit_skill_bodies(input: &mut [Value]) {
                 .as_str()
                 .is_some_and(|id| notes.contains(id))
         {
-            item["output"] = json!("Main Notes update omitted; the rebuilt notes carry it.");
+            item["output"] = json!("Omitted; the notes and mode pinned after compaction carry it.");
         }
     }
     for item in input {
@@ -1183,7 +1190,7 @@ mod tests {
         super::omit_skill_bodies(&mut input);
         let text = json!(input).to_string();
         assert!(!text.contains("SKILL") && text.contains("text_omitted"));
-        assert!(!text.contains("new line") && text.contains("Main Notes update omitted"));
+        assert!(!text.contains("new line") && text.contains("Omitted; the notes and mode pinned"));
         assert_eq!(input[5]["output"], "kept");
     }
 }

@@ -156,6 +156,44 @@ impl<
             controls
         ])))
     }
+    /// The session's mode guidance: the text pinned ahead of the history (set when the
+    /// history basis changes, so at the start and after each compaction) and, when the mode
+    /// changed since the last call, the new guidance to add to the history.
+    async fn mode_guidance(
+        &self,
+        sid: &str,
+        basis: &str,
+    ) -> Result<(Option<String>, Option<String>)> {
+        let mode = self.session_mode(sid).await?;
+        let revision = mode["revision"].as_u64().unwrap_or(0);
+        let text = mode["definition"]["label"].as_str().map(|label| {
+            format!(
+                "Execution mode: {label}\n{}",
+                mode["definition"]["prompt"].as_str().unwrap_or("").trim()
+            )
+        });
+        let key = format!("session_mode_view:{sid}");
+        let saved = self.store.get(&key).await?;
+        let (view, change) = match &saved {
+            Some(view) if view["history_basis"] == basis => {
+                if view["revision"].as_u64() == Some(revision) {
+                    (view.clone(), None)
+                } else {
+                    let mut next = view.clone();
+                    next["revision"] = json!(revision);
+                    (next, text.clone())
+                }
+            }
+            _ => (
+                json!({"history_basis":basis,"revision":revision,"pinned":text}),
+                None,
+            ),
+        };
+        if saved.as_ref() != Some(&view) {
+            self.store.put(&key, &view).await?;
+        }
+        Ok((view["pinned"].as_str().map(str::to_owned), change))
+    }
     pub async fn prepare_capability(
         &self,
         run: &Value,
@@ -209,34 +247,46 @@ impl<
             .get(&format!("session:{sid}"))
             .await?
             .ok_or_else(|| anyhow::anyhow!("Context session missing"))?;
-        let (notes, updates) = Box::pin(self.native.main_notes(
+        let basis = webagent_context::assets::history_basis(&session);
+        let (mut notes, updates) = Box::pin(self.native.main_notes(
             self.store.records(),
             &agent,
             &sid,
             &requester,
-            &webagent_context::assets::history_basis(&session),
+            &basis,
         ))
         .await?;
-        // Another session's Main Notes changes join the history as main_notes_update rows,
-        // once each, where they stay (and stay cached) until compaction.
+        let (mode_pinned, mode_change) = self.mode_guidance(&sid, &basis).await?;
+        if let Some(text) = mode_pinned {
+            notes.insert(0, ("mode-guidance".to_owned(), text));
+        }
+        // Another session's Main Notes changes and this session's mode changes join the
+        // history as tool-call rows, once each, where they stay (and stay cached) until
+        // compaction pins the current notes and mode ahead of the history again.
+        let mut rows = Vec::new();
+        let mut row = |name: &str, text: String| {
+            let id = format!("{name}-{}", uuid::Uuid::new_v4());
+            rows.push(json!({"type":"function_call","call_id":id,"name":name,"arguments":"{}"}));
+            rows.push(json!({"type":"function_call_output","call_id":id,"output":text}));
+        };
+        if let Some(text) = mode_change {
+            row("mode_guidance", text);
+        }
+        for text in updates {
+            row("main_notes_update", text);
+        }
         let mut extended;
-        let history = if updates.is_empty() {
+        let history = if rows.is_empty() {
             history
         } else {
             extended = history.to_vec();
-            let mut rows = Vec::new();
-            for text in updates {
-                let id = format!("main-notes-update-{}", uuid::Uuid::new_v4());
-                rows.push(json!({"type":"function_call","call_id":id,"name":"main_notes_update","arguments":"{}"}));
-                rows.push(json!({"type":"function_call_output","call_id":id,"output":text}));
-            }
             if let Some(input) = run["input"].as_array_mut() {
                 input.extend(rows.iter().cloned());
             }
             extended.extend(rows.iter().cloned());
             // Journal them so later runs of this session rebuild them from its history.
             self.store
-                .save_run_observed(run, "main_notes_update", &json!({"items":rows}))
+                .save_run_observed(run, "history_rows", &json!({"items":rows}))
                 .await?;
             extended.as_slice()
         };

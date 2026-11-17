@@ -596,9 +596,9 @@ impl<
                 )
                 .await?;
             }
-            // Main Notes updates join the session's history like any tool exchange, so later
-            // runs rebuild them from the journal until compaction.
-            if kind == "main_notes_update" {
+            // Main Notes updates and mode changes join the session's history like any tool
+            // exchange, so later runs rebuild them from the journal until compaction.
+            if kind == "history_rows" {
                 for (ordinal, item) in payload["items"]
                     .as_array()
                     .into_iter()
@@ -612,7 +612,7 @@ impl<
                         &mut tx,
                         sid,
                         rid,
-                        &format!("notes:{call_id}:{ordinal}"),
+                        &format!("rows:{call_id}:{ordinal}"),
                         item,
                     ))
                     .await?;
