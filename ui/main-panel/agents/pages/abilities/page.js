@@ -10,6 +10,7 @@ import { buildPolicyControls, effectiveLabel, readinessLabel } from './policy.js
 
 import { _buildMoreButton, _buildToolRow, _buildAbilitySettingsList, closeFloatingMenu } from '../../../../shared/ability-row-controls.js';
 import { buildSkillRow } from './rows.js';
+import { createSettingsRegister, createSettingsRow } from '../../../../shared/settings-register.js';
 import { _markSaving, _flashSaveCheck } from '../../../../shared/models/dom-utils.js';
 
 const node = (tag, className = '', text = '') => {
@@ -22,6 +23,42 @@ const chevronSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" 
 const modes = ['off', 'on_request', 'loaded'];
 // Core is set only by tool.json or skill.json and is shown as a locked pill.
 const modeLabel = mode => ({ loaded: 'Skill loaded', on_request: 'Skill on request', off: 'Off', core: 'Core' })[mode] || mode;
+// Register icons are raw SVG paths: one per ability group, taken from its first ability.
+const ICONS = {
+  box: '<path d="M12 3 3 7.5v9L12 21l9-4.5v-9L12 3Z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/>',
+  book: '<path d="M4 5a2 2 0 0 1 2-2h12v18H6a2 2 0 0 1-2-2Z"/><path d="M8 3v18"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z"/>',
+  terminal: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/>',
+  wrench: '<path d="M14.5 6.5a4 4 0 0 0 5 5L10 21l-4-4 8.5-8.5Z"/>',
+  'file-text': '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>',
+  cpu: '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',
+  image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m4 18 5-5 4 4 3-3 4 4"/>',
+  database: '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/>',
+  users: '<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0M16 5.5a3 3 0 0 1 0 5.5M18 20a6 6 0 0 0-3-5.2"/>',
+  message: '<path d="M21 12a8 8 0 0 1-8 8H8l-4 3v-6a8 8 0 1 1 17-5Z"/>',
+  'shopping-bag': '<path d="M6 8h12l1 12H5L6 8Z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/>',
+  'credit-card': '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/>',
+  code: '<path d="m9 18-6-6 6-6M15 6l6 6-6 6"/>',
+  smartphone: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/>',
+  briefcase: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M3 12h18"/>',
+  clipboard: '<rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4V3h6v1M9 10h6M9 14h4"/>',
+};
+// The tile names the category, so a group maps by name rather than by its first ability.
+const GROUP_ICONS = [[/administrator/, 'shield'], [/core/, 'cpu'], [/knowledge/, 'book'],
+  [/productiv/, 'clipboard'], [/web/, 'globe'], [/communicat/, 'message'], [/social/, 'users'],
+  [/commerce/, 'shopping-bag'], [/payment/, 'credit-card'], [/develop/, 'code'],
+  [/crm|marketing/, 'briefcase'], [/device/, 'smartphone'], [/system/, 'settings'], [/prompt/, 'file-text']];
+const iconFor = group => {
+  const hit = GROUP_ICONS.find(([pattern]) => pattern.test(group.name.toLowerCase()));
+  return ICONS[hit ? hit[1] : 'shield'];
+};
+const groupHint = group => {
+  const names = group.items.map(item => item.name);
+  const more = names.length > 3 ? ' +' + (names.length - 3) + ' more' : '';
+  return names.length + (names.length === 1 ? ' ability · ' : ' abilities · ') + names.slice(0, 3).join(', ') + more;
+};
 let searchText = '';
 let expandedAbility = null;
 
@@ -136,9 +173,7 @@ export async function renderAbilities(host, request, options) {
   search.placeholder = 'Search abilities, skills, tools and prompts';
   search.setAttribute('aria-label', 'Search abilities');
   search.value = searchText;
-  const list = node('div', 'conn-grid ac-list v3-abilities-list');
   const prompts = canManage ? await buildPromptsGroup(request, agentId) : null;
-  if (prompts) list.append(prompts);
   const levelSelector = buildPolicyControls({ data, levelId, rerender, status });
   if (host._abilityGeneration !== generation) return;
   overview.querySelector('[data-tier-selector]').replaceChildren(levelSelector);
@@ -355,10 +390,26 @@ export async function renderAbilities(host, request, options) {
     if (administrator) detail.append(administrator);
     if (ability.migration_note) detail.append(node('p', 'v3-ability-note', ability.migration_note));
   };
+  // Two-stage register: the list shows one row per ability group, and a group's page
+  // lists the abilities inside that group (each still expands to its own settings).
+  const categories = [...groups].map(([groupId, group]) => ({
+    id: 'g-' + groupId, title: group.name, hint: groupHint(group), icon: iconFor(group),
+  }));
+  if (prompts) categories.push({
+    id: 'prompts', title: 'Prompts',
+    hint: slots.length + (slots.length === 1 ? ' prompt slot' : ' prompt slots') + ' configured for this agent',
+    icon: ICONS['file-text'],
+  });
+  page.append(overview, search);
+  const register = createSettingsRegister(page, {label: 'Ability groups', categories});
+  const abilityPages = new Map();
+  const rowsBySection = new Map();
   for (const [groupId, group] of groups) {
-    const groupRow = buildGroup(groupId, group.name, 'shield', 'var(--brand)', '');
-    setGroupStatus(groupRow, group.items);
-    const body = groupRow.querySelector('.ac-group-body');
+    const section = createSettingsRow(register.stage, {id: 'g-' + groupId, title: group.name});
+    // Rows attach after the register builds its pages, so the first ability's switch
+    // is not mistaken for a page-level toggle.
+    const rows = [];
+    rowsBySection.set(section, rows);
     for (const ability of group.items) {
       const row = node('div', 'conn-card ac-row v3-ability' +
         (ability.visibility !== 'off' ? ' enabled' : ''));
@@ -437,37 +488,45 @@ export async function renderAbilities(host, request, options) {
           open();
         }
       });
+      row.dataset.groupId = groupId;
       row.append(header, detail);
-      body.append(row);
-      if (expandedAbility === ability.id) {
-        groupRow.classList.add('expanded');
-        groupRow.querySelector('.ac-group-head').setAttribute('aria-expanded', 'true');
-        open();
-      }
+      rows.push(row);
+      abilityPages.set(ability.id, {groupId, open});
     }
-    list.append(groupRow);
   }
+  let promptsSection = null;
+  if (prompts) {
+    promptsSection = createSettingsRow(register.stage, {id: 'prompts', title: 'Prompts'});
+    prompts.classList.add('expanded', 'v3-register-prompts');
+    prompts.querySelector('.ac-group-head')?.remove();
+  }
+  const matchesAbility = ability => [ability.name, ability.description, ability.skill_summary,
+    ...(ability.tools || []).map(tool => tool.name)]
+    .some(value => String(value || '').toLowerCase().includes(searchText));
   const filter = () => {
     searchText = search.value.trim().toLowerCase();
-    for (const row of list.querySelectorAll('.v3-ability')) {
+    for (const row of page.querySelectorAll('.v3-ability')) {
       const ability = abilities.find(item => item.id === row.dataset.abilityId);
-      row.hidden = !!searchText && ![ability.name, ability.description, ability.skill_summary,
-        ...(ability.tools || []).map(tool => tool.name)]
-        .some(value => String(value || '').toLowerCase().includes(searchText));
+      row.hidden = !!searchText && !matchesAbility(ability);
     }
-    for (const group of list.querySelectorAll('.ac-group:not(.ac-group-prompts)')) {
-      group.hidden = !group.querySelector('.v3-ability:not([hidden])');
-      if (searchText && !group.hidden) {
-        group.classList.add('expanded');
-        group.querySelector('.ac-group-head').setAttribute('aria-expanded', 'true');
-      }
-    }
-    if (prompts) prompts.hidden = !!searchText && !slots.some(slot =>
+    const noPrompts = !!searchText && !slots.some(slot =>
       [slot.slot_name, slot.content].some(value =>
         String(value || '').toLowerCase().includes(searchText)));
+    for (const row of page.querySelectorAll('.sr-row')) {
+      const id = row.dataset.registerFor;
+      if (id === 'prompts') { row.hidden = noPrompts; continue; }
+      row.hidden = !!searchText && !groups.get(id.slice(2)).items.some(matchesAbility);
+    }
   };
   search.addEventListener('input', filter);
-  page.append(overview, search, list, status);
+  page.append(status);
+  const style = node('style');
+  style.textContent = '.v3-abilities-page .sr-shell{margin-top:2px}'
+    + '.v3-abilities-page .sr-detail-body .v3-ability{margin-bottom:8px}'
+    + '.v3-abilities-page .sr-detail-body .v3-ability:last-child{margin-bottom:0}'
+    + '.v3-abilities-page .v3-register-prompts{border:0;background:transparent}'
+    + '.v3-abilities-page .v3-register-prompts>.ac-group-body{padding:0}';
+  page.append(style);
   const reload = node('button', 'ac-btn ac-btn-sm', 'Reload abilities');
   reload.type = 'button';
   reload.onclick = () => rerender({ administratorNotice: '' }).catch(error => { status.textContent = error.message; });
@@ -475,7 +534,12 @@ export async function renderAbilities(host, request, options) {
   closeFloatingMenu();
   host.replaceChildren(page);
   window.lucide?.createIcons({ nodes: [...page.querySelectorAll('[data-lucide]:not(.lucide)')] });
+  register.present();
+  for (const [section, rows] of rowsBySection) section.body.append(...rows);
+  if (promptsSection) promptsSection.body.append(prompts);
   filter();
+  const restored = abilityPages.get(expandedAbility);
+  if (restored) { register.open('g-' + restored.groupId); restored.open(); }
   // LIVE-CONTEXT-CHART: poll the cheap revision stamp every two seconds while the
   // tab is visible and the chart is on screen, and re-read the estimate only when
   // the stamp moved. Hidden tabs and unmounted pages poll nothing; returning to the
