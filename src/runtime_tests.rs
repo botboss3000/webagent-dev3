@@ -4869,7 +4869,7 @@ async fn issues_route_aggregates_the_conversation_tree() {
         assert_eq!(view["totals"]["sessions"], 2);
         assert_eq!(view["groups"][0]["tool"], "browser_read");
         assert_eq!(view["groups"][0]["count"], 2);
-        assert!(!body.contains("4471"));
+        assert!(!body.contains(sentinel));
     }
     let (_, body) = read(unrelated).await;
     assert_eq!(

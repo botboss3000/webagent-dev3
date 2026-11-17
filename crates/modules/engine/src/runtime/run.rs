@@ -121,6 +121,12 @@ fn skills_in_history(input: &Value) -> std::collections::HashSet<String> {
         .collect()
 }
 
+/// Asking the agent to file an `agent_review` note for a new issue group is switched off:
+/// it spends a call in the user's session. A forked reviewer that records the note without
+/// touching the session's context is planned; until it is built and validated, issue groups
+/// are still recorded but never prompted.
+const REVIEW_PROMPTS_ENABLED: bool = false;
+
 /// Add `request` to the newest result of `tool` in the run's history, as `review_request`.
 /// False when there is no such result to carry it.
 fn attach_review_request(run: &mut Value, tool: &str, request: &str) -> bool {
@@ -2457,7 +2463,8 @@ impl<
                         .tool_abilities("agent_review", &Value::Null, &Value::Null, &Value::Null)
                         .iter()
                         .any(|id| id == "diagnostics");
-                    let prompted = installed
+                    let prompted = REVIEW_PROMPTS_ENABLED
+                        && installed
                         && access.ability_permission("diagnostics") != access::Permission::Deny;
                     super::health::record_review_prompt(&mut run, prompted);
                     tracing::warn!(

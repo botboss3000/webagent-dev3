@@ -200,7 +200,9 @@ fn failure_kind(value: &Value) -> crate::model_selection::FailureKind {
         "Selected model is unavailable or unsupported for this account" => ModelUnavailable,
         "Provider authorization is invalid or expired; reconnect ChatGPT" => InvalidCredentials,
         "Provider rate limit exceeded" | "Provider internal error" => Transient,
-        "Provider usage limit exceeded" => QuotaExhausted,
+        "Provider usage limit exceeded" | "Provider account has insufficient balance" => {
+            QuotaExhausted
+        }
         "Provider context limit exceeded"
         | "Provider rejected the request format or parameters" => MalformedRequest,
         _ => Protocol,
@@ -327,6 +329,8 @@ async fn response_failure(
     };
     let detail = match status {
         401 => "Provider authorization is invalid or expired; reconnect ChatGPT",
+        // DeepSeek and other pay-as-you-go APIs answer 402 when the account has no credit.
+        402 => "Provider account has insufficient balance",
         403 => "Provider denied access to this account or model",
         429 => "Provider rate or usage limit exceeded",
         _ => value
@@ -337,6 +341,7 @@ async fn response_failure(
     use crate::model_selection::FailureKind::*;
     let kind = match status {
         401 => InvalidCredentials,
+        402 => QuotaExhausted,
         403 => PolicyRejected,
         429 if value
             .as_ref()

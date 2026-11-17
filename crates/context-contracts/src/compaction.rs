@@ -462,7 +462,7 @@ fn call_id(item: &Value) -> Option<&str> {
 /// Prefer an earlier completed user turn. If one long task fills the context,
 /// a completed tool exchange is also safe: no tool call is left without its
 /// output on the summarized side. Planning never removes durable history.
-
+///
 /// COMPACTION POLICY: the trigger estimates the complete logical request.
 /// Assembly supplies fixed instructions/schema overhead; only history is folded.
 pub fn plan_rolling(input: &[Value], max_bytes: usize, config: &Config) -> Result<Option<Plan>> {
