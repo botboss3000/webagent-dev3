@@ -1,64 +1,14 @@
-//! Core task bookkeeping and safe declarative presentation.
-//! The model never selects a user, session or run: Rust supplies those identities.
+//! present_chat_component: declarative chat panels and the server-side check of their answers.
+use super::{authorize, short_title, text};
 use crate::{Call, NativeHost};
 use anyhow::{anyhow, bail, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio_util::sync::CancellationToken;
-use webagent_access::Permission;
-use webagent_host_core::{digest, key};
+use webagent_host_core::digest;
 
-/// Tools this module executes; their schemas are built in below.
-pub const TOOLS: &[&str] = &[
-    "get_task_checkpoint",
-    "update_task_checkpoint",
-    "present_chat_component",
-];
-/// Whether this module executes tool `name`.
-#[must_use]
-pub fn owns(name: &str) -> bool {
-    matches!(
-        name,
-        "get_task_checkpoint" | "update_task_checkpoint" | "present_chat_component"
-    )
-}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CheckpointArgs {
-    #[serde(default)]
-    action_id: Option<String>,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct UpdateArgs {
-    expected_revision: u64,
-    update: Update,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Update {
-    summary: String,
-    #[serde(default)]
-    steps: Option<Vec<Step>>,
-    #[serde(default)]
-    active_step: Option<String>,
-    #[serde(default)]
-    next_action: Option<String>,
-    #[serde(default)]
-    blockers: Option<Vec<String>>,
-}
-#[derive(Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-struct Step {
-    label: String,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    verification: Option<String>,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ComponentArgs {
+pub(super) struct ComponentArgs {
     #[serde(rename = "type")]
     kind: String,
     #[serde(default)]
@@ -74,104 +24,13 @@ struct ComponentArgs {
     #[serde(default)]
     dismiss: bool,
 }
-/// The agreed plan an agent hands over when it leaves Plan mode (`set_execution_mode`).
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Plan {
-    #[serde(default)]
-    goal: String,
-    #[serde(default)]
-    criteria: String,
-    #[serde(default)]
-    notes: String,
-    #[serde(default)]
-    title: String,
-    checklist: Vec<Step>,
-}
-/// Session artifact id (and kind) of a session's agreed plan.
-pub const PLAN_ARTIFACT: &str = "plan";
 /// Hard limit for panel prompts and hints; the tool skill asks for 200 or fewer. The margin
 /// only protects against runaway text.
 const PANEL_TEXT: usize = 400;
 fn empty_object() -> Value {
     json!({})
 }
-fn text(value: &str, limit: usize) -> Result<String> {
-    let value = value.trim();
-    if value.len() > limit
-        || value
-            .chars()
-            .any(|ch| ch.is_control() && ch != '\n' && ch != '\t')
-    {
-        bail!("Text exceeds {limit} bytes or contains control characters");
-    }
-    Ok(value.to_owned())
-}
-fn short_title(value: &str, fallback: &str) -> Result<String> {
-    let value = text(value, 80)?;
-    if value.is_empty() || value.split_whitespace().count() > 3 {
-        Ok(fallback.to_owned())
-    } else {
-        Ok(value)
-    }
-}
-fn validate_steps(steps: &[Step]) -> Result<Value> {
-    if steps.is_empty() || steps.len() > 32 {
-        bail!("Expected 1..32 task steps");
-    }
-    let mut output = Vec::with_capacity(steps.len());
-    for step in steps {
-        let label = text(&step.label, 240)?;
-        if label.len() < 3 {
-            bail!("Task step label is too short");
-        }
-        let status = step.status.as_deref().unwrap_or("pending");
-        if !matches!(status, "pending" | "in_progress" | "done" | "blocked") {
-            bail!("Invalid task step status");
-        }
-        output.push(json!({"label":label,"status":status,
-            "verification":text(step.verification.as_deref().unwrap_or(""),240)?}));
-    }
-    Ok(json!(output))
-}
-fn checkpoint(update: Update) -> Result<Value> {
-    let summary = text(&update.summary, 1200)?;
-    if summary.len() < 20 {
-        bail!("Task summary needs 20..1200 bytes");
-    }
-    let steps = update
-        .steps
-        .as_ref()
-        .map(|steps| validate_steps(steps))
-        .transpose()?;
-    let active_step = update
-        .active_step
-        .as_deref()
-        .map(|s| text(s, 120))
-        .transpose()?;
-    let next_action = update
-        .next_action
-        .as_deref()
-        .map(|s| text(s, 1200))
-        .transpose()?;
-    let blockers = update
-        .blockers
-        .map(|items| {
-            if items.len() > 8 {
-                bail!("Too many task blockers");
-            }
-            items
-                .into_iter()
-                .map(|item| text(&item, 240))
-                .collect::<Result<Vec<_>>>()
-        })
-        .transpose()?;
-    Ok(
-        json!({"summary":summary,"steps":steps,"active_step":active_step,
-        "next_action":next_action,"blockers":blockers,"provenance":"agent_claim"}),
-    )
-}
-fn component(args: ComponentArgs, fallback_id: &str) -> Result<(String, Value, u64)> {
+pub(super) fn component(args: ComponentArgs, fallback_id: &str) -> Result<(String, Value, u64)> {
     let kind = args.kind.as_str();
     if kind == "approval" {
         // A model-drawn approval could be mistaken for a real permission control.
@@ -510,276 +369,30 @@ pub fn answer_text(spec: &Value, answer: &Value) -> Result<String> {
         .collect::<Vec<_>>()
         .join("\n"))
 }
-
-/// The session artifact for an agreed `plan`: goal, criteria and notes, then the numbered
-/// checklist. Validates every field, so a bad plan is refused before anything changes.
-pub fn plan_artifact(args: &Plan) -> Result<Value> {
-    let steps = validate_steps(&args.checklist)?;
-    let mut sections = Vec::new();
-    for (label, value) in [
-        ("Goal", &args.goal),
-        ("Done when", &args.criteria),
-        ("Notes", &args.notes),
-    ] {
-        let value = text(value, 1200)?;
-        if !value.is_empty() {
-            sections.push(json!({"label":label,"value":value,"status":null}));
-        }
-    }
-    let list = steps
-        .as_array()
-        .unwrap()
-        .iter()
-        .enumerate()
-        .map(|(i, s)| {
-            format!(
-                "{}. [{}] {}",
-                i + 1,
-                if s["status"] == "done" { "x" } else { " " },
-                s["label"].as_str().unwrap_or("")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    sections.push(json!({"label":"Checklist","value":list,"status":null}));
-    let title = short_title(&args.title, "Plan")?;
-    let artifact = json!({"title":title,"sections":sections});
-    if serde_json::to_vec(&artifact)?.len() > 24 * 1024 {
-        bail!("Plan exceeds 24 KiB");
-    }
-    Ok(artifact)
-}
-/// Fresh live authority for the task call `pending_id`: the run generation, or an error
-/// when the call, its recorded revisions or the caller's live access no longer admit it.
-async fn authorize(
-    host: &dyn NativeHost,
-    sid: &str,
-    rid: &str,
-    pending_id: &str,
-    name: &str,
-) -> Result<String> {
-    let agent = host.session_agent_id(sid).await?;
-    let scoped = host.agent_store(&agent).await?;
-    let run = scoped
-        .get(&key("run", rid))
-        .await?
-        .ok_or_else(|| anyhow!("Run not found"))?;
-    if run["session_id"] != sid
-        || run["agent_id"].as_str().unwrap_or("shared_default") != agent
-        || run["status"] != "running"
-    {
-        bail!("Task run unavailable for current session");
-    }
-    let (mode_revision, visibility, state) = host.scoped_ability_controls(&scoped, sid).await?;
-    let access = host
-        .scoped_live_access(&scoped, host.actor(), sid, &agent)
-        .await?;
-    let pending = if run["pending"]["id"] == pending_id && run["pending"]["state"] == "executing" {
-        Some(&run["pending"])
-    } else {
-        run["batch"]
-            .as_array()
-            .and_then(|batch| {
-                batch.iter().find(|item| {
-                    item["pending"]["id"] == pending_id && item["state"] == "executing"
-                })
-            })
-            .map(|item| &item["pending"])
-    }
-    .ok_or_else(|| anyhow!("Task call is no longer executing"))?;
-    if pending["mode_revision"] != json!(mode_revision)
-        || pending["visibility_revision"] != visibility["revision"]
-        || pending["ability_state_revision"] != state["revision"]
-        || pending["access_revision"] != json!(access.revision.clone())
-    {
-        bail!("Task authorization changed during dispatch");
-    }
-    if !access.admitted()
-        || host
-            .live_tool_decision(&access, name, &visibility, &state, &run["loaded_abilities"])
-            .permission
-            == Permission::Deny
-    {
-        bail!("Base task tool unavailable under current access");
-    }
-    Ok(run["generation"]
-        .as_str()
-        .ok_or_else(|| anyhow!("Task run generation unavailable"))?
-        .to_owned())
-}
-async fn work(
-    host: &dyn NativeHost,
-    sid: &str,
-    rid: &str,
-    pending_id: &str,
-    name: &str,
-    args: &Value,
-) -> Result<Value> {
-    let generation = authorize(host, sid, rid, pending_id, name).await?;
-    let call = Call {
-        sid,
-        run_id: rid,
-        generation: &generation,
-        pending_id,
-    };
-    match name {
-        "get_task_checkpoint" => {
-            let query: CheckpointArgs = serde_json::from_value(args.clone())?;
-            let mut state = host.task_checkpoint(host.store(), sid, rid).await?;
-            let run = host
-                .store()
-                .get(&key("run", rid))
-                .await?
-                .ok_or_else(|| anyhow!("Run not found"))?;
-            state["actions"] = json!(host.action_statuses(&run).await?);
-            if let Some(id) = query.action_id {
-                state["action"] = host.action_lookup(&run, &id).await?;
-            }
-            if authorize(host, sid, rid, pending_id, name).await? != generation {
-                bail!("Task run generation changed");
-            }
-            Ok(json!({"status":"success","output":state}))
-        }
-        "update_task_checkpoint" => {
-            let request: UpdateArgs = serde_json::from_value(args.clone())?;
-            let artifact = checkpoint(request.update)?;
-            if authorize(host, sid, rid, pending_id, name).await? != generation {
-                bail!("Task run generation changed");
-            }
-            let saved = host
-                .write_artifact(
-                    call,
-                    "checkpoint",
-                    "task",
-                    request.expected_revision,
-                    &artifact,
-                )
-                .await?;
-            Ok(json!({"status":"success","output":saved}))
-        }
-        "present_chat_component" => {
-            let request: ComponentArgs = serde_json::from_value(args.clone())?;
-            let fallback = format!("component-{}", &digest(&json!(pending_id))[..24]);
-            let (id, spec, revision) = component(request, &fallback)?;
-            if authorize(host, sid, rid, pending_id, name).await? != generation {
-                bail!("Task run generation changed");
-            }
-            let saved = host
-                .write_artifact(call, "component", &id, revision, &spec)
-                .await?;
-            Ok(json!({"status":"success","output":saved}))
-        }
-        _ => bail!("Unknown Base task tool"),
-    }
-}
-/// Run one task tool under fresh authority; rejections are tool results.
-pub async fn execute(
+pub(super) async fn run(
     host: &dyn NativeHost,
     call: Call<'_>,
+    sid: &str,
+    rid: &str,
+    pending_id: &str,
     name: &str,
+    generation: &str,
     args: &Value,
-    cancel: CancellationToken,
 ) -> Result<Value> {
-    if cancel.is_cancelled() {
-        bail!("tool execution cancelled");
+    let request: ComponentArgs = serde_json::from_value(args.clone())?;
+    let fallback = format!("component-{}", &digest(&json!(pending_id))[..24]);
+    let (id, spec, revision) = component(request, &fallback)?;
+    if authorize(host, sid, rid, pending_id, name).await? != generation {
+        bail!("Task run generation changed");
     }
-    let result = tokio::select! {
-        _=cancel.cancelled()=>bail!("tool execution cancelled"),
-        result=work(host,call.sid,call.run_id,call.pending_id,name,args)=>result,
-    };
-    if cancel.is_cancelled() {
-        bail!("tool execution cancelled");
-    }
-    Ok(match result {
-        Ok(output) => output,
-        Err(error) => {
-            json!({"status":"error","error_kind":"base_task_rejected","output":error.to_string()})
-        }
-    })
+    let saved = host
+        .write_artifact(call, "component", &id, revision, &spec)
+        .await?;
+    Ok(json!({"status":"success","output":saved}))
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn plan_artifact_holds_the_plan_and_refuses_bad_steps() {
-        let plan: Plan = serde_json::from_value(json!({"title":"Standup note","goal":"Daily note",
-            "checklist":[{"label":"Write it"},{"label":"Schedule it","status":"done"}]}))
-        .unwrap();
-        let card = plan_artifact(&plan).unwrap();
-        assert_eq!(card["title"], "Standup note");
-        assert_eq!(
-            card["sections"][1]["value"],
-            "1. [ ] Write it\n2. [x] Schedule it"
-        );
-        let short: Plan = serde_json::from_value(json!({"checklist":[{"label":"x"}]})).unwrap();
-        assert!(plan_artifact(&short).is_err());
-        assert!(
-            serde_json::from_value::<Plan>(json!({"checklist":[],"expected_revision":0})).is_err()
-        );
-    }
-    #[test]
-    fn checkpoint_and_components_are_bounded_and_declarative() {
-        let valid = json!({"summary":"Worked through implementation; next verify persistence.",
-            "steps":[{"label":"Implement storage","status":"in_progress"}]});
-        let update: Update = serde_json::from_value(valid).unwrap();
-        assert_eq!(checkpoint(update).unwrap()["provenance"], "agent_claim");
-        assert!(
-            serde_json::from_value::<Update>(json!({"summary":"x","html":"<script>"})).is_err()
-        );
-        assert!(serde_json::from_value::<ComponentArgs>(json!({"type":"status","expected_revision":0,
-            "data":{"sections":[{"label":"Progress","value":"Ready"}]},"lifecycle":{"script":"alert(1)"}})).is_err());
-        assert!(component(
-            serde_json::from_value(json!({"type":"approval","expected_revision":0,
-            "data":{"message":"Please approve","status":"approved"}}))
-            .unwrap(),
-            "c",
-        )
-        .is_err());
-        let (_, choice, _) = component(
-            serde_json::from_value(
-                json!({"type":"choice","expected_revision":0,"title":"For Bob",
-            "data":{"question":"Which?","options":[{"label":"A"},"B"]}}),
-            )
-            .unwrap(),
-            "c",
-        )
-        .unwrap();
-        assert_eq!(choice["authority"], "user_reply");
-        assert_eq!(choice["data"]["prompt"], "Which?");
-        assert_eq!(choice["data"]["options"][1]["label"], "B");
-        let (_, closed, _) = component(
-            serde_json::from_value(json!({"type":"choice","expected_revision":1,"dismiss":true}))
-                .unwrap(),
-            "c",
-        )
-        .unwrap();
-        assert_eq!(closed["lifecycle"]["dismissed"], true);
-        assert!(component(
-            serde_json::from_value(json!({"type":"choice","expected_revision":0,
-            "data":{"options":["A"]}}))
-            .unwrap(),
-            "c",
-        )
-        .is_err());
-        let (_, form, _) = component(
-            serde_json::from_value(
-                json!({"type":"form","expected_revision":0,"title":"Options to combine",
-            "data":{"fields":[{"name":"pick","type":"multi","options":["A","B","C"]}]}}),
-            )
-            .unwrap(),
-            "c",
-        )
-        .unwrap();
-        assert_eq!(form["title"], "Options to combine");
-        assert_eq!(form["data"]["fields"][0]["options"][2], "C");
-        assert!(component(
-            serde_json::from_value(json!({"type":"form","expected_revision":0,"title":"T",
-            "data":{"fields":[{"name":"pick","type":"multi","options":[]}]}}))
-            .unwrap(),
-            "c",
-        )
-        .is_err());
-    }
     #[test]
     fn paged_forms_keep_radio_other_and_attach_only_where_they_apply() {
         let form = |fields: Value| {

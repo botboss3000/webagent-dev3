@@ -40,7 +40,7 @@ pub mod knowledge_files;
 pub mod mode;
 #[path = "../../../../../abilities/Core/model_switcher/tools/shared/model_switcher.rs"]
 pub mod model_switcher;
-#[path = "../../../../../abilities/Core/agent_management/native/orchestration.rs"]
+#[path = "../../../../../abilities/Core/agent_management/tools/shared/orchestration.rs"]
 pub mod orchestration;
 #[path = "../../../../../abilities/Core/base/tools/read_own_prompt/read_own_prompt.rs"]
 pub mod prompt;
@@ -52,7 +52,7 @@ pub mod reply_buttons;
 pub mod self_edit;
 #[path = "../../../../../abilities/Core/base/tools/shared/session.rs"]
 pub mod session;
-#[path = "../../../../../abilities/Core/base/native/task.rs"]
+#[path = "../../../../../abilities/Core/base/tools/shared/task.rs"]
 pub mod task;
 #[path = "../../../../../abilities/Core/base/tools/shared/text_search.rs"]
 pub mod text_search;
@@ -66,7 +66,7 @@ pub mod vault;
 pub mod web_access;
 #[path = "../../../../../abilities/Core/base/tools/shared/webhooks.rs"]
 pub mod webhooks;
-#[path = "../../../../../abilities/Memory/wiki_context/native/wiki.rs"]
+#[path = "../../../../../abilities/Memory/wiki_context/tools/shared/wiki.rs"]
 pub mod wiki;
 #[path = "../../../../../abilities/Memory/wiki_context/tools/shared/wiki_markdown.rs"]
 pub mod wiki_markdown;
