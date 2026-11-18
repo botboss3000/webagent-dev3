@@ -1,6 +1,7 @@
 //! Saved UI elements for the app's pages (storage in
-//! `webagent_native_tools::sandbox::elements`): the agent's Artifacts page lists them and
-//! approves, rejects or deletes them, and an open chat loads one into its Artifacts card.
+//! `webagent_native_tools::sandbox::elements`): the agent's Artifacts page lists and
+//! deletes them, and an open chat loads one into its Artifacts card. Agents save them with
+//! the approval-gated `sandbox_save`.
 //! Every route works only on the caller's own elements with an agent they may use; a shared
 //! element is deleted only by someone who manages the agent.
 use crate::*;
@@ -18,8 +19,7 @@ fn settings() -> std::result::Result<Config, ApiError> {
     Config::read().map_err(|error| ApiError(StatusCode::SERVICE_UNAVAILABLE, error.to_string()))
 }
 
-/// GET: the caller's elements, the shared ones and pending proposals (with their HTML, to
-/// review) for one agent.
+/// GET: the caller's elements and the shared ones for one agent.
 pub async fn page_read(
     State(app): State<App>,
     Extension(identity): Extension<Value>,
@@ -40,37 +40,7 @@ pub async fn page_read(
     Ok(Json(list))
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Decision {
-    approve: bool,
-}
-
-/// POST: approve (save exactly as proposed) or reject one pending proposal.
-pub async fn page_decide(
-    State(app): State<App>,
-    Extension(identity): Extension<Value>,
-    Path((agent, id)): Path<(String, String)>,
-    Json(body): Json<Decision>,
-) -> Api {
-    super::core_scripts::page_store(&app, &identity, &agent).await?;
-    let user = caller(&identity)?;
-    let config = settings()?;
-    let _guard = app.gate.lock().await;
-    elements::decide(
-        &app.store.root,
-        &agent,
-        &user,
-        &id,
-        body.approve,
-        &config,
-        now(),
-    )
-    .map(Json)
-    .map_err(|error| conflict(&error.to_string()))
-}
-
-/// DELETE: remove one of the caller's elements (or pending proposal), or a shared element
+/// DELETE: remove one of the caller's elements, or a shared element
 /// when the caller manages the agent.
 pub async fn page_delete(
     State(app): State<App>,

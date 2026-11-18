@@ -32,13 +32,13 @@ this agent keeps for this user across all their conversations, and shows in a ch
 in the Artifacts chip.
 
 1. Build it in a sandbox folder, for example `toggle/index.html`, and test its logic there.
-2. `sandbox_propose` it. The user approves it on the agent's Artifacts page; nothing is saved
-   before that. Tell the user it is waiting.
+2. `sandbox_save` it. Like other approval-gated tools it follows the session's execution
+   mode: in Ask the user approves it in the chat, in Auto it is saved at once.
 3. Once saved, `sandbox_present` places a card for it in any of the user's chats with this
    agent, with your title, a short description and optional `params`.
 
 Saved elements are read-only in the sandbox at `saved/mine/<name>/` and `saved/shared/<name>/`.
-To change one, copy it into your folder, edit and propose it again. `sandbox_elements` lists
+To change one, copy it into your folder, edit and save it again. `sandbox_elements` lists
 them.
 
 An element runs in a sandboxed frame with no network and no app access. It talks to the chat

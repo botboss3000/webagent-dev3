@@ -4,13 +4,13 @@
 //!
 //! - `agent_data/<agent>/ui_elements/users/<user>/<name>/`: one user's elements with
 //!   this agent, never seen by another user.
-//! - `agent_data/<agent>/ui_elements/users/<user>/.proposals/<id>/`: proposals waiting
-//!   for that user's approval on the agent's Artifacts page.
 //! - `agent_data/<agent>/ui_elements/shared/<name>/`: agent-wide elements an operator
 //!   shared with every user of the agent.
 //!
-//! Nothing here renders or runs an element: the chat shows it in a sandboxed frame with no
-//! network and no app access. Limits come from the ability's `elements.json`.
+//! Saving, deleting and sharing go through approval-gated tools, so they follow the
+//! session's execution mode: Ask shows the approval in the chat, Auto runs them. Nothing
+//! here renders or runs an element: the chat shows it in a sandboxed frame with no network
+//! and no app access. Limits come from the ability's `elements.json`.
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 use sha2::Digest;
@@ -69,7 +69,6 @@ pub struct Config {
     pub max_element_kb: u64,
     pub max_elements: usize,
     pub max_shared: usize,
-    pub max_proposals: usize,
     pub max_params_kb: u64,
     pub prompt_countdown_seconds: u64,
     /// App routes an element may open, as path-and-query prefixes such as `/app?tab=agents`.
@@ -116,7 +115,6 @@ impl Config {
             max_element_kb: number("max_element_kb")?.clamp(1, 512),
             max_elements: count("max_elements")?,
             max_shared: count("max_shared")?,
-            max_proposals: count("max_proposals")?,
             max_params_kb: number("max_params_kb")?.clamp(1, 16),
             prompt_countdown_seconds: number("prompt_countdown_seconds")?.clamp(1, 30),
             routes,
@@ -130,7 +128,7 @@ impl Config {
     }
 }
 
-/// An element or proposal name: 1–40 lowercase letters, digits, `-` and `_`.
+/// An element name: 1–40 lowercase letters, digits, `-` and `_`.
 #[must_use]
 pub fn name_ok(name: &str) -> bool {
     (1..=40).contains(&name.len())
@@ -175,7 +173,7 @@ fn scope_dir(root: &Path, agent: &str, user: &str, scope: Scope) -> Result<PathB
     }
 }
 
-/// The title, description and HTML of a new element or proposal, checked against `config`.
+/// The name, title, description and HTML of an element to save, checked against `config`.
 pub struct Draft<'a> {
     pub name: &'a str,
     pub title: &'a str,
@@ -252,41 +250,21 @@ fn write_element(dir: &Path, meta: &Value, html: &str) -> Result<()> {
     Ok(())
 }
 
-/// This user's elements, the shared ones and this user's pending proposals for `agent`.
+/// This user's elements and the shared ones for `agent`.
 ///
 /// # Errors
 /// For an invalid agent or user.
 pub fn list(root: &Path, agent: &str, user: &str) -> Result<Value> {
-    let mine = user_dir(root, agent, user)?;
-    Ok(
-        json!({"mine":entries(&mine),"shared":entries(&base(root, agent)?.join("shared")),
-        "proposals":proposals(&mine)}),
-    )
+    Ok(json!({"mine":entries(&user_dir(root, agent, user)?),
+        "shared":entries(&base(root, agent)?.join("shared"))}))
 }
 
-fn proposals(mine: &Path) -> Vec<Value> {
-    let mut found: Vec<Value> = std::fs::read_dir(mine.join(".proposals"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .filter_map(|entry| {
-            let mut meta = meta_of(&entry.path())?;
-            meta["id"] = json!(entry.file_name().to_str()?);
-            meta["html"] = json!(std::fs::read_to_string(entry.path().join("index.html")).ok()?);
-            Some(meta)
-        })
-        .collect();
-    found.sort_by_key(|meta| meta["proposed_at"].as_u64().unwrap_or(0));
-    found
-}
-
-/// Records `draft` as a proposal from session `sid`, replacing this user's earlier pending
-/// proposal of the same name. Returns its id.
+/// Saves `draft` from session `sid` as this user's element, replacing one of the same name
+/// and raising its revision. Returns the saved description.
 ///
 /// # Errors
 /// When the draft breaks a limit or the folder cannot be written.
-pub fn propose(
+pub fn save(
     root: &Path,
     agent: &str,
     user: &str,
@@ -294,82 +272,26 @@ pub fn propose(
     draft: &Draft<'_>,
     config: &Config,
     now: u64,
-) -> Result<String> {
-    draft.check(config)?;
-    let pending = user_dir(root, agent, user)?.join(".proposals");
-    let earlier: Vec<Value> = proposals(&user_dir(root, agent, user)?);
-    for old in earlier.iter().filter(|old| old["name"] == draft.name) {
-        if let Some(id) = old["id"].as_str() {
-            std::fs::remove_dir_all(pending.join(id))?;
-        }
-    }
-    if earlier
-        .iter()
-        .filter(|old| old["name"] != draft.name)
-        .count()
-        >= config.max_proposals
-    {
-        bail!(
-            "{} proposals are already waiting; ask the user to approve or reject them first",
-            config.max_proposals
-        );
-    }
-    let id = format!("{}-{}", draft.name, unique());
-    let meta = json!({"name":draft.name,"title":draft.title.trim(),"description":draft.description.trim(),
-        "proposed_at":now,"origin_session_id":sid,"bytes":draft.html.len()});
-    write_element(&pending.join(&id), &meta, draft.html)?;
-    Ok(id)
-}
-
-/// Approves (saves exactly as proposed, replacing this user's element of the same name and
-/// raising its revision) or rejects proposal `id`.
-///
-/// # Errors
-/// When the proposal is missing or saving would pass the element limit.
-pub fn decide(
-    root: &Path,
-    agent: &str,
-    user: &str,
-    id: &str,
-    approve: bool,
-    config: &Config,
-    now: u64,
 ) -> Result<Value> {
-    if !id
-        .bytes()
-        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'-' | b'_'))
-        || id.is_empty()
-        || id.len() > 64
-    {
-        bail!("Invalid proposal");
-    }
+    draft.check(config)?;
     let mine = user_dir(root, agent, user)?;
-    let dir = mine.join(".proposals").join(id);
-    let meta = meta_of(&dir).ok_or_else(|| anyhow!("Proposal not found"))?;
-    if !approve {
-        std::fs::remove_dir_all(&dir)?;
-        return Ok(json!({"status":"rejected"}));
-    }
-    let name = meta["name"].as_str().unwrap_or_default().to_owned();
     let existing = entries(&mine);
-    let earlier = existing.iter().find(|old| old["name"] == name.as_str());
+    let earlier = existing.iter().find(|old| old["name"] == draft.name);
     if earlier.is_none() && existing.len() >= config.max_elements {
         bail!(
-            "This agent already keeps {} elements for you; delete one first",
+            "This agent already keeps {} elements for this user; delete one first",
             config.max_elements
         );
     }
-    let html = std::fs::read_to_string(dir.join("index.html"))?;
     let revision = earlier
         .and_then(|old| old["revision"].as_u64())
         .unwrap_or(0)
         + 1;
-    let saved = json!({"name":name,"title":meta["title"],"description":meta["description"],
-        "revision":revision,"saved_at":now,"origin_session_id":meta["origin_session_id"],
-        "bytes":html.len()});
-    write_element(&mine.join(&name), &saved, &html)?;
-    std::fs::remove_dir_all(&dir)?;
-    Ok(json!({"status":"saved","element":saved}))
+    let saved = json!({"name":draft.name,"title":draft.title.trim(),
+        "description":draft.description.trim(),"revision":revision,"saved_at":now,
+        "origin_session_id":sid,"bytes":draft.html.len()});
+    write_element(&mine.join(draft.name), &saved, draft.html)?;
+    Ok(saved)
 }
 
 /// One element's description and HTML.
@@ -391,35 +313,20 @@ pub fn read(
     Ok((meta, std::fs::read_to_string(dir.join("index.html"))?))
 }
 
-/// Deletes one element (`Shared` only for an operator; the caller checks) or one of this
-/// user's pending proposals of that name.
+/// Deletes one element (`Shared` only for an operator; the caller checks).
 ///
 /// # Errors
-/// When neither exists.
+/// When it does not exist.
 pub fn delete(root: &Path, agent: &str, user: &str, scope: Scope, name: &str) -> Result<()> {
     if !name_ok(name) {
         bail!("Element not found");
     }
     let dir = scope_dir(root, agent, user, scope)?.join(name);
-    if meta_of(&dir).is_some() {
-        std::fs::remove_dir_all(dir)?;
-        return Ok(());
+    if meta_of(&dir).is_none() {
+        bail!("Element not found");
     }
-    if scope == Scope::Mine {
-        let pending = user_dir(root, agent, user)?.join(".proposals");
-        let ids: Vec<String> = proposals(&user_dir(root, agent, user)?)
-            .into_iter()
-            .filter(|p| p["name"] == name)
-            .filter_map(|p| p["id"].as_str().map(str::to_owned))
-            .collect();
-        if !ids.is_empty() {
-            for id in ids {
-                std::fs::remove_dir_all(pending.join(id))?;
-            }
-            return Ok(());
-        }
-    }
-    bail!("Element not found")
+    std::fs::remove_dir_all(dir)?;
+    Ok(())
 }
 
 /// Shares this user's element `name` with every user of the agent (copying it, so later
@@ -457,7 +364,7 @@ pub fn share(
     Ok(json!({"status":"shared","element":copy}))
 }
 
-/// Bytes of the elements and proposals `user` keeps with any agent, for their storage.
+/// Bytes of the elements `user` keeps with any agent, for their storage.
 #[must_use]
 pub fn user_bytes(root: &Path, user: &str) -> u64 {
     if !user_ok(user) {
@@ -527,7 +434,7 @@ mod tests {
 
     fn config() -> Config {
         Config::from_value(&json!({"max_element_kb":1,"max_elements":2,"max_shared":1,
-            "max_proposals":2,"max_params_kb":4,"prompt_countdown_seconds":3,
+            "max_params_kb":4,"prompt_countdown_seconds":3,
             "routes":["/app?tab=agents"]}))
         .expect("config")
     }
@@ -543,18 +450,18 @@ mod tests {
 
     #[test]
     fn settings_refuse_routes_outside_the_app() {
-        let bad = json!({"max_element_kb":1,"max_elements":2,"max_shared":1,"max_proposals":2,
+        let bad = json!({"max_element_kb":1,"max_elements":2,"max_shared":1,
             "max_params_kb":4,"prompt_countdown_seconds":3,"routes":["//evil.example"]});
         assert!(Config::from_value(&bad).is_err());
         assert_eq!(config().bridge()["prompt_countdown_seconds"], 3);
     }
 
     #[test]
-    fn proposals_wait_for_approval_and_stay_per_user() {
+    fn saves_stay_per_user_and_raise_the_revision() {
         let dir = Temp::new();
         let root = dir.path();
         let config = config();
-        let id = propose(
+        save(
             root,
             "agent",
             "alice",
@@ -563,17 +470,8 @@ mod tests {
             &config,
             1,
         )
-        .expect("proposed");
-        assert!(list(root, "agent", "alice").expect("list")["mine"]
-            .as_array()
-            .expect("mine")
-            .is_empty());
-        assert!(list(root, "agent", "bob").expect("list")["proposals"]
-            .as_array()
-            .expect("p")
-            .is_empty());
-        // A second proposal of the same name replaces the first.
-        let id2 = propose(
+        .expect("saved");
+        let again = save(
             root,
             "agent",
             "alice",
@@ -582,21 +480,23 @@ mod tests {
             &config,
             2,
         )
-        .expect("proposed again");
-        assert!(decide(root, "agent", "alice", &id, true, &config, 3).is_err());
-        decide(root, "agent", "alice", &id2, true, &config, 3).expect("approved");
-        let (meta, html) = read(root, "agent", "alice", Scope::Mine, "toggle").expect("saved");
-        assert_eq!(
-            (meta["revision"].as_u64(), html.as_str()),
-            (Some(1), "<p>b</p>")
-        );
+        .expect("saved again");
+        assert_eq!(again["revision"], 2);
+        let (_, html) = read(root, "agent", "alice", Scope::Mine, "toggle").expect("read");
+        assert_eq!(html, "<p>b</p>");
         assert!(read(root, "agent", "bob", Scope::Mine, "toggle").is_err());
+        assert!(list(root, "agent", "bob").expect("list")["mine"]
+            .as_array()
+            .expect("mine")
+            .is_empty());
         assert_eq!(
             mirror_manifest(root, "agent", "alice").expect("manifest"),
-            json!({"mine/toggle":1})
+            json!({"mine/toggle":2})
         );
         assert!(user_bytes(root, "alice") > 0);
         assert_eq!(user_bytes(root, "bob"), 0);
+        delete(root, "agent", "alice", Scope::Mine, "toggle").expect("deleted");
+        assert!(delete(root, "agent", "alice", Scope::Mine, "toggle").is_err());
     }
 
     #[test]
@@ -604,7 +504,7 @@ mod tests {
         let dir = Temp::new();
         let config = config();
         let big = "x".repeat(2048);
-        assert!(propose(
+        assert!(save(
             dir.path(),
             "agent",
             "u",
@@ -614,7 +514,7 @@ mod tests {
             1
         )
         .is_err());
-        assert!(propose(
+        assert!(save(
             dir.path(),
             "agent",
             "u",
@@ -624,7 +524,7 @@ mod tests {
             1
         )
         .is_err());
-        assert!(propose(
+        assert!(save(
             dir.path(),
             "../agent",
             "u",
@@ -635,7 +535,7 @@ mod tests {
         )
         .is_err());
         assert!(list(dir.path(), "agent", "../u").is_err());
-        propose(
+        save(
             dir.path(),
             "agent",
             "u",
@@ -645,7 +545,7 @@ mod tests {
             1,
         )
         .expect("a");
-        propose(
+        save(
             dir.path(),
             "agent",
             "u",
@@ -655,7 +555,7 @@ mod tests {
             1,
         )
         .expect("b");
-        assert!(propose(
+        assert!(save(
             dir.path(),
             "agent",
             "u",
@@ -671,7 +571,7 @@ mod tests {
     fn sharing_copies_for_every_user_and_unsharing_removes_it() {
         let dir = Temp::new();
         let (root, config) = (dir.path(), config());
-        let id = propose(
+        save(
             root,
             "agent",
             "op",
@@ -680,8 +580,7 @@ mod tests {
             &config,
             1,
         )
-        .expect("p");
-        decide(root, "agent", "op", &id, true, &config, 2).expect("saved");
+        .expect("saved");
         share(root, "agent", "op", "toggle", true, &config, 3).expect("shared");
         assert!(read(root, "agent", "someone", Scope::Shared, "toggle").is_ok());
         share(root, "agent", "op", "toggle", false, &config, 4).expect("unshared");

@@ -1,13 +1,13 @@
 {
-  "name": "sandbox_propose",
-  "description": "Propose a sandbox folder's index.html as a saved UI element of this agent; the user approves it on the agent's Artifacts page.",
+  "name": "sandbox_save",
+  "description": "Save a sandbox folder's index.html as this agent's UI element for the user, kept across their conversations; asks for approval in Ask mode.",
   "effect": "write",
   "repeat_guard": {
     "risk": "low"
   },
   "default_policy": {
-    "operator": "allow",
-    "member": "allow",
+    "operator": "require_approval",
+    "member": "require_approval",
     "visitor": "deny"
   },
   "parameters": {
@@ -41,11 +41,11 @@
   "match": {
     "examples": [
       "save this page as a reusable element",
-      "propose the element I built"
+      "save the element I built"
     ],
     "keywords": [
       "element",
-      "propose"
+      "save"
     ]
   }
 }

@@ -49,7 +49,9 @@ export function elementFrame(row, sid, send) {
   // A click into the frame moves focus to it; that is the only click the page can see.
   const noteClick = () => { if (document.activeElement === frame) clickedAt = Date.now(); };
   window.addEventListener('blur', noteClick);
-  const clicked = () => Date.now() - clickedAt < CLICK_WINDOW_MS;
+  // A click inside the frame also activates this page (user activation reaches ancestor
+  // frames); focus moving into the frame is the fallback where that is unavailable.
+  const clicked = () => navigator.userActivation ? navigator.userActivation.isActive : Date.now() - clickedAt < CLICK_WINDOW_MS;
   const reply = (id, ok, value, error) => frame.contentWindow?.postMessage({webagent: 1, id, ok, value, error}, '*');
   let pending = null;
   function countdown(text) {
@@ -72,7 +74,8 @@ export function elementFrame(row, sid, send) {
     try {
       if (type === 'resize') {
         const height = Math.round(Number(data.height));
-        if (Number.isFinite(height)) frame.style.height = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, height)) + 'px';
+        // Two pixels for the frame's own border, so content of that height needs no scrollbar.
+        if (Number.isFinite(height)) frame.style.height = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, height + 2)) + 'px';
         return reply(id, true, null);
       }
       if (type === 'preview.status') {

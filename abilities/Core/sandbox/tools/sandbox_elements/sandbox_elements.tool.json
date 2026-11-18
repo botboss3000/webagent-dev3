@@ -1,6 +1,6 @@
 {
   "name": "sandbox_elements",
-  "description": "List this agent's saved UI elements for the user, the shared ones and pending proposals.",
+  "description": "List this agent's saved UI elements for the user and the shared ones.",
   "effect": "read",
   "default_policy": {
     "operator": "allow",

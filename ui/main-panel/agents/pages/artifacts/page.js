@@ -5,7 +5,7 @@ const node=(tag,text='',cls='')=>{const el=document.createElement(tag);el.textCo
 export async function renderArtifacts(host,request,{agentId}) {
   const generation=(host._artifactsGeneration||0)+1;host._artifactsGeneration=generation;
   host._artifactsNotes?.destroy();host._artifactsNotes=null;
-  host.replaceChildren(node('h2','Artifacts'),node('p','What this agent keeps across conversations: your Main Notes, your saved scripts and your UI elements. Agents propose saved scripts and UI elements; nothing is saved until you approve it.','ac-hint'));
+  host.replaceChildren(node('h2','Artifacts'),node('p','What this agent keeps across conversations: your Main Notes, your saved scripts and your UI elements. Agents propose saved scripts, and nothing is saved until you approve it here. UI elements follow the mode of each chat: in Ask mode you approve each save in the chat.','ac-hint'));
   const notes=section('Main Notes');host.append(notes.box);
   const controller=createMainNotes({request,agentId});controller.element.open=true;notes.box.append(controller.element);host._artifactsNotes=controller;
   const elements=section('UI elements');host.append(elements.box);
@@ -44,7 +44,7 @@ export async function renderArtifacts(host,request,{agentId}) {
     card.append(actions);scripts.box.append(card);
   }
 }
-/** UI elements: proposals to approve or reject (their HTML shown as text), saved elements and shared ones. */
+/** UI elements: the agent saves them with sandbox_save (approved in the chat in Ask mode); this lists and deletes them. */
 async function renderElements(part,request,agentId,current,rerender){
   const status=node('p','Loading…','ac-hint');status.setAttribute('role','status');part.box.append(status);
   const path='/agents/'+encodeURIComponent(agentId)+'/ui-elements';
@@ -53,25 +53,13 @@ async function renderElements(part,request,agentId,current,rerender){
   if(!current())return;
   const act=(label,tone,run)=>{const button=node('button',label,'members-btn '+tone);button.type='button';button.style.webkitTapHighlightColor='transparent';
     button.onclick=async event=>{requestTouchVibration(event);button.disabled=true;try{if(await run()===null){button.disabled=false;return;}await rerender();}catch(error){status.textContent=error.message;button.disabled=false;}};return button;};
-  const mine=data.mine||[],shared=data.shared||[],proposals=data.proposals||[];
+  const mine=data.mine||[],shared=data.shared||[];
   status.textContent=mine.length+' of '+data.max_elements+' saved'+(shared.length?' · '+shared.length+' shared':'');
   part.count.textContent=String(mine.length+shared.length);
   const card=(element,note)=>{const box=node('details','','artifacts-script'),summary=node('summary');
     summary.append(node('span',element.title||element.name,'artifacts-script-name'),node('span',element.description||'','artifacts-script-description'));box.append(summary);
     box.append(node('p',[element.name,element.revision?'revision '+element.revision:'',note].filter(Boolean).join(' · '),'artifacts-meta'));return box;};
-  if(proposals.length){
-    part.box.append(node('h3','Awaiting your approval','artifacts-subhead'));
-    for(const proposal of proposals){
-      const box=card(proposal,mine.some(old=>old.name===proposal.name)?'Replaces your saved element of the same name':'New UI element');box.open=true;
-      box.append(node('p','Source conversation: '+proposal.origin_session_id,'artifacts-meta'),node('p','Approving saves exactly this page. It runs in a sandboxed frame with no network and no access to the app; it can only ask the chat to turn this chat\'s previews on or off, send a prompt after a countdown you can cancel, or open allowed app pages.','ac-hint'));
-      const code=node('details','','artifacts-element-code'),codeSummary=node('summary','Show its HTML ('+String(proposal.html||'').length+' characters)');code.append(codeSummary,node('pre',String(proposal.html||''),'artifacts-args'));box.append(code);
-      const actions=node('div','','artifacts-actions');
-      actions.append(act('Approve','authorize',()=>request(path+'/proposals/'+encodeURIComponent(proposal.id),'POST',{approve:true})),
-        act('Reject','restrict',()=>request(path+'/proposals/'+encodeURIComponent(proposal.id),'POST',{approve:false})));
-      box.append(actions);part.box.append(box);
-    }
-  }
-  if(!mine.length&&!shared.length)part.box.append(node('div','No UI elements yet. When an agent builds a page worth reusing, it proposes it here.','members-empty'));
+  if(!mine.length&&!shared.length)part.box.append(node('div','No UI elements yet. When an agent builds a page worth reusing, it saves it here; in Ask mode you approve that in the chat.','members-empty'));
   const list=(items,scope,note,canDelete)=>{for(const element of items){
     const box=card(element,element.saved_at?note+' '+new Date(element.saved_at*1000).toLocaleString():note);
     if(canDelete){const actions=node('div','','artifacts-actions');

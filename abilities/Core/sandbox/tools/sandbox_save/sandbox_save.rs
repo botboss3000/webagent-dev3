@@ -1,5 +1,7 @@
-//! `sandbox_propose`: propose a sandbox folder's `index.html` as a saved UI element of
-//! this agent. Nothing is saved until the user approves it on the agent's Artifacts page.
+//! `sandbox_save`: save a sandbox folder's `index.html` as one of this agent's UI elements
+//! for the user, kept across all their conversations with the agent. The tool needs
+//! approval, so it follows the session's execution mode: in Ask the user approves it in the
+//! chat, in Auto it runs.
 use super::{elements, only, short, Owner};
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
@@ -18,7 +20,7 @@ pub(super) fn check(args: &Value) -> Result<Value> {
     )
 }
 
-/// Records the proposal for `html`, the folder's `index.html`.
+/// Saves `html`, the folder's `index.html`.
 pub(super) fn run(
     owner: &Owner,
     sid: &str,
@@ -33,7 +35,7 @@ pub(super) fn run(
         description: request["description"].as_str().unwrap_or_default(),
         html,
     };
-    let id = elements::propose(
+    let saved = elements::save(
         &owner.root,
         &owner.agent,
         &owner.user,
@@ -43,10 +45,8 @@ pub(super) fn run(
         now,
     )?;
     Ok(json!({"status":"success","output":format!(
-        "Proposed \"{}\" ({} bytes). It is saved only once the user approves it on this agent's Artifacts page; tell them it is waiting.",
-        draft.title, html.len()),
-        "proposal_id":id,
-        "review":format!("/app?tab=agents&agent={}&agentView=artifacts", owner.agent)}))
+        "Saved \"{}\" (revision {}, {} bytes). Place it in a chat with sandbox_present.",
+        draft.title, saved["revision"], html.len()),"element":saved}))
 }
 
 #[cfg(test)]

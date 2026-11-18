@@ -6,8 +6,8 @@
     "risk": "low"
   },
   "default_policy": {
-    "operator": "allow",
-    "member": "allow",
+    "operator": "require_approval",
+    "member": "require_approval",
     "visitor": "deny"
   },
   "parameters": {

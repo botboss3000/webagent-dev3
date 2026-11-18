@@ -1,13 +1,13 @@
 {
   "name": "sandbox_delete",
-  "description": "Delete one of the user's saved UI elements with this agent, or their pending proposal of that name.",
+  "description": "Delete one of the user's saved UI elements with this agent; asks for approval in Ask mode.",
   "effect": "write",
   "repeat_guard": {
     "risk": "low"
   },
   "default_policy": {
-    "operator": "allow",
-    "member": "allow",
+    "operator": "require_approval",
+    "member": "require_approval",
     "visitor": "deny"
   },
   "parameters": {

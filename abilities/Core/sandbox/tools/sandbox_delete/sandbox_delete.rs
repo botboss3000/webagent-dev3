@@ -1,5 +1,5 @@
-//! `sandbox_delete`: delete one of the user's saved UI elements with this agent, or their
-//! pending proposal of that name. Shared elements are unshared with `sandbox_share`.
+//! `sandbox_delete`: delete one of the user's saved UI elements with this agent. Shared
+//! elements are unshared with `sandbox_share`. Needs approval in Ask mode.
 use super::{elements, only, short, Owner};
 use anyhow::Result;
 use serde_json::{json, Value};

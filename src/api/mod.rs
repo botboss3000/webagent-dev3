@@ -439,10 +439,6 @@ pub(super) fn router(app: App) -> Router {
             get(tools::core_elements::page_read),
         )
         .route(
-            "/agents/{id}/ui-elements/proposals/{proposal}",
-            post(tools::core_elements::page_decide),
-        )
-        .route(
             "/agents/{id}/ui-elements/{scope}/{name}",
             axum::routing::delete(tools::core_elements::page_delete),
         )

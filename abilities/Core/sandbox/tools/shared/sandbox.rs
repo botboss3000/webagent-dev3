@@ -1,5 +1,5 @@
 //! The Sandbox ability: `sandbox_shell`, `sandbox_python` and `sandbox_file` in a session's
-//! scratch folder, and the saved UI elements built there (`sandbox_propose`,
+//! scratch folder, and the saved UI elements built there (`sandbox_save`,
 //! `sandbox_elements`, `sandbox_present`, `sandbox_delete`, `sandbox_share`; storage in
 //! [`elements`]). Each tool's module checks its arguments; every call then runs under
 //! fresh run authority. Folder calls run on the isolated worker's strict sandbox; the root
@@ -21,10 +21,10 @@ pub mod elements;
 mod file;
 #[path = "../sandbox_present/sandbox_present.rs"]
 mod present;
-#[path = "../sandbox_propose/sandbox_propose.rs"]
-mod propose;
 #[path = "../sandbox_python/sandbox_python.rs"]
 mod python;
+#[path = "../sandbox_save/sandbox_save.rs"]
+mod save;
 #[path = "../sandbox_share/sandbox_share.rs"]
 mod share;
 #[path = "../sandbox_shell/sandbox_shell.rs"]
@@ -35,7 +35,7 @@ pub const TOOLS: &[&str] = &[
     "sandbox_shell",
     "sandbox_python",
     "sandbox_file",
-    "sandbox_propose",
+    "sandbox_save",
     "sandbox_elements",
     "sandbox_present",
     "sandbox_delete",
@@ -99,7 +99,7 @@ pub async fn execute(
         "sandbox_shell" => shell::request(args),
         "sandbox_python" => python::request(args),
         "sandbox_file" => file::request(args),
-        "sandbox_propose" => propose::check(args),
+        "sandbox_save" => save::check(args),
         "sandbox_elements" => element_list::check(args),
         "sandbox_present" => present::check(args),
         "sandbox_delete" => delete::check(args),
@@ -115,7 +115,7 @@ pub async fn execute(
     let config = || elements::Config::read();
     let now = webagent_host_core::now();
     let output = match name {
-        "sandbox_propose" => {
+        "sandbox_save" => {
             let read = host
                 .worker(
                     ELEMENT_SYNC,
@@ -128,7 +128,7 @@ pub async fn execute(
             if read["status"] != "success" {
                 return Ok(read);
             }
-            propose::run(
+            save::run(
                 &owner,
                 call.sid,
                 &request,
