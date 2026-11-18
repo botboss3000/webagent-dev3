@@ -36,3 +36,20 @@
   color: var(--fg-3);
   overflow-wrap: anywhere;
 }
+
+/* Main Chat guidance sections: the row's flex layout hides the native disclosure
+   marker, so draw one that turns when the section opens. */
+.main-chat-skill > summary { list-style: none; }
+.main-chat-skill > summary::-webkit-details-marker { display: none; }
+.main-chat-skill > summary::before {
+  content: '';
+  width: 0.45em;
+  height: 0.45em;
+  margin: 0.4em 0.35em 0 0.15em;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s;
+  flex: none;
+}
+.main-chat-skill[open] > summary::before { transform: rotate(45deg); }
