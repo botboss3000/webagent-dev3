@@ -1,8 +1,9 @@
 // A UI element in an Artifacts card: the agent's saved page running in a sandboxed frame
 // (its own route serves it as an opaque origin with no network), and the bridge it talks
 // to. Every request is checked here before the app acts on it:
-// - preview on/off: this chat's own UI previews only, after a click in the element; the
-//   page then reloads in the same tab;
+// - preview on/off: this chat's UI previews, or a sub-agent's named in the card's params
+//   (the server checks it), after a click in the element; the page then reloads in the
+//   same tab;
 // - prompt: sent as the user's own message after a countdown the user can cancel, after
 //   a click;
 // - open: allow-listed app routes (or this chat) in the same tab, after a click;
@@ -45,6 +46,10 @@ export function elementFrame(row, sid, send) {
   frame.title = row.title || 'UI element';
   frame.style.height = '160px';
   let bridge = {prompt_countdown_seconds: 3, routes: []};
+  // The session whose workspace holds the card's variant: this chat, or a sub-agent of it
+  // named in the card's params (the server checks it belongs to this conversation).
+  const named = row.params?.preview_session;
+  const previewSession = typeof named === 'string' && /^[0-9a-f-]{36}$/.test(named) ? named : sid;
   let clickedAt = 0;
   // A click into the frame moves focus to it; that is the only click the page can see.
   const noteClick = () => { if (document.activeElement === frame) clickedAt = Date.now(); };
@@ -80,7 +85,7 @@ export function elementFrame(row, sid, send) {
       }
       if (type === 'preview.status') {
         const current = await (await fetch('/api/v3/ui-preview', {credentials: 'same-origin', cache: 'no-store'})).json();
-        return reply(id, true, {variant: current.session_id === sid ? current.variant : null});
+        return reply(id, true, {variant: current.session_id === previewSession ? current.variant : null});
       }
       if (!clicked()) return reply(id, false, null, 'Only after a click in the element');
       clickedAt = 0;
@@ -91,7 +96,7 @@ export function elementFrame(row, sid, send) {
         const response = await fetch('/api/v3/sessions/' + encodeURIComponent(sid) + '/ui-preview', {
           method: 'POST', credentials: 'same-origin',
           headers: {'Content-Type': 'application/json', 'x-csrf-token': await csrf()},
-          body: JSON.stringify({variant})});
+          body: JSON.stringify({variant, source_session: previewSession})});
         if (!response.ok) { status.textContent = 'The preview could not be changed.'; return reply(id, false, null, 'Refused'); }
         reply(id, true, {variant});
         // The preview changes which UI files load, so the page reloads in this tab.

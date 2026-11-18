@@ -45,10 +45,12 @@ An element runs in a sandboxed frame with no network and no app access. It talks
 only through `window.webagent`, which the app adds:
 
 - `webagent.params`: the card's `params` object; `webagent.card`: its title and description.
-- `webagent.preview.status()`: a promise of `{variant}` for this chat's UI preview in this
-  browser (`variant` is null when off). `webagent.preview.on(variant)` and
+- `webagent.preview.status()`: a promise of `{variant}` for the card's preview session in
+  this browser (`variant` is null when off). `webagent.preview.on(variant)` and
   `webagent.preview.off()` turn a variant of this chat's UI previews (see the UI proposals
-  skill) on or off; the app then reloads the page in the same tab.
+  skill) on or off; the app then reloads the page in the same tab. A card whose `params`
+  name `preview_session` (one of this chat's sub-agent sessions) previews that session's
+  variants instead.
 - `webagent.prompt(text)`: sends `text` as the user's next message after a short countdown
   the user can cancel. Call it only from a click in the element.
 - `webagent.open(route)`: opens an allowed app page (listed in the ability's

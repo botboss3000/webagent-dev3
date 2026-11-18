@@ -255,11 +255,34 @@ mod preview {
     pub(crate) struct Choice {
         /// The variant to preview, or null to stop previewing.
         variant: Option<String>,
+        /// The session whose workspace holds the variant: this chat (the default) or one of
+        /// its sub-agent sessions, which keep their variants in their own workspaces.
+        #[serde(default)]
+        source_session: Option<String>,
     }
 
-    /// `POST /api/v3/sessions/{sid}/ui-preview` with `{"variant": name | null}`: what the
-    /// start and off links do, for a page that then reloads itself in the same tab (a UI
-    /// element's preview switch) rather than following a redirect.
+    /// The conversation tree's root of session `sid`, from its spawn record (itself when it
+    /// was not spawned). The caller's own store finds only the caller's records.
+    async fn tree_root(app: &crate::App, sid: &str) -> Option<String> {
+        let origin = app
+            .store
+            .get(&format!("core_spawn_origin:{sid}"))
+            .await
+            .ok()
+            .flatten();
+        Some(
+            origin
+                .as_ref()
+                .and_then(|origin| origin["root_session_id"].as_str())
+                .unwrap_or(sid)
+                .to_owned(),
+        )
+    }
+
+    /// `POST /api/v3/sessions/{sid}/ui-preview` with `{"variant": name | null}` and an
+    /// optional `source_session` (a sub-agent of this chat): what the start and off links do,
+    /// for a page that then reloads itself in the same tab (a UI element's preview switch)
+    /// rather than following a redirect.
     pub(crate) async fn set(
         axum::Extension(app): axum::Extension<crate::App>,
         axum::Extension(identity): axum::Extension<Value>,
@@ -271,6 +294,15 @@ mod preview {
         if variant != "off" && !variant_ok(&variant) {
             return (StatusCode::BAD_REQUEST, "Invalid variant").into_response();
         }
+        // A card may preview a variant from a sub-agent of this chat, never another tree.
+        let source = choice.source_session.unwrap_or_else(|| sid.clone());
+        if source != sid
+            && (!session_ok(&source)
+                || tree_root(&app, &source).await != tree_root(&app, &sid).await)
+        {
+            return (StatusCode::FORBIDDEN, "Not a session of this conversation").into_response();
+        }
+        let sid = source;
         let mut response = start(
             axum::Extension(app),
             axum::Extension(identity),
