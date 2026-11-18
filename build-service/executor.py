@@ -36,6 +36,7 @@ TEST_STACK_BYTES=32*1024*1024
 # (2026-10-28: 15+ different flaky tests); lower these again on a smaller host.
 TEST_THREADS=8
 CARGO_BUILD_JOBS="10"
+COMPILE_TEST_ARGV=["sh","-c","set -e\ncargo test --workspace --locked --offline --no-run --message-format=json-render-diagnostics > /output/test-artifacts.json\ncargo build --workspace --exclude webagent-v3 --locked --offline --bins --message-format=json-render-diagnostics >> /output/test-artifacts.json"]
 # Compiled-dependency snapshots: stub compiles mirror the engine profiles exactly.
 SNAPSHOT_RECIPE="compiled-dependencies-v2"
 SNAPSHOT_COMPILES="set -e\ncargo test --workspace --locked --offline --no-run\ncargo build --workspace --locked --offline --bins\ncargo build --workspace --release --locked --offline --no-default-features --features webagent-v3/live-context"
@@ -209,8 +210,10 @@ class Executor:
     def concurrent_phase(self,job,*args,**kwargs):
         """Start one phase on a thread carrying this job's context; join with result()."""
         return self.background(lambda:self.phase(job,*args,**kwargs),"phase-"+args[0])
-    def phase(self,job,phase,kind,source,output,argv,profile,timeout=3600,network=False,cargo_home=None):
-        """Expose bounded phase timing and current work without command text or private paths."""
+    def phase(self,job,phase,kind,source,output,argv,profile,timeout=3600,network=False,cargo_home=None,remote=None):
+        """Expose bounded phase timing and current work without command text or private paths.
+
+        remote (from remote_test_half) runs the container on the build helper instead of here."""
         started=time.monotonic();token=uuid.uuid4().hex;outcome="failed"
         job["active_verification"]={"id":token,"phase":phase,"recipe":profile,"started_at":time.time()}
         if getattr(self.runner,"job_context",None)is not None:self.runner.job_context.verification_id=token
@@ -218,7 +221,8 @@ class Executor:
         with self.job_lock():job["active_phases"]=[a for a in job.get("active_phases",[])if a.get("id")!=token]+[{"id":token,"phase":phase,"recipe":profile,"started_at":time.time()}]
         getattr(self.runner,"resource_progress",lambda _:None)(job)
         try:
-            result=self._phase_workload(job,phase,kind,source,output,argv,profile,timeout,network,cargo_home)
+            result=(self._remote_workload(job,phase,argv,profile,timeout,remote)if remote else
+                self._phase_workload(job,phase,kind,source,output,argv,profile,timeout,network,cargo_home))
             outcome="completed";return result
         finally:
             with self.job_lock():
@@ -320,6 +324,134 @@ class Executor:
             if not primary:
                 if oom:raise RuntimeError("Compiler memory cap exceeded (OOM); check failed")
                 if proof_error is not None:raise RuntimeError("Compiler memory completion evidence unavailable or changed")from proof_error
+    # --- Build helper (scheduler.remote_tests): the Rust test half on a second machine ---
+    def remote_tests(self,job):
+        """The build helper's settings, or None when it is off, incomplete or the job is a stable release."""
+        value=self.tuning("remote_tests",None)
+        if not isinstance(value,dict)or value.get("enabled")is not True or job.get("release_mode")=="stable":return None
+        if not all(isinstance(value.get(k),str)and value[k]for k in ("host","user","key","known_hosts")):return None
+        return value
+    @staticmethod
+    def remote_argv(settings,*words):
+        """SSH to the helper's forced command with the broker's own key and pinned host key; no shell is reachable."""
+        return ["ssh","-i",settings["key"],"-o","BatchMode=yes","-o","IdentitiesOnly=yes","-o","StrictHostKeyChecking=yes",
+            "-o","UserKnownHostsFile="+settings["known_hosts"],"-o","ConnectTimeout=10","-o","ServerAliveInterval=15",
+            "-o","ServerAliveCountMax=4",settings["user"]+"@"+settings["host"],*words]
+    def remote_call(self,settings,*words,stdin=None,timeout=120,output_file=None):
+        return self.runner.command(self.remote_argv(settings,*words),stdin=stdin,timeout=timeout,output_file=output_file)
+    def _remote_workload(self,job,phase,argv,profile,timeout,remote):
+        """One phase on the helper: the same image, recipe and incremental setting as a local phase."""
+        request=json.dumps({"argv":argv,"image":remote["image"],"cargo_key":remote["cargo_key"],"incremental":self.incremental(job,profile)}).encode()
+        logs=self.remote_call(remote["settings"],"run",job["job_id"],phase,str(int(timeout)),stdin=request,timeout=int(timeout)+120)
+        self.persist_phase_log(job,logs);return logs
+    @staticmethod
+    def helper_tree(root):
+        """Tar of the application tree plus the digest remote_helper.tree_digest computes over the same files."""
+        rows=[];stream=io.BytesIO()
+        with tarfile.open(fileobj=stream,mode="w")as archive:
+            for path in sorted(root.rglob("*")):
+                name=path.relative_to(root).as_posix()
+                if path.is_symlink():rows.append((name,"link",os.readlink(path)))
+                elif path.is_file():
+                    with path.open("rb")as body:sha=hashlib.file_digest(body,"sha256").hexdigest()
+                    rows.append((name,"x"if path.stat().st_mode&0o111 else"f",sha))
+                elif not path.is_dir():continue
+                archive.add(path,arcname=name,recursive=False)
+        return stream.getvalue(),hashlib.sha256(json.dumps(rows).encode()).hexdigest()
+    @staticmethod
+    def remote_test_files(metadata):
+        """Every debug executable the test compile listed: the files retain_test_manifest and the suite read."""
+        names=set()
+        for line in metadata.read_text().splitlines():
+            value=json.loads(line)
+            executable=value.get("executable")if value.get("reason")=="compiler-artifact"else None
+            if not executable:continue
+            if not executable.startswith("/output/target/debug/")or ".."in Path(executable).parts:raise ValueError("Helper test executable escaped fixed target")
+            names.add(executable.removeprefix("/output/"))
+        return sorted(names)
+    def remote_fetch(self,settings,job,output,names):
+        """Copy named helper outputs into this job's output; only fixed target paths are accepted."""
+        archive=output/("helper-fetch-"+uuid.uuid4().hex+".tar")
+        try:
+            with archive.open("xb")as stream:self.remote_call(settings,"fetch",job["job_id"],stdin=json.dumps(names).encode(),timeout=900,output_file=stream)
+            with tarfile.open(archive)as tar:
+                members=tar.getmembers()
+                if sorted(m.name for m in members)!=sorted(names)or not all(m.isfile()for m in members):raise ValueError("Helper fetch returned other files")
+                for member in members:
+                    target=output/member.name
+                    if target.is_symlink():raise ValueError("Helper fetch target symlink")
+                    if target.exists():target.unlink()
+                tar.extractall(output,filter="data")
+        finally:archive.unlink(missing_ok=True)
+    def remote_test_half(self,job,blob,application,output,settings,state):
+        """Compile the workspace tests on the build helper, fetch them, then run the suite there.
+
+        Runs beside the release compile. It fills state as it goes (manifest, smoke proof, selection), so
+        the caller can finish locally from the last completed step if anything here fails. Passing results
+        are trusted: same image by ID, same source by digest, staged binaries hash-checked against the
+        manifest built here. The caller reruns a failed suite here before failing the job."""
+        jid=job["job_id"];record=job["remote_tests"]={"host":settings["host"],"decision":"started","started_at":time.time()}
+        accepted=json.loads(self.remote_call(settings,"begin",jid))
+        if accepted.get("decision")!="accepted":raise ValueError("Build helper "+str(accepted.get("decision"))+": "+str(accepted.get("reason")or accepted.get("job_id")or""))
+        state["held"]=True
+        image=self.runner.compiler_runtime(job)["image"]
+        if image not in json.loads(self.remote_call(settings,"status")).get("images",[]):
+            saver=subprocess.Popen(["docker","save",image],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+            try:loaded=json.loads(self.remote_call(settings,"load-image",jid,image,stdin=saver.stdout,timeout=1800))
+            finally:saver.stdout.close();saver.wait(120)
+            if saver.returncode or not loaded.get("present"):raise ValueError("Compiler image transfer to build helper failed")
+            record["image_transferred"]=True
+        tree,digest_value=self.helper_tree(application)
+        synced=json.loads(self.remote_call(settings,"sync-source",jid,stdin=tree,timeout=600))
+        if synced.get("sha256")!=digest_value:raise ValueError("Build helper source differs from captured inputs")
+        key=(job.get("dependency_cache")or{}).get("key")
+        if not isinstance(key,str)or not re.fullmatch(r"[a-f0-9]{64}",key):raise ValueError("Dependency cache key unavailable")
+        if not json.loads(self.remote_call(settings,"has-cargo",key)).get("present"):
+            archive=output/"helper-cargo.tar"
+            try:
+                with tarfile.open(archive,"w")as tar:tar.add(output/"cargo/registry",arcname="registry")
+                with archive.open("rb")as stream:self.remote_call(settings,"put-cargo",jid,key,stdin=stream,timeout=1800)
+            finally:archive.unlink(missing_ok=True)
+            record["cargo_transferred"]=True
+        remote={"settings":settings,"image":image,"cargo_key":key}
+        record.update(image=image,source_sha256=digest_value,source_changed=synced.get("changed"),cargo_key=key)
+        state["logs"]=self.phase(job,"compile_test","engine",application,output,COMPILE_TEST_ARGV,"engine:rust1.90:compile_test",remote=remote)
+        self.remote_fetch(settings,job,output,["test-artifacts.json"])
+        names=self.remote_test_files(output/"test-artifacts.json");self.remote_fetch(settings,job,output,names)
+        record["fetched_files"]=len(names)
+        artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True)
+        state["manifest"]=self.retain_test_manifest(output,artifacts)
+        # Fail-fast checks exist to stop before the release compile; it is already running here.
+        job["focused_verification"]={"policy":HOST_FOCUSED_POLICY,"policy_sha256":HOST_FOCUSED_POLICY_SHA256,"required_suite":"workspace",
+            "status":"not_applicable","reason":"suite_on_build_helper_beside_release_compile","runs":[]}
+        state["logs"]+=self.linked_reference(job,application,output,state)
+        selection=state["selection"]=self.test_selection(job,blob,application,output,state["manifest"])
+        origin={Path(name).name:name for name in names}
+        pairs=[[origin[row["file"].removeprefix("tests/")],row["file"]]for row in state["manifest"]["tests"]]
+        staged=json.loads(self.remote_call(settings,"stage",jid,stdin=json.dumps(pairs).encode(),timeout=300))
+        if staged!={row["file"]:row["sha256"]for row in state["manifest"]["tests"]}:raise ValueError("Build helper test executables differ from the retained manifest")
+        suite=self.phase(job,"test","test",application,output,selection["argv"],"engine:rust1.90:test",remote=remote)
+        record.update(decision="passed",seconds=round(time.time()-record["started_at"],3))
+        return "Workspace tests compiled and run on build helper "+settings["host"]+".\n"+suite
+    def linked_reference(self,job,application,output,state):
+        """Linked reference: the root crate's default-features (linked) debug test binary, which compile_test
+        built and the suite runs, executes the context smoke through an ignored test hook here."""
+        stable=output/"stable";stable.mkdir(exist_ok=True)
+        linked=self.linked_test_binary(state["manifest"])
+        logs=self.phase(job,"linked_smoke","test",application,output,self.smoke_recipe("linked",linked),"engine:rust1.90:linked-smoke",60)
+        if not (stable/"linked-smoke-result.json").exists():
+            # Sources without the hook run nothing; build the debug app once, as before.
+            logs+=self.phase(job,"linked_smoke","engine",application,output,["cargo","build","--locked","--offline","-p","webagent-v3","--bin","webagent-v3"],"engine:rust1.90:compile_test")
+            linked="/output/target/debug/webagent-v3"
+            logs+=self.phase(job,"linked_smoke","test",application,output,self.smoke_recipe("linked",linked),"engine:rust1.90:linked-smoke",60)
+        state["linked"]=linked;state["proof"]=self.linked_smoke(self.smoke_artifact(stable/"linked-smoke-result.json"))
+        return logs
+    def remote_release(self,settings,job,result):
+        """Free the helper; a stop or error also kills its containers. Never fails the job."""
+        try:subprocess.run(self.remote_argv(settings,*(["end",job["job_id"],result]if result in {"passed","fallback"}else["cancel",job["job_id"]])),
+            capture_output=True,timeout=60)
+        except (OSError,subprocess.SubprocessError):pass
+
     # Fixed RAM BuildKit workspace and proof. Config: build-service/scheduler-defaults.json -> package_ram_bytes, package_tmpfs_bytes, reserve_percent.
     @contextlib.contextmanager
     def packager(self,job,role="generic"):
@@ -1734,43 +1866,70 @@ class Executor:
         if seeded and stable_release:logs+=self.phase(job,"dependency","dependency",application,output,["cargo","clean","--package","webagent-v3"],"engine:rust1.90:clean-root",600)
         else:logs+=self.dependency_snapshot(job,application,output);logs+=self.workspace_snapshot(job,application,output)
         self.attest_release_base(job,context_blob)
-        logs+=self.phase(job,"compile_test","engine",application,output,["sh","-c","set -e\ncargo test --workspace --locked --offline --no-run --message-format=json-render-diagnostics > /output/test-artifacts.json\ncargo build --workspace --exclude webagent-v3 --locked --offline --bins --message-format=json-render-diagnostics >> /output/test-artifacts.json"],"engine:rust1.90:compile_test")
-        artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True)
-        manifest=self.retain_test_manifest(output,artifacts)
-        logs+=self.focused_tests(job,application,output,fresh_tests=artifacts)
-        if self.runner.execution_source_digest(source)!=before:raise ValueError("Focused tests changed captured application inputs")
-        # Linked reference: the root crate's default-features (linked) debug test binary,
-        # which compile_test built and the suite runs, executes the context smoke through
-        # an ignored test hook. No separate debug app binary or linked release is compiled.
-        stable=output/"stable";stable.mkdir(exist_ok=True)
-        linked=self.linked_test_binary(manifest)
-        logs+=self.phase(job,"linked_smoke","test",application,output,self.smoke_recipe("linked",linked),"engine:rust1.90:linked-smoke",60)
-        if not (stable/"linked-smoke-result.json").exists():
-            # Sources without the hook run nothing; build the debug app once, as before.
-            logs+=self.phase(job,"linked_smoke","engine",application,output,["cargo","build","--locked","--offline","-p","webagent-v3","--bin","webagent-v3"],"engine:rust1.90:compile_test")
-            linked="/output/target/debug/webagent-v3"
-            logs+=self.phase(job,"linked_smoke","test",application,output,self.smoke_recipe("linked",linked),"engine:rust1.90:linked-smoke",60)
-        proof=self.linked_smoke(self.smoke_artifact(stable/"linked-smoke-result.json"))
-        # The full suite runs beside the live (deployed) release compile. Tests mount the
-        # application writable, so the compile reads a verified private copy that
-        # no test container mounts; the post-suite digest check still applies.
+        helper=self.remote_tests(job)
+        # The release compile reads a verified private copy that no test container mounts (tests mount
+        # the application writable); the post-suite digest check still applies.
         linked_source=root/"linked-source"
-        if linked_source.exists():shutil.rmtree(linked_source)
-        shutil.copytree(source,linked_source,symlinks=True)
-        if self.runner.execution_source_digest(linked_source)!=before:raise ValueError("Compile source copy differs from captured inputs")
-        self.attest_release_base(job,context_blob)
-        # Cargo holds the package-cache lock of its CARGO_HOME for a whole build, so a shared home
-        # made the suite and this compile take turns. The compile mounts its own offline copy at
-        # the same /output/cargo path, keeping registry source paths (and fingerprints) unchanged.
-        release_cargo=output/"cargo-release";shutil.rmtree(release_cargo,ignore_errors=True);shutil.copytree(cargo,release_cargo,symlinks=True)
-        selection=self.test_selection(job,blob,application,output,manifest)
-        suite=self.concurrent_phase(job,"test","test",application,output,selection["argv"],"engine:rust1.90:test")
-        try:live_log=self.phase(job,"compile_release","engine",linked_source/"v3",output,self.live_recipe(stable_release,job["cargo_incremental"]),"engine:rust1.90:release",cargo_home=release_cargo)
-        finally:
-            try:suite_output=suite.result()
+        def release_inputs():
+            if linked_source.exists():shutil.rmtree(linked_source)
+            shutil.copytree(source,linked_source,symlinks=True)
+            if self.runner.execution_source_digest(linked_source)!=before:raise ValueError("Compile source copy differs from captured inputs")
+            self.attest_release_base(job,context_blob)
+            # Cargo holds the package-cache lock of its CARGO_HOME for a whole build, so a shared home
+            # made the suite and this compile take turns. The compile mounts its own offline copy at
+            # the same /output/cargo path, keeping registry source paths (and fingerprints) unchanged.
+            release_cargo=output/"cargo-release";shutil.rmtree(release_cargo,ignore_errors=True);shutil.copytree(cargo,release_cargo,symlinks=True)
+            return release_cargo
+        def release(release_cargo):
+            try:return self.phase(job,"compile_release","engine",linked_source/"v3",output,self.live_recipe(stable_release,job["cargo_incremental"]),"engine:rust1.90:release",cargo_home=release_cargo)
             finally:
                 shutil.rmtree(linked_source,ignore_errors=True)
                 shutil.rmtree(release_cargo,ignore_errors=True)
+        state={}
+        if helper:
+            # The whole test half runs on the build helper while the release compiles here at once.
+            half=self.background(lambda:self.remote_test_half(job,blob,application,output,helper,state),"remote-tests")
+            try:live_log=release(release_inputs())
+            except BaseException:
+                # Stop the helper's work, then let its thread finish before this job's folders are reused.
+                self.remote_release(helper,job,"cancelled")
+                try:half.result()
+                except BaseException:pass
+                raise
+            try:suite_output=half.result()
+            except PermissionError:
+                self.remote_release(helper,job,"cancelled");raise
+            except Exception as error:
+                job.setdefault("remote_tests",{}).update(decision="fallback",reason=str(error)[:600],failed_step="suite"if state.get("selection")else"compile")
+                suite_output=None
+            self.remote_release(helper,job,"passed"if suite_output is not None else"fallback")
+            if suite_output is None:
+                logs+="Build helper unavailable or failed ("+job["remote_tests"]["reason"][:200]+"); test half runs here.\n"
+                if state.get("manifest")is None:
+                    shutil.rmtree(output/"artifacts/tests",ignore_errors=True);(output/"artifacts/test-manifest.json").unlink(missing_ok=True)
+        if not helper or state.get("manifest")is None:
+            logs+=state.pop("logs","")if helper else""
+            logs+=self.phase(job,"compile_test","engine",application,output,COMPILE_TEST_ARGV,"engine:rust1.90:compile_test")
+            artifacts=output/"artifacts";artifacts.mkdir(exist_ok=True)
+            state["manifest"]=self.retain_test_manifest(output,artifacts)
+            logs+=self.focused_tests(job,application,output,fresh_tests=artifacts)
+            if self.runner.execution_source_digest(source)!=before:raise ValueError("Focused tests changed captured application inputs")
+        else:logs+=state.pop("logs","")
+        if state.get("proof")is None:logs+=self.linked_reference(job,application,output,state)
+        manifest,linked,proof=state["manifest"],state["linked"],state["proof"]
+        stable=output/"stable"
+        if not helper:
+            # The full suite runs beside the live (deployed) release compile.
+            release_cargo=release_inputs()
+            selection=self.test_selection(job,blob,application,output,manifest)
+            suite=self.concurrent_phase(job,"test","test",application,output,selection["argv"],"engine:rust1.90:test")
+            try:live_log=release(release_cargo)
+            finally:suite_output=suite.result()
+        elif suite_output is None:
+            # Anything the helper did not finish, including a failed suite, runs (and is confirmed) here.
+            selection=state.get("selection")or self.test_selection(job,blob,application,output,manifest)
+            suite_output=self.phase(job,"test","test",application,output,selection["argv"],"engine:rust1.90:test")
+        else:selection=state["selection"]
         logs+=suite_output
         counts=Executor.suite_totals(suite_output)
         if not any(counts)and not selection["skipped"]:raise ValueError("Suite executed no tests")

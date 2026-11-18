@@ -110,8 +110,10 @@ UI checks ("Needed by"), with their result (fixtures run and reused, rollback
 save used or saved again). Background failures never fail a release; they only
 cost the time they would have saved.
 
-**Where checks run.** The server (12 threads) is the default and only gate:
-release builds, the full suite, deployment and promotion always run here. An
+**Where checks run.** The server (12 threads) is the default gate: release
+builds, deployment and promotion always run here. When `scheduler.remote_tests` names a
+build helper, a dev Rust release's test half (test compile and full suite) runs there
+beside the release compile; see "Build helper" below. An
 operator may also mirror a task's sources to another machine for a fast local
 edit-and-check loop (same Rust 1.90 toolchain, Mold 1.10.1 linker,
 `CARGO_INCREMENTAL=0`, `RUSTFLAGS="-C debuginfo=0 -C link-arg=-fuse-ld=mold"`),
@@ -626,6 +628,40 @@ unchanged; otherwise they are saved again. The publication-time fixture run
 stays the gate and reuses the early passes by exact input hash, rerunning any
 fixture a rebase changed. A failure in either early piece is recorded in
 `early_work` and only costs the time it would have saved.
+
+## Build helper
+
+A second machine can take a dev `build_deploy`'s Rust test half so it runs at the same
+time as the release compile, and the server keeps its CPU for the app. Settings, in the
+installation JSON (off by default):
+
+    "remote_tests": {"enabled": true, "host": "100.126.37.96", "user": "ar",
+                     "key": "/etc/webagent/broker-helper/id_ed25519",
+                     "known_hosts": "/etc/webagent/broker-helper/known_hosts"}
+
+The helper runs `remote_helper.py` as the SSH forced command of that key (no shell). Per
+job the server: takes the helper's job lock (`begin`), copies the compiler image by ID
+if missing, mirrors the captured application tree (only changed files are rewritten, so
+the helper's warm Cargo target rebuilds only what changed) and checks its digest, sends
+the locked crate store once per dependency key, runs `compile_test` there, fetches the
+test executables into this job's target, builds the manifest and runs the linked smoke
+here, stages the selected executables there (their hashes must equal the manifest's) and
+runs the suite there. Phase timings keep their usual names and recipes.
+
+Integrity: same image ID, same source digest, hash-checked binaries; a passing suite is
+accepted, and anything the helper could not finish (busy, unreachable, image or crate
+transfer, a compile or suite failure) is run, and a failure confirmed, here.
+`remote_tests` in the job records the host, image, digest, decision and any fallback
+reason. Fail-fast focused tests are skipped on the helper path (the release compile has
+already started; the full suite still gates). Stable releases always test here.
+
+Install on the helper: `/usr/local/lib/broker-helper/remote_helper.py` (root-owned),
+`/etc/broker-helper.json` for its limits (`uid`, `gid`, `cargo_build_jobs`,
+`memory_bytes`, `min_free_bytes`, `target_max_bytes`, `cargo_keep`), the key's
+`authorized_keys` line `restrict,from="<server>",command="/usr/bin/python3 -I
+/usr/local/lib/broker-helper/remote_helper.py serve"`, and a timer running
+`remote_helper.py prune`. It refuses jobs below `min_free_bytes` free, so the server
+tests locally instead.
 
 ## Stale-tree install guard
 
