@@ -5,271 +5,7 @@
    Need a colour that doesn't exist yet? Add a token to the palette in design-system.css
    (the dark :root block AND its body.light-mode twin), then reference it here.
    Re-theming the whole app (e.g. peach → green) is then a one-file edit. */
-    top: 0;
-    border-bottom: var(--border-width) solid var(--border);
-    white-space: nowrap;
-  }
-.db-table {
-    table-layout: fixed;
-    border-collapse: collapse;
-  }
-.db-table td {
-    padding: 4px 10px;
-    border-bottom: var(--border-width) solid var(--border-soft);
-    border-right: var(--border-width) solid var(--files-border-strong);
-    color: var(--fg-1);
-    max-width: 300px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-.db-table td.db-row-delete-td,
-.db-table th.db-row-delete-th { border-right: none; }
-.db-table td:last-child,
-.db-table th:last-child { border-right: none; }
-.db-table tr:hover td { background: rgba(var(--ink-rgb), 0.04); }
-.db-row-even td { background: var(--bg-2); }
-.db-table tr[style*="height:100px"] .db-cell-pre { max-height: 50px; }
-
-/* Slim scrollbars matching the rest of the app (agents page baseline:
-   width 5px, thumb var(--bg-tint), transparent track). Applied to the table area,
-   per-cell overflow scrollbars, and the sidebar table list. */
-#db-table-data::-webkit-scrollbar,
-#db-table-data *::-webkit-scrollbar,
-#db-table-list::-webkit-scrollbar {
-    width: 5px;
-    height: 5px;
-  }
-#db-table-data::-webkit-scrollbar-track,
-#db-table-data *::-webkit-scrollbar-track,
-#db-table-list::-webkit-scrollbar-track {
-    background: transparent;
-  }
-#db-table-data::-webkit-scrollbar-thumb,
-#db-table-data *::-webkit-scrollbar-thumb,
-#db-table-list::-webkit-scrollbar-thumb {
-    background: var(--bg-tint);
-    border-radius: 3px;
-  }
-#db-table-data::-webkit-scrollbar-thumb:hover,
-#db-table-data *::-webkit-scrollbar-thumb:hover,
-#db-table-list::-webkit-scrollbar-thumb:hover {
-    background: var(--bg-tint);
-  }
-#db-table-data::-webkit-scrollbar-corner,
-#db-table-data *::-webkit-scrollbar-corner {
-    background: transparent;
-  }
-
-/* Light-mode override — same selectors as the dark-mode block above so the
-   `#db-table-data *` rule (descendant scrollbars like .db-cell) doesn't keep
-   the dark thumb color on a light background. Uses the warm peach used by
-   the rest of the light theme. */
-body.light-mode #db-table-data::-webkit-scrollbar-thumb,
-body.light-mode #db-table-data *::-webkit-scrollbar-thumb,
-body.light-mode #db-table-list::-webkit-scrollbar-thumb {
-    background: var(--bg-tint);
-  }
-body.light-mode #db-table-data::-webkit-scrollbar-thumb:hover,
-body.light-mode #db-table-data *::-webkit-scrollbar-thumb:hover,
-body.light-mode #db-table-list::-webkit-scrollbar-thumb:hover {
-    background: var(--bg-tint);
-  }
-.db-table .col-pk { color: var(--warning); }
-.db-table .col-null { color: var(--fg-3); font-style: italic; }
-.db-cell-pre {
-    margin: 0;
-    white-space: pre-wrap;
-    overflow-wrap: break-word;
-    word-break: break-word;
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
-    font-size: 11px;
-    line-height: 1.4;
-    max-height: 6em;
-    max-width: 100%;
-    overflow: hidden;
-  }
-.db-row-resize-td {
-    padding: 0 !important;
-    line-height: 0;
-  }
-.db-row-resize-handle {
-    height: 4px;
-    cursor: row-resize;
-    background: transparent;
-  }
-.db-row-resize-handle:hover,
-.db-row-resize-handle.resizing {
-    background: rgba(var(--brand-rgb), 0.19);
-  }
-.db-cell { overflow: auto; position: relative; }
-.db-cell:hover { outline: 1px solid rgba(var(--brand-rgb), 0.33); }
-.db-cell-overlay { display: contents; }
-.db-cell-expand {
-    position: absolute;
-    top: 1px;
-    right: 1px;
-    background: var(--bg-elev);
-    border: var(--border-width) solid var(--border);
-    color: var(--fg-3);
-    width: 18px;
-    height: 18px;
-    line-height: 16px;
-    text-align: center;
-    font-size: 11px;
-    cursor: pointer;
-    border-radius: 3px;
-    opacity: 0.35;
-    z-index: 5;
-    padding: 0;
-    transition: opacity 0.12s;
-  }
-.db-cell:hover .db-cell-expand {
-    opacity: 1;
-  }
-.db-cell-expand:hover {
-    color: var(--brand);
-    border-color: var(--brand);
-  }
-
-.db-cell-edit {
-    position: absolute;
-    top: 1px;
-    left: 1px;
-    background: var(--bg-elev);
-    border: var(--border-width) solid var(--border);
-    color: var(--fg-3);
-    width: 18px;
-    height: 18px;
-    line-height: 16px;
-    text-align: center;
-    font-size: 11px;
-    cursor: pointer;
-    border-radius: 3px;
-    opacity: 0.35;
-    z-index: 5;
-    padding: 0;
-    transition: opacity 0.12s;
-  }
-.db-cell:hover .db-cell-edit {
-    opacity: 1;
-  }
-.db-cell-edit:hover {
-    color: var(--warning);
-    border-color: var(--warning);
-  }
-
-.db-row-delete-th,
-.db-row-delete-td {
-    width: 28px;
-    min-width: 28px;
-    max-width: 28px;
-    padding: 0;
-    text-align: center;
-    background: transparent;
-  }
-.db-row-delete {
-    background: var(--bg-elev);
-    border: var(--border-width) solid var(--border);
-    color: var(--fg-3);
-    width: 22px;
-    height: 22px;
-    line-height: 18px;
-    text-align: center;
-    font-size: 12px;
-    cursor: pointer;
-    border-radius: 3px;
-    opacity: 0.45;
-    padding: 0;
-    transition: opacity 0.12s, color 0.12s, border-color 0.12s;
-  }
-.db-row:hover .db-row-delete,
-.db-row-delete:hover {
-    opacity: 1;
-  }
-.db-row-delete:hover {
-    color: var(--danger);
-    border-color: var(--danger);
-  }
-
-/* Non-admin view: keep button visible so the hover tooltip can explain why
- * it's disabled, but dim it and override hover affordances. */
-.db-cell-edit.restricted,
-.db-row-delete.restricted,
-.db-table-reset-btn.restricted,
-#db-reset.restricted {
-    opacity: 0.35;
-    cursor: not-allowed;
-    filter: grayscale(100%);
-  }
-.db-cell-edit.restricted:hover,
-.db-row-delete.restricted:hover,
-.db-table-reset-btn.restricted:hover,
-#db-reset.restricted:hover {
-    color: inherit;
-    border-color: inherit;
-    opacity: 0.35;
-  }
-
-.db-table td,
-.db-table th {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-.db-th { position: relative; user-select: none; }
-.th-text {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    display: inline-block;
-    cursor: pointer;
-    border-radius: 3px;
-    padding: 1px 4px;
-    white-space: nowrap;
-    max-width: 100%;
-    box-sizing: border-box;
-  }
-.th-text:hover { background: var(--bg-elev-2); }
-.th-name { display: inline; }
-.th-sort { color: var(--fg-3); display: inline; font-size: 10px; margin-left: 2px; }
-.th-resize {
-    position: absolute;
-    top: 0; right: 0;
-    width: 5px;
-    height: 100%;
-    cursor: col-resize;
-    z-index: 10;
-  }
-.th-resize:hover,
 .th-resize.resizing { background: rgba(var(--brand-rgb), 0.33); }
-.db-table .resize-line {
-    position: absolute;
-    top: 0; bottom: 0;
-    width: 1px;
-    background: var(--brand);
-    z-index: 20;
-    pointer-events: none;
-  }
-.db-edit-input {
-    background: var(--bg-0);
-    border: 1px solid var(--brand);
-    color: var(--fg-1);
-    padding: 4px 6px;
-    font-size: 12px;
-    font-family: 'Fira Code', Menlo, monospace;
-    position: absolute;
-    top: 4px;
-    left: 10px;
-    right: 10px;
-    bottom: 4px;
-    width: auto;
-    height: auto;
-    min-height: auto;
-    box-sizing: border-box;
-    outline: none;
-    border-radius: 2px;
-    resize: none;
-  }
 
 /* ── JSON editor modal ── */
   #cell-modal { display: none; position: fixed; inset: 0; z-index: 999; }
@@ -342,303 +78,8 @@ body.light-mode #db-table-list::-webkit-scrollbar-thumb:hover {
     line-height: 1.5;
     background: var(--bg-0);
   }
-#cell-modal-viewer .json-root {
-    font-size: 12px;
-  }
-#cell-modal-viewer .json-content-md {
-    font-size: 13px;
-    max-width: 800px;
-  }
-
-/* Column filter indicator */
-  .db-th.filtered .th-name { color: var(--brand); }
-.th-funnel {
-    display: inline;
-    margin-left: 2px;
-    font-size: 9px;
-    color: var(--brand);
-  }
-.th-hide-btn {
-    position: absolute;
-    top: 4px;
-    left: 4px;
-    background: transparent;
-    border: none;
-    color: var(--fg-3);
-    font-size: 11px;
-    cursor: pointer;
-    z-index: 5;
-    padding: 0;
-    line-height: 1;
-    opacity: 0.5;
-    transition: all 0.15s;
-  }
-.db-th:hover .th-hide-btn {
-    opacity: 1;
-  }
-.th-hide-btn:hover {
-    color: var(--fg-1);
-  }
-.th-hide-btn.hidden-col {
-    color: var(--danger);
-    opacity: 1;
-  }
-
-/* ── Column filter/sort popup (Google Sheets style) ── */
-  .db-col-popup {
-    position: absolute;
-    z-index: 100;
-    background: var(--bg-2);
-    border: var(--border-width) solid var(--border);
-    border-radius: 8px;
-    box-shadow: 0 8px 32px rgba(var(--shadow-rgb), 0.6);
-    padding: 6px 0;
-    max-height: 320px;
-    display: flex;
-    flex-direction: column;
-    min-width: 180px;
-    max-width: 300px;
-  }
-.db-popup-sort {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 4px 6px;
-    border-bottom: var(--border-width) solid var(--border);
-  }
-.db-popup-sort-btn {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    background: none;
-    border: none;
-    color: var(--fg-1);
-    font-size: 12px;
-    font-family: inherit;
-    cursor: pointer;
-    padding: 4px 8px;
-    border-radius: 4px;
-    text-align: left;
-    width: 100%;
-  }
-.db-popup-sort-btn:hover { background: var(--bg-elev-2); }
-.db-popup-sort-btn.active { color: var(--brand); }
-.db-popup-sort-arrow { font-size: 10px; display: inline-block; width: 14px; text-align: center; }
-.db-popup-unsort-btn {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    background: none;
-    border: none;
-    color: var(--fg-3);
-    font-size: 11px;
-    font-family: inherit;
-    cursor: pointer;
-    padding: 4px 8px;
-    border-radius: 4px;
-    text-align: left;
-    width: 100%;
-  }
-.db-popup-unsort-btn:hover { background: var(--bg-elev-2); color: var(--fg-1); }
-.db-popup-search-wrap {
-    padding: 6px 6px 4px;
-    border-bottom: var(--border-width) solid var(--border);
-  }
-.db-popup-search {
-    width: 100%;
-    background: var(--bg-0);
-    border: var(--border-width) solid var(--border);
-    border-radius: 4px;
-    padding: 4px 8px;
-    color: var(--fg-1);
-    font-size: 11px;
-    font-family: inherit;
-    box-sizing: border-box;
-    outline: none;
-  }
-.db-popup-search:focus { border-color: var(--brand); }
-.db-popup-search::placeholder { color: var(--fg-4); }
-.db-popup-select-header {
-    display: flex;
-    justify-content: space-between;
-    padding: 4px 10px 2px;
-    font-size: 11px;
-  }
-.db-popup-select-header a {
-    color: var(--brand);
-    text-decoration: none;
-    cursor: pointer;
-  }
-.db-popup-select-header a:hover { text-decoration: underline; }
-.db-popup-items {
-    flex: 1;
-    overflow-y: auto;
-    max-height: 180px;
-    padding: 2px 0;
-  }
-.db-popup-items::-webkit-scrollbar { width: 4px; }
-.db-popup-items::-webkit-scrollbar-thumb { background: var(--bg-tint); border-radius: 2px; }
-.db-popup-item {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 3px 10px;
-    font-size: 12px;
-    cursor: pointer;
-    user-select: none;
-    max-width: 100%;
-  }
-.db-popup-item:hover { background: var(--bg-elev-2); }
-.db-popup-item.unchecked .db-popup-val { opacity: 0.4; }
-.db-popup-check { accent-color: var(--brand); cursor: pointer; margin: 0; flex-shrink: 0; }
-.db-popup-val {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    flex: 1;
-  }
-.db-popup-empty { padding: 10px; color: var(--fg-3); font-size: 11px; text-align: center; }
-.db-popup-status {
-    padding: 4px 10px;
-    font-size: 10px;
-    color: var(--fg-3);
-    border-top: var(--border-width) solid var(--border);
-  }
-.db-popup-actions {
-    padding: 6px 10px;
-    border-top: var(--border-width) solid var(--border);
-    display: flex;
-    justify-content: flex-end;
-  }
-.db-popup-hide-row {
-    padding: 2px 10px;
-    border-top: var(--border-width) solid var(--border);
-  }
-.db-popup-hide-btn {
-    background: none;
-    border: none;
-    color: var(--fg-3);
-    font-size: 11px;
-    font-family: inherit;
-    cursor: pointer;
-    padding: 4px 4px;
-    border-radius: 4px;
-    width: 100%;
-    text-align: left;
-  }
-.db-popup-hide-btn:hover {
-    background: var(--bg-elev-2);
-    color: var(--danger);
-  }
-.db-popup-apply-btn {
-    background: var(--brand);
-    color: var(--bg-0);
-    border: none;
-    border-radius: 4px;
-    padding: 4px 16px;
-    font-size: 12px;
-    font-family: inherit;
-    font-weight: 600;
-    cursor: pointer;
-  }
-.db-popup-apply-btn:hover { background: var(--brand-strong); }
-
-/* Drag-to-reorder */
-  .db-th.drop-target {
-    border-left: 2px solid var(--brand) !important;
-  }
-.db-th[draggable="true"] {
-    cursor: grab;
-  }
-.db-th[draggable="true"]:active {
-    cursor: grabbing;
-  }
-
-/* ═══════════════════════════════════════════════
-   LIGHT MODE OVERRIDES
-   ═══════════════════════════════════════════════ */
-body.light-mode .db-col-popup {
-  background: var(--bg-2);
-  border-color: var(--border);
-  box-shadow: 0 8px 32px rgba(var(--shadow-rgb), 0.1);
-}
-body.light-mode .db-popup-sort {
-  border-bottom-color: var(--border);
-}
-body.light-mode .db-popup-sort-btn {
-  color: var(--fg-1);
-}
-body.light-mode .db-popup-sort-btn:hover {
-  background: var(--bg-elev-2);
-}
-body.light-mode .db-popup-sort-btn.active {
-  color: var(--brand);
-}
-body.light-mode .db-popup-unsort-btn {
-  color: var(--fg-3);
-}
-body.light-mode .db-popup-unsort-btn:hover {
-  background: var(--bg-elev-2);
-  color: var(--fg-1);
-}
-body.light-mode .db-popup-search {
-  background: var(--bg-0);
-  border-color: var(--border);
-  color: var(--fg-1);
-}
-body.light-mode .db-popup-search:focus {
-  border-color: var(--brand);
-}
-body.light-mode .db-popup-search::placeholder {
-  color: var(--fg-4);
-}
-body.light-mode .db-popup-select-header a {
-  color: var(--brand);
-}
-body.light-mode .db-popup-items::-webkit-scrollbar-thumb {
-  background: var(--bg-tint);
-}
-body.light-mode .db-popup-item {
-  color: var(--fg-1);
-}
-body.light-mode .db-popup-item:hover {
-  background: var(--bg-elev-2);
-}
-body.light-mode .db-popup-item.unchecked .db-popup-val {
-  opacity: 0.3;
-}
-body.light-mode .db-popup-check {
-  accent-color: var(--brand);
-}
-body.light-mode .db-popup-empty {
-  color: var(--fg-3);
-}
-body.light-mode .db-popup-status {
-  color: var(--fg-3);
-  border-top-color: var(--border);
-}
-body.light-mode .db-popup-actions {
-  border-top-color: var(--border);
-}
-body.light-mode .db-popup-apply-btn {
-  background: var(--brand);
-  color: #ffffff; /* KEEP (intentional): contrast ink on the brand-filled button */
-}
-body.light-mode .db-popup-apply-btn:hover {
-  background: var(--brand-strong);
-}
 body.light-mode .th-text:hover {
   background: var(--bg-elev-2);
-}
-body.light-mode .db-popup-hide-row {
-  border-top-color: var(--border);
-}
-body.light-mode .db-popup-hide-btn {
-  color: var(--fg-3);
-}
-body.light-mode .db-popup-hide-btn:hover {
-  background: var(--bg-elev-2);
-  color: var(--danger);
 }
 body.light-mode .th-hide-btn {
   color: var(--fg-4);
@@ -649,38 +90,6 @@ body.light-mode .th-hide-btn:hover {
 body.light-mode .th-hide-btn.hidden-col {
   color: var(--danger);
 }
-body.light-mode .db-cell-expand {
-  background: var(--bg-0);
-  border-color: var(--border);
-  color: var(--fg-4);
-}
-body.light-mode .db-cell-expand:hover {
-  color: var(--brand);
-  border-color: var(--brand);
-}
-body.light-mode .db-cell-edit {
-  background: var(--bg-0);
-  border-color: var(--border);
-  color: var(--fg-4);
-}
-body.light-mode .db-cell-edit:hover {
-  color: var(--warning);
-  border-color: var(--warning);
-}
-body.light-mode .db-row-delete {
-  background: var(--bg-0);
-  border-color: var(--border);
-  color: var(--fg-4);
-}
-body.light-mode .db-row-delete:hover {
-  color: var(--danger);
-  border-color: var(--danger);
-}
-body.light-mode .db-edit-input {
-  background: var(--bg-0);
-  border-color: var(--brand);
-  color: var(--fg-1);
-}
 body.light-mode #cell-modal-backdrop {
   background: rgba(255, 250, 245, 0.7); /* KEEP (intentional): light-mode warm-white veil scrim — deliberately lightens, no neutral/shadow token fits */
   backdrop-filter: blur(3px);
@@ -690,10 +99,6 @@ body.light-mode #cell-modal-close {
 }
 body.light-mode #cell-modal-close:hover {
   color: var(--danger);
-}
-
-body.light-mode .db-th.filtered .th-name {
-  color: var(--brand);
 }
 body.light-mode .th-funnel {
   color: var(--brand);
@@ -745,12 +150,6 @@ body.light-mode .th-funnel {
 	  padding: 18px 20px 12px;
 	  background: transparent;
 	}
-.ac-page-title {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--fg-1, var(--fg-1));
-  letter-spacing: 0.2px;
-}
 
 /* Tab strip with chevron-scroll carousel (mirrors agent-detail-tabs)
    Hidden: using unified sub-header instead */
@@ -769,56 +168,10 @@ body.light-mode .th-funnel {
   overscroll-behavior-x: none;
 }
 #app-config-tabs::-webkit-scrollbar { display: none; }
-/* SISTER-CAROUSEL: ACTIVE-TAB-GROW — shared formatting with the agent-card tab
-   carousel (`.agent-card-tabs .agents-detail-tab` in ui/main-panel/agents/agents.css).
-   Both are horizontal chevron-scroll tab strips where the ACTIVE tab renders a
-   couple px larger than the rest, with `font-size` in the transition so the
-   change animates as you switch tabs. Keep the two in sync: any change to the
-   active-tab grow/animation here must be mirrored there (and vice-versa). */
-.ac-tab {
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--fg-muted, var(--fg-3));
-  padding: 10px 14px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  font-family: inherit;
-  transition: color 0.15s, border-color 0.15s, font-size 0.15s;
-  margin-bottom: -1px;
-  white-space: nowrap;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.ac-tab:hover { color: var(--fg-1, var(--fg-1)); }
 .ac-tab.active {
   color: var(--accent);
   border-bottom-color: var(--accent);
   font-size: 14px;
-}
-.ac-tab-icon {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-}
-.ac-tab-count-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  height: 14px;
-  padding: 0 4px;
-  margin-left: 4px;
-  border-radius: 7px;
-  background: var(--bg-tint);
-  color: var(--fg-2);
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 14px;
-  vertical-align: middle;
 }
 .ac-tab.active .ac-tab-count-badge {
   background: var(--fg-4);
@@ -850,23 +203,6 @@ body.light-mode .ac-tab.active .ac-tab-count-badge {
   -webkit-mask-image: linear-gradient(to right, transparent 0, #000 44px, #000 calc(100% - 44px), transparent 100%);
           mask-image: linear-gradient(to right, transparent 0, #000 44px, #000 calc(100% - 44px), transparent 100%);
 }
-.ac-tabs-chev {
-  display: none;
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  color: var(--accent);
-  cursor: pointer;
-  font-size: 14px;
-  width: 36px;
-  padding: 0;
-  font-family: inherit;
-  z-index: 2;
-}
 .ac-tabs-chev.left {
 	  left: 0;
 	  justify-content: flex-start;
@@ -878,7 +214,6 @@ body.light-mode .ac-tab.active .ac-tab-count-badge {
 	  padding-right: 4px;
 	}
 .ac-tabs-chev.visible { display: flex; }
-.ac-tabs-chev:hover { color: var(--fg-1, var(--fg-1)); }
 
 /* Right scrollable content */
 #app-config-content {
@@ -1065,16 +400,6 @@ body.light-mode .ac-tab.active .ac-tab-count-badge {
 #app-config-content.ac-searching .ac-category-group:not([data-ac-search-hidden="true"]) > .ac-category-body {
   display: block !important;
 }
-#app-config-content .ac-search-empty {
-  margin: 28px auto;
-  padding: 18px 22px;
-  width: min(520px, calc(100% - 32px));
-  color: var(--text-muted);
-  text-align: center;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-2) 76%, transparent);
-}
 
 /* ── Mobile keyboard: clear the bottom clutter off a focused field ───────────
    When the on-screen keyboard is up (`body.kb-open`, set mobile-only by the
@@ -1102,82 +427,8 @@ body.kb-open .ac-stickynav .ac-category-summary { position: relative; }
   align-items: flex-start;
   gap: 12px;
 }
-.ac-section-icon {
-  width: 20px;
-  height: 20px;
-  color: var(--accent);
-  flex-shrink: 0;
-  margin-top: 3px;
-}
-.ac-section-title {
-  margin: 0 0 4px;
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--fg-1, var(--fg-1));
-}
-.ac-section-desc {
-  margin: 0;
-  font-size: 12px;
-  color: var(--fg-muted, var(--fg-3));
-}
-
-/* Card */
-.ac-card {
-  background: var(--bg-elev, var(--bg-elev));
-  border: var(--border-width) solid var(--border);
-  border-radius: 10px;
-  padding: 18px 20px;
-}
-.ac-card-label {
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--fg-2, var(--fg-2));
-}
-.ac-card-sublabel {
-  font-size: 11px;
-  color: var(--fg-muted, var(--fg-3));
-  margin-top: 2px;
-}
-
-/* Collapsible card (<details class="ac-card">). The default disclosure
-   triangle is hidden; the card label gets its own chevron that rotates
-   on open/close. Default state is `open` so behavior matches non-collapsible
-   cards for first-time visitors. */
-details.ac-card > summary {
-  list-style: none;
-  cursor: pointer;
-  user-select: none;
-}
-details.ac-card > summary::-webkit-details-marker { display: none; }
-details.ac-card > summary::after {
-  content: "";
-  display: inline-block;
-  margin-left: auto;
-  width: 8px;
-  height: 8px;
-  border-right: 2px solid var(--fg-3, var(--fg-3));
-  border-bottom: 2px solid var(--fg-3, var(--fg-3));
-  transform: rotate(45deg) translateY(-2px);
-  transition: transform 0.18s ease;
-  flex-shrink: 0;
-}
-details.ac-card[open] > summary::after {
-  transform: rotate(-135deg) translateY(2px);
-}
-details.ac-card > summary.ac-card-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
 /* Hide everything that is not the summary when collapsed, restore when open. */
 details.ac-card:not([open]) > *:not(summary) { display: none; }
-
-/* Field */
-.ac-field {
-  margin-top: 14px;
-}
 .ac-label {
   display: block;
   font-size: 12px;
@@ -1314,15 +565,6 @@ details.ac-card:not([open]) > *:not(summary) { display: none; }
   border-radius: 999px;
   white-space: nowrap;
 }
-
-/* Selected-model metadata panel (chips + description) */
-.ac-model-meta {
-  margin-top: 8px;
-  padding: 10px 12px;
-  background: var(--bg-elev);
-  border: var(--border-width) solid var(--border);
-  border-radius: 8px;
-}
 .ac-model-meta-desc {
   font-size: 12px;
   line-height: 1.5;
@@ -1405,13 +647,8 @@ details.ac-card:not([open]) > *:not(summary) { display: none; }
 .ac-model-analytics-toggle { display: inline-flex; gap: 3px; padding: 2px; border: var(--border-width) solid var(--border); border-radius: 7px; background: var(--bg-0); }
 .ac-model-analytics-toggle .ac-btn { border-color: transparent; }
 .ac-model-analytics-toggle .ac-btn.active { background: rgba(var(--brand-rgb), 0.13); border-color: var(--accent); color: var(--accent); }
-.ac-model-analytics-scale { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--fg-2); white-space: nowrap; }
 .ac-model-analytics-scale .ac-input { width: 96px; }
-.ac-model-analytics-status { margin: 12px 0 0; font-size: 12px; color: var(--fg-3); }
 .ac-model-analytics-chart { margin-top: 4px; min-height: 38px; }
-.ac-model-analytics-summary { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; margin: 5px 0 2px; font-size: 12px; color: var(--fg-3); }
-.ac-model-analytics-summary strong { color: var(--fg-1); }
-.ac-model-analytics-summary span:last-child { margin-left: auto; }
 .ac-model-analytics-svg { display: block; width: 100%; height: auto; min-height: 190px; overflow: visible; }
 /* The y axis was removed from the chart, so no grid line rule remains here. */
 .ac-model-analytics-axis { fill: var(--fg-3); font-size: 10px; }
@@ -1511,7 +748,6 @@ details.ac-card:not([open]) > *:not(summary) { display: none; }
   .ac-model-analytics { padding: 12px; }
   /* The header holds only the kebab now, so keep it hard against the right edge. */
   .ac-model-analytics-controls { width: 100%; justify-content: flex-end; }
-  .ac-model-analytics-summary span:last-child { margin-left: 0; width: 100%; }
   .ac-model-analytics-svg { min-height: 160px; }
   /* Keep the pinned hover panel from obscuring the shorter phone plot. */
   .ac-model-analytics-tip { min-width: 148px; padding: 5px 6px; font-size: 10px; line-height: 1.25; }
@@ -1521,33 +757,10 @@ details.ac-card:not([open]) > *:not(summary) { display: none; }
   .ac-model-analytics-tip-row.ac-model-analytics-tip-total { margin-top: 3px; padding-top: 3px; }
   .ac-model-analytics-tip-note { margin-top: 3px; padding-top: 3px; font-size: 10px; }
 }
-
-/* Segment buttons (cloud/local,
-live/scheduled) */
-.ac-seg-btn {
-  text-align: center;
-  padding: 14px 12px;
-  border: var(--border-width) solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-base, var(--bg-0));
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  color: var(--fg-1, var(--fg-1));
-  font-family: inherit;
-  transition: border-color 0.15s, background 0.15s, color 0.15s;
-}
 .ac-seg-btn.active {
   border-color: var(--accent);
   background: rgba(var(--brand-rgb),0.08);
   color: var(--accent);
-}
-.ac-seg-sub {
-  font-weight: 400;
-  font-size: 11px;
-  color: var(--fg-muted, var(--fg-3));
-  display: block;
-  margin-top: 4px;
 }
 .ac-seg-btn.active .ac-seg-sub { color: var(--accent); opacity: 0.7; }
 
@@ -1561,134 +774,9 @@ live/scheduled) */
   color: var(--fg-2, var(--fg-2));
   line-height: 1.5;
 }
-.ac-tab-link {
-  color: var(--accent);
-  cursor: pointer;
-  text-decoration: underline;
-}
-
-/* Stats table */
-.ac-stats-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 11px;
-}
-.ac-stats-table th {
-  padding: 8px 10px;
-  text-align: left;
-  color: var(--fg-2, var(--fg-2));
-  font-weight: 600;
-  white-space: nowrap;
-  background: var(--bg-base, var(--bg-0));
-  border-bottom: var(--border-width) solid var(--border);
-}
-.ac-stats-table td {
-  padding: 7px 10px;
-  color: var(--fg-1, var(--fg-1));
-  border-bottom: var(--border-width) solid var(--border);
-  white-space: nowrap;
-}
-.ac-stats-table tr:last-child td { border-bottom: none; }
-.ac-table-empty {
-  text-align: center;
-  color: var(--fg-muted, var(--fg-3));
-  padding: 20px !important;
-}
-
-/* ── Optimizer Runs dashboard ───────────────────────────────────────
-   Sortable / filterable runs table + expandable per-stage detail. Built on
-   .ac-stats-table; all colours derive from the design-system palette. Markup:
-   ui/main-panel/app/settings/optimizer/optimizer-stats.js · logic: optimizer-stats.js */
-.ac-opt-toolbar {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 10px; flex-wrap: wrap; margin-bottom: 10px;
-}
-.ac-opt-toolbar-left { display: flex; align-items: center; gap: 8px; }
-.ac-opt-toolbar-right { display: flex; align-items: center; gap: 8px; }
-.ac-opt-count { font-size: 11px; color: var(--fg-muted, var(--fg-3)); font-weight: 400; }
-.ac-opt-search { width: 160px; }
-.ac-opt-filter { width: auto; }
-.ac-opt-icon-btn { padding: 6px 8px; }
-.ac-opt-table-wrap {
-  overflow-x: auto;
-  border: var(--border-width) solid var(--border);
-  border-radius: 6px;
-}
-.ac-opt-runs-table { margin: 0; }
-
-/* Sortable headers */
-.ac-opt-sort { cursor: pointer; user-select: none; position: relative; }
-.ac-opt-sort:hover { color: var(--accent); }
-.ac-opt-sort.sort-asc::after  { content: ' ▲'; font-size: 9px; color: var(--accent); }
-.ac-opt-sort.sort-desc::after { content: ' ▼'; font-size: 9px; color: var(--accent); }
-.ac-opt-num { text-align: right; }
-
-/* Run rows */
-.ac-opt-run-row { cursor: pointer; }
-.ac-opt-run-row:hover td { background: rgba(var(--brand-rgb), 0.05); }
 .ac-opt-run-row.open td { background: rgba(var(--brand-rgb), 0.07); }
-.ac-opt-target { display: flex; align-items: center; gap: 6px; max-width: 220px; }
-.ac-opt-target span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ac-opt-caret { width: 13px; height: 13px; flex: 0 0 auto; color: var(--fg-muted, var(--fg-3)); }
-.ac-opt-arrow { color: var(--fg-muted, var(--fg-3)); }
-.ac-opt-date { font-size: 10px; color: var(--fg-muted, var(--fg-3)); white-space: nowrap; }
-
-/* Metric value + signed delta */
-.ac-opt-metric-val { font-weight: 600; }
-.ac-opt-delta { font-size: 10px; font-weight: 600; }
 .ac-opt-delta.good { color: var(--success); }
 .ac-opt-delta.bad  { color: var(--danger); }
-
-/* Status / stage badges */
-.ac-opt-badge {
-  display: inline-block; padding: 2px 8px; border-radius: 10px;
-  font-size: 10px; font-weight: 600; white-space: nowrap;
-}
-.ac-opt-badge.status-running  { background: rgba(var(--brand-rgb), 0.15);   color: var(--brand); }
-.ac-opt-badge.status-success  { background: rgba(var(--success-rgb), 0.15); color: var(--success); }
-.ac-opt-badge.status-failed   { background: rgba(var(--danger-rgb), 0.15);  color: var(--danger); }
-.ac-opt-badge.stage-planner   { background: rgba(var(--purple-rgb), 0.15);  color: var(--purple); }
-.ac-opt-badge.stage-worker    { background: rgba(var(--brand-rgb), 0.15);   color: var(--brand); }
-.ac-opt-badge.stage-closer    { background: rgba(var(--warning-rgb), 0.15); color: var(--warning); }
-.ac-opt-badge.stage-deployed  { background: rgba(var(--success-rgb), 0.15); color: var(--success); }
-
-/* Expanded per-stage detail row */
-.ac-opt-detail-row td { background: rgba(var(--brand-rgb), 0.03); padding: 0 !important; }
-.ac-opt-detail-loading {
-  display: flex; align-items: center; gap: 6px;
-  padding: 14px; font-size: 11px; color: var(--fg-muted, var(--fg-3));
-}
-.ac-opt-stages { display: flex; gap: 10px; flex-wrap: wrap; padding: 12px 14px; }
-.ac-opt-stage {
-  flex: 1 1 180px; min-width: 170px;
-  border: var(--border-width) solid var(--border);
-  border-radius: 6px; padding: 10px; background: var(--bg-1, var(--bg-0));
-  display: flex; flex-direction: column; gap: 6px;
-}
-.ac-opt-stage-head { display: flex; align-items: center; gap: 6px; }
-.ac-opt-stage-icon { width: 14px; height: 14px; color: var(--accent); flex: 0 0 auto; }
-.ac-opt-stage-label { font-size: 12px; font-weight: 600; color: var(--fg-1); }
-.ac-opt-stage-meta { margin-left: auto; font-size: 10px; color: var(--fg-muted, var(--fg-3)); }
-.ac-opt-stage-detail { font-size: 11px; color: var(--fg-2); line-height: 1.4; }
-.ac-opt-stage-action { margin-top: auto; }
-.ac-opt-open-btn { padding: 4px 10px; font-size: 11px; display: inline-flex; align-items: center; gap: 5px; }
-.ac-opt-stage-noopen { font-size: 10px; color: var(--fg-muted, var(--fg-3)); font-style: italic; }
-
-/* User Management — access mode radios */
-.ac-um-radio {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
-  border: var(--border-width) solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-  background: var(--bg-elev, var(--bg-elev));
-  transition: border-color 0.15s, background 0.15s;
-}
-.ac-um-radio:hover {
-  border-color: var(--accent);
-}
 .ac-um-radio input[type=radio] {
   margin-top: 3px;
   accent-color: var(--accent);
@@ -1698,104 +786,15 @@ live/scheduled) */
   border-color: var(--accent);
   background: rgba(var(--brand-rgb), 0.06);
 }
-.ac-um-radio-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--fg-1, var(--fg-1));
-}
-.ac-um-radio-desc {
-  font-size: 12px;
-  color: var(--fg-muted, var(--fg-3));
-  margin-top: 2px;
-  line-height: 1.4;
-}
-
-/* App Access (Data Settings) — radio VARIANT of the shared toggle-list. Each
-   access mode is a standard `.ac-ability-row` inside `.ac-list`, but the whole
-   row is a <label> so clicking anywhere selects that mode, and the right-hand
-   control is a native radio (accent-tinted) instead of a toggle. The selected
-   row gets the same subtle accent wash the abilities tree uses for an enabled
-   row, so the current choice reads at a glance. See app-access.js + ui-guidance
-   "Toggle-list" (a row's control can be a radio). */
-.ac-access-row { cursor: pointer; }
-.ac-access-row:has(.ac-access-radio:checked) {
-  background: rgba(var(--brand-rgb), 0.06);
-}
-.ac-access-radio-cell {
-  /* Keep the radio vertically centred on the row's first (title) line and give
-     the on-top save overlay a box to cover — _markSaving sets this relative. */
-  display: flex;
-  align-items: center;
-  padding-top: 1px;
-}
-.ac-access-radio {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--accent);
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-/* Danger Zone (Data Settings) — a checkbox VARIANT of the shared toggle-list.
-   Each reset target is a `.ac-ability-row` wrapped in a <label> (so the whole row
-   toggles its checkbox), with a danger-tinted native checkbox on the right. A
-   ticked row gets a subtle danger wash so the current selection reads at a glance.
-   The card heading + icons are danger-coloured to signal the destructive intent.
-   See danger-zone.js + the #ac-danger-card block in data-settings.html. */
-.ac-dz-row { cursor: pointer; }
-.ac-dz-row:has(.ac-dz-check:checked) {
-  background: rgba(var(--danger-rgb, 220, 80, 80), 0.07);
-}
-.ac-dz-check-cell {
-  display: flex;
-  align-items: center;
-  padding-top: 1px;
-}
-.ac-dz-check {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--danger);
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-/* Hold-to-fire buttons (Reset / Delete installation). Press and HOLD: a danger
-   fill sweeps left→right beneath the label; hold to the end and the action fires
-   (the hold IS the confirmation — no dialog). Same affordance as the deploy card's
-   hold-to-restart button. The fill's transition duration is driven from JS via the
-   `--dz-hold` custom property so CSS + the JS fire-timer can never drift.
-   See danger-zone.js `_beginHold`. */
-.ac-dz-hold {
-  position: relative;
-  overflow: hidden;
-  user-select: none;
-  -webkit-user-select: none;
-  touch-action: none;           /* a touch-hold shouldn't scroll the page */
-}
-.ac-dz-hold .ac-dz-fill {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  transform: scaleX(0);
-  transform-origin: left center;
-  background: rgba(var(--danger-rgb, 220, 80, 80), 0.30);
-  transition: transform 150ms ease;    /* quick snap-back on release / abort */
-  pointer-events: none;
-}
 .ac-dz-hold.holding .ac-dz-fill {
   transform: scaleX(1);
   transition: transform var(--dz-hold, 1500ms) linear;   /* == the JS fire timer */
-}
-.ac-dz-hold .ac-dz-hold-label {
-  position: relative;
-  z-index: 1;
 }
 /* Armed (past the arm threshold): intensify the danger tint so it reads as "committed". */
 .ac-dz-hold.warning {
   color: var(--danger);
   border-color: rgba(var(--danger-rgb, 220, 80, 80), 0.75);
 }
-.ac-dz-hold[disabled] .ac-dz-fill { transform: scaleX(0); }
 
 /* ── App Access · Social sign-in (data-settings.html) ──
    The social providers live in the SAME `.ac-list` tree as the access-mode
@@ -1804,55 +803,12 @@ live/scheduled) */
    and header↔first-provider hairlines; only the provider↔provider hairlines need
    a rule (the providers are wrapped in the `#ac-social-list` block). */
 #ac-social-list > * + * { border-top: var(--border-width) solid var(--border); }
-
-/* "Sign in options" header row — reads like an ability-group head (chevron +
-   icon + title + count) and is now an EXPAND target: clicking it toggles the
-   provider list below (collapsed by default). */
-.ac-access-subhead { cursor: pointer; }
-.ac-access-subhead .ac-category-count { align-self: center; margin-left: 8px; }
 /* Collapse the provider list under the "Sign in options" head; the adjacent
    sibling reveal opens it when the head carries `.expanded` (comments between
    the two elements are ignored by the sibling combinator). */
 #ac-social-list { display: none; }
 .ac-access-subhead.expanded + #ac-social-list { display: block; }
 .ac-access-subhead.expanded .ac-row-chevron--left { transform: rotate(90deg); }
-
-/* Provider brand mark sits in the shared 28px icon column; scale the 18px brand
-   SVG down to the 16px the ability rows use. Google / Microsoft carry their own
-   brand colours inline; the monochrome marks (GitHub, Apple, generic) use
-   currentColor, so tint them with the foreground for correct dark + light. */
-.ac-social-brand { color: var(--fg-1); }
-.ac-social-brand svg { width: 16px; height: 16px; display: block; }
-
-/* User Management — pill badges in the table */
-.ac-um-badge {
-  display: inline-block;
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 7px;
-  border-radius: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  white-space: nowrap;
-}
-.ac-um-badge-admin { background: rgba(var(--purple-rgb),0.18); color: var(--purple); }
-.ac-um-badge-member { background: rgba(var(--brand-rgb),0.14); color: var(--brand); }
-.ac-um-badge-approved { background: rgba(var(--success-rgb),0.16); color: var(--success); }
-.ac-um-badge-pending { background: rgba(var(--warning-rgb),0.18); color: var(--warning); }
-.ac-um-badge-locked { background: rgba(var(--danger-rgb),0.18); color: var(--danger); }
-
-.ac-um-action-btn {
-  background: transparent;
-  border: var(--border-width) solid var(--border);
-  color: var(--fg-1, var(--fg-1));
-  padding: 3px 9px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 10px;
-  font-family: inherit;
-  margin: 0 2px;
-}
-.ac-um-action-btn:hover { border-color: var(--accent); color: var(--accent); }
 .ac-um-action-btn.danger:hover { border-color: var(--danger); color: var(--danger); }
 
 /* Social Sign-In providers (drop-in) — the expandable body content. The rows
@@ -1862,135 +818,6 @@ live/scheduled) */
    Theme via tokens only (dark + light correct). */
 .ac-social-check.saved { color: var(--success); }
 .ac-social-check.error { color: var(--danger); }
-.ac-social-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.ac-social-flabel {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--fg-muted, var(--fg-3));
-  margin-top: 6px;
-}
-.ac-social-field {
-  background: var(--bg-1, var(--bg));
-  border: var(--border-width) solid var(--border);
-  border-radius: 6px;
-  color: var(--fg-1);
-  padding: 7px 9px;
-  font-size: 12px;
-  font-family: inherit;
-  width: 100%;
-  box-sizing: border-box;
-}
-.ac-social-field:focus { outline: none; border-color: var(--accent); }
-.ac-social-redirect { display: flex; align-items: center; gap: 8px; }
-.ac-social-redirect code {
-  flex: 1;
-  background: rgba(var(--brand-rgb), 0.08);
-  border-radius: 6px;
-  padding: 7px 9px;
-  font-size: 11px;
-  color: var(--fg-1);
-  overflow-x: auto;
-  white-space: nowrap;
-}
-.ac-social-req, .ac-social-hint {
-  font-size: 11px;
-  color: var(--fg-muted, var(--fg-3));
-  line-height: 1.45;
-}
-.ac-social-setup { font-size: 11px; color: var(--accent); text-decoration: none; }
-.ac-social-setup:hover { text-decoration: underline; }
-.ac-social-actions { margin-top: 8px; }
-
-/* (Removed: .ac-gh-* GitHub status grid — was only used by the deleted
-   App Configuration ▸ Git Providers tab; repo status now lives in the
-   Git Control panel.) */
-
-/* Details / summary */
-.ac-details summary {
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--accent);
-  font-weight: 500;
-}
-.ac-details-body {
-  margin-top: 10px;
-  font-size: 12px;
-  color: var(--fg-2, var(--fg-2));
-  line-height: 1.7;
-}
-.ac-details-body ol { padding-left: 18px; margin: 6px 0; }
-.ac-details-body p { margin: 6px 0; }
-
-/* ── Saved Models table (capabilities: Text / Vision / Image / Voice / Video) ── */
-/* Header and rows share one column template so the angled labels line up
-   over their checkbox columns. The header padding (11px) matches the row's
-   10px padding + 1px border so the content boxes are the same width. */
-.ac-prov-head,
-.ac-provider-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 34px 34px 34px 22px;
-  align-items: center;
-  column-gap: 4px;
-}
-
-/* 45°-angled column header above the first row */
-.ac-prov-head {
-  align-items: end;
-  min-height: 40px;
-  margin-bottom: 4px;
-  padding: 0 11px;
-  overflow: visible;
-}
-.ac-prov-th {
-  display: inline-block;
-  justify-self: center;
-  align-self: end;
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  color: var(--fg-3);
-  white-space: nowrap;
-  transform: rotate(-45deg);
-  transform-origin: bottom center;
-  pointer-events: none;
-}
-
-.ac-provider-row {
-  background: var(--bg-0);
-  border: var(--border-width) solid var(--border);
-  border-radius: 6px;
-  padding: 8px 10px;
-  margin-bottom: 6px;
-}
-.ac-provider-row:last-child { margin-bottom: 0; }
-
-.ac-prov-cell {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.ac-cap-dot {
-  color: var(--fg-4);
-  opacity: 0.5;
-  font-size: 15px;
-  line-height: 1;
-}
-.ac-prov-del {
-  justify-self: center;
-  background: none;
-  border: none;
-  color: var(--fg-4);
-  cursor: pointer;
-  font-size: 16px;
-  line-height: 1;
-  padding: 0;
-}
-.ac-prov-del:hover { color: var(--danger); }
 
 /* ══ Models — configurator table (4 rows, each field auto-saves) ══════════════
    A flush `.ac-list` table where each row is a label + its input/select on the
@@ -2161,33 +988,6 @@ live/scheduled) */
 .ac-num-step:active { color: var(--accent); }
 .ac-num-step:disabled { color: var(--fg-3); opacity: .3; cursor: default; }
 .ac-num-step svg { display: block; pointer-events: none; }
-/* App-global ceiling reached on a resume-limit stepper: the up arrow is disabled
-   (`.ac-num-step:disabled` above greys it) and this bubble explains why. The
-   bubble is a REAL node (`.ac-num-limit-tip`) inserted as the up arrow's previous
-   sibling inside `.ac-num-stepper` by `_wireGlobalLimitStepper` in
-   agents/configs/content.js. It lives on its own node because a disabled button
-   can't be relied on for :hover, and is revealed while the field (wrapper) is
-   hovered or focused. */
-.ac-num-limit-tip {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  right: 0;
-  width: max-content;
-  max-width: min(220px, 70vw);
-  padding: 6px 10px;
-  background: var(--bg-1);
-  border: var(--border-width) solid var(--border-soft);
-  border-radius: 8px;
-  box-shadow: var(--shadow-float);
-  color: var(--fg-1);
-  font-size: 12px;
-  line-height: 1.4;
-  white-space: nowrap;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity .15s ease;
-  z-index: 20;
-}
 .ac-num-stepper.ac-num-at-max:hover .ac-num-limit-tip,
 .ac-num-stepper.ac-num-at-max:focus-within .ac-num-limit-tip { opacity: 1; }
 /* Inline config dropdown — kept COMPACT (shorter than the two-line label) so a
@@ -2196,27 +996,6 @@ live/scheduled) */
    stand taller than on/off rows, breaking the uniform table rhythm. */
 .ac-config-control > select.ac-config-sel { min-width: 132px; padding: 5px 10px; font-size: 12px; }
 .ac-config-control > input.ac-config-key { width: 168px; }
-.ac-range-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  min-width: 210px;
-}
-.ac-config-range {
-  width: 158px;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-.ac-config-range:disabled { cursor: default; opacity: 0.6; }
-.ac-range-value {
-  min-width: 38px;
-  color: var(--fg-2);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-/* Optional schema note rendered under an ability's settings list. */
-.ac-config-note { font-size: 11px; color: var(--fg-muted, var(--fg-3)); margin: 8px 2px 2px; }
 /* The transient auto-save check OVERLAYS the control's right edge rather than
    reserving layout width — so the Provider / Base URL / API Key inputs and the
    Add / Clear buttons all reach the same full-width right edge as the model
@@ -2479,28 +1258,6 @@ live/scheduled) */
   transform: translate(-50%, -50%);
   border-radius: 4px;
 }
-
-/* ── Storage Routing custom checkboxes ────────────────────────────────────
-   Mirrors .auto-check-cell / .sessions-check-cell from the automations and
-   sessions pages: a styled div checkbox instead of a native <input>. Used in
-   the Data Settings → Storage Routing grid (storage-routing.js). */
-.ac-sr-check-cell {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 5px;
-  border: var(--border-width) solid var(--border);
-  background: transparent;
-  cursor: pointer;
-  transition: background .1s, border-color .1s;
-  color: transparent;
-}
-.ac-sr-check-cell:hover {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
 .ac-sr-check-cell.checked {
   background: var(--accent);
   border-color: var(--accent);
@@ -2519,17 +1276,6 @@ live/scheduled) */
 .ac-sr-check-cell.disabled:hover {
   border-color: var(--border);
   background: transparent;
-}
-.ac-sr-label {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  gap: 2px;
-}
-.ac-sr-desc {
-  font-size: 10.5px;
-  color: var(--fg-muted, var(--fg-3));
-  line-height: 1.35;
 }
 
 /* ── Roles more-button + floating popover ─────────────────────────────────
@@ -2801,178 +1547,13 @@ body.light-mode .ac-info-banner { background: var(--bg-1); border-left-color: va
 body.light-mode .ac-stats-table th { background: var(--bg-1); color: var(--fg-2); border-bottom-color: var(--border); }
 body.light-mode .ac-stats-table td { color: var(--fg-1); border-bottom-color: var(--border-soft); }
 body.light-mode .ac-table-empty { color: var(--fg-3); }
-
-/* ── Integrations ── */
-.ac-int-badge {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 10px;
-  border-radius: 12px;
-  white-space: nowrap;
-}
-.ac-int-badge-on {
-  background: rgba(var(--success-rgb), 0.15);
-  color: var(--success);
-}
-.ac-int-badge-off {
-  background: rgba(var(--ink-rgb), 0.12);
-  color: var(--fg-muted, var(--fg-3));
-}
-.ac-int-badge-soon {
-  background: rgba(var(--warning-rgb), 0.15);
-  color: var(--warning);
-}
-.ac-int-coming-soon {
-  opacity: 0.6;
-}
-.ac-int-account-info {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  background: var(--bg-base, var(--bg-0));
-  border: var(--border-width) solid var(--border);
-  border-radius: 8px;
-}
 body.light-mode .ac-int-badge-on { background: rgba(var(--success-rgb), 0.12); color: var(--success); }
 body.light-mode .ac-int-badge-off { background: rgba(var(--ink-rgb), 0.08); color: var(--fg-3); }
 body.light-mode .ac-int-badge-soon { background: rgba(var(--warning-rgb), 0.12); color: var(--warning); }
 body.light-mode .ac-int-account-info { background: var(--bg-1); border-color: var(--border-strong); }
 body.light-mode .ac-provider-row { background: var(--bg-1); border-color: var(--border-strong); }
-
-/* ── Communications channel grid ── */
-.ac-comm-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 12px;
-  margin-top: 4px;
-}
-.ac-comm-card {
-  background: var(--bg-0);
-  border: var(--border-width) solid var(--border);
-  border-radius: 10px;
-  position: relative;       /* anchor for the floating panel */
-  transition: border-color 0.15s;
-}
-.ac-comm-card:hover { border-color: rgba(var(--brand-rgb),0.35); }
-.ac-comm-card.panel-open { border-color: var(--accent); z-index: 10; }
-.ac-comm-card-dim {
-  opacity: 0.6;
-  pointer-events: none;
-}
-.ac-comm-card-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 14px 14px 14px;
-}
-.ac-comm-logo {
-  flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  background: rgba(var(--ink-rgb),0.04);
-}
-.ac-comm-meta {
-  flex: 1;
-  min-width: 0;
-}
-.ac-comm-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--fg-1, var(--fg-1));
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ac-comm-desc {
-  font-size: 11px;
-  color: var(--fg-muted, var(--fg-3));
-  margin-top: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ac-comm-badge {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  padding: 3px 8px;
-  border-radius: 10px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-.ac-comm-badge-active {
-  background: rgba(var(--success-rgb),0.15);
-  color: var(--success);
-}
-.ac-comm-badge-inactive {
-  background: rgba(var(--danger-rgb),0.12);
-  color: var(--danger);
-}
-.ac-comm-badge-unconfigured {
-  background: rgba(var(--ink-rgb),0.1);
-  color: var(--fg-muted, var(--fg-3));
-}
-.ac-comm-badge-dim {
-  background: rgba(var(--ink-rgb),0.08);
-  color: var(--fg-muted, var(--fg-3));
-  font-size: 10px;
-  font-weight: 600;
-  padding: 3px 8px;
-  border-radius: 10px;
-}
-.ac-comm-toggle-btn {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 5px 11px;
-  border-radius: 6px;
-  border: var(--border-width) solid var(--border);
-  background: transparent;
-  color: var(--accent);
-  cursor: pointer;
-  flex-shrink: 0;
-  font-family: inherit;
-  transition: background 0.12s, border-color 0.12s;
-}
-.ac-comm-toggle-btn:hover { background: rgba(var(--brand-rgb),0.08); border-color: var(--accent); }
 .ac-comm-toggle-btn.open { background: rgba(var(--brand-rgb),0.1); border-color: var(--accent); }
-.ac-comm-panel {
-  display: none;
-  position: absolute;
-  top: calc(100% - 14px);  /* overlap upward into the card, hiding its bottom corners */
-  left: -1px;
-  right: -1px;
-  z-index: 200;
-  padding: 24px 14px 16px; /* extra top padding to clear the overlap zone */
-  border: 1px solid var(--accent);
-  border-top: none;
-  border-radius: 0 0 10px 10px;
-  background: var(--bg-0);
-  box-shadow: 0 12px 32px rgba(var(--shadow-rgb), 0.55);
-}
 .ac-comm-panel.open { display: block; }
-.ac-comm-panel-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 14px;
-  flex-wrap: wrap;
-}
-.ac-comm-webhook-url {
-  margin-top: 10px;
-  padding: 8px 10px;
-  background: var(--bg-base, var(--bg-0));
-  border: var(--border-width) solid var(--border);
-  border-radius: 6px;
-  font-size: 11px;
-  color: var(--fg-2, var(--fg-2));
-  word-break: break-all;
-}
 
 /* Light mode overrides for comm grid */
 body.light-mode .ac-comm-card { background: var(--bg-elev); border-color: var(--border); }
@@ -3057,7 +1638,6 @@ body.light-mode .files-restricted-card { background: var(--bg-elev) !important; 
   border-top-color: var(--accent);
   animation: ac-spin 0.7s linear infinite;
 }
-.ac-tree-loading-label { font-size: 12px; }
 
 /* ── Whole-section build gate ───────────────────────────────────────────────
    A config section whose JS rearranges static markup into formatted tables
@@ -3079,7 +1659,6 @@ body.light-mode .files-restricted-card { background: var(--bg-elev) !important; 
   min-height: 340px;
 }
 .ac-section:not(.is-building) > .ac-section-loader { display: none; }
-.ac-section-loader-label { font-size: 12px; color: var(--fg-muted, var(--fg-3)); }
 
 @keyframes ac-group-reveal {
   from { opacity: 0; transform: scaleY(0.4) translateY(-4px); }
@@ -3206,17 +1785,6 @@ body.light-mode .files-restricted-card { background: var(--bg-elev) !important; 
   -webkit-line-clamp: unset;
   overflow: visible;
 }
-/* Search-match highlight (agent-ability-table.js `_markSearchHits`). Marks the
-   literal query occurrences inside a matching card/group head — including the
-   nested tool rows the search expands — so a filter result shows WHY it matched.
-   `--accent-mid` is the theme-aware accent tint (registered brighter in the light
-   block), so the mark reads in both themes with no per-theme override. No padding
-   and no font change, so marking can never reflow a clamped/ellipsised row. */
-mark.ac-search-hit {
-  background: var(--accent-mid);
-  color: var(--fg-1);
-  border-radius: 3px;
-}
 /* Row-level search pruning (agent-ability-table.js `_filterCardRows`). The `hidden`
    attribute alone is NOT enough here: its UA `display: none` loses to this sheet's
    author `.ac-ability-row { display: flex }`, and to the inline `display` an open
@@ -3337,13 +1905,6 @@ mark.ac-search-hit {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-}
-/* Click-to-expand, added by `wireGateParamRows` only when the text overflows. */
-.ac-gate-param-desc-toggle { cursor: pointer; }
-.ac-gate-param-desc-toggle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 2px;
 }
 .ac-gate-param-desc.is-open {
   -webkit-line-clamp: unset;
@@ -3493,25 +2054,6 @@ mark.ac-search-hit {
   border: 4px solid transparent;
   border-top-color: var(--warning);
 }
-
-/* ── SHARED-HAZARD-CONFIRM ───────────────────────────────────────────────────
-   The in-app replacement for the native confirm() popup (shared/js/confirm-dialog.js):
-   a centred notification panel with a hazard badge + Cancel/Confirm. Theme-safe —
-   all colours are design-system tokens; the tone (warning/danger) recolours the
-   badge + confirm button. */
-.wa-confirm-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 4000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: rgba(var(--bg-0-rgb), 0.55);
-  backdrop-filter: blur(3px);
-  opacity: 0;
-  transition: opacity 0.16s ease;
-}
 .wa-confirm-overlay.show { opacity: 1; }
 .wa-confirm-panel {
   width: 100%;
@@ -3525,46 +2067,8 @@ mark.ac-search-hit {
   transition: transform 0.16s ease;
 }
 .wa-confirm-overlay.show .wa-confirm-panel { transform: translateY(0) scale(1); }
-.wa-confirm-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-.wa-confirm-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-}
-.wa-confirm-warning .wa-confirm-icon { color: var(--warning); background: var(--warning-soft); }
-.wa-confirm-danger  .wa-confirm-icon { color: var(--danger);  background: var(--danger-soft); }
-.wa-confirm-title {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--fg-1);
-  line-height: 1.3;
-}
-.wa-confirm-msg {
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--fg-2, var(--muted));
-  white-space: pre-wrap;
-  margin-bottom: 18px;
-}
-.wa-confirm-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
 .wa-confirm-actions .ac-btn { padding: 7px 16px; }
-.wa-confirm-warning .wa-confirm-go { background: var(--warning); color: var(--bg-0); }
-.wa-confirm-danger  .wa-confirm-go { background: var(--danger);  color: var(--bg-0); }
 @media (prefers-reduced-motion: reduce) {
-  .wa-confirm-overlay,
   .wa-confirm-panel { transition: none; }
 }
 
@@ -3588,11 +2092,6 @@ mark.ac-search-hit {
   vertical-align: middle;
 }
 @keyframes agents-spin { to { transform: rotate(360deg); } }
-/* Locked-on safety ability (e.g. Context Control): the toggle is fixed in the
-   ON position and cannot be turned off. The switch still renders as ON; we only
-   signal that it is fixed (no-drop cursor) — clicking it reports "Cannot be
-   deactivated" rather than changing. Theme-safe (inherits the ON track colour). */
-.ac-ability-toggle-locked { cursor: not-allowed; }
 .ac-ability-toggle-locked .conn-toggle { cursor: not-allowed; }
 
 /* ── Toggle switch (SISTER-PANEL: AGENT-ABILITY-TABLE) ──────────────────────
@@ -4236,39 +2735,7 @@ body.light-mode .ac-group-body > .ac-card.ac-card-compact .ac-int-row:hover {
    on the same right edge. Both share the same inline style set in JS; this rule
    only guarantees the group head reserves room for it at the same offset. */
 .ac-group-head .ac-ability-delete-btn { margin-left: 0; }
-
-/* ── Compactified integration cards ──────────────────────────────────────
-   Every OAuth / channel / generic card (agent-settings/agent-settings.html) is turned
-   into a slim row that matches the Agent Tools table: the original card header
-   is hidden and a `.ac-int-row` is prepended; the config form lives in the
-   collapsible `…-body` revealed on expand. See _compactifyCard() in
-   app-config.js. */
-.ac-card.ac-card-compact {
-  padding: 0;
-  margin: 0 0 6px;
-  border: var(--border-width) solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-elev);
-  overflow: hidden;
-}
-.ac-card-compact .ac-int-row {
-  border-bottom: none;
-  cursor: pointer;
-}
-.ac-card-compact > div[id$="-body"] {
-  padding: 12px 14px 14px;
-  border-top: var(--border-width) solid var(--border);
-}
-.ac-int-row-chevron {
-  display: flex;
-  align-items: center;
-  margin-left: 8px;
-  flex-shrink: 0;
-  color: var(--fg-muted);
-  transition: transform 0.2s;
-}
 .ac-int-row .ac-ability-toggle-wrap { margin-left: auto; }
-.ac-int-row-chevron + * { margin-left: 0; }
 
 /* Integration cards grouped into ONE flush `.ac-list` (see _groupIntegrationLists
    in app-config.js). The list draws the border / radius / dividers; each card
@@ -4288,26 +2755,7 @@ body.light-mode .ac-group-body > .ac-card.ac-card-compact .ac-int-row:hover {
 body.light-mode .ac-list > .ac-card.ac-card-compact + .ac-card.ac-card-compact {
   border-top-color: var(--border);
 }
-
-/* ── Coming-soon rows (greyed, non-interactive) ──────────────────────────── */
-.ac-soon-rows {
-  margin-top: 8px;
-}
-.ac-soon-row { opacity: 0.7; }
 .ac-soon-row .ac-ability-icon { color: var(--fg-muted); }
-.ac-soon-pill {
-  flex-shrink: 0;
-  margin-left: auto;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  padding: 3px 9px;
-  border-radius: 999px;
-  background: var(--bg-2);
-  color: var(--fg-muted);
-  border: var(--border-width) solid var(--border-soft);
-  white-space: nowrap;
-}
 body.light-mode .ac-card.ac-card-compact { background: var(--bg-elev); border-color: var(--border); }
 body.light-mode .ac-card-compact > div[id$="-body"] { border-top-color: var(--border); }
 body.light-mode .ac-soon-pill { background: rgba(var(--ink-rgb), 0.08); border-color: var(--border); }
@@ -4401,155 +2849,9 @@ body.light-mode .ac-soon-pill { background: rgba(var(--ink-rgb), 0.08); border-c
   padding: 3px 8px;
   font-size: 13px;
 }
-/* Tunnel "How do I set up my Cloudflare tunnel?" collapsible guide */
-.ac-tl-guide-summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  cursor: pointer;
-  user-select: none;
-  list-style: none;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--fg-1);
-  transition: background 0.15s;
-}
-.ac-tl-guide-summary::-webkit-details-marker { display: none; }
-.ac-tl-guide-summary:hover { background: rgba(var(--brand-rgb), 0.05); }
-.ac-tl-guide-chev { transition: transform 0.18s ease; }
-.ac-tl-guide[open] .ac-tl-guide-chev { transform: rotate(180deg); }
-
-/* ── Remote Access row bodies (App Settings → Remote Access) ────────────────
-   Small layout helpers for the content INSIDE the three expandable rows
-   (same-network · internet method · on-your-phone). The table/row look itself
-   is the shared .ac-list / .ac-row component; these only tidy the form bits
-   that used to be ad-hoc inline-styled boxes across two separate panels. All
-   colours are design-system vars, so the bodies are correct in dark AND light.
-   Element ids inside are read by ui/shared/js/remote-access.js +
-   ui/shared/js/tunnel-link.js. */
-.ac-ra-url-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.ac-ra-code {
-  font-size: 13px;
-  padding: 4px 8px;
-  background: var(--bg-0);
-  border: var(--border-width) solid var(--border);
-  border-radius: 6px;
-  color: var(--fg-1);
-}
-.ac-ra-code-long { font-size: 12px; word-break: break-all; max-width: 100%; }
-
-/* Same-network: every LAN address stacked, each a uniform code + Copy + QR row. */
-.ac-ra-sn-urls { display: flex; flex-direction: column; gap: 8px; }
-.ac-ra-sn-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.ac-ra-sn-row .ac-ra-code { flex: 1 1 auto; min-width: 0; word-break: break-all; }
-/* Compact square icon button (Copy / QR) — Lucide glyph, no text. */
-.ac-ra-icon-btn {
-  display: inline-flex; align-items: center; justify-content: center;
-  flex: 0 0 auto;
-  width: 30px; height: 30px; padding: 0;
-  background: var(--bg-0);
-  border: var(--border-width) solid var(--border);
-  color: var(--fg-2);
-}
-.ac-ra-icon-btn:hover { color: var(--accent); border-color: var(--accent); opacity: 1; }
-.ac-ra-icon-btn .lucide-icon,
-.ac-ra-icon-btn svg { width: 15px; height: 15px; }
-/* Clone-current-repo (Repo-to-deploy header) busy state — dim + gently spin the
-   icon while it reads the current repo. See deploy.js _cloneCurrentRepo. */
-.ac-deploy-repo-clone-busy { opacity: 0.55; pointer-events: none; }
-.ac-deploy-repo-clone-busy svg { animation: ac-deploy-spin 0.8s linear infinite; }
+.ac-ra-icon-btn .lucide-icon { width: 15px; height: 15px; }
 @keyframes ac-deploy-spin { to { transform: rotate(360deg); } }
-/* Clone toggle ON: the button is a two-state toggle (clone the current repo ↔ back
-   to the production repo). While a clone is in effect it reads as active/filled so
-   it's clear a second click reverts. See deploy.js _toggleCloneCurrentRepo. */
-.ac-deploy-repo-clone-on {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--bg-0);
-}
-.ac-deploy-repo-clone-on:hover { color: var(--bg-0); opacity: 0.9; }
-/* Primary icon button (Start) — accent-filled to stand out from the rest. */
-.ac-ra-icon-btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--bg-0);
-}
-.ac-ra-icon-btn-primary:hover { color: var(--bg-0); opacity: 0.85; }
-
-/* ── Shared QR popup (ui/shared/js/qr-popup.js) ──────────────────────────
-   Compact popover: toolbar (draggable handle) + white plate + truncated URL.
-   Opens fully inside the viewport so it's never clipped by an edge. */
-.qr-pop {
-  position: fixed; z-index: 1000;
-  display: flex; flex-direction: column;
-  width: 208px;
-  background: var(--bg-elev, var(--bg-0));
-  border: var(--border-width) solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 6px 18px rgba(var(--shadow-rgb), 0.38);
-}
-/* Toolbar — only the close button on the right. Drag only from here. */
-.qr-pop-toolbar {
-  display: flex; align-items: center; justify-content: flex-end;
-  height: 22px; padding: 0 2px;
-  border-radius: 8px 8px 0 0;
-  cursor: grab;
-  user-select: none; -webkit-user-select: none;
-}
-.qr-pop-dragging .qr-pop-toolbar { cursor: grabbing; }
-.qr-pop-close {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 18px; height: 18px; padding: 0;
-  border: none; border-radius: 4px;
-  background: transparent; color: var(--fg-4); cursor: pointer;
-  flex-shrink: 0;
-}
-.qr-pop-close:hover { background: rgba(var(--ink-rgb), 0.10); color: var(--fg-1); }
-.qr-pop-close > * { pointer-events: none; }
-.qr-pop-close > svg, .qr-pop-close > .lucide-icon { width: 12px; height: 12px; }
-/* White plate — the QR renders dark-on-light so it scans in either theme. */
-.qr-pop-plate {
-  background: #ffffff; padding: 8px; align-self: stretch;
-  cursor: grab;
-  -webkit-user-drag: none; user-select: none; -webkit-user-select: none;
-}
-/* URL label — single-line truncated, click to copy. */
-.qr-pop-url {
-  font-size: 10px; font-family: var(--font-mono, monospace);
-  color: var(--fg-2); text-align: center;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  padding: 2px 5px 5px;
-  cursor: pointer; user-select: none; -webkit-user-select: none;
-}
-.qr-pop-url:hover { color: var(--brand); }
-.qr-pop-copied { color: var(--success) !important; }
-/* Drag state — bump z-index so it stays above everything. */
-.qr-pop-dragging { z-index: 10000 !important; }
-/* Deploy variant — wider for longer commands (builds on .qr-pop). */
-.ac-tx-qr-pop { width: 212px; max-width: 260px; min-width: unset; }
-.ac-ra-code-inline {
-  font-size: 11px;
-  padding: 1px 5px;
-  background: var(--bg-0);
-  border: var(--border-width) solid var(--border);
-  border-radius: 4px;
-  color: var(--fg-1);
-}
-.ac-ra-fields {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-top: 10px;
-}
-.ac-ra-fields:empty { margin-top: 0; }
-.ac-ra-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 12px;
-}
+.qr-pop-close > .lucide-icon { width: 12px; height: 12px; }
 /* Deploy card — the local-deployments list (this app + sibling checkouts),
    deploy.js `_renderInstances`. Each instance is an expandable `.ac-row` inside
    #ac-deploy-instances; the list reuses the shared `.ac-ability-row` /
@@ -4558,234 +2860,12 @@ body.light-mode .ac-soon-pill { background: rgba(var(--ink-rgb), 0.08); border-c
 .ac-deploy-insts > .ac-row + .ac-row {
   border-top: var(--border-width) solid var(--border);
 }
-/* Status dot in the icon column (green running / amber busy / grey stopped). */
-.ac-deploy-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--fg-muted, var(--fg-3));
-}
-.ac-deploy-dot-run {
-  background: var(--success, #22c55e);
-  box-shadow: 0 0 0 3px rgba(var(--success-rgb, 34, 197, 94), 0.18);
-}
-.ac-deploy-dot-busy { background: var(--warning, #d1a01e); }
-.ac-deploy-dot-stop { background: var(--fg-muted, var(--fg-3)); opacity: 0.55; }
-/* Right-hand status word on the title line. */
-.ac-deploy-inst-status {
-  margin-left: auto;
-  flex-shrink: 0;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--fg-muted, var(--fg-3));
-}
-/* Hold-to-restart button on the "This app" hub row (deploy.js _beginResetHold).
-   Press and hold: after a beat it arms to the hazard triangle + tints red — the
-   same cue the app's delete buttons use — while the fill sweeps left→right; hold
-   to the end and the server restarts (no confirm dialog; the hold is the confirm).
-   The .holding fill duration MUST match _RESET_HOLD_MS in deploy.js. */
-.ac-deploy-reset-btn {
-  position: relative;
-  align-self: center;          /* centre on the title line (row is flex-start) */
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: var(--border-width) solid var(--border);
-  border-radius: 7px;
-  background: transparent;
-  color: var(--fg-muted, var(--fg-3));
-  cursor: pointer;
-  overflow: hidden;
-  user-select: none;
-  -webkit-user-select: none;
-  touch-action: none;          /* let a touch-hold work without triggering scroll */
-}
-.ac-deploy-reset-btn:hover { color: var(--fg-1); border-color: var(--border-strong, var(--border)); }
 .ac-deploy-reset-btn.warning { color: var(--danger); border-color: rgba(var(--danger-rgb, 220, 80, 80), 0.6); }
-.ac-deploy-reset-btn .ac-deploy-reset-ico { position: relative; z-index: 1; display: inline-flex; }
-.ac-deploy-reset-btn .ac-deploy-reset-ico svg { width: 14px; height: 14px; }
-.ac-deploy-reset-fill {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  transform: scaleX(0);
-  transform-origin: left center;
-  background: rgba(var(--danger-rgb, 220, 80, 80), 0.22);
-  transition: transform 150ms ease;   /* quick snap-back on release / abort */
-}
 .ac-deploy-reset-btn.holding .ac-deploy-reset-fill {
   transform: scaleX(1);
   transition: transform 1200ms linear; /* == _RESET_HOLD_MS in deploy.js */
 }
-/* Small pill badges after the name ("This app", "Needs update"). */
-.ac-deploy-badge {
-  display: inline-block;
-  margin-left: 7px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 600;
-  vertical-align: middle;
-}
-.ac-deploy-badge-app {
-  background: rgba(var(--accent-rgb, 224, 163, 94), 0.16);
-  color: var(--accent);
-}
-.ac-deploy-badge-warn {
-  background: rgba(var(--warning-rgb, 209, 160, 30), 0.18);
-  color: var(--warning, #b8860b);
-}
-/* The "Port N · folder" line. The port is fixed-width; the folder is monospace
-   and dims slightly. A middle dot separates them. */
-.ac-deploy-meta-port { font-weight: 600; color: var(--fg-2, var(--fg-1)); }
-.ac-deploy-meta-folder {
-  margin-left: 14px;
-  font-family: var(--font-mono);
-  color: var(--fg-muted, var(--fg-3));
-  word-break: break-all;
-}
-.ac-deploy-meta-folder::before {
-  content: "·";
-  margin-right: 14px;
-  color: var(--fg-muted, var(--fg-3));
-}
-/* Danger action (Remove) reuses the base `.ac-btn` but tints red. */
-.ac-deploy-danger-btn { color: var(--danger); border-color: rgba(var(--danger-rgb, 220, 80, 80), 0.5); }
-.ac-deploy-danger-btn:hover { background: rgba(var(--danger-rgb, 220, 80, 80), 0.1); }
-/* Reused for the "reopen at" link after a hub-port relaunch. */
-.ac-deploy-current-link {
-  color: var(--accent);
-  text-decoration: none;
-  font-family: var(--font-mono);
-}
-.ac-deploy-current-link:hover { text-decoration: underline; }
-
-/* Setup-bundle rows (data-settings.html #ac-deploy-export-row /
-   #ac-deploy-import-row): two static top-level rows in #ac-deploy-list, siblings
-   of "+ New deployment". They reuse the shared expandable `.ac-row` /
-   `.ac-ability-row` / `.ac-ability-body` look, so these rules only add the
-   password + Verify row and the import preview lines. Behaviour wired by
-   deploy.js _initBootRows; expand by data-settings.js _wireBootRow. Theme-safe. */
-/* Password + inline Verify button. The field grows; the button hugs its label
-   and matches the input height so they read as one control. The Verify button
-   reveals the Copy (export) / Accept (import) action once it succeeds. */
-.ac-boot-pw-row {
-  display: flex;
-  align-items: stretch;
-  gap: 8px;
-}
 .ac-boot-pw-row .ac-input { flex: 1 1 auto; min-width: 0; }
-.ac-boot-verify { flex: 0 0 auto; white-space: nowrap; }
-/* One "what the code carries" line in the import preview — summary text with an
-   optional "already set" badge, divided by the same hairline the list uses. */
-.ac-boot-preview-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 0;
-  font-size: 12px;
-  border-top: var(--border-width) solid var(--border);
-}
-.ac-boot-preview-row > span:first-child { flex: 1 1 auto; min-width: 0; }
-.ac-boot-preview-row .ac-deploy-badge { margin-left: 0; }
-
-/* Deploy card — primary "Deploy now" button + the live NDJSON log.
-   Reuses the Remote Access form grid (.ac-ra-fields) + actions row. */
-.ac-deploy-go-btn {
-  background: var(--accent);
-  color: var(--bg-0);
-  border-color: var(--accent);
-  font-weight: 600;
-}
-.ac-deploy-go-btn:hover { opacity: 0.85; }
-.ac-deploy-log {
-  margin-top: 10px;
-  max-height: 220px;
-  overflow: auto;
-  padding: 10px 12px;
-  border: var(--border-width) solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-tint);
-  color: var(--fg-2);
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* Generated copy-paste command box — shown by "manual" deploy targets (e.g.
-   Termux on a phone) that produce a command the admin runs themselves, rather
-   than creating a cloud server. The command sits in a monospace box with a Copy
-   button; the note below explains what to do with it. */
-.ac-deploy-cmd-wrap { margin-top: 12px; }
-.ac-deploy-cmd-head {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: var(--fg-3);
-  margin-bottom: 5px;
-}
-.ac-deploy-cmd-row {
-  display: flex;
-  align-items: stretch;
-  gap: 8px;
-}
-.ac-deploy-cmd {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 9px 11px;
-  border: var(--border-width) solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-0);
-  color: var(--fg-1);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre;
-  overflow-x: auto;
-  user-select: all;            /* one tap/drag selects the whole command */
-}
-.ac-deploy-cmd-copy {
-  flex: 0 0 auto;
-  align-self: flex-start;
-  white-space: nowrap;
-}
-.ac-deploy-cmd-note {
-  margin-top: 7px;
-  padding: 8px 11px;
-  border-left: 3px solid var(--accent);
-  border-radius: 6px;
-  background: var(--bg-tint);
-  color: var(--fg-2);
-  font-size: 11.5px;
-  line-height: 1.55;
-}
-/* Manual install rows (Linux/Termux, Windows, macOS) — the command box's button
-   column (Copy + QR stacked) and the click-to-show QR popover. Shared by all
-   three rows (kept the `ac-tx-` names from the original Termux-only row). The
-   command is shown LIVE (built by deploy.js as the fields change); the QR button
-   toggles a popover (same code as a scannable QR), mirroring Remote Access →
-   Same network. */
-.ac-tx-cmd-btns {
-  flex: 0 0 auto;
-  align-self: center;
-  display: flex;
-  gap: 6px;
-}
-.ac-tx-steps {
-  margin: 12px 0 0;
-  padding-left: 20px;
-  color: var(--fg-2);
-  font-size: 12px;
-  line-height: 1.6;
-}
-.ac-tx-steps li { margin-bottom: 4px; }
 
 /* Field help: a small circled "?" beside a label. CLICK / TAP opens the help
    bubble (.ac-tip-pop below); hover also previews it on a mouse. Used by the
@@ -4843,47 +2923,6 @@ body.light-mode .ac-soon-pill { background: rgba(var(--ink-rgb), 0.08); border-c
 }
 .ac-tip-pop.show { opacity: 1; transform: translateY(0); }
 .ac-tip-pop[hidden] { display: none; }
-/* Live "who is this size for" note shown under the machine-size menu. */
-.ac-field-note {
-  margin-top: 6px;
-  padding: 7px 10px;
-  border-left: 3px solid var(--accent);
-  border-radius: 6px;
-  background: var(--bg-tint);
-  color: var(--fg-2);
-  font-size: 11.5px;
-  line-height: 1.5;
-}
-.ac-field-note:empty { display: none; }
-
-/* A clickable helper link rendered directly under a Deploy field's TITLE, above
-   the input (e.g. "Open the Google Cloud console"). Dynamic ones (built from the
-   project ID) hide themselves until the value they depend on is filled in — see
-   deploy.js _applyDynLink. `display:block` keeps it on its own line between the
-   label and the field; the bottom margin separates it from the input. */
-.ac-field-link {
-  display: block;
-  margin-top: 4px;
-  margin-bottom: 7px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--accent);
-  text-decoration: none;
-  word-break: break-word;
-}
-.ac-field-link:hover { text-decoration: underline; }
-
-/* Inline "how to get this" help under a form field — the field's `tip` spelled
-   out visibly (not behind the hover ⓘ badge) while a provider is being set up.
-   Used by dns.js `_buildField(..., showTip=true)`; collapses back to the badge
-   once the provider is connected. Muted, small, its own line under the input. */
-.ac-field-help {
-  margin-top: 5px;
-  font-size: 11.5px;
-  line-height: 1.55;
-  color: var(--fg-3);
-  word-break: break-word;
-}
 
 /* Rich help bubble — carries a paragraph, an optional (project-ID-driven) link,
    and screenshot thumbnails, not just one line of text. Made clickable (the plain
@@ -4937,21 +2976,6 @@ body.light-mode .ac-soon-pill { background: rgba(var(--ink-rgb), 0.08); border-c
   box-shadow: 0 10px 44px rgba(0, 0, 0, 0.55);
 }
 
-/* Advanced-actions panel revealed by the Deploy form's "More" button — the
-   less-common actions (test / save / tear-down) tucked away so the completion
-   step shows only the primary "Activate" button. */
-.ac-deploy-more-panel {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
-  padding: 10px;
-  border: var(--border-width) solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-tint);
-}
-.ac-deploy-more-panel[hidden] { display: none; }
-
 /* Drag-and-drop affordance on the Service-account JSON box: dropping the
    downloaded key file fills the box as if pasted (deploy.js _wireDropzone). */
 textarea.ac-dropzone.is-dragover {
@@ -4959,52 +2983,12 @@ textarea.ac-dropzone.is-dragover {
   background: var(--accent-soft);
   box-shadow: 0 0 0 2px var(--accent-line);
 }
-.ac-ra-check-lbl {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--fg-3);
-  cursor: pointer;
-}
-.ac-ra-subhead {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--fg-1);
-  margin-bottom: 4px;
-}
 .ac-ra-subhead .lucide-icon { width: 14px; height: 14px; color: var(--accent); flex-shrink: 0; }
-.ac-ra-disclosure > summary {
-  cursor: pointer;
-  font-size: 11px;
-  color: var(--fg-3);
-  list-style: none;
-}
-.ac-ra-disclosure > summary::-webkit-details-marker { display: none; }
-.ac-category-chevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  font-size: 10px;
-  color: var(--fg-3, var(--fg-3));
-  transition: transform 0.2s;
-  flex-shrink: 0;
-}
 .ac-category-group[open] .ac-category-chevron {
   transform: rotate(90deg);
 }
 .ac-category-title {
   flex: 1;
-}
-.ac-category-count {
-  font-size: 10px;
-  color: var(--fg-muted, var(--fg-3));
-  font-weight: 400;
 }
 .ac-category-body {
   padding: 4px 0 0;
@@ -5220,10 +3204,6 @@ body.light-mode .ac-category-desc {
   flex-shrink: 0;
   border-bottom: var(--border-width) solid var(--border);
 }
-.ac-mnav { display: block; }
-
-/* Show all subnav strips since all sections are always visible. */
-#app-config-subnav > .ac-mnav { display: block; }
 
 /* Un-stack the in-flow headings for a carousel section so they scroll naturally
    instead of pinning top/bottom. Higher specificity than the base
@@ -5233,55 +3213,6 @@ body.light-mode .ac-category-desc {
    `static` here let the switch escape to the viewport and float loose over the
    mobile page instead of pinning to the right of its heading row. */
 .ac-section.ac-mnav-on .ac-category-summary { position: relative; }
-
-#app-config-subnav > .ac-mnav {
-  /* Full-width bar with a bottom rule, mirroring #app-config-tabs-wrap — a
-     second row of tabs attached directly under the app-config tabs. It lives
-     outside the scroller, so (like the tab wrap) nothing scrolls behind it and
-     it can be transparent, letting the panel gradient show through. */
-  width: 100%;
-  border-bottom: var(--border-width) solid var(--border);
-  background: transparent;
-}
-.ac-mnav-strip {
-  display: flex;
-  gap: 0;
-  overflow-x: auto;
-  padding: 0 18px;                  /* match #app-config-tabs */
-  scroll-behavior: smooth;
-  scroll-snap-type: x proximity;
-  scrollbar-width: none;            /* hide the horizontal scrollbar */
-  -ms-overflow-style: none;
-  overscroll-behavior-x: none;
-}
-.ac-mnav-strip::-webkit-scrollbar { width: 0; height: 0; display: none; }
-/* Mirror .ac-tab (the app-config tab bar): underline tabs — the active one
-   accent-coloured with the underline + a touch larger, animated. Keep in sync
-   with `.ac-tab` above. */
-.ac-mnav-chip {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;              /* sit the underline ON the bar's bottom rule */
-  padding: 10px 14px;
-  color: var(--fg-muted, var(--fg-3));
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
-  font-family: inherit;
-  cursor: pointer;
-  scroll-snap-align: start;
-  transition: color 0.15s, border-color 0.15s, font-size 0.15s;
-}
-/* Icon inherits the tab colour (muted when idle, accent when active) — same as
-   .ac-tab-icon, which sets no colour of its own. */
-.ac-mnav-chip .ac-mnav-ico { width: 14px; height: 14px; flex: 0 0 auto; }
-.ac-mnav-chip:hover { color: var(--fg-1); }
 .ac-mnav-chip.active {
   color: var(--accent);
   border-bottom-color: var(--accent);
@@ -5291,38 +3222,6 @@ body.light-mode .ac-category-desc {
 body.light-mode .ac-mnav-chip { color: var(--fg-3); }
 body.light-mode .ac-mnav-chip:hover { color: var(--fg-2); }
 body.light-mode .ac-mnav-chip.active { color: var(--brand); border-bottom-color: var(--brand); }
-/* Unified carousel: section labels as prefixes */
-.ac-mnav-section-label {
-  font-size: 10px;
-  font-weight: 500;
-  text-transform: uppercase;
-  opacity: 0.7;
-  margin-right: 2px;
-}
-/* Edge-fade on the side(s) that can still scroll — an ALPHA MASK only, so the
-   opaque bar (never a guessed colour) shows through the fade. Same technique as
-   the main-tab carousel; the both-sides rule outranks the single-side ones. */
-.ac-mnav.can-left .ac-mnav-strip {
-  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 26px);
-          mask-image: linear-gradient(to right, transparent 0, #000 26px);
-}
-.ac-mnav.can-right .ac-mnav-strip {
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 26px), transparent 100%);
-          mask-image: linear-gradient(to right, #000 calc(100% - 26px), transparent 100%);
-}
-.ac-mnav.can-left.can-right .ac-mnav-strip {
-  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%);
-          mask-image: linear-gradient(to right, transparent 0, #000 26px, #000 calc(100% - 26px), transparent 100%);
-}
-
-/* ── Main Panel Pages (drag-reorderable list) ── */
-/* Main Panel Pages — the shared `.ac-list` flush table plus a drag handle so the
-   rows double as a drag-to-reorder list. The list/row look comes from `.ac-list`
-   / `.ac-ability-row`; only the drag affordance, drop indicator and the small
-   visibility toggle are defined here. */
-.ac-main-panel-list {
-  /* container look comes from `.ac-list` */
-}
 .ac-main-panel-item {
   cursor: grab;
   user-select: none;
@@ -5495,46 +3394,7 @@ body.light-mode .ac-main-panel-item .ac-mp-icon-btn:hover {
 body.light-mode .ac-main-panel-item .ac-mp-name-input:focus {
   background: var(--bg-1);
 }
-
-/* ── Terminal tunnel (user drives a terminal through chat) ──────────────────
-   The overlay covers the chat message area with a live read-only terminal; the
-   banner (above the pill) carries the key palette + Hand-back. Theme-aware via
-   design-system variables — correct in dark and light. See ui/shared/js/chatTunnel.js
-   and app/agent/terminal_tunnel.py. */
-.chat-tunnel-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 6;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-0, var(--bg-0));
-  border-top: var(--border-width) solid var(--border);
-  overflow: hidden;
-}
 .chat-tunnel-overlay .xterm { padding: 8px; height: 100%; }
-.chat-tunnel-error {
-  padding: 16px;
-  color: var(--danger);
-  font-family: var(--font-mono, monospace);
-  font-size: 13px;
-}
-
-/* ── Terminal Chat engine overlay ───────────────────────────────────────────
-   When the active agent runs on the terminal_chat engine, the chat bubble area
-   is replaced by a live xterm.js terminal. Same visual contract as the tunnel
-   overlay above. See ui/chat/js/chat-terminal-engine.js and
-   plugins/engines/terminal_chat/. */
-.chat-terminal-error {
-  padding: 16px;
-  color: var(--danger);
-}
-.tl-screenshot {
-  max-width: 100%;
-  max-height: 400px;
-  margin-top: 4px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-}
 #chat-terminal-overlay {
   position: absolute;
   inset: 0;
@@ -5544,85 +3404,10 @@ body.light-mode .ac-main-panel-item .ac-mp-name-input:focus {
   overflow: hidden;
 }
 #chat-terminal-overlay .xterm { padding: 8px; height: 100%; }
-
-.chat-tunnel-banner {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 0 0 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--accent);
-  border-radius: 12px;
-  background: var(--bg-elev);
-  box-shadow: 0 0 0 1px rgba(var(--brand-rgb), 0.12) inset;
-}
-.chat-tunnel-banner-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.chat-tunnel-label {
-  flex: 1 1 auto;
-  font-size: 13px;
-  color: var(--fg-2, var(--fg-1));
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.chat-tunnel-label .chat-tunnel-cmd {
-  color: var(--fg-1);
-  font-family: var(--font-mono, monospace);
-}
-.chat-tunnel-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex: 0 0 auto;
-  animation: chat-tunnel-pulse 1.6s ease-in-out infinite;
-}
 @keyframes chat-tunnel-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.4; transform: scale(0.7); }
 }
-.chat-tunnel-handback {
-  flex: 0 0 auto;
-  padding: 5px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--accent);
-  background: transparent;
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  cursor: pointer;
-}
-.chat-tunnel-handback:hover {
-  color: var(--bg-0, var(--bg-0));
-  background: var(--accent);
-}
-.chat-tunnel-keys {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.chat-tunnel-key {
-  min-width: 34px;
-  padding: 4px 9px;
-  font-family: var(--font-mono, monospace);
-  font-size: 12px;
-  color: var(--fg-2, var(--fg-1));
-  background: var(--bg-1);
-  border: var(--border-width) solid var(--border);
-  border-radius: 7px;
-  cursor: pointer;
-}
-.chat-tunnel-key:hover {
-  color: var(--fg-1);
-  border-color: var(--accent);
-  background: var(--bg-tint);
-}
-.chat-tunnel-key:active { transform: translateY(1px); }
 
 /* ── Debug Console Log Panel ─────────────────────────────────────────────── */
 /* Body becomes a flex column so the panel sits below the stage in normal flow,
@@ -5636,50 +3421,9 @@ body {
 }
 #main-header { flex-shrink: 0; }
 #stage { flex: 1 1 0; min-height: 0; }
-
-.debug-console-panel {
-  flex-shrink: 0;
-  z-index: 9999;
-  height: 250px;
-  background: var(--bg-0, var(--bg-0));
-  border-top: var(--border-width) solid var(--border);
-  display: none;
-  flex-direction: column;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 12px;
-  color: var(--fg-2);
-  box-shadow: 0 -4px 24px rgba(var(--shadow-rgb), 0.5);
-}
-/* Drag handle across the full top edge */
-.debug-console-drag-handle {
-  position: relative;
-  flex-shrink: 0;
-  height: 8px;
-  cursor: row-resize;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  transition: background 0.15s ease;
-  z-index: 1;
-  pointer-events: auto;
-  min-height: 8px;
-  touch-action: none;
-}
-.debug-console-drag-handle:hover,
 .debug-console-drag-handle.resizing {
   background: rgba(var(--brand-rgb), 0.08);
 }
-.debug-console-drag-line {
-  width: 40px;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--fg-4);
-  opacity: 0.4;
-  transition: opacity 0.15s ease, background 0.15s ease, width 0.15s ease;
-  pointer-events: none;
-}
-.debug-console-drag-handle:hover .debug-console-drag-line,
 .debug-console-drag-handle.resizing .debug-console-drag-line {
   opacity: 0.8;
   background: var(--accent);
@@ -5688,69 +3432,9 @@ body {
 .debug-console-panel.open {
   display: flex;
 }
-.debug-console-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 10px;
-  background: var(--bg-1);
-  flex-shrink: 0;
-}
-.debug-console-title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--fg-1);
-}
-/* Carousel wrapper — positions chevrons over the scrollable strip */
-.debug-console-header-actions-wrap {
-  display: flex;
-  align-items: center;
-  position: relative;
-  flex: 1 1 auto;
-  min-width: 0;
-  gap: 0;
-  --dc-fade: 20px;
-}
-.debug-console-header-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 4px;
-  overflow-x: auto;
-  scroll-behavior: smooth;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 0 2px;
-}
-.debug-console-header-actions::-webkit-scrollbar { display: none; }
-
-/* Chevron buttons — absolutely positioned over the strip edges */
-.debug-console-chev {
-  display: none;
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 20px;
-  align-items: center;
-  border: none;
-  background: transparent;
-  color: var(--fg-2);
-  cursor: pointer;
-  font-size: 13px;
-  padding: 0 2px;
-  z-index: 2;
-  flex-shrink: 0;
-  line-height: 1;
-}
 .debug-console-chev.left  { left: 0;  justify-content: flex-start; }
 .debug-console-chev.right { right: 0; justify-content: flex-end; }
 .debug-console-chev.visible { display: flex; }
-.debug-console-chev:hover { color: var(--fg-1); }
 
 /* Edge-fade mask — same pattern as main-tabs / chat-header carousel */
 .debug-console-header-actions-wrap:has(.debug-console-chev.left.visible) .debug-console-header-actions {
@@ -5766,33 +3450,6 @@ body {
 .debug-console-header-actions-wrap:has(.debug-console-chev.left.visible):has(.debug-console-chev.right.visible) .debug-console-header-actions {
   -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--dc-fade), #000 calc(100% - var(--dc-fade)), transparent 100%);
           mask-image: linear-gradient(to right, transparent 0, #000 var(--dc-fade), #000 calc(100% - var(--dc-fade)), transparent 100%);
-}
-
-/* Commit & push button — styled like Git Control ⭐ */
-.debug-console-commit-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(90deg, #f59e0b, #fbbf24);
-  border: var(--border-width) solid rgba(245,158,11,0.4);
-  border-radius: 4px;
-  color: #1a1a2e;
-  cursor: pointer;
-  padding: 2px 5px;
-  font-size: 11px;
-  font-family: inherit;
-  font-weight: 600;
-  line-height: 1;
-  transition: filter 0.12s ease, transform 0.12s ease;
-  flex-shrink: 0;
-}
-.debug-console-commit-btn:hover:not(:disabled) {
-  filter: brightness(1.1);
-  transform: scale(1.04);
-}
-.debug-console-commit-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 .debug-console-commit-btn.is-working,
 .debug-console-commit-btn.is-done {
@@ -5834,31 +3491,6 @@ body {
 @keyframes dc-spin {
   to { transform: rotate(360deg); }
 }
-
-/* Global stop button in the Debug action strip — keeps the same compact shell
-   as its neighbouring server control, while the shared state classes below
-   retain the danger/red armed and engaged treatments. */
-#debug-console-panel .debug-console-kill-switch-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: var(--border-width) solid var(--border);
-  border-radius: 4px;
-  color: var(--fg-2);
-  cursor: pointer;
-  padding: 2px 5px;
-  font-size: 11px;
-  line-height: 1;
-  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
-  flex-shrink: 0;
-}
-#debug-console-panel .debug-console-kill-switch-btn:hover:not(:disabled) {
-  color: var(--fg-1);
-  border-color: var(--border-strong, var(--border));
-  background: var(--bg-2);
-  transform: scale(1.04);
-}
 #debug-console-panel .debug-console-kill-switch-btn.active,
 #debug-console-panel .debug-console-kill-switch-btn.is-armed {
   color: var(--danger);
@@ -5867,34 +3499,6 @@ body {
 #debug-console-panel .debug-console-kill-switch-btn.active { background: rgba(var(--danger-rgb), 0.14); }
 #debug-console-panel .debug-console-kill-switch-btn.is-armed { background: rgba(var(--danger-rgb), 0.22); }
 #debug-console-panel .debug-console-kill-switch-btn.is-busy { cursor: wait; opacity: 0.78; }
-
-/* Restart server button — two-tap arm/confirm pattern (rotate-ccw / alert-triangle) */
-.debug-console-restart-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: var(--border-width) solid var(--border);
-  border-radius: 4px;
-  color: var(--fg-2);
-  cursor: pointer;
-  padding: 2px 5px;
-  font-size: 11px;
-  font-family: inherit;
-  font-weight: 600;
-  line-height: 1;
-  transition: filter 0.12s ease, transform 0.12s ease, background 0.12s, border-color 0.12s, color 0.12s;
-  flex-shrink: 0;
-}
-.debug-console-restart-btn:hover:not(:disabled) {
-  filter: brightness(1.15);
-  transform: scale(1.04);
-  border-color: rgba(var(--brand-rgb),0.4);
-}
-.debug-console-restart-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
 /* Armed (first tap) — danger styling with hazard icon */
 .debug-console-restart-btn.is-armed {
   background: rgba(var(--danger-rgb), 0.15);
@@ -5910,128 +3514,22 @@ body {
   from { box-shadow: 0 0 0 rgba(var(--danger-rgb), 0); }
   to   { box-shadow: 0 0 6px rgba(var(--danger-rgb), 0.4); }
 }
-
-/* Filter toggle button — single button that opens the popover */
-.debug-console-filter-toggle-btn {
-  padding: 1px 7px;
-  border: var(--border-width) solid var(--border);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--fg-3);
-  font-family: inherit;
-  font-size: 10px;
-  cursor: pointer;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  flex-shrink: 0;
-  position: relative;
-}
-.debug-console-filter-toggle-btn:hover {
-  color: var(--fg-1);
-  border-color: rgba(var(--brand-rgb),0.4);
-}
 .debug-console-filter-toggle-btn.is-open {
   background: rgba(var(--brand-rgb),0.12);
   color: var(--accent);
   border-color: var(--accent);
 }
-
-/* Filter popover — dropdown panel with individual level toggles */
-.debug-console-filter-popover {
-  display: none;
-  position: absolute;
-  top: 100%;
-  right: 0;
-  z-index: 10000;
-  background: var(--bg-1);
-  border: var(--border-width) solid var(--border);
-  border-radius: 6px;
-  padding: 4px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.25);
-  gap: 2px;
-  flex-direction: column;
-  min-width: 80px;
-}
 .debug-console-filter-popover.is-open {
   display: flex;
-}
-.debug-console-filter-popover .debug-console-filter-btn {
-  display: flex;
-  width: 100%;
-  padding: 3px 10px;
-  border: none;
-  border-radius: 3px;
-  background: transparent;
-  color: var(--fg-3);
-  font-family: inherit;
-  font-size: 10px;
-  cursor: pointer;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  white-space: nowrap;
-  text-align: left;
 }
 .debug-console-filter-popover .debug-console-filter-btn.active {
   background: rgba(var(--brand-rgb),0.15);
   color: var(--accent);
 }
-.debug-console-filter-popover .debug-console-filter-btn:hover {
-  color: var(--fg-1);
-  background: rgba(var(--brand-rgb),0.08);
-}
 .debug-console-filter-popover .debug-console-filter-btn.active::before {
   content: '✓';
   margin-right: 5px;
   font-size: 10px;
-}
-.debug-console-close-btn {
-  background: none;
-  border: var(--border-width) solid var(--border);
-  border-radius: 4px;
-  color: var(--fg-3);
-  cursor: pointer;
-  padding: 1px 7px;
-  font-size: 11px;
-  font-family: inherit;
-}
-.debug-console-close-btn:hover {
-  color: var(--fg-1);
-  border-color: var(--accent);
-}
-.debug-console-clear-btn {
-  background: rgba(var(--warning-rgb), 0.1);
-  border: var(--border-width) solid rgba(var(--warning-rgb), 0.25);
-  border-radius: 4px;
-  color: var(--warning);
-  cursor: pointer;
-  padding: 1px 7px;
-  font-size: 10px;
-  font-family: inherit;
-  font-weight: 600;
-}
-.debug-console-clear-btn:hover {
-  background: rgba(var(--warning-rgb), 0.2);
-  border-color: var(--warning);
-}
-.debug-console-copy-all-btn {
-  background: none;
-  border: var(--border-width) solid var(--border);
-  border-radius: 4px;
-  color: var(--fg-3);
-  cursor: pointer;
-  padding: 2px 5px;
-  font-size: 13px;
-  font-family: inherit;
-  line-height: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: color 0.12s, border-color 0.12s, background 0.12s;
-}
-.debug-console-copy-all-btn:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: rgba(var(--brand-rgb), 0.1);
 }
 .debug-console-copy-all-btn.copied {
   color: var(--accent);
@@ -6046,82 +3544,14 @@ body {
   font-size: 13px;
   line-height: 1;
 }
-.debug-console-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 4px 0;
-  background: var(--bg-0, var(--bg-0));
-}
-.debug-console-content .debug-console-empty {
-  padding: 20px;
-  text-align: center;
-  color: var(--fg-4);
-  font-style: italic;
-}
-.dc-entry {
-  padding: 2px 10px;
-  line-height: 1.5;
-  word-break: break-all;
-  cursor: pointer;
-  transition: background 0.08s ease;
-}
-.dc-entry:hover {
-  background: rgba(var(--brand-rgb),0.05);
-}
-.dc-entry.copied-row {
-  background: rgba(var(--brand-rgb),0.12);
-  transition: background 0s;
-}
-.dc-entry .dc-tag {
-  display: inline-block;
-  width: 42px;
-  flex-shrink: 0;
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  padding: 0 4px;
-  border-radius: 3px;
-  margin-right: 6px;
-  text-align: center;
-}
 .dc-entry .dc-tag.log { color: var(--accent); background: rgba(var(--brand-rgb),0.12); }
 .dc-entry .dc-tag.warn { color: var(--warning); background: rgba(var(--warning-rgb),0.12); }
 .dc-entry .dc-tag.error { color: var(--danger); background: rgba(var(--danger-rgb),0.12); }
-.dc-entry .dc-tag.debug { color: #73daca; background: rgba(115,218,202,0.12); } /* KEEP (intentional): teal is the fixed debug console-level colour; no status token maps to it */
-.dc-entry .dc-msg {
-  color: var(--fg-2);
-}
+.dc-entry .dc-tag.debug { color: #73daca; background: rgba(115,218,202,0.12); }
 .dc-entry.warn .dc-msg { color: var(--warning); }
 .dc-entry.error .dc-msg { color: var(--danger); }
-.dc-entry .dc-stack {
-  display: block;
-  font-size: 10px;
-  color: var(--fg-4);
-  padding-left: 50px;
-  white-space: pre-wrap;
-  max-height: 80px;
-  overflow: hidden;
-}
 .dc-entry .dc-stack.expanded {
   max-height: none;
-}
-/* ── Command input bar (REPL) ── */
-.debug-console-command {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  background: var(--bg-0);
-  flex-shrink: 0;
-}
-.dc-command-prompt {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--accent);
-  flex-shrink: 0;
-  width: 14px;
-  text-align: center;
 }
 #debug-console-input {
   flex: 1;
@@ -6143,157 +3573,9 @@ body {
   color: var(--fg-4);
   font-style: italic;
 }
-.debug-console-run-btn {
-  background: rgba(var(--brand-rgb), 0.12);
-  border: var(--border-width) solid var(--accent-line);
-  border-radius: 4px;
-  color: var(--accent);
-  padding: 3px 10px;
-  font-family: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background 0.12s ease;
-}
-.debug-console-run-btn:hover {
-  background: rgba(var(--brand-rgb), 0.22);
-}
-
-.debug-console-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 3px 10px;
-  background: var(--bg-1);
-  flex-shrink: 0;
-  font-size: 10px;
-  gap: 8px;
-}
-.dc-footer-left {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  overflow: hidden;
-}
-.dc-sw-version {
-  color: var(--fg-4);
-  cursor: pointer;
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.3px;
-  white-space: nowrap;
-  padding: 1px 4px;
-  border-radius: 3px;
-  transition: color 0.12s ease, background 0.12s ease;
-}
-.dc-sw-version:hover {
-  color: var(--accent);
-  background: rgba(var(--brand-rgb), 0.1);
-}
-.dc-sw-version.has-sw {
-  color: var(--accent);
-}
-.dc-clear-sw {
-  color: var(--fg-4);
-  font-size: 10px;
-  white-space: nowrap;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.dc-clear-sw-btn {
-  background: rgba(var(--danger-rgb), 0.12);
-  border: var(--border-width) solid var(--danger-line, rgba(var(--danger-rgb), 0.3));
-  border-radius: 3px;
-  color: var(--danger);
-  padding: 1px 6px;
-  font-family: inherit;
-  font-size: 10px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.12s ease;
-}
-.dc-clear-sw-btn:hover {
-  background: rgba(var(--danger-rgb), 0.22);
-}
-.debug-console-count {
-  color: var(--fg-4);
-}
-
-/* Debug console toggle button in header */
-.debug-console-toggle-btn {
-  background: none;
-  border: 0;
-  color: var(--fg-3);
-  cursor: pointer;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s ease;
-}
-.debug-console-toggle-btn:hover {
-  color: var(--fg-1);
-  background: rgba(var(--brand-rgb),0.08);
-}
 .debug-console-toggle-btn.active {
   color: var(--accent);
   background: rgba(var(--brand-rgb),0.12);
-}
-/* Error state — the bug icon turns red while the log holds ≥1 error entry
-   (replaces the old fixed top-of-page JS error banner: every banner error
-   also reaches the panel via console.error, so the toggle is the single
-   always-visible error indicator). Theme-safe design-system tokens. */
-.debug-console-toggle-btn.has-errors {
-  color: var(--danger);
-  background: rgba(var(--danger-rgb), 0.12);
-}
-.debug-console-toggle-btn.has-errors:hover {
-  color: var(--danger);
-  background: rgba(var(--danger-rgb), 0.18);
-}
-/* Header refresh button (right of the debug toggle). Same static shell
-   treatment as the debug toggle; clears the service worker + caches and
-   reloads. */
-.header-refresh-sw-btn {
-  background: none;
-  border: 0;
-  color: var(--fg-3);
-  cursor: pointer;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s ease;
-}
-.header-refresh-sw-btn:hover {
-  color: var(--fg-1);
-  background: rgba(var(--brand-rgb), 0.08);
-}
-.header-refresh-sw-btn:active {
-  color: var(--accent);
-  background: rgba(var(--brand-rgb), 0.12);
-}
-/* Kill-switch button in header (left of the debug toggle). Same static shell
-   treatment; turns danger-red while engaged and shows a stronger fill while
-   armed for its two-tap confirm. Admin-only (revealed by kill-switch.js). */
-.kill-switch-toggle-btn {
-  background: none;
-  border: 0;
-  color: var(--fg-3);
-  cursor: pointer;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s ease;
-}
-.kill-switch-toggle-btn[hidden] { display: none; }
-.kill-switch-toggle-btn:hover {
-  color: var(--fg-1);
-  background: rgba(var(--brand-rgb), 0.08);
 }
 .kill-switch-toggle-btn.active {
   color: var(--danger);
@@ -6312,252 +3594,16 @@ body {
   cursor:wait;
   opacity:0.78;
 }
-.kill-switch-live {
-  position:absolute;
-  width:1px;
-  height:1px;
-  padding:0;
-  margin:-1px;
-  overflow:hidden;
-  clip:rect(0,0,0,0);
-  white-space:nowrap;
-  border:0;
-}
 @keyframes kill-switch-arm-pulse {
   0%, 100% { background: rgba(var(--danger-rgb), 0.22); }
   50% { background: rgba(var(--danger-rgb), 0.4); }
 }
-/* Update-available notifier (account dropdown, above Manage Account). It is
-   hidden for non-admins and driven by ui/shared/js/update-notifier.js. */
-.update-available-btn {
-  position: relative;
-  background: none;
-  border: 0;
-  color: var(--fg-3);
-  cursor: pointer;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s ease;
-}
-.update-available-btn[hidden] { display: none; }
-.update-available-btn:hover {
-  color: var(--fg-1);
-  background: rgba(var(--brand-rgb), 0.08);
-}
-/* lucide replaces the <i> placeholder with an <svg> (replaceChild) at
-   createIcons() — target the svg directly for the accent hover tint. */
-.update-available-btn:hover svg {
-  color: var(--accent);
-}
-.update-available-badge {
-  position: absolute;
-  top: -3px;
-  right: -4px;
-  min-width: 11px;
-  height: 11px;
-  padding: 0 3px;
-  border-radius: 6px;
-  background: var(--accent);
-  color: var(--bg-0);
-  font-size: 8px;
-  font-weight: 700;
-  line-height: 11px;
-  text-align: center;
-  pointer-events: none;
-}
-/* The same notifier becomes an inline action inside the account dropdown.
-   Its count stays visually distinct but no longer floats over a header icon. */
-.user-dropdown-update-btn.update-available-btn {
-  width: calc(100% - 24px);
-  margin: 6px 12px 4px;
-  padding: 8px 12px;
-  justify-content: flex-start;
-  gap: 8px;
-  background: var(--bg-tint);
-  border: var(--border-width) solid var(--border);
-  border-radius: 6px;
-  color: var(--fg-1);
-  font: 500 13px inherit;
-}
-.user-dropdown-update-btn.update-available-btn:hover {
-  background: var(--bg-tint-2);
-  border-color: var(--brand);
-}
-.user-dropdown-update-btn .update-available-badge {
-  position: static;
-  margin-left: auto;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 5px;
-  border-radius: 8px;
-  font-size: 10px;
-  line-height: 16px;
-}
-/* ── Ability-table hybrid search / chat pill ──────────────────────────────────
-   The pill above BOTH ability tables (per-agent Abilities tab + admin Agent
-   Settings). Built by buildAbilitySearchPill in ui/shared/js/dom-utils.js; it
-   opts into the shared .chat-pill .chat-pill-1line geometry (app1.css) and the
-   floating-glass skin .ability-search-pill (index.css). Only the wrapper spacing
-   and this pill's OWN attachment preview bar live here — and they live in app3.css
-   (not agents.css) because the admin table renders on a page that doesn't load
-   agents.css. The pill is inline (above the table, normal flow), so its preview
-   bar sits BELOW it in flow — unlike the floating composer's absolute
-   #chat-preview-bar. */
-.ability-search-pill-wrap { margin-bottom: 12px; }
-.ability-search-pill-wrap .ability-search-preview {
-  gap: 6px;
-  flex-wrap: wrap;
-  padding: 0;
-  margin-top: 6px;
-}
-
-/* ── Appearance: theme palette editor (App Settings → Appearance) ──────────────
-   A two-row expandable table (Light + Dark) built on the shared ability-table
-   component (.ac-list / .ac-row / .ac-ability-body). Each row expands to reveal
-   that theme's preset chips, background select and palette swatches — these
-   styles cover the CONTENT inside the expandable .ac-ability-body (the row/
-   table/expand look itself comes from the shared component). A shared Fonts &
-   borders card sits below. Built by app-settings.js from the token map in
-   ui/shared/js/appearance.js; every control auto-saves with the shared
-   .agents-autosave-check green tick (same as the ability tables / model table).
-   Colours come from design-system variables, so it tracks dark + light itself. */
-
-/* Preset chips — one-click full-palette themes for this mode (top of the body). */
-.ac-theme-presets {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-.ac-preset-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 9px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--fg-2);
-  background: var(--bg-tint);
-  border: var(--border-width) solid var(--border);
-  border-radius: var(--r-pill);
-  cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-}
-.ac-preset-chip:hover { color: var(--fg-1); border-color: var(--accent-line); }
 .ac-preset-chip.active {
   color: var(--accent);
   border-color: var(--accent);
   background: var(--accent-soft);
 }
-.ac-preset-chip .ac-preset-dot {
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  box-shadow: 0 0 0 1px rgba(var(--shadow-rgb), 0.18) inset;
-}
-/* Delete "×" on a custom-theme chip. */
-.ac-preset-chip .ac-preset-del {
-  margin-left: 1px;
-  margin-right: -2px;
-  width: 15px;
-  height: 15px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  font-size: 14px;
-  line-height: 1;
-  color: var(--fg-3);
-  opacity: 0.7;
-}
-.ac-preset-chip .ac-preset-del:hover {
-  color: var(--danger);
-  background: rgba(var(--danger-rgb), 0.14);
-  opacity: 1;
-}
-/* "Add theme" button — a dashed sibling of the preset chips. */
-.ac-preset-add {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--fg-3);
-  background: transparent;
-  border: var(--border-width) dashed var(--border-strong);
-  border-radius: var(--r-pill);
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
-}
-.ac-preset-add:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-
-/* A row in a theme card: the background select + each colour swatch. */
-.ac-theme-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 30px;
-  padding: 5px 0;
-}
-.ac-theme-row + .ac-theme-row { border-top: var(--border-width) solid var(--border-soft); }
-.ac-theme-row-label {
-  font-size: 12.5px;
-  color: var(--fg-2);
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-}
-.ac-theme-row-ctl { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
-/* Colour swatch input — square, rounded, no native chrome. */
-.ac-swatch {
-  width: 30px;
-  height: 26px;
-  padding: 0;
-  border: var(--border-width) solid var(--border-strong);
-  border-radius: var(--r-md);
-  background: none;
-  cursor: pointer;
-}
-.ac-swatch::-webkit-color-swatch-wrapper { padding: 2px; }
-.ac-swatch::-webkit-color-swatch { border: none; border-radius: 5px; }
 .ac-swatch::-moz-color-swatch { border: none; border-radius: 5px; }
-/* Opacity slider — sits left of the colour swatch on alpha-capable tokens
-   (surfaces + bubbles). A checker hint behind the track reads as "transparency".
-   Accent thumb so it matches the rest of the controls. */
-.ac-swatch-alpha {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 64px;
-  height: 6px;
-  border-radius: var(--r-pill);
-  background:
-    linear-gradient(90deg, transparent, var(--fg-2)),
-    repeating-conic-gradient(var(--border-soft) 0% 25%, transparent 0% 50%) 0 / 8px 8px;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.ac-swatch-alpha::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  background: var(--accent);
-  border: 2px solid var(--bg-elev);
-  box-shadow: 0 1px 3px rgba(var(--shadow-rgb), 0.4);
-  cursor: pointer;
-}
 .ac-swatch-alpha::-moz-range-thumb {
   width: 13px;
   height: 13px;
@@ -6606,31 +3652,8 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .sk-shimmer { animation: none; }
 }
-
-/* Free Model Ranking — sibling of the shared Models table. */
-.ac-free-ranking { margin-top:18px; border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--bg-elev); }
-.ac-free-ranking-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:18px 20px; border-bottom:1px solid var(--border); }
-.ac-free-ranking-head h3 { margin:0; font-size:14px; color:var(--fg-1); }
-.ac-free-ranking-head p { margin:5px 0 0; max-width:760px; font-size:12px; line-height:1.45; color:var(--fg-3); }
-.ac-free-ranking-badge { flex:0 0 auto; padding:4px 8px; border:1px solid var(--border); border-radius:999px; color:var(--fg-3); font-size:11px; }
-.ac-free-ranking-connect, .ac-free-ranking-settings { padding:13px 20px; border-bottom:1px solid var(--border); }
-.ac-free-ranking-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:8px; }
-.ac-free-ranking-credential { font-size:12px; color:var(--fg-3); }
 .ac-free-ranking-credential.is-connected { color:var(--accent); }
-.ac-free-ranking-key { width:220px; min-width:160px; }
-.ac-free-ranking-toggle, .ac-free-ranking-cadence { display:flex; align-items:center; gap:6px; white-space:nowrap; font-size:12px; color:var(--fg-2); }
 .ac-free-ranking-cadence .ac-input { width:66px; }
-.ac-free-ranking-statusline { padding:9px 20px; border-bottom:1px solid var(--border); font-size:12px; color:var(--fg-3); background:rgba(var(--brand-rgb), .035); }
-.ac-free-ranking-grid { overflow-x:auto; }
-.ac-free-ranking-grid-head, .ac-free-ranking-grid-row, .ac-free-ranking-grid-empty { min-width:1310px; display:grid; grid-template-columns:minmax(180px,2fr) minmax(132px,1.2fr) repeat(8,minmax(92px,1fr)) minmax(170px,1.5fr); align-items:center; gap:0; }
-.ac-free-ranking-grid-head { color:var(--fg-3); font-size:11px; text-transform:uppercase; letter-spacing:.035em; border-bottom:1px solid var(--border); background:rgba(var(--brand-rgb), .035); }
-.ac-free-ranking-grid-head > span, .ac-free-ranking-grid-row > span { min-width:0; padding:11px 10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.ac-free-ranking-grid-row { border-bottom:1px solid var(--border); color:var(--fg-2); font-size:12px; }
-.ac-free-ranking-grid-row:last-child { border-bottom:0; }
-.ac-free-ranking-grid-row > span:first-child { color:var(--fg-1); font-weight:500; }
-/* HEALTH-AGE: muted trailing age next to a verdict ("Healthy 2d"), derived from the
-   server's status_since stamp — see agent-settings.js. */
-.ac-free-ranking-grid-row .ac-free-ranking-age { color:var(--fg-3); font-variant-numeric:tabular-nums; }
 /* CAPABILITY-FLAGS: the free catalog shows the FULL capability option set per model
    (Text · Vision · Image · Voice) — capable squares in the success colour, the rest
    muted — using the same 16×16 square as the primary model table's flags column
@@ -6638,184 +3661,6 @@ body {
    table's role-flag styling is untouched. */
 .ac-free-ranking-caps .ac-role-flag { background:var(--success-soft); border-color:var(--success-mid); color:var(--success); }
 .ac-free-ranking-caps .ac-role-flag.off { background:var(--bg-tint); border-color:var(--border); color:var(--fg-4); opacity:.55; }
-.ac-free-ranking-grid-row:hover { background:rgba(var(--brand-rgb), .035); }
-.ac-free-ranking-grid-empty { color:var(--fg-3); grid-column:1 / -1; padding:14px 10px; }
-.ac-free-ranking-info { width:16px; height:16px; margin-left:3px; padding:0; border:1px solid var(--border); border-radius:50%; background:transparent; color:var(--fg-3); font:600 10px/14px inherit; text-transform:none; cursor:help; vertical-align:1px; }
-.ac-free-ranking-info:hover { color:var(--fg-1); border-color:var(--fg-3); }
-.ac-free-ranking-info:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-@media (max-width:760px) { .ac-free-ranking-head { padding:15px; flex-direction:column; } .ac-free-ranking-connect, .ac-free-ranking-settings { padding:12px 15px; } .ac-free-ranking-actions { justify-content:flex-start; margin-top:9px; } }
-
-/* ══════════════════════════════════════════════════════════════════════════
-   PAGE-CHAT-LAUNCHER — "Ask or Search" pill shared by page routes.
-   Implementation: ui/shared/js/page-chat-launcher.js (PAGE-CHAT-LAUNCHER-SYNC).
-   Bindings: ui/shared/js/agents-page-chat-widget.js,
-             ui/shared/js/settings-page-chat-widget.js.
-   Kept in the shared stylesheet because a binding's own page CSS is only loaded
-   while that page is active, and the pill must style identically on every route.
-   ══════════════════════════════════════════════════════════════════════════ */
-/* PAGE-CHAT-LAUNCHER (SHARED): the Ask-or-Search pill shared by page routes.
-   A non-flow sibling overlay, never a child of the route scroller, so the
-   route's scroll viewport ends above the pill. Its inline side is set by
-   ui/shared/js/page-chat-launcher.js, so it follows its nearest wall rather
-   than remaining in the middle of a resized page. Route bindings:
-     Agents   → .page-chat-launcher[data-route="agents"]   (in #tab-agents)
-     Settings → .page-chat-launcher[data-route="settings"] (in #main-panel) */
-.page-chat-launcher {
-  position: absolute;
-  z-index: 40;
-  touch-action: none;
-  /* PAGE-CHAT-LAUNCHER-SPRING: the pill chrome changes hands between the root
-     (expanded) and the button (collapsed) — cross-fade it so the handover is
-     never a hard cut. */
-  transition: background .16s ease, border-color .16s ease, box-shadow .16s ease;
-}
-.page-chat-launcher-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 38px;
-  padding: 0 13px;
-  border: 1px solid rgba(var(--brand-rgb), 0.42);
-  border-radius: 999px;
-  background: var(--bg-elev);
-  color: var(--fg-1);
-  box-shadow: 0 8px 22px rgba(var(--ink-rgb), 0.24);
-  cursor: grab;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 650;
-  user-select: none;
-  transition: transform .14s ease, background .14s ease, border-color .14s ease, color .14s ease, box-shadow .14s ease;
-}
-.page-chat-launcher-button:hover {
-  border-color: var(--brand);
-  background: var(--bg-elev);
-  color: var(--fg-1);
-  transform: scale(1.04);
-  box-shadow: 0 8px 24px rgba(var(--brand-rgb), 0.20);
-}
-.page-chat-launcher-button:focus-visible {
-  border-color: var(--brand);
-  background: var(--bg-elev);
-  color: var(--fg-1);
-  outline: none;
-  box-shadow: 0 8px 24px rgba(var(--brand-rgb), 0.20);
-}
-.page-chat-launcher[data-dragging="true"] .page-chat-launcher-button { cursor: grabbing; }
-
-/* The expanded input is inside the same route-scoped pill. Right-anchored pills
-   grow left; left-anchored pills grow right, keeping the stored nearest edge fixed. */
-.page-chat-launcher[data-expanded="true"] {
-  display: flex;
-  align-items: stretch;
-  width: min(400px, calc(100vw - 32px));
-  max-width: calc(100% - 32px);
-  overflow: hidden;
-  border: 1px solid rgba(var(--brand-rgb), 0.42);
-  border-radius: 999px;
-  background: var(--bg-elev);
-  box-shadow: 0 8px 22px rgba(var(--ink-rgb), 0.24);
-}
-.page-chat-launcher[data-edge="right"][data-expanded="true"] { transform-origin: right center; }
-.page-chat-launcher[data-edge="left"][data-expanded="true"] { transform-origin: left center; }
-.page-chat-launcher[data-expanded="true"] .page-chat-launcher-button {
-  width: 38px;
-  min-height: 38px;
-  padding: 0;
-  justify-content: center;
-  border: 0;
-  border-right: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  transform: none;
-}
-.page-chat-launcher[data-expanded="true"] .page-chat-launcher-button:hover {
-  background: transparent;
-  box-shadow: none;
-  transform: none;
-}
-.page-chat-launcher[data-expanded="true"] .page-chat-launcher-button span { display: none; }
-
-/* PAGE-CHAT-LAUNCHER-SPRING — the chrome handover during the pill's spring.
-   `data-animating` is set and cleared by ui/shared/js/page-chat-launcher.js for
-   the length of the expand/collapse animation.
-   Collapsing: the chrome is held on the ROOT — the element the width animation
-   is actually resizing — and the button's identical chrome is held back, so the
-   pill the user sees closing is the one being resized and the two never stack.
-   The chrome returns to the button when the spring settles: an invisible
-   handover, because both draw the same pill at the same size. */
-.page-chat-launcher[data-animating="collapse"] {
-  display: flex;
-  align-items: stretch;
-  overflow: hidden;
-  border: 1px solid rgba(var(--brand-rgb), 0.42);
-  border-radius: 999px;
-  background: var(--bg-elev);
-  box-shadow: 0 8px 22px rgba(var(--ink-rgb), 0.24);
-}
-/* The pill closes onto its anchored wall, so the label rides that wall instead
-   of being left behind at the far side of the closing box. */
-.page-chat-launcher[data-animating="collapse"][data-edge="right"] { justify-content: flex-end; }
-.page-chat-launcher[data-animating="collapse"] .page-chat-launcher-button {
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-}
-/* Expanding: the pill is already on screen at its collapsed size and simply
-   grows, so its chrome must be there from the first frame — no fade-in, and the
-   button's chrome (which the root has taken over) drops at once rather than
-   lingering as a second shadow inside the growing pill. */
-.page-chat-launcher[data-animating="expand"] { transition: none; }
-.page-chat-launcher[data-animating="expand"] .page-chat-launcher-button {
-  background: transparent;
-  box-shadow: none;
-}
-@media (prefers-reduced-motion: reduce) {
-  /* The width spring is skipped in JS, so the chrome handover goes with it. The
-     button keeps its transform transition, so hover feedback is unchanged. */
-  .page-chat-launcher { transition: none; }
-  .page-chat-launcher .page-chat-launcher-button { transition-property: transform; }
-}
-.page-chat-launcher-form {
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-  align-items: center;
-}
-.page-chat-launcher-form[hidden] { display: none; }
-.page-chat-launcher-input {
-  min-width: 0;
-  flex: 1 1 auto;
-  height: 38px;
-  padding: 0 6px 0 12px;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--fg-1);
-  font: inherit;
-  font-size: 13px;
-}
-.page-chat-launcher-input::placeholder { color: var(--fg-3); }
-.page-chat-launcher-send {
-  display: inline-flex;
-  width: 38px;
-  height: 38px;
-  flex: 0 0 38px;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-left: 0;
-  background: transparent;
-  color: var(--brand);
-  cursor: pointer;
-}
-.page-chat-launcher-send:hover,
-.page-chat-launcher-send:focus-visible {
-  background: rgba(var(--brand-rgb), 0.12);
-  color: var(--brand);
-  outline: 0;
-}
 /* A search-only sub-view turns this same slot into a CLEAR control (see _applyMode
    in page-chat-launcher.js). The red is the point: beside a label that says search
    it has to read as "clear", never as "send". Shared danger tokens, both themes. */
@@ -6825,18 +3670,6 @@ body {
   background: rgba(var(--danger-rgb), 0.12);
   color: var(--danger);
 }
-/* That X is the single clear affordance in this mode, so drop WebKit's native one
-   rather than showing the user two. Scoped to search mode only — the ask composer
-   keeps the browser's own field reset. */
-.page-chat-launcher[data-mode="search"] .page-chat-launcher-input::-webkit-search-cancel-button {
-  -webkit-appearance: none;
-  appearance: none;
-}
-@media (max-width: 520px) {
-  /* Keep the collapsed Ask or Search label visible on mobile. The expanded
-     state already hides that label so the in-pill composer retains room. */
-  .page-chat-launcher[data-expanded="true"] { width: min(320px, calc(100vw - 32px)); }
-}
 
 /* Settings mounts the pill once, into the panel box, so a single copy serves the
    route. It may only show while BOTH the App tab is the active pane AND the
@@ -6844,7 +3677,6 @@ body {
    not keep the pill on screen after leaving Settings. */
 #settings-page-chat-launcher { display: none; z-index: 60; }
 body:has(#tab-app.active) #main-panel:has(.inst-settings-host) > #settings-page-chat-launcher { display: block; }
-
 
 /* Ability-table toggle states stay semantically legible in every theme.
    Scope this to the Agents → Abilities table; shared toggles keep their own states.
@@ -6863,55 +3695,6 @@ body:has(#tab-app.active) #main-panel:has(.inst-settings-host) > #settings-page-
 .ac-ability-toggle-wrap .conn-toggle:checked + .conn-toggle-track::after {
   background: var(--success);
 }
-
-/* ── Ability availability picker (SISTER-PANEL: AGENT-ABILITY-TABLE) ───────── */
-.ac-ability-exposure-picker {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  padding: 12px 14px;
-  border-bottom: var(--border-width) solid var(--border);
-  background: var(--bg-1);
-}
-.ac-ability-exposure-title {
-  grid-column: 1 / -1;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-  color: var(--fg-3);
-}
-.ac-ability-exposure-choice {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 8px 9px;
-  border: var(--border-width) solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-elev);
-  color: var(--fg-2);
-  text-align: left;
-  cursor: pointer;
-}
-.ac-ability-exposure-choice:hover,
-.ac-ability-exposure-choice:focus-visible {
-  border-color: var(--accent-line);
-  outline: none;
-}
-.ac-ability-exposure-choice:disabled { opacity: .55; cursor: default; }
-.ac-ability-exposure-choice strong,
-.ac-ability-exposure-choice small { display: block; }
-.ac-ability-exposure-choice strong { font-size: 11px; }
-.ac-ability-exposure-choice small { margin-top: 2px; font-size: 10px; color: var(--fg-3); }
-.ac-ability-exposure-dot {
-  width: 11px;
-  height: 11px;
-  flex: 0 0 11px;
-  border: var(--border-width) solid var(--codex-gray);
-  border-radius: 50%;
-  background: var(--bg-1);
-}
 .ac-ability-exposure-choice.is-selected[data-exposure-choice="discoverable"] { border-color: var(--border); }
 .ac-ability-exposure-choice.is-selected[data-exposure-choice="discoverable"] .ac-ability-exposure-dot { background: var(--success); }
 .ac-ability-exposure-choice.is-selected[data-exposure-choice="loaded"] { border-color: var(--success); }
@@ -6923,7 +3706,6 @@ body:has(#tab-app.active) #main-panel:has(.inst-settings-host) > #settings-page-
 .ac-ability-row[data-exposure="discoverable"] .ac-ability-toggle-wrap .conn-toggle:checked + .conn-toggle-track::after { background: var(--success); }
 .ac-ability-row[data-exposure="visible"] .ac-ability-toggle-wrap .conn-toggle:checked + .conn-toggle-track { background: var(--success-soft); border-color: var(--success); }
 .ac-ability-row[data-exposure="visible"] .ac-ability-toggle-wrap .conn-toggle:checked + .conn-toggle-track::after { background: var(--success); }
-
 
 /* Per-agent ability exposure states — mirrors the shared admin ability table. */
 .conn-card[data-exposure="off"] .ac-ability-toggle-wrap .conn-toggle-track {
