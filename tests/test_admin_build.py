@@ -166,7 +166,7 @@ class FakeRunner:
         self.calls.append(("stage_assets", job_id))
         self.staged_assets.add(job_id)
 
-    def validate_ui(self, job_id, changed):
+    def validate_ui(self, job_id, changed, *, baseline=False):
         self.calls.append(("validate_ui", tuple(changed)))
 
     def current_asset_id(self):

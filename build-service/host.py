@@ -1745,8 +1745,12 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         return {"binding":binding,"image":image,"recipe":recipe,"tests":tests,"status":"passed"if tests else"not_applicable",
                 "reused":bool(tests)and not pending,"reused_tests":reused,"executed_tests":pending,"fixtures":fixtures}
 
-    def validate_ui(self, job_id, changed, *, root=None):
-        """Validate complete candidate assets and registered packages against the owning runtime before activation."""
+    def validate_ui(self, job_id, changed, *, root=None, baseline=False):
+        """Validate complete candidate assets and registered packages against the owning runtime before activation.
+
+        With baseline (asset-only plugin_deploy releases, which ship no Rust code) the live
+        publication is mounted read-only as the app's --validate-baseline, so a tool schema
+        edit the unchanged code could not follow is refused before activation."""
         root = Path(root)if root is not None else ASSET_ROOT / "releases" / job_id
         (ASSET_ROOT/"artifacts").mkdir(parents=True,exist_ok=True)
         active=getattr(getattr(self,"job_context",None),"job",None)
@@ -1763,14 +1767,17 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             # its already-tested candidate API image; hot updates use the retained consumer.
             image=(active["images"]["api"] if active is not None
                 and active.get("operation")=="build_deploy" else self.inspect(TARGETS[0])["Image"])
+            live_root=(ASSET_ROOT/"current"/"v3").resolve()if baseline and (ASSET_ROOT/"current"/"v3"/"abilities").is_dir()else None
+            compare=(["--mount","type=bind,src="+str(live_root)+",dst=/baseline/v3,readonly"]if live_root else[])
             result=self.command(["docker","run","--rm","--network","none","--read-only",
                 "--cap-drop","ALL","--security-opt","no-new-privileges",
                 "--user",str(CONFIG["app_uid"])+":"+str(CONFIG["app_gid"]),
                 "--pids-limit","64","--memory","256m","--tmpfs","/tmp:rw,size=64m,mode=1777",
                 "--mount","type=bind,src="+str(root)+",dst=/candidate,readonly",
                 "--mount","type=bind,src="+str(root/"v3")+",dst=/code,readonly",
-                "--mount","type=bind,src="+str(ASSET_ROOT/"artifacts")+",dst=/opt/v3/assets/artifacts,readonly",
-                "--entrypoint","/usr/local/bin/webagent-v3",image,"--validate-assets=/candidate/v3"],timeout=30)
+                "--mount","type=bind,src="+str(ASSET_ROOT/"artifacts")+",dst=/opt/v3/assets/artifacts,readonly",*compare,
+                "--entrypoint","/usr/local/bin/webagent-v3",image,"--validate-assets=/candidate/v3",
+                *(["--validate-baseline=/baseline/v3"]if live_root else[])],timeout=30)
             receipt=json.loads(result)
             program=("import json,pathlib; root=pathlib.Path('/candidate/v3/abilities'); "
                 "packages=[p for p in root.glob('*/*/plugin.json') if json.loads(p.read_bytes()).get('dispatch')=='isolated']; "
@@ -2001,7 +2008,10 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             expected = expected_path.read_bytes() if expected_path.is_file() else None
             connection = http.client.HTTPConnection({"0.0.0.0":"127.0.0.1","::":"::1"}.get(CONFIG["bind_address"],CONFIG["bind_address"]), CONFIG["port"], timeout=10)
             try:
-                connection.request("GET", quote(route, safe="/"))
+                # Ask like a browser does, without "Accept-Encoding: identity": with it, tower-http
+                # ServeDir answers a missing "<folder>.<ext>" with the folder (200, empty body).
+                connection.putrequest("GET", quote(route, safe="/"), skip_accept_encoding=True)
+                connection.endheaders()
                 response = connection.getresponse()
                 body = response.read(16 * 1024 * 1024 + 1)
                 if expected is None and response.status == 404:
@@ -3477,18 +3487,77 @@ class Broker:
                 return
 
     def _has_unresolved_release(self, current=None):
+        return bool(self._unresolved_releases(current))
+
+    def _unresolved_releases(self, current=None):
+        """Uncertain releases that hold the whole queue until reconciled (adopted, marked not installed or retried)."""
         completed = [job.get("finished_at", 0) for job in self.jobs.values()
                      if job.get("isolated") and (job["status"] == "completed"
                      or job.get("operator_adopted_at"))
                      and job["operation"] in ("deploy", "build_deploy", "ui_deploy", "index_deploy", "host_service_deploy", "plugin_deploy")
                      and job.get("effects_started")]
         latest = max(completed, default=0)
-        return any(job["status"] == "uncertain"
-                   and not job.get("operator_adopted_at")
-                   and job.get("effects_started")
-                   and job.get("finished_at", job["created_at"]) >= latest
-                   and job["job_id"] != current
-                   for job in self.jobs.values())
+        return [job for job in self.jobs.values()
+                if job["status"] == "uncertain"
+                and not job.get("operator_adopted_at")
+                and job.get("effects_started")
+                and job.get("finished_at", job["created_at"]) >= latest
+                and job["job_id"] != current]
+
+    def wait_cycles(self, key):
+        """Wait cycles through task key: its job is queued behind another task's job (or behind an uncertain
+        release, which holds the queue) while that task, or another task of the same session (a fix for that
+        release is often a separate task), waits for claims key holds, so neither can move."""
+        item = self.work.get(key) or {}
+        job = self.jobs.get(item.get("job_id")) or {}
+        if job.get("status") != "queued":
+            return []
+        ahead = [other for other in self.jobs.values() if other is not job and (other.get("status") == "running" or (
+            other.get("status") == "queued" and (other.get("created_at") or 0) < (job.get("created_at") or 0)))]
+        ahead += self._unresolved_releases(job["job_id"])
+        store, overlap = self.scheduler.store, scheduler_module.ownership.scope_overlap
+        cycles, seen = [], set()
+        try:
+            mine = store.get(key)
+        except ValueError:
+            return []
+        with store.connect() as db:
+            for other in ahead:
+                holder = other.get("ownership_id")
+                if not holder or holder == key:
+                    continue
+                session = task_session(self.work.get(holder))
+                waiting = [holder] + [k for k, i in self.work.items() if session and k not in (holder, key) and task_session(i) == session]
+                for other_key in waiting:
+                    if other_key in seen:
+                        continue
+                    try:
+                        theirs = store.get(other_key, db)
+                    except ValueError:
+                        continue
+                    if theirs["state"] != "waiting" or not theirs["requested"]:
+                        continue
+                    if not any(b["task_id"] == key for b in store.blockers(theirs, theirs["requested"], db)):
+                        continue
+                    seen.add(other_key)
+                    cycles.append(self._wait_cycle(item, mine, other, self.work.get(holder) or {}, self.work.get(other_key) or {}, theirs, overlap))
+        return cycles
+
+    @staticmethod
+    def _wait_cycle(item, mine, holder_job, holder_item, waiter_item, theirs, overlap):
+        """One wait cycle as data plus a sentence naming both sides and the ways out."""
+        held = [s for s in mine["scopes"] if any(overlap(s, r) for r in theirs["requested"])][:6]
+        mine_label, label, session = item.get("task_id"), holder_item.get("task_id"), task_session(holder_item)
+        waiter = waiter_item.get("task_id")
+        how = ("its uncertain release, which holds the queue until reconciled" if holder_job.get("status") == "uncertain"
+               else "its job " + holder_job["job_id"][:8] + " (" + str(holder_job.get("status")) + ")")
+        return {"task_id": label, "session": session, "job_id": holder_job["job_id"], "waiting_task_id": waiter,
+                "job_status": holder_job.get("status"), "held": held,
+                "text": f"Wait cycle: {mine_label} is queued behind {label} (session \"{session}\"), {how}, "
+                        f"while {waiter} waits for claims {mine_label} holds ({', '.join(held) or 'its scopes'}). "
+                        f"Neither can move until one gives way: {mine_label} can cancel its queued job and abandon "
+                        f"or release its claims, or {label} can resolve its job without them. "
+                        f"Agree which with a note on the other task (buildctl note)."}
 
     def _maintenance(self):
         if self.maintenance_file.is_symlink():raise PermissionError("Maintenance state replaced")
@@ -5506,7 +5575,7 @@ class Broker:
                     if not state["drained"]:
                         self._start_next()
                 return {**self._maintenance(),"busy":bool(self.active or self.active_ui or any(j["status"]=="running"for j in self.jobs.values())),"queued":sum(j["status"]=="queued" for j in self.jobs.values())}
-            read_actions={"heartbeat","status","review","preflight","receipt","list","get","read","search","job","artifact","reservations","resources","takeover_preview"}
+            read_actions={"heartbeat","status","review","preflight","receipt","list","get","read","search","job","artifact","reservations","resources","takeover_preview","note","notes"}
             read_names={"v3_build_status","v3_worker_job","v3_build_dashboard","v3_build_result","administrator_host_lease","administrator_host_revoke","v3_build_cancel","v3_build_leftovers","v3_build_progress","v3_source_list","v3_source_read","v3_source_read_batch","v3_source_search","v3_source_receipt","file_list","file_read","file_search"}
             # Isolated task work (edits, checks, finish) is admitted while drained; _start_next holds its jobs until resume.
             task_work=name in {"build_work","v3_build_work","v3_cargo_task","v3_source_prepare","v3_source_apply","v3_source_apply_prepared","file_edit","file_write"}and args.get("action")not in {"reconcile_release","reload_resource_policy","reload_memory_policy"}
@@ -6381,6 +6450,15 @@ class Broker:
                                               for other in sorted(self.jobs.values(), key=lambda j: j.get("created_at") or 0)
                                               if other is not job and other.get("status") in {"queued", "running"}
                                               and (other.get("status") == "running" or (other.get("created_at") or 0) < (job.get("created_at") or 0))][:8]
+                    # An uncertain release starts nothing but holds every queued job until it is reconciled.
+                    value["queued_behind"] += [{"job_id": other["job_id"], "task_id": other.get("task_id"), "session": session(other.get("task_id")),
+                                                "status": "uncertain", "phase": other.get("phase")}
+                                               for other in self._unresolved_releases(job["job_id"])][:4]
+                item = next((i for i in self.work.values() if i.get("job_id") == job["job_id"]), None)
+                if item is not None:
+                    # Blocker board: notes left on this job's task, and any wait cycle it is part of.
+                    value["notes"] = self.scheduler.board.notes(item["key"])
+                    value["wait_cycles"] = self.wait_cycles(item["key"])
                 return value
             if name == "v3_worker_job":
                 if "job_id" not in args or set(args) - {"job_id", "log_cursor"}:
@@ -6605,7 +6683,7 @@ class Broker:
             if not self._sync_job(job, self._current_release_blob(), blob, job.get("changed_paths", ())):return
             self._phase(job, "indexing_source")
             self.runner.stage_assets(blob, job["job_id"])
-            self.runner.validate_ui(job["job_id"], job["changed_paths"])
+            self.runner.validate_ui(job["job_id"], job["changed_paths"], baseline=job["operation"]=="plugin_deploy")
         self._save(job)
         prepared = release.snapshot(Path(job["release_root"]), CONTEXT, context_digest)
         if context_digest(prepared)[0] != job["inputs_sha256"]:
@@ -6802,7 +6880,7 @@ class Broker:
                     if job.get("isolated") and not self._sync_job(job, self._current_release_blob(), blob, job.get("changed_paths", ())):return
                     self._phase(job, "indexing_source")
                     self.runner.stage_assets(blob, job["job_id"])
-                    self.runner.validate_ui(job["job_id"], job.get("changed_paths", ()))
+                    self.runner.validate_ui(job["job_id"], job.get("changed_paths", ()), baseline=job["operation"]=="plugin_deploy")
                 self._save(job)
                 with self.lock:
                     job["asset_previous"] = self.runner.current_asset_id()

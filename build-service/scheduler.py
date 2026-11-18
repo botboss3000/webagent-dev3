@@ -3,7 +3,7 @@
 Ownership is separate from immutable source generations and release receipts.
 Config: protected build-service.json -> scheduler.mode and orphan_after_seconds.
 """
-import hashlib,importlib.util,json,os,re,stat,subprocess,time
+import hashlib,importlib.util,json,os,re,stat,subprocess,threading,time,uuid
 from pathlib import Path
 
 # Every caller on the broker's local socket (Claude Code, Codex, OpenCode on the T480) shares this
@@ -25,6 +25,69 @@ def sibling(name):
 ownership=sibling("ownership")
 # Kept for recovery (host.py PINNED_JOB); its task record is never trimmed.
 PINNED_JOB="4f605f3b-4444-4447-a511-3a9d4b9677df"
+# Blocker board: short notes operators leave on each other's broker tasks. A note belongs to the
+# task it is posted on, so whoever follows that task (a monitor, the Broker card, an in-app
+# agent's progress read) sees it, whatever harness or computer the author used. Notes are
+# coordination text only: they never change ownership, claims or jobs. They clear themselves
+# when their task completes or is abandoned, and expire after note_ttl_seconds.
+MAX_TEXT = 1000
+MAX_PER_TASK = 20
+MAX_TOTAL = 500
+
+class Board:
+    def __init__(self, path, ttl=86400, clock=time.time):
+        self.path, self.ttl, self.clock = Path(path), ttl, clock
+        self.lock = threading.Lock()
+
+    def _read(self):
+        try:
+            value = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            return []
+        return [note for note in value.get("notes", []) if isinstance(note, dict)]
+
+    def _write(self, notes):
+        # Replace atomically so a crash never leaves a half-written board.
+        temporary = self.path.with_name(self.path.name + ".tmp")
+        temporary.write_text(json.dumps({"version": 1, "notes": notes}, sort_keys=True))
+        os.replace(temporary, self.path)
+
+    def post(self, *, to_key, to_label, from_label, from_session, origin, text):
+        """Add one note to task to_key; returns the stored note."""
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("Note text required")
+        text = text.strip()
+        if len(text) > MAX_TEXT:
+            raise ValueError(f"Note text is limited to {MAX_TEXT} characters")
+        note = {"id": uuid.uuid4().hex[:12], "to": to_key, "to_label": to_label, "from_label": from_label,
+                "from_session": from_session, "origin": origin, "text": text, "at": self.clock()}
+        with self.lock:
+            notes = self._read()
+            if sum(1 for n in notes if n.get("to") == to_key) >= MAX_PER_TASK:
+                raise ValueError(f"Task already has {MAX_PER_TASK} notes; they clear when it ends")
+            if len(notes) >= MAX_TOTAL:
+                raise ValueError("Blocker board is full")
+            notes.append(note)
+            self._write(notes)
+        return note
+
+    def notes(self, key):
+        """Notes on task key, oldest first, without the internal task key."""
+        now = self.clock()
+        return [{k: v for k, v in note.items() if k != "to"} for note in self._read()
+                if note.get("to") == key and now - note.get("at", 0) <= self.ttl]
+
+    def prune(self, live):
+        """Drop notes whose task ended (live(key) is false) or that passed ttl; returns how many."""
+        with self.lock:
+            notes = self._read()
+            now = self.clock()
+            kept = [n for n in notes if now - n.get("at", 0) <= self.ttl and live(n.get("to"))]
+            if len(kept) != len(notes):
+                self._write(kept)
+            return len(notes) - len(kept)
+
+
 class Conflict(ValueError):
     """Preserve machine-readable blockers through the broker transport."""
     def __init__(self,details):
@@ -33,7 +96,7 @@ class Conflict(ValueError):
 # Source reservations and completion. Config: build-service/scheduler-defaults.json -> mode, orphan_after_seconds; protected installation overrides at broker restart.
 class Scheduler:
     """Derive authority and scope from the broker; caller assertions never certify a release."""
-    actions={"create","resources","pause","resume","priority","reconcile","increase_memory","reservations","reserve","heartbeat","continue","acceptance","complete","handoff","takeover_preview","takeover","recover","reconcile_acquisition","clear_pending_requests","reconcile_continuation","reopen"}
+    actions={"create","resources","pause","resume","priority","reconcile","increase_memory","reservations","reserve","heartbeat","continue","acceptance","complete","handoff","takeover_preview","takeover","recover","reconcile_acquisition","clear_pending_requests","reconcile_continuation","reopen","note","notes"}
     def __init__(self,broker,config):
         """Load reviewed coordination policy and open its private durable ownership store."""
         self.broker=broker;self.config=config
@@ -47,6 +110,7 @@ class Scheduler:
         self.registry_high_water=policy.get("registry_high_water",800)
         self.last_trim=0.
         self.store=ownership.Ownership(broker.work_dir/"ownership.sqlite")
+        self.board=Board(broker.work_dir/"board.json",ttl=policy.get("note_ttl_seconds",86400))
     @staticmethod
     def owner(trusted,workspace):
         """Caller identity is sealed by Unix-peer or Rust transport, not model arguments."""
@@ -455,6 +519,31 @@ class Scheduler:
         checks=job.get("rust_tests",{"status":"not_required"})
         if checks.get("status")not in {"passed","not_required"}:raise ValueError("Release checks incomplete")
         return {"generation":self.store.get(item["key"])["generation"],"release_id":job["job_id"],"inputs_sha256":job["inputs_sha256"],"promoted_hashes":promoted,"checks":[checks],"acceptance":acceptance,"commit":commit}
+    def find(self,label):
+        """An open task by its label, whoever owns it: notes may address any operator's task."""
+        if not isinstance(label,str)or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}",label):raise ValueError("Bounded task ID required")
+        found=[i for i in self.broker.work.values()if i.get("task_id")==label and self.live(i.get("key"))]
+        if not found:raise ValueError("No open task "+label)
+        return max(found,key=lambda i:i.get("created_at",0))
+    def live(self,key):
+        """A task that has not completed or been abandoned keeps its notes."""
+        item=self.broker.work.get(key)
+        if item is None or item.get("status")=="abandoned":return False
+        try:return self.store.get(key)["state"]not in {"complete","abandoned"}
+        except ValueError:return item.get("status")=="open"
+    def board_action(self,args,trusted,workspace):
+        """note: post args["reason"] from the caller's own task_id onto target_task_id (default: itself).
+        notes: read the notes on task_id, any operator's, plus any wait cycle it is part of."""
+        if args["action"]=="notes":
+            if set(args)-{"action","task_id"}:raise ValueError("notes takes task_id")
+            item=self.find(args.get("task_id"))
+            return {"task_id":item["task_id"],"notes":self.board.notes(item["key"]),"cycles":self.broker.wait_cycles(item["key"])}
+        if set(args)-{"action","task_id","target_task_id","reason"}:raise ValueError("note takes task_id, target_task_id and reason")
+        author=self.item(args,trusted,workspace)
+        target=self.find(args.get("target_task_id")or author["task_id"])
+        note=self.board.post(to_key=target["key"],to_label=target["task_id"],from_label=author["task_id"],
+                             from_session=self.session(author["key"]),origin=self.origin(author["key"]),text=args.get("reason"))
+        return {"status":"posted","note":{k:v for k,v in note.items()if k!="to"}}
     def housekeeping(self):
         """Keep authorized delegated execution active; orphaned source never becomes available automatically."""
         if self.mode!="enforce":return
@@ -463,7 +552,7 @@ class Scheduler:
                 self.store.touch(job["ownership_id"],self.owner({"user_id":job["user_id"]},job["workspace"]),job["ownership_epoch"])
         # Scope holders get a 30-minute floor: local checks and commit close-out make no broker call.
         self.store.orphan(self.orphan_after,max(self.orphan_after,1800))
-        self.settle();self.trim_registry()
+        self.settle();self.trim_registry();self.board.prune(self.live)
     def touch_task(self,args,trusted,workspace):
         """Treat any authenticated call naming the caller's own task as liveness; never revives orphaned or foreign ownership."""
         if self.mode!="enforce":return
@@ -599,6 +688,7 @@ class Scheduler:
             return self.broker.handle({"name":"v3_build_work","arguments":{"action":"begin","task_id":args.get("task_id"),"summary":args.get("summary","Scheduler followup"),"mode":"isolated"},"trusted":trusted,"workspace":workspace})
         if action in {"resources","pause","resume","priority","reconcile","increase_memory"}:
             return self.resource_action(args,trusted,workspace)
+        if action in {"note","notes"}:return self.board_action(args,trusted,workspace)
         allowed={"action","task_id","task_key","paths","request_id","expected_revision","expected_epoch","job_id","commit","acceptance","target_task_id","reason","offset","limit"}
         if set(args)-allowed or action not in self.actions:raise ValueError("Unsupported scheduler arguments")
         if action in {"reservations","takeover_preview"}:return self._handle(args,trusted,workspace)

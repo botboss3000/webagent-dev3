@@ -378,6 +378,25 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertIn('queued behind other-task (session "Fix login", job abcdef12, building_api)', out)
 
+    def test_queued_job_names_an_uncertain_release_holding_the_queue(self):
+        ahead = [{"job_id": "575893ae-0000", "task_id": "ui-shared-folders2", "session": "UI shared", "status": "uncertain", "phase": "checking_ui"}]
+        line = client.status_line(self.progress(status="queued", queued_behind=ahead))
+        self.assertEqual(line, 'queued behind ui-shared-folders2 (session "UI shared", job 575893ae, uncertain, holds the queue until reconciled)')
+
+    def test_new_note_and_wait_cycle_wake_once_with_their_text(self):
+        note = {"id": "n1", "from_label": "other-task", "from_session": "Fix login", "origin": "t480/codex", "text": "I need module:broker"}
+        cycle = {"job_id": "575893ae-0000", "text": "Wait cycle: task-1 is queued behind other-task"}
+        queued = self.progress(status="queued", job_seconds=5, notes=[note])
+        code, out = self.run_monitor([queued])
+        self.assertEqual(code, 4)
+        self.assertIn('note from other-task (session "Fix login", t480/codex): I need module:broker', out)
+        code, out = self.run_monitor([dict(queued, wait_cycles=[cycle])])
+        self.assertEqual(code, 4)  # the note was already shown; the new cycle wakes
+        self.assertIn("Wait cycle: task-1 is queued behind other-task", out)
+        self.assertNotIn("I need module:broker", out)
+        code, _ = self.run_monitor([dict(queued, wait_cycles=[cycle]), self.progress(status="failed")])
+        self.assertEqual(code, 1)  # neither wakes again
+
     def test_status_line_between_stages_and_short_time_left(self):
         between = self.progress(finished=[{"stage": "compile tests", "id": "2", "seconds": 60}], remaining_seconds=[20, 40])
         self.assertEqual(client.status_line(between), "running, between stages after compile tests; about 0.3-0.7 min left")

@@ -483,6 +483,22 @@ class CodebasePublicationMetadataTests(unittest.TestCase):
    # Relative live-file reads (gate manifests, providers) resolve to the candidate.
    self.assertIn("type=bind,src="+str(root/"releases"/job/"v3")+",dst=/code,readonly",args)
 
+ def test_asset_only_release_compares_tool_schemas_with_the_live_publication(self):
+  from unittest.mock import Mock
+  with tempfile.TemporaryDirectory() as temporary:
+   root=Path(temporary);job=str(uuid.uuid4());(root/"releases"/job/"v3/abilities").mkdir(parents=True)
+   live=root/"releases"/"live";(live/"v3/abilities").mkdir(parents=True);(root/"current").symlink_to(live)
+   runner=fixtures.host.Runner();runner.inspect=Mock(return_value={"Image":"sha256:retained-runtime"})
+   for baseline in (True,False):
+    runner.command=Mock(side_effect=[json.dumps({"catalog_version":"f"*64}),"syntax valid"])
+    with patch.object(fixtures.host,"ASSET_ROOT",root):
+     runner.validate_ui(job,["v3/abilities/Core/base/tools/calculate/calculate.tool.json"],baseline=baseline)
+    args=runner.command.call_args_list[0].args[0]
+    mount="type=bind,src="+str((live/"v3").resolve())+",dst=/baseline/v3,readonly"
+    # Only an asset-only release, which ships no Rust code, is held to the live schemas.
+    self.assertEqual(mount in args,baseline)
+    self.assertEqual(args[-1],"--validate-baseline=/baseline/v3"if baseline else"--validate-assets=/candidate/v3")
+
 
 # The Administrator pack is optional; the core app builds and tests without it.
 # Abilities moved from plugins/abilities to the checkout root.

@@ -49,7 +49,7 @@ class PreparedRunner(fixtures.FakeRunner):
             if self.barrier is not None and first:self.barrier.wait(5)
         return self._stage(blob,job_id,private)
 
-    def validate_ui(self,job_id,changed,*,root=None):
+    def validate_ui(self,job_id,changed,*,root=None,baseline=False):
         self.calls.append(("validate_candidate",job_id,str(root)))
         assert Path(root or self.assets/"releases"/job_id).is_dir()
 
@@ -271,13 +271,13 @@ class ConcurrentUIEntryTests(unittest.TestCase):
     def test_validation_retries_only_when_captured_runtime_changed(self):
         self.change("ui-runtime-task","ui/probe/a.css","body {}\n","body { color: red; }\n")
         original=self.runner.validate_ui;first=True
-        def validate(job_id,changed,root=None):
+        def validate(job_id,changed,root=None,baseline=False):
             nonlocal first
             if first:
                 first=False
                 self.runner.containers[fixtures.host.TARGETS[0]]["Id"]+="-new"
                 raise RuntimeError("consumer transition")
-            return original(job_id,changed,root=root)
+            return original(job_id,changed,root=root,baseline=baseline)
         self.runner.validate_ui=validate
         job=self.finish("ui-runtime-task");row=self.wait([job])[0]
         self.assertEqual(row["status"],"completed",row.get("reason"));self.assertEqual(row["preparation"]["attempts"],2)

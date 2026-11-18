@@ -5,6 +5,7 @@
   "failed_scratch_retention_seconds": 86400,
   "cargo_download_retention_seconds": 1209600,
   "orphan_release_seconds": 7200,
+  "note_ttl_seconds": 86400,
   "registry_retention_seconds": 604800,
   "registry_keep_finished": 200,
   "registry_high_water": 800,

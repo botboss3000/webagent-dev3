@@ -589,4 +589,53 @@ class SchedulerBrokerTests(unittest.TestCase):
         self.call("build_work",{"action":"status","task_id":item["task_id"]})
         value=store.get(item["key"]);self.assertEqual(value["state"],"orphaned");self.assertEqual(value["heartbeat"],stale)
 
+    def test_blocker_board_notes_cross_tasks_and_clear_when_the_task_ends(self):
+        """Any operator posts on any open task from their own task; the note clears when that task ends."""
+        self.begin("board-author");target=self.begin("board-target")
+        posted=self.call("build_work",{"action":"note","task_id":"board-author","target_task_id":"board-target","reason":"I need module:broker"})
+        self.assertEqual(posted["note"]["from_label"],"board-author");self.assertEqual(posted["note"]["to_label"],"board-target")
+        read=self.call("build_work",{"action":"notes","task_id":"board-target"})
+        self.assertEqual([n["text"]for n in read["notes"]],["I need module:broker"]);self.assertEqual(read["cycles"],[])
+        with self.assertRaises(ValueError):self.call("build_work",{"action":"note","task_id":"board-author","target_task_id":"no-such-task","reason":"x"})
+        with self.assertRaises(ValueError):self.call("build_work",{"action":"note","task_id":"board-author","reason":"x","job_id":"j"})
+        target["status"]="abandoned";self.broker.scheduler.housekeeping()
+        self.assertEqual(self.broker.scheduler.board.notes(target["key"]),[])
+
+    def test_blocker_board_bounds_text_and_expires_notes(self):
+        """Note text is bounded; notes past note_ttl_seconds are hidden and pruned."""
+        board=fixtures.host.scheduler_module.Board(self.root/"board.json",ttl=3600,clock=lambda:now[0]);now=[0.0]
+        post=lambda text:board.post(to_key="a"*64,to_label="t",from_label="f",from_session="s",origin="o",text=text)
+        for bad in ("","   ","x"*(fixtures.host.scheduler_module.MAX_TEXT+1),None):
+            with self.assertRaises(ValueError):post(bad)
+        post("ok");self.assertEqual(len(board.notes("a"*64)),1)
+        now[0]=3601.0;self.assertEqual(board.notes("a"*64),[]);self.assertEqual(board.prune(lambda key:True),1)
+
+    def test_wait_cycle_through_an_uncertain_release_and_its_sessions_fix_task(self):
+        """This morning's deadlock: mine is queued behind an uncertain release while the same session's fix
+        task waits for a claim mine holds. Progress names the holder and reports the cycle once."""
+        mine=self.begin("cycle-mine");holder=self.begin("cycle-holder");fix=self.begin("cycle-fix")
+        for item in (holder,fix):item["summary"]="Folder move [origin=claude-code; session=UI shared]"
+        store=self.broker.scheduler.store
+        with store.transaction()as db:
+            db.execute("UPDATE tasks SET state='owned',scopes=? WHERE id=?",(json.dumps(["module:broker"]),mine["key"]))
+            db.execute("UPDATE tasks SET state='waiting',requested=? WHERE id=?",(json.dumps(["module:broker","path:build-service/host.py"]),fix["key"]))
+        now=time.time()
+        self.broker.jobs["held-job"]={"job_id":"held-job","task_id":"cycle-holder","status":"uncertain","phase":"checking_ui","effects_started":True,
+            "created_at":now-60,"finished_at":now-30,"ownership_id":holder["key"],"operation":"build_deploy","isolated":True}
+        self.broker.jobs["mine-job"]={"job_id":"mine-job","task_id":"cycle-mine","status":"queued","created_at":now,"ownership_id":mine["key"],"operation":"build_deploy"}
+        mine["job_id"]="mine-job"
+        cycles=self.broker.wait_cycles(mine["key"])
+        self.assertEqual(len(cycles),1)
+        self.assertEqual((cycles[0]["task_id"],cycles[0]["waiting_task_id"],cycles[0]["held"]),("cycle-holder","cycle-fix",["module:broker"]))
+        self.assertIn('queued behind cycle-holder (session "UI shared"), its uncertain release',cycles[0]["text"])
+        self.assertEqual(self.broker.wait_cycles(holder["key"]),[])  # only a queued job can be in this cycle
+        self.broker.jobs["mine-job"].update(user_id="codex-local",workspace=self.workspace)
+        self.call("build_work",{"action":"note","task_id":"cycle-fix","target_task_id":"cycle-mine","reason":"Can you release module:broker?"})
+        progress=self.call("v3_build_progress",{"job_id":"mine-job"})
+        self.assertIn({"job_id":"held-job","task_id":"cycle-holder","session":"UI shared","status":"uncertain","phase":"checking_ui"},progress["queued_behind"])
+        self.assertEqual([n["text"]for n in progress["notes"]],["Can you release module:broker?"])
+        self.assertEqual(len(progress["wait_cycles"]),1)
+        with store.transaction()as db:db.execute("UPDATE tasks SET state='owned',requested='[]' WHERE id=?",(fix["key"],))
+        self.assertEqual(self.broker.wait_cycles(mine["key"]),[])
+
 if __name__=="__main__":unittest.main()

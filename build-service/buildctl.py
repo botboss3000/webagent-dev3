@@ -336,7 +336,8 @@ def status_line(progress):
     count = len({str(s.get("id", "")).rstrip("abcdefgh") for s in progress.get("finished_stages", []) + running + progress.get("upcoming_stages", [])})
     if progress.get("status") == "queued":
         ahead = progress.get("queued_behind") or []
-        return "queued" + (" behind " + "; ".join(f"{a.get('task_id')} (session \"{a.get('session') or 'unknown'}\", job {a['job_id'][:8]}, {a.get('phase')})"
+        return "queued" + (" behind " + "; ".join(f"{a.get('task_id')} (session \"{a.get('session') or 'unknown'}\", job {a['job_id'][:8]}, "
+                                                           + ("uncertain, holds the queue until reconciled" if a.get("status") == "uncertain" else str(a.get("phase"))) + ")"
                                                    for a in ahead) if ahead else "")
     low, high = progress.get("remaining_seconds") or [0, 0]
     left = f"; about {low / 60:.1f}-{high / 60:.1f} min left" if high else ""
@@ -448,6 +449,15 @@ def monitor(task_id=None, job_id=None, request=call, pause=time.sleep, clock=tim
             if not partner or clock() - held >= PARALLEL_HOLD:
                 save(current);show(progress);return PENDING_EXIT
         alerted, stalled = current["alerted"], current["stalled"]
+        # Blocker board: a new note on this task or a new wait cycle wakes at once, with its text.
+        current["notes_seen"] = (saved or {}).get("notes_seen", [])
+        fresh = [n for n in progress.get("notes") or [] if n.get("id") not in current["notes_seen"]]
+        fresh += [c for c in progress.get("wait_cycles") or [] if "cycle:" + c.get("job_id", "") not in current["notes_seen"]]
+        if fresh:
+            for entry in fresh:
+                print(board_line(entry))
+                current["notes_seen"].append(entry["id"] if "id" in entry else "cycle:" + entry.get("job_id", ""))
+            saved = current;save(current);show(progress);return DECISION_EXIT
         for stage in progress.get("running_stages", []):
             name, seconds, late = stage["stage"], stage.get("seconds") or 0, stage.get("late")
             stall = stage["stage"] == progress.get("stage") and (progress.get("idle_seconds") or 0) > STALL_SECONDS and name not in stalled
@@ -476,6 +486,14 @@ def monitor(task_id=None, job_id=None, request=call, pause=time.sleep, clock=tim
             print(f"no command or progress for {idle}s after {progress.get('stage')}")
             save(current);show(progress);return DECISION_EXIT
         pause(POLL_SECONDS)
+
+
+def board_line(entry):
+    """One blocker-board entry as a line: a note with its author, or a wait cycle."""
+    if "id" in entry:
+        return (f"note from {entry.get('from_label')} (session \"{entry.get('from_session') or 'unknown'}\", "
+                f"{entry.get('origin') or 'unknown'}): {entry.get('text')}")
+    return entry.get("text", "")
 
 
 def late_due(seconds, late, alerted, name):
@@ -651,6 +669,10 @@ def main():
     maintenance=commands.add_parser("maintenance")
     maintenance.add_argument("action",choices=("status","drain","resume"))
     maintenance.add_argument("--task-id")
+    note=commands.add_parser("note",help="leave a note on a task (yours or a blocking one); it clears when that task ends")
+    note.add_argument("task_id",help="your own task, shown as the author");note.add_argument("text")
+    note.add_argument("--to",dest="target",help="the task to post on (default: your own)")
+    commands.add_parser("notes",help="read a task's notes and any wait cycle it is part of").add_argument("task_id")
     schedule=commands.add_parser("schedule",help="structured ownership and resource control through build_work")
     schedule.add_argument("--input",required=True,help="JSON request file, or - for stdin")
     apply=commands.add_parser("apply",help="checked isolated source patch with derived ownership")
@@ -682,6 +704,14 @@ def main():
         if args.feature_profile is not None:request["feature_profile"]=args.feature_profile
         if args.compiler_memory_cap is not None:request["compiler_memory_cap"]=args.compiler_memory_cap
         print(json.dumps(call("build_work",request),sort_keys=True));return 0
+    if args.command=="note":
+        print(json.dumps(call("build_work",{"action":"note","task_id":args.task_id,"reason":args.text,
+                                            **({"target_task_id":args.target}if args.target else{})}),sort_keys=True));return 0
+    if args.command=="notes":
+        value=call("build_work",{"action":"notes","task_id":args.task_id})
+        for entry in value.get("notes",[])+value.get("cycles",[]):print(board_line(entry))
+        if not value.get("notes")and not value.get("cycles"):print("no notes on "+value.get("task_id",args.task_id))
+        return 0
     if args.command=="schedule":
         value=json.loads(sys.stdin.read(1024*1024)if args.input=="-"else Path(args.input).read_text())
         print(json.dumps(call("build_work",value),sort_keys=True));return 0

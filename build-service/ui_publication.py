@@ -133,7 +133,8 @@ class UIPublication:
             validation_started=clock()
             if not host_only:
                 try:
-                    self.broker.runner.validate_ui(job["job_id"],job.get("changed_paths",()),root=destination)
+                    self.broker.runner.validate_ui(job["job_id"],job.get("changed_paths",()),root=destination,
+                        baseline=job.get("operation")=="plugin_deploy")
                 except Exception:
                     # A coordinated backend switch may temporarily remove a consumer.
                     # Retry only when the exact captured publication/runtime binding changed.
