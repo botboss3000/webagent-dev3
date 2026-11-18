@@ -47,6 +47,53 @@
 #   5. Verify: send a message in WebAgent with the bridge model; the reply should arrive and
 #      `python3 harness-bridge.py stats` should count the call.
 #
+# Isolation and guardrails (recommended; set these up with the user, then VERIFY them):
+#   WebAgent never runs its tools here: this client only returns the model's reply and the tool
+#   calls it asked for, and WebAgent runs those on its own server under its own permissions and
+#   approvals. What runs here is the local harness (claude / opencode) on WebAgent's prompts, so
+#   keep it away from this computer's other data:
+#   a. One dedicated home per bridge. Run the client with HOME set to a folder of its own, for
+#      example ~/webagent-bridge/home, so the harness keeps its sessions, database, settings and
+#      login there instead of in your own ~/.claude or ~/.local/share/opencode (and never mixes
+#      with your own interactive sessions):
+#        mkdir -p ~/webagent-bridge/home
+#   b. Sign the harness in inside that home (the user types their own login; never copy or print
+#      credentials for them):
+#        HOME=~/webagent-bridge/home claude            # Claude Bridge: sign in, then exit
+#        HOME=~/webagent-bridge/home opencode auth login   # OpenCode Bridge
+#   c. The harness's own tools stay off. This script already passes: Claude `--tools Read` with only
+#      `mcp__harness` allowed (headless, so Read outside the run's folder is refused); OpenCode its
+#      own tools as "deny" (paid models) or "ask" (free models, refused because nobody can answer).
+#   d. A system-level sandbox for the service (Linux systemd; the system enforces it, whatever a
+#      model asks). Add to the [Service] section of the unit above, adjusting the CLI paths:
+#          Environment=HOME=%h/webagent-bridge/home
+#          ProtectSystem=strict
+#          ProtectHome=tmpfs
+#          BindPaths=%h/webagent-bridge
+#          BindReadOnlyPaths=-%h/.local/bin -%h/.opencode -%h/.local/share/claude
+#          PrivateTmp=yes
+#          NoNewPrivileges=yes
+#      ProtectHome=tmpfs hides the real home; only the bridge folder (read-write) and the CLI
+#      install folders (read-only) are visible. On macOS, run the client as a separate user account.
+#
+#   Agents setting this up: do not trust these comments; check each guardrail on this computer and
+#   tell the user the result of each check:
+#     - The service runs with the sandbox:  systemctl --user show harness-bridge.service -p Environment
+#       -p ProtectSystem -p ProtectHome -p NoNewPrivileges   (expect HOME=…/webagent-bridge/home,
+#       strict, tmpfs, yes).
+#     - The real home is hidden from it: start a throwaway unit with the same settings and try to
+#       read a private file, e.g.
+#         systemd-run --user --pipe -p ProtectHome=tmpfs -p BindPaths=%h/webagent-bridge \
+#           -p ProtectSystem=strict ls ~/.ssh      (expect "No such file or directory")
+#     - The harness uses the dedicated home: after one call, its sessions appear under
+#       ~/webagent-bridge/home (for example home/.claude/projects or home/.local/share/opencode),
+#       not under the real home.
+#     - The harness's own tools are refused: read this script's claude_command / opencode_config,
+#       then ask the bridge model in WebAgent to run a shell command itself (not through a WebAgent
+#       tool); the run must not execute it.
+#     - `python3 harness-bridge.py selftest` passes, and one WebAgent message gets a reply.
+#   If a check fails, stop and tell the user which guardrail is missing before serving calls.
+#
 # Options: HARNESS_BRIDGE_URL=<origin> overrides the paired server. Any number of clients, and
 # processes of one client, may serve the same bridge provider: each call runs on exactly one of them.
 # To serve two bridge providers (for example Claude Bridge and OpenCode Bridge), pair a copy in its
