@@ -512,6 +512,7 @@ const _SORT_KEY_MAP = {
   message_count:     { key: 'message_count',     type: 'number' },
   total_input_tokens:  { key: 'total_input_tokens',  type: 'number' },
   total_output_tokens: { key: 'total_output_tokens', type: 'number' },
+  total_cache_write_tokens: { key: 'total_cache_write_tokens', type: 'number' },
   total_cost:        { key: 'total_cost',        type: 'number' },
   total_duration_ms: { key: 'total_duration_ms', type: 'number' },
   last_active:       { key: 'last_active',       type: 'date' },
@@ -1033,6 +1034,7 @@ function _renderCell(row, col, ctx) {
     case 'links': return '<td class="col-links v3-pending" title="Session links · Pending V3">Pending</td>';
     case 'msgs': return '<td class="col-msgs" style="text-align:right;">' + (row.message_count ?? '—') + '</td>';
     case 'tokens_in': return '<td class="col-tokens_in" title="'+_esc(row.usage_note)+'" style="text-align:right;">' + ((row.usage?.unreported_calls||0)>0&&row.total_input_tokens!=null?'≥':'') + _fmtTokens(row.total_input_tokens) + '</td>';
+    case 'cache_writes': return '<td class="col-cache_writes" title="Tokens written to the provider prompt cache" style="text-align:right;">' + _fmtTokens(row.total_cache_write_tokens) + '</td>';
     case 'tokens_out': return '<td class="col-tokens_out" title="'+_esc(row.usage_note)+'" style="text-align:right;">' + ((row.usage?.unreported_calls||0)>0&&row.total_output_tokens!=null?'≥':'') + _fmtTokens(row.total_output_tokens) + '</td>';
     case 'cost': return '<td class="col-cost" title="Unknown unless all recorded calls report cost; historical usage may be absent" style="text-align:right;">' + _fmtCost(row.total_cost) + '</td>';
     case 'duration': return '<td class="col-duration v3-pending" title="Duration · Pending V3">Pending</td>';
@@ -1237,7 +1239,7 @@ function _renderSkeletonRows(count) {
   const cols = _activeConfig ? getColumns(_activeConfig) : null;
   const colIds = (cols && cols.length)
     ? cols.map(c => c.id)
-    : ['check', 'title', 'links', 'msgs', 'tokens_in', 'tokens_out', 'cost', 'duration'];
+    : ['check', 'title', 'links', 'msgs', 'tokens_in', 'tokens_out', 'cache_writes', 'cost', 'duration'];
   const bar = '<span class="sess-sk sk-shimmer" style="width:' + _SKELETON_BAR_WIDTH + '"></span>';
   let html = '';
   for (let i = 0; i < n; i++) {

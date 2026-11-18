@@ -61,14 +61,15 @@ const SESSION_COLUMNS = [
   { id: "msgs",       width: 70,  sort_key: "message_count",       align: "right", for: ["session"] },
   { id: "tokens_in",  width: 70,  sort_key: "total_input_tokens",  align: "right", for: ["session"] },
   { id: "tokens_out", width: 70,  sort_key: "total_output_tokens", align: "right", for: ["session"] },
+  { id: "cache_writes", width: 80, sort_key: "total_cache_write_tokens", align: "right", for: ["session"] },
   { id: "cost",       width: 70,  sort_key: "total_cost",          align: "right", for: ["session"] },
   { id: "duration",   width: 80,     align: "right", for: ["session"] }
 ];
 
 const SESSION_RESPONSIVE = {
   breakpoints: [
-    { max_width: 600,  hide: ["tokens_in", "tokens_out", "cost", "duration"] },
-    { max_width: 900,  hide: ["tokens_in", "tokens_out", "cost", "duration"] },
+    { max_width: 600,  hide: ["tokens_in", "tokens_out", "cache_writes", "cost", "duration"] },
+    { max_width: 900,  hide: ["tokens_in", "tokens_out", "cache_writes", "cost", "duration"] },
     { max_width: 1100, hide: ["duration"] }
   ]
 };

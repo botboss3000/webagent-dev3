@@ -62,6 +62,7 @@ export function mountUsageStats({root,client,note,issues}) {
     content.append(caption);
     row(content,'Recorded session input / output tokens',usage?.reported_calls ? num(usage.input_tokens)+' / '+num(usage.output_tokens) : 'Not reported yet');
     row(content,'Cached input tokens',usage?.reported_calls && !usage.unknown_cache_calls ? num(usage.cached_input_tokens) : 'Not fully reported');
+    row(content,'Cache write tokens',usage?.reported_calls && !usage.unknown_cache_calls ? num(usage.cache_write_tokens||0) : 'Not fully reported');
     row(content,'Last call input / output',run?.usage?.latest ? num(run.usage.latest.input_tokens)+' / '+num(run.usage.latest.output_tokens) : 'Not reported');
     row(content,'Reported / unreported calls',num(usage?.reported_calls)+' / '+num(usage?.unreported_calls));
     const known=usage?.known_cost_usd;

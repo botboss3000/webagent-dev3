@@ -1262,6 +1262,7 @@ body.light-mode .sess-agent-badge {
 #sessions-table-wrap.narrow #sessions-table .col-msgs,
 #sessions-table-wrap.narrow #sessions-table .col-tokens_in,
 #sessions-table-wrap.narrow #sessions-table .col-tokens_out,
+#sessions-table-wrap.narrow #sessions-table .col-cache_writes,
 #sessions-table-wrap.narrow #sessions-table .col-cost,
 #sessions-table-wrap.narrow #sessions-table .col-duration,
 #sessions-table-wrap.narrow #sessions-table .col-updated {
