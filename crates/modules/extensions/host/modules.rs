@@ -940,6 +940,11 @@ pub(crate) async fn pause_session_automations(app: &App, sid: &str) -> Result<Ve
     }
     Ok(paused)
 }
+/// A Main Notes binding check that fails before dispatch: nothing ran, so the agent gets the
+/// reason and can correct the call instead of a "may have taken effect" result.
+fn binding_refusal(reason: &str) -> Value {
+    json!({"status":"error","error_kind":"invalid_main_notes_binding","no_effect":true,"output":reason})
+}
 pub(crate) async fn tool_call(
     app: &App,
     sid: &str,
@@ -999,7 +1004,9 @@ pub(crate) async fn tool_call(
             .main_chat_state()
             .await?;
         if notes["settings"]["enabled"] != true || notes["session_id"] != sid {
-            return Err(anyhow!("Only Main Chat coordinates Main Notes schedules"));
+            return Ok(binding_refusal(
+                "Only Main Chat coordinates Main Notes schedules",
+            ));
         }
         let topic = binding["topic_id"]
             .as_str()
@@ -1016,8 +1023,8 @@ pub(crate) async fn tool_call(
         );
         let updating = name == "update_automation";
         if updating && args["id"] != action_id {
-            return Err(anyhow!(
-                "Schedule identity does not match the Main Notes action"
+            return Ok(binding_refusal(
+                "Schedule identity does not match the Main Notes action",
             ));
         }
         let existing = if updating {
@@ -1049,12 +1056,12 @@ pub(crate) async fn tool_call(
             || action["timing"] != trigger
             || action["text"] != prompt
         {
-            return Err(anyhow!(
-                "Schedule prompt and timing must match the current Main Notes action"
+            return Ok(binding_refusal(
+                "Schedule prompt and timing must match the current Main Notes action",
             ));
         }
         if matches!(action["state"].as_str(), Some("done" | "cancelled")) {
-            return Err(anyhow!("Action is already terminal"));
+            return Ok(binding_refusal("Action is already terminal"));
         }
         if name != "remind_me" {
             let destination = if updating && args["destination"].is_null() {
@@ -1069,8 +1076,8 @@ pub(crate) async fn tool_call(
             if !matches!(kind, "existing_chat" | "existing_session" | "chat")
                 || destination["session_id"] != sid
             {
-                return Err(anyhow!(
-                    "Main Notes schedules must explicitly target Main Chat"
+                return Ok(binding_refusal(
+                    "Main Notes schedules must explicitly target Main Chat",
                 ));
             }
         }
@@ -1084,8 +1091,8 @@ pub(crate) async fn tool_call(
             .as_str()
             .is_some_and(|v| v.starts_with("main-notes-action-"))
     {
-        return Err(anyhow!(
-            "Main Notes updates require their current action binding"
+        return Ok(binding_refusal(
+            "Main Notes updates require their current action binding",
         ));
     }
     let mut scope = execution_scope(&scoped, &agent, Some(sid), false).await?;
