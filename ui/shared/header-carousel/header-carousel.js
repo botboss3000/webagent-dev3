@@ -51,5 +51,5 @@ const tabBar=document.getElementById("main-tabs"), tabWrap=document.getElementBy
 let last="";
 function refresh(){const active=tabBar.querySelector(".main-tab.active");const id=active?.dataset.value;if(id && id!==last){last=id;syncActive(id);}else updateChevrons();}
 new MutationObserver(refresh).observe(tabBar,{subtree:true,childList:true,attributes:true,attributeFilter:["class"]});
-window.__refreshTabStrip=refresh; refresh();
+refresh();
 }
