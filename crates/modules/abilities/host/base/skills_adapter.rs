@@ -115,6 +115,16 @@ async fn ranked_skills(query: &str, skills: Vec<Value>) -> (Vec<Value>, &'static
         .collect();
     (rows, by)
 }
+/// `ability_id` alone selects that ability's primary skill (`<ability>/skills/<ability>.skill.md`),
+/// the selector agents reach for first; every other selector is left as given.
+fn primary_by_default(mut args: LoadArgs) -> LoadArgs {
+    if args.tool_name.is_none() && args.kind.is_empty() && args.skill_id.is_empty() {
+        args.kind = "ability".into();
+        args.skill_id = args.ability_id.clone();
+    }
+    args
+}
+
 /// Constrain kind, private scope and optional catalog receipt version before lookup.
 fn validate_load(args: &LoadArgs) -> Result<()> {
     if let Some(tool) = &args.tool_name {
@@ -661,8 +671,9 @@ async fn work(app: &App, sid: &str, run_id: &str, name: &str, args: &Value) -> R
                 "ranked_by":ranked_by,"source_kind":"skill_metadata","activates":false})
         }
         "load_skill" => {
-            let query: LoadArgs =
-                serde_json::from_value(args.clone()).context("Invalid skill-load arguments")?;
+            let query = primary_by_default(
+                serde_json::from_value(args.clone()).context("Invalid skill-load arguments")?,
+            );
             validate_load(&query)?;
             if query
                 .expected_catalog_version
@@ -853,6 +864,29 @@ mod tests {
         assert!(skill_matches(&skill, "theme"));
         assert!(skill_matches(&skill, "appearence"));
         assert!(!skill_matches(&skill, "payments"));
+    }
+
+    #[test]
+    fn ability_id_alone_selects_the_primary_skill() {
+        let query = primary_by_default(
+            serde_json::from_value(json!({"ability_id":"sandbox"})).expect("arguments"),
+        );
+        assert_eq!(
+            (query.kind.as_str(), query.skill_id.as_str()),
+            ("ability", "sandbox")
+        );
+        assert!(validate_load(&query).is_ok());
+        let explicit = primary_by_default(
+            serde_json::from_value(
+                json!({"ability_id":"sandbox","kind":"tool","skill_id":"sandbox_file"}),
+            )
+            .expect("arguments"),
+        );
+        assert_eq!(explicit.kind, "tool");
+        let tool = primary_by_default(
+            serde_json::from_value(json!({"tool_name":"sandbox_file"})).expect("arguments"),
+        );
+        assert!(tool.kind.is_empty() && validate_load(&tool).is_ok());
     }
 
     #[test]

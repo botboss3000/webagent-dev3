@@ -3,7 +3,7 @@
 ## Usage
 
 - Load a skill for this conversation and read its text in the result.
-- Pass either exact `ability_id`, `kind` (`ability`, `tool`, `selectable`, or `own`) and `skill_id` from `list_skills`, or `tool_name` alone for any tool in your tool list.
+- Pass either exact `ability_id`, `kind` (`ability`, `tool`, `selectable`, or `own`) and `skill_id` from `list_skills`, `ability_id` alone for that ability's primary skill, or `tool_name` alone for any tool in your tool list.
 - Does not activate abilities or tools or grant execution.
 
 Every enabled tool's schema is already in your tool list. A tool whose skill is not in the prompt can be loaded by name: `load_skill` with `tool_name`. A tool without a skill returns a short note that its schema is complete; an unknown or Off tool is refused. Optionally send `expected_catalog_version` with an explicit selector to reject a change since listing. Paths and other user, agent or session scopes are unsupported. Visible or already loaded guidance needs no repeated load.
