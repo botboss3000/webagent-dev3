@@ -357,6 +357,9 @@ fn queue(
         return Err("queue_capacity".into());
     }
     let today = now.div_euclid(86_400_000);
+    // A "run now" never takes the slot of a scheduled run later that day; manual runs still
+    // count among themselves.
+    let manual = key.contains(":manual:");
     if state
         .occurrences
         .values()
@@ -364,6 +367,7 @@ fn queue(
         .filter(|o| {
             o.automation_id == d.id
                 && o.status != "cancelled"
+                && (manual || !o.id.contains(":manual:"))
                 && o.scheduled_ms.div_euclid(86_400_000) == today
         })
         .count() as u64
@@ -1486,6 +1490,19 @@ mod policy_tests {
         );
         state.occurrences.get_mut("first").unwrap().status = "cancelled".into();
         assert!(queue(&mut state, &job, 100000, "second".into(), json!({}), vec![]).is_ok());
+    }
+    #[test]
+    fn run_now_leaves_the_scheduled_daily_slot() {
+        let created = definition(json!({}));
+        let mut state: State = serde_json::from_value(created["state"].clone()).unwrap();
+        let mut job = state.definitions["job"].clone();
+        job.daily_cap = 1;
+        queue(&mut state, &job, 100000, "job:manual:r".into(), json!({}), vec![]).unwrap();
+        assert_eq!(
+            queue(&mut state, &job, 100000, "job:manual:r2".into(), json!({}), vec![]),
+            Err("daily_cap".into())
+        );
+        assert!(queue(&mut state, &job, 100000, "scheduled".into(), json!({}), vec![]).is_ok());
     }
     #[test]
     fn safe_retry_waits_and_preserves_occurrence_identity() {
