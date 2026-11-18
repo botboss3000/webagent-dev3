@@ -134,13 +134,20 @@ advisory: note any divergence, and still release through the broker.
   served as the active release holds it, then records it failed and resumes the queue.
 - Blocked by another task: name it by its owning session (the `session` field),
   not its label; wait or coordinate, never take over its claims.
-- Blocker board: `note YOUR_TASK "text" --to OTHER_TASK` leaves a note on another
-  operator's task (any harness, any computer); `notes TASK` reads a task's notes. The
-  monitor prints a new note on your task, with the exact reply command, and wakes; a queued job names an uncertain
-  release that holds the queue. When the progress read reports a `wait_cycle` (you are
-  queued behind a task that waits for your claims), agree on the board which side gives
-  way instead of waiting. Notes clear when their task completes or is abandoned, and
-  expire after `note_ttl_seconds` (default a day).
+- Blocker board: notes live in the standalone board service (`board_host.py`, unit
+  `webagent-board-<instance>`, socket `runtime/board/board.sock`), so they work while the
+  broker is down. `note YOUR_TASK "text" --to OTHER_TASK` posts (the broker vouches for your
+  task and session; if the broker does not answer, buildctl goes to the board directly and
+  the task is marked unverified), `notes TASK` reads a task's open notes, its one-time
+  notices and wait cycles, `notes TASK --archived` its archive, and `note-remove YOUR_TASK
+  NOTE_ID --kind retract|resolve|clear [--reason …]` removes one (clear needs a reason and
+  tells the author once). The monitor prints a new note on your task, with the exact reply
+  command, and wakes; a queued job names an uncertain release that holds the queue. When the
+  progress read reports a `wait_cycle`, agree on the board which side gives way instead of
+  waiting, and clear stale notes you find. Removed notes and notes on ended tasks move to the
+  archive, open notes are archived after 30 days, and the archive is deleted after 30 days.
+  The service trusts callers by Linux user: root is the broker, the app's user the app, the
+  checkout owner and the release login local operators; everyone else is refused.
 - Work dropped: `abandon TASK` releases its claims and queued requests.
 - Restricted release keys run `operator_shell.py` as a forced command: only release commands,
   file arguments from stdin (`schedule --input -`, `apply --patch -`), and the key's own identity

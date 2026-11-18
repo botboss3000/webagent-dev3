@@ -589,11 +589,21 @@ class SchedulerBrokerTests(unittest.TestCase):
         self.call("build_work",{"action":"status","task_id":item["task_id"]})
         value=store.get(item["key"]);self.assertEqual(value["state"],"orphaned");self.assertEqual(value["heartbeat"],stale)
 
-    def test_blocker_board_notes_cross_tasks_and_clear_when_the_task_ends(self):
-        """Any operator posts on any open task from their own task; the note clears when that task ends."""
-        self.begin("board-author");target=self.begin("board-target")
+    def board(self,clock=None):
+        """An in-memory board service, wired into the broker as its client would be."""
+        import importlib.util
+        spec=importlib.util.spec_from_file_location("board_host_fixture",Path(fixtures.host.__file__).with_name("board_host.py"))
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        board=module.Board(self.root/"board.sqlite",**({"clock":clock}if clock else{}))
+        self.broker.scheduler.board=fixtures.host.scheduler_module.BoardClient(self.root/"board.sock",call=lambda request:module.handle(board,"broker",request))
+        return module,board
+
+    def test_blocker_board_notes_cross_tasks_and_archive_when_the_task_ends(self):
+        """Any operator posts on any open task from their own task; the broker vouches for it, and the
+        note is archived when that task ends."""
+        self.board();self.begin("board-author");target=self.begin("board-target")
         posted=self.call("build_work",{"action":"note","task_id":"board-author","target_task_id":"board-target","reason":"I need module:broker"})
-        self.assertEqual(posted["note"]["from_label"],"board-author");self.assertEqual(posted["note"]["to_label"],"board-target")
+        self.assertEqual((posted["note"]["from_task"],posted["note"]["to_task"],posted["note"]["verified"]),("board-author","board-target",True))
         read=self.call("build_work",{"action":"notes","task_id":"board-target"})
         self.assertEqual([n["text"]for n in read["notes"]],["I need module:broker"]);self.assertEqual(read["cycles"],[])
         with self.assertRaises(ValueError):self.call("build_work",{"action":"note","task_id":"board-author","target_task_id":"no-such-task","reason":"x"})
@@ -602,16 +612,38 @@ class SchedulerBrokerTests(unittest.TestCase):
         self.call("build_work",{"action":"note","task_id":"board-author","target_task_id":"board-target","reason":"again","request_id":"inapp-request-1"})
         self.assertEqual(len(self.call("build_work",{"action":"notes","task_id":"board-target","request_id":"inapp-request-2"})["notes"]),2)
         target["status"]="abandoned";self.broker.scheduler.housekeeping()
-        self.assertEqual(self.broker.scheduler.board.notes(target["key"]),[])
+        self.assertEqual(self.broker.scheduler.board.notes("board-target")["notes"],[])
+        archived=self.call("build_work",{"action":"notes","task_id":"board-target","archived":True})["notes"]
+        self.assertEqual({n["removal"]for n in archived},{"task-ended"})
 
-    def test_blocker_board_bounds_text_and_expires_notes(self):
-        """Note text is bounded; notes past note_ttl_seconds are hidden and pruned."""
-        board=fixtures.host.scheduler_module.Board(self.root/"board.json",ttl=3600,clock=lambda:now[0]);now=[0.0]
-        post=lambda text:board.post(to_key="a"*64,to_label="t",from_label="f",from_session="s",origin="o",text=text)
-        for bad in ("","   ","x"*(fixtures.host.scheduler_module.MAX_TEXT+1),None):
-            with self.assertRaises(ValueError):post(bad)
-        post("ok");self.assertEqual(len(board.notes("a"*64)),1)
-        now[0]=3601.0;self.assertEqual(board.notes("a"*64),[]);self.assertEqual(board.prune(lambda key:True),1)
+    def test_board_service_rules(self):
+        """Callers by kind, retract and clear rules, one-time notices, backstop, archive deletion and import."""
+        now=[1000.0];module,board=self.board(clock=lambda:now[0])
+        with self.assertRaises(PermissionError):module.handle(board,"operator",{"action":"tasks","live":[]})
+        with self.assertRaises(PermissionError):module.handle(board,"app",{"action":"post","to_task":"target-task","text":"x"})
+        note=module.handle(board,"app",{"action":"post","user":"admin","to_task":"target-task","from_task":"author-task","text":"ping"})
+        self.assertEqual((note["author"],note["verified"]),("app/admin",False))
+        for bad in ("","   ","x"*(module.MAX_TEXT+1),None):
+            with self.assertRaises(ValueError):module.handle(board,"operator",{"action":"post","to_task":"target-task","text":bad})
+        with self.assertRaises(PermissionError):module.handle(board,"operator",{"action":"remove","id":note["id"],"kind":"retract"})
+        with self.assertRaises(ValueError):module.handle(board,"operator",{"action":"remove","id":note["id"],"kind":"clear"})
+        module.handle(board,"operator",{"action":"remove","id":note["id"],"kind":"clear","reason":"blocker released","origin":"codex"})
+        # The author hears once, on an explicit read of its own task; a progress read leaves it.
+        self.assertEqual(module.handle(board,"operator",{"action":"list","task":"author-task"})["notices"],[])
+        first=module.handle(board,"operator",{"action":"list","task":"author-task","notices":True})["notices"]
+        self.assertEqual(first,["Your note to target-task was cleared by t480/codex: blocker released"])
+        self.assertEqual(module.handle(board,"operator",{"action":"list","task":"author-task","notices":True})["notices"],[])
+        mine=module.handle(board,"operator",{"action":"post","origin":"codex","to_task":"target-task","text":"mine"})
+        module.handle(board,"operator",{"action":"remove","id":mine["id"],"kind":"retract","origin":"codex"})
+        old=module.handle(board,"operator",{"action":"post","to_task":"target-task","text":"forgotten"})
+        # 30 days on, the forgotten note is archived and the two removed a month ago are deleted.
+        now[0]+=module.BACKSTOP_SECONDS+1;self.assertEqual(board.prune(),{"expired":1,"deleted":2})
+        self.assertEqual(module.handle(board,"operator",{"action":"list","task":"target-task"})["notes"],[])
+        self.assertIn(old["id"],[n["id"]for n in module.handle(board,"operator",{"action":"list","task":"target-task","archived":True})["notes"]])
+        now[0]+=module.ARCHIVE_SECONDS+1;self.assertEqual(board.prune()["deleted"],1)
+        legacy=self.root/"board.json";legacy.write_text(json.dumps({"notes":[{"id":"n1","to_label":"target-task","from_label":"author-task","origin":"t480/claude-code","text":"moved"}]}))
+        self.assertEqual(board.import_legacy(legacy),1);self.assertFalse(legacy.exists())
+        self.assertEqual([n["text"]for n in module.handle(board,"operator",{"action":"list","task":"target-task"})["notes"]],["moved"])
 
     def test_wait_cycle_through_an_uncertain_release_and_its_sessions_fix_task(self):
         """This morning's deadlock: mine is queued behind an uncertain release while the same session's fix
@@ -632,6 +664,7 @@ class SchedulerBrokerTests(unittest.TestCase):
         self.assertEqual((cycles[0]["task_id"],cycles[0]["waiting_task_id"],cycles[0]["held"]),("cycle-holder","cycle-fix",["module:broker"]))
         self.assertIn('queued behind cycle-holder (session "UI shared"), its uncertain release',cycles[0]["text"])
         self.assertEqual(self.broker.wait_cycles(holder["key"]),[])  # only a queued job can be in this cycle
+        self.board()
         self.broker.jobs["mine-job"].update(user_id="codex-local",workspace=self.workspace)
         self.call("build_work",{"action":"note","task_id":"cycle-fix","target_task_id":"cycle-mine","reason":"Can you release module:broker?"})
         progress=self.call("v3_build_progress",{"job_id":"mine-job"})

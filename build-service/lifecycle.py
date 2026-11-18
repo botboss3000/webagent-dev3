@@ -84,6 +84,32 @@ def repoint_boot(plan,backup,run=subprocess.run):
  if state=="inactive":return {"drop_in":str(path),"changed":True,"previous":str(backup),"restarted":None}
  run(["systemctl","reset-failed",unit],check=False);run(["systemctl","restart",unit],check=True)
  return {"drop_in":str(path),"changed":True,"previous":str(backup),"restarted":unit}
+def install_board(value,service_dir,unit_root="/etc/systemd/system",run=subprocess.run,lib_root="/var/lib/webagent"):
+ """Install the blocker board service from this release: its code at a fixed path and its unit.
+
+ The board restarts only when its code or unit changed, so a broker install that leaves
+ board_host.py alone never interrupts it (it is how sessions talk while the broker is away)."""
+ source=Path(service_dir)/"board_host.py"
+ if not source.is_file() or source.is_symlink():return {"board":"absent"}
+ folder=Path(lib_root)/value["instance"]/"board-service"
+ if folder.is_symlink():raise PermissionError("Board service directory symlink")
+ folder.mkdir(mode=0o755,parents=True,exist_ok=True);os.chmod(folder,0o755)
+ target=folder/"board_host.py";body=source.read_bytes()
+ changed=not target.exists() or target.read_bytes()!=body
+ if changed:
+  copy=folder/"board_host.py.new";copy.write_bytes(body);copy.chmod(0o644);os.replace(copy,target)
+ name="webagent-board-"+value["instance"]+".service";unit=Path(unit_root)/name
+ if unit.is_symlink():raise PermissionError("Board unit symlink")
+ text=("[Unit]\nDescription=WebAgent blocker board "+value["instance"]+"\n\n[Service]\nType=simple\n"
+       "Environment=WEBAGENT_BUILD_CONFIG="+os.environ.get("WEBAGENT_BUILD_CONFIG","/etc/webagent/development/build-service.json")+"\n"
+       "ExecStart=/usr/bin/python3 -I "+str(target)+"\nRestart=always\nRestartSec=2\nUMask=0077\n\n[Install]\nWantedBy=multi-user.target\n")
+ if not unit.exists() or unit.read_text()!=text:
+  unit.write_text(text);unit.chmod(0o644);changed=True;run(["systemctl","daemon-reload"],check=True)
+ run(["systemctl","enable",name],check=False)
+ state=run(["systemctl","is-active",name],check=False,capture_output=True,text=True).stdout.strip()
+ if changed or state!="active":
+  run(["systemctl","reset-failed",name],check=False);run(["systemctl","restart",name],check=True)
+ return {"board":name,"changed":changed,"restarted":changed or state!="active"}
 def install(args):
  if os.geteuid()!=0:raise PermissionError("Installation requires root")
  source=Path(__file__).resolve().parent;checkout=Path(args.checkout_root or source.parent)
@@ -179,7 +205,8 @@ def install(args):
   copy=folder/(name+".new");copy.write_bytes(body);copy.chmod(0o644);os.replace(copy,target)
   if unit:subprocess.run(["systemctl","try-restart",unit],check=False)
  boot_host=repoint_boot(boot,boot_home/(BOOT_PIN+".previous")) if boot else {"drop_in":"absent","changed":False,"note":"no "+BOOT_PIN+" drop-in; boot host left unchanged"}
- print(json.dumps({"installed":True,"version":release,"config":str(config_path),"unit":unit_name,"boot_host":boot_host}))
+ board=install_board(value,value["service_dir"])
+ print(json.dumps({"installed":True,"version":release,"config":str(config_path),"unit":unit_name,"boot_host":boot_host,"board":board}))
 def resource_policy(config_path,candidate_path,task_id,dry_run=False):
  """Atomically change only protected CPU/memory policy; reload broker/helper without a restart."""
  if os.geteuid()!=0:raise PermissionError("Memory policy installation requires root")

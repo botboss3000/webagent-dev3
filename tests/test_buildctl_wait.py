@@ -384,12 +384,12 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(line, 'queued behind ui-shared-folders2 (session "UI shared", job 575893ae, uncertain, holds the queue until reconciled)')
 
     def test_new_note_and_wait_cycle_wake_once_with_their_text(self):
-        note = {"id": "n1", "from_label": "other-task", "from_session": "Fix login", "origin": "t480/codex", "text": "I need module:broker"}
+        note = {"id": "n1", "from_task": "other-task", "session": "Fix login", "author": "t480/codex", "verified": True, "text": "I need module:broker"}
         cycle = {"job_id": "575893ae-0000", "task_id": "holder-task", "text": "Wait cycle: task-1 is queued behind other-task"}
         queued = self.progress(status="queued", job_seconds=5, notes=[note])
         code, out = self.run_monitor([queued], task="task-1")
         self.assertEqual(code, 4)
-        self.assertIn('note from other-task (session "Fix login", t480/codex): I need module:broker', out)
+        self.assertIn('note n1 from other-task (session "Fix login", t480/codex): I need module:broker', out)
         self.assertIn(' note task-1 "your reply" --to other-task', out)  # the exact answer, from this task
         code, out = self.run_monitor([dict(queued, wait_cycles=[cycle])], task="task-1")
         self.assertEqual(code, 4)  # the note was already shown; the new cycle wakes
@@ -400,8 +400,8 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(code, 1)  # neither wakes again
 
     def test_shown_notes_survive_stage_changes_and_own_notes_do_not_wake(self):
-        note = {"id": "n2", "from_label": "other-task", "from_session": "s", "origin": "o", "text": "ping"}
-        own = {"id": "n3", "from_label": "task-1", "from_session": "s", "origin": "o", "text": "mine"}
+        note = {"id": "n2", "from_task": "other-task", "session": "s", "author": "o", "text": "ping"}
+        own = {"id": "n3", "from_task": "task-1", "session": "s", "author": "o", "text": "mine"}
         queued = self.progress(status="queued", job_seconds=5, notes=[note, own])
         code, out = self.run_monitor([queued], task="task-1")
         self.assertEqual(code, 4);self.assertIn("ping", out);self.assertNotIn("mine", out)

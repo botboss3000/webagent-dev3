@@ -5008,7 +5008,7 @@ class Broker:
 
     def host_source_scope(self):
         """Broker modules and their docs/tests that the host-only lane may publish."""
-        review_modules={"source_status.py","workspace.py","compiler.Dockerfile","ui_policy.py","monitoring_component.py","buildctl.py","engine_components.py","release.py","workspace_support.py","executor_worker.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py","reconfigure.py","operator_shell.py","host_helper.py"}
+        review_modules={"source_status.py","workspace.py","compiler.Dockerfile","ui_policy.py","monitoring_component.py","buildctl.py","engine_components.py","release.py","workspace_support.py","executor_worker.py","scheduler.py","ui_publication.py","resources.py","resource_control.py","executor.py","config.py","lifecycle.py","scheduler-defaults.json","docker_retention.py","docker_guard_dispatch.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","install.py","reconfigure.py","operator_shell.py","host_helper.py","board_host.py"}
         allowed={"v3/tests/test_operator_identities.py","v3/tests/test_host_helper.py","v3/tests/test_build_source_status.py","v3/tests/test_admin_workspace.py","v3/tests/test_ui_policy.py","v3/tests/test_scheduler_monitoring.py","v3/tests/test_scheduler_executor.py","v3/tests/test_buildctl_wait.py","v3/tests/test_build_cache_retention.py","v3/tests/test_scheduler_docker_retention.py","v3/tests/test_admin_build_install.py"}|{"v3/build-service/"+n for n in review_modules}|{"v3/tests/test_build_ui_publication.py","v3/tests/test_scheduler_memory_limits.py","v3/tests/test_scheduler_resources.py","v3/tests/test_scheduler_ram_packaging.py","v3/tests/test_scheduler_package_cache.py","v3/tests/test_scheduler_image_reuse.py","v3/tests/test_broker_shared_ui.py","v3/tests/test_broker_ui_override.py","v3/tests/test_scheduler_broker.py","v3/tests/test_build_cancel.py"}|{"v3/build-service/host.py","v3/build-service/ownership.py","v3/build-service/README.md",
                  "v3/tests/test_build_service.py","v3/tests/test_scheduler_ownership.py","v3/tests/test_admin_build.py",
                  "v3/tests/test_context_component_builds.py","v3/tests/test_engine_components.py","v3/tests/test_build_lifecycle_entry.py",
@@ -6499,7 +6499,8 @@ class Broker:
                 item = next((i for i in self.work.values() if i.get("job_id") == job["job_id"]), None)
                 if item is not None:
                     # Blocker board: notes left on this job's task, and any wait cycle it is part of.
-                    value["notes"] = self.scheduler.board.notes(item["key"])
+                    board = self.scheduler.board.notes(item.get("task_id"))
+                    value["notes"] = (board or {}).get("notes", [])
                     value["wait_cycles"] = self.wait_cycles(item["key"])
                 return value
             if name == "v3_worker_job":

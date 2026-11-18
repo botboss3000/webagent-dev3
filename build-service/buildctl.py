@@ -455,7 +455,7 @@ def monitor(task_id=None, job_id=None, request=call, pause=time.sleep, clock=tim
         # notes_seen lives in every saved state, so a stage-change save never forgets it; a task's
         # own notes (posted from itself) are shown by notes but never wake it.
         fresh = [n for n in progress.get("notes") or []
-                 if n.get("id") not in current["notes_seen"] and n.get("from_label") != task_id]
+                 if n.get("id") not in current["notes_seen"] and (n.get("from_task") or n.get("from_label")) != task_id]
         fresh += [c for c in progress.get("wait_cycles") or [] if "cycle:" + c.get("job_id", "") not in current["notes_seen"]]
         if fresh:
             for entry in fresh:
@@ -492,6 +492,19 @@ def monitor(task_id=None, job_id=None, request=call, pause=time.sleep, clock=tim
         pause(POLL_SECONDS)
 
 
+def board_or_direct(through_broker, direct):
+    """Board requests go through the broker, which vouches for the task and session. When the broker does
+    not answer, they go straight to the board service as this local operator (the task is then unverified)."""
+    try:
+        return call("build_work", through_broker)
+    except (OSError, BrokerUnresponsive) as error:
+        board_host = importlib.util.module_from_spec(spec := importlib.util.spec_from_file_location("board_host", Path(__file__).with_name("board_host.py")))
+        spec.loader.exec_module(board_host)
+        cfg = json.loads(Path(os.environ.get("WEBAGENT_BUILD_CONFIG", "/etc/webagent/development/build-service.json")).read_text())
+        print("broker unavailable (" + str(error)[:80] + "); using the board service directly", file=sys.stderr)
+        return board_host.call(board_host.paths(cfg)[1], {**direct, "origin": os.environ.get("WEBAGENT_ORIGIN", "claude-code")})
+
+
 def reply_command(task_id, to):
     """The exact command, run on the broker host, that answers on task to's board."""
     config = os.environ.get("WEBAGENT_BUILD_CONFIG")
@@ -504,9 +517,13 @@ def board_line(entry, task_id=None):
 
     task_id is the reader's own task, shown as the author of the reply."""
     if "id" in entry:
-        return (f"note from {entry.get('from_label')} (session \"{entry.get('from_session') or 'unknown'}\", "
-                f"{entry.get('origin') or 'unknown'}): {entry.get('text')}\n"
-                f"  reply: {reply_command(task_id, entry.get('from_label'))}")
+        source = entry.get("from_task") or entry.get("from_label")
+        checked = "" if entry.get("verified", True) else ", task unverified"
+        line = (f"note {entry['id']} from {source or 'no task'} (session \"{entry.get('session') or entry.get('from_session') or 'unknown'}\", "
+                f"{entry.get('author') or entry.get('origin') or 'unknown'}{checked}): {entry.get('text')}")
+        if entry.get("archived_at"):
+            return line + f"\n  {entry.get('removal')} by {entry.get('removed_by')}" + (f": {entry['reason']}" if entry.get("reason") else "")
+        return line + (f"\n  reply: {reply_command(task_id, source)}" if source else "")
     others = [t for t in (entry.get("task_id"), entry.get("waiting_task_id")) if t]
     return entry.get("text", "") + "".join(f"\n  tell {other}: {reply_command(task_id, other)}"
                                          for other in dict.fromkeys(others))
@@ -688,10 +705,14 @@ def main():
     maintenance=commands.add_parser("maintenance")
     maintenance.add_argument("action",choices=("status","drain","resume"))
     maintenance.add_argument("--task-id")
-    note=commands.add_parser("note",help="leave a note on a task (yours or a blocking one); it clears when that task ends")
+    note=commands.add_parser("note",help="leave a note on a task (yours or a blocking one); it is archived when that task ends")
     note.add_argument("task_id",help="your own task, shown as the author");note.add_argument("text")
     note.add_argument("--to",dest="target",help="the task to post on (default: your own)")
-    commands.add_parser("notes",help="read a task's notes and any wait cycle it is part of").add_argument("task_id")
+    notes=commands.add_parser("notes",help="read a task's open notes, notices and wait cycles; --archived reads its archive")
+    notes.add_argument("task_id");notes.add_argument("--archived",action="store_true")
+    unnote=commands.add_parser("note-remove",help="retract your note, resolve one, or clear a stale one (clear needs --reason)")
+    unnote.add_argument("task_id",help="your own task");unnote.add_argument("note_id")
+    unnote.add_argument("--kind",choices=("retract","resolve","clear"),default="resolve");unnote.add_argument("--reason")
     schedule=commands.add_parser("schedule",help="structured ownership and resource control through build_work")
     schedule.add_argument("--input",required=True,help="JSON request file, or - for stdin")
     apply=commands.add_parser("apply",help="checked isolated source patch with derived ownership")
@@ -724,12 +745,18 @@ def main():
         if args.compiler_memory_cap is not None:request["compiler_memory_cap"]=args.compiler_memory_cap
         print(json.dumps(call("build_work",request),sort_keys=True));return 0
     if args.command=="note":
-        print(json.dumps(call("build_work",{"action":"note","task_id":args.task_id,"reason":args.text,
-                                            **({"target_task_id":args.target}if args.target else{})}),sort_keys=True));return 0
+        request={"action":"note","task_id":args.task_id,"reason":args.text,**({"target_task_id":args.target}if args.target else{})}
+        print(json.dumps(board_or_direct(request,{"action":"post","to_task":args.target or args.task_id,"from_task":args.task_id,"text":args.text}),sort_keys=True));return 0
+    if args.command=="note-remove":
+        request={"action":"note_remove","task_id":args.task_id,"note_id":args.note_id,"kind":args.kind,**({"reason":args.reason}if args.reason else{})}
+        print(json.dumps(board_or_direct(request,{"action":"remove","id":args.note_id,"kind":args.kind,**({"reason":args.reason}if args.reason else{})}),sort_keys=True));return 0
     if args.command=="notes":
-        value=call("build_work",{"action":"notes","task_id":args.task_id})
+        value=board_or_direct({"action":"notes","task_id":args.task_id,"archived":args.archived},
+                              {"action":"list","task":args.task_id,"archived":args.archived,"notices":True})
+        for notice in value.get("notices",[]):print("notice: "+notice)
         for entry in value.get("notes",[])+value.get("cycles",[]):print(board_line(entry,args.task_id))
-        if not value.get("notes")and not value.get("cycles"):print("no notes on "+value.get("task_id",args.task_id))
+        if value.get("more"):print(f"… and {value['more']} older; read them with --archived or a larger limit")
+        if not value.get("notes")and not value.get("cycles")and not value.get("notices"):print("no notes on "+args.task_id)
         return 0
     if args.command=="schedule":
         value=json.loads(sys.stdin.read(1024*1024)if args.input=="-"else Path(args.input).read_text())

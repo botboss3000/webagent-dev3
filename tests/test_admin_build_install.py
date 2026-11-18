@@ -40,7 +40,7 @@ class InstallTests(unittest.TestCase):
         (self.source / "install.py").write_bytes(b"# fixture bootstrap\n")
         (self.source / "release.py").write_bytes(b"# fixture release\n")
         (self.source / "performance.py").write_bytes(b"# fixture protected performance\n")
-        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","executor_worker.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py","ownership.py","scheduler.py","resources.py","resource_control.py","docker_retention.py","docker_guard_dispatch.py","executor.py","engine_components.py","source_status.py","monitoring_component.py","boot_host.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","ui_policy.py","ui_publication.py","ui-test.Dockerfile","compiler.Dockerfile"):
+        for name in ("config.py","workspace.py","workspace_support.py","workspace_executor.py","executor_worker.py","lifecycle.py","reconfigure.py","deploy.py","buildctl.py","ownership.py","scheduler.py","resources.py","resource_control.py","docker_retention.py","docker_guard_dispatch.py","executor.py","engine_components.py","source_status.py","monitoring_component.py","boot_host.py","board_host.py","apt_prefetch.py","packaging_cache.py","image_reuse.py","ui_policy.py","ui_publication.py","ui-test.Dockerfile","compiler.Dockerfile"):
             (self.source/name).write_bytes(b"# fixture module\n")
         (self.source/"scheduler-defaults.json").write_text("{}")
         self.fake = FakePrivileges()
@@ -311,6 +311,30 @@ class InstallTests(unittest.TestCase):
         self.assertIn("/proc/self/fd/42", command[1])
         self.assertEqual({"PATH","HOME","LANG","WEBAGENT_BUILD_CONFIG","WEBAGENT_BUILD_MODULE_ROOT"},set(command[2]))
 
+
+
+class BoardServiceInstallTests(unittest.TestCase):
+    """The blocker board installs from each release but restarts only when its code or unit changed."""
+    def test_board_restarts_only_on_change(self):
+        import importlib.util,tempfile,subprocess as sp
+        from types import SimpleNamespace
+        root=Path(__file__).resolve().parents[1]/"build-service"
+        spec=importlib.util.spec_from_file_location("lifecycle_board",root/"lifecycle.py");lifecycle=importlib.util.module_from_spec(spec);spec.loader.exec_module(lifecycle)
+        with tempfile.TemporaryDirectory() as temporary:
+            base=Path(temporary);release=base/"release";release.mkdir();(base/"units").mkdir()
+            (release/"board_host.py").write_text("print('v1')\n")
+            calls=[]
+            def run(argv,**kwargs):
+                calls.append(argv)
+                return SimpleNamespace(stdout="active\n",returncode=0)
+            value={"instance":"test"}
+            first=lifecycle.install_board(value,release,unit_root=base/"units",run=run,lib_root=base/"lib")
+            self.assertTrue(first["restarted"]);self.assertTrue((base/"lib/test/board-service/board_host.py").exists())
+            calls.clear()
+            again=lifecycle.install_board(value,release,unit_root=base/"units",run=run,lib_root=base/"lib")
+            self.assertFalse(again["restarted"]);self.assertNotIn(["systemctl","restart","webagent-board-test.service"],calls)
+            (release/"board_host.py").write_text("print('v2')\n")
+            self.assertTrue(lifecycle.install_board(value,release,unit_root=base/"units",run=run,lib_root=base/"lib")["restarted"])
 
 if __name__ == "__main__": unittest.main()
 
