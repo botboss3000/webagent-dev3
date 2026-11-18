@@ -2671,10 +2671,11 @@ def write_performance(path):
 STAGE_OF = {"dependency": "dependencies", "compile_test": "compile tests", "test": "run tests",
     "compile_linked": "release build", "compile_release": "release build", "live_smoke": "release build",
     "package": "package release", "building_loop": "package release", "preparing_plugins": "package release",
-    "preparing_ui": "UI build and tests", "frontend_tests": "UI build and tests", "ui_test": "UI build and tests", "fmt": "format check"}
+    "preparing_ui": "UI build and tests", "frontend_tests": "UI build and tests", "fmt": "format check"}
 # A standalone check runs its execution steps inside checking_source, as a release does inside building_api.
 STEP_PHASES = {"building_api", "checking_source"}
-STAGE_SKIP = {"engine_metadata", "linked_smoke", "start", "finished", "admitted", "queued_check", None} | STEP_PHASES
+# ui_test runs early beside a compile too (shown under Background); frontend_tests owns the UI stage.
+STAGE_SKIP = {"engine_metadata", "linked_smoke", "start", "finished", "admitted", "queued_check", "ui_test", None} | STEP_PHASES
 STAGE_ORDER = ["dependencies", "format check", "compile tests", "run tests", "release build", "package release",
     "UI build and tests", "deploy and health checks"]
 # Timed host steps that belong to a stage; early work runs beside the stages (background).

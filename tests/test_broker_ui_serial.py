@@ -98,8 +98,12 @@ class UITestProgressTests(unittest.TestCase):
         observer.flush(final=True, outcome="completed")
         self.assertEqual(job_value["execution_observation"]["test_progress"]["completed"], 0)
 
-    def test_ui_test_phase_is_the_ui_stage(self):
-        self.assertEqual(fixtures.host.STAGE_OF["ui_test"], "UI build and tests")
+    def test_ui_test_runs_never_form_a_stage(self):
+        # Early UI test runs overlap a compile; a stage for them read as a late UI stage at build start.
+        self.assertNotIn("ui_test", fixtures.host.STAGE_OF)
+        job = {"status": "running", "phase": "building_api", "phase_history": [{"at": 100.0, "phase": "building_api"}],
+               "execution_history": [{"phase": "ui_test", "started_at": 110.0, "elapsed_seconds": 60}]}
+        self.assertNotIn("UI build and tests", fixtures.host.stage_spans(job, 200.0))
 
 
 if __name__ == "__main__":
