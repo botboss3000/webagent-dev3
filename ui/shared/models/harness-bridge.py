@@ -613,6 +613,10 @@ def remember(call):
     (folder / "requests").mkdir(exist_ok=True)
     count = len(list((folder / "requests").iterdir())) + 1
     (folder / "requests" / f"{count:04d}-{call['id']}.json").write_text(json.dumps(call, indent=1))
+    # Only the newest few copies are kept (a debugging record; Muse reads the current one).
+    keep = max(1, int(cleanup_settings()["keep_requests_per_chat"]))
+    for old in sorted((folder / "requests").glob("*.json"), key=lambda p: p.stat().st_mtime)[:-keep]:
+        old.unlink(missing_ok=True)
     return folder, state, changes(folder, state, call["body"], count)
 
 
@@ -1778,7 +1782,7 @@ def selftest():
 # Active chats keep only their newest request copies (a debugging record).
 CLEANUP_FILE = ROOT / "cleanup.json"
 CLEANUP_LOG = ROOT / "cleanup.jsonl"
-CLEANUP_DEFAULTS = {"enabled": True, "max_idle_hours": 24, "keep_requests_per_chat": 20,
+CLEANUP_DEFAULTS = {"enabled": True, "max_idle_hours": 24, "keep_requests_per_chat": 2,
                     "schedule": ["daily 03:00"]}
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
