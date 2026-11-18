@@ -172,6 +172,42 @@ pub fn delegation_allowed(settings: &Value, agent: &str) -> bool {
         .unwrap_or(agent == "shared_default")
 }
 
+/// The Web Search providers an agent's settings switch on, in manifest order. Defaults
+/// follow `abilities/Web/web_search/web_search.json`; a value of the wrong type keeps the
+/// default, as the plugin itself reads it.
+pub fn web_search_providers(settings: &Value) -> Vec<&'static str> {
+    [
+        ("tavily", true),
+        ("brave", false),
+        ("wikipedia", true),
+        ("duckduckgo", false),
+    ]
+    .into_iter()
+    .filter(|(provider, default)| {
+        settings[format!("{provider}_enabled")]
+            .as_bool()
+            .unwrap_or(*default)
+    })
+    .map(|(provider, _)| provider)
+    .collect()
+}
+
+#[cfg(test)]
+mod web_search_provider_tests {
+    use super::*;
+
+    #[test]
+    fn only_switched_on_providers_are_offered() {
+        assert_eq!(web_search_providers(&Value::Null), ["tavily", "wikipedia"]);
+        assert_eq!(
+            web_search_providers(
+                &json!({"tavily_enabled":false,"brave_enabled":true,"duckduckgo_enabled":"yes"})
+            ),
+            ["brave", "wikipedia"]
+        );
+    }
+}
+
 #[cfg(test)]
 mod delegation_tests {
     use super::*;

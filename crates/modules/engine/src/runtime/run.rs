@@ -2230,6 +2230,25 @@ impl<
                                 properties.remove("agent_id");
                             }
                         }
+                        // Offer only the providers this agent switched on; a refused choice
+                        // is not a choice.
+                        if schema["name"] == "web_search" {
+                            let providers = webagent_abilities::controls::web_search_providers(
+                                &visibility["settings"]["web_search"],
+                            );
+                            if let Some(properties) =
+                                schema["parameters"]["properties"].as_object_mut()
+                            {
+                                if providers.is_empty() {
+                                    properties.remove("provider");
+                                } else {
+                                    properties.insert(
+                                        "provider".into(),
+                                        serde_json::json!({"type":"string","enum":providers}),
+                                    );
+                                }
+                            }
+                        }
                         schema
                     })
                     .filter(|schema| {
