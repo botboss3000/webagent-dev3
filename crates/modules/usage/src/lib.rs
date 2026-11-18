@@ -1,3 +1,4 @@
+// Broker sidekick trial marker (temporary; removed by the next trial release).
 //! Provider usage normalization, per-run accumulation, bounded public projection
 //! and session totals. Provider-reported accounting is separate from the
 //! byte-measured model envelope; the host owns record keys, sealing and caching.
