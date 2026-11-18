@@ -1,6 +1,9 @@
 'use strict';
 
 import { pushBackHandler } from '../../../../shared/history-back/history-back.js';
+// The shared copy falls back to a hidden textarea on plain-HTTP pages (phones on the LAN).
+export { copyText } from '../../../../shared/models/clipboard.js';
+export { applyRubberBand } from '../../../../shared/rubber-band/rubber-band.js';
 
 let menu = null;
 let cleanup = null;
@@ -16,9 +19,6 @@ export function _esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, ch => ({
     '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
   })[ch]);
-}
-export async function copyText(value) {
-  await navigator.clipboard.writeText(String(value));
 }
 export function _refreshLucideIcons() {
   window.lucide?.createIcons?.();
@@ -163,7 +163,6 @@ export function openFloatingMenu(items, top, left) {
     window.addEventListener('resize', position);
   });
 }
-export function applyRubberBand() {}
 function key(primary, fallback) { return 'v3:file-manager:' + (primary || fallback); }
 export function kvRead(primary, fallback) {
   try { return JSON.parse(localStorage.getItem(key(primary, fallback))); } catch { return null; }

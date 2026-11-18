@@ -27,19 +27,6 @@ export function icon(name, opts = {}) {
 }
 
 // ── Chat-element type icons (COMPONENT-TYPE-ICON-STANDARD) ────────────────
-// One icon per chat-component type, used by the session-dropdown chips and the
-// agent panel head. todo_list (Checklist) → check in a box; status
-// (Overview/plan) → square-menu (a square of text lines — the pinned Lucide
-// 0.469.0 has no `square-text`, so that name warned and rendered blank);
-// scratchpad (the user's notes) → notepad-text; choice / approval / form
-// (elements that have buttons) → square-square.
-export function componentTypeIcon(type) {
-  return type === 'todo_list' ? 'check-square'
-       : type === 'status' ? 'square-menu'
-       : type === 'scratchpad' ? 'notepad-text'
-       : 'square-square';
-}
-
 // ── Claude spark mark (NOT a Lucide icon) ───────────────────────────────────────
 // The REAL Claude logo, straight from Anthropic's official asset — the orange
 // (#D97757) radial sunburst of tapered petals on a transparent tile. Ships as a
