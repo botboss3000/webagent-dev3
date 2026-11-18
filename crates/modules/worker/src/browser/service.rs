@@ -1811,6 +1811,12 @@ impl Service {
                 }
                 result
             }
+            "delay" => {
+                let ms = args.get("ms").and_then(Value::as_u64).unwrap_or(300);
+                let started = Instant::now();
+                tokio::time::sleep(Duration::from_millis(ms)).await;
+                json!({"waited_ms":rounded_ms(Instant::now() - started)})
+            }
             "wait_for" => Self::wait_for(state, args).await?,
             "mutations" => Self::mutations(state, args, selector).await?,
             "scroll" => {

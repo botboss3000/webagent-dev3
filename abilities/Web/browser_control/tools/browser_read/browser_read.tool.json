@@ -19,6 +19,7 @@
           "pixels",
           "performance",
           "wait_for",
+          "delay",
           "mutations",
           "animations",
           "scroll",
@@ -81,6 +82,12 @@
         "minimum": 100,
         "maximum": 10000,
         "description": "mutations only: how long to watch for DOM changes (default 3000)"
+      },
+      "ms": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10000,
+        "description": "delay only: how long to wait before the next step (default 300)"
       },
       "dx": {
         "type": "integer",

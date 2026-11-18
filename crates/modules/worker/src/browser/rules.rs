@@ -25,9 +25,10 @@ const APP_PARAMS: [&str; 12] = [
     "ui_sample",
     "window",
 ];
-pub(crate) const READ_ACTIONS: [&str; 14] = [
+pub(crate) const READ_ACTIONS: [&str; 15] = [
     "animations",
     "close",
+    "delay",
     "emulate",
     "keyboard",
     "measure",
@@ -696,6 +697,7 @@ fn permitted(action: &str) -> &'static [&'static str] {
     match action {
         "navigate" => &["url", "signed_in"],
         "read" => &["selector", "offset"],
+        "delay" => &["ms"],
         "click" => &["selector"],
         "type" => &["selector", "text", "vault", "totp"],
         "save_login" => &["origin"],
@@ -745,6 +747,7 @@ pub fn validate_args(name: &str, args: &mut Map<String, Value>) -> Result<&'stat
                     "timeout_ms",
                     "quiet_ms",
                     "duration_ms",
+                    "ms",
                     "dx",
                     "dy",
                     "preset",
@@ -935,6 +938,13 @@ pub fn validate_args(name: &str, args: &mut Map<String, Value>) -> Result<&'stat
                         "{key} must be a whole number from {low} to {high}"
                     )));
                 }
+            }
+        }
+    }
+    if action == "delay" {
+        if let Some(value) = args.get("ms") {
+            if !(is_int(value) && int_in(value, 1, 10_000)) {
+                return Err(Fault::rejected("ms must be a whole number from 1 to 10000"));
             }
         }
     }

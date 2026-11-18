@@ -1031,6 +1031,19 @@ async fn measure_wait_animations_scroll_press_pixels_and_emulate() {
         .call(json!({"action":"wait_for","condition":"quiet","quiet_ms":10001}))
         .await;
     assert!(output(&too_quiet).contains("quiet_ms"));
+    let paused = f.call(json!({"action":"delay","ms":40})).await;
+    assert_eq!(paused["status"], json!("success"), "{paused}");
+    assert!(
+        paused["waited_ms"].as_i64().is_some_and(|ms| ms >= 30),
+        "{paused}"
+    );
+    let defaulted = f.call(json!({"action":"delay"})).await;
+    assert!(
+        defaulted["waited_ms"].as_i64().is_some_and(|ms| ms >= 250),
+        "{defaulted}"
+    );
+    let too_long = f.call(json!({"action":"delay","ms":10001})).await;
+    assert!(output(&too_long).contains("ms"), "{too_long}");
     let counted = f
         .call(json!({"action":"mutations","selector":"#chat","duration_ms":100}))
         .await;
