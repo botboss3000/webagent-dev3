@@ -538,6 +538,9 @@ export async function renderAbilities(host, request, options) {
   const style = node('style');
   style.textContent = '.v3-abilities-page .sr-shell{margin-top:2px}'
     + '.v3-abilities-page .sr-item[hidden]{display:none}'
+    // Every level shares the group list's inset: the register's page body adds 2px
+    // of its own, which would step the ability list and the config page inward.
+    + '.v3-abilities-page .sr-detail-body{padding-left:0;padding-right:0}'
     + '.v3-abilities-page .v3-register-prompts{border:0;background:transparent}'
     + '.v3-abilities-page .v3-register-prompts>.ac-group-body{padding:0}'
     // The ability page sits at the register's side inset, so its rows line up with
