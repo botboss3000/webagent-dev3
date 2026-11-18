@@ -88,7 +88,8 @@ Files live in ../work/harness-bridge/ relative to this script's folder (below: w
 Client secret and server: work/harness-bridge/client.json (mode 0600), written by `pair`.
 Server override: $HARNESS_BRIDGE_URL.
 Per-chat files: work/harness-bridge/sessions/<webagent-session>/. `usage [--json]` reports what the
-bridge keeps on this computer (per-chat folders and the harnesses' session stores).
+bridge keeps on this computer (per-chat folders and the harnesses' session stores); `cleanup [--dry-run]`
+runs the clean-up that also runs on its schedule (cleanup.json; daily 03:00 by default).
 """
 import base64, difflib, hashlib, json, os, re, secrets, shutil, signal, socket, subprocess, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request, uuid
 from pathlib import Path
@@ -1203,8 +1204,13 @@ def answer_opencode(call, folder, state, delta):
     message = parse_reply(json.dumps({"content": text, "tool_calls": calls}), body)
     post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": opencode_usage(usage)})
     record(call, state, delta, started, ended)
+    replaced = state.get("opencode_session")
     state["opencode_session"] = session
     save_state(folder, state)
+    # A rewrite or checkpoint gave the chat a new main session; the old one is no longer used.
+    keep = {session, (state.get("opencode_checkpoint") or {}).get("session")}
+    if replaced and replaced not in keep:
+        delete_opencode_session(replaced, work, run[run.index("--server") + 1])
     print(f"{call['id']}: answered chat {call.get('session')} with {body.get('model')} "
           f"({'fresh' if fresh else 'resumed'} session {session}, {len(calls)} tool call(s))")
 
@@ -1240,6 +1246,9 @@ def fork_opencode(call):
     message = parse_reply(json.dumps({"content": text, "tool_calls": calls}), body)
     post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": opencode_usage(usage)})
     print(f"{call['id']}: answered a fork of chat {call.get('session')} (session {session} -> {forked})")
+    # WebAgent accepted the summary; the fork is spent.
+    if forked and forked != session:
+        delete_opencode_session(forked, work, server)
 
 
 def check_stopped():
@@ -1419,6 +1428,29 @@ def answer_claude(call, folder, state, delta):
 CLI_SESSION_KEEP_SECS = 24 * 3600
 
 
+def delete_opencode_session(session, work, server=None):
+    """Delete one OpenCode session (with its child sessions) WebAgent no longer needs; best effort.
+    Without a running server for the chat, a private one opens the same store."""
+    if not session:
+        return False
+    command = [OPENCODE, "session", "delete", session] + (["--server", server] if server else ["--standalone"])
+    try:
+        done = subprocess.run(command, cwd=work if Path(work).is_dir() else None, capture_output=True, text=True,
+                              timeout=60, env={**os.environ, "OPENCODE_SERVER_PASSWORD": server_password()})
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if done.returncode:
+        print(f"could not delete OpenCode session {session}: {(done.stderr or done.stdout)[:160]}", file=sys.stderr)
+    return not done.returncode
+
+
+def delete_claude_session(session, folder):
+    """Delete one Claude session file (and its large-result folder) of the chat folder."""
+    project = claude_project(folder)
+    (project / f"{session}.jsonl").unlink(missing_ok=True)
+    shutil.rmtree(project / session, ignore_errors=True)
+
+
 def claude_project(folder):
     """Where `claude` stores the sessions of runs started in `folder` (it names the folder after the path)."""
     return Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(folder))
@@ -1461,6 +1493,10 @@ def fork_claude(call):
     message = parse_reply(json.dumps({"content": output.get("result") or "", "tool_calls": calls}), body)
     post("/api/v3/harness-bridge/reply", {"id": call["id"], "message": message, "usage": claude_usage(output)})
     print(f"{call['id']}: answered a fork of chat {call.get('session')} (session {session} -> {output.get('session_id')})")
+    # WebAgent accepted the summary; the fork is spent.
+    forked = output.get("session_id")
+    if forked and forked != session:
+        delete_claude_session(forked, folder)
 
 
 # Muse Bridge harness (supplied by the Muse side). There is no Muse CLI: the harness is a live
@@ -1531,6 +1567,7 @@ FORKERS = {"claude_bridge": fork_claude, "opencode_bridge": fork_opencode}
 def cmd_auto(session):
     reattach_servers()
     threading.Thread(target=reap_servers, daemon=True).start()
+    threading.Thread(target=cleanup_scheduler, daemon=True).start()
     forks = fork_support()
     # One thread per call, no cap: each call already holds its own harness process.
     while True:
@@ -1607,6 +1644,14 @@ def selftest():
                                      {"role": "user", "content": "e"}, note("step three")]}, 6)
     shown = prompt_for({"body": {"model": "m", "messages": []}}, changed, False)
     assert shown.endswith("step three")
+    # The clean-up schedule: a daily slot fires once after it passes, "every Nh" by elapsed time.
+    noon = time.mktime(time.localtime()[:3] + (12, 0, 0, 0, 0, -1))
+    assert cleanup_due(["daily 03:00"], noon - 12 * 3600, noon) and not cleanup_due(["daily 03:00"], noon - 3600, noon)
+    assert cleanup_due(["daily 03:00, 11:30"], noon - 3600, noon)
+    assert cleanup_due(["every 6h"], noon - 7 * 3600, noon) and not cleanup_due(["every 6h"], noon - 3600, noon)
+    weekday = DAYS[time.localtime(noon).tm_wday]
+    assert cleanup_due([f"weekly {weekday} 11:00"], noon - 3600 * 2, noon)
+    assert not cleanup_due([f"weekly {DAYS[(DAYS.index(weekday) + 1) % 7]} 11:00"], noon - 3600 * 2, noon)
     # A fork planned before the chat's later steps still forks, and names where its summary ends.
     raced = {}
     history = [system, tail, {"role": "user", "content": "b"}]
@@ -1727,6 +1772,111 @@ def selftest():
     print("selftest ok")
 
 
+# The daily clean-up (`cleanup.json` beside the chat folders, read at each check). A chat idle longer
+# than max_idle_hours loses its harness sessions and its folder: WebAgent's history is the record, so
+# its next call starts a fresh harness session (an idle session would get no cache hit anyway).
+# Active chats keep only their newest request copies (a debugging record).
+CLEANUP_FILE = ROOT / "cleanup.json"
+CLEANUP_LOG = ROOT / "cleanup.jsonl"
+CLEANUP_DEFAULTS = {"enabled": True, "max_idle_hours": 24, "keep_requests_per_chat": 20,
+                    "schedule": ["daily 03:00"]}
+DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+def cleanup_settings():
+    try:
+        saved = json.loads(CLEANUP_FILE.read_text())
+    except (OSError, ValueError):
+        saved = {}
+    return {**CLEANUP_DEFAULTS, **(saved if isinstance(saved, dict) else {})}
+
+
+def cleanup_due(schedule, last, now):
+    """Whether a slot of `schedule` fell after `last` and by `now` (local time). Slots: "daily HH:MM"
+    (several times allowed: "daily 03:00, 15:00"), "weekly mon HH:MM", "every Nh"."""
+    for entry in schedule:
+        words = entry.replace(",", " ").split()
+        if not words:
+            continue
+        if words[0] == "every" and len(words) == 2 and words[1].endswith("h"):
+            if now - last >= float(words[1][:-1]) * 3600:
+                return True
+            continue
+        days = DAYS if words[0] == "daily" else [w for w in words[1:] if w in DAYS] if words[0] == "weekly" else []
+        times = [w for w in words[1:] if ":" in w]
+        for back in range(8):  # each local day from today back a week
+            day = time.localtime(now - back * 86400)
+            if DAYS[day.tm_wday] not in days:
+                continue
+            for hhmm in times:
+                hour, minute = (int(x) for x in hhmm.split(":"))
+                slot = time.mktime((day.tm_year, day.tm_mon, day.tm_mday, hour, minute, 0, 0, 0, -1))
+                if last < slot <= now:
+                    return True
+    return False
+
+
+def cleanup(dry_run=False):
+    """Run the clean-up once; returns (and logs) what it removed and the sizes before and after."""
+    settings = cleanup_settings()
+    now = time.time()
+    before = usage_report()["total_bytes"]
+    removed, trimmed, sessions = [], 0, 0
+    for chat in sorted(SESSIONS.iterdir()) if SESSIONS.is_dir() else []:
+        if not chat.is_dir():
+            continue
+        with BUSY_LOCK:
+            if chat.name in BUSY:
+                continue
+        newest = max([chat.stat().st_mtime] + [p.stat().st_mtime for p in chat.rglob("*") if p.is_file()])
+        if now - newest >= settings["max_idle_hours"] * 3600:
+            state = load_state(chat)
+            ids = [state.get("opencode_session"), (state.get("opencode_checkpoint") or {}).get("session")]
+            removed.append(chat.name)
+            if dry_run:
+                continue
+            for session in filter(None, ids):
+                sessions += delete_opencode_session(session, OPENCODE_HOME / chat.name)
+            project = claude_project(chat)
+            if project.is_dir():
+                sessions += len(list(project.glob("*.jsonl")))
+                shutil.rmtree(project, ignore_errors=True)
+            for path in (chat, OPENCODE_HOME / chat.name, OPENCODE_HOME / (chat.name + ".fork")):
+                shutil.rmtree(path, ignore_errors=True)
+            continue
+        copies = sorted((chat / "requests").glob("*.json")) if (chat / "requests").is_dir() else []
+        for old in copies[:-settings["keep_requests_per_chat"]] if settings["keep_requests_per_chat"] else copies:
+            trimmed += 1
+            if not dry_run:
+                old.unlink(missing_ok=True)
+    after = before if dry_run else usage_report()["total_bytes"]
+    entry = {"at": now, "dry_run": dry_run, "chats_removed": len(removed), "harness_sessions_deleted": sessions,
+             "request_copies_trimmed": trimmed, "bytes_before": before, "bytes_after": after}
+    if not dry_run:
+        with CLEANUP_LOG.open("a") as log:
+            log.write(json.dumps(entry) + "\n")
+    return entry
+
+
+def cleanup_scheduler():
+    """Check the clean-up schedule once a minute while the client runs; the last run is kept in the log."""
+    last = time.time()
+    try:
+        last = json.loads(CLEANUP_LOG.read_text().splitlines()[-1])["at"]
+    except (OSError, ValueError, IndexError, KeyError):
+        pass
+    while True:
+        time.sleep(60)
+        settings = cleanup_settings()
+        now = time.time()
+        if settings["enabled"] and cleanup_due(settings["schedule"], last, now):
+            try:
+                print(f"cleanup: {json.dumps(cleanup())}")
+            except Exception as error:
+                print(f"cleanup failed: {error}", file=sys.stderr)
+            last = now
+
+
 def tree_bytes(path):
     """Bytes of the files under path (0 when it does not exist)."""
     if not path.exists():
@@ -1813,6 +1963,8 @@ if __name__ == "__main__":
         mcp_stub(args[1])
     elif args[:1] == ["stats"] and len(args) <= 2:
         cmd_stats(float(args[1]) if len(args) == 2 else 24)
+    elif args[:1] == ["cleanup"] and len(args) <= 2:
+        print(json.dumps(cleanup(dry_run="--dry-run" in args)))
     elif args[:1] == ["usage"] and len(args) <= 2:
         cmd_usage("--json" in args)
     elif args[:1] == ["selftest"]:
