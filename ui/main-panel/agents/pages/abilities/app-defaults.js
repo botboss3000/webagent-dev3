@@ -78,7 +78,7 @@ export function createAppDefaults(request, initial) {
     }, 600));
   };
   const draftOf = path => state.drafts.files?.[path]?.draft || null;
-  return { state, refresh, edit, revert: path => write(path, null), draftOf,
+  return { state, refresh, edit, write, revert: path => write(path, null), draftOf,
     onChange: listener => state.listeners.add(listener), request };
 }
 
@@ -345,6 +345,195 @@ function buildParametersForm(value, changed, name) {
   return wrap;
 }
 
+/** Path of an ability's manifest or skill, and of a group's manifest. */
+export const abilityPath = (ability, file) => 'abilities/' + ability.group + '/' + ability.id + '/' + file;
+export const skillPath = (ability, skillId) =>
+  abilityPath(ability, 'skills/' + (skillId === 'core' ? ability.id : skillId) + '.skill.md');
+export const groupPath = groupId => 'abilities/' + groupId + '/_group.json';
+
+/** Read one file and draw `build(content, original)` into a panel once it arrives. */
+function filePanel(app, title, path, build) {
+  const panel = node('div', 'adf-panel');
+  panel.append(node('div', 'adf-panel-title', title));
+  const body = node('div', 'adf-panel-body', 'Loading…');
+  panel.append(body);
+  app.request('/admin/app-defaults/file?' + new URLSearchParams({ path })).then(file => {
+    body.replaceChildren();
+    if (!file.exists) {
+      body.append(node('p', 'ac-hint', 'No ' + path.split('/').pop() + ' here: this part is built into the app.'));
+      return;
+    }
+    build(body, app.draftOf(path)?.content ?? file.content, file.content);
+  }).catch(error => { body.textContent = 'Could not load ' + path.split('/').pop() + ': ' + error.message; });
+  return panel;
+}
+
+/** A JSON manifest: named fields drawn by `fields`, plus the whole file as raw JSON. */
+function jsonPanel(app, title, path, fields) {
+  return filePanel(app, title, path, (body, content, original) => {
+    let value;
+    try { value = JSON.parse(content); } catch { value = null; }
+    const raw = node('textarea', 'ac-input adf-raw');
+    raw.spellcheck = false;
+    raw.setAttribute('aria-label', title + ' raw JSON');
+    raw.value = value ? pretty(value) : content;
+    const changed = () => { raw.value = pretty(value); app.edit(path, raw.value, original); };
+    if (value) body.append(fields(value, changed));
+    else body.append(node('p', 'adf-failed', 'Not valid JSON; fix it in the raw editor below.'));
+    const rawError = node('p', 'adf-failed');
+    raw.oninput = () => {
+      try { value = JSON.parse(raw.value); rawError.textContent = ''; app.edit(path, raw.value, original); }
+      catch (error) { rawError.textContent = 'Not valid JSON yet: ' + error.message; }
+    };
+    const toggle = node('button', 'ac-btn ac-btn-sm', 'Raw JSON');
+    toggle.type = 'button';
+    toggle.setAttribute('aria-expanded', 'false');
+    const box = node('div', 'adf-raw-box');
+    box.hidden = true;
+    box.append(node('p', 'ac-hint', 'The whole file, including fields the form does not show.'), raw, rawError);
+    toggle.onclick = () => { box.hidden = !box.hidden; toggle.setAttribute('aria-expanded', String(!box.hidden)); };
+    body.append(toggle, box);
+  });
+}
+
+/** Display fields shared by group and ability manifests: name, description, icon, color, order. */
+function displayFields(value, changed, { nameKey, descKey, label }) {
+  const form = node('div', 'adf-form');
+  const name = text(value[nameKey], label + ' name');
+  name.oninput = () => { value[nameKey] = name.value; changed(); };
+  form.append(field('Name', name));
+  const description = createRichTextEditor({
+    value: value[descKey] || '', label: label + ' description', minHeight: 44, maxHeight: 140,
+    onChange: next => { value[descKey] = next.trim(); changed(); },
+  });
+  form.append(field('Description', description.element));
+  const row = node('div', 'adf-limits');
+  row.append(field('Icon', iconPicker(value.icon || '', icon => { value.icon = icon; changed(); }), 'A Lucide icon name.'));
+  const color = node('input', 'ac-input adf-color');
+  color.type = 'color';
+  color.value = /^#[0-9a-f]{6}$/i.test(value.color || '') ? value.color : '#888888';
+  color.setAttribute('aria-label', label + ' color');
+  color.oninput = () => { value.color = color.value; changed(); };
+  row.append(field('Color', color));
+  const order = text(value.order, label + ' order', 'number');
+  order.onchange = () => { value.order = Number(order.value) || 0; changed(); };
+  row.append(field('Order', order, 'Lower comes first.'));
+  form.append(row);
+  return form;
+}
+
+/** A searchable Lucide icon chooser: the current icon, a search box and matching icons to tap. */
+function iconPicker(current, onPick) {
+  const wrap = node('div', 'adf-icon');
+  const head = node('div', 'adf-icon-head');
+  const preview = node('span', 'adf-icon-preview');
+  const name = node('code', '', current || 'none');
+  const show = icon => {
+    preview.innerHTML = icon ? '<i data-lucide="' + icon + '"></i>' : '';
+    name.textContent = icon || 'none';
+    window.lucide?.createIcons({ nodes: [preview] });
+  };
+  const search = text('', 'Search icons', 'search');
+  search.placeholder = 'Search icons';
+  const results = node('div', 'adf-icon-results');
+  // Lucide's registry is keyed in PascalCase; pages name icons in kebab-case.
+  const names = Object.keys(window.lucide?.icons || {}).map(key =>
+    key.replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/([A-Za-z])([0-9])/g, '$1-$2').toLowerCase());
+  search.oninput = () => {
+    const query = search.value.trim().toLowerCase();
+    results.replaceChildren();
+    if (!query) return;
+    for (const icon of names.filter(icon => icon.includes(query)).slice(0, 40)) {
+      const button = node('button', 'ac-btn ac-btn-sm adf-icon-choice');
+      button.type = 'button';
+      button.title = icon;
+      button.setAttribute('aria-label', 'Use icon ' + icon);
+      button.innerHTML = '<i data-lucide="' + icon + '"></i>';
+      button.onclick = () => { show(icon); onPick(icon); results.replaceChildren(); search.value = ''; };
+      results.append(button);
+    }
+    window.lucide?.createIcons({ nodes: [results] });
+  };
+  head.append(preview, name);
+  wrap.append(head, search, results);
+  show(current);
+  return wrap;
+}
+
+/** A group's card: its _group.json name, description, icon, color and order. */
+export function buildGroupDefaultsPanel(app, groupId, groupName) {
+  return jsonPanel(app, groupName + ' group', groupPath(groupId), (value, changed) =>
+    displayFields(value, changed, { nameKey: 'name', descKey: 'desc', label: groupName + ' group' }));
+}
+
+/** An ability's manifest, its skills (edit, add, delete) and nothing of its tools. */
+export function buildAbilityDefaultsPanels(app, ability) {
+  const panels = [];
+  panels.push(jsonPanel(app, ability.name + ' manifest', abilityPath(ability, ability.id + '.json'), (value, changed) => {
+    const form = displayFields(value, changed, { nameKey: 'display_name', descKey: 'description', label: ability.name });
+    const summary = createRichTextEditor({
+      value: value.skill_summary || '', label: ability.name + ' skill summary', minHeight: 44, maxHeight: 140,
+      onChange: next => { if (next.trim()) value.skill_summary = next.trim(); else delete value.skill_summary; changed(); },
+    });
+    form.append(field('Skill summary', summary.element, 'Shown when the skill is offered on request.'));
+    return form;
+  }));
+  const skills = [...(ability.general_skills || (ability.has_skill ? [{ skill_id: 'core', title: 'Skill' }] : [])),
+    ...(ability.selectable_skills || [])];
+  for (const skill of skills) panels.push(skillPanel(app, ability, skill.skill_id || 'core', skill.title || skill.skill_id));
+  panels.push(addSkillPanel(app, ability));
+  return panels;
+}
+
+/** One skill file in the shared editor; skills other than the primary can be deleted. */
+function skillPanel(app, ability, skillId, title) {
+  const path = skillPath(ability, skillId);
+  return filePanel(app, 'Skill: ' + (skillId === 'core' ? 'primary' : title), path, (body, content, original) => {
+    const deleted = app.draftOf(path)?.delete === true;
+    const editor = createRichTextEditor({
+      value: deleted ? original : content, label: title + ' skill', minHeight: 120, maxHeight: 340,
+      onChange: next => app.edit(path, next.replace(/\n$/, '') + '\n', original),
+    });
+    body.append(editor.element);
+    if (skillId === 'core') return;
+    const remove = node('button', 'ac-btn ac-btn-sm', deleted ? 'Keep this skill' : 'Delete this skill');
+    remove.type = 'button';
+    remove.onclick = () => {
+      const now = app.draftOf(path)?.delete === true;
+      app.write(path, now ? null : { delete: true });
+      remove.textContent = now ? 'Delete this skill' : 'Keep this skill';
+      body.classList.toggle('adf-deleted', !now);
+    };
+    body.classList.toggle('adf-deleted', deleted);
+    body.append(remove, node('p', 'ac-hint', 'Deleting removes the file on Save; agents that load it by name lose it.'));
+  });
+}
+
+/** Start a new skill: a file name and its text become a draft that creates the file on Save. */
+function addSkillPanel(app, ability) {
+  const panel = node('div', 'adf-panel');
+  panel.append(node('div', 'adf-panel-title', 'Add a skill'));
+  const name = text('', 'New skill name');
+  name.placeholder = 'skill_name';
+  const editor = createRichTextEditor({ value: '', label: 'New skill text', minHeight: 100, maxHeight: 300,
+    placeholder: '---\nid: skill_name\ntitle: …\nwhen_to_use: …\n---\n\n# …' });
+  const add = node('button', 'ac-btn ac-btn-sm', 'Add skill draft');
+  add.type = 'button';
+  const status = node('p', 'ac-hint', 'Lowercase letters, digits and underscores. It is created on Save.');
+  add.onclick = () => {
+    const id = name.value.trim();
+    if (!/^[a-z0-9_]{1,60}$/.test(id) || id === ability.id) { status.textContent = 'Use lowercase letters, digits and underscores, other than the ability\'s own name.'; return; }
+    const content = editor.getValue().trim();
+    if (!content) { status.textContent = 'Write the skill text first.'; return; }
+    app.write(skillPath(ability, id), { content: content + '\n' });
+    status.textContent = 'Drafted ' + id + '.skill.md; it is created on Save.';
+    name.value = '';
+    editor.setValue('');
+  };
+  panel.append(field('File name', name), editor.element, add, status);
+  return panel;
+}
+
 export const APP_DEFAULTS_CSS = '.adf-bar{display:flex;flex-direction:column;gap:8px;margin-top:10px}'
   + '.adf-bar-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}'
   + '.adf-list{margin:0;padding-left:18px;font-size:13px;color:var(--fg-2)}'
@@ -362,4 +551,11 @@ export const APP_DEFAULTS_CSS = '.adf-bar{display:flex;flex-direction:column;gap
   + '.adf-param-head{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}'
   + '.adf-inline{display:inline-flex;gap:6px;align-items:center;font-size:13px}'
   + '.adf-raw{width:100%;min-height:220px;font-family:var(--font-mono,monospace);font-size:12px;box-sizing:border-box}'
-  + '.adf-raw-box{display:flex;flex-direction:column;gap:6px}';
+  + '.adf-raw-box{display:flex;flex-direction:column;gap:6px}'
+  + '.adf-icon{display:flex;flex-direction:column;gap:6px;min-width:0}'
+  + '.adf-icon-head{display:flex;gap:8px;align-items:center}'
+  + '.adf-icon-preview{display:inline-flex;width:24px;height:24px;color:var(--fg-1)}'
+  + '.adf-icon-results{display:flex;flex-wrap:wrap;gap:6px}'
+  + '.adf-icon-choice{width:36px;height:36px;padding:0;display:inline-flex;align-items:center;justify-content:center}'
+  + '.adf-color{width:64px;height:36px;padding:2px}'
+  + '.adf-deleted .rte{opacity:.5}';

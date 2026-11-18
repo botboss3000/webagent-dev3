@@ -7,7 +7,7 @@ import { buildMcpControls } from './mcp.js';
 import { buildPromptsGroup } from './prompts.js';
 import { buildGroup, setGroupStatus } from './table.js';
 import { buildPolicyControls, effectiveLabel, readinessLabel } from './policy.js';
-import { APP_DEFAULT, APP_DEFAULTS_CSS, buildAppDefaultsBar, buildToolDefaultsPanel, createAppDefaults, loadAppDefaults } from './app-defaults.js';
+import { APP_DEFAULT, APP_DEFAULTS_CSS, buildAbilityDefaultsPanels, buildAppDefaultsBar, buildGroupDefaultsPanel, buildToolDefaultsPanel, createAppDefaults, loadAppDefaults } from './app-defaults.js';
 
 import { _buildMoreButton, _buildToolRow, _buildAbilitySettingsList, closeFloatingMenu } from '../../../../shared/ability-row-controls/ability-row-controls.js';
 import { buildSkillRow } from './rows.js';
@@ -272,8 +272,8 @@ export async function renderAbilities(host, request, options) {
       // App Default edits this ability's source files, not the agent's settings.
       const config = createConfigPage({ title: ability.name, onBack });
       config.body.append(node('p', 'ac-hint', 'App Default: edits are drafts of this ability\'s source files until you Save.'));
+      config.body.append(...buildAbilityDefaultsPanels(appDefaults, ability));
       for (const tool of ability.tools || []) config.body.append(buildToolDefaultsPanel(appDefaults, ability, tool));
-      if (!(ability.tools || []).length) config.body.append(node('p', 'ac-hint', 'This ability has no tools. Its manifest and skills become editable in the next App Default update.'));
       detail.append(config.element);
       return;
     }
@@ -489,6 +489,8 @@ export async function renderAbilities(host, request, options) {
     }
     // Stage 2 is the register's own row list: the same rows as the group list, with the
     // ability's switch beside each one.
+    // App Default edits the group's own card above its abilities.
+    if (appDefaults) holder.append(buildGroupDefaultsPanel(appDefaults, groupId, group.name));
     createSettingsMenu(holder, {label: group.name + ' abilities', items});
     for (const [id, info] of rowInfo) {
       const button = holder.querySelector('.sr-row[data-register-link="' + id + '"]');
