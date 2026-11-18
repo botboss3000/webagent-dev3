@@ -388,6 +388,94 @@ impl ToolDecision {
     }
 }
 
+impl ToolDecision {
+    /// The Main Chat's scheduling-approval setting, injected into its session mode as
+    /// `schedule_approval`, overrides the mode for its scheduling tools only: "each" always
+    /// asks, "recurring" asks for cron schedules, "free" never asks. Denials still win.
+    #[must_use]
+    pub fn for_schedule_approval(self, mode: &Value, name: &str, args: &Value) -> Self {
+        let policy = mode["schedule_approval"].as_str().unwrap_or("tool");
+        if self.permission == Permission::Deny
+            || !matches!(name, "schedule_task" | "remind_me" | "update_automation")
+        {
+            return self;
+        }
+        let ask = match policy {
+            "each" => true,
+            "recurring" => args["trigger"]["kind"] == "cron",
+            "free" => false,
+            _ => return self,
+        };
+        if ask {
+            Self {
+                permission: Permission::Ask,
+                reason: Reason::ApprovalRequired,
+            }
+        } else {
+            Self {
+                permission: Permission::Auto,
+                reason: Reason::Allowed,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod schedule_approval_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn main_chat_schedule_approval_overrides_the_mode_for_scheduling_only() {
+        let auto = ToolDecision {
+            permission: Permission::Auto,
+            reason: Reason::Allowed,
+        };
+        let ask = ToolDecision {
+            permission: Permission::Ask,
+            reason: Reason::ApprovalRequired,
+        };
+        let cron = json!({"trigger":{"kind":"cron"}});
+        let once = json!({"trigger":{"kind":"once"}});
+        let mode = |p: &str| json!({"schedule_approval":p});
+        assert_eq!(
+            auto.for_schedule_approval(&mode("each"), "schedule_task", &once),
+            ask
+        );
+        assert_eq!(
+            auto.for_schedule_approval(&mode("recurring"), "schedule_task", &cron),
+            ask
+        );
+        assert_eq!(
+            ask.for_schedule_approval(&mode("recurring"), "remind_me", &once),
+            auto
+        );
+        assert_eq!(
+            ask.for_schedule_approval(&mode("free"), "update_automation", &cron),
+            auto
+        );
+        assert_eq!(
+            ask.for_schedule_approval(&mode("tool"), "schedule_task", &cron),
+            ask
+        );
+        assert_eq!(
+            ask.for_schedule_approval(&json!({}), "schedule_task", &cron),
+            ask
+        );
+        assert_eq!(
+            ask.for_schedule_approval(&mode("free"), "web_search", &cron),
+            ask
+        );
+        let denied = ToolDecision {
+            permission: Permission::Deny,
+            reason: Reason::Allowed,
+        };
+        assert_eq!(
+            denied.for_schedule_approval(&mode("free"), "schedule_task", &cron),
+            denied
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

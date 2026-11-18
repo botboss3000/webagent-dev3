@@ -70,6 +70,9 @@ pub struct Settings {
     pub chat_name: String,
     pub notes_name: String,
     pub write_mode: String,
+    /// How Main Chat's scheduling calls are approved: "tool" follows the tool permission and
+    /// session mode; "each", "recurring" (cron only) and "free" override both.
+    pub schedule_approval: String,
 }
 
 impl Default for Settings {
@@ -85,6 +88,7 @@ impl Default for Settings {
                 .unwrap_or("Main Notes")
                 .into(),
             write_mode: "automatic".into(),
+            schedule_approval: "tool".into(),
         }
     }
 }
@@ -96,7 +100,9 @@ impl Settings {
                 return Err(anyhow!("Invalid Main Chat name"));
             }
         }
-        if !["every_write", "new_topics", "automatic"].contains(&self.write_mode.as_str()) {
+        if !["every_write", "new_topics", "automatic"].contains(&self.write_mode.as_str())
+            || !["tool", "each", "recurring", "free"].contains(&self.schedule_approval.as_str())
+        {
             return Err(anyhow!("Invalid Main Chat configuration"));
         }
         Ok(())

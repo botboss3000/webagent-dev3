@@ -414,7 +414,8 @@ impl<
                             &state,
                             &run["loaded_abilities"],
                         )
-                        .for_execution_mode(&mode);
+                        .for_execution_mode(&mode)
+                        .for_schedule_approval(&mode, name, args);
                     let mut expected_args = pending["arguments"].clone();
                     if let Some(object) = expected_args.as_object_mut() {
                         object.remove("_execution_mode");

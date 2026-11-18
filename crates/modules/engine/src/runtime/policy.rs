@@ -70,6 +70,13 @@ impl<
         if value["revision"].as_u64().is_none() {
             return Err(anyhow!("Invalid session capability mode"));
         }
+        if let Some(policy) = self
+            .native
+            .main_chat_schedule_approval(self.store.records(), &agent, sid)
+            .await?
+        {
+            value["schedule_approval"] = json!(policy);
+        }
         Ok(value)
     }
     pub async fn ability_controls(&self, sid: &str) -> Result<(u64, Value, Value)> {
@@ -204,7 +211,8 @@ impl<
             .await?;
         let decision = self
             .live_tool_decision(&access, name, &visibility, &state, &run["loaded_abilities"])
-            .for_execution_mode(&mode);
+            .for_execution_mode(&mode)
+            .for_schedule_approval(&mode, name, &pending["arguments"]);
         Ok(access.admitted()
             && decision.permission != access::Permission::Deny
             && (decision.permission != access::Permission::Ask

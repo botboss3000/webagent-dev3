@@ -1227,7 +1227,9 @@ impl<
                 &run["loaded_abilities"],
             )
         };
-        effective = effective.for_execution_mode(&authorization_mode);
+        effective = effective
+            .for_execution_mode(&authorization_mode)
+            .for_schedule_approval(&authorization_mode, &name, &args);
         workflow::record(
             &mut run,
             &workflow_policy,

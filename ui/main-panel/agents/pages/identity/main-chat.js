@@ -32,6 +32,7 @@ export async function renderMainChat(host, request, {agentId,canManage=false}={}
   }
   field('chat_name','Main Chat name');field('notes_name','Main Notes name');
   field('write_mode','Notes write approval',[['automatic','Automatic writes and edits (default)'],['new_topics','Approve new topics and scope changes'],['every_write','Approve every write or edit']]);
+  field('schedule_approval','Scheduling approval',[['tool','Follow the tool permission and chat mode (default)'],['each','Approve each schedule'],['recurring','Approve recurring schedules only'],['free','Schedule freely']]);
   // Texts from prompts/main_chat.json; {chat} and {notes} become the two names above.
   for(const [key,title,description]of [['contribute','Notes guidance','Sent ahead of the notes in this agent’s working sessions while enabled.'],['review','Main Chat prompt','Sent only in this agent’s Main Chat while enabled.']]){
     const card=document.createElement('details');card.className='ac-row main-chat-skill';card.dataset.mainChatSkill=key;
@@ -68,7 +69,7 @@ export async function renderMainChat(host, request, {agentId,canManage=false}={}
   function paint(data){
     if(data.agent_id!==agentId||!data.settings||!data.skills)throw Error('Agent settings scope mismatch');
     state=data;pending=null;
-    for(const [key,input]of fields){if(key==='enabled')input.checked=data.settings.enabled===true;else input.value=data.settings[key]||'';}
+    for(const [key,input]of fields){if(key==='enabled')input.checked=data.settings.enabled===true;else input.value=data.settings[key]||(key==='schedule_approval'?'tool':'');}
     for(const [key,{input}]of editors){input.value=typeof data.skills[key]?.override==='string'?data.skills[key].override:'';input.placeholder=typeof data.skills[key]?.fallback==='string'?data.skills[key].fallback:'';}
     const topics=Object.keys(data.topics||{}).length;
     size.textContent=topics?'Main Notes in every session’s context: '+topics+(topics===1?' topic':' topics')+', about '+Number(data.notes_context_tokens||0).toLocaleString()+' tokens.':'Main Notes are empty. Once agents add notes, every session carries them in its context.';
@@ -82,7 +83,7 @@ export async function renderMainChat(host, request, {agentId,canManage=false}={}
   form.addEventListener('submit',async event=>{
     event.preventDefault();if(busy||!state||!editable())return;
     if(!pending){
-      const settings={enabled:enabled.checked,chat_name:fields.get('chat_name').value.trim(),notes_name:fields.get('notes_name').value.trim(),write_mode:fields.get('write_mode').value};
+      const settings={enabled:enabled.checked,chat_name:fields.get('chat_name').value.trim(),notes_name:fields.get('notes_name').value.trim(),write_mode:fields.get('write_mode').value,schedule_approval:fields.get('schedule_approval').value};
       if(!settings.chat_name||!settings.notes_name){status.textContent='Both names are required.';return;}
       if([settings.chat_name,settings.notes_name].some(v=>new TextEncoder().encode(v).length>200)){status.textContent='Each name must fit within 200 UTF-8 bytes.';return;}
       const skill_overrides={};for(const [key,{input}]of editors){if(new TextEncoder().encode(input.value).length>65536){status.textContent='Each skill must fit within 65,536 UTF-8 bytes.';return;}skill_overrides[key]=input.value.trim()?input.value:null;}

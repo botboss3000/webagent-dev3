@@ -111,6 +111,13 @@ pub trait AgentPolicy<S>: Clone + Send + Sync + 'static {
         agent: &'a str,
         roles: &'a [String],
     ) -> impl Future<Output = Result<Vec<String>>> + Send + 'a;
+    /// The agent's Main Chat scheduling-approval setting when `sid` is its Main Chat.
+    fn main_chat_schedule_approval<'a>(
+        &'a self,
+        store: &'a S,
+        agent: &'a str,
+        sid: &'a str,
+    ) -> impl Future<Output = Result<Option<String>>> + Send + 'a;
 }
 /// Native owner handle Engine composes with its other policy ports.
 pub trait NativePolicy: Clone + Send + Sync + 'static {}

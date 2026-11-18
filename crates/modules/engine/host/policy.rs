@@ -49,6 +49,25 @@ impl webagent_engine::runtime::ports::AgentPolicy<Store> for NativePolicy {
     ) -> impl std::future::Future<Output = Result<Value>> + Send + 'a {
         store.agent_abilities_for(agent)
     }
+    fn main_chat_schedule_approval<'a>(
+        &'a self,
+        store: &'a Store,
+        agent: &'a str,
+        sid: &'a str,
+    ) -> impl std::future::Future<Output = Result<Option<String>>> + Send + 'a {
+        async move {
+            let state = Box::pin(store.for_agent(agent).await?.main_chat_state()).await?;
+            Ok(
+                (state["settings"]["enabled"] == true && state["session_id"] == sid)
+                    .then(|| {
+                        state["settings"]["schedule_approval"]
+                            .as_str()
+                            .map(str::to_owned)
+                    })
+                    .flatten(),
+            )
+        }
+    }
     fn unresolved_model_roles<'a>(
         &'a self,
         store: &'a Store,
