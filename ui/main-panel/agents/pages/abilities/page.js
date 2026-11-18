@@ -87,6 +87,7 @@ export async function renderAbilities(host, request, options) {
     // Icon and color come from the group's _group.json; Base and Optimization may lack them.
     group.icon ||= ability.group_icon;
     group.color ||= ability.group_color;
+    group.svg ||= ability.group_icon_svg;
     group.items.push(ability);
   }
   const page = node('div', 'conn-tab-content v3-abilities-page');
@@ -403,7 +404,7 @@ export async function renderAbilities(host, request, options) {
   // lists its abilities as the same rows, each opening the shared config page.
   const categories = [...groups].map(([groupId, group]) => ({
     id: 'g-' + groupId, title: group.name, hint: groupHint(group),
-    lucide: group.icon || 'shield', color: group.color || '',
+    lucide: group.icon || 'shield', color: group.color || '', svg: group.svg || '',
   }));
   if (prompts) categories.push({
     id: 'prompts', title: 'Prompts',
@@ -482,7 +483,7 @@ export async function renderAbilities(host, request, options) {
         save(ability, 'ability', ability.visibility !== 'off' ? 'off' : 'loaded', toggleWrap).catch(() => {});
       });
       toggleWrap.append(toggle, node('span', 'conn-toggle-track'));
-      items.push({id: ability.id, title: ability.name, hint, icon: ability.icon || 'box',
+      items.push({id: ability.id, title: ability.name, hint, icon: ability.icon || 'box', svg: ability.icon_svg || '',
         trailing: toggleWrap, onSelect: () => openAbility(ability)});
       rowInfo.set(ability.id, {name: ability.name, incomplete, status});
       abilityPages.set(ability.id, {groupId, open: claim => openAbility(ability, claim)});

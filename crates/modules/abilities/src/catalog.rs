@@ -83,6 +83,9 @@ struct Ability {
     group_order: i32,
     group_icon: Option<String>,
     group_color: Option<String>,
+    /// The group's `_group.svg` and the ability's `<id>.svg`, when they pass `icons::svg_problem`.
+    group_icon_svg: Option<String>,
+    icon_svg: Option<String>,
     name: String,
     description: String,
     skill_summary: Option<String>,
@@ -793,6 +796,7 @@ impl<H: Host> Catalog<H> {
                         config_digest
                     ]))?));
                 }
+                let icon_svg = crate::icons::read(&ability_path.join(format!("{id}.svg")));
                 abilities.push(Ability {
                     id,
                     path: ability_path,
@@ -808,6 +812,8 @@ impl<H: Host> Catalog<H> {
                     group_order: group_meta.order,
                     group_icon: group_meta.icon.clone(),
                     group_color: group_meta.color.clone(),
+                    group_icon_svg: crate::icons::read(&group_path.join("_group.svg")),
+                    icon_svg,
                     name: manifest.display_name,
                     description: manifest.description,
                     skill_summary: manifest.skill_summary,
@@ -847,6 +853,8 @@ impl<H: Host> Catalog<H> {
                 group_order: 100,
                 group_icon: None,
                 group_color: None,
+                group_icon_svg: None,
+                icon_svg: None,
                 name: manifest.display_name,
                 description: manifest.description,
                 skill_summary: manifest.skill_summary,
@@ -866,15 +874,16 @@ impl<H: Host> Catalog<H> {
             });
         }
         // Base sorts with the Core group's other abilities when that group exists.
-        let (group_name, group_order, group_icon, group_color) = abilities
+        let (group_name, group_order, group_icon, group_color, group_icon_svg) = abilities
             .iter()
             .find(|ability| ability.group == "Core")
-            .map_or(("Core".to_string(), 1, None, None), |core| {
+            .map_or(("Core".to_string(), 1, None, None, None), |core| {
                 (
                     core.group_name.clone(),
                     core.group_order,
                     core.group_icon.clone(),
                     core.group_color.clone(),
+                    core.group_icon_svg.clone(),
                 )
             });
         let base_path = root.join("Core").join(crate::base::ID);
@@ -905,6 +914,8 @@ impl<H: Host> Catalog<H> {
             group_order,
             group_icon,
             group_color,
+            group_icon_svg,
+            icon_svg: None,
             name: crate::base::NAME.into(),
             description: crate::base::DESCRIPTION.into(),
             skill_summary: None,
@@ -1593,6 +1604,7 @@ impl<H: Host> Catalog<H> {
         }
         let mut described = json!({"id":ability.id,"group":ability.group,"group_name":ability.group_name,
             "group_icon":ability.group_icon,"group_color":ability.group_color,
+            "group_icon_svg":ability.group_icon_svg,"icon_svg":ability.icon_svg,
             "name":ability.name,"description":ability.description,
             "kind":ability.kind,"readiness":ability.readiness,"config":ability.config,
             "skill_summary":ability.skill_summary,"migration_note":ability.migration_note,

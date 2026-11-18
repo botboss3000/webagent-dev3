@@ -142,39 +142,12 @@ pub fn draft_problem(path: &str, draft: &Draft) -> Option<String> {
                 return Some(format!("{path}: content is not valid JSON"));
             }
             if path.ends_with(".svg") {
-                return svg_problem(text).map(|problem| format!("{path}: {problem}"));
+                return webagent_abilities::icons::svg_problem(text)
+                    .map(|problem| format!("{path}: {problem}"));
             }
         }
     }
     None
-}
-
-/// An icon is drawn inline on the page, so it may only hold drawing markup.
-fn svg_problem(text: &str) -> Option<&'static str> {
-    let lower = text.to_ascii_lowercase();
-    if !lower.trim_start().starts_with("<svg") {
-        return Some("an icon must be one <svg> element");
-    }
-    for refused in [
-        "<script",
-        "<foreignobject",
-        "<iframe",
-        "<object",
-        "<embed",
-        "javascript:",
-        "<!entity",
-        "href=\"http",
-        "href='http",
-        "url(http",
-    ] {
-        if lower.contains(refused) {
-            return Some("icons may not hold scripts, embedded content or external links");
-        }
-    }
-    let attribute_event = lower
-        .split(|c: char| c.is_whitespace() || c == '<')
-        .any(|word| word.starts_with("on") && word.contains('='));
-    attribute_event.then_some("icons may not hold event handlers")
 }
 
 /// The broker task label for one Save: unique per administrator and time.

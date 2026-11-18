@@ -4,6 +4,33 @@ import {pushBackHandler} from '../history-back/history-back.js';
 const FALLBACK_ICON = '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/>';
 const CHEV_BACK = '<svg class="sr-chev-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>';
 
+// Custom icons (an ability's or group's .svg) are drawn inline, so only drawing elements and
+// attributes survive; the server checks them too. Anything else is dropped, never escaped in.
+const SVG_TAGS = new Set(['svg', 'g', 'path', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'rect', 'title',
+  'defs', 'lineargradient', 'radialgradient', 'stop', 'clippath', 'mask']);
+const SVG_ATTRS = /^(viewbox|width|height|fill|fill-opacity|fill-rule|clip-rule|stroke|stroke-[a-z]+|d|cx|cy|r|rx|ry|x|y|x1|y1|x2|y2|points|transform|opacity|id|offset|stop-color|stop-opacity|gradientunits|gradienttransform|clip-path|mask|xmlns)$/;
+export function safeSvg(markup) {
+  if (!markup) return null;
+  const doc = new DOMParser().parseFromString(markup, 'image/svg+xml');
+  const root = doc.documentElement;
+  if (!root || root.nodeName.toLowerCase() !== 'svg') return null;
+  const clean = element => {
+    for (const child of [...element.children]) {
+      if (!SVG_TAGS.has(child.nodeName.toLowerCase())) child.remove(); else clean(child);
+    }
+    for (const attribute of [...element.attributes]) {
+      const value = attribute.value.toLowerCase();
+      if (!SVG_ATTRS.test(attribute.name.toLowerCase()) || (value.includes('url(') && !/^url\(#[\w-]+\)$/.test(value.trim()))) {
+        element.removeAttribute(attribute.name);
+      }
+    }
+  };
+  clean(root);
+  root.setAttribute('class', 'sr-icon');
+  root.setAttribute('aria-hidden', 'true');
+  return document.importNode(root, true);
+}
+
 function iconMarkup(icon) {
   return '<svg class="sr-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (icon || FALLBACK_ICON) + '</svg>';
 }
@@ -61,7 +88,9 @@ export function createSettingsMenu(host, {label = 'Settings', items = []} = {}) 
     const tile = document.createElement('span');
     tile.className = 'sr-tile';
     tile.setAttribute('aria-hidden', 'true');
-    tile.innerHTML = item.icon ? '<i data-lucide="' + item.icon + '"></i>' : iconMarkup('');
+    const custom = safeSvg(item.svg);
+    if (custom) tile.append(custom);
+    else tile.innerHTML = item.icon ? '<i data-lucide="' + item.icon + '"></i>' : iconMarkup('');
     const text = document.createElement('span');
     text.className = 'sr-text';
     const title = document.createElement('span');
@@ -182,7 +211,7 @@ export function createSettingsRegister(host, {label = 'Settings', categories = [
       return [{id, section, body, toggleWrap, toggle,
         title: category.title || section.dataset.registerTitle || 'Settings',
         hint: category.hint || '', icon: category.icon || '',
-        lucide: category.lucide || '', color: category.color || ''}];
+        lucide: category.lucide || '', color: category.color || '', svg: category.svg || ''}];
     });
     entries.sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity));
     stage.remove();
@@ -204,6 +233,8 @@ export function createSettingsRegister(host, {label = 'Settings', categories = [
         + (entry.lucide ? '<i data-lucide="' + entry.lucide + '"></i>' : iconMarkup(entry.icon)) + '</span>'
         + '<span class="sr-text"><span class="sr-title"></span><span class="sr-hint"></span></span>'
         + '<span class="sr-state"></span>';
+      const custom = safeSvg(entry.svg);
+      if (custom) row.querySelector('.sr-tile').replaceChildren(custom);
       if (entry.color) row.querySelector('.sr-tile').style.color = entry.color;
       row.querySelector('.sr-title').textContent = entry.title;
       const hintEl = row.querySelector('.sr-hint');

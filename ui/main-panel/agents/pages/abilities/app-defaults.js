@@ -78,7 +78,12 @@ export function createAppDefaults(request, initial) {
     }, 600));
   };
   const draftOf = path => state.drafts.files?.[path]?.draft || null;
-  return { state, refresh, edit, write, revert: path => write(path, null), draftOf,
+  const revert = path => {
+    clearTimeout(state.timers.get(path));
+    state.timers.delete(path);
+    return write(path, null);
+  };
+  return { state, refresh, edit, write, revert, draftOf,
     onChange: listener => state.listeners.add(listener), request };
 }
 
@@ -98,16 +103,23 @@ export function buildAppDefaultsBar(app, { onStatus }) {
   const note = text('', 'Optional note for this Save');
   note.placeholder = 'Optional note for the release';
   note.maxLength = 120;
-  row.append(save, count, discard);
+  const previewButton = node('button', 'ac-btn ac-btn-sm', 'Preview changes');
+  previewButton.type = 'button';
+  previewButton.setAttribute('aria-expanded', 'false');
+  row.append(save, count, previewButton, discard);
   const list = node('ul', 'adf-list');
   list.hidden = true;
   const release = node('div', 'adf-release');
-  bar.append(row, note, list, release);
+  const preview = node('div', 'adf-form');
+  preview.hidden = true;
+  bar.append(row, note, list, preview, release);
   const paint = drafts => {
     const paths = Object.keys(drafts.files || {});
     const releasing = drafts.release?.status === 'releasing';
     count.textContent = paths.length === 1 ? '1 unsaved edit' : paths.length + ' unsaved edits';
     count.disabled = !paths.length;
+    previewButton.hidden = !paths.length;
+    if (!paths.length) preview.hidden = true;
     discard.hidden = !paths.length;
     save.disabled = !paths.length || releasing;
     save.textContent = releasing ? 'Saving…' : 'Save';
@@ -129,6 +141,24 @@ export function buildAppDefaultsBar(app, { onStatus }) {
       const label = job.status === 'releasing' ? 'Releasing your last Save. ' : 'Your last Save did not release: ' + (job.reason || 'see the Broker card') + '. Drafts are kept. ';
       release.append(node('span', job.status === 'releasing' ? '' : 'adf-failed', label), link);
     }
+  };
+  // What Save would change: each drafted file against the checkout, as added and removed lines.
+  previewButton.onclick = async () => {
+    preview.hidden = !preview.hidden;
+    previewButton.setAttribute('aria-expanded', String(!preview.hidden));
+    if (preview.hidden) return;
+    preview.replaceChildren(node('p', 'ac-hint', 'Comparing with the server…'));
+    await app.state.pending;
+    const files = Object.entries(app.state.drafts.files || {});
+    const blocks = await Promise.all(files.map(async ([path, { draft }]) => {
+      const current = await app.request('/admin/app-defaults/file?' + new URLSearchParams({ path })).catch(() => ({ exists: false }));
+      const block = node('div', 'adf-field');
+      const verb = draft.delete ? 'delete' : current.exists ? 'change' : 'create';
+      block.append(node('span', 'adf-label', verb + ' ' + path.replace(/^abilities\//, '')));
+      if (!draft.delete) block.append(diffView(current.exists ? current.content : '', draft.content));
+      return block;
+    }));
+    preview.replaceChildren(...blocks);
   };
   count.onclick = () => {
     list.hidden = !list.hidden;
@@ -175,6 +205,55 @@ export function buildAppDefaultsBar(app, { onStatus }) {
   return bar;
 }
 
+/** Added and removed lines between two texts, with two lines of context around each change. */
+function diffView(before, after) {
+  const view = node('pre', 'adf-diff');
+  const a = before.split('\n'), b = after.split('\n');
+  if (a.length * b.length > 4e6) {
+    view.textContent = 'Too large to compare line by line: ' + a.length + ' lines become ' + b.length + '.';
+    return view;
+  }
+  // Longest common subsequence table, filled from the end so the walk below runs forwards.
+  const table = Array.from({ length: a.length + 1 }, () => new Uint32Array(b.length + 1));
+  for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--)
+    table[i][j] = a[i] === b[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
+  const lines = [];
+  let i = 0, j = 0;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) { lines.push([' ', a[i]]); i++; j++; }
+    else if (j < b.length && (i === a.length || table[i][j + 1] >= table[i + 1][j])) { lines.push(['+', b[j]]); j++; }
+    else { lines.push(['-', a[i]]); i++; }
+  }
+  const near = lines.map((_, k) => lines.slice(Math.max(0, k - 2), k + 3).some(([mark]) => mark !== ' '));
+  let skipped = false;
+  lines.forEach(([mark, line], k) => {
+    if (!near[k]) { if (!skipped) view.append(node('span', 'adf-gap', '…\n')); skipped = true; return; }
+    skipped = false;
+    view.append(node('span', mark === '+' ? 'adf-add' : mark === '-' ? 'adf-del' : '', mark + ' ' + line + '\n'));
+  });
+  if (!lines.some(([mark]) => mark !== ' ')) view.textContent = 'No change.';
+  return view;
+}
+
+/** A panel's title row with a Revert button, shown while any of `paths` has a draft. */
+function panelHead(app, title, paths, reload) {
+  const head = node('div', 'adf-panel-head');
+  const revert = node('button', 'ac-btn ac-btn-sm', 'Revert');
+  revert.type = 'button';
+  revert.title = 'Discard this panel\'s drafts and show the file as it is now';
+  const sync = () => { revert.hidden = !paths.some(path => app.draftOf(path)); };
+  revert.onclick = async () => {
+    revert.disabled = true;
+    for (const path of paths) if (app.draftOf(path)) await app.revert(path);
+    revert.disabled = false;
+    reload();
+  };
+  app.onChange(sync);
+  sync();
+  head.append(node('div', 'adf-panel-title', title), revert);
+  return head;
+}
+
 /** Path of a tool's definition or skill file in the checkout. */
 export const toolPath = (ability, tool, kind) =>
   'abilities/' + ability.group + '/' + ability.id + '/tools/' + tool + '/' + tool + (kind === 'skill' ? '.skill.md' : '.tool.json');
@@ -182,12 +261,10 @@ export const toolPath = (ability, tool, kind) =>
 /** One tool's App Default panel: its tool.json as fields, its parameters, raw JSON and its skill. */
 export function buildToolDefaultsPanel(app, ability, tool) {
   const panel = node('div', 'adf-panel');
-  panel.append(node('div', 'adf-panel-title', tool.name));
   const body = node('div', 'adf-panel-body', 'Loading…');
-  panel.append(body);
   const definitionPath = toolPath(ability, tool.name, 'definition');
   const skillPath = toolPath(ability, tool.name, 'skill');
-  Promise.all([
+  const load = () => { body.textContent = 'Loading…'; Promise.all([
     app.request('/admin/app-defaults/file?' + new URLSearchParams({ path: definitionPath })),
     app.request('/admin/app-defaults/file?' + new URLSearchParams({ path: skillPath })),
   ]).then(([definition, skill]) => {
@@ -243,7 +320,9 @@ export function buildToolDefaultsPanel(app, ability, tool) {
     body.append(field('Tool skill', editor.element, 'Loads together with the tool. Arguments, results, limits and error recovery belong here.'));
   }).catch(error => {
     body.textContent = 'Could not load this tool: ' + error.message;
-  });
+  }); };
+  panel.append(panelHead(app, tool.name, [definitionPath, skillPath], load), body);
+  load();
   return panel;
 }
 
@@ -352,24 +431,24 @@ export const skillPath = (ability, skillId) =>
 export const groupPath = groupId => 'abilities/' + groupId + '/_group.json';
 
 /** Read one file and draw `build(content, original)` into a panel once it arrives. */
-function filePanel(app, title, path, build) {
+function filePanel(app, title, path, build, extraPaths = []) {
   const panel = node('div', 'adf-panel');
-  panel.append(node('div', 'adf-panel-title', title));
   const body = node('div', 'adf-panel-body', 'Loading…');
-  panel.append(body);
-  app.request('/admin/app-defaults/file?' + new URLSearchParams({ path })).then(file => {
+  const load = () => { body.textContent = 'Loading…'; app.request('/admin/app-defaults/file?' + new URLSearchParams({ path })).then(file => {
     body.replaceChildren();
     if (!file.exists) {
       body.append(node('p', 'ac-hint', 'No ' + path.split('/').pop() + ' here: this part is built into the app.'));
       return;
     }
     build(body, app.draftOf(path)?.content ?? file.content, file.content);
-  }).catch(error => { body.textContent = 'Could not load ' + path.split('/').pop() + ': ' + error.message; });
+  }).catch(error => { body.textContent = 'Could not load ' + path.split('/').pop() + ': ' + error.message; }); };
+  panel.append(panelHead(app, title, [path, ...extraPaths], load), body);
+  load();
   return panel;
 }
 
 /** A JSON manifest: named fields drawn by `fields`, plus the whole file as raw JSON. */
-function jsonPanel(app, title, path, fields) {
+function jsonPanel(app, title, path, fields, extraPaths = []) {
   return filePanel(app, title, path, (body, content, original) => {
     let value;
     try { value = JSON.parse(content); } catch { value = null; }
@@ -393,11 +472,11 @@ function jsonPanel(app, title, path, fields) {
     box.append(node('p', 'ac-hint', 'The whole file, including fields the form does not show.'), raw, rawError);
     toggle.onclick = () => { box.hidden = !box.hidden; toggle.setAttribute('aria-expanded', String(!box.hidden)); };
     body.append(toggle, box);
-  });
+  }, extraPaths);
 }
 
 /** Display fields shared by group and ability manifests: name, description, icon, color, order. */
-function displayFields(value, changed, { nameKey, descKey, label }) {
+function displayFields(value, changed, { nameKey, descKey, label, app, svgPath }) {
   const form = node('div', 'adf-form');
   const name = text(value[nameKey], label + ' name');
   name.oninput = () => { value[nameKey] = name.value; changed(); };
@@ -409,6 +488,7 @@ function displayFields(value, changed, { nameKey, descKey, label }) {
   form.append(field('Description', description.element));
   const row = node('div', 'adf-limits');
   row.append(field('Icon', iconPicker(value.icon || '', icon => { value.icon = icon; changed(); }), 'A Lucide icon name.'));
+  if (app && svgPath) row.append(field('Custom icon', svgUpload(app, svgPath, label), 'An .svg replaces the Lucide icon everywhere; plain drawing only, up to 16 KB.'));
   const color = node('input', 'ac-input adf-color');
   color.type = 'color';
   color.value = /^#[0-9a-f]{6}$/i.test(value.color || '') ? value.color : '#888888';
@@ -420,6 +500,39 @@ function displayFields(value, changed, { nameKey, descKey, label }) {
   row.append(field('Order', order, 'Lower comes first.'));
   form.append(row);
   return form;
+}
+
+/** Upload or remove a custom .svg icon; the draft creates or deletes the file on Save. */
+function svgUpload(app, path, label) {
+  const wrap = node('div', 'adf-icon');
+  const input = node('input');
+  input.type = 'file';
+  input.accept = '.svg,image/svg+xml';
+  input.setAttribute('aria-label', label + ' custom icon file');
+  const state = node('span', 'ac-hint');
+  const remove = node('button', 'ac-btn ac-btn-sm', 'Use the Lucide icon');
+  remove.type = 'button';
+  const paint = () => {
+    const draft = app.draftOf(path);
+    state.textContent = draft?.delete ? 'Custom icon removed on Save.' : draft?.content ? 'Custom icon uploaded; it shows after Save.' : '';
+  };
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    if (file.size > 16 * 1024) { state.textContent = 'That file is over 16 KB.'; return; }
+    await app.write(path, { content: await file.text() });
+    input.value = '';
+    paint();
+  };
+  remove.onclick = async () => {
+    const exists = await app.request('/admin/app-defaults/file?' + new URLSearchParams({ path })).then(file => file.exists, () => false);
+    await (exists ? app.write(path, { delete: true }) : app.revert(path));
+    paint();
+  };
+  app.onChange(paint);
+  paint();
+  wrap.append(input, remove, state);
+  return wrap;
 }
 
 /** A searchable Lucide icon chooser: the current icon, a search box and matching icons to tap. */
@@ -462,22 +575,24 @@ function iconPicker(current, onPick) {
 
 /** A group's card: its _group.json name, description, icon, color and order. */
 export function buildGroupDefaultsPanel(app, groupId, groupName) {
+  const svgPath = 'abilities/' + groupId + '/_group.svg';
   return jsonPanel(app, groupName + ' group', groupPath(groupId), (value, changed) =>
-    displayFields(value, changed, { nameKey: 'name', descKey: 'desc', label: groupName + ' group' }));
+    displayFields(value, changed, { nameKey: 'name', descKey: 'desc', label: groupName + ' group', app, svgPath }), [svgPath]);
 }
 
 /** An ability's manifest, its skills (edit, add, delete) and nothing of its tools. */
 export function buildAbilityDefaultsPanels(app, ability) {
   const panels = [];
+  const svgPath = abilityPath(ability, ability.id + '.svg');
   panels.push(jsonPanel(app, ability.name + ' manifest', abilityPath(ability, ability.id + '.json'), (value, changed) => {
-    const form = displayFields(value, changed, { nameKey: 'display_name', descKey: 'description', label: ability.name });
+    const form = displayFields(value, changed, { nameKey: 'display_name', descKey: 'description', label: ability.name, app, svgPath });
     const summary = createRichTextEditor({
       value: value.skill_summary || '', label: ability.name + ' skill summary', minHeight: 44, maxHeight: 140,
       onChange: next => { if (next.trim()) value.skill_summary = next.trim(); else delete value.skill_summary; changed(); },
     });
     form.append(field('Skill summary', summary.element, 'Shown when the skill is offered on request.'));
     return form;
-  }));
+  }, [svgPath]));
   // general_skills carries titles; selectable_skills may list the same skills by ID only.
   const skills = new Map();
   for (const entry of [...(ability.general_skills || (ability.has_skill ? [{ skill_id: 'core', title: 'Skill' }] : [])),
@@ -510,7 +625,22 @@ function skillPanel(app, ability, skillId, title) {
       body.classList.toggle('adf-deleted', !now);
     };
     body.classList.toggle('adf-deleted', deleted);
-    body.append(remove, node('p', 'ac-hint', 'Deleting removes the file on Save; agents that load it by name lose it.'));
+    const rename = text('', 'Rename ' + title + ' skill');
+    rename.placeholder = 'new_skill_name';
+    const renameButton = node('button', 'ac-btn ac-btn-sm', 'Rename');
+    renameButton.type = 'button';
+    const renameStatus = node('p', 'ac-hint', 'Renaming moves the file on Save. Agents and skills that load it by its old name lose it, and agents\' saved settings for it stop applying.');
+    renameButton.onclick = async () => {
+      const id = rename.value.trim();
+      if (!/^[a-z0-9_]{1,60}$/.test(id) || id === skillId || id === ability.id) { renameStatus.textContent = 'Use lowercase letters, digits and underscores, different from the current and ability names.'; return; }
+      await app.write(skillPath(ability, id), { content: editor.getValue().replace(/\n$/, '') + '\n' });
+      await app.write(path, { delete: true });
+      renameStatus.textContent = 'Drafted: ' + skillId + '.skill.md becomes ' + id + '.skill.md on Save.';
+      body.classList.add('adf-deleted');
+    };
+    const renameRow = node('div', 'adf-bar-row');
+    renameRow.append(rename, renameButton);
+    body.append(remove, node('p', 'ac-hint', 'Deleting removes the file on Save; agents that load it by name lose it.'), renameRow, renameStatus);
   });
 }
 
@@ -545,7 +675,10 @@ export const APP_DEFAULTS_CSS = '.adf-bar{display:flex;flex-direction:column;gap
   + '.adf-release{font-size:13px;color:var(--fg-2)}'
   + '.adf-failed,.adf-stale{color:var(--warning)}'
   + '.adf-panel{border:var(--border-width) solid var(--border-soft);border-radius:var(--r-md,10px);padding:10px 12px;margin:8px 0}'
-  + '.adf-panel-title{font-weight:600;margin-bottom:6px;overflow-wrap:anywhere}'
+  + '.adf-panel-head{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:6px}'
+  + '.adf-panel-title{font-weight:600;overflow-wrap:anywhere;min-width:0}'
+  + '.adf-diff{margin:0;max-height:320px;overflow:auto;font-family:var(--font-mono,monospace);font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;border:var(--border-width) solid var(--border-soft);border-radius:8px;padding:6px}'
+  + '.adf-diff .adf-add{color:var(--success)}.adf-diff .adf-del{color:var(--danger)}.adf-diff .adf-gap{color:var(--fg-3)}'
   + '.adf-form,.adf-panel-body{display:flex;flex-direction:column;gap:10px}'
   + '.adf-field{display:flex;flex-direction:column;gap:4px;min-width:0}'
   + '.adf-label{font-size:13px;font-weight:600;color:var(--fg-2)}'
