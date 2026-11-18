@@ -345,6 +345,12 @@ class CommandObservation:
             chunk = self.buffer.encode("utf-8")[:4096].decode("utf-8", "ignore")
             self.buffer = self.buffer[len(chunk):]
             self.append(chunk)
+        # node --test prints one top-level line per finished test: "✔ name (1.2ms)" or "✖ name (3ms)".
+        node = re.fullmatch(r"([\u2714\u2716]) .{1,256} \([0-9.]+ms\)\s*", text)
+        if self.scope.get("kind") == "ui_test" and node:
+            self.completed += 1
+            self.failed += node.group(1) == "\u2716"
+            self.last_progress = self.wall()
         match = re.fullmatch(r"test ([A-Za-z0-9_:<>., /-]{1,256}) \.\.\. (ok|FAILED|ignored)\s*", text)
         if self.scope.get("kind") == "test" and match:
             name, result = match.groups()
@@ -1448,7 +1454,15 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             identity=candidate
             self.command(["docker","start",name],timeout=30)
             resources.attached(name,identity);self.job_context.phase_container=name
-            result=self.command(["docker","exec",name,arguments[entry+1],*program],timeout=max(1,deadline-time.monotonic()))
+            # Observed output marks progress per finished test, so a slow run never reads as stalled.
+            # Only the pre-publication run: early runs overlap a compile that owns the job's observation.
+            outer=getattr(self.job_context,"observation_scope",None)
+            if job.get("phase")=="frontend_tests":
+                self.job_context.observation_scope={"phase":phase,"recipe":profile,"kind":kind,"target":"ui-fixtures"}
+            try:
+                result=self.command(["docker","exec",name,arguments[entry+1],*program],timeout=max(1,deadline-time.monotonic()))
+            finally:
+                self.job_context.observation_scope=outer
             counters=self.resource_request({"operation":"stats","container":name})
             with resources.lock:resources.rows[name]["metrics"]=counters
             oom=counters.get("oom_kills",0)>0 or counters.get("oom_events",0)>0
@@ -2511,7 +2525,7 @@ def write_performance(path):
 STAGE_OF = {"dependency": "dependencies", "compile_test": "compile tests", "test": "run tests",
     "compile_linked": "release build", "compile_release": "release build", "live_smoke": "release build",
     "package": "package release", "building_loop": "package release", "preparing_plugins": "package release",
-    "preparing_ui": "UI build and tests", "frontend_tests": "UI build and tests", "fmt": "format check"}
+    "preparing_ui": "UI build and tests", "frontend_tests": "UI build and tests", "ui_test": "UI build and tests", "fmt": "format check"}
 # A standalone check runs its execution steps inside checking_source, as a release does inside building_api.
 STEP_PHASES = {"building_api", "checking_source"}
 STAGE_SKIP = {"engine_metadata", "linked_smoke", "start", "finished", "admitted", "queued_check", None} | STEP_PHASES

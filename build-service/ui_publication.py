@@ -14,6 +14,21 @@ class PublicationWaitTimeout(TimeoutError):
 
 UI_TEST_AT=re.compile(r"test at (?:file://)?(\S+?):\d+:\d+")
 UI_HISTORY_JOBS=40
+# Phases of a job whose UI tests passed and whose publication is imminent or under way.
+PUBLISHING_PHASES=frozenset({"installing_prepared_assets","switching_ui"})
+
+def tested_peer(jobs,job_id):
+    """Another running job that finished its UI tests and is about to publish, else None.
+
+    Testing against the live base while such a peer is about to change it only produces
+    results the post-test base check throws away (a full re-run each time)."""
+    for other in jobs.values():
+        if other.get("job_id")==job_id or other.get("status")!="running":continue
+        wait=other.get("publication_wait")or{}
+        if other.get("phase")in PUBLISHING_PHASES or(other.get("phase")=="waiting_publication"
+                and wait.get("purpose")=="publication"and "state"not in wait):
+            return {"job_id":other["job_id"],"task_id":other.get("task_id"),"phase":other["phase"]}
+    return None
 
 def failing_fixtures(text,tests,strict=True):
     """Selected fixture files named by node's failing-tests summary; None whenever any doubt remains."""
@@ -68,7 +83,7 @@ class UIPublication:
                     with self.broker.lock:
                         self.broker._batch_lease(job)
                         job["phase"]="waiting_publication"
-                        job["publication_wait"]={"resource":resource,"owner":blocker,"purpose":purpose,"reason":"Publication serialization"if resource=="deploy_lock"else"Boot supervisor or publication effect lease", "since":since,"deadline_at":since+timeout,"elapsed_seconds":round(now-started,3),"state":"waiting"}
+                        job["publication_wait"]={"resource":resource,"owner":blocker,"purpose":purpose,"reason":"Publication serialization"if resource=="deploy_lock"else"Waiting for a tested release to publish"if resource=="tested_candidate"else"Boot supervisor or publication effect lease", "since":since,"deadline_at":since+timeout,"elapsed_seconds":round(now-started,3),"state":"waiting"}
                         self.broker._save(job)
                     last=now
                 time.sleep(min(.1,max(0,timeout-(time.monotonic()-started))))
@@ -97,6 +112,15 @@ class UIPublication:
             if acquired:self.broker.deploy_lock.release()
             raise
 
+    def await_tested_peer(self,job):
+        """Start a preparation attempt only after a tested peer has published (bounded).
+
+        On timeout the attempt proceeds as before; the post-test base check stays the gate."""
+        def owner():
+            with self.broker.lock:return tested_peer(self.broker.jobs,job["job_id"])
+        try:self.wait_for(job,"tested_candidate",lambda:owner()is None,timeout=self.wait_timeout*2,owner=owner,purpose="await_tested_candidate")
+        except PublicationWaitTimeout:pass
+
     @contextlib.contextmanager
     def capture(self,job):
         self.acquire(job,"capture_publication_base")
@@ -116,6 +140,7 @@ class UIPublication:
         """Return with publication and boot-effect locks held only for a current prepared candidate."""
         clock=time.monotonic;started=clock();job.setdefault("preparation",{})
         for attempt in range(1,4):
+            if job.get("operation")!="host_service_deploy":self.await_tested_peer(job)
             with self.capture(job):
                 with self.broker.lock:self.broker._batch_lease(job)
                 if self.broker._has_unresolved_release(job["job_id"]):raise ValueError("Reconcile uncertain publication first")
