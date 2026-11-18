@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {minutes, taskIcon, liveSeconds, stageVerdict, remaining, statusClass} from './broker-chip.js';
+import {minutes, taskIcon, liveSeconds, stageVerdict, remaining, statusClass, stageName} from './broker-chip.js';
 
 test('times read as minutes with one decimal, counting a tenth every 6 s', () => {
   assert.equal(minutes(0), '0.0');
@@ -42,4 +42,10 @@ test('done reads in bold green and failures in red', () => {
   for (const status of ['failed', 'cancelled', 'uncertain', 'interrupted']) assert.equal(statusClass(status), 'broker-blocker');
   assert.equal(statusClass('running'), '');
   assert.equal(statusClass('needs_decision'), '');
+});
+
+test('stages the broker sidekick ran name where they ran', () => {
+  assert.equal(stageName({stage: 'run tests', where: 'sidekick'}), 'run tests (sidekick)');
+  assert.equal(stageName({stage: 'compile tests', where: 'sidekick → server'}), 'compile tests (sidekick → server)');
+  assert.equal(stageName({stage: 'release build'}), 'release build');
 });

@@ -402,7 +402,8 @@ export function mountBuilds(panel, onStatus = () => {}) {
       id.textContent = stage.id || '';
       const name = document.createElement('span');
       name.className = 'tp-sname';
-      name.textContent = stage.stage;
+      // where: the broker sidekick ran this stage ("sidekick", or "sidekick → server" after a fallback).
+      name.textContent = stage.stage + (stage.where ? ' (' + stage.where + ')' : '');
       const normalCell = document.createElement('span');
       normalCell.className = 'tp-normal';
       normalCell.textContent = normal;

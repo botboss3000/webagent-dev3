@@ -78,6 +78,11 @@ function pressable(node, tap, hold) {
 }
 
 /** The class that colors a job status: done in bold green, failures in red. */
+// A stage the broker sidekick ran reads "run tests (sidekick)", or "(sidekick → server)" after a fallback.
+export function stageName(stage) {
+  return stage.stage + (stage.where ? ' (' + stage.where + ')' : '');
+}
+
 export function statusClass(status) {
   return status === 'completed' ? 'broker-ok' : FAILED.includes(status) && status !== 'needs_decision' ? 'broker-blocker' : '';
 }
@@ -110,7 +115,7 @@ function stageRows(snapshot, age, slowNow, failed = false) {
     if (state === 'running') { time.dataset.base = stage.seconds || 0; slowNow.push([stage, row]); }
     time.textContent = state === 'upcoming' ? '—' : minutes(state === 'running' ? (stage.seconds || 0) + age : stage.seconds) + ' min';
     const normal = stage.normal ? minutes(stage.normal[0]) + '–' + minutes(stage.normal[1]) : (stage.samples ? '' : 'no history');
-    row.append(el('span', 'broker-id', stage.id || ''), el('span', 'broker-name', stage.stage), time, el('span', 'broker-normal', normal),
+    row.append(el('span', 'broker-id', stage.id || ''), el('span', 'broker-name', stageName(stage)), time, el('span', 'broker-normal', normal),
       el('span', 'broker-state', state === 'running' ? stageVerdict(stage, (stage.seconds || 0) + age) : state));
     table.append(row);
   }
