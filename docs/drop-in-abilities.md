@@ -26,7 +26,8 @@ it, naming exactly its tool folders. `<tool>.tool.json` holds:
   Rust code, may change descriptions, limits and patterns and remove allowed values, but
   may not add, remove or rename an argument, change a type, add an allowed value, make a
   required argument optional or remove a tool definition. Tools of a plugin package whose
-  code changes in the same release are exempt.
+  code changes in the same release are exempt, as are `build_work` and `performance_work`,
+  whose arguments the build broker validates itself.
 - `effect`: `read` or `write`. It says whether the tool changes anything and drives
   recovery (an interrupted write is uncertain and never rerun), batches, background work
   and the repeat guard. It never decides access.

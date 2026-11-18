@@ -730,9 +730,15 @@ impl App {
     }
 }
 // Exit fixed offline smoke before state initialization; otherwise initialize the selected role at the shared v3 root.
+/// Tools whose arguments the build broker (`build-service/`, released through the broker's own
+/// lane) reads and validates itself: an asset-only release cannot be checked against that code,
+/// and the broker refuses an action or argument it does not know with a precise error.
+const BROKER_SERVED_TOOLS: [&str; 2] = ["build_work", "performance_work"];
+
 /// Every candidate tool schema keeps to the rules the shared argument check enforces. With
 /// `--validate-baseline=<live root>` (an asset-only release ships no Rust code) it also may
-/// not change what a tool's code receives, unless the tool's plugin package ships new code.
+/// not change what a tool's code receives, unless the tool's plugin package ships new code
+/// or the broker serves it ([`BROKER_SERVED_TOOLS`]).
 fn validate_tool_schemas(path: &std::path::Path) -> Result<()> {
     use webagent_abilities::tool_definitions;
     use webagent_engine::tools::arguments;
@@ -750,7 +756,9 @@ fn validate_tool_schemas(path: &std::path::Path) -> Result<()> {
             &baseline.join("abilities"),
             &path.join("abilities"),
         );
-        for (name, definition) in live.iter().filter(|(name, _)| !shipping.contains(*name)) {
+        for (name, definition) in live.iter().filter(|(name, _)| {
+            !shipping.contains(*name) && !BROKER_SERVED_TOOLS.contains(&name.as_str())
+        }) {
             match candidate.get(name) {
                 Some(next) => problems.extend(arguments::contract_changes(
                     name,

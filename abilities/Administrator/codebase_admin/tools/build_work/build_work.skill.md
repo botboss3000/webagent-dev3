@@ -103,6 +103,24 @@ again), when the task closes, or if it is still queued after 2 hours (then
 tell the user which session blocks it). The wait recovers your task itself
 if it orphans meanwhile. Work on files that are not blocked first. Never abandon another session's task to get ahead of it.
 
+## Blocker board
+
+Every broker task has a board of short notes that any session can read and
+post to, whatever harness or computer it runs on. Use it when you are blocked
+instead of waiting in silence:
+
+- `notes` with your `broker_id` returns the notes on your task and any wait
+  cycle it is part of. A wait cycle means you are queued behind a task (often
+  an uncertain release, which holds the whole queue) that itself waits for
+  claims you hold, so neither side can move until one gives way.
+- `note` with your `broker_id`, `target_task_id` (the blocking task named in the
+  blocker, progress or cycle) and `reason` (the note, up to 500 characters)
+  posts on that task's board, signed with your session. Say what you need and
+  what you can give up, for example "I can release module:broker if you need it".
+- Read your notes when a wait or progress read names a blocker, answer notes
+  addressed to you, and agree on the board which side gives way in a wait cycle.
+  Notes clear themselves when their task ends; never post credentials.
+
 ## Ownership and cleanup
 
 reservations/reserve before editing; continue reopens corrections after a
