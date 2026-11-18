@@ -385,16 +385,18 @@ class MonitorTests(unittest.TestCase):
 
     def test_new_note_and_wait_cycle_wake_once_with_their_text(self):
         note = {"id": "n1", "from_label": "other-task", "from_session": "Fix login", "origin": "t480/codex", "text": "I need module:broker"}
-        cycle = {"job_id": "575893ae-0000", "text": "Wait cycle: task-1 is queued behind other-task"}
+        cycle = {"job_id": "575893ae-0000", "task_id": "holder-task", "text": "Wait cycle: task-1 is queued behind other-task"}
         queued = self.progress(status="queued", job_seconds=5, notes=[note])
-        code, out = self.run_monitor([queued])
+        code, out = self.run_monitor([queued], task="task-1")
         self.assertEqual(code, 4)
         self.assertIn('note from other-task (session "Fix login", t480/codex): I need module:broker', out)
-        code, out = self.run_monitor([dict(queued, wait_cycles=[cycle])])
+        self.assertIn(' note task-1 "your reply" --to other-task', out)  # the exact answer, from this task
+        code, out = self.run_monitor([dict(queued, wait_cycles=[cycle])], task="task-1")
         self.assertEqual(code, 4)  # the note was already shown; the new cycle wakes
         self.assertIn("Wait cycle: task-1 is queued behind other-task", out)
+        self.assertIn(' note task-1 "your reply" --to holder-task', out)
         self.assertNotIn("I need module:broker", out)
-        code, _ = self.run_monitor([dict(queued, wait_cycles=[cycle]), self.progress(status="failed")])
+        code, _ = self.run_monitor([dict(queued, wait_cycles=[cycle]), self.progress(status="failed")], task="task-1")
         self.assertEqual(code, 1)  # neither wakes again
 
     def test_status_line_between_stages_and_short_time_left(self):

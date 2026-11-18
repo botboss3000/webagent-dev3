@@ -134,7 +134,7 @@ advisory: note any divergence, and still release through the broker.
   not its label; wait or coordinate, never take over its claims.
 - Blocker board: `note YOUR_TASK "text" --to OTHER_TASK` leaves a note on another
   operator's task (any harness, any computer); `notes TASK` reads a task's notes. The
-  monitor prints a new note on your task and wakes, and a queued job names an uncertain
+  monitor prints a new note on your task, with the exact reply command, and wakes; a queued job names an uncertain
   release that holds the queue. When the progress read reports a `wait_cycle` (you are
   queued behind a task that waits for your claims), agree on the board which side gives
   way instead of waiting. Notes clear when their task completes or is abandoned, and

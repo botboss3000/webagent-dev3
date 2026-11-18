@@ -455,7 +455,7 @@ def monitor(task_id=None, job_id=None, request=call, pause=time.sleep, clock=tim
         fresh += [c for c in progress.get("wait_cycles") or [] if "cycle:" + c.get("job_id", "") not in current["notes_seen"]]
         if fresh:
             for entry in fresh:
-                print(board_line(entry))
+                print(board_line(entry, task_id))
                 current["notes_seen"].append(entry["id"] if "id" in entry else "cycle:" + entry.get("job_id", ""))
             saved = current;save(current);show(progress);return DECISION_EXIT
         for stage in progress.get("running_stages", []):
@@ -488,12 +488,24 @@ def monitor(task_id=None, job_id=None, request=call, pause=time.sleep, clock=tim
         pause(POLL_SECONDS)
 
 
-def board_line(entry):
-    """One blocker-board entry as a line: a note with its author, or a wait cycle."""
+def reply_command(task_id, to):
+    """The exact command, run on the broker host, that answers on task to's board."""
+    config = os.environ.get("WEBAGENT_BUILD_CONFIG")
+    return ((f"WEBAGENT_BUILD_CONFIG={config} " if config else "") + f"python3 -B {Path(__file__).resolve()} note "
+            f"{task_id or 'YOUR_TASK'} \"your reply\" --to {to}")
+
+
+def board_line(entry, task_id=None):
+    """One blocker-board entry as a line (a note with its author, or a wait cycle) and how to answer it.
+
+    task_id is the reader's own task, shown as the author of the reply."""
     if "id" in entry:
         return (f"note from {entry.get('from_label')} (session \"{entry.get('from_session') or 'unknown'}\", "
-                f"{entry.get('origin') or 'unknown'}): {entry.get('text')}")
-    return entry.get("text", "")
+                f"{entry.get('origin') or 'unknown'}): {entry.get('text')}\n"
+                f"  reply: {reply_command(task_id, entry.get('from_label'))}")
+    others = [t for t in (entry.get("task_id"), entry.get("waiting_task_id")) if t]
+    return entry.get("text", "") + "".join(f"\n  tell {other}: {reply_command(task_id, other)}"
+                                         for other in dict.fromkeys(others))
 
 
 def late_due(seconds, late, alerted, name):
@@ -709,7 +721,7 @@ def main():
                                             **({"target_task_id":args.target}if args.target else{})}),sort_keys=True));return 0
     if args.command=="notes":
         value=call("build_work",{"action":"notes","task_id":args.task_id})
-        for entry in value.get("notes",[])+value.get("cycles",[]):print(board_line(entry))
+        for entry in value.get("notes",[])+value.get("cycles",[]):print(board_line(entry,args.task_id))
         if not value.get("notes")and not value.get("cycles"):print("no notes on "+value.get("task_id",args.task_id))
         return 0
     if args.command=="schedule":
