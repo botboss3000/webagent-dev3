@@ -344,7 +344,18 @@ mod preview {
     }
 
     /// Serve the variant's copy of a UI file, never cached.
-    pub(super) async fn serve(file: PathBuf, request: Request) -> Response {
+    pub(super) async fn serve(file: PathBuf, mut request: Request) -> Response {
+        // The browser revalidates its cached live copy; answering that from the variant's
+        // date could return 304 and keep the live file, so a preview is always sent whole.
+        for name in [
+            header::IF_MODIFIED_SINCE,
+            header::IF_NONE_MATCH,
+            header::IF_UNMODIFIED_SINCE,
+            header::IF_MATCH,
+            header::IF_RANGE,
+        ] {
+            request.headers_mut().remove(name);
+        }
         let mut response = tower_http::services::ServeFile::new(file)
             .oneshot(request)
             .await
@@ -361,6 +372,22 @@ mod preview {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[tokio::test]
+        async fn a_preview_file_is_sent_whole_despite_a_newer_cached_copy() {
+            let dir = tempfile::tempdir().expect("dir");
+            let file = dir.path().join("a.css");
+            std::fs::write(&file, "/* variant */").expect("file");
+            // The browser's cached live copy is newer than the variant file.
+            let request = Request::builder()
+                .uri("/ui/a.css")
+                .header(header::IF_MODIFIED_SINCE, "Fri, 01 Jan 2100 00:00:00 GMT")
+                .body(axum::body::Body::empty())
+                .expect("request");
+            let response = serve(file, request).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        }
 
         #[test]
         fn variant_files_stay_inside_their_folder() {
