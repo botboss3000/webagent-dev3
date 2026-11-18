@@ -6,7 +6,7 @@
 // Shows a cloned chat element in an accessible modal dialog Trigger config: ui/chat/chat.json -> chat_common.message_gutters.user.controls.full_view and…
 
 import { _refreshLucideIcons } from './presentation.js';
-import { pushBackHandler } from '../../shared/history-back.js';
+import { pushBackHandler } from '../../shared/history-back/history-back.js';
 
 let _activeFullView = null;
 let _viewerId = 0;

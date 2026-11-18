@@ -1,4 +1,4 @@
-import {createSettingsRow, createSettingsRegister} from '../../../../shared/settings-register.js';
+import {createSettingsRow, createSettingsRegister} from '../../../../shared/settings-register/settings-register.js';
 import {renderMainChat} from './main-chat.js';
 import {renderMemberAccess} from './member-access.js';
 

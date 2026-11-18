@@ -1,6 +1,6 @@
 'use strict';
 // Ported from v2 agent-ability-table.js skill row and expansion lifecycle.
-import { buildConfigRow } from '../../../../shared/ability-row-controls.js';
+import { buildConfigRow } from '../../../../shared/ability-row-controls/ability-row-controls.js';
 const chevronSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>';
 export function buildSkillRow(skill, { canEdit, menu, loadContent }) {
 let skillRow, skillBody;

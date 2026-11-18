@@ -1,5 +1,5 @@
 // Saved site sign-ins belong to the signed-in user; cookies and vault values never come back from the API.
-import { requestTouchVibration } from '../../../../shared/vibrate.js';
+import { requestTouchVibration } from '../../../../shared/vibrate/vibrate.js';
 const node = (tag, cls = '', text = '') => {
   const el = document.createElement(tag); el.className = cls; el.textContent = text; return el;
 };

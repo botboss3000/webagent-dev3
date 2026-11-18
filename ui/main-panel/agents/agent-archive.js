@@ -1,4 +1,4 @@
-import {requestTouchVibration} from '../../shared/vibrate.js';
+import {requestTouchVibration} from '../../shared/vibrate/vibrate.js';
 import {advanceDeleteBtn,resetDeleteBtn} from './pages/sessions/js/delete-control.js';
 import {icon} from './pages/sessions/js/adapter.js';
 

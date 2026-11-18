@@ -167,7 +167,7 @@ test('an ability page takes the back press before its group page', async () => {
     await waitForChart(page, '1,000 tokens');
     // app.js answers a popstate through consumeBack, so calling it is the same press.
     const pressed = await page.evaluate(async () => {
-      const {consumeBack} = await import('/ui/shared/history-back.js');
+      const {consumeBack} = await import('/ui/shared/history-back/history-back.js');
       const row = document.querySelector('.sr-row[data-register-link="web_access"]');
       row.click();
       const opened = !!document.querySelector('.ab-page[data-ability-id="web_access"] .cfg-page');

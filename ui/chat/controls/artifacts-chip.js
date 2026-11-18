@@ -3,7 +3,7 @@
 // arrive with the session snapshot; the chip lists them and opens one as a read-only card.
 // A UI element card (kind ui_element) also runs the agent's saved element in a sandboxed
 // frame (artifact-element.js). The user's own uploads are not artifacts.
-import {requestTouchVibration} from '../../shared/vibrate.js';
+import {requestTouchVibration} from '../../shared/vibrate/vibrate.js';
 import {elementFrame} from './artifact-element.js';
 
 const KINDS = {plan: 'Plan', ui_element: 'Element'};

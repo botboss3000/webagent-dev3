@@ -1,4 +1,4 @@
-import {requestTouchVibration} from '../../../../shared/vibrate.js';
+import {requestTouchVibration} from '../../../../shared/vibrate/vibrate.js';
 import {createMainNotes} from '../../../../chat/elements/main-notes/index.js';
 const node=(tag,text='',cls='')=>{const el=document.createElement(tag);el.textContent=text;el.className=cls;return el;};
 /** Artifacts: what an agent keeps across conversations for this user — Main Notes, saved scripts and UI elements. Text-only DOM; script and element content is untrusted. */

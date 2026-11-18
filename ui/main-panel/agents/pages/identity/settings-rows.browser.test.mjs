@@ -7,7 +7,7 @@ const root=path.resolve(new URL('../../../../../',import.meta.url).pathname);
 const server=http.createServer(async(req,res)=>{
  try{
   const u=new URL(req.url,'http://localhost').pathname;
-  if(u==='/'){res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/shared/ui/shared/css/design-system.css"><link rel="stylesheet" href="/shared/ui/shared/settings-register.css"><link rel="stylesheet" href="/shared/ui/main-panel/agents/agents.css"><link rel="stylesheet" href="/shared/ui/main-panel/agents/pages/identity/identity.css"><link rel="stylesheet" href="/ui/app.css"><link rel="stylesheet" href="/ui/shared/models/reference.css"><main id="host" style="padding:12px;max-width:650px"></main>');return;}
+  if(u==='/'){res.setHeader('content-type','text/html');res.end('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/shared/ui/shared/css/design-system.css"><link rel="stylesheet" href="/shared/ui/shared/settings-register/settings-register.css"><link rel="stylesheet" href="/shared/ui/main-panel/agents/agents.css"><link rel="stylesheet" href="/shared/ui/main-panel/agents/pages/identity/identity.css"><link rel="stylesheet" href="/ui/app.css"><link rel="stylesheet" href="/ui/shared/models/reference.css"><main id="host" style="padding:12px;max-width:650px"></main>');return;}
   if(u==='/ui/vibrate.json'){res.setHeader('content-type','application/json');res.end('{"enabled":true,"duration_ms":17}');return;}
   const file=u.startsWith('/shared/')?path.resolve(root,u.slice(8)):path.resolve(root,'.'+u);
   if(!file.startsWith(root+'/ui/')&&!file.startsWith(path.join(root,'ui')+'/'))throw Error('outside');
@@ -24,10 +24,10 @@ try{
   await page.evaluate(async light=>{
    document.body.classList.toggle('light-mode',light);
    const {renderIdentity}=await import('/ui/main-panel/agents/pages/identity/page.js');
-   const {vibrationConfigReady}=await import('/ui/shared/vibrate.js');await vibrationConfigReady;
+   const {vibrationConfigReady}=await import('/ui/shared/vibrate/vibrate.js');await vibrationConfigReady;
    window.pulses=[];Object.defineProperty(navigator,'vibrate',{configurable:true,value:n=>{pulses.push(n);return true;}});
    // app.js answers a back press through consumeBack; the fixture stands in for that listener.
-   const {consumeBack}=await import('/ui/shared/history-back.js');
+   const {consumeBack}=await import('/ui/shared/history-back/history-back.js');
    window.__unclaimed=0;window.__alive=true;
    window.addEventListener('popstate',()=>{if(!consumeBack())window.__unclaimed+=1;});
    const agent={name:'Fixture',description:'',revision:3,can_manage:true,member_access:{visitor_access:false,app_login_members:true,conversation_privacy:'operator_reviewable'},capability_levels:{revision:0,order:['operator','member','visitor'],levels:Object.fromEntries([['operator','Operator'],['member','Member'],['visitor','Visitor']].map(([id,name])=>[id,{id,name,revision:1,ability_permissions:{},tool_permissions:{},ability_exposure:{},tool_exposure:{},skill_exposure:{}}]))},default_execution_mode:'ask',execution_modes:[{id:'ask',label:'Ask',description:'Ask first',prompt:'Ask prompt',builtin:true},{id:'auto',label:'Auto',description:'Act',prompt:'Auto prompt',builtin:true}],shared_chat:{shareable:false,admin_view:false,admin_join:false,help:false,initial_active:true},compaction_thresholds:{trigger_tokens:150000,tail_tokens:40000},compaction_defaults:{trigger_tokens:150000,tail_tokens:40000},manager_incoming_message:{enabled:false,criteria:''},message_visibility:{mode:'manual'},closing_message:{notification_guidance:'Saved closing'},closing_protocol:{flags:['complete'],notification_target_words:5},voice_output:{enabled:false,voice:'af_heart'},voice_catalog:[{id:'af_heart',name:'Heart',group:'English'}]};

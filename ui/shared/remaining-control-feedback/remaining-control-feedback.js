@@ -1,4 +1,4 @@
-import { discoverPageControlFeedback } from './page-control-feedback.js';
+import { discoverPageControlFeedback } from '../page-control-feedback/page-control-feedback.js';
 
 // Owns native actions on remaining main-panel pages, private access, standalone setup and embed authentication/consent.
 // Catalog mounts include optional module pages; App and Agents keep their owners.

@@ -1,5 +1,5 @@
-import { mountControlFeedback } from '../chat/widget/window.js';
-import { requestTouchVibration } from './vibrate.js';
+import { mountControlFeedback } from '../../chat/widget/window.js';
+import { requestTouchVibration } from '../vibrate/vibrate.js';
 
 // Owns touch feedback for app navigation and its body-portaled account menu.
 /** Registers dynamic header controls and the account portal without intercepting their actions.
@@ -41,10 +41,10 @@ window.addEventListener('pagehide', () => { dispose(); dispose = () => {}; });
 window.addEventListener('pageshow', event => { if (event.persisted) dispose = mountHeaderFeedback(); });
 
 // The shell interaction entry also discovers the independently mounted Agents surface.
-import './agents-feedback.js';
+import '../agents-feedback/agents-feedback.js';
 
 // App page feedback is independently mounted after the catalog inserts its root.
-import './app-control-feedback.js';
+import '../app-control-feedback/app-control-feedback.js';
 
 // Remaining main pages and detached consent own their native action feedback.
-import './remaining-control-feedback.js';
+import '../remaining-control-feedback/remaining-control-feedback.js';

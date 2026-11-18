@@ -469,7 +469,7 @@ Test helpers are deterministic fixtures, not proof of live runtime behavior.
 | `snapshot` | Build minimal public messages/run snapshot and maximum sequence for fixture recovery. |
 | `tick` | Yield event loop for outstanding recovery requests/callbacks. |
 
-### ui/shared/background-issues.js
+### ui/shared/background-issues/background-issues.js
 
 | Function or group | Verified purpose and contract |
 | --- | --- |
@@ -494,7 +494,7 @@ Test helpers are deterministic fixtures, not proof of live runtime behavior.
 
 ### Meaningful inline and returned callbacks
 
-- `ui/shared/background-issues.js`: {"fail": "Open/deduplicate episode while started; cap count at 1e6 and active map128; display local error with operation label.", "resolve": "Remove only matching episode, emit captured resolution and repaint.", "select": "Filter visible session, no false resolution.", "start": "Idempotent config read/5s polling.", "stop": "Invalidate epoch/timers/queue/map and clear rendered issue notices."}
+- `ui/shared/background-issues/background-issues.js`: {"fail": "Open/deduplicate episode while started; cap count at 1e6 and active map128; display local error with operation label.", "resolve": "Remove only matching episode, emit captured resolution and repaint.", "select": "Filter visible session, no false resolution.", "start": "Idempotent config read/5s polling.", "stop": "Invalidate epoch/timers/queue/map and clear rendered issue notices."}
 - `ui/chat/core/client.js`: Returned endpoint wrappers are documented inline: queue delivery/resume, undo/fork, sharing/invites/participation/help, usage/context config, snapshots/attachments/voice, controls/mode/model, session lifecycle/read/create/send and run decisions/recovery/resume. They delegate method/path/body unchanged through caller-authenticated request; no new independent authority.
 - `ui/chat/core/panel.js`: Returned panel methods validate draft/context/run ownership and delegate to submit/cancel/decide/recover; accessor reports selected session. UI event handlers use guard and server capability projections. read observer, reviewTimer, sharing onState and open transport callbacks own matched failure/success paths.
 - `ui/app.js`: Inline handlers cover authentication/register/profile/password/session-policy/revocation, provider/model/policy writes, main/agent/mobile/theme navigation, shell chat widget and pull refresh; credential errors stay inline and explicit actions retain note feedback.

@@ -27,7 +27,7 @@ try{
   await page.goto('http://127.0.0.1:'+server.address().port+'/');
   await page.evaluate(async()=>{
    const {createAgentArchive}=await import('/ui/main-panel/agents/agent-archive.js');
-   const {vibrationConfigReady}=await import('/ui/shared/vibrate.js');await vibrationConfigReady;
+   const {vibrationConfigReady}=await import('/ui/shared/vibrate/vibrate.js');await vibrationConfigReady;
    window.pulses=[];Object.defineProperty(navigator,'vibrate',{configurable:true,value:n=>{pulses.push(n);return true;}});
    window.roster=[{id:'shared_default',name:'WebAgent',can_manage:true,revision:1},{id:'a1',name:'Alpha',can_manage:true,revision:3},{id:'a2',name:'Beta',can_manage:false,revision:1},{id:'a3',name:'Gamma',can_manage:true,revision:5}];
    window.archived=[];window.calls=[];window.changes=[];window.failGamma=true;

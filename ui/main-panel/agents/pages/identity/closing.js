@@ -1,4 +1,4 @@
-import {createSettingsRow} from '../../../../shared/settings-register.js';
+import {createSettingsRow} from '../../../../shared/settings-register/settings-register.js';
 'use strict';
 // Final response: whether every message becomes a chat bubble, and which run-ending parts the
 // agent records. Guidance about publishing lives in each execution mode's per-turn guidance; the

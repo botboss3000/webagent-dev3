@@ -1,5 +1,5 @@
-import {requestTouchVibration} from './vibrate.js';
-import {pushBackHandler} from './history-back.js';
+import {requestTouchVibration} from '../vibrate/vibrate.js';
+import {pushBackHandler} from '../history-back/history-back.js';
 
 const FALLBACK_ICON = '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/>';
 const CHEV_BACK = '<svg class="sr-chev-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>';

@@ -123,7 +123,7 @@ test('back closes the last opened call of the active group before that group',as
  await p.evaluate(async()=>{
   view.disconnect();
   // app.js hands every popstate to consumeBack; the fixture stands in for that listener.
-  const {consumeBack}=await import('/ui/shared/history-back.js');
+  const {consumeBack}=await import('/ui/shared/history-back/history-back.js');
   window.addEventListener('popstate',()=>consumeBack());
   const {createActivityGroup}=await import('/ui/chat/elements/activity-group/index.js');
   const {createMiniTranscript}=await import('/ui/chat/elements/mini-transcript/index.js');
@@ -147,7 +147,7 @@ test('back closes the last opened call of the active group before that group',as
  await p.waitForFunction(()=>history.length===window.__lenBefore+2&&history.state?.webagentBack===true);
  // consumeBack is the same press app.js sends on popstate.
  const presses=await p.evaluate(async()=>{
-  const {consumeBack}=await import('/ui/shared/history-back.js');
+  const {consumeBack}=await import('/ui/shared/history-back/history-back.js');
   const state=()=>({group:group.element.open,
    tools:document.querySelectorAll('.v2-mini-tool > details.v2-mini-tool-disclosure[open]').length});
   const before=state();

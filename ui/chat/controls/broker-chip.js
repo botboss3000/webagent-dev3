@@ -3,7 +3,7 @@
 // the job (crates/modules/engine/src/runtime/build_tasks.rs); the chip loads the task list
 // on session open and on build events, and a task's card loads only when opened. While a
 // card is open its counters tick in the browser and it re-reads the task every 15 s.
-import {requestTouchVibration} from '../../shared/vibrate.js';
+import {requestTouchVibration} from '../../shared/vibrate/vibrate.js';
 
 const ACTIVE = ['queued','running','needs_decision'];
 const FAILED = ['failed','stale','cancelled','uncertain','interrupted','needs_decision'];

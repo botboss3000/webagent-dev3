@@ -2,7 +2,7 @@
 import {setVoiceReplyControl} from './chat-config.js';
 import {textForSpeech} from './composer-media.js';
 import {createVoicePlayer} from './voice-player.js';
-import {requestTouchVibration} from '../../shared/vibrate.js';
+import {requestTouchVibration} from '../../shared/vibrate/vibrate.js';
 
 const STORAGE_KEY = 'webagent_voice_reply';
 

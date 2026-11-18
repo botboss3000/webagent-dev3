@@ -1,5 +1,5 @@
 // Locates the embedded chat runtime, credential lifecycle, session wiring, and serialized parent command bridge.
-import {vibrationConfigReady,getVibrationConfig} from '../shared/vibrate.js';
+import {vibrationConfigReady,getVibrationConfig} from '../shared/vibrate/vibrate.js';
 import {mountChatPanel} from '../chat/core/panel.js';
 import {initChatConfig,setChatSurfaceActions} from '../chat/controls/chat-config.js';
 import {watchAuthorization} from './auth-handoff.js';

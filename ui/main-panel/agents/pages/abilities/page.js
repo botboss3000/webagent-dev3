@@ -8,12 +8,12 @@ import { buildPromptsGroup } from './prompts.js';
 import { buildGroup, setGroupStatus } from './table.js';
 import { buildPolicyControls, effectiveLabel, readinessLabel } from './policy.js';
 
-import { _buildMoreButton, _buildToolRow, _buildAbilitySettingsList, closeFloatingMenu } from '../../../../shared/ability-row-controls.js';
+import { _buildMoreButton, _buildToolRow, _buildAbilitySettingsList, closeFloatingMenu } from '../../../../shared/ability-row-controls/ability-row-controls.js';
 import { buildSkillRow } from './rows.js';
-import { createSettingsMenu, createSettingsRegister, createSettingsRow } from '../../../../shared/settings-register.js';
-import { createConfigPage } from '../../../../shared/config-page.js';
-import { createRichTextEditor } from '../../../../shared/rich-text-editor.js';
-import { pushBackHandler } from '../../../../shared/history-back.js';
+import { createSettingsMenu, createSettingsRegister, createSettingsRow } from '../../../../shared/settings-register/settings-register.js';
+import { createConfigPage } from '../../../../shared/config-page/config-page.js';
+import { createRichTextEditor } from '../../../../shared/rich-text-editor/rich-text-editor.js';
+import { pushBackHandler } from '../../../../shared/history-back/history-back.js';
 import { _markSaving, _flashSaveCheck } from '../../../../shared/models/dom-utils.js';
 
 const node = (tag, className = '', text = '') => {

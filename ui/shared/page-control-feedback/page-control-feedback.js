@@ -1,5 +1,5 @@
-import { mountControlFeedback } from '../chat/widget/window.js';
-import { requestTouchVibration } from './vibrate.js';
+import { mountControlFeedback } from '../../chat/widget/window.js';
+import { requestTouchVibration } from '../vibrate/vibrate.js';
 
 export const PAGE_ACTIONS = 'button, [role="button"], [role="menuitem"], [role="switch"], [role="checkbox"], [role="radio"], summary, a[href], input[type="checkbox"], input[type="radio"], label:has(input[type="checkbox"]), label:has(input[type="radio"])';
 const markers = new WeakMap();

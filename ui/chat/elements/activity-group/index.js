@@ -3,7 +3,7 @@
 import {_refreshLucideIcons} from '../../core/presentation.js';
 import {toolFailure} from '../../core/activity.js';
 import {lineCount} from '../mini-transcript/rows.js';
-import {pushBackHandler} from '../../../shared/history-back.js';
+import {pushBackHandler} from '../../../shared/history-back/history-back.js';
 /** Compact group label: nonzero counts, any extra parts (such as sub-agent notices), then status. */
 export function activityLabel(group,{error='',extra=[]}={}) {
     // Summarize nonzero category counts without changing the underlying journal rows.

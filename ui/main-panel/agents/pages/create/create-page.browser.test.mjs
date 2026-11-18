@@ -23,7 +23,7 @@ try{
   await page.goto('http://127.0.0.1:'+server.address().port+'/');
   await page.evaluate(async()=>{
    const {renderCreateAgent}=await import('/ui/main-panel/agents/pages/create/page.js');
-   const {vibrationConfigReady}=await import('/ui/shared/vibrate.js');await vibrationConfigReady;
+   const {vibrationConfigReady}=await import('/ui/shared/vibrate/vibrate.js');await vibrationConfigReady;
    window.pulses=[];Object.defineProperty(navigator,'vibrate',{configurable:true,value:n=>{pulses.push(n);return true;}});
    window.calls=[];window.created=[];window.fail=true;
    const request=async(path,method,body)=>{calls.push({path,method,body});if(fail){fail=false;throw Error('Temporarily unavailable');}return {id:'agent-x',name:body.name,assignment_required:true};};

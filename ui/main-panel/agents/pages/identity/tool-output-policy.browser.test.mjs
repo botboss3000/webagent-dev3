@@ -26,7 +26,7 @@ try {
     document.body.classList.toggle('light-mode',light);
     const {renderCompaction}=await import('/ui/main-panel/agents/pages/identity/compaction.js');
     const {renderToolOutputPolicy}=await import('/ui/main-panel/agents/pages/identity/tool-output-policy.js');
-    const {vibrationConfigReady}=await import('/ui/shared/vibrate.js');await vibrationConfigReady;
+    const {vibrationConfigReady}=await import('/ui/shared/vibrate/vibrate.js');await vibrationConfigReady;
     const stored=JSON.parse(localStorage.getItem('dedup-fixture')||'true');
     const agent={can_manage:canManage,compaction_overridden:true,compaction_thresholds:{trigger_tokens:150000,tail_tokens:20000,ceiling_tokens:250000,summarizer:'self'},compaction_defaults:{trigger_tokens:150000,tail_tokens:20000,summary_tokens:5000,ceiling_tokens:250000,summarizer:'self'},tool_output_policy:{enabled:true,scope:'all_eligible',tools:[],lifetime_calls:6,ordinary_chars:24000,promoted_chars:24000,refresh_on_recall:true,promote_on_edit:true},tool_output_eligible_tools:['file_read']};
     if(available)agent.tool_result_deduplication={enabled:stored};

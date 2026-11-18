@@ -1,5 +1,5 @@
 // Shared optional touch feedback.
-import {createTouchVibration} from '../chat/widget/window.js';
+import {createTouchVibration} from '../../chat/widget/window.js';
 let config = null;
 
 /** Accepts one stage object; malformed stages are ignored. */
@@ -13,7 +13,7 @@ function stage(value) {
  */
 async function loadVibrationConfig() {
   try {
-    const response = await fetch(new URL('../vibrate.json', import.meta.url), {cache: 'no-store'});
+    const response = await fetch(new URL('../../vibrate.json', import.meta.url), {cache: 'no-store'});
     if (!response.ok) return;
     const value = await response.json();
     if (typeof value.enabled !== 'boolean') return;

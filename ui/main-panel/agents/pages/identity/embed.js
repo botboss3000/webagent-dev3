@@ -1,4 +1,4 @@
-import {createSettingsRow} from '../../../../shared/settings-register.js';
+import {createSettingsRow} from '../../../../shared/settings-register/settings-register.js';
 /** Loads and saves per-agent embed enablement, guest access, and exact allowed origins; appearance stays in the chat UI profile. */
 export async function renderEmbedSettings(host,request,{agentId}){
  const row=createSettingsRow(host,{id:'website-chat-widget',title:'Website chat widget',toggleLabel:'Enable website embedding'});

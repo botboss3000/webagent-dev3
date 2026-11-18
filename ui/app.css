@@ -251,7 +251,7 @@ body #app-restricted-overlay {
 }
 /* Shared desktop scrollbar: a persistent 6px rounded thumb on a transparent
    track in every browser. Chromium/Safari draw it from the layer below; desktop
-   Firefox draws the same thumb (.wa-scrollbar) from /ui/shared/scrollbars.js.
+   Firefox draws the same thumb (.wa-scrollbar) from /ui/shared/scrollbars/scrollbars.js.
    Layered !important outranks every unlayered !important, so page-specific
    widths and colours yield. Bars hidden with scrollbar-width:none stay hidden,
    and touch devices keep their native bars. */
@@ -282,7 +282,7 @@ body {
   * { scrollbar-width: auto; scrollbar-color: rgba(var(--brand-rgb), 0.38) transparent; }
   body.light-mode * { scrollbar-color: rgba(var(--brand-rgb), 0.45) transparent; }
 }
-/* Administrator rebuild-needed popup (shared/ability-drift.js): top left on every page. */
+/* Administrator rebuild-needed popup (shared/ability-drift/ability-drift.js): top left on every page. */
 #ability-drift{position:fixed;top:12px;left:12px;z-index:9999;width:min(420px,calc(100vw - 24px));max-height:70vh;overflow:auto;background:var(--bg-elev);border:var(--border-width) solid var(--warning);border-radius:var(--r-md);padding:12px 14px;box-shadow:0 8px 24px rgba(var(--shadow-rgb),.25)}
 #ability-drift h2{margin:0 0 4px;font-size:1rem;color:var(--warning)}
 #ability-drift p{margin:0 0 8px}

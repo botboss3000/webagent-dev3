@@ -1,4 +1,4 @@
-@import url("/ui/shared/main-chat-avatar.css");
+@import url("/ui/shared/main-chat-avatar/main-chat-avatar.css");
 @import url("/ui/chat/controls/session-dropdown/row.css");
 /* Keeps configured rows scrollable and the optional footer reachable. */
 #session-dropdown-menu:not([hidden]) { display:flex; flex-direction:column; overflow:hidden; }

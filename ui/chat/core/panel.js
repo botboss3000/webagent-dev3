@@ -4,7 +4,7 @@ import {createMainNotes} from '../elements/main-notes/index.js';
 // Locates the v3 chat panel lifecycle, transcript, and run controls Config: data/config/chat.json -> chat_display.default and chat_common.composer.keyboard_focus.
 // V2-style panel/client separation; markup and message protocol remain V3.
 // Panel feeds selected-session runs/live messages to display policy from data/config/chat.json -> chat_common.screen_display and surface overrides; history loading is excluded.
-import {mountScreenAwake} from '../../shared/screen-awake.js';
+import {mountScreenAwake} from '../../shared/screen-awake/screen-awake.js';
 import {mountChatControlFeedback} from '../controls/feedback.js';
 import {mountSharedChat} from '../controls/shared-chat.js';
 import { createChatClient } from './client.js';

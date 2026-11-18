@@ -72,7 +72,7 @@ These examples do not limit the properties or elements you can investigate.
 ### Optional touch haptics
 
 - On a completed, enabled touch activation, request one brief pulse with
-  `requestTouchVibration(event)` from `ui/shared/vibrate.js` where available.
+  `requestTouchVibration(event)` from `ui/shared/vibrate/vibrate.js` where available.
   Config: `ui/vibrate.json` -> `enabled`, `duration_ms` (milliseconds); loaded
   once per page and adopted on reload. Call from the user interaction
   handler before asynchronous work. Treat this as a request, not proof that
@@ -140,7 +140,7 @@ These examples do not limit the properties or elements you can investigate.
 
 The shared chat rollout applies these defaults through `ui/chat/controls/feedback.js`,
 `ui/chat/widget/window.js`, `ui/chat/chat.css`, and `ui/chat/widget/window.css`,
-using `ui/shared/vibrate.js` and the central `ui/vibrate.json` configuration.
+using `ui/shared/vibrate/vibrate.js` and the central `ui/vibrate.json` configuration.
 The panel owns dynamic controls and body portals; widget chrome registers its
 own roots. External hosts receive only validated configuration through the
 existing source/origin/channel-bound iframe bridge and request pulses locally.

@@ -1,4 +1,4 @@
-import {requestTouchVibration} from '../../../../shared/vibrate.js';
+import {requestTouchVibration} from '../../../../shared/vibrate/vibrate.js';
 const node=(tag,text='',cls='')=>{const el=document.createElement(tag);el.textContent=text;el.className=cls;return el;};
 const requestId=()=>globalThis.crypto?.randomUUID?.()||'create-'+Date.now()+'-'+Math.random().toString(16).slice(2);
 /** One request ID per draft: a retried submit is idempotent, a changed draft gets a new ID. */

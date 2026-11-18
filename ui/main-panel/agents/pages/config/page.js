@@ -1,5 +1,5 @@
 'use strict';
-import { createSettingsMenu } from '../../../../shared/settings-register.js';
+import { createSettingsMenu } from '../../../../shared/settings-register/settings-register.js';
 
 /** The pin control for one page: pressed keeps it in the agent card tabs. */
 function starButton(page, favorites, onToggle) {

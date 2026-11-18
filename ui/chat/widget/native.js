@@ -1,5 +1,5 @@
 // Connects the native chat surface, floating window, and launcher.
-import {requestTouchVibration} from '../../shared/vibrate.js';
+import {requestTouchVibration} from '../../shared/vibrate/vibrate.js';
 import {widgetProfile,defaultChatDisplay,refreshChatSurface,setChatSurfaceActions} from '../controls/chat-config.js';
 /** Connects the chat panel to its floating window and launcher, persisting the user's docked/floating preference. Injects the shared central vibration callback into both widget lifecycles. Profile changes update both widgets; callbacks keep shell visibility, chat surface config, and launcher actions in sync. */
 export function mountNativeWidget({chat,createFloatingChat,createChatLauncher,onDock,onChange=()=>{},note}){

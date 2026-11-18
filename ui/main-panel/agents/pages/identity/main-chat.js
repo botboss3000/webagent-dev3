@@ -1,4 +1,4 @@
-import {requestTouchVibration} from '../../../../shared/vibrate.js';
+import {requestTouchVibration} from '../../../../shared/vibrate/vibrate.js';
 
 /** Agent-specific coordination settings and text overrides. Config: crates/modules/configuration/prompts/main_chat.json supplies the defaults shown as placeholders; the host resolves effective texts. */
 export async function renderMainChat(host, request, {agentId,canManage=false}={}) {

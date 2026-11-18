@@ -1,6 +1,6 @@
 'use strict';
 
-import { pushBackHandler } from '../../shared/history-back.js';
+import { pushBackHandler } from '../../shared/history-back/history-back.js';
 
 // Shared full-screen image viewer for composer attachment tiles and published
 // message attachments. A click is delegated per root so tiles opened from any

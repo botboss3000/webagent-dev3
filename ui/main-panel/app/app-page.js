@@ -10,7 +10,7 @@ import { mountAppSettings } from './pages/settings/page.js';
 import { mountFunctions } from './pages/functions/page.js';
 import { mountModules } from './pages/modules/page.js';
 import { mountAppModels } from './pages/models/page.js';
-import { holdTabScroll, wirePageTabCarousel, wirePageTabDrag } from '../../shared/page-tabs.js';
+import { holdTabScroll, wirePageTabCarousel, wirePageTabDrag } from '../../shared/page-tabs/page-tabs.js';
 import { startView as startFiles, stopView as stopFiles, resetExplorerForRemount } from './pages/files/page.js';
 
 export async function start(mount) {

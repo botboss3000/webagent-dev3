@@ -370,7 +370,7 @@ body.light-mode #chat-messages-inner .chat-bubble.v3-config-bubble{background:va
 .chat-action-note .chat-action-secure{width:24px;height:24px}
 .chat-action-note[hidden]{display:none}
 .chat-action-secure{display:inline-block;flex-shrink:0;width:15px;height:15px;background:var(--success);-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 1 3 5v6c0 5.6 3.8 10.7 9 12 5.2-1.3 9-6.4 9-12V5l-9-4zm-1.4 15.6-4.2-4.2 1.4-1.4 2.8 2.8 5.6-5.6 1.4 1.4-7 7z'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 1 3 5v6c0 5.6 3.8 10.7 9 12 5.2-1.3 9-6.4 9-12V5l-9-4zm-1.4 15.6-4.2-4.2 1.4-1.4 2.8 2.8 5.6-5.6 1.4 1.4-7 7z'/%3E%3C/svg%3E") center/contain no-repeat}
-/* Desktop Firefox draws the shared scrollbar as an overlay (/ui/shared/scrollbars.js),
+/* Desktop Firefox draws the shared scrollbar as an overlay (/ui/shared/scrollbars/scrollbars.js),
    so scrollbar-gutter reserves nothing; keep bubbles the same 6px off the edge as Chromium. */
 @supports not selector(::-webkit-scrollbar){@media (hover:hover) and (pointer:fine){#chat-messages-inner{padding-right:var(--wa-scrollbar-size,6px)!important}}}
 /* Mobile chat keeps its native scrolling gesture but hides the transcript scrollbar. */

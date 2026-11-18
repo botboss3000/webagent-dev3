@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 const source = await fs.readFile(new URL('./tool-output-policy.js', import.meta.url), 'utf8');
-const rowSource = (await fs.readFile(new URL('../../../../shared/settings-register.js', import.meta.url), 'utf8')).replace(/import \{requestTouchVibration\} from '[^']+';/, 'const requestTouchVibration=()=>{};').replace(/import \{pushBackHandler\} from '[^']+';/, 'const pushBackHandler=()=>()=>{};').replace('export function createSettingsRow', 'function createSettingsRow');
-const {renderToolOutputPolicy} = await import('data:text/javascript;base64,' + Buffer.from(rowSource + source.replace("import {createSettingsRow} from '../../../../shared/settings-register.js';", '')).toString('base64'));
+const rowSource = (await fs.readFile(new URL('../../../../shared/settings-register/settings-register.js', import.meta.url), 'utf8')).replace(/import \{requestTouchVibration\} from '[^']+';/, 'const requestTouchVibration=()=>{};').replace(/import \{pushBackHandler\} from '[^']+';/, 'const pushBackHandler=()=>()=>{};').replace('export function createSettingsRow', 'function createSettingsRow');
+const {renderToolOutputPolicy} = await import('data:text/javascript;base64,' + Buffer.from(rowSource + source.replace("import {createSettingsRow} from '../../../../shared/settings-register/settings-register.js';", '')).toString('base64'));
 
 // A small DOM fixture exercises the actual field/save implementation without replacing its logic.
 class Element {
@@ -65,9 +65,9 @@ test('save remains disabled until the revisioned persistence operation settles',
 
 
 // Exercise the actual tool-panel state/save logic; substitute only DOM/menu and save-feedback collaborators.
-const controls = await fs.readFile(new URL('../../../../shared/ability-row-controls.js', import.meta.url), 'utf8');
+const controls = await fs.readFile(new URL('../../../../shared/ability-row-controls/ability-row-controls.js', import.meta.url), 'utf8');
 const seam=controls.indexOf('let floatingMenuCleanup = null;');assert.ok(seam>0);
-const toolSource=controls.slice(0,seam).replace(/import \{requestTouchVibration\} from '[^']+';/, 'const requestTouchVibration=()=>{};').replace(/import \{pushBackHandler\} from '[^']+';/, 'const pushBackHandler=()=>()=>{};').replace("import { _markSaving, _flashSaveCheck } from './models/dom-utils.js';",
+const toolSource=controls.slice(0,seam).replace(/import \{requestTouchVibration\} from '[^']+';/, 'const requestTouchVibration=()=>{};').replace(/import \{pushBackHandler\} from '[^']+';/, 'const pushBackHandler=()=>()=>{};').replace("import { _markSaving, _flashSaveCheck } from '../models/dom-utils.js';",
   'const _markSaving=()=>{}; const _flashSaveCheck=()=>{};')+`
 let captured=null;
 function openFloatingMenu(factory){captured=factory;}

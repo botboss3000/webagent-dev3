@@ -2,7 +2,7 @@
 // Audio and scheduled back to back, so one position marker spans every portion. The speaker's
 // plan (characters per chunk) sizes the track before audio exists: synthesized portions show
 // solid, the rest light gray, and the estimate tightens as real durations arrive.
-import {requestTouchVibration} from '../../shared/vibrate.js';
+import {requestTouchVibration} from '../../shared/vibrate/vibrate.js';
 
 // Estimated speech seconds per character until a decoded chunk gives the real rate.
 const SECONDS_PER_CHAR = 0.065;

@@ -1,4 +1,4 @@
-import {createSettingsRow} from '../../../../shared/settings-register.js';
+import {createSettingsRow} from '../../../../shared/settings-register/settings-register.js';
 // Shared-chat policy uses Identity's serialized, revision-fenced persistence.
 export function renderSharedChat(host,agent,persist) {
   const {body:section}=createSettingsRow(host,{id:'shared-conversations',title:'Shared conversations'});

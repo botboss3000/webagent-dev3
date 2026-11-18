@@ -194,7 +194,7 @@ export function mountScreenAwake(root, {getProfile = () => null} = {}) {
   let defaults = profileScreenPolicy(getProfile());
   let storage = null; try { storage = window.localStorage; } catch { /* Per-page settings still work. */ }
   let policy = deviceScreenPolicy(defaults, storage);
-  const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = '/ui/shared/screen-awake.css'; document.head.append(css);
+  const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = '/ui/shared/screen-awake/screen-awake.css'; document.head.append(css);
   const overlay = document.createElement('div'); overlay.dataset.screenDim = ''; overlay.setAttribute('aria-hidden', 'true');
   Object.assign(overlay.style, {position:'fixed', inset:'0', background:'#000', pointerEvents:'none', zIndex:'2147483647', display:'none'});
   document.body.append(overlay);

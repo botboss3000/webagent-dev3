@@ -1,5 +1,5 @@
 'use strict';
-import {createSettingsRow} from '../../../../shared/settings-register.js';
+import {createSettingsRow} from '../../../../shared/settings-register/settings-register.js';
 
 // Identity owns agent thresholds; the app-wide JSON retains hard safety limits.
 export function renderCompaction(host, agent, persist, request) {

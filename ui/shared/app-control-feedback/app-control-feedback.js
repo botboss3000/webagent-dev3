@@ -1,4 +1,4 @@
-import { PAGE_ACTIONS, discoverPageControlFeedback } from './page-control-feedback.js';
+import { PAGE_ACTIONS, discoverPageControlFeedback } from '../page-control-feedback/page-control-feedback.js';
 
 // Covers App Config, Functions, Modules, Settings, Files/Git, Users, User Policies, Page Access and Model Catalog.
 export const APP_ACTIONS = [PAGE_ACTIONS,

@@ -1,5 +1,5 @@
 'use strict';
-import { applyRubberBand } from './rubber-band.js';
+import { applyRubberBand } from '../rubber-band/rubber-band.js';
 
 // V2 tab carousel (agents/js/view.js _wireTabCarousel): the strip scrolls natively
 // with a hidden scrollbar; edge chevrons and fades (shared agents.css) show while

@@ -1,6 +1,6 @@
 // Remote sites belong to the signed-in user; credentials never come back from the API.
-import { buildConfigRow } from '../../../../shared/ability-row-controls.js';
-import { requestTouchVibration } from '../../../../shared/vibrate.js';
+import { buildConfigRow } from '../../../../shared/ability-row-controls/ability-row-controls.js';
+import { requestTouchVibration } from '../../../../shared/vibrate/vibrate.js';
 const node = (tag, text = '') => { const el = document.createElement(tag); el.textContent = text; return el; };
 const fields = [
   ['github_owner', 'GitHub owner', ''], ['github_repo', 'GitHub repository', ''],

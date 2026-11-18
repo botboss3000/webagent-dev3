@@ -1,7 +1,7 @@
 // Session dropdown presentation and interactions.
 // Adapted from running v2 session-dropdown/controller.js. V3 owns data/actions.
 
-import { pushBackHandler } from '../../../shared/history-back.js';
+import { pushBackHandler } from '../../../shared/history-back/history-back.js';
 /** Mounts menu positioning, keyboard/focus behavior, animation, and teardown around V3-owned data callbacks. */
 export function mountSessionDropdown(root, {refresh, select, guard, resetSearch = () => {}, paintCached = () => false}) {
  const dropdown=root, menu=root.querySelector('.session-dropdown-menu');

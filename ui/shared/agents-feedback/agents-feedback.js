@@ -1,5 +1,5 @@
-import { mountControlFeedback } from '../chat/widget/window.js';
-import { requestTouchVibration } from './vibrate.js';
+import { mountControlFeedback } from '../../chat/widget/window.js';
+import { requestTouchVibration } from '../vibrate/vibrate.js';
 
 // Owns Agents cards, tabs, Config, Identity, Primary Models, Abilities and Sessions actions plus their body portals.
 export const AGENT_ACTIONS = [

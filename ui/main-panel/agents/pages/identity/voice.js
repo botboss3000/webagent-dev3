@@ -1,4 +1,4 @@
-import {createSettingsRow} from '../../../../shared/settings-register.js';
+import {createSettingsRow} from '../../../../shared/settings-register/settings-register.js';
 'use strict';
 // Agent voice output: the toggle shows the chat's voice reply control for this agent, and the
 // chosen Kokoro voice speaks its replies. The server validates voices against its catalog.

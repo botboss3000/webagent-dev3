@@ -7,7 +7,7 @@
 //   a click;
 // - open: allow-listed app routes (or this chat) in the same tab, after a click;
 // - resize: the card's height, bounded.
-import {requestTouchVibration} from '../../shared/vibrate.js';
+import {requestTouchVibration} from '../../shared/vibrate/vibrate.js';
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 /** How long after a click in the element its requests count as the user's. */
