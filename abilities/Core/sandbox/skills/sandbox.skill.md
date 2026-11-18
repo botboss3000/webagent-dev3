@@ -24,3 +24,36 @@ it leaves the sandbox on its own.
 
 When a command is refused or fails because of a limit, say which limit it was and work
 within it; do not try to get around it.
+
+## Saved UI elements
+
+An element is a small self-contained page (`index.html` with inline style and script) that
+this agent keeps for this user across all their conversations, and shows in a chat as a card
+in the Artifacts chip.
+
+1. Build it in a sandbox folder, for example `toggle/index.html`, and test its logic there.
+2. `sandbox_propose` it. The user approves it on the agent's Artifacts page; nothing is saved
+   before that. Tell the user it is waiting.
+3. Once saved, `sandbox_present` places a card for it in any of the user's chats with this
+   agent, with your title, a short description and optional `params`.
+
+Saved elements are read-only in the sandbox at `saved/mine/<name>/` and `saved/shared/<name>/`.
+To change one, copy it into your folder, edit and propose it again. `sandbox_elements` lists
+them.
+
+An element runs in a sandboxed frame with no network and no app access. It talks to the chat
+only through `window.webagent`, which the app adds:
+
+- `webagent.params`: the card's `params` object; `webagent.card`: its title and description.
+- `webagent.preview.status()`: a promise of `{variant}` for this chat's UI preview in this
+  browser (`variant` is null when off). `webagent.preview.on(variant)` and
+  `webagent.preview.off()` turn a variant of this chat's UI previews (see the UI proposals
+  skill) on or off; the app then reloads the page in the same tab.
+- `webagent.prompt(text)`: sends `text` as the user's next message after a short countdown
+  the user can cancel. Call it only from a click in the element.
+- `webagent.open(route)`: opens an allowed app page (listed in the ability's
+  `elements.json`) in the same tab, after a click.
+- `webagent.resize(height)`: asks for a card height in pixels (bounded by the app).
+
+The app checks every request and ignores anything else. Keep elements small and readable on
+a phone (360 px wide) and on desktop.

@@ -573,8 +573,77 @@ async fn sandbox_files_round_trip_inside_the_scratch_folder() {
     assert!(usage[SESSION].as_u64().expect("bytes") >= 9);
 }
 
+async fn saved_elements_are_read_only_in_the_sandbox() {
+    if !sandbox_available() {
+        return;
+    }
+    let worker = worker().await;
+    let put = json!({"action":"put","path":"mine/toggle","revision":2,"html":"<p>saved</p>"});
+    let refused = worker.call("sandbox_element", put.clone(), 30).await;
+    assert_eq!(refused["status"], "failed", "{refused}");
+    let synced = worker
+        .call_with("sandbox_element", put, 30, json!({"element_sync":true}))
+        .await;
+    assert_eq!(synced["status"], "success", "{synced}");
+    let status = worker
+        .call_with(
+            "sandbox_element",
+            json!({"action":"status"}),
+            30,
+            json!({"element_sync":true}),
+        )
+        .await;
+    assert_eq!(status["output"]["revisions"]["mine/toggle"], 2, "{status}");
+    let shell = worker
+        .sandbox(
+            "sandbox_shell",
+            json!({"command":"cat ../saved/mine/toggle/index.html; echo; echo x > ../saved/mine/toggle/index.html || echo read-only"}),
+        )
+        .await;
+    assert_eq!(
+        shell["output"]
+            .as_str()
+            .map(|o| o.contains("<p>saved</p>") && o.contains("read-only")),
+        Some(true),
+        "{shell}"
+    );
+    let read = worker
+        .sandbox(
+            "sandbox_file",
+            json!({"action":"read","path":"saved/mine/toggle/index.html"}),
+        )
+        .await;
+    assert_eq!(read["output"], "<p>saved</p>", "{read}");
+    let write = worker
+        .sandbox(
+            "sandbox_file",
+            json!({"action":"write","path":"saved/mine/toggle/index.html","content":"x"}),
+        )
+        .await;
+    assert_eq!(write["status"], "failed", "{write}");
+    let own = worker
+        .sandbox(
+            "sandbox_file",
+            json!({"action":"write","path":"draft/index.html","content":"<p>draft</p>"}),
+        )
+        .await;
+    assert_eq!(own["status"], "success", "{own}");
+    let proposed = worker
+        .call_with(
+            "sandbox_element",
+            json!({"action":"read","folder":"draft"}),
+            30,
+            json!({"element_sync":true}),
+        )
+        .await;
+    assert_eq!(proposed["output"]["html"], "<p>draft</p>", "{proposed}");
+}
+
 fn main() {
     harness::main(&[
+        ("saved_elements_are_read_only_in_the_sandbox", || {
+            Box::pin(saved_elements_are_read_only_in_the_sandbox())
+        }),
         ("sandbox_tools_need_the_apps_limits", || {
             Box::pin(sandbox_tools_need_the_apps_limits())
         }),

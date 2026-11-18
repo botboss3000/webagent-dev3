@@ -1,0 +1,62 @@
+{
+  "name": "sandbox_present",
+  "description": "Place a saved UI element in this chat's Artifacts chip as a card with a title, a short description and the element.",
+  "effect": "write",
+  "repeat_guard": {
+    "risk": "low"
+  },
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "element": {
+        "type": "string",
+        "pattern": "^[a-z0-9_-]{1,40}$"
+      },
+      "scope": {
+        "type": "string",
+        "enum": [
+          "mine",
+          "shared"
+        ]
+      },
+      "title": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 80
+      },
+      "description": {
+        "type": "string",
+        "maxLength": 300
+      },
+      "params": {
+        "type": "object"
+      },
+      "id": {
+        "type": "string",
+        "pattern": "^[a-z0-9_-]{1,40}$"
+      }
+    },
+    "required": [
+      "element",
+      "title",
+      "description"
+    ],
+    "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "show the preview toggle card",
+      "present the element in the chat"
+    ],
+    "keywords": [
+      "element",
+      "card",
+      "present"
+    ]
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "name": "sandbox_share",
+  "description": "Share one of your saved UI elements with every user of this agent, or stop sharing it (operators only).",
+  "effect": "write",
+  "repeat_guard": {
+    "risk": "low"
+  },
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "pattern": "^[a-z0-9_-]{1,40}$"
+      },
+      "shared": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "name",
+      "shared"
+    ],
+    "additionalProperties": false
+  },
+  "role_access": [
+    "operator"
+  ],
+  "match": {
+    "examples": [
+      "share this element with everyone using the agent"
+    ],
+    "keywords": [
+      "element",
+      "share"
+    ]
+  }
+}

@@ -292,6 +292,11 @@ pub(super) fn router(app: App) -> Router {
             "/sessions/{sid}/ui-preview/{variant}",
             get(crate::ui_pages::ui_preview_start),
         )
+        .route(
+            "/sessions/{sid}/ui-preview",
+            post(crate::ui_pages::ui_preview_set),
+        )
+        .route("/ui-preview", get(crate::ui_pages::ui_preview_status))
         .nest(
             "/models",
             model_selection_api::router().merge(crate::agents_api::router()),
@@ -418,6 +423,26 @@ pub(super) fn router(app: App) -> Router {
         .route(
             "/embed/credentials/{id}",
             axum::routing::delete(embed::revoke),
+        )
+        .route(
+            "/agents/{id}/ui-elements",
+            get(tools::core_elements::page_read),
+        )
+        .route(
+            "/agents/{id}/ui-elements/proposals/{proposal}",
+            post(tools::core_elements::page_decide),
+        )
+        .route(
+            "/agents/{id}/ui-elements/{scope}/{name}",
+            axum::routing::delete(tools::core_elements::page_delete),
+        )
+        .route(
+            "/sessions/{sid}/ui-elements/{scope}/{name}",
+            get(tools::core_elements::session_element),
+        )
+        .route(
+            "/sessions/{sid}/ui-elements/{scope}/{name}/frame",
+            get(tools::core_elements::session_frame),
         )
         .route(
             "/agents/{id}/saved-scripts",

@@ -14,6 +14,7 @@ pub mod sandbox;
 pub mod sandbox_tools;
 pub mod terminal;
 pub mod tunnel;
+pub mod workspaces;
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -170,6 +171,62 @@ fn existing_workspace(roots: &files::Roots, request: &Value) -> Option<PathBuf> 
     path.is_dir().then_some(path)
 }
 
+/// Where the Sandbox ability publishes each session's folder size.
+fn sandbox_usage(roots: &files::Roots) -> PathBuf {
+    roots.port_claims.with_file_name("sandbox-usage.json")
+}
+
+/// Removes the workspaces of sessions `keep` does not list (see [`workspaces::orphans`]),
+/// skipping any with a running command, terminal or tunnel, and drops their Sandbox usage.
+/// Returns how many it removed.
+async fn sweep_workspaces(
+    roots: &files::Roots,
+    keep: &[String],
+    active: &Active,
+    persistent: &Persistent,
+) -> usize {
+    let Ok(root) = std::fs::canonicalize(&roots.workspaces) else {
+        return 0;
+    };
+    let candidates = {
+        let (root, keep) = (root.clone(), keep.to_vec());
+        tokio::task::spawn_blocking(move || workspaces::orphans(&root, &keep, workspaces::MIN_AGE))
+            .await
+            .unwrap_or_default()
+    };
+    let mut removed = 0;
+    for base in candidates {
+        let sid = base
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        if active.busy(&sid)
+            || persistent.terminals.count(&base) > 0
+            || persistent.tunnels.count(&base) > 0
+        {
+            continue;
+        }
+        // remove_dir_all never follows a symbolic link, so nothing outside the workspace
+        // root is touched.
+        if matches!(
+            tokio::task::spawn_blocking(move || std::fs::remove_dir_all(base)).await,
+            Ok(Ok(()))
+        ) {
+            removed += 1;
+        }
+    }
+    let usage = sandbox_usage(roots);
+    let keep = keep.to_vec();
+    let _ = tokio::task::spawn_blocking(move || {
+        sandbox_tools::forget_usage(&usage, |session| {
+            !keep.iter().any(|kept| kept == session) && !root.join(session).is_dir()
+        })
+    })
+    .await;
+    removed
+}
+
 /// The commands running in each workspace, so a run stop can end them.
 /// A running command's workspace and its stop signal.
 type Running = (String, Arc<Notify>);
@@ -194,6 +251,12 @@ impl Active {
     fn end(&self, id: u64) {
         let mut calls = self.calls.lock().unwrap_or_else(PoisonError::into_inner);
         calls.1.remove(&id);
+    }
+
+    /// Whether a command is running in `workspace`.
+    fn busy(&self, workspace: &str) -> bool {
+        let calls = self.calls.lock().unwrap_or_else(PoisonError::into_inner);
+        calls.1.values().any(|(owner, _)| owner == workspace)
     }
 
     /// Stops every command in `workspace`; a stop sent before the command waits is kept.
@@ -399,6 +462,13 @@ async fn handle(
             persistent.browsers.purge(sid).await;
         }
         let mut result = json!({"status":"success"});
+        if let Some(sid) = parsed["workspace"].as_str().map(str::to_owned) {
+            let usage = sandbox_usage(&config.files);
+            let _ = tokio::task::spawn_blocking(move || {
+                sandbox_tools::forget_usage(&usage, |session| session == sid)
+            })
+            .await;
+        }
         if let Some(base) = existing_workspace(&config.files, parsed) {
             persistent.terminals.close_all(&base).await;
             persistent.tunnels.close_workspace(&base).await;
@@ -424,7 +494,9 @@ async fn handle(
         });
         let result = match keep {
             Some(keep) => {
-                json!({"status":"success","output":{"removed":persistent.browsers.sweep(&keep).await}})
+                let removed = persistent.browsers.sweep(&keep).await;
+                let workspaces = sweep_workspaces(&config.files, &keep, active, persistent).await;
+                json!({"status":"success","output":{"removed":removed,"workspaces_removed":workspaces}})
             }
             None => json!({"status":"error","output":"keep list required"}),
         };

@@ -1,13 +1,15 @@
 import {requestTouchVibration} from '../../../../shared/vibrate.js';
 import {createMainNotes} from '../../../../chat/elements/main-notes/index.js';
 const node=(tag,text='',cls='')=>{const el=document.createElement(tag);el.textContent=text;el.className=cls;return el;};
-/** Artifacts: what an agent keeps across conversations for this user — Main Notes and saved scripts. Text-only DOM; script content is untrusted. */
+/** Artifacts: what an agent keeps across conversations for this user — Main Notes, saved scripts and UI elements. Text-only DOM; script and element content is untrusted. */
 export async function renderArtifacts(host,request,{agentId}) {
   const generation=(host._artifactsGeneration||0)+1;host._artifactsGeneration=generation;
   host._artifactsNotes?.destroy();host._artifactsNotes=null;
-  host.replaceChildren(node('h2','Artifacts'),node('p','What this agent keeps across conversations: your Main Notes and your saved scripts. Agents propose saved scripts; nothing is saved until you approve it.','ac-hint'));
+  host.replaceChildren(node('h2','Artifacts'),node('p','What this agent keeps across conversations: your Main Notes, your saved scripts and your UI elements. Agents propose saved scripts and UI elements; nothing is saved until you approve it.','ac-hint'));
   const notes=section('Main Notes');host.append(notes.box);
   const controller=createMainNotes({request,agentId});controller.element.open=true;notes.box.append(controller.element);host._artifactsNotes=controller;
+  const elements=section('UI elements');host.append(elements.box);
+  void renderElements(elements,request,agentId,()=>host._artifactsGeneration===generation,()=>renderArtifacts(host,request,{agentId}));
   const scripts=section('Saved scripts');host.append(scripts.box);
   const status=node('p','Loading…','ac-hint');status.setAttribute('role','status');scripts.box.append(status);
   const path='/agents/'+encodeURIComponent(agentId)+'/saved-scripts';
@@ -41,6 +43,42 @@ export async function renderArtifacts(host,request,{agentId}) {
     actions.append(act('Delete','restrict',async()=>{if(!window.confirm('Delete the saved script "'+name+'"? Agents can no longer run it. This cannot be undone.'))return null;return request(path+'/scripts/'+encodeURIComponent(name),'DELETE',{expected_revision:data.revision});}));
     card.append(actions);scripts.box.append(card);
   }
+}
+/** UI elements: proposals to approve or reject (their HTML shown as text), saved elements and shared ones. */
+async function renderElements(part,request,agentId,current,rerender){
+  const status=node('p','Loading…','ac-hint');status.setAttribute('role','status');part.box.append(status);
+  const path='/agents/'+encodeURIComponent(agentId)+'/ui-elements';
+  let data;
+  try{data=await request(path);}catch(error){if(current())status.textContent='UI elements unavailable: '+error.message;return;}
+  if(!current())return;
+  const act=(label,tone,run)=>{const button=node('button',label,'members-btn '+tone);button.type='button';button.style.webkitTapHighlightColor='transparent';
+    button.onclick=async event=>{requestTouchVibration(event);button.disabled=true;try{if(await run()===null){button.disabled=false;return;}await rerender();}catch(error){status.textContent=error.message;button.disabled=false;}};return button;};
+  const mine=data.mine||[],shared=data.shared||[],proposals=data.proposals||[];
+  status.textContent=mine.length+' of '+data.max_elements+' saved'+(shared.length?' · '+shared.length+' shared':'');
+  part.count.textContent=String(mine.length+shared.length);
+  const card=(element,note)=>{const box=node('details','','artifacts-script'),summary=node('summary');
+    summary.append(node('span',element.title||element.name,'artifacts-script-name'),node('span',element.description||'','artifacts-script-description'));box.append(summary);
+    box.append(node('p',[element.name,element.revision?'revision '+element.revision:'',note].filter(Boolean).join(' · '),'artifacts-meta'));return box;};
+  if(proposals.length){
+    part.box.append(node('h3','Awaiting your approval','artifacts-subhead'));
+    for(const proposal of proposals){
+      const box=card(proposal,mine.some(old=>old.name===proposal.name)?'Replaces your saved element of the same name':'New UI element');box.open=true;
+      box.append(node('p','Source conversation: '+proposal.origin_session_id,'artifacts-meta'),node('p','Approving saves exactly this page. It runs in a sandboxed frame with no network and no access to the app; it can only ask the chat to turn this chat\'s previews on or off, send a prompt after a countdown you can cancel, or open allowed app pages.','ac-hint'));
+      const code=node('details','','artifacts-element-code'),codeSummary=node('summary','Show its HTML ('+String(proposal.html||'').length+' characters)');code.append(codeSummary,node('pre',String(proposal.html||''),'artifacts-args'));box.append(code);
+      const actions=node('div','','artifacts-actions');
+      actions.append(act('Approve','authorize',()=>request(path+'/proposals/'+encodeURIComponent(proposal.id),'POST',{approve:true})),
+        act('Reject','restrict',()=>request(path+'/proposals/'+encodeURIComponent(proposal.id),'POST',{approve:false})));
+      box.append(actions);part.box.append(box);
+    }
+  }
+  if(!mine.length&&!shared.length)part.box.append(node('div','No UI elements yet. When an agent builds a page worth reusing, it proposes it here.','members-empty'));
+  const list=(items,scope,note,canDelete)=>{for(const element of items){
+    const box=card(element,element.saved_at?note+' '+new Date(element.saved_at*1000).toLocaleString():note);
+    if(canDelete){const actions=node('div','','artifacts-actions');
+      actions.append(act('Delete','restrict',async()=>{if(!window.confirm('Delete the UI element "'+element.name+'"? Cards that show it stop working. This cannot be undone.'))return null;return request(path+'/'+scope+'/'+encodeURIComponent(element.name),'DELETE');}));box.append(actions);}
+    part.box.append(box);}};
+  list(mine,'mine','Saved',true);
+  list(shared,'shared','Shared with every user of this agent ·',data.can_manage===true);
 }
 function section(title){const box=node('section','','members-section artifacts-section'),header=node('div','','members-section-header'),count=node('span','','members-section-count');header.append(node('span',title,'members-section-title'),count);box.append(header);return {box,count};}
 /** One script: name and description in the summary; params and each step's tool and arguments inside. */

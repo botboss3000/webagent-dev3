@@ -269,8 +269,8 @@ pub(crate) async fn purge_browser_folder(app: &App, sid: &str) {
     }
 }
 
-/// At startup, delete browser folders whose chat session no longer exists in any user's
-/// store. Retries while the worker starts; skips the sweep if any store cannot be listed.
+/// At startup, delete browser folders and workspaces whose chat session no longer exists
+/// in any user's store. Retries while the worker starts; skips the sweep if any store cannot be listed.
 pub(crate) async fn sweep_browser_folders(app: App) {
     let mut keep = Vec::new();
     let Ok(users) = app.store.all_user_ids().await else {
@@ -301,7 +301,8 @@ pub(crate) async fn sweep_browser_folders(app: App) {
         )
         .await;
         if let Some(value) = result.ok().filter(|value| value["status"] == "success") {
-            tracing::info!(removed = %value["output"]["removed"], "Browser folder sweep");
+            tracing::info!(removed = %value["output"]["removed"],
+                workspaces = %value["output"]["workspaces_removed"], "Browser folder and workspace sweep");
             return;
         }
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;

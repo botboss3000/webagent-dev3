@@ -16,13 +16,20 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 /// The tools this module runs.
-pub const TOOLS: [&str; 3] = ["sandbox_shell", "sandbox_python", "sandbox_file"];
+pub const TOOLS: [&str; 4] = [
+    "sandbox_shell",
+    "sandbox_python",
+    "sandbox_file",
+    "sandbox_element",
+];
 const MIB: u64 = 1024 * 1024;
 /// Folder entries a size count walks before it calls the folder full.
 const MAX_ENTRIES: usize = 50_000;
 /// What each file or folder counts for besides its bytes, so empty files still fill it.
 const ENTRY_BYTES: u64 = 256;
 const LIST_LIMIT: usize = 500;
+/// The largest `index.html` a proposal reads; the ability's own limit is lower.
+const ELEMENT_READ: u64 = 512 * 1024;
 
 /// Whether this module runs `name`.
 #[must_use]
@@ -147,6 +154,15 @@ impl Confinement {
 /// Runs one Sandbox request. Dropping the future stops a running command, as for
 /// [`crate::commands::call`].
 pub async fn call(roots: &Roots, runner: &[String], request: &Value) -> Value {
+    if request["name"] == "sandbox_element" {
+        let (roots, request) = (roots.clone(), request.clone());
+        return tokio::task::spawn_blocking(move || {
+            element(&roots, &request)
+                .unwrap_or_else(|output| json!({"status":"failed","output":output}))
+        })
+        .await
+        .unwrap_or_else(|_| json!({"status":"failed","output":"Sandbox element sync failed"}));
+    }
     let admitted = {
         let roots = roots.clone();
         let request = request.clone();
@@ -184,6 +200,136 @@ pub async fn call(roots: &Roots, runner: &[String], request: &Value) -> Value {
 }
 
 type Admitted = (PathBuf, String, Value, Limits, u64);
+
+/// The read-only copy of the agent's saved UI elements beside the scratch folder:
+/// `<workspace>/saved/{mine,shared}/<name>/index.html`. Sandbox commands read it at
+/// `../saved` and `sandbox_file` at `saved/...`; only the app writes it, through
+/// [`element`].
+fn saved_root(scratch: &Path) -> PathBuf {
+    scratch.with_file_name("saved")
+}
+
+/// `mine/<name>` or `shared/<name>` with a valid element name.
+fn mirror_path(path: &str) -> Option<(&str, &str)> {
+    let (scope, name) = path.split_once('/')?;
+    let named = (1..=40).contains(&name.len())
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'-' | b'_'));
+    (matches!(scope, "mine" | "shared") && named).then_some((scope, name))
+}
+
+/// The app's sync of a session's element copy (`sandbox_element`, trusted only): `status`
+/// lists each copied element's revision, `put` writes one, `remove` drops one.
+fn element(roots: &Roots, request: &Value) -> Result<Value, String> {
+    if request["trusted"]["element_sync"] != true {
+        return Err("Sandbox element sync is the app's own".into());
+    }
+    let (base, _, args) = files::admit(roots, request).map_err(|f| f.to_string())?;
+    let saved = base.join("saved");
+    for dir in [saved.clone(), saved.join("mine"), saved.join("shared")] {
+        match std::fs::DirBuilder::new().mode(0o750).create(&dir) {
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            result => result.map_err(|error| error.to_string())?,
+        }
+        if !std::fs::symlink_metadata(&dir).is_ok_and(|meta| meta.is_dir()) {
+            return Err("Invalid saved elements folder".into());
+        }
+    }
+    match args["action"].as_str() {
+        Some("status") => {
+            let mut revisions = serde_json::Map::new();
+            for scope in ["mine", "shared"] {
+                for entry in std::fs::read_dir(saved.join(scope))
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                {
+                    let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                        continue;
+                    };
+                    let path = format!("{scope}/{name}");
+                    if mirror_path(&path).is_none() || !entry.file_type().is_ok_and(|t| t.is_dir())
+                    {
+                        continue;
+                    }
+                    let revision = std::fs::read_to_string(entry.path().join(".revision"))
+                        .ok()
+                        .and_then(|text| text.trim().parse::<u64>().ok());
+                    revisions.insert(path, json!(revision));
+                }
+            }
+            Ok(json!({"status":"success","output":{"revisions":revisions}}))
+        }
+        Some("put") => {
+            let path = args["path"]
+                .as_str()
+                .and_then(mirror_path)
+                .ok_or("Invalid element path")?;
+            let html = args["html"].as_str().ok_or("html must be text")?;
+            let revision = args["revision"]
+                .as_u64()
+                .ok_or("revision must be a whole number")?;
+            let dir = saved.join(path.0).join(path.1);
+            let temporary = saved.join(path.0).join(format!(".tmp-{}", path.1));
+            let _ = std::fs::remove_dir_all(&temporary);
+            std::fs::DirBuilder::new()
+                .mode(0o750)
+                .create(&temporary)
+                .map_err(|error| error.to_string())?;
+            std::fs::write(temporary.join("index.html"), html).map_err(|e| e.to_string())?;
+            std::fs::write(temporary.join(".revision"), revision.to_string())
+                .map_err(|e| e.to_string())?;
+            if std::fs::symlink_metadata(&dir).is_ok() {
+                std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+            }
+            std::fs::rename(&temporary, &dir).map_err(|e| e.to_string())?;
+            Ok(json!({"status":"success"}))
+        }
+        Some("read") => {
+            // The scratch folder's `<folder>/index.html` for a proposal, never through a symlink.
+            let folder = args["folder"].as_str().unwrap_or_default();
+            let mut parts = checked(folder)?;
+            parts.push("index.html");
+            let scratch = base.join("sandbox");
+            let root = rustix::fs::open(
+                &scratch,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|_| "The sandbox folder is empty".to_owned())?;
+            let fd = beneath(&root, parts, OFlags::RDONLY)
+                .map_err(|_| format!("No index.html in sandbox folder {folder}"))?;
+            let mut file = std::fs::File::from(fd);
+            if !file.metadata().is_ok_and(|meta| meta.is_file()) {
+                return Err(format!("{folder}/index.html is not a file"));
+            }
+            let mut data = Vec::new();
+            (&mut file)
+                .take(ELEMENT_READ + 1)
+                .read_to_end(&mut data)
+                .map_err(|error| error.to_string())?;
+            if data.len() as u64 > ELEMENT_READ {
+                return Err("index.html is larger than 512 KB".into());
+            }
+            let html =
+                String::from_utf8(data).map_err(|_| "index.html is not UTF-8 text".to_owned())?;
+            Ok(json!({"status":"success","output":{"html":html}}))
+        }
+        Some("remove") => {
+            let path = args["path"]
+                .as_str()
+                .and_then(mirror_path)
+                .ok_or("Invalid element path")?;
+            let dir = saved.join(path.0).join(path.1);
+            if std::fs::symlink_metadata(&dir).is_ok() {
+                std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+            }
+            Ok(json!({"status":"success"}))
+        }
+        _ => Err("action must be status, put, read or remove".into()),
+    }
+}
 
 fn admit(roots: &Roots, request: &Value) -> Result<Admitted, String> {
     let limits = Limits::from_request(request)?;
@@ -269,9 +415,25 @@ fn full_message(used: u64, cap: u64) -> String {
 /// the scratch folder without following any symlink.
 fn file(scratch: &Path, args: &Value, limits: &Limits, used: u64) -> Result<Value, String> {
     let action = args["action"].as_str().unwrap_or_default();
-    let path = args["path"].as_str().unwrap_or_default();
+    let requested = args["path"].as_str().unwrap_or_default();
+    // `saved/...` reads the agent's saved elements, which are read-only here.
+    let (folder, path) = match requested
+        .strip_prefix("saved")
+        .filter(|rest| rest.is_empty() || rest.starts_with('/'))
+    {
+        Some(rest) => {
+            if !matches!(action, "read" | "list") {
+                return Err("saved/ holds the agent's saved elements and is read-only".into());
+            }
+            (saved_root(scratch), rest.trim_start_matches('/'))
+        }
+        None => (scratch.to_path_buf(), requested),
+    };
+    if !folder.is_dir() {
+        return Err("No saved elements yet".into());
+    }
     let root = rustix::fs::open(
-        scratch,
+        &folder,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     )
@@ -475,18 +637,33 @@ static USAGE: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);
 /// Writes `sandbox-usage.json` beside the port claims (group-readable by the API, which
 /// counts it toward the owner's storage), replacing it atomically: `{"<session id>": bytes}`.
 fn publish_usage(path: &Path, session: &str, bytes: u64) -> io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let body = {
-        let mut usage = USAGE.lock().unwrap_or_else(PoisonError::into_inner);
-        let usage = usage.get_or_insert_with(|| {
-            std::fs::read(path)
-                .ok()
-                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-                .unwrap_or_default()
-        });
+    change_usage(path, |usage| {
         usage.insert(session.to_owned(), bytes);
-        serde_json::to_vec(&*usage)?
-    };
+    })
+}
+
+/// Drops the usage of every session `gone` names, for a deleted session or the startup
+/// sweep of orphaned workspaces.
+///
+/// # Errors
+/// When the file cannot be replaced.
+pub fn forget_usage(path: &Path, gone: impl Fn(&str) -> bool) -> io::Result<()> {
+    change_usage(path, |usage| usage.retain(|session, _| !gone(session)))
+}
+
+/// Applies `change` to the usage map and rewrites the file, holding the lock throughout so
+/// concurrent calls never interleave their writes.
+fn change_usage(path: &Path, change: impl FnOnce(&mut HashMap<String, u64>)) -> io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut usage = USAGE.lock().unwrap_or_else(PoisonError::into_inner);
+    let usage = usage.get_or_insert_with(|| {
+        std::fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    });
+    change(usage);
+    let body = serde_json::to_vec(&*usage)?;
     let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
     let _ = std::fs::remove_file(&temporary);
     let mut file = std::fs::OpenOptions::new()

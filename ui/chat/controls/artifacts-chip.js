@@ -1,10 +1,12 @@
 // Artifacts chip: a header session-tab chip for what the agent produced in this chat (the
 // agreed plan first). Artifacts are kept with the session (its session_artifacts rows) and
 // arrive with the session snapshot; the chip lists them and opens one as a read-only card.
-// The user's own uploads are not artifacts.
+// A UI element card (kind ui_element) also runs the agent's saved element in a sandboxed
+// frame (artifact-element.js). The user's own uploads are not artifacts.
 import {requestTouchVibration} from '../../shared/vibrate.js';
+import {elementFrame} from './artifact-element.js';
 
-const KINDS = {plan: 'Plan'};
+const KINDS = {plan: 'Plan', ui_element: 'Element'};
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 
 /** The session's artifacts that can be shown, newest first. */
@@ -14,8 +16,11 @@ export function artifactRows(items) {
     .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
 }
 
-/** One artifact as a read-only card: its title, then each section as a label over its text. */
-export function artifactCard(row) {
+/**
+ * One artifact as a card: its title, then each section as a label over its text; a UI
+ * element card then shows the element (`frame(row)` builds it).
+ */
+export function artifactCard(row, frame = null) {
   const box = el('div', 'sub-chip-menu artifact-card'); box.setAttribute('role', 'dialog');
   box.setAttribute('aria-label', 'Artifact ' + (row.title || row.id));
   box.append(el('strong', 'artifact-card-title', row.title || 'Artifact'));
@@ -25,11 +30,16 @@ export function artifactCard(row) {
     part.append(el('div', 'artifact-label', String(section.label || '')), el('p', 'artifact-text', section.value));
     box.append(part);
   }
+  if (row.kind === 'ui_element' && frame) { box.classList.add('artifact-card-element'); box.append(frame(row)); }
   return box;
 }
 
-/** Mounts the chip into the header session-tabs row and returns its session lifecycle. */
-export function createArtifactsChip() {
+/**
+ * Mounts the chip into the header session-tabs row and returns its session lifecycle.
+ * `session()` names the open chat and `send(text)` sends the user's message, for UI
+ * element cards.
+ */
+export function createArtifactsChip({session = () => '', send = async () => {}} = {}) {
   const tabs = document.getElementById('chat-sub-header');
   const chip = el('button', 'sub-chip chip-artifacts'); chip.type = 'button'; chip.id = 'chat-artifacts-chip';
   chip.setAttribute('aria-haspopup', 'dialog'); chip.setAttribute('aria-expanded', 'false');
@@ -46,7 +56,7 @@ export function createArtifactsChip() {
     document.addEventListener('pointerdown', outside, true);
   }
   function openCard(row) {
-    const card = artifactCard(row);
+    const card = artifactCard(row, element => elementFrame(element, session(), text => { close(); return send(text); }));
     if (rows.length > 1) {
       // Back returns to the list; the card itself stays read-only.
       const back = el('button', 'artifact-back', 'All artifacts'); back.type = 'button';

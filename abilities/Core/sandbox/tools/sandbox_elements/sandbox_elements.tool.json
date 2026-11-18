@@ -1,0 +1,24 @@
+{
+  "name": "sandbox_elements",
+  "description": "List this agent's saved UI elements for the user, the shared ones and pending proposals.",
+  "effect": "read",
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "which ui elements are saved"
+    ],
+    "keywords": [
+      "elements"
+    ]
+  }
+}

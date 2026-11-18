@@ -129,7 +129,7 @@ impl Store {
         .await?)
     }
     /// Bytes this user stores: the database and its journal, attachment files, browser
-    /// folders and Sandbox folders.
+    /// folders, Sandbox folders and saved UI elements.
     pub(crate) async fn storage_used(&self) -> Result<u64> {
         let files = self
             .get(webagent_files::QUOTA_KEY)
@@ -147,7 +147,14 @@ impl Store {
         }
         Ok(files
             .saturating_add(database)
-            .saturating_add(self.worker_used().await?))
+            .saturating_add(self.worker_used().await?)
+            .saturating_add({
+                let (root, user) = (self.root.clone(), self.user_id.clone());
+                tokio::task::spawn_blocking(move || {
+                    webagent_native_tools::sandbox::elements::user_bytes(&root, &user)
+                })
+                .await?
+            }))
     }
     /// Remove only an unclaimed upload owned by this session and decrement its quota atomically.
     pub(crate) async fn delete_pending_upload(&self, sid: &str, aid: &str) -> Result<()> {

@@ -98,6 +98,7 @@ mod preview {
         http::{header, HeaderMap, HeaderValue},
         response::{IntoResponse, Redirect},
     };
+    use serde_json::json;
     use std::{
         collections::HashMap,
         path::PathBuf,
@@ -249,6 +250,67 @@ mod preview {
         ([(header::SET_COOKIE, cookie)], Redirect::to("/app")).into_response()
     }
 
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub(crate) struct Choice {
+        /// The variant to preview, or null to stop previewing.
+        variant: Option<String>,
+    }
+
+    /// `POST /api/v3/sessions/{sid}/ui-preview` with `{"variant": name | null}`: what the
+    /// start and off links do, for a page that then reloads itself in the same tab (a UI
+    /// element's preview switch) rather than following a redirect.
+    pub(crate) async fn set(
+        axum::Extension(app): axum::Extension<crate::App>,
+        axum::Extension(identity): axum::Extension<Value>,
+        RoutePath(sid): RoutePath<String>,
+        headers: HeaderMap,
+        axum::Json(choice): axum::Json<Choice>,
+    ) -> Response {
+        let variant = choice.variant.unwrap_or_else(|| "off".into());
+        if variant != "off" && !variant_ok(&variant) {
+            return (StatusCode::BAD_REQUEST, "Invalid variant").into_response();
+        }
+        let mut response = start(
+            axum::Extension(app),
+            axum::Extension(identity),
+            RoutePath((sid.clone(), variant.clone())),
+            headers,
+        )
+        .await;
+        if response.status().is_redirection() {
+            *response.status_mut() = StatusCode::OK;
+            response.headers_mut().remove(header::LOCATION);
+            let active = (variant != "off").then_some(variant);
+            *response.body_mut() =
+                axum::body::Body::from(json!({"session_id":sid,"variant":active}).to_string());
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+        }
+        response
+    }
+
+    /// `GET /api/v3/ui-preview`: the preview this browser shows, `{"session_id","variant"}`,
+    /// or nulls when none (the preview cookie itself is hidden from pages).
+    pub(crate) async fn status(
+        axum::Extension(app): axum::Extension<crate::App>,
+        headers: HeaderMap,
+    ) -> Response {
+        let grant = cookie_value(&headers, COOKIE)
+            .and_then(|token| GRANTS.lock().ok()?.get(token).cloned());
+        let live = match &grant {
+            Some(_) => root_for(&app, &headers).await.is_some(),
+            None => false,
+        };
+        let body = match grant.filter(|_| live) {
+            Some(grant) => json!({"session_id":grant.session_id,"variant":grant.variant}),
+            None => json!({"session_id":null,"variant":null}),
+        };
+        axum::Json(body).into_response()
+    }
+
     /// Serve the variant's copy of a UI file, never cached.
     pub(super) async fn serve(file: PathBuf, request: Request) -> Response {
         let mut response = tower_http::services::ServeFile::new(file)
@@ -286,4 +348,6 @@ mod preview {
         }
     }
 }
+pub(crate) use preview::set as ui_preview_set;
 pub(crate) use preview::start as ui_preview_start;
+pub(crate) use preview::status as ui_preview_status;

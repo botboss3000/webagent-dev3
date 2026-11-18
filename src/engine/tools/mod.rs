@@ -13,6 +13,8 @@ pub(crate) mod core_app_control;
 pub(crate) mod core_authority;
 #[path = "../../../crates/modules/inference/host/tools.rs"]
 pub(crate) mod core_config_controller;
+#[path = "../../../crates/modules/abilities/host/base/elements_adapter.rs"]
+pub(crate) mod core_elements;
 #[path = "../../../crates/modules/media/host/image_generation.rs"]
 pub(crate) mod core_image_generation;
 #[path = "../../../crates/modules/abilities/host/base/mode_adapter.rs"]

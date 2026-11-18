@@ -1,0 +1,35 @@
+{
+  "name": "sandbox_delete",
+  "description": "Delete one of the user's saved UI elements with this agent, or their pending proposal of that name.",
+  "effect": "write",
+  "repeat_guard": {
+    "risk": "low"
+  },
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "pattern": "^[a-z0-9_-]{1,40}$"
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "delete the saved element"
+    ],
+    "keywords": [
+      "element",
+      "delete"
+    ]
+  }
+}

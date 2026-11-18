@@ -1,0 +1,51 @@
+{
+  "name": "sandbox_propose",
+  "description": "Propose a sandbox folder's index.html as a saved UI element of this agent; the user approves it on the agent's Artifacts page.",
+  "effect": "write",
+  "repeat_guard": {
+    "risk": "low"
+  },
+  "default_policy": {
+    "operator": "allow",
+    "member": "allow",
+    "visitor": "deny"
+  },
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "folder": {
+        "type": "string",
+        "maxLength": 200
+      },
+      "name": {
+        "type": "string",
+        "pattern": "^[a-z0-9_-]{1,40}$"
+      },
+      "title": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 80
+      },
+      "description": {
+        "type": "string",
+        "maxLength": 300
+      }
+    },
+    "required": [
+      "folder",
+      "name",
+      "title"
+    ],
+    "additionalProperties": false
+  },
+  "match": {
+    "examples": [
+      "save this page as a reusable element",
+      "propose the element I built"
+    ],
+    "keywords": [
+      "element",
+      "propose"
+    ]
+  }
+}

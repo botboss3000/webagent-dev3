@@ -212,7 +212,7 @@ const sessionList=createSessionList($('session-dropdown'),{guard,screenSettings:
 // Header Broker chip: this session's (and its sub-agents') broker tasks and stage cards.
 const brokerChip=createBrokerChip({request,note,family:id=>sessionList.family(id)});
 // The Artifacts chip lists what the agent produced in the open session; snapshots refill it.
-const artifactsChip=createArtifactsChip();
+const artifactsChip=createArtifactsChip({session:()=>session,send:text=>submit(text)});
 // Exposes dropdown configuration through the session-list controller.
 $('session-dropdown').configure=cfg=>sessionList.configure(cfg);
 const chatPanel=root;

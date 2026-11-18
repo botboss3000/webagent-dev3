@@ -45,9 +45,14 @@ pub fn supervise(argv_json: &str) -> i32 {
         let argv = serde_json::from_str(argv_json).map_err(invalid)?;
         Ok(Spec {
             argv,
-            // A Sandbox command reads only the strict sandbox's own system files.
+            // A Sandbox command reads only the strict sandbox's own system files and the
+            // read-only copy of the agent's saved elements beside its folder.
             read_paths: if strict.is_some() {
-                Vec::new()
+                std::env::current_dir()
+                    .map(|base| base.with_file_name("saved"))
+                    .into_iter()
+                    .filter(|saved| saved.is_dir())
+                    .collect()
             } else {
                 command_read_paths(std::env::var("V3_CHECKOUT_READ").is_ok_and(|v| v == "1"))
             },

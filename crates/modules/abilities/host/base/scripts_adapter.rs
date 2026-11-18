@@ -360,7 +360,7 @@ pub async fn execute(
 }
 
 /// The caller's own store, once they may use `agent` at all.
-async fn page_store(
+pub(crate) async fn page_store(
     app: &App,
     identity: &Value,
     agent: &str,

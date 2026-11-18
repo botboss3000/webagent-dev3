@@ -24,3 +24,14 @@
 .artifact-back { min-height: 32px; margin: 0 0 6px; padding: 4px 10px; border: var(--border-width) solid var(--border); border-radius: 8px; background: none; color: var(--fg-1); font: inherit; font-size: 12px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .artifact-back:active { background: color-mix(in oklab, var(--fg-1) 10%, transparent); }
 .artifact-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* A UI element card (artifact-element.js): the agent's element in a sandboxed frame, and the
+   countdown strip shown before a prompt it asked to send. */
+.artifact-card.artifact-card-element { width: min(560px, calc(100vw - 16px)); }
+.artifact-element { margin-top: 8px; }
+.artifact-element-frame { display: block; width: 100%; border: var(--border-width) solid var(--border); border-radius: 8px; background: var(--bg-1, transparent); }
+.artifact-element-status { margin: 4px 0; color: var(--fg-2); font-size: 12px; }
+.artifact-element-countdown { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 6px 8px; border: var(--border-width) solid var(--border); border-radius: 8px; font-size: 12px; }
+.artifact-element-countdown-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.artifact-element-cancel { min-height: 32px; padding: 4px 12px; border: var(--border-width) solid var(--border); border-radius: 8px; background: none; color: var(--fg-1); font: inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.artifact-element-cancel:active { background: color-mix(in oklab, var(--fg-1) 10%, transparent); }
+.artifact-element-cancel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

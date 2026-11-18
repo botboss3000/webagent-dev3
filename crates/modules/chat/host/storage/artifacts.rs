@@ -114,7 +114,7 @@ impl Store {
                 "kind":row.get::<String,_>("kind"),"revision":row.get::<i64,_>("revision"),
                 "run_id":row.get::<String,_>("run_id"),"created_at":row.get::<i64,_>("created_at"),
                 "updated_at":row.get::<i64,_>("updated_at"),"title":body["title"],
-                "sections":body["sections"]}));
+                "sections":body["sections"],"element":body["element"],"params":body["params"]}));
         }
         Ok(artifacts)
     }

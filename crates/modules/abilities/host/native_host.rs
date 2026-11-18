@@ -76,10 +76,13 @@ impl NativeHost for Host<'_> {
         Box::pin(async move {
             // Directory decisions read the live checkout only when Codebase Admin supplies
             // file_list to this run. Sandbox calls carry the ability's limits and the
-            // storage owner's remaining room, which only the root may set.
+            // storage owner's remaining room, and element syncs their marker, which only the
+            // root may set.
             let trusted = if name == "decision_candidates" {
                 tools::administrator::checkout_grant(self.0, sid, run, "file_list", None).await
-            } else if webagent_native_tools::sandbox::owns(name) {
+            } else if name == webagent_native_tools::sandbox::ELEMENT_SYNC {
+                Some(serde_json::json!({"element_sync":true}))
+            } else if webagent_native_tools::sandbox::limited(name) {
                 let mut limits = webagent_native_tools::sandbox::limits()?;
                 limits["room_bytes"] = serde_json::json!(api::uploads::storage_room(self.0)
                     .await
