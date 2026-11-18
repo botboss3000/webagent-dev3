@@ -154,7 +154,7 @@ export async function renderIdentity(host, request, {agentId, onSaved = () => {}
         if(key==='prompt')input.rows=6;if(key==='turn_guidance'){input.rows=6;input.maxLength=4000;}if(key==='turn_label')input.maxLength=60;
         input.value=mode[key]||'';input.disabled=!agent.can_manage;
         if(key==='turn_guidance'){
-          wrap.append(' ',tipBadge('The per-turn label and this text are sent to the model with every turn while the session is in this mode, after the conversation history, and never saved in it. Include guidance on publish_main_message here. Through a bridge (Claude Code, OpenCode), they are added once per run, and again at the next step when they change.'));
+          wrap.append(' ',tipBadge('The per-turn label and this text are sent to the model with every turn while the session is in this mode, after the conversation history, and never saved in it. Use it for guidance the agent must follow on every turn, on top of the mode. Through a bridge (Claude Code, OpenCode), they are added with each user message, and again at the next step when they change.'));
         }
         input.addEventListener('input',()=>{mode[key]=input.value;save.disabled=false;status.textContent='Unsaved changes';updateSummary();});wrap.append(input);
         if(key==='turn_guidance'){const note=document.createElement('span');note.className='ac-hint';note.textContent='Sent with every turn in this mode, after the per-turn label. Leave both empty to send nothing.';wrap.append(note);}

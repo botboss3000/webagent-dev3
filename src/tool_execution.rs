@@ -29,9 +29,6 @@ pub fn advanced_policies(name: &str) -> Value {
 pub fn resolve(value: &Value, name: &str) -> Result<Settings> {
     webagent_engine::tools::execution::resolve::<NativeActions>(value, name)
 }
-pub fn guidance(value: &Value, names: &[String]) -> Result<String> {
-    webagent_engine::tools::execution::guidance::<NativeActions>(value, names)
-}
 pub async fn acquire(
     scope: &std::path::Path,
     user: &str,

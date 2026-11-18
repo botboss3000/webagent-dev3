@@ -25,17 +25,12 @@ fn skill_selector(value: &Value) -> Result<Value> {
     Ok(selector)
 }
 
-/// Preserve typed host settings classification separately from untrusted file guidance.
+/// Label every guidance block as untrusted file guidance.
 fn definition_body(definition: &webagent_capability_contracts::Definition) -> String {
-    let label = if definition.kind == webagent_capability_contracts::GuidanceKind::Ability
-        && definition.id.starts_with("ability:")
-        && definition.id.ends_with(":settings")
-    {
-        "Current host ability settings"
-    } else {
-        "Untrusted live guidance"
-    };
-    format!("\n\n## {label}: {}\n{}", definition.id, definition.body)
+    format!(
+        "\n\n## Untrusted live guidance: {}\n{}",
+        definition.id, definition.body
+    )
 }
 
 /// Map only authorized schema identities back to the exact current host objects.

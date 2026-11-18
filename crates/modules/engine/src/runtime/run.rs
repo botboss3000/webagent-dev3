@@ -2307,15 +2307,7 @@ impl<
                 // once compaction has taken that result out of the history.
                 let in_history = skills_in_history(&run["input"]);
                 guidance_blocks.retain(|block| block.natural || !in_history.contains(&block.id));
-                let names = schemas
-                    .iter()
-                    .filter_map(|schema| schema["name"].as_str().map(str::to_owned))
-                    .collect::<Vec<_>>();
-                let menu = format!(
-                    "{}\n{}",
-                    tool_execution::guidance::<A>(&visibility, &names)?,
-                    X::optimization_guidance(&run)
-                );
+                let menu = X::optimization_guidance(&run).to_owned();
                 let profile_request = webagent_provider_contracts::RequestV1::Profile {
                     version: 1,
                     provider: crate::provider::projection_id(selection.provider),

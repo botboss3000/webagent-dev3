@@ -39,7 +39,7 @@ Paths named `plugin <id>.py` refer to the owning V2 folder matching the ID and g
 | Administrator/git_control | plugin git_control.py; source handlers/adapter | ready; scoped Git push, credential policy and conflict resolution exercised through V3 APIs | Agent-owned sealed HTTPS connection/token; revisioned notify setting | 4 declared / 5 skills |
 | Administrator/program_screenshot | plugin program_screenshot.py; source handlers/adapter | pending; explicitly excluded by user | Not installed | 1 declared / 2 skills |
 | Administrator/remote_tunnel | Rust worker `tunnel.rs` | ready; owned preview lease, unowned-port denial and expiry passed API checks | Session-owned server port and separate quicktunnel connector | 2 declared / 3 skills |
-| Administrator/terminal_control | Rust worker `terminal.rs` (`--terminal-supervisor`) | ready; sandboxed PTY input/output and revocation closure passed API checks | Session workspace, assigned ports and revisioned caution setting | 6 declared / 7 skills |
+| Administrator/terminal_control | Rust worker `terminal.rs` (`--terminal-supervisor`) | ready; sandboxed PTY input/output and revocation closure passed API checks | Session workspace and assigned ports | 6 declared / 7 skills |
 | CRM/hubspot | Product placeholder; no executable contract | placeholder; intentionally unavailable | Separate product specification required | 0 declared / 0 skills |
 | CRM/mailchimp | Product placeholder; no executable contract | placeholder; intentionally unavailable | Separate product specification required | 0 declared / 0 skills |
 | CRM/salesforce | Product placeholder; no executable contract | placeholder; intentionally unavailable | Separate product specification required | 0 declared / 0 skills |

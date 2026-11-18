@@ -260,24 +260,7 @@ impl<
             return access.tool_decision(name, true, true);
         }
         let (available, visible, ability_ids) = (gate.available, gate.visible, &gate.abilities);
-        // An ability's "cautious" setting makes its writes ask, whatever the level allows.
-        let cautious = !A::is_read(name)
-            && ability_ids.iter().any(|id| {
-                let key = match id.as_str() {
-                    "terminal_control" => "terminal_caution",
-                    "codebase_admin" => "destructive_caution",
-                    _ => return false,
-                };
-                visibility["settings"][id][key] == "cautious"
-            });
-        let mut decision =
-            access.tool_decision_for_abilities(name, ability_ids, available, visible);
-        if cautious && decision.permission == access::Permission::Auto {
-            decision = access::ToolDecision {
-                permission: access::Permission::Ask,
-                reason: access::Reason::ApprovalRequired,
-            };
-        }
+        let decision = access.tool_decision_for_abilities(name, ability_ids, available, visible);
         // A tool switched off for this agent is denied as if it did not exist, so no
         // denial reason confirms a hidden capability. Only the reason changes.
         if decision.permission == access::Permission::Deny

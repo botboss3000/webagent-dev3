@@ -1957,18 +1957,6 @@ impl<H: Host> Catalog<H> {
             let has_tool = ability.tools.iter().any(|tool| supplied_tool(tool));
             let header = format!("\n\nVisible ability {} ({}):", ability.id, ability.name);
             let mut part = header.clone();
-            // Only typed saved settings enter guidance; they never grant use.
-            for key in ["terminal_caution", "destructive_caution"] {
-                if !has_tool {
-                    break;
-                }
-                if let Some(value) = visibility["settings"][&ability.id][key]
-                    .as_str()
-                    .filter(|v| matches!(*v, "cautious" | "balanced" | "trusted"))
-                {
-                    part.push_str(&format!("\nConfigured {key}: {value}. Live Rust policy and approval remain authoritative."));
-                }
-            }
 
             // Visible core guidance is mandatory. Discoverable skill loads rebuild
             // their own context layer, independently of ability activation.
@@ -2107,26 +2095,6 @@ impl<H: Host> Catalog<H> {
                         })
                     })
             };
-            // Saved caution remains mandatory independently of core-skill mode.
-            // Keeping it separate prevents it from promoting discoverable skill text.
-            let mut settings = String::new();
-            for key in ["terminal_caution", "destructive_caution"] {
-                if let Some(value) = visibility["settings"][id][key]
-                    .as_str()
-                    .filter(|value| matches!(*value, "cautious" | "balanced" | "trusted"))
-                {
-                    settings.push_str(&format!("\nConfigured {key}: {value}. Live Rust policy and approval remain authoritative."));
-                }
-            }
-            if !settings.is_empty() {
-                guidance.push(Guidance {
-                    id: format!("ability:{id}:settings"),
-                    kind: GuidanceKind::Ability,
-                    body: settings,
-                    selected: false,
-                    natural: has_tool,
-                });
-            }
             if Self::skill_mode(visibility, ability) != "off" {
                 if let Some(body) = Self::core_skill(ability) {
                     if Self::skill_mode(visibility, ability) == "core" {
@@ -3617,8 +3585,7 @@ pub mod registered_tests {
             fs::write(&path, skill("FIRST BODY")).unwrap();
             let catalog = Catalog::<H>::load_snapshot(root.path()).unwrap();
             let visible = json!({"visibility":{"codebase_admin":"loaded"},"skill_visibility":{"codebase_admin":"loaded"},
-            "tool_modes":{"file_edit":"loaded"},
-            "settings":{"codebase_admin":{"terminal_caution":"cautious"}}});
+            "tool_modes":{"file_edit":"loaded"}});
             let state = json!({"active":[],"suppressed":[]});
             let entries = catalog.catalog_with(&visible, &state);
             let schemas = vec![json!({"name":"load_skill"}), json!({"name":"file_edit"})];
@@ -3637,11 +3604,6 @@ pub mod registered_tests {
             assert!(first.iter().any(|item| item.id == "ability:codebase_admin"
                 && item.natural
                 && item.body == "Use scoped workspace tools."));
-            assert!(first
-                .iter()
-                .any(|item| item.id == "ability:codebase_admin:settings"
-                    && item.natural
-                    && item.body.contains("Configured terminal_caution: cautious")));
             let mut hidden_core = visible.clone();
             hidden_core["skill_visibility"] = json!({"codebase_admin":"on_request"});
             let hidden = catalog.capability_guidance(
@@ -3655,9 +3617,6 @@ pub mod registered_tests {
             assert!(hidden.iter().any(|item| item.id == "ability:codebase_admin"
                 && !item.natural
                 && !item.selected));
-            assert!(hidden
-                .iter()
-                .any(|item| item.id == "ability:codebase_admin:settings" && item.natural));
             hidden_core["skill_visibility"]["codebase_admin"] = json!("off");
             let off_core = catalog.capability_guidance(
                 &entries,
@@ -3670,9 +3629,6 @@ pub mod registered_tests {
             assert!(!off_core
                 .iter()
                 .any(|item| item.id == "ability:codebase_admin"));
-            assert!(off_core
-                .iter()
-                .any(|item| item.id == "ability:codebase_admin:settings" && item.natural));
             assert!(first
                 .iter()
                 .any(|item| item.id == "tool:codebase_admin:file_edit" && item.natural));

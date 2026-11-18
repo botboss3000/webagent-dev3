@@ -93,9 +93,7 @@ fn synthetic_codebase_admin(root: &std::path::Path) {
         "tools": ["file_list", "file_read", "file_search", "file_edit", "file_write",
             "state_inspect", "prompt_slot_read", "prompt_slot_write", "shell", "python",
             "checkout_edit"],
-        "readiness": "ready",
-        "config": {"bias": {"key": "destructive_caution", "label": "Caution", "default": "balanced",
-            "levels": {"cautious": "Ask first.", "balanced": "Ask when unsure.", "trusted": "Act."}}}
+        "readiness": "ready"
     });
     std::fs::write(
         ability.join("codebase_admin.json"),
@@ -2026,8 +2024,9 @@ async fn long_run_compacts_before_model_and_keeps_full_message_history() {
         finished["workflow"]["receipts"]["model_dispatch"]["turn"]
     );
     assert_eq!(report["transport"], "responses");
-    // The mode rides in this step's guidance message, never in the instructions.
-    assert!(native_call_suffix(request).contains("Execution mode:"));
+    // The mode's per-turn guidance rides in this step's guidance message; the mode itself
+    // never enters the instructions.
+    assert!(native_call_suffix(request).contains("publish_main_message"));
     assert!(!request["instructions"]
         .as_str()
         .unwrap_or_default()
@@ -4597,13 +4596,13 @@ async fn mode_guidance_enters_history_once_and_each_step_has_a_status() {
     assert_eq!(app.run(&second).await.unwrap()["status"], "completed");
     let requests = requests.lock().await;
     assert_eq!(requests.len(), 2);
-    // By default (mode_guidance.json "both") each step's guidance message carries a one-line
-    // status, and the full guidance is a set_execution_mode result in the history: the starting
-    // mode once, then the user's change once.
+    // By default (mode_guidance.json "both") each step's guidance message carries the mode's
+    // per-turn guidance, and the full guidance is a set_execution_mode result in the history:
+    // the starting mode once, then the user's change once.
     let first_suffix = native_call_suffix(&requests[0]);
     let second_suffix = native_call_suffix(&requests[1]);
-    assert!(first_suffix.contains("Execution mode: Ask."));
-    assert!(second_suffix.contains("Execution mode: Plan."));
+    assert!(first_suffix.starts_with("Harness guidance:"));
+    assert!(second_suffix.contains("publish_main_message"));
     assert!(!second_suffix.contains("Plan mode is"));
     let results = |request: &Value| -> Vec<Value> {
         request["input"]

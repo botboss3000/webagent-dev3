@@ -26,13 +26,7 @@ A separate protected host broker handles installation image builds and developme
 
 The selected agent controls the Abilities page's base settings. Owners and delegated managers can edit their agent; members receive a sanitized effective view. Selecting a capability level or preview user disables base settings and repository writes, preventing a preview from being mistaken for an administrative target.
 
-Three exact Administrator settings are supported:
-
-- `terminal_control.terminal_caution`: cautious, balanced or trusted.
-- `codebase_admin.destructive_caution`: cautious, balanced or trusted.
-- `git_control.notify_repo_changes`: boolean.
-
-Caution is an additional decision rule and never raises access above installation, account-tier, agent, capability-level or session ceilings. Saves require CSRF protection and the current agent ability revision. A stale write returns 409; reload before saving again.
+One exact Administrator setting is supported: `git_control.notify_repo_changes` (boolean). Approval follows the session's execution mode and tool policy only. Saves require CSRF protection and the current agent ability revision. A stale write returns 409; reload before saving again.
 
 Repository configuration uses `GET /api/v3/agents/{agent}/repository-connections` and `PUT /api/v3/agents/{agent}/repository-connections/{id}`. The catalog has an aggregate optimistic revision and a maximum of eight connections. Managers may create connections; only the connection owner may update an existing one. Installation oversight does not silently acquire another owner's private credentials.
 

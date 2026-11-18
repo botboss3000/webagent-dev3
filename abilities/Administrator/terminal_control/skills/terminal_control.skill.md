@@ -11,4 +11,4 @@ Use `terminal_open` → `terminal_read` → `terminal_send` → `terminal_wait` 
 
 Terminal IDs belong to the current workspace. Output is a bounded byte ring, preserving raw terminal escape sequences; this is not a rendered screen. `cursor` advances in bytes, and `truncated: true` means older output was discarded. Terminal processes are capped at four per workspace, expire after fifteen minutes without tool activity, and have a one-hour absolute lifetime. A worker restart closes them and never replays keystrokes.  A server listening on one of the workspace's preview ports can be shared with Remote Tunnel.
 
-Opening, sending and closing require the live Rust execution policy and any required approval. Read, wait and list are observations; observing never grants permission to execute. Respect the configured caution guidance. If the user asks to stop, close the terminal through its authorized control path.
+Opening, sending and closing require the live Rust execution policy and any required approval. Read, wait and list are observations; observing never grants permission to execute. If the user asks to stop, close the terminal through its authorized control path.

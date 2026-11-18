@@ -738,9 +738,10 @@ def changes(folder, state, body, count):
         # The previous call's conversation, for a checkpoint after a rewrite.
         "previous": seen, "digests": digests, "notes": notes,
         # The harness session keeps every prompt it is given, so WebAgent's step guidance goes in only
-        # when its text differs from the last copy this session received: at the start, and at the
-        # next step after it changes. A rewrite or a fresh session gets it again.
-        "notes_repeated": bool(notes) and bool(seen) and append and digest(notes) == state.get("notes_digest"),
+        # with each new user message and when its text differs from the last copy this session
+        # received; other steps of the same turn skip it. A rewrite or a fresh session gets it again.
+        "notes_repeated": bool(notes) and bool(seen) and append and digest(notes) == state.get("notes_digest")
+                          and not any(m.get("role") == "user" for m in conversation[len(seen):]),
     }
     # A run's closing call ends with a private closer message that WebAgent keeps out of history: the
     # session holds it, but the next call (or a fork) must still read as an append, not a rewrite.
@@ -1678,21 +1679,23 @@ def selftest():
     assert not nxt["rewritten"] and [m["content"] for m in nxt["new"]] == ["b"]
     shown = prompt_for({"body": {"model": "m", "messages": []}}, nxt, False)
     assert shown.endswith("step two") and "step one" not in shown
-    # The same guidance on the next step is not given to the harness session again.
+    # The same guidance on a later step of the same turn is not given to the harness session again.
     again = changes(folder, noted, {"model": "m", "messages": [system, tail, {"role": "user", "content": "b"},
-                                                               {"role": "user", "content": "c"}, note("step two")]}, 3)
+                                                               {"role": "assistant", "content": "c"}, note("step two")]}, 3)
     shown = prompt_for({"body": {"model": "m", "messages": []}}, again, False)
     assert again["notes_repeated"] and "step two" not in shown
     # A closing call carries no guidance and does not count as a change.
     changes(folder, noted, {"model": "m", "webagent_closing": True, "messages": [system, tail,
-            {"role": "user", "content": "b"}, {"role": "user", "content": "c"}, {"role": "user", "content": "label"}]}, 4)
+            {"role": "user", "content": "b"}, {"role": "assistant", "content": "c"}, {"role": "user", "content": "label"}]}, 4)
+    # Unchanged guidance goes in again with the next user message.
     later = changes(folder, noted, {"model": "m", "messages": [system, tail, {"role": "user", "content": "b"},
-                                   {"role": "user", "content": "c"}, {"role": "user", "content": "d"}, note("step two")]}, 5)
-    assert later["notes_repeated"]
+                                   {"role": "assistant", "content": "c"}, {"role": "user", "content": "d"}, note("step two")]}, 5)
+    shown = prompt_for({"body": {"model": "m", "messages": []}}, later, False)
+    assert not later["notes_repeated"] and shown.endswith("step two")
     # Changed guidance goes in at the next step.
     changed = changes(folder, noted, {"model": "m", "messages": [system, tail, {"role": "user", "content": "b"},
-                                     {"role": "user", "content": "c"}, {"role": "user", "content": "d"},
-                                     {"role": "user", "content": "e"}, note("step three")]}, 6)
+                                     {"role": "assistant", "content": "c"}, {"role": "user", "content": "d"},
+                                     {"role": "assistant", "content": "e"}, note("step three")]}, 6)
     shown = prompt_for({"body": {"model": "m", "messages": []}}, changed, False)
     assert shown.endswith("step three")
     # The clean-up schedule: a daily slot fires once after it passes, "every Nh" by elapsed time.

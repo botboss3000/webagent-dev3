@@ -31,12 +31,9 @@ async function saveSettings({ ability, data, request, scope, status, settings, c
     throw error;
   }
 }
-const cautions = ['cautious', 'balanced', 'trusted'];
 // Agent settings are edited at the agent's own (Operator) level; other levels are read-only.
 const editable = levelId => !levelId || levelId === 'operator';
 const settingsSpec = {
-  terminal_control: ['terminal_caution', 'Terminal caution'],
-  codebase_admin: ['destructive_caution', 'Destructive operation caution'],
   git_control: ['notify_repo_changes', 'Notify repository changes'],
 };
 function buildOptimizationControls({ ability, data, request, scope, levelId, status, rerender }) {
@@ -212,23 +209,13 @@ export function buildAdministratorControls({ ability, data, repository, request,
   const panel = node('div', 'ac-list v3-administrator-settings');
   const enabled = editable(levelId);
   panel.append(node('p', 'ac-hint', enabled
-    ? 'Agent settings. Caution never raises access above installation, account tier or capability policy.'
+    ? 'Agent settings.'
     : 'Agent settings are read-only while viewing another capability level.'));
   const [key, title] = spec;
   const current = data.settings?.[ability.id]?.[key];
-  let control;
-  if (ability.id === 'git_control') {
-    control = field(title, '', 'checkbox'); control.checked = current === true;
-  } else {
-    control = node('select', 'ac-input ac-config-sel'); control.setAttribute('aria-label', title);
-    for (const value of cautions) {
-      const option = node('option', '', value[0].toUpperCase() + value.slice(1));
-      option.value = value; control.append(option);
-    }
-    control.value = cautions.includes(current) ? current : 'cautious';
-  }
+  const control = field(title, '', 'checkbox'); control.checked = current === true;
   control.disabled = !enabled;
-  let savedValue = ability.id === 'git_control' ? control.checked : control.value;
+  let savedValue = control.checked;
   // Persist each setting change while its current revision is still on screen.
   control.onchange = async () => {
     if (!enabled || control.disabled) return;
@@ -236,18 +223,16 @@ export function buildAdministratorControls({ ability, data, repository, request,
     status.textContent = 'Saving agent settings…';
     try {
       await saveSettings({ ability, data, request, scope, status, changed: control,
-        settings: { [key]: ability.id === 'git_control' ? control.checked : control.value },
+        settings: { [key]: control.checked },
         notice: 'Agent settings saved.' });
-      savedValue = ability.id === 'git_control' ? control.checked : control.value;
+      savedValue = control.checked;
     } catch (error) {
-      if (ability.id === 'git_control') control.checked = savedValue;
-      else control.value = savedValue;
+      control.checked = savedValue;
       status.textContent = message(error);
     }
     control.disabled = false;
   };
   panel.append(row(title, control));
-  if (ability.id !== 'git_control') return panel;
   panel.append(node('p', 'ac-hint', 'Repository connections belong to this agent. Only the connection owner can edit it. Tokens are write-only.'));
   if (repository?.load_failed || !repository || repository.agent_id !== data.agent_id) {
     panel.append(node('p', 'ac-hint', 'Repository connections unavailable. Reload abilities to retry.'));

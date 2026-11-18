@@ -1358,20 +1358,6 @@ pub(crate) async fn settings_set(
         "git_control" => body.settings.as_object().is_some_and(|m| {
             m.len() == 1 && m.get("notify_repo_changes").is_some_and(Value::is_boolean)
         }),
-        "terminal_control" => body.settings.as_object().is_some_and(|m| {
-            m.len() == 1
-                && matches!(
-                    m.get("terminal_caution").and_then(Value::as_str),
-                    Some("cautious" | "balanced" | "trusted")
-                )
-        }),
-        "codebase_admin" => body.settings.as_object().is_some_and(|m| {
-            m.len() == 1
-                && matches!(
-                    m.get("destructive_caution").and_then(Value::as_str),
-                    Some("cautious" | "balanced" | "trusted")
-                )
-        }),
         "optimization" => serde_json::from_value::<
             crate::optimization_settings::OptimizationSettings,
         >(body.settings.clone())
