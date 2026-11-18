@@ -134,10 +134,10 @@ test('a save repaints only the chart, not the abilities page', async () => {
       origin: performance.timeOrigin,
       abilityReads: window.fixture.abilityReads(),
       marker: document.getElementById('host').dataset.marker,
-      rows: document.querySelectorAll('.v3-ability').length,
+      rows: document.querySelectorAll('.sr-item[data-ability-id]').length,
       toggle: document.querySelector('[data-ability-id="web_access"] input.conn-toggle')?.checked,
       toggleType: document.querySelector('[data-ability-id="web_access"] input.conn-toggle')?.type,
-      exposure: document.querySelector('.v3-ability[data-ability-id="web_access"]')?.dataset.exposure,
+      exposure: document.querySelector('.sr-item[data-ability-id="web_access"]')?.dataset.exposure,
       puts: window.fixture.requests.filter(item => item.method === 'PUT').map(item => item.url),
       reads: window.fixture.reads(),
     }));
@@ -155,7 +155,7 @@ test('a save repaints only the chart, not the abilities page', async () => {
   }
 });
 
-test('an expanded ability row takes the back press before its group page', async () => {
+test('an ability page takes the back press before its group page', async () => {
   const server = await serve();
   let browser;
   try {
@@ -168,18 +168,20 @@ test('an expanded ability row takes the back press before its group page', async
     // app.js answers a popstate through consumeBack, so calling it is the same press.
     const pressed = await page.evaluate(async () => {
       const {consumeBack} = await import('/ui/shared/history-back.js');
-      const row = document.querySelector('.v3-ability[data-ability-id="web_access"]');
-      row.querySelector('.conn-card-header').click();
-      const expanded = row.classList.contains('expanded');
+      const row = document.querySelector('.sr-row[data-register-link="web_access"]');
+      row.click();
+      const opened = !!document.querySelector('.ab-page[data-ability-id="web_access"] .cfg-page');
       const first = consumeBack();
-      const collapsed = !row.classList.contains('expanded');
+      const closed = !document.querySelector('.ab-page[data-ability-id="web_access"]');
+      const listBack = row.closest('.ab-holder').hidden === false;
       const second = consumeBack();
-      return {expanded, first, collapsed, second};
+      return {opened, first, closed, listBack, second};
     });
-    assert.equal(pressed.expanded, true, 'the header click expands the row');
-    assert.equal(pressed.first, true, 'the expanded row claims the press');
-    assert.equal(pressed.collapsed, true, 'one press collapses the row');
-    assert.equal(pressed.second, false, 'no claim is left behind for the page');
+    assert.equal(pressed.opened, true, 'the row opens the ability config page');
+    assert.equal(pressed.first, true, 'the ability page claims the press');
+    assert.equal(pressed.closed, true, 'one press closes the ability page');
+    assert.equal(pressed.listBack, true, 'the ability list is shown again');
+    assert.equal(pressed.second, false, 'no claim is left behind for the group page');
   } finally {
     await browser?.close();
     await new Promise(resolve => server.close(resolve));
@@ -248,10 +250,10 @@ test("a tool's skill opens in the shared editor under its row", async () => {
     await page.goto('http://127.0.0.1:' + server.address().port + '/');
     await waitForChart(page, '1,000 tokens');
     const result = await page.evaluate(async () => {
-      const row = document.querySelector('.v3-ability[data-ability-id="web_access"]');
-      row.querySelector('.conn-card-header').click();
-      const shell = !!row.querySelector('.ac-ability-body > .cfg-page');
-      const link = row.querySelector('.ac-tool-skill-link');
+      document.querySelector('.sr-row[data-register-link="web_access"]').click();
+      const host = document.querySelector('.ab-page[data-ability-id="web_access"]');
+      const shell = !!host?.querySelector('.cfg-page');
+      const link = host.querySelector('.ac-tool-skill-link');
       link.click();
       const band = () => document.querySelector('.ab-tool-skill');
       for (let i = 0; i < 60 && !(band()?.querySelector('.rte-doc')?.innerText || '').trim(); i += 1) {

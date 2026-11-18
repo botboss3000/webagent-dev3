@@ -10,7 +10,7 @@ import { buildPolicyControls, effectiveLabel, readinessLabel } from './policy.js
 
 import { _buildMoreButton, _buildToolRow, _buildAbilitySettingsList, closeFloatingMenu } from '../../../../shared/ability-row-controls.js';
 import { buildSkillRow } from './rows.js';
-import { createSettingsRegister, createSettingsRow } from '../../../../shared/settings-register.js';
+import { createSettingsMenu, createSettingsRegister, createSettingsRow } from '../../../../shared/settings-register.js';
 import { createConfigPage } from '../../../../shared/config-page.js';
 import { createRichTextEditor } from '../../../../shared/rich-text-editor.js';
 import { pushBackHandler } from '../../../../shared/history-back.js';
@@ -22,7 +22,6 @@ const node = (tag, className = '', text = '') => {
   element.textContent = text;
   return element;
 };
-const chevronSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>';
 const modes = ['off', 'on_request', 'loaded'];
 // Core is set only by tool.json or skill.json and is shown as a locked pill.
 const modeLabel = mode => ({ loaded: 'Skill loaded', on_request: 'Skill on request', off: 'Off', core: 'Core' })[mode] || mode;
@@ -186,7 +185,7 @@ export async function renderAbilities(host, request, options) {
   // the control unchanged and shows the reason in red under its row.
   const save = async (ability, kind, mode, control, toolName = null) => {
     const input = control.querySelector('input') || control;
-    const row = control.closest('.ac-ability-row');
+    const row = control.closest('.sr-item');
     row?.nextElementSibling?.classList.contains('v3-toggle-error') && row.nextElementSibling.remove();
     input.disabled = true;
     _markSaving(control);
@@ -216,8 +215,8 @@ export async function renderAbilities(host, request, options) {
         input.checked = mode !== 'off';
         input.setAttribute('aria-label', input.getAttribute('aria-label').replace(/: \w+\./, ': ' + mode + '.'));
       }
-      const card = kind === 'ability' && control.closest('.v3-ability');
-      if (card) { card.classList.toggle('enabled', mode !== 'off'); card.dataset.exposure = mode; }
+      const item = kind === 'ability' && control.closest('.sr-item');
+      if (item) item.dataset.exposure = mode;
       input.disabled = false;
       _flashSaveCheck(control, true);
     } catch (error) {
@@ -283,12 +282,11 @@ export async function renderAbilities(host, request, options) {
     mark.style.whiteSpace = 'nowrap'; // Keep "Default: Auto" on one line on phones.
     anchor?.after(mark);
   };
-  const buildAbilityBody = (detail, ability) => {
+  const buildAbilityBody = (detail, ability, onBack) => {
     if (detail.childElementCount) return;
     // The tool page is the shared config page: one shell owns the back control and
     // the list itself, so every setting that opens at this level looks the same.
-    const config = createConfigPage({ title: ability.name,
-      onBack: () => abilityPages.get(ability.id)?.open(false) });
+    const config = createConfigPage({ title: ability.name, onBack });
     if (ability.id === 'mcp') config.body.append(buildMcpControls({ ability, request, scope,
       canManage, levelId, status }));
     const tools = _buildAbilitySettingsList();
@@ -409,7 +407,7 @@ export async function renderAbilities(host, request, options) {
     detail.append(config.element);
   };
   // Two-stage register: the list shows one row per ability group, and a group's page
-  // lists the abilities inside that group (each still expands to its own settings).
+  // lists its abilities as the same rows, each opening the shared config page.
   const categories = [...groups].map(([groupId, group]) => ({
     id: 'g-' + groupId, title: group.name, hint: groupHint(group), icon: iconFor(group),
   }));
@@ -421,54 +419,61 @@ export async function renderAbilities(host, request, options) {
   page.append(overview, search);
   const register = createSettingsRegister(page, {label: 'Ability groups', categories});
   const abilityPages = new Map();
-  const rowsBySection = new Map();
   for (const [groupId, group] of groups) {
     const section = createSettingsRow(register.stage, {id: 'g-' + groupId, title: group.name});
-    // Rows attach after the register builds its pages, so the first ability's switch
-    // is not mistaken for a page-level toggle.
-    const rows = [];
-    rowsBySection.set(section, rows);
+    // The ability list and an ability's own page share this body: opening a row swaps
+    // the list for that page, and the page's back control swaps the list back in.
+    const holder = node('div', 'ab-holder');
+    section.body.append(holder);
+    const items = [];
+    const rowInfo = new Map();
+    let current = null;
+    const closeAbility = () => {
+      const entry = current;
+      if (!entry) return;
+      current = null;
+      const release = entry.release;
+      entry.release = null;
+      release?.();
+      const opened = entry.element.dataset.abilityId || '';
+      entry.element.remove();
+      holder.hidden = false;
+      holder.querySelector('.sr-row[data-register-link="' + opened + '"]')?.focus({preventScroll: true});
+    };
+    const openAbility = (ability, claim = true) => {
+      if (current) closeAbility();
+      const pageHost = node('div', 'ab-page');
+      pageHost.dataset.abilityId = ability.id;
+      buildAbilityBody(pageHost, ability, () => closeAbility());
+      holder.hidden = true;
+      holder.after(pageHost);
+      const entry = {element: pageHost, release: null};
+      current = entry;
+      // A restored page claims nothing, so a reload never adds a history entry.
+      if (claim) entry.release = pushBackHandler(() => {
+        if (current !== entry || !pageHost.isConnected) return false;
+        entry.release = null;
+        closeAbility();
+        return true;
+      });
+      pageHost.querySelector('.cfg-back')?.focus({preventScroll: true});
+    };
     for (const ability of group.items) {
-      const row = node('div', 'conn-card ac-row v3-ability' +
-        (ability.visibility !== 'off' ? ' enabled' : ''));
-      row.dataset.abilityId = ability.id;
-      row.dataset.exposure = ability.visibility;
-      const header = node('div', 'conn-card-header ac-ability-row conn-card-header-clickable');
-      const chevron = node('span', 'ac-row-chevron ac-row-chevron--left');
-      chevron.innerHTML = chevronSvg;
-      const icon = node('span', 'conn-icon ac-ability-icon');
-      const iconGlyph = node('i');
-      iconGlyph.setAttribute('data-lucide', ability.icon || 'box');
-      iconGlyph.style.cssText = 'width:16px;height:16px';
-      icon.append(iconGlyph);
-      if (ability.color) icon.style.color = ability.color;
-      const label = node('div', 'ac-ability-label');
-      const name = node('div', 'conn-name ac-ability-name', ability.name);
+      const projected = projection(ability);
       // Port status is independent of visibility, credentials and caller permissions.
       const incomplete = ['pending', 'placeholder', 'partial'].includes(ability.readiness) ||
         ability.installed === false || (ability.tools || []).some(tool => tool.supported === false);
-      if (incomplete) name.style.color = 'var(--danger)';
-      label.append(name, node('div', 'ac-ability-desc', ability.description));
-      const projected = projection(ability);
-      // Defaults depend on the viewed level, so read them from its projection.
-      const declared = projected.default ?? ability.default;
-      markDefault(label, declared && (declared === 'off' ? 'off' : 'on'));
-      const availability = node('span', 'ac-ability-status',
-        [readinessLabel(ability), effectiveLabel(projected)].filter(Boolean).join(' · '));
-      if (projected.effective?.reason === 'tier_denied') {
-        // Blocked abilities stay configurable and visible to the agent; say why they fail.
-        availability.textContent = 'Unavailable on the agent owner’s tier';
-        availability.style.color = 'var(--danger)';
-      }
       const roleBlocked = ability.role_blocked === true || projected.role_blocked === true;
-      if (roleBlocked) {
-        // role_access excludes the viewed level: show it locked with a muted note.
-        availability.textContent = 'Not available to this level';
-        availability.classList.add('v3-role-note');
-      }
-      availability.title = ['Declared: ' + !!ability.declared, 'Installed: ' + !!ability.installed,
-        'Configured: ' + !!ability.configured, readinessLabel(ability)].join(' · ');
+      const tierBlocked = projected.effective?.reason === 'tier_denied';
+      // One line under the name: why the ability is blocked, else what it does.
+      const hint = tierBlocked ? 'Unavailable on the agent owner’s tier'
+        : roleBlocked ? 'Not available to this level' : (ability.description || '');
+      const status = ['Declared: ' + !!ability.declared, 'Installed: ' + !!ability.installed,
+        'Configured: ' + !!ability.configured, readinessLabel(ability), effectiveLabel(projected)]
+        .filter(Boolean).join(' · ');
       const toggleWrap = node('label', 'conn-toggle-wrap ac-ability-toggle-wrap');
+      // The switch stays inside the page: the register must not adopt it as the page toggle.
+      toggleWrap.dataset.inlineSwitch = '';
       const toggle = node('input', 'conn-toggle');
       toggle.type = 'checkbox';
       // Base holds the loaders and core tools, so it is always on.
@@ -483,46 +488,22 @@ export async function renderAbilities(host, request, options) {
         save(ability, 'ability', ability.visibility !== 'off' ? 'off' : 'loaded', toggleWrap).catch(() => {});
       });
       toggleWrap.append(toggle, node('span', 'conn-toggle-track'));
-      header.append(chevron, icon, label, toggleWrap);
-      header.title = availability.title + ' · ' + availability.textContent;
-      const detail = node('div', 'ac-ability-body');
-      // An expanded row owns the back press, so the next press closes its group page.
-      let rowBack = null;
-      const open = (claim = true) => {
-        const expanded = row.classList.toggle('expanded');
-        row.classList.toggle('conn-card-expanded', expanded);
-        header.setAttribute('aria-expanded', String(expanded));
-        if (!expanded) {
-          if (rowBack) { const release = rowBack; rowBack = null; release(); }
-          return;
-        }
-        buildAbilityBody(detail, ability);
-        // A restored row claims nothing, so reloading never adds a history entry.
-        if (claim && !rowBack) rowBack = pushBackHandler(() => {
-          rowBack = null;
-          if (!row.isConnected || !row.classList.contains('expanded')) return false;
-          open(false);
-          return true;
-        });
-      };
-      header.tabIndex = 0;
-      header.setAttribute('role', 'button');
-      header.setAttribute('aria-expanded', 'false');
-      header.addEventListener('click', event => {
-        if (event.target.closest('button, label, input, .v3-mode-menu')) return;
-        open();
-      });
-      header.addEventListener('keydown', event => {
-        if (event.target.closest('button, label, input, select, .v3-mode-menu')) return;
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          open();
-        }
-      });
-      row.dataset.groupId = groupId;
-      row.append(header, detail);
-      rows.push(row);
-      abilityPages.set(ability.id, {groupId, open});
+      items.push({id: ability.id, title: ability.name, hint, icon: ability.icon || 'box',
+        trailing: toggleWrap, onSelect: () => openAbility(ability)});
+      rowInfo.set(ability.id, {name: ability.name, incomplete, status});
+      abilityPages.set(ability.id, {groupId, open: claim => openAbility(ability, claim)});
+    }
+    // Stage 2 is the register's own row list: the same rows as the group list, with the
+    // ability's switch beside each one.
+    createSettingsMenu(holder, {label: group.name + ' abilities', items});
+    for (const [id, info] of rowInfo) {
+      const button = holder.querySelector('.sr-row[data-register-link="' + id + '"]');
+      const item = button?.closest('.sr-item');
+      if (!button || !item) continue;
+      item.dataset.abilityId = id;
+      button.dataset.abilityId = id;
+      if (info.incomplete) button.querySelector('.sr-title').style.color = 'var(--danger)';
+      button.title = [info.name, info.status].filter(Boolean).join(' · ');
     }
   }
   let promptsSection = null;
@@ -536,31 +517,33 @@ export async function renderAbilities(host, request, options) {
     .some(value => String(value || '').toLowerCase().includes(searchText));
   const filter = () => {
     searchText = search.value.trim().toLowerCase();
-    for (const row of page.querySelectorAll('.v3-ability')) {
+    // Both stages are register rows, so one rule hides a row at either level. A list row
+    // sits in an .sr-item wrapper; a group row is appended bare, so hide the row itself.
+    for (const row of page.querySelectorAll('.sr-row[data-register-link]')) {
       const ability = abilities.find(item => item.id === row.dataset.abilityId);
-      row.hidden = !!searchText && !matchesAbility(ability);
+      (row.closest('.sr-item') || row).hidden = !!searchText && !matchesAbility(ability);
     }
     const noPrompts = !!searchText && !slots.some(slot =>
       [slot.slot_name, slot.content].some(value =>
         String(value || '').toLowerCase().includes(searchText)));
-    for (const row of page.querySelectorAll('.sr-row')) {
+    for (const row of page.querySelectorAll('.sr-row[data-register-for]')) {
       const id = row.dataset.registerFor;
-      if (id === 'prompts') { row.hidden = noPrompts; continue; }
-      row.hidden = !!searchText && !groups.get(id.slice(2)).items.some(matchesAbility);
+      const item = row.closest('.sr-item') || row;
+      if (id === 'prompts') { item.hidden = noPrompts; continue; }
+      item.hidden = !!searchText && !groups.get(id.slice(2)).items.some(matchesAbility);
     }
   };
   search.addEventListener('input', filter);
   page.append(status);
   const style = node('style');
   style.textContent = '.v3-abilities-page .sr-shell{margin-top:2px}'
-    + '.v3-abilities-page .sr-detail-body .v3-ability{margin-bottom:8px}'
-    + '.v3-abilities-page .sr-detail-body .v3-ability:last-child{margin-bottom:0}'
+    + '.v3-abilities-page .sr-item[hidden]{display:none}'
     + '.v3-abilities-page .v3-register-prompts{border:0;background:transparent}'
     + '.v3-abilities-page .v3-register-prompts>.ac-group-body{padding:0}'
-    // The tool page sits at the register's side inset, so its rows line up with
+    // The ability page sits at the register's side inset, so its rows line up with
     // the rows it opened from instead of being indented into the card.
-    + '.v3-abilities-page .ac-ability-body{padding:8px 4px 10px}'
-    + '.v3-abilities-page .ac-ability-body .cfg-page{padding-top:2px}'
+    + '.v3-abilities-page .ab-page{padding:0;margin:0}'
+    + '.v3-abilities-page .ab-page .cfg-page{padding-top:2px}'
     + '.v3-abilities-page .ab-tool-skill{padding:2px 0 10px}'
     + '.v3-abilities-page .ab-tool-skill .rte-doc{max-height:300px}';
   page.append(style);
@@ -572,7 +555,6 @@ export async function renderAbilities(host, request, options) {
   host.replaceChildren(page);
   window.lucide?.createIcons({ nodes: [...page.querySelectorAll('[data-lucide]:not(.lucide)')] });
   register.present();
-  for (const [section, rows] of rowsBySection) section.body.append(...rows);
   if (promptsSection) promptsSection.body.append(prompts);
   filter();
   const restored = abilityPages.get(expandedAbility);
