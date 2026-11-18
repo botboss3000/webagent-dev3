@@ -399,6 +399,18 @@ class MonitorTests(unittest.TestCase):
         code, _ = self.run_monitor([dict(queued, wait_cycles=[cycle]), self.progress(status="failed")], task="task-1")
         self.assertEqual(code, 1)  # neither wakes again
 
+    def test_shown_notes_survive_stage_changes_and_own_notes_do_not_wake(self):
+        note = {"id": "n2", "from_label": "other-task", "from_session": "s", "origin": "o", "text": "ping"}
+        own = {"id": "n3", "from_label": "task-1", "from_session": "s", "origin": "o", "text": "mine"}
+        queued = self.progress(status="queued", job_seconds=5, notes=[note, own])
+        code, out = self.run_monitor([queued], task="task-1")
+        self.assertEqual(code, 4);self.assertIn("ping", out);self.assertNotIn("mine", out)
+        moved = self.progress(running=[{"stage": "dependencies", "id": "1", "seconds": 1}], notes=[note, own])
+        code, _ = self.run_monitor([moved], task="task-1")
+        self.assertEqual(code, 3)  # the stage change wakes; its save keeps the shown note
+        code, _ = self.run_monitor([moved, self.progress(status="failed", notes=[note])], task="task-1")
+        self.assertEqual(code, 1)  # the note does not wake again
+
     def test_status_line_between_stages_and_short_time_left(self):
         between = self.progress(finished=[{"stage": "compile tests", "id": "2", "seconds": 60}], remaining_seconds=[20, 40])
         self.assertEqual(client.status_line(between), "running, between stages after compile tests; about 0.3-0.7 min left")

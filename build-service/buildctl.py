@@ -436,7 +436,8 @@ def monitor(task_id=None, job_id=None, request=call, pause=time.sleep, clock=tim
         finished = sorted(s["stage"] for s in progress.get("finished_stages", []))
         queue = [[a.get("job_id"), a.get("phase")] for a in progress.get("queued_behind") or []]
         current = {"job_id": job_id, "status": status, "finished": finished, "queue": queue,
-                   "alerted": (saved or {}).get("alerted", {}), "stalled": (saved or {}).get("stalled", [])}
+                   "alerted": (saved or {}).get("alerted", {}), "stalled": (saved or {}).get("stalled", []),
+                   "notes_seen": (saved or {}).get("notes_seen", [])}
         if saved is None or saved.get("job_id") != job_id:
             saved = current;save(current);show(progress)
         changed = (status != saved["status"] or set(finished) - set(saved["finished"])
@@ -450,8 +451,10 @@ def monitor(task_id=None, job_id=None, request=call, pause=time.sleep, clock=tim
                 save(current);show(progress);return PENDING_EXIT
         alerted, stalled = current["alerted"], current["stalled"]
         # Blocker board: a new note on this task or a new wait cycle wakes at once, with its text.
-        current["notes_seen"] = (saved or {}).get("notes_seen", [])
-        fresh = [n for n in progress.get("notes") or [] if n.get("id") not in current["notes_seen"]]
+        # notes_seen lives in every saved state, so a stage-change save never forgets it; a task's
+        # own notes (posted from itself) are shown by notes but never wake it.
+        fresh = [n for n in progress.get("notes") or []
+                 if n.get("id") not in current["notes_seen"] and n.get("from_label") != task_id]
         fresh += [c for c in progress.get("wait_cycles") or [] if "cycle:" + c.get("job_id", "") not in current["notes_seen"]]
         if fresh:
             for entry in fresh:
