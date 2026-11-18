@@ -27,7 +27,7 @@ async function fixture(t,{mobile=false}={}) {
   const root=document.querySelector('#session-dropdown');
   window.items=Array.from({length:18},(_,i)=>({id:'s'+i,title:'Session '+i,agent_id:'shared_default',last_active_at:123,metadata_revision:1,status:'active'}));
   window.controller=mountSessionDropdown(root,{refresh:async()=>{refreshes++;list.update(items,window.fixtureSelected||'s0');},select:id=>selectedCalls.push(id),guard:fn=>fn,resetSearch:()=>list.reset()});
-  window.list=createSessionList(root,{guard:fn=>fn,refresh:async()=>{refreshes++;},select:id=>selectedCalls.push(id),client:{sessions:async status=>({sessions:status==='active'?items:[{...items[0],id:'archived',status:'archived'}]}),patch:async(id,body)=>{writes.push({id,body});return {session:{...items[0],title:body.title}};}},screenSettings:()=>{const d=document.createElement('details');d.className='display-settings';d.innerHTML='<summary>Screen display</summary>';return d;}});
+  window.list=createSessionList(root,{guard:fn=>fn,refresh:async()=>{refreshes++;},select:id=>selectedCalls.push(id),client:{sessions:async status=>({sessions:status==='active'?items:[{...items[0],id:'archived',status:'archived'}]}),patch:async(id,body)=>{writes.push({id,body});return {session:{...items[0],title:body.title}};}}});
   list.configure(config);list.update(items,'s0');
  });
  return page;
@@ -39,9 +39,9 @@ async function configure(page,changes){await page.evaluate(changes=>{for(const [
 test('JSON owns trigger, rows, independent menu actions, optional More and footer visibility',async t=>{
  const p=await fixture(t);assert.equal(await p.locator('#session-dropdown-kebab').isVisible(),false);
  await p.locator('#session-dropdown-trigger').click({button:'right'});
- assert.equal(await p.locator('.session-row-actions button').count(),9);assert.equal(await p.locator('.display-settings').count(),1);assert.equal(await p.evaluate(()=>selectedCalls.length),0);
+ assert.equal(await p.locator('.session-row-actions button').count(),9);assert.equal(await p.evaluate(()=>selectedCalls.length),0);
  await p.keyboard.press('Escape');assert.equal(await p.locator('.session-row-actions').count(),0);
- await configure(p,{menu:{pinning:false,auto_rename:false,open_in_widget:false,refresh:false,start_scratchpad:false,archive:false,agent_id:false,session_id:false,always_on_display:false},footer:{enabled:false},trigger:{agent_icon:false,session_name:false,status:false,row_actions:true}});
+ await configure(p,{menu:{pinning:false,auto_rename:false,open_in_widget:false,refresh:false,start_scratchpad:false,archive:false,agent_id:false,session_id:false},footer:{enabled:false},trigger:{agent_icon:false,session_name:false,status:false,row_actions:true}});
  assert.equal(await p.locator('#session-dropdown-icon').isVisible(),false);assert.equal(await p.locator('#session-dropdown-label').isVisible(),false);assert.equal(await p.locator('#session-dropdown-status').isVisible(),false);
  await p.locator('#session-dropdown-kebab').click();assert.deepEqual(await p.locator('.session-row-actions button').allTextContents(),[' Rename session']);
  await p.keyboard.press('Escape');await openList(p);assert.equal(await p.locator('.session-manage-row').count(),0);

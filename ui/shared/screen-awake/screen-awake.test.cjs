@@ -2,7 +2,7 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict'), fs = require('node:fs'), vm = require('node:vm');
 const source = fs.readFileSync(__dirname + '/screen-awake.js', 'utf8');
 const context = vm.createContext({}); vm.runInContext(source.replace(/export /g, ''), context);
-const policy = {enabled:true, mobile_only:true, after_activity_ms:120000, after_input_ms:120000, dim_after_ms:30000, dim_opacity:0.8, active:'dim', inactive:'off', allow_device_overrides:false};
+const policy = {enabled:true, mobile_only:true, after_activity_ms:120000, after_input_ms:120000, dim_after_ms:30000, dim_opacity:0.8, active:'dim', inactive:'off'};
 // Drain the asynchronous request/release boundary without advancing the simulated clock.
 const settle = async () => { for (let i=0; i<12; i++) await Promise.resolve(); };
 /** Fake only browser, clock and wake-lock boundaries; assert observable requests, releases and dim state. */
@@ -94,11 +94,7 @@ test('BFCache and teardown withdraw locks, timers and listeners', async()=>{
   const f=fixture();f.api.select('one');f.api.runs([{status:'running'}]);await settle();f.win.emit('pagehide');await settle();assert.equal(f.sentinels[0].released,true);
   f.win.emit('pageshow');await settle();assert.equal(f.requests,2);f.api.destroy();await settle();assert.equal(f.doc.count(),0);assert.equal(f.win.count(),0);assert.equal(f.timerCount,0);assert.equal(f.sentinels[1].released,true);
 });
-test('device overrides validate, preserve mobile-only policy and handle storage failure',()=>{
-  const load=value=>context.deviceScreenPolicy({...policy,allow_device_overrides:true},{getItem:()=>value});
-  assert.equal(load(JSON.stringify({enabled:false,after_input_ms:60000})).enabled,false);
-  for(const value of ['{','[]',JSON.stringify({mobile_only:false}),JSON.stringify({after_input_ms:-1}),JSON.stringify({enabled:'yes'}),JSON.stringify({dim_opacity:1})])assert.equal(load(value).enabled,true);
-  assert.equal(context.deviceScreenPolicy(policy,{getItem(){throw Error('blocked')}}).after_input_ms,120000);
+test('invalid policies are refused rather than leasing the screen without bound',()=>{
   for(const value of [null,{...policy,after_activity_ms:Infinity},{...policy,after_activity_ms:0.1},{...policy,dim_opacity:-1}])assert.equal(context.screenPolicy(value),null);
 });
 
@@ -108,16 +104,11 @@ test('reopening the same conversation preserves its last-input deadline', async(
   await f.advance(89999);assert.equal(f.sentinels[0].released,false);await f.advance(1);assert.equal(f.sentinels[0].released,true);
 });
 
-// Central policy is authoritative unless the profile explicitly permits device overrides.
-test('chat profile policy merges defaults and ignores local preferences unless permitted',()=>{
+// chat.json is the only source of the display policy.
+test('chat profile policy merges defaults',()=>{
   assert.equal(context.profileScreenPolicy(null),null);
   assert.equal(context.profileScreenPolicy({screen_display:{after_input_ms:60000}}).after_input_ms,60000);
   assert.equal(context.profileScreenPolicy({screen_display:{active:'unknown'}}),null);
-  const stored={getItem:()=>JSON.stringify({enabled:false,active:'off',after_activity_ms:5})};
-  assert.equal(context.deviceScreenPolicy(policy,stored).enabled,true);
-  assert.equal(context.deviceScreenPolicy({...policy,allow_device_overrides:true},stored).enabled,false);
-  const legacy={getItem:()=>JSON.stringify({after_chat_ms:60000})};
-  assert.equal(context.deviceScreenPolicy({...policy,allow_device_overrides:true},legacy).after_activity_ms,60000);
 });
 test('active and inactive on/dim/off modes have independent wake and appearance behavior',async()=>{
   for(const active of ['on','dim','off'])for(const inactive of ['on','dim','off']){

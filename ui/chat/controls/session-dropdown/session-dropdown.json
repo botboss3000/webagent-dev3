@@ -10,7 +10,7 @@
       "archive": false
     },
     "menu": {
-      "_instructions": "default_rows limits visible rows before scrolling (1\u2013100); viewport can show fewer. agent_icons/session_name/status control row contents. row_actions shows optional row More buttons. All action flags control visibility only. flag_status shows Mark Dismissed / Mark Active for a session with a settled flag. always_on_display controls Screen display. archive archives an active session; unarchive/delete (permanent) control archived-session actions.",
+      "_instructions": "default_rows limits visible rows before scrolling (1\u2013100); viewport can show fewer. agent_icons/session_name/status control row contents. row_actions shows optional row More buttons. All action flags control visibility only. flag_status shows Mark Dismissed / Mark Active for a session with a settled flag. archive archives an active session; unarchive/delete (permanent) control archived-session actions.",
       "default_rows": 8,
       "max_height": "min(66vh, 640px)",
       "agent_icons": true,
@@ -27,7 +27,6 @@
       "archive": true,
       "agent_id": true,
       "session_id": true,
-      "always_on_display": true,
       "unarchive": true,
       "delete": true
     },

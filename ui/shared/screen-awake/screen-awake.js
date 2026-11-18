@@ -1,15 +1,13 @@
 // Display policy from ui/chat/chat.json -> chat_common.screen_display, merged with desktop/mobile/widget overrides; on/dim/off modes and activity/input timeouts adopt with the chat profile.
 const ACTIVE = new Set(['queued', 'running', 'waiting_gate', 'waiting_external']);
 const WAITING = new Set(['waiting_approval', 'recovery']);
-const PREFERENCES = ['enabled', 'after_activity_ms', 'after_input_ms', 'active', 'inactive', 'dim_after_ms', 'dim_opacity'];
 const MODES = new Set(['on', 'dim', 'off']);
 // Missing optional profile values inherit these defaults; malformed explicit values disable the enhancement.
-export const DEFAULT_SCREEN_POLICY = Object.freeze({enabled:true, mobile_only:true, after_activity_ms:120000, after_input_ms:120000, active:'dim', inactive:'off', dim_after_ms:30000, dim_opacity:0.6, allow_device_overrides:false});
-const STORAGE_KEY = 'v3.chat.screen-awake';
+export const DEFAULT_SCREEN_POLICY = Object.freeze({enabled:true, mobile_only:true, after_activity_ms:120000, after_input_ms:120000, active:'dim', inactive:'off', dim_after_ms:30000, dim_opacity:0.6});
 /** Reject malformed settings rather than allowing an accidental unlimited display lease. */
 export function screenPolicy(value) {
   if (!value || typeof value.enabled !== 'boolean' || typeof value.mobile_only !== 'boolean') return null;
-  if (!MODES.has(value.active) || !MODES.has(value.inactive) || typeof value.allow_device_overrides !== 'boolean') return null;
+  if (!MODES.has(value.active) || !MODES.has(value.inactive)) return null;
   for (const key of ['after_activity_ms', 'after_input_ms', 'dim_after_ms']) {
     if (!Number.isSafeInteger(value[key]) || value[key] < 0 || value[key] > 2147483647) return null;
   }
@@ -22,22 +20,6 @@ export function profileScreenPolicy(profile) {
   const value = profile.screen_display;
   if (value !== undefined && (!value || typeof value !== 'object' || Array.isArray(value))) return null;
   return screenPolicy({...DEFAULT_SCREEN_POLICY, ...value});
-}
-/** Device overrides require explicit opt-in from chat.json; legacy timing overrides migrate only when permitted. */
-export function deviceScreenPolicy(defaults, storage) {
-  if (!screenPolicy(defaults)) return null;
-  if (!defaults.allow_device_overrides) return screenPolicy(defaults);
-  try {
-    const stored = JSON.parse(storage?.getItem(STORAGE_KEY) || 'null');
-    if (stored && typeof stored === 'object' && !Array.isArray(stored) && Object.hasOwn(stored, 'after_chat_ms')) {
-      if (!Object.hasOwn(stored, 'after_activity_ms')) stored.after_activity_ms = stored.after_chat_ms;
-      delete stored.after_chat_ms;
-    }
-    if (stored && typeof stored === 'object' && !Array.isArray(stored) && Object.keys(stored).every(key => PREFERENCES.includes(key))) {
-      return screenPolicy({...defaults, ...stored}) || screenPolicy(defaults);
-    }
-  } catch { /* Storage errors do not disable chat or its valid defaults. */ }
-  return screenPolicy(defaults);
 }
 /** Own one serialized wake-lock request and real activity timestamps, independent of snapshot polling.
  * Dimming changes only app appearance, and only while a screen lock is actually held.
@@ -143,58 +125,11 @@ export function createScreenAwake({config, doc = document, nav = navigator, win 
   return {select, runs, attention, configure, destroy};
 }
 // Display policy from ui/chat/chat.json -> chat_common.screen_display, merged with desktop/mobile/widget overrides; on/dim/off modes and activity/input timeouts adopt with the chat profile.
-/** Build accessible device-only controls; parent popup owns dismissal and the shared chat feedback owner handles summary taps. */
-function preferenceControls({getPolicy, save, supported}) {
-  const details = document.createElement('details'); details.className = 'screen-awake-settings';
-  const summary = document.createElement('summary'); summary.textContent = 'Screen display'; details.append(summary);
-  const editable = getPolicy().allow_device_overrides;
-  const description = document.createElement('p'); description.textContent = (editable
-    ? 'Device overrides are enabled.' : 'Managed by chat configuration. Device overrides are disabled.') +
-    (supported ? ' On/dim keeps the screen awake; off allows normal screen-off after the grace period. Dimming changes app appearance only.' : ' Screen wake lock is unavailable in this browser.');
-  details.append(description);
-  const feedback = document.createElement('p'); feedback.setAttribute('role', 'status'); feedback.className = 'screen-awake-save-status';
-  /** Validate one edit against the whole policy before applying and persisting it. */
-  function change(key, value, input) {
-    if (!getPolicy().allow_device_overrides) return;
-    const next = screenPolicy({...getPolicy(), [key]:value});
-    if (!next || !input.checkValidity()) { input.setAttribute('aria-invalid', 'true'); feedback.textContent = 'Enter a valid display setting.'; return; }
-    input.removeAttribute('aria-invalid'); feedback.textContent = save(next) ? 'Saved on this device.' : 'Applied for this page; device storage is unavailable.';
-  }
-  const enabledLabel = document.createElement('label'); enabledLabel.className = 'screen-awake-field';
-  const enabled = document.createElement('button'); enabled.type = 'button'; enabled.setAttribute('role', 'switch');
-  enabled.disabled = !editable;
-  enabled.dataset.screenSetting = 'enabled'; enabled.setAttribute('aria-label', 'Keep mobile screen awake during chat');
-  // Keep the visible switch label and its accessible state aligned with the current device policy.
-  const paintEnabled = () => { enabled.setAttribute('aria-checked', String(getPolicy().enabled)); enabled.textContent = getPolicy().enabled ? 'On' : 'Off'; };
-  paintEnabled(); enabled.addEventListener('click', () => { change('enabled', !getPolicy().enabled, enabled); paintEnabled(); });
-  enabledLabel.append(document.createTextNode('Keep mobile screen awake during chat'), enabled); details.append(enabledLabel);
-  for (const [key, text] of [['active', 'While assistant is working'], ['inactive', 'While idle / awaiting input']]) {
-    const label = document.createElement('label'); label.className = 'screen-awake-field'; label.textContent = text;
-    const select = document.createElement('select'); select.dataset.screenSetting = key; select.setAttribute('aria-label', text); select.disabled = !editable;
-    for (const [value, title] of [['on', 'Stay on'], ['dim', 'Dim'], ['off', 'Allow screen off']]) { const option = document.createElement('option'); option.value = value; option.textContent = title; select.append(option); }
-    select.value = getPolicy()[key]; select.addEventListener('change', () => change(key, select.value, select)); label.append(select); details.append(label);
-  }
-  for (const [key, text, scale, max, step] of [
-    ['after_activity_ms', 'After activity (seconds)', 1000, 2147483, 1],
-    ['after_input_ms', 'After last input (seconds)', 1000, 2147483, 1],
-    ['dim_after_ms', 'Dim after inactivity (seconds; 0 disables)', 1000, 2147483, 1],
-    ['dim_opacity', 'Dim strength (%)', 0.01, 95, 1]
-  ]) {
-    const label = document.createElement('label'); label.className = 'screen-awake-field'; label.textContent = text;
-    const input = document.createElement('input'); input.type = 'number'; input.disabled = !editable; input.min = '0'; input.max = String(max); input.step = String(step);
-    input.value = String(Math.round(getPolicy()[key] / scale)); input.dataset.screenSetting = key; input.setAttribute('aria-label', text);
-    input.addEventListener('change', () => change(key, input.value === '' ? NaN : Math.round(Number(input.value) * scale * 1e6) / 1e6, input));
-    label.append(input); details.append(label);
-  }
-  details.append(feedback); return details;
-}
 // Display policy from ui/chat/chat.json -> chat_common.screen_display, merged with desktop/mobile/widget overrides; on/dim/off modes and activity/input timeouts adopt with the chat profile.
 /** Calls from panel select/runs/live message callbacks; only changed notice text restores brightness. */
 export function mountScreenAwake(root, {getProfile = () => null} = {}) {
-  let defaults = profileScreenPolicy(getProfile());
-  let storage = null; try { storage = window.localStorage; } catch { /* Per-page settings still work. */ }
-  let policy = deviceScreenPolicy(defaults, storage);
-  const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = '/ui/shared/screen-awake/screen-awake.css'; document.head.append(css);
+  // chat.json is the only source: there is no per-device override or settings panel.
+  let policy = profileScreenPolicy(getProfile());
   const overlay = document.createElement('div'); overlay.dataset.screenDim = ''; overlay.setAttribute('aria-hidden', 'true');
   Object.assign(overlay.style, {position:'fixed', inset:'0', background:'#000', pointerEvents:'none', zIndex:'2147483647', display:'none'});
   document.body.append(overlay);
@@ -206,19 +141,9 @@ export function mountScreenAwake(root, {getProfile = () => null} = {}) {
     if (!bar || dim === (barColor !== null)) return;
     if (dim) { barColor = bar.content; bar.content = '#000000'; } else { bar.content = barColor; barColor = null; }
   }});
-  /** Apply preferences even if persistence is blocked, and report the true storage result to the user. */
-  function save(next) {
-    if (!defaults?.allow_device_overrides) return false;
-    policy = next; controller.configure(next);
-    try { if (!storage) return false; storage.setItem(STORAGE_KEY, JSON.stringify(Object.fromEntries(PREFERENCES.map(key => [key, next[key]])))); return true; }
-    catch { return false; }
-  }
-  /** Re-read device overrides when another same-origin tab saves its display preferences. */
-  function storageChanged(event) { if (event.key === STORAGE_KEY || event.key === null) { policy = deviceScreenPolicy(defaults, storage); controller.configure(policy); } }
-  window.addEventListener('storage', storageChanged);
   /** Adopt merged profile updates, including resize/widget transitions, without renewing activity clocks. */
   function profileChanged() {
-    defaults = profileScreenPolicy(getProfile()); policy = deviceScreenPolicy(defaults, storage); controller.configure(policy);
+    policy = profileScreenPolicy(getProfile()); controller.configure(policy);
   }
   document.addEventListener('v3:chat-config-applied', profileChanged);
   // Notice observation excludes streaming content, run repaint and initial/restored transcript history.
@@ -233,7 +158,6 @@ export function mountScreenAwake(root, {getProfile = () => null} = {}) {
   });
   for (const region of regions) observer.observe(region, {childList:true, subtree:true, characterData:true});
   return {...controller,
-    settings() { return policy ? preferenceControls({getPolicy:() => policy, save, supported:!!navigator.wakeLock?.request}) : null; },
-    destroy() { observer.disconnect(); window.removeEventListener('storage', storageChanged); document.removeEventListener('v3:chat-config-applied', profileChanged); controller.destroy(); overlay.remove(); css.remove(); }
+    destroy() { observer.disconnect(); document.removeEventListener('v3:chat-config-applied', profileChanged); controller.destroy(); overlay.remove(); }
   };
 }

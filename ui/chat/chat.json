@@ -790,10 +790,10 @@
       "top": 8
     },
     "screen_display": {
+      "_instructions": "Keeps the phone screen awake or dimmed during chat; configured only here (no settings panel). enabled: on/off. mobile_only: touch devices only. active / inactive: 'on' (stay on), 'dim' or 'off' (allow screen off) while the assistant works / while idle. after_activity_ms / after_input_ms: grace period after the last run activity / user input. dim_after_ms: dim after this much inactivity (0 never dims). dim_opacity: dim strength, 0 to 0.95.",
       "active": "dim",
       "after_activity_ms": 120000,
       "after_input_ms": 120000,
-      "allow_device_overrides": false,
       "dim_after_ms": 30000,
       "dim_opacity": 0.6,
       "enabled": true,

@@ -837,7 +837,6 @@
           "active": "dim",
           "after_activity_ms": 120000,
           "after_input_ms": 120000,
-          "allow_device_overrides": false,
           "dim_after_ms": 30000,
           "dim_opacity": 0.8,
           "enabled": true,

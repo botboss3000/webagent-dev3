@@ -2,7 +2,7 @@
 // Session dropdown presentation and interactions.
 import {bindNotes, createBlock, fillBlock, flagToggle, isLive, setFlagCatalog, tickTimes} from './row.js';
 /** Renders active/archived sessions, private search results, and revision-fenced management actions. Controller callbacks own navigation; client writes retain retry receipts, and teardown fences pending work. */
-export function createSessionList(root, {guard, refresh, select, client, archived = () => {}, screenSettings = () => null}) {
+export function createSessionList(root, {guard, refresh, select, client, archived = () => {}}) {
   const protectedSession=item=>item?.main_chat===true||item?.can_delete===false;
   let items = [], selected = '', config = {}, query = '', status = 'active';
   let hits = [], continuation = null, searchInfo = '', searching = false, epoch = 0, timer = 0, destroyed = false;
@@ -226,8 +226,6 @@ export function createSessionList(root, {guard, refresh, select, client, archive
       const b = button(title,'copy',() => navigator.clipboard.writeText(value),'session-row-action session-row-id');
       b.append(document.createTextNode(` ${title}: ${value}`)); popup.append(b);
     }
-    // Device display settings share the popup lifecycle; they never write session/server configuration.
-    const displaySettings = config.menu?.always_on_display === false ? null : screenSettings(); if (displaySettings) popup.append(displaySettings);
     if (!popup.childElementCount) { root._sessionDropdownController.setPopup(null); return; }
     popup.style.maxHeight = 'min(80vh, 640px)'; popup.style.overflowY = 'auto';
     // Explicit intrinsic width prevents fixed-position shrink-to-fit width changing after placement.
