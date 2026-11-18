@@ -183,13 +183,17 @@ def opencode_config(work, model):
     but "ask" makes the headless run reject every use (never pass --auto). Paid models get "deny", which
     hides them, so the model cannot pick bash over webagent_shell. WebAgent's tools come from this script's
     MCP stub, which records each call for the reply instead of running it; WebAgent's own policy and
-    approvals are their only gate."""
+    approvals are their only gate. Code Mode is off so the model gets every WebAgent schema as a native
+    tool; the skill tool is denied so this computer's skills stay out of the prompt. OpenCode 2.x
+    converts the older config layout and drops `codemode`, so this uses the 2.x layout."""
     own = "ask" if model.startswith("opencode/") else "deny"
     return json.dumps({
-        "mcp": {"webagent": {"type": "local", "enabled": True,
-                             "command": [sys.executable, "-B", str(Path(__file__).resolve()), "mcp", str(work)]}},
-        "agent": {"webagent-bridge": {"mode": "primary", "prompt": OPENCODE_PROMPT,
-                                      "permission": {"*": own, "execute": "allow", MCP_PREFIX + "*": "allow"}}}})
+        "mcp": {"servers": {"webagent": {"type": "local", "codemode": False,
+                                         "command": [sys.executable, "-B", str(Path(__file__).resolve()), "mcp", str(work)]}}},
+        "agents": {"webagent-bridge": {"mode": "primary", "system": OPENCODE_PROMPT,
+                                       "permissions": [{"action": "*", "resource": "*", "effect": own},
+                                                       {"action": "skill", "resource": "*", "effect": "deny"},
+                                                       {"action": MCP_PREFIX + "*", "resource": "*", "effect": "allow"}]}}})
 
 
 FORK_SUPPORT = None
@@ -1131,7 +1135,8 @@ def opencode_turn_once(command, prompt, work, model):
     so any further step is the model winding down (30-45 s each on a long context). The next call resumes
     the session with the tool's real result."""
     # The prompt goes on stdin: a fresh session's full history can exceed the 128 KiB argument cap.
-    process = start_harness(command, cwd=work, env={**os.environ, "OPENCODE_SERVER_PASSWORD": server_password()})
+    # `opencode run` takes its directory from PWD, not the process cwd; without it every chat is /home/ar.
+    process = start_harness(command, cwd=work, env={**os.environ, "PWD": str(work), "OPENCODE_SERVER_PASSWORD": server_password()})
     stop = lambda: interrupt(process)
     timer = threading.Timer(HARNESS_SECS, stop)
     timer.start()
