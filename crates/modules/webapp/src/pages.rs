@@ -10,7 +10,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-#[cfg(test)]
 use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -210,7 +209,21 @@ pub fn routes<S: Clone + Send + Sync + 'static>(ui: &Path) -> Router<S> {
             }),
         )
         .route_service("/setup.html", ServeFile::new(ui.join("setup.html")))
-        .nest_service("/ui", ServeDir::new(ui))
+        .nest_service("/ui", ui_files(ui))
+}
+
+/// Drops `Accept-Encoding` so a missing file whose name minus its extension is a folder is a 404.
+/// tower-http 0.6 ServeDir retries a missing `x.js` as `x` under `Accept-Encoding: identity` and
+/// opens folder `x` (200, empty body); the UI ships no precompressed variants to negotiate.
+fn without_accept_encoding(mut request: axum::extract::Request) -> axum::extract::Request {
+    request.headers_mut().remove(header::ACCEPT_ENCODING);
+    request
+}
+
+type Strip = fn(axum::extract::Request) -> axum::extract::Request;
+
+fn ui_files(ui: &Path) -> tower::util::MapRequest<ServeDir, Strip> {
+    ServeDir::new(ui).map_request(without_accept_encoding as Strip)
 }
 
 /// Package availability is supplied by Extensions; Webapp validates descriptors and assets.
@@ -342,6 +355,31 @@ mod tests {
         assert!(crate::configuration::live_root(&config_path, ui.path()).is_none());
         fs::remove_file(&config_path).unwrap();
         assert!(crate::configuration::live_root(&config_path, ui.path()).is_none());
+    }
+
+    #[tokio::test]
+    async fn missing_file_named_like_a_folder_is_not_found() {
+        let ui = tempfile::tempdir().unwrap();
+        fs::create_dir(ui.path().join("vibrate")).unwrap();
+        fs::write(ui.path().join("vibrate/vibrate.js"), "x").unwrap();
+        for (path, status) in [
+            ("/ui/vibrate.js", StatusCode::NOT_FOUND),
+            ("/ui/vibrate/vibrate.js", StatusCode::OK),
+        ] {
+            for encoding in ["identity", "gzip, br"] {
+                let response = routes::<()>(ui.path())
+                    .oneshot(
+                        Request::builder()
+                            .uri(path)
+                            .header(header::ACCEPT_ENCODING, encoding)
+                            .body(axum::body::Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), status, "{path} with {encoding}");
+            }
+        }
     }
 
     #[tokio::test]
