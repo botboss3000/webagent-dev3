@@ -1,27 +1,49 @@
 //! Root compatibility names for the Engine-owned confinement boundary.
+#[cfg(test)]
+use std::{fs::File, io, path::Path};
 pub use webagent_engine::sandbox::*;
-#[cfg(test)] use std::{fs::File,io,path::Path};
 
-#[cfg(test)] mod tests {
+#[cfg(test)]
+mod tests {
     use super::*;
-    use std::{os::unix::process::CommandExt, process::{Command, Stdio}};
+    use std::{
+        os::unix::process::CommandExt,
+        process::{Command, Stdio},
+    };
     /// Launch probes through the same host pre-exec boundary as the replaceable service.
     fn run(program: &Path, args: &[&str]) -> io::Result<std::process::Output> {
         let sandbox = prepare(program)?;
         let mut command = Command::new(program);
-        command.args(args).env_clear().current_dir("/").stdin(Stdio::null());
-        unsafe { command.pre_exec(move || sandbox.apply()); }
+        command
+            .args(args)
+            .env_clear()
+            .current_dir("/")
+            .stdin(Stdio::null());
+        unsafe {
+            command.pre_exec(move || sandbox.apply());
+        }
         command.output()
     }
-    #[test] fn approved_program_starts_but_cannot_read_application_state() {
-        assert!(run(Path::new("/bin/cat"), &["/etc/passwd"]).unwrap().status.success() == false);
+    #[test]
+    fn approved_program_starts_but_cannot_read_application_state() {
+        assert!(
+            run(Path::new("/bin/cat"), &["/etc/passwd"])
+                .unwrap()
+                .status
+                .success()
+                == false
+        );
         assert!(run(Path::new("/bin/true"), &[]).unwrap().status.success());
     }
-    #[test] fn host_boundary_rejects_malicious_native_code() {
+    #[test]
+    fn host_boundary_rejects_malicious_native_code() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("probe.c");
         let executable = temp.path().join("probe");
-        std::fs::write(&source, r#"
+        std::fs::write(
+            &source,
+            r#"
+#define _GNU_SOURCE
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
@@ -47,11 +69,29 @@ int main(void) {
  if(getrlimit(RLIMIT_AS,&limit)!=0 || limit.rlim_max!=512*1024*1024) return 12;
  if(getrlimit(RLIMIT_NOFILE,&limit)!=0 || limit.rlim_max!=32) return 13;
  return 0;
-}"#).unwrap();
-        assert!(Command::new("cc").arg(&source).arg("-o").arg(&executable).status().unwrap().success());
+}"#,
+        )
+        .unwrap();
+        // Show the compiler's own message when the probe does not build, not just "assertion failed".
+        let compiled = Command::new("cc")
+            .arg(&source)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(
+            compiled.status.success(),
+            "probe did not compile: {}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
         let ambient = File::open("/etc/passwd").unwrap();
         let result = run(&executable, &[]).unwrap();
         drop(ambient);
-        assert!(result.status.success(), "probe failed: {:?} {:?}", result.status, result.stderr);
+        assert!(
+            result.status.success(),
+            "probe failed: {:?} {:?}",
+            result.status,
+            result.stderr
+        );
     }
 }
