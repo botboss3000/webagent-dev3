@@ -187,9 +187,7 @@ body.chat-resizing,body.chat-resizing *{cursor:col-resize!important;user-select:
 #abilities-page{padding:5px;max-width:940px}
 #abilities-page .v3-abilities-page{max-width:750px;margin:0 auto}
 #abilities-page .v3-ability-search{display:block;width:100%;margin:16px 0;padding:9px 12px;border:var(--border-width) solid var(--border);border-radius:8px;background:var(--bg-elev);color:var(--fg-1)}
-#abilities-page .v3-abilities-list,#abilities-page .v3-ability-tools{overflow:visible}
-#abilities-page .v3-ability>.ac-ability-row{cursor:pointer}
-#abilities-page .v3-ability:not(.expanded)>.ac-ability-body{display:none}
+#abilities-page .v3-ability-tools{overflow:visible}
 #abilities-page .v3-ability-note{margin:10px 8px;color:var(--fg-3);font-size:12px}
 #abilities-page .v3-ability-status{min-height:20px;color:var(--warning)}
 #abilities-page .v3-toggle-error{margin:2px 10px 6px;color:var(--danger);font-size:12px;text-align:right}

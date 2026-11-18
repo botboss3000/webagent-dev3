@@ -18,6 +18,7 @@ const CSS = `
 .cfg-list{display:flex;flex-direction:column;min-width:0}
 .cfg-list > * + *{border-top:var(--border-width) solid var(--border-soft)}
 .cfg-note{padding:8px 4px;font-size:12px;color:var(--fg-3)}
+@media (pointer: coarse){.cfg-back{min-height:44px}}
 `;
 const CHEVRON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>';
 
