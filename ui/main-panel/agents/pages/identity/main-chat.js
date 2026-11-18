@@ -59,6 +59,7 @@ export async function renderMainChat(host, request, {agentId,canManage=false}={}
   function lock(value){for(const input of fields.values())input.disabled=value||!editable();for(const {input}of editors.values()){input.disabled=value;input.readOnly=!editable();}save.disabled=value||!editable();save.hidden=!!state&&!editable();reload.disabled=value;}
   /** Missing guidance is a visible warning only; never disable otherwise available functions. */
   function warnings(){for(const {input,warning}of editors.values())warning.hidden=!!input.value.trim()||!!input.placeholder.trim();}
+  let repair=false;
   function dirty(){if(!busy&&editable()){status.textContent='Unsaved changes';warnings();}}
   for(const input of fields.values())input.addEventListener('input',dirty);
   enabled.addEventListener('change',()=>{expanded(true);dirty();});
@@ -74,7 +75,9 @@ export async function renderMainChat(host, request, {agentId,canManage=false}={}
     open.hidden=!data.session_id;if(data.session_id)open.href='/app?session_id='+encodeURIComponent(data.session_id);warnings();lock(false);save.textContent='Save Main Chat';
   }
   /** Explicit reload reconciles conflicts; detached navigation cannot repaint another agent. */
-  async function load(){const epoch=++generation;busy=true;lock(true);status.textContent='Loading Main Chat…';try{const data=await request(path);if(!alive()||epoch!==generation)return;paint(data);status.textContent=data.can_manage===true?'':'Only this agent’s Operators can edit these settings.';}catch(error){if(alive()&&epoch===generation)status.textContent='Main Chat unavailable: '+error.message;}finally{if(epoch===generation){busy=false;reload.disabled=false;}}}
+  async function load(){const epoch=++generation;busy=true;lock(true);status.textContent='Loading Main Chat…';try{const data=await request(path);if(!alive()||epoch!==generation)return;paint(data);status.textContent=data.can_manage===true?'':'Only this agent’s Operators can edit these settings.';repair=data.session_missing===true&&data.settings.enabled===true&&data.can_manage===true;}catch(error){if(alive()&&epoch===generation)status.textContent='Main Chat unavailable: '+error.message;}finally{if(epoch===generation){busy=false;reload.disabled=false;
+    // The linked Main Chat session record is gone: save the stored settings once so the server recreates it.
+    if(repair&&alive()){status.textContent='Main Chat session was missing. Recreating it…';form.requestSubmit();}}}}
   reload.addEventListener('click',()=>{if(!busy)void load();});
   form.addEventListener('submit',async event=>{
     event.preventDefault();if(busy||!state||!editable())return;
@@ -88,8 +91,8 @@ export async function renderMainChat(host, request, {agentId,canManage=false}={}
     // A second explicit activation approves the frozen deactivation payload; the server must enforce the same transition guard.
     if(state.settings.enabled===true&&pending.settings.enabled===false&&pending.confirm_deactivation!==true){confirmation.hidden=false;lock(true);status.textContent='Confirm deactivation before this change is saved.';keep.focus();return;}
     busy=true;lock(true);status.textContent='Saving Main Chat…';
-    try{await request(path,'PUT',pending);if(!alive())return;const latest=await request(path);if(!alive())return;paint(latest);status.textContent='Main Chat saved. Updated skills apply on the next model call.';document.dispatchEvent(new CustomEvent('v3:main-chat-changed',{detail:{agentId}}));window.dispatchEvent(new Event('v3:sessions-changed'));}
-    catch(error){if(!alive())return;status.textContent='Save not confirmed: '+error.message+'. Reload to reconcile, or retry the same change.';save.textContent='Retry save';save.disabled=false;reload.disabled=false;}
+    try{await request(path,'PUT',pending);if(!alive())return;const latest=await request(path);if(!alive())return;paint(latest);status.textContent=repair?'Main Chat session was missing and has been recreated.':'Main Chat saved. Updated skills apply on the next model call.';repair=false;document.dispatchEvent(new CustomEvent('v3:main-chat-changed',{detail:{agentId}}));window.dispatchEvent(new Event('v3:sessions-changed'));}
+    catch(error){if(!alive())return;repair=false;status.textContent='Save not confirmed: '+error.message+'. Reload to reconcile, or retry the same change.';save.textContent='Retry save';save.disabled=false;reload.disabled=false;}
     finally{busy=false;}
   });
   /** Cancel only the deactivation intent; other unsaved name and skill edits stay in the form. */

@@ -228,7 +228,12 @@ async fn resolve_chat_session(state: &mut Value, store: &Store) -> Result<()> {
             state["settings"]["chat_name"] = session["title"].clone();
             state["session_metadata_revision"] = session["metadata_revision"].clone();
         }
-        None => state["session_id"] = Value::Null,
+        None => {
+            // Kept for tracing a recurrence: the stored link names a session record that is gone.
+            tracing::warn!(session_id = %sid, "Main Chat session record missing; the next save recreates it");
+            state["session_id"] = Value::Null;
+            state["session_missing"] = json!(true);
+        }
     }
     Ok(())
 }
@@ -290,6 +295,15 @@ pub(crate) async fn configure_api(Extension(app): Extension<App>, Json(body): Js
     }
     let mut extra = vec![];
     let mut sid = previous["session_id"].as_str().map(str::to_owned);
+    // A link to a session record that is gone is replaced; there is nothing left to rename.
+    let mut stale = false;
+    if let Some(gone) = sid.clone() {
+        if app.store.get(&key("session", &gone)).await?.is_none() {
+            tracing::warn!(session_id = %gone, "Main Chat session record missing; creating a new one");
+            sid = None;
+            stale = true;
+        }
+    }
     if settings.enabled && sid.is_none() {
         let mut prepared = crate::api::chat_sessions::prepare_session_id(
             &app,
@@ -309,7 +323,9 @@ pub(crate) async fn configure_api(Extension(app): Extension<App>, Json(body): Js
     let result=app.store.main_chat_change(expected,&request,&digest(&body),extra,|state| {
         state["settings"]=serde_json::to_value(&settings)?;
         state["skill_overrides"]=skills.clone();
-        state["_rename_expected_revision"]=body["expected_session_revision"].clone();
+        if !stale {
+            state["_rename_expected_revision"]=body["expected_session_revision"].clone();
+        }
         state["session_id"]=if settings.enabled {json!(sid)}else{Value::Null};
         Ok(json!({"configured":true,"agent_id":app.store.current_agent_id(),"session_id":state["session_id"],"revision":expected+1}))
     }).await.map_err(error)?;
@@ -475,6 +491,7 @@ mod tests {
             "settings":{"chat_name":"x"}});
         resolve_chat_session(&mut stale, &app.store).await.unwrap();
         assert!(stale["session_id"].is_null(), "{stale}");
+        assert_eq!(stale["session_missing"], json!(true));
         let live = crate::runtime_tests::conversation(&app).await;
         let mut state = json!({"session_id":live,"settings":{}});
         resolve_chat_session(&mut state, &app.store).await.unwrap();
@@ -679,6 +696,39 @@ mod api_tests {
         json!({"expected_revision":revision,"expected_session_revision":session_revision,"request_id":request,
             "settings":{"enabled":enabled,"chat_name":"Coordinator","notes_name":"Agent Notes","write_mode":"new_topics"},
             "skill_overrides":{"contribute":"Contribute sentinel","review":"Review sentinel"}})
+    }
+    #[tokio::test]
+    async fn a_save_recreates_a_missing_main_chat_session() {
+        let (_root, app) = crate::runtime_tests::fixture().await;
+        let first = configure_api(
+            Extension(app.clone()),
+            Json(config(0, Value::Null, "enable", true)),
+        )
+        .await
+        .unwrap()
+        .0;
+        let gone = first["session_id"].as_str().unwrap().to_owned();
+        app.store.delete(&key("session", &gone)).await.unwrap();
+        let read = read_api(Extension(app.clone())).await.unwrap().0;
+        assert_eq!(read["session_missing"], json!(true), "{read}");
+        let saved = configure_api(
+            Extension(app.clone()),
+            Json(config(1, Value::Null, "repair", true)),
+        )
+        .await
+        .unwrap()
+        .0;
+        let fresh = saved["session_id"].as_str().unwrap();
+        assert_ne!(fresh, gone);
+        assert!(app
+            .store
+            .get(&key("session", fresh))
+            .await
+            .unwrap()
+            .is_some());
+        let read = read_api(Extension(app.clone())).await.unwrap().0;
+        assert_eq!(read["session_id"], json!(fresh));
+        assert!(read["session_missing"].is_null(), "{read}");
     }
     #[tokio::test]
     async fn agent_isolation_disable_fresh_identity_and_receipts() {
