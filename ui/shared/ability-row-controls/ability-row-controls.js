@@ -40,7 +40,7 @@ export function _buildMoreButton(items, opts = {}) {
   return btn;
 }
 
-export function _buildPermissionTri(cfg) {
+function _buildPermissionTri(cfg) {
   const { value = 'allow', canEdit = true, onChange = _noop, displayOnly = false } = cfg || {};
   const ORDER = ['deny', 'require_approval', 'allow'];
   // Map the permission mode onto the group tri's off/mixed/on detents so the
@@ -130,7 +130,7 @@ export function _buildPermissionTri(cfg) {
   return tri;
 }
 
-export function _refreshLucideIcons(host) {
+function _refreshLucideIcons(host) {
   if (window.lucide && typeof window.lucide.createIcons === 'function') {
     try {
       const scope = host || document;
@@ -213,23 +213,14 @@ export function _buildToolRow(toolMeta, opts) {
       void opts.onOpenToolSkill(toolMeta.name);
     });
   }
-  // The semantic header keeps the name and optional App-only chip as siblings
-  // while `display: contents` preserves the shared stacked-row flex layout.
+  // The semantic header wraps the name while `display: contents` preserves the
+  // shared stacked-row flex layout.
   const header = document.createElement('span');
   header.className = 'ac-tool-header';
   header.appendChild(nameEl);
-  if (opts && opts.showMissingSkill === true && !hasToolSkill) {
-    const chip = document.createElement('span');
-    chip.className = 'ac-tool-missing-skill-chip';
-    chip.textContent = 'No skill';
-    chip.title = 'No dedicated Markdown skill is associated with this tool. Add one only when operational guidance would be useful.';
-    header.appendChild(chip);
-  }
   label.appendChild(header);
   if (toolMeta.description) {
-    // The description line is a separate, full-width flex item. The optional
-    // App-admin edit button is its sibling, so it stays at the end of the text
-    // line without becoming part of the clamped/click-to-expand description.
+    // The description line is a separate, full-width flex item.
     const descLine = document.createElement('span');
     descLine.className = 'ac-tool-description-line';
     const descEl = document.createElement('span');
@@ -237,23 +228,6 @@ export function _buildToolRow(toolMeta, opts) {
     descEl.textContent = toolMeta.description;
     descEl.title = toolMeta.description;
     descLine.appendChild(descEl);
-    if (opts && opts.toolDescriptionEditable === true && opts.abilityId) {
-      const editButton = document.createElement('button');
-      editButton.type = 'button';
-      editButton.className = 'ac-tool-description-edit';
-      editButton.textContent = 'Edit';
-      editButton.title = `Edit description for ${toolMeta.name}`;
-      editButton.setAttribute('aria-label', `Edit description for ${toolMeta.name}`);
-      editButton.addEventListener('click', (event) => {
-        event.stopPropagation();
-        void openToolDescriptionEditor(opts.abilityId, toolMeta.name, toolMeta.description, (updated) => {
-          toolMeta.description = updated;
-          descEl.textContent = updated;
-          descEl.title = updated;
-        });
-      });
-      descLine.appendChild(editButton);
-    }
     label.appendChild(descLine);
 
     // Only a genuinely clamped description becomes interactive. This keeps
@@ -603,7 +577,7 @@ export function closeFloatingMenu(keepBack = false) {
   if (m) m.remove();
 }
 
-export function openFloatingMenu(items, top, left, owner = null) {
+function openFloatingMenu(items, top, left, owner = null) {
   // A repaint replaces the same menu, so the claim it already holds carries over.
   const claimed = Boolean(releaseBack);
   closeFloatingMenu(true);

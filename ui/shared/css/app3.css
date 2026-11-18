@@ -1812,23 +1812,6 @@ body.light-mode .files-restricted-card { background: var(--bg-elev) !important; 
   min-width: 0;
   margin: 0;
 }
-.ac-tool-description-edit {
-  flex: 0 0 auto;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  font: inherit;
-  font-size: 10.5px;
-  line-height: 1.4;
-  text-decoration: underline;
-  cursor: pointer;
-}
-.ac-tool-description-edit:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 2px;
-}
 /* Tool descriptions expand independently of the ability/group row. The shared
    tool renderer adds this only after it confirms the one-line clamp overflowed. */
 .ac-tool-description-toggle {
@@ -2400,22 +2383,6 @@ body.light-mode .ac-ability-body {
   font-family: var(--font-mono, monospace);
   font-weight: 500;
   font-size: 12px;
-}
-/* App-admin-only informational warning: this is a compact header sibling, not a
-   control or description element, so it neither competes with the state control
-   nor becomes part of the description's clamp/expand target. */
-.ac-tool-missing-skill-chip {
-  flex: 0 0 auto;
-  align-self: center;
-  padding: 1px 5px;
-  border: var(--border-width) solid var(--warning);
-  border-radius: 999px;
-  background: rgba(var(--warning-rgb), 0.12);
-  color: var(--warning);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1.3;
-  white-space: nowrap;
 }
 
 /* ── Unified settings + tools list — INLINE in the expanded ability body ───────
