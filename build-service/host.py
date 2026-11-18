@@ -62,6 +62,66 @@ SOURCE = Path(CONFIG["checkout_root"])
 
 STATE = Path(CONFIG["state_root"])
 UI_TEST_EVIDENCE_KEEP = 4096
+# Loaded into each node --test child of the UI fixture container (NODE_OPTIONS --require): it lists the
+# /candidate paths the fixture read, so a pass is reused while every one of them is byte-identical.
+UI_TRACER = r"""'use strict';
+// Records the /candidate paths one node --test child touches, so the broker can reuse a passing
+// UI fixture while every file it read is unchanged. Only test children record; the runner does not.
+const ROOT = '/candidate/';
+const file = process.argv[1] || '';
+if (process.env.NODE_TEST_CONTEXT && file.startsWith(ROOT)) {
+  const fs = require('fs'), path = require('path'), url = require('url');
+  const childProcess = require('child_process'), workers = require('worker_threads'), builtins = require('module');
+  const write = fs.writeFileSync, mkdir = fs.mkdirSync;
+  const touched = new Set(), listed = new Set();
+  let unsafe = '';
+  const resolve = value => {
+    try {
+      if (value instanceof URL) value = url.fileURLToPath(value);
+      else if (Buffer.isBuffer(value)) value = value.toString();
+      return typeof value === 'string' ? path.resolve(value) : null;
+    } catch { return null; }
+  };
+  const note = (value, into) => { const full = resolve(value); if (full && full.startsWith(ROOT)) into.add(full); };
+  const wrap = (owner, name, into) => {
+    const original = owner[name];
+    if (typeof original !== 'function') return;
+    const wrapped = function (target, ...rest) { note(target, into); return original.call(this, target, ...rest); };
+    for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(original))) {
+      if (key !== 'prototype') Object.defineProperty(wrapped, key, descriptor);
+    }
+    for (const symbol of Object.getOwnPropertySymbols(original)) {
+      Object.defineProperty(wrapped, symbol, Object.getOwnPropertyDescriptor(original, symbol));
+    }
+    owner[name] = wrapped;
+  };
+  for (const name of ['readFile', 'readFileSync', 'createReadStream', 'open', 'openSync', 'stat', 'statSync', 'lstat',
+    'lstatSync', 'access', 'accessSync', 'exists', 'existsSync', 'realpath', 'realpathSync']) wrap(fs, name, touched);
+  for (const name of ['readdir', 'readdirSync', 'opendir', 'opendirSync']) wrap(fs, name, listed);
+  for (const name of ['readFile', 'open', 'stat', 'lstat', 'access', 'realpath']) wrap(fs.promises, name, touched);
+  for (const name of ['readdir', 'opendir']) wrap(fs.promises, name, listed);
+  // A subprocess or worker could read files unseen; only the pinned browser is expected.
+  for (const name of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']) {
+    const original = childProcess[name];
+    childProcess[name] = function (command, ...rest) {
+      if (typeof command !== 'string' || !/^\/(opt\/ui-tests|ms-playwright)\//.test(command)) unsafe = 'subprocess';
+      return original.call(this, command, ...rest);
+    };
+  }
+  const Worker = workers.Worker;
+  workers.Worker = class extends Worker { constructor(...args) { unsafe = 'worker'; super(...args); } };
+  builtins.syncBuiltinESMExports();
+  process.on('exit', () => {
+    try {
+      mkdir('/tmp/ui-trace', {recursive: true});
+      write('/tmp/ui-trace/' + process.pid + '.json', JSON.stringify({test: file, touched: [...touched].sort(), listed: [...listed].sort(), unsafe}));
+    } catch { /* No trace means no traced reuse. */ }
+  });
+}
+"""
+UI_TRACE_LIMIT = 4 * 1024 * 1024
+READ_UI_TRACES = ("const fs=require('fs');const out=[];try{for(const f of fs.readdirSync('/tmp/ui-trace'))"
+                  "out.push(JSON.parse(fs.readFileSync('/tmp/ui-trace/'+f,'utf8')))}catch{}process.stdout.write(JSON.stringify(out))")
 SEO_BLOCK_MAX = 16 * 1024
 ADMIN_WORKSPACE = "00000000-0000-0000-0000-000000000000"
 STABLE_FEATURE = "stable-abilities"  # root Cargo feature that links ability crates into the binary  # server-rendered head block allowed in the /app shell  # passed frontend fixture records reused across releases
@@ -1425,12 +1485,15 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         release.write_source_receipt(destination,job_id,context_digest(blob)[0])
         return destination
 
-    def index_command(self,arguments,timeout=120,kind="ui_test"):
-        """Run UI tests in a measured, attributable, bounded container."""
+    def index_command(self,arguments,timeout=120,kind="ui_test",traces=False):
+        """Run UI tests in a measured, attributable, bounded container.
+
+        With traces, return (output, fixture read traces or None); traces need the measured container."""
         resources=getattr(self,"resources",None)
         job=getattr(self.job_context,"job",None)
         if not CONFIG.get("scheduler",{}).get("component_indexing",False)or resources is None or not resources.enabled or not job:
-            return self.command(arguments,timeout=timeout)
+            result=self.command(arguments,timeout=timeout)
+            return (result,None)if traces else result
         if arguments[:3]!=["docker","run","--rm"]or arguments.count("--entrypoint")!=1:raise ValueError("Fixed index container recipe required")
         entry=arguments.index("--entrypoint")
         if kind!="ui_test"or arguments[entry+1]!="node":raise ValueError("Fixed protected verification recipe required")
@@ -1467,7 +1530,12 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             with resources.lock:resources.rows[name]["metrics"]=counters
             oom=counters.get("oom_kills",0)>0 or counters.get("oom_events",0)>0
             if oom:raise RuntimeError("UI tests exceeded memory budget")
-            success=True;return result
+            recorded=None
+            if traces:
+                # A missing or unreadable trace only forgoes traced reuse.
+                try:recorded=self.command(["docker","exec",name,"node","-e",READ_UI_TRACES],timeout=30,private_raw=True)
+                except Exception:recorded=None
+            success=True;return (result,recorded)if traces else result
         finally:
             self.job_context.phase_container=None
             self.executor.finish_phase(name,identity,success and not oom)
@@ -1695,6 +1763,47 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         os.replace(temporary,store/(key+".json"))
         for old in sorted(store.glob("*.json"),key=lambda p:p.stat().st_mtime)[:-UI_TEST_EVIDENCE_KEEP]:old.unlink(missing_ok=True)
 
+    @staticmethod
+    def ui_trace_inventory(root,paths,folders):
+        """Bytes of each traced candidate path ('missing' when absent) and each listed folder's names.
+
+        None when a path is unsafe to judge (a symlink or outside the UI trees): no traced reuse then."""
+        if len(paths)+len(folders)>20000:return None
+        files={};names={}
+        for rel in sorted(paths):
+            if not rel.startswith(("v3/ui/","ui/"))or ".."in Path(rel).parts:return None
+            path=root/rel
+            if any(part.is_symlink()for part in (path,*path.parents)if root in part.parents):return None
+            files[rel]=hashlib.sha256(path.read_bytes()).hexdigest()if path.is_file()else"folder"if path.is_dir()else"missing"
+        for rel in sorted(folders):
+            if not rel.startswith(("v3/ui/","ui/"))or ".."in Path(rel).parts:return None
+            path=root/rel
+            if path.is_symlink():return None
+            names[rel]=sorted(os.listdir(path))if path.is_dir()else None
+        return {"files":files,"folders":names}
+
+    @staticmethod
+    def ui_trace_record(store,key):
+        """A broker-written traced pass for this exact fixture key, or None."""
+        path=store/(key+".json")
+        if store.is_symlink()or path.is_symlink()or not path.is_file()or path.stat().st_size>UI_TRACE_LIMIT:return None
+        try:value=json.loads(path.read_bytes())
+        except (OSError,ValueError):return None
+        if value.get("trace_key")!=key or value.get("status")!="passed"or not isinstance(value.get("inventory"),dict):return None
+        return value
+
+    @staticmethod
+    def record_ui_trace(store,key,test,job_id,verified_at,inventory):
+        """Publish one traced fixture pass atomically; keep the most recent records only."""
+        body=json.dumps({"trace_key":key,"test":test,"status":"passed","verified_job_id":job_id,"verified_at":verified_at,"inventory":inventory},sort_keys=True)
+        if len(body)>UI_TRACE_LIMIT:return
+        if store.is_symlink():raise ValueError("UI test trace store symlink")
+        store.mkdir(mode=0o700,parents=True,exist_ok=True)
+        temporary=store/(key+".tmp-"+uuid.uuid4().hex)
+        temporary.write_text(body)
+        os.replace(temporary,store/(key+".json"))
+        for old in sorted(store.glob("*.json"),key=lambda p:p.stat().st_mtime)[:-UI_TEST_EVIDENCE_KEEP]:old.unlink(missing_ok=True)
+
     def validate_selected_tests(self,job_id,root,evidence):
         """Execute dependency-selected frontend fixtures in one isolated browser-capable worker."""
         tests=evidence["tests"]
@@ -1706,7 +1815,19 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
         job=getattr(self.job_context,"job",None)
         previous=(job or {}).get("ui_test_evidence",{})
         prior=previous.get("fixtures",{}) if previous.get("status")=="passed" else {}
-        fixtures={};pending=[];reused=[];store=STATE/"ui-test-evidence"
+        fixtures={};pending=[];reused=[];store=STATE/"ui-test-evidence";trace_store=STATE/"ui-test-traces"
+        tracer_sha256=hashlib.sha256(UI_TRACER.encode()).hexdigest()
+        def trace_key(test):
+            return hashlib.sha256(canonical({"test":test,"image":image,"recipe":recipe,"recipe_sha256":recipe_sha256,
+                "environment":environment,"tracer_sha256":tracer_sha256,"policy_sha256":evidence.get("policy_sha256")})).hexdigest()
+        def traced_pass(test):
+            # A fixture whose reads the static graph cannot bound is reused only while every
+            # file its last passing run read (and every folder it listed) is byte-identical.
+            record=Runner.ui_trace_record(trace_store,trace_key(test))
+            if not record:return None
+            inventory=record["inventory"]
+            current=Runner.ui_trace_inventory(Path(root),set(inventory.get("files",{})),set(inventory.get("folders",{})))
+            return record if current==inventory else None
         for test in tests:
             proof=evidence.get("test_inputs",{}).get(test)
             dependency=proof["sha256"] if proof else evidence["sha256"]
@@ -1722,6 +1843,9 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
             elif stored:
                 fixtures[test]={"binding":binding,"reuse_key":reuse_key,"status":"passed","reused":True,"reused_from":stored["verified_job_id"],
                     "verified_job_id":stored["verified_job_id"],"verified_at":stored["verified_at"],"conservative":False};reused.append(test)
+            elif proof and proof.get("conservative")and(traced:=traced_pass(test)):
+                fixtures[test]={"binding":binding,"reuse_key":reuse_key,"status":"passed","reused":True,"reused_from":traced["verified_job_id"],
+                    "verified_job_id":traced["verified_job_id"],"verified_at":traced["verified_at"],"conservative":False,"traced":True};reused.append(test)
             else:
                 fixtures[test]={"binding":binding,"reuse_key":reuse_key,"status":"pending","reused":False,"conservative":proof.get("conservative",True)if proof else True}
                 pending.append(test)
@@ -1739,22 +1863,44 @@ if "mold 1.10.1 "not in subprocess.check_output(["cc","-fuse-ld=mold","-Wl,--ver
                 for tree in ("v3/ui","ui"):
                     if (root/tree).is_symlink():raise ValueError("UI tree symlink")
                     if (root/tree).is_dir():shutil.copytree(root/tree,mount/tree,symlinks=True)
+                (mount/".ui-trace.cjs").write_text(UI_TRACER)
                 for path in [mount,*mount.rglob("*")]:
                     if path.is_dir()and not path.is_symlink():path.chmod(0o755)
+                (mount/".ui-trace.cjs").chmod(0o644)
                 # No application credentials, mounts, authentication state or external network.
-                self.index_command(["docker","run","--rm","--network","none","--init","--read-only","--cap-drop","ALL",
+                reply=self.index_command(["docker","run","--rm","--network","none","--init","--read-only","--cap-drop","ALL",
                     "--security-opt","no-new-privileges","--user",str(CONFIG["app_uid"])+":"+str(CONFIG["app_gid"]),
                     "--memory","1g","--pids-limit","256","--cpus","1","--shm-size","256m",
                     "--tmpfs","/tmp:rw,size=512m,mode=1777","--env","HOME=/tmp","--env","NODE_PATH=/opt/ui-tests/node_modules",
                     "--env","PLAYWRIGHT_MODULE=/opt/ui-tests/playwright-entry.cjs",
                     "--env","CHROMIUM_PATH=/opt/ui-tests/chromium","--env","BROWSER_EXECUTABLE=/opt/ui-tests/chromium",
+                    "--env","NODE_OPTIONS=--require=/candidate/.ui-trace.cjs",
                     "--mount","type=bind,src="+str(mount)+",dst=/candidate,readonly","--workdir","/candidate/v3",
-                    "--entrypoint","node",image,"--experimental-vm-modules","--test","--test-concurrency=1",*["/candidate/"+p for p in pending]],timeout=self.ui_test_timeout(pending),kind="ui_test")
+                    "--entrypoint","node",image,"--experimental-vm-modules","--test","--test-concurrency=1",*["/candidate/"+p for p in pending]],timeout=self.ui_test_timeout(pending),kind="ui_test",traces=True)
             finally:
                 shutil.rmtree(mount,ignore_errors=True)
+            recorded=reply[1]if isinstance(reply,tuple)and len(reply)==2 else None
+            reads={}
+            try:rows=json.loads(recorded)if recorded else[]
+            except ValueError:rows=[]
+            for row in rows if isinstance(rows,list)else[]:
+                if not isinstance(row,dict)or row.get("unsafe")or not isinstance(row.get("test"),str):continue
+                rel=lambda value:value.removeprefix("/candidate/")
+                # Only the UI trees are mounted: any other /candidate path is absent in every run.
+                mounted=lambda value:isinstance(value,str)and rel(value).startswith(("v3/ui/","ui/"))
+                files,folders=reads.setdefault(rel(row["test"]),(set(),set()))
+                files.update(rel(p)for p in row.get("touched",())if mounted(p))
+                folders.update(rel(p)for p in row.get("listed",())if mounted(p))
             for test in pending:
                 fixtures[test].update(status="passed",verified_job_id=job_id,verified_at=time.time())
                 if fixtures[test].get("reuse_key"):Runner.record_ui_test(store,fixtures[test]["reuse_key"],test,job_id,fixtures[test]["verified_at"])
+                proof=evidence.get("test_inputs",{}).get(test)
+                # A browser pointed at file:// reads past the tracer, so such fixtures are never traced.
+                direct=lambda rel:(Path(root)/rel).is_file()and re.search(rb"file://|pathToFileURL",(Path(root)/rel).read_bytes())
+                if proof and test in reads and not any(direct(rel)for rel in {test,*proof.get("static_inputs",())}):
+                    files,folders=reads[test]
+                    inventory=Runner.ui_trace_inventory(Path(root),files|set(proof.get("static_inputs",()))|{test},folders)
+                    if inventory:Runner.record_ui_trace(trace_store,trace_key(test),test,job_id,fixtures[test]["verified_at"],inventory)
         binding=hashlib.sha256(canonical({p:row["binding"]for p,row in fixtures.items()})).hexdigest()
         return {"binding":binding,"image":image,"recipe":recipe,"tests":tests,"status":"passed"if tests else"not_applicable",
                 "reused":bool(tests)and not pending,"reused_tests":reused,"executed_tests":pending,"fixtures":fixtures}

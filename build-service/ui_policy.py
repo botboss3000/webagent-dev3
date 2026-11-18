@@ -78,6 +78,8 @@ def dependencies(files, changed):
                 if dependency not in inputs:
                     inputs.add(dependency); queue.append(dependency)
         unresolved = sorted(inputs & unknown)
+        # The import closure the broker can see; traced reuse adds the files a run actually read.
+        static_inputs = sorted(inputs)
         if unresolved:
             # The fixture container sees only the UI trees, so an unresolved fixture
             # depends on at most those files (plus the pinned image and recipe).
@@ -85,7 +87,8 @@ def dependencies(files, changed):
         inventory = {p: {"sha256": hashlib.sha256(files[p][1]).hexdigest(), "mode": files[p][0]}
                      for p in sorted(inputs) if p in files}
         proof = {"version": VERSION, "policy_sha256": policy_hash, "test": test,
-                 "dependencies": inventory, "unresolved": unresolved, "conservative": bool(unresolved)}
+                 "dependencies": inventory, "unresolved": unresolved, "conservative": bool(unresolved),
+                 "static_inputs": static_inputs}
         proof["sha256"] = hashlib.sha256(json.dumps(proof, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         test_inputs[test] = proof
     payload = dict(version=VERSION, policy_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), affected=sorted(affected), dependencies=hashes, tests=tests, conservative=conservative, test_inputs=test_inputs)
