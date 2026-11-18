@@ -9,7 +9,7 @@ import { buildGroup, setGroupStatus } from './table.js';
 import { buildPolicyControls, effectiveLabel, readinessLabel } from './policy.js';
 import { APP_DEFAULT, APP_DEFAULTS_CSS, buildAbilityDefaultsPanels, buildAppDefaultsBar, buildGroupDefaultsPanel, buildToolDefaultsPanel, createAppDefaults, loadAppDefaults } from './app-defaults.js';
 
-import { _buildMoreButton, _buildToolRow, _buildAbilitySettingsList, closeFloatingMenu } from '../../../../shared/ability-row-controls/ability-row-controls.js';
+import { _buildMoreButton, _buildToolRow, _buildAbilitySettingsList, closeFloatingMenu } from './ability-row-controls/ability-row-controls.js';
 import { buildSkillRow } from './rows.js';
 import { createSettingsMenu, createSettingsRegister, createSettingsRow } from '../../../../shared/settings-register/settings-register.js';
 import { createConfigPage } from '../../../../shared/config-page/config-page.js';

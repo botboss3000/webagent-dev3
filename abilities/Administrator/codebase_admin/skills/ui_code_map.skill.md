@@ -49,7 +49,7 @@ search this checkout instead.
 | Styles | `chat.css`; shared app styles in `ui/shared/css/` |
 | Mobile soft keyboard | `ui/boot/viewport.js` tracks the visual viewport and sets `body.kb-open` (see `ui_design`) |
 
-Other areas: shell `ui/app.js`, `ui/index.html`; main-panel pages `ui/main-panel/<id>/`
+Other areas: shell `ui/shell/app.js`, `ui/index.html`; main-panel pages `ui/main-panel/<id>/`
 (`docs/ui-pages.md`); shared assets `ui/shared/`. Routes for browser checks are in
 `docs/ui-journeys.md`. Design rules (tap highlight, mobile and desktop, theming) are in
 the `ui_design` skill.

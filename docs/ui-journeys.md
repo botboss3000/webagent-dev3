@@ -35,7 +35,7 @@ The selection table module was imported and exercised in a detached DOM against 
 ## Models reference UI adaptation — partial acceptance, 2026-10-03
 
 Source changes: `ui/main-panel/agents/pages/model-table.js`,
-`ui/shared/model-row-ordering.js` and `ui/app.css` (legacy form styles scoped
+`ui/shared/model-row-ordering.js` and `ui/shell/app.css` (legacy form styles scoped
 away from the reference-style mount). No Rust changes or service recreation were
 performed for this adaptation. Unrelated checkout edits were preserved.
 

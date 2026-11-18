@@ -1,6 +1,6 @@
-import {createBackgroundIssues} from './shared/background-issues/background-issues.js';
-import {createAbilityDrift,abilityDriftView} from './shared/ability-drift/ability-drift.js';
-import {requestTouchVibration} from './shared/vibrate/vibrate.js';
+import {createBackgroundIssues} from './background-issues/background-issues.js';
+import {createAbilityDrift,abilityDriftView} from './ability-drift/ability-drift.js';
+import {requestTouchVibration} from '../shared/vibrate/vibrate.js';
 // Port of V2 private-access shell; authentication remains exclusively V3.
 const privateResponse=await fetch('/ui/private-access/private-access-page/private-access-page.html');
 if(!privateResponse.ok)throw Error('Private access page failed to load');
@@ -9,34 +9,34 @@ const privateHost=document.querySelector('[data-private-access-form]');
 const privateReveal=document.querySelector('[data-private-access-reveal]');
 privateReveal.onclick=()=>{privateHost.hidden=false;privateReveal.hidden=true;privateReveal.setAttribute('aria-expanded','true');document.getElementById('login-username').focus({preventScroll:true});};
 function privateVisible(visible){document.body.classList.toggle('app-restricted',visible);document.getElementById('app-restricted-overlay').setAttribute('aria-hidden',String(!visible));privateHost.hidden=true;privateReveal.hidden=false;privateReveal.setAttribute('aria-expanded','false');}
-import { initHeaderCarousel } from './shared/header-carousel/header-carousel.js';
+import { initHeaderCarousel } from './header-carousel/header-carousel.js';
 initHeaderCarousel();
-import { holdTabScroll, wirePageTabCarousel, wirePageTabDrag } from './shared/page-tabs/page-tabs.js';
-import { consumeBack, pushBackHandler } from './shared/history-back/history-back.js';
-import { purgeAllBrowserData } from './browser-data-reset.js';
-import { showNotification } from './chat/core/chat-action-panel.js';
-import { createFloatingChat,createChatLauncher } from './chat/widget/window.js';
-import { mountNativeWidget } from './chat/widget/native.js';
-import { authorizeEmbedPopup } from './embed/authorize.js';
-import { mountChatResize } from './shared/chat-resize/chat-resize.js';
-import { initChatConfig } from './chat/controls/chat-config.js';
-import { mountChatPanel } from './chat/core/panel.js';
-import { openSignInPanel } from './chat/core/sign-in-panel.js';
-import { showLeftOverlay } from './chat/controls/login-hook.js';
+import { holdTabScroll, wirePageTabCarousel, wirePageTabDrag } from '../shared/page-tabs/page-tabs.js';
+import { consumeBack, pushBackHandler } from '../shared/history-back/history-back.js';
+import { purgeAllBrowserData } from '../browser-data-reset.js';
+import { showNotification } from '../chat/core/chat-action-panel.js';
+import { createFloatingChat,createChatLauncher } from '../chat/widget/window.js';
+import { mountNativeWidget } from '../chat/widget/native.js';
+import { authorizeEmbedPopup } from '../embed/authorize.js';
+import { mountChatResize } from '../chat/chat-resize/chat-resize.js';
+import { initChatConfig } from '../chat/controls/chat-config.js';
+import { mountChatPanel } from '../chat/core/panel.js';
+import { openSignInPanel } from '../chat/core/sign-in-panel.js';
+import { showLeftOverlay } from '../chat/controls/login-hook.js';
 
 // v2 dom-utils imports v1 auth and uploads; v3 uses text nodes and its own transport.
-import { renderIdentity } from './main-panel/agents/pages/identity/page.js';
-import {renderMembers} from './main-panel/agents/pages/members/page.js';
-import {renderArtifacts} from './main-panel/agents/pages/artifacts/page.js';
-import {offerAccessRequest,showAccessNotices} from './main-panel/agents/request-access.js';
-import {renderCreateAgent} from './main-panel/agents/pages/create/page.js';
-import {createAgentArchive} from './main-panel/agents/agent-archive.js';
-import { renderAbilities } from './main-panel/agents/pages/abilities/page.js';
-import { loadAgentPages } from './main-panel/agents/pages/catalog.js';
-import { renderAgentDirectory } from './main-panel/agents/pages/config/page.js';
-import { mountSelectionTable } from './main-panel/agents/pages/model/page.js';
-import { mountSessionsPage } from './main-panel/agents/pages/sessions/page.js';
-import { mountAvailableModels } from './main-panel/account/available-models.js';
+import { renderIdentity } from '../main-panel/agents/pages/identity/page.js';
+import {renderMembers} from '../main-panel/agents/pages/members/page.js';
+import {renderArtifacts} from '../main-panel/agents/pages/artifacts/page.js';
+import {offerAccessRequest,showAccessNotices} from '../main-panel/agents/request-access.js';
+import {renderCreateAgent} from '../main-panel/agents/pages/create/page.js';
+import {createAgentArchive} from '../main-panel/agents/agent-archive.js';
+import { renderAbilities } from '../main-panel/agents/pages/abilities/page.js';
+import { loadAgentPages } from '../main-panel/agents/pages/catalog.js';
+import { renderAgentDirectory } from '../main-panel/agents/pages/config/page.js';
+import { mountSelectionTable } from '../main-panel/agents/pages/model/page.js';
+import { mountSessionsPage } from '../main-panel/agents/pages/sessions/page.js';
+import { mountAvailableModels } from '../main-panel/account/available-models.js';
 let availableModelsDispose;
 let selectionTable;
 let agentSelectionQueue=Promise.resolve();
@@ -224,7 +224,7 @@ function startProtectedPage(page){
     for(const href of page.css||[]){
       if(!protectedAsset(href))continue;
       const link=document.createElement('link');link.rel='stylesheet';link.href=href;
-      document.head.insertBefore(link,document.querySelector('link[href^="/ui/app.css"]'));
+      document.head.insertBefore(link,document.querySelector('link[href^="/ui/shell/app.css"]'));
     }
     if(protectedAsset(page.html)){
       const response=await fetch(page.html,{credentials:'same-origin'});
@@ -252,7 +252,7 @@ async function loadMainPages(){
       if(protectedAsset(href))continue;
       const link=document.createElement('link');
       link.rel='stylesheet';link.href=href;
-      document.head.insertBefore(link,document.querySelector('link[href^="/ui/app.css"]'));
+      document.head.insertBefore(link,document.querySelector('link[href^="/ui/shell/app.css"]'));
     }
     const tab=document.createElement('button');
     tab.id='tab-button-'+page.id;tab.type='button';tab.className='main-tab';
@@ -1092,4 +1092,4 @@ const start=()=>api('/auth/setup-status').then(status=>{if(!status.initialized){
 start();
 
 // App-shell ownership includes the header account portal; chat shares its gesture registry.
-import './shared/header-feedback/header-feedback.js';
+import '../shared/header-feedback/header-feedback.js';

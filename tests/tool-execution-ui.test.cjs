@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, '../ui/shared/ability-row-controls/ability-row-controls.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../ui/main-panel/agents/pages/abilities/ability-row-controls/ability-row-controls.js'), 'utf8');
 function control({ capable = true, maxConcurrency = capable ? 4 : 1, canEdit = true, save = async () => {}, execution, policies, duplicateCapable = false } = {}) {
   const handlers = {};
   const tri = {

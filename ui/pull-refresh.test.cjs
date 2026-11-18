@@ -1,7 +1,7 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
-const source=fs.readFileSync(path.join(__dirname,'app.js'),'utf8');
+const source=fs.readFileSync(path.join(__dirname,'shell/app.js'),'utf8');
 function fixture(){
   const events={},nodes={},timers=[];let pending,fetches=0,prevented=false;
   const classes=new Set();

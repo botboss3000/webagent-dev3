@@ -2,9 +2,9 @@
 // SISTER-PANEL: AGENT-ABILITY-TABLE. Actual v2 dom-utils row/menu builders.
 // Keep these copies synchronized with ui/shared/js/dom-utils.js; v3 saves are supplied as callbacks.
 // Credential and tool-editor workflows remain unported; callers do not enable their options.
-import { _markSaving, _flashSaveCheck } from '../models/dom-utils.js';
-import {requestTouchVibration} from '../vibrate/vibrate.js';
-import {pushBackHandler} from '../history-back/history-back.js';
+import { _markSaving, _flashSaveCheck } from '../../../../../shared/models/dom-utils.js';
+import {requestTouchVibration} from '../../../../../shared/vibrate/vibrate.js';
+import {pushBackHandler} from '../../../../../shared/history-back/history-back.js';
 const _noop = () => {};
 function _moreDotsSvg() {
   return '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>';

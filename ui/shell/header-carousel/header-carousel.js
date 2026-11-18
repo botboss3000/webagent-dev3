@@ -1,5 +1,5 @@
 "use strict";
-import { applyRubberBand } from '../rubber-band/rubber-band.js';
+import { applyRubberBand } from '../../shared/rubber-band/rubber-band.js';
 export function initHeaderCarousel() {
 const tabBar=document.getElementById("main-tabs"), tabWrap=document.getElementById("main-tabs-wrap"), chevLeft=document.getElementById("main-tabs-chev-left"), chevRight=document.getElementById("main-tabs-chev-right");
   function updateChevrons() {

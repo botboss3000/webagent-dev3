@@ -8,13 +8,13 @@ const path=require('node:path');
 // Rerun this test after changing imports; a failure prints the replacement block.
 function startupModules(){
  const imports=/(?:^|[;\s])(?:import|export)\s[^;]*?from\s*['"](\.[^'"]+)['"]|(?:^|[;\s])import\s*['"](\.[^'"]+)['"]/gm;
- const seen=new Set(),queue=['app.js'];
+ const seen=new Set(),queue=['shell/app.js'];
  while(queue.length){
   const file=queue.shift();if(seen.has(file))continue;seen.add(file);
   const source=fs.readFileSync(path.join(__dirname,file),'utf8').replace(/\/\*[\s\S]*?\*\//g,'').replace(/^\s*\/\/.*$/gm,'');
   for(const match of source.matchAll(imports))queue.push(path.posix.normalize(path.posix.join(path.posix.dirname(file),(match[1]||match[2]).split('?')[0])));
  }
- seen.delete('app.js');
+ seen.delete('shell/app.js');
  return [...seen].sort();
 }
 

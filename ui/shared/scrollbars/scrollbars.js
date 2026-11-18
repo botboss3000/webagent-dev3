@@ -1,5 +1,5 @@
 /* Desktop Firefox half of the shared scrollbar; Chromium/Safari draw it from the
-   wa-scrollbar layer in /ui/app.css. Firefox offers only auto/thin widths and
+   wa-scrollbar layer in /ui/shell/app.css. Firefox offers only auto/thin widths and
    its GTK overlay bars fade when idle, so on fine-pointer desktops each scroller's
    native bar is hidden and the same persistent 6px thumb is drawn as a positioned
    child, keeping the scroller's own clipping and stacking. */

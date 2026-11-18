@@ -170,7 +170,7 @@ Main Chat remains ordinary. No engine or authorization behavior changed.
 | sessions/js/adapter.js::compareSessionsByPinnedOrder | Main Chat, pins, descending last_active_at, then stable ID tie-breaks. Archived-origin rows receive neither role nor pin priority. Inputs are not mutated. |
 | sessions/js/sessions-page.js::_applySort | Sorts a copy using the adapter for default recent order. Explicit column sorts retain Main Chat/pin priority, existing pinned sort_order and column handling within groups. |
 | sessions/js/sessions-page.js::_renderTitleCell | Chooses the wavy Main Chat class or existing pinned halo; retains escaped labels, avatar slots and family disclosure controls. |
-| shared/main-chat-avatar/main-chat-avatar.css | Imported by both dropdown and Sessions styles. The static SVG mask on .session-row-agent-main::after draws a wavy ring at inset -3px, using --warning with yellow fallback. No animation; pointer-events:none keeps actions unobstructed and the avatar slot unchanged. |
+| chat/main-chat-avatar/main-chat-avatar.css | Imported by both dropdown and Sessions styles. The static SVG mask on .session-row-agent-main::after draws a wavy ring at inset -3px, using --warning with yellow fallback. No animation; pointer-events:none keeps actions unobstructed and the avatar slot unchanged. |
 
 Config: `ui/chat/controls/session-dropdown/session-dropdown.json` ->
 `common.trigger.agent_icon` and `common.menu.agent_icons`, with desktop/mobile/widget

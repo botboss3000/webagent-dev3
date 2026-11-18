@@ -81,7 +81,7 @@ assert.equal(await page.locator('tr[data-session-id="main-protected"] .sessions-
   document.body.innerHTML='<main id="main-panel"><section id="tab-agents" class="active sessions-view"><div id="agents-grid"><div class="agents-top-row">Sessions</div><div id="sessions-region"><div class="agent-row"><div class="agent-card-tabs-only">Sessions</div><div class="agent-detail-panel"><div class="agent-detail-content"><section id="sessions-section"></section></div></div></div></div></div></section></main>';
   const style=document.createElement('style');style.textContent='html,body{height:100%;margin:0}#main-panel{height:100%;overflow:auto}#agents-grid{display:flex;flex-direction:column} .agents-top-row{height:148px} .agent-card-tabs-only{min-height:39px} .sessions-footer{display:flex;min-height:32px} .agent-detail-content{height:520px;flex-direction:column}';
   document.head.append(style);
-  const appStyle=document.createElement('link');appStyle.rel='stylesheet';appStyle.href='/ui/app.css';document.head.append(appStyle);
+  const appStyle=document.createElement('link');appStyle.rel='stylesheet';appStyle.href='/ui/shell/app.css';document.head.append(appStyle);
   const {mountSessionsPage}=await import('/ui/main-panel/agents/pages/sessions/page.js');
   const rows=Array.from({length:200},(_,i)=>({id:'long-'+i,title:'Long catalog '+i,agent_id:'one',status:'active',metadata_revision:0,created_at:1,last_active_at:200-i,message_count:0}));
   window.longPage=await mountSessionsPage(document.getElementById('sessions-section'),{isCurrent:()=>true,request:async()=>({sessions:rows,next_offset:null}),userId:'long-fixture',roster:[{id:'one',name:'One'}],getSessionId:()=>null,open:()=>{},changed:()=>{}});

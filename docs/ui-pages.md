@@ -1,6 +1,6 @@
 # Main-panel pages — authoring conventions
 
-A main-panel page is a folder `ui/main-panel/<id>/` containing a `page.json`. Nothing else registers it: the catalog is derived from these folders by `src/api/ui_pages.rs` and served at `GET /api/v3/pages/catalog`; `ui/app.js` builds the tab, loads the page CSS, and mounts the page from the catalog. Read this file before authoring a page — exemplar pages do not need to be read to learn these conventions.
+A main-panel page is a folder `ui/main-panel/<id>/` containing a `page.json`. Nothing else registers it: the catalog is derived from these folders by `src/api/ui_pages.rs` and served at `GET /api/v3/pages/catalog`; `ui/shell/app.js` builds the tab, loads the page CSS, and mounts the page from the catalog. Read this file before authoring a page — exemplar pages do not need to be read to learn these conventions.
 
 ## page.json (required)
 

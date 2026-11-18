@@ -2,7 +2,7 @@ const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import assert from 'node:assert/strict';
-const source=await fs.readFile(process.env.AGENT_NAVIGATION_SOURCE||new URL('../../app.js',import.meta.url),'utf8');
+const source=await fs.readFile(process.env.AGENT_NAVIGATION_SOURCE||new URL('../../shell/app.js',import.meta.url),'utf8');
 // Run the shell's actual card, route, and remount functions; replace only backend/page collaborators.
 // Keep extraction bounded to its owning feature and fail directly if the source seam moves.
 const slice=(start,end)=>{

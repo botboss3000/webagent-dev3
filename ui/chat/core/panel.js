@@ -4,7 +4,7 @@ import {createMainNotes} from '../elements/main-notes/index.js';
 // Locates the v3 chat panel lifecycle, transcript, and run controls Config: data/config/chat.json -> chat_display.default and chat_common.composer.keyboard_focus.
 // V2-style panel/client separation; markup and message protocol remain V3.
 // Panel feeds selected-session runs/live messages to display policy from data/config/chat.json -> chat_common.screen_display and surface overrides; history loading is excluded.
-import {mountScreenAwake} from '../../shared/screen-awake/screen-awake.js';
+import {mountScreenAwake} from '../screen-awake/screen-awake.js';
 import {mountChatControlFeedback} from '../controls/feedback.js';
 import {mountSharedChat} from '../controls/shared-chat.js';
 import { createChatClient } from './client.js';
@@ -40,7 +40,7 @@ const mountedPanels = new WeakMap();
 /**
  * Mounts the V3 chat partial, transport, transcript and controls under the supplied shell root.
  * Replaces an earlier panel for that root through its destroy lifecycle and returns the panel API.
- * Called by ui/app.js with the authenticated request, action guard, identity and selected-agent adapters.
+ * Called by ui/shell/app.js with the authenticated request, action guard, identity and selected-agent adapters.
  * Reports session/run/sent changes through onEvent and returns the mounted panel API.
  * Missing or incomplete partial markup and synchronous setup failures propagate to the shell.
  */

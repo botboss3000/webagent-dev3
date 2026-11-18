@@ -65,9 +65,9 @@ test('save remains disabled until the revisioned persistence operation settles',
 
 
 // Exercise the actual tool-panel state/save logic; substitute only DOM/menu and save-feedback collaborators.
-const controls = await fs.readFile(new URL('../../../../shared/ability-row-controls/ability-row-controls.js', import.meta.url), 'utf8');
+const controls = await fs.readFile(new URL('../abilities/ability-row-controls/ability-row-controls.js', import.meta.url), 'utf8');
 const seam=controls.indexOf('let floatingMenuCleanup = null;');assert.ok(seam>0);
-const toolSource=controls.slice(0,seam).replace(/import \{requestTouchVibration\} from '[^']+';/, 'const requestTouchVibration=()=>{};').replace(/import \{pushBackHandler\} from '[^']+';/, 'const pushBackHandler=()=>()=>{};').replace("import { _markSaving, _flashSaveCheck } from '../models/dom-utils.js';",
+const toolSource=controls.slice(0,seam).replace(/import \{requestTouchVibration\} from '[^']+';/, 'const requestTouchVibration=()=>{};').replace(/import \{pushBackHandler\} from '[^']+';/, 'const pushBackHandler=()=>()=>{};').replace("import { _markSaving, _flashSaveCheck } from '../../../../../shared/models/dom-utils.js';",
   'const _markSaving=()=>{}; const _flashSaveCheck=()=>{};')+`
 let captured=null;
 function openFloatingMenu(factory){captured=factory;}

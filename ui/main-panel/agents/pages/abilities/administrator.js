@@ -1,5 +1,5 @@
 // Agent configuration is distinct from capability-level views; Rust enforces every save.
-import { buildConfigRow } from '../../../../shared/ability-row-controls/ability-row-controls.js';
+import { buildConfigRow } from './ability-row-controls/ability-row-controls.js';
 import { _markSaving, _flashSaveCheck } from '../../../../shared/models/dom-utils.js';
 const node = (tag, cls = '', text = '') => {
   const el = document.createElement(tag); el.className = cls; el.textContent = text; return el;

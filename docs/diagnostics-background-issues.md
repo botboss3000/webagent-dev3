@@ -32,7 +32,7 @@ Probe child PID/executable files as the actual application UID; container root m
 
 ## Independent issues and recovery
 
-`ui/app.js` creates `createBackgroundIssues` and injects it into the authenticated main chat panel.
+`ui/shell/app.js` creates `createBackgroundIssues` and injects it into the authenticated main chat panel.
 An episode is keyed by operation/session and has one UUID shared by opening and resolution. Repeated
 failures update local text/count. Matching success removes that episode and emits resolution; unrelated
 success or clearing action feedback does not. Session selection only filters visibility, never recovery.
@@ -129,7 +129,7 @@ to visible. Public reload composed shell, history/activity and composer. Lifecyc
 used actual frontend tracker/notice/render harnesses plus API boundaries, not a live browser fault.
 
 The documentation review freshly reran 39 affected UI tests. It found one remaining issue:
-`ui/app.js` global status callbacks lack authentication-generation and request-sequence fencing.
+`ui/shell/app.js` global status callbacks lack authentication-generation and request-sequence fencing.
 An earlier failure after stop/start can display an old error; an older failed poll can arrive after
 a newer success. Reproduce: start tracker; retain old status-failure callback; stop; start; invoke
 old callback. The currently started tracker accepts it. A separate correction should fence shell
@@ -307,7 +307,7 @@ Test helpers are deterministic fixtures, not proof of live runtime behavior.
 | `fixture` | Instantiate actual controls/notification modules in VM with mutable server snapshots, captured writes/errors and optional issue adapter. |
 | `tick` | Yield one event-loop turn to let deferred control actions settle. |
 
-### ui/app.js
+### ui/shell/app.js
 
 | Function or group | Verified purpose and contract |
 | --- | --- |
@@ -469,7 +469,7 @@ Test helpers are deterministic fixtures, not proof of live runtime behavior.
 | `snapshot` | Build minimal public messages/run snapshot and maximum sequence for fixture recovery. |
 | `tick` | Yield event loop for outstanding recovery requests/callbacks. |
 
-### ui/shared/background-issues/background-issues.js
+### ui/shell/background-issues/background-issues.js
 
 | Function or group | Verified purpose and contract |
 | --- | --- |
@@ -494,10 +494,10 @@ Test helpers are deterministic fixtures, not proof of live runtime behavior.
 
 ### Meaningful inline and returned callbacks
 
-- `ui/shared/background-issues/background-issues.js`: {"fail": "Open/deduplicate episode while started; cap count at 1e6 and active map128; display local error with operation label.", "resolve": "Remove only matching episode, emit captured resolution and repaint.", "select": "Filter visible session, no false resolution.", "start": "Idempotent config read/5s polling.", "stop": "Invalidate epoch/timers/queue/map and clear rendered issue notices."}
+- `ui/shell/background-issues/background-issues.js`: {"fail": "Open/deduplicate episode while started; cap count at 1e6 and active map128; display local error with operation label.", "resolve": "Remove only matching episode, emit captured resolution and repaint.", "select": "Filter visible session, no false resolution.", "start": "Idempotent config read/5s polling.", "stop": "Invalidate epoch/timers/queue/map and clear rendered issue notices."}
 - `ui/chat/core/client.js`: Returned endpoint wrappers are documented inline: queue delivery/resume, undo/fork, sharing/invites/participation/help, usage/context config, snapshots/attachments/voice, controls/mode/model, session lifecycle/read/create/send and run decisions/recovery/resume. They delegate method/path/body unchanged through caller-authenticated request; no new independent authority.
 - `ui/chat/core/panel.js`: Returned panel methods validate draft/context/run ownership and delegate to submit/cancel/decide/recover; accessor reports selected session. UI event handlers use guard and server capability projections. read observer, reviewTimer, sharing onState and open transport callbacks own matched failure/success paths.
-- `ui/app.js`: Inline handlers cover authentication/register/profile/password/session-policy/revocation, provider/model/policy writes, main/agent/mobile/theme navigation, shell chat widget and pull refresh; credential errors stay inline and explicit actions retain note feedback.
+- `ui/shell/app.js`: Inline handlers cover authentication/register/profile/password/session-policy/revocation, provider/model/policy writes, main/agent/mobile/theme navigation, shell chat widget and pull refresh; credential errors stay inline and explicit actions retain note feedback.
 
 Configuration assessments distinguish actual JSON consumers from protocol, identity,
 accessibility and deterministic-fixture invariants; missing settings are opportunities,

@@ -3,7 +3,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const vm=require('node:vm');
-const source=fs.readFileSync(path.join(__dirname,'../../app.js'),'utf8');
+const source=fs.readFileSync(path.join(__dirname,'../../shell/app.js'),'utf8');
 const policyFunction=source.match(/^async function loadGuestPolicy\(\).*$/m)[0];
 
 test('approval notice is hidden in markup and its hidden attribute overrides the grid',()=>{

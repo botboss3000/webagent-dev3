@@ -36,7 +36,7 @@ test('late authenticated status failure after stop cannot repopulate private not
 test('actual shell action notices and guards preserve independent background issues',async()=>{
  const notice={textContent:''},context=vm.createContext({Date,Set,Map,Error,Number,String,crypto:{randomUUID:()=> 'issue-id'},setInterval:()=>1,clearInterval(){},setTimeout,clearTimeout,$:()=>notice,api:async()=>({enabled:true,show_toasts:true})});
  const module=new vm.SourceTextModule(fs.readFileSync(__dirname+'/background-issues.js','utf8'),{context});await module.link(()=>{});await module.evaluate();context.createBackgroundIssues=module.namespace.createBackgroundIssues;
- const source=fs.readFileSync(require('node:path').join(__dirname,'../../app.js'),'utf8'),block=source.slice(source.indexOf("let noticeSource='"),source.indexOf('async function api('));
+ const source=fs.readFileSync(require('node:path').join(__dirname,'../app.js'),'utf8'),block=source.slice(source.indexOf("let noticeSource='"),source.indexOf('async function api('));
  vm.runInContext(block+';this.shell={issues,note,clearNoticeFrom};',context);const {issues,note,clearNoticeFrom}=context.shell;issues.start();await new Promise(setImmediate);issues.select('a');issues.fail('usage',Error('offline'),'a');
  note('Saved','save');assert.equal(notice.textContent,'Saved · Usage unavailable: offline');clearNoticeFrom('status-poll');assert.equal(notice.textContent,'Saved · Usage unavailable: offline');note('');assert.equal(notice.textContent,'Usage unavailable: offline');note('Saved','save');issues.resolve('usage','a');assert.equal(notice.textContent,'Saved · Usage unavailable: offline (Cleared 3)');issues.stop();assert.equal(notice.textContent,'Saved');
 });
