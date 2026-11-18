@@ -457,17 +457,23 @@ fn reduce(state: &mut State, r: &Request) -> Result<(Value, Vec<Value>, bool), S
                 }
                 // Only unadmitted work transfers. Keep its occurrence identity, so
                 // a consumed one-shot survives without another scheduling request.
+                // Undelivered review wake-ups are dropped instead: the new session starts
+                // with the whole current notes, so they carry nothing it lacks.
                 for occurrence in state
                     .occurrences
                     .values_mut()
                     .filter(|o| ["queued", "retry_wait"].contains(&o.status.as_str()))
                 {
                     if let Some(definition) = state.definitions.get(&occurrence.automation_id) {
-                        if definition.agent_id == r.context["agent_id"]
-                            && (definition.id == id
-                                || definition.id.starts_with("main-notes-action-"))
-                            && occurrence.revision.checked_add(1) == Some(definition.revision)
+                        if definition.agent_id != r.context["agent_id"]
+                            || occurrence.revision.checked_add(1) != Some(definition.revision)
                         {
+                            continue;
+                        }
+                        if definition.id == id {
+                            occurrence.status = "cancelled".into();
+                            occurrence.last_error = Some("main_chat_session_replaced".into());
+                        } else if definition.id.starts_with("main-notes-action-") {
                             occurrence.revision = definition.revision;
                         }
                     }
@@ -2212,5 +2218,17 @@ mod main_notes_tests {
             fresh["state"]["definitions"]["main-notes-review-two"]["destination"]["session_id"],
             "main"
         );
+        let status = |agent: &str| {
+            fresh["state"]["occurrences"]
+                .as_object()
+                .unwrap()
+                .values()
+                .find(|o| o["automation_id"] == format!("main-notes-review-{agent}"))
+                .unwrap()["status"]
+                .clone()
+        };
+        // The replaced session's undelivered wake-up is dropped; the other agent's stays.
+        assert_eq!(status("one"), "cancelled");
+        assert_ne!(status("two"), "cancelled");
     }
 }
