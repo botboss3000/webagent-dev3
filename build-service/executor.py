@@ -36,7 +36,7 @@ TEST_STACK_BYTES=32*1024*1024
 # (2026-10-28: 15+ different flaky tests); lower these again on a smaller host.
 TEST_THREADS=8
 CARGO_BUILD_JOBS="10"
-SIDEKICK_PROTOCOL=3  # sidekick.py VERSION this broker requires
+SIDEKICK_PROTOCOL=4  # sidekick.py VERSION this broker requires
 SUITE_MARK="@@sidekick-step-passed "
 COMPILE_TEST_ARGV=["sh","-c","set -e\ncargo test --workspace --locked --offline --no-run --message-format=json-render-diagnostics > /output/test-artifacts.json\ncargo build --workspace --exclude webagent-v3 --locked --offline --bins --message-format=json-render-diagnostics >> /output/test-artifacts.json"]
 # Compiled-dependency snapshots: stub compiles mirror the engine profiles exactly.
@@ -397,7 +397,8 @@ class Executor:
         return json.loads(self.sidekick_call(settings,*words,**kwargs))
     def _sidekick_workload(self,job,phase,argv,profile,timeout,remote):
         """One phase on the sidekick: the same image, recipe and incremental setting as a local phase."""
-        request=json.dumps({"argv":argv,"image":remote["image"],"cargo_key":remote["cargo_key"],"incremental":self.incremental(job,profile)}).encode()
+        request=json.dumps({"argv":argv,"image":remote["image"],"cargo_key":remote["cargo_key"],"incremental":self.incremental(job,profile),
+            "output":remote.get("output","compile")}).encode()
         # Phase output is a log: it keeps the scrubbed, observed path of a local phase.
         logs=self.runner.command(self.sidekick_argv(remote["settings"],"run",job["job_id"],phase,str(int(timeout))),stdin=request,timeout=int(timeout)+120)
         self.persist_phase_log(job,logs);return logs
@@ -485,6 +486,53 @@ class Executor:
     def suite_remainder(selection,done):
         """The selection's script without the steps already passed."""
         return ["sh","-c","\n".join(line for line in selection["argv"][2].split("\n")if Executor.suite_step(line)not in done)]
+    def sidekick_prepare(self,job,application,settings,record):
+        """The compiler image by ID (sent once if missing) and the captured application tree, checked by digest."""
+        jid=job["job_id"];image=self.runner.compiler_runtime(job)["image"]
+        if image not in self.sidekick_json(settings,"status").get("images",[]):
+            saver=subprocess.Popen(["docker","save",image],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+            try:loaded=self.sidekick_json(settings,"load-image",jid,image,stdin=saver.stdout,timeout=1800)
+            finally:saver.stdout.close();saver.wait(120)
+            if saver.returncode or not loaded.get("present"):raise ValueError("Compiler image transfer to the sidekick failed")
+            record["image_transferred"]=True
+        tree,digest_value=self.sidekick_tree(application)
+        synced=self.sidekick_json(settings,"sync-source",jid,stdin=tree,timeout=600)
+        if synced.get("sha256")!=digest_value:raise ValueError("Sidekick source differs from captured inputs")
+        return image,digest_value,synced
+    def sidekick_replay(self,job,application,output,artifacts,manifest,settings,state):
+        """Replay the retained test executables on the sidekick, which holds them by sha256 (only missing ones are
+        sent). A marker follows each one, so those that passed survive a disconnect; the caller replays the rest
+        here and confirms any failure. Staged hashes must equal the retained manifest's."""
+        jid=job["job_id"];record=job["sidekick"];record["mode"]="replay"
+        image,digest_value,synced=self.sidekick_prepare(job,application,settings,record)
+        record.update(image=image,source_sha256=digest_value,source_changed=synced.get("changed"))
+        local={};wanted={}
+        for row in manifest["tests"]:
+            wanted["artifacts/"+row["file"]]=row["sha256"];local[row["sha256"]]=artifacts/row["file"]
+        for item in [manifest["support"],*manifest.get("additional_support",[])]:
+            wanted[item["destination"]]=item["sha256"];local[item["sha256"]]=artifacts/item["file"]
+        missing=self.sidekick_json(settings,"have",stdin=json.dumps(sorted(set(wanted.values()))).encode())
+        if missing:
+            archive=output/"sidekick-binaries.tar"
+            try:
+                with tarfile.open(archive,"w")as tar:
+                    for sha in missing:tar.add(local[sha],arcname=sha,recursive=False)
+                with archive.open("rb")as stream:self.sidekick_call(settings,"put-binaries",jid,stdin=stream,timeout=1800)
+            finally:archive.unlink(missing_ok=True)
+        record["binaries_sent"]=len(missing)
+        staged=self.sidekick_json(settings,"stage-replay",jid,stdin=json.dumps([[sha,destination]for destination,sha in wanted.items()]).encode(),timeout=300)
+        if staged!=wanted:raise ValueError("Sidekick replay executables differ from the retained manifest")
+        threads="--test-threads="+str(self.tuning("test_threads",TEST_THREADS));steps=[]
+        lines=["set -e",'export LD_LIBRARY_PATH="$(rustc --print target-libdir)${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"']
+        for row in sorted(manifest["tests"],key=lambda r:r["file"]):
+            lines+=["/output/artifacts/"+row["file"]+" "+threads,"echo "+shlex.quote(SUITE_MARK+row["file"])];steps.append(row["file"])
+        remote={"settings":settings,"image":image,"cargo_key":None,"output":"replay"}
+        try:logs=self.phase(job,"test","test",application,output,["sh","-c","\n".join(lines)],"engine:rust1.90:test",sidekick=remote)
+        except PermissionError:raise
+        except Exception as error:
+            state["partial"],state["done"]=self.sidekick_partial(getattr(error,"log",None)or str(error),steps);raise
+        record.update(decision="passed",seconds=round(time.time()-record["started_at"],3))
+        return "Retained tests replayed on the broker sidekick "+settings["host"]+".\n"+logs
     def sidekick_claim(self,job,settings,state):
         """Health check, program sync and the job lock, in seconds and before the release compile starts:
         a sidekick that is off, paused, busy or failing leaves this job on the usual server order."""
@@ -502,16 +550,7 @@ class Executor:
         results are trusted: same image by ID, same source by digest, staged binaries hash-checked against the
         manifest built here. A failed step is always rerun here before it can fail the job."""
         jid=job["job_id"];record=job["sidekick"]
-        image=self.runner.compiler_runtime(job)["image"]
-        if image not in self.sidekick_json(settings,"status").get("images",[]):
-            saver=subprocess.Popen(["docker","save",image],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
-            try:loaded=self.sidekick_json(settings,"load-image",jid,image,stdin=saver.stdout,timeout=1800)
-            finally:saver.stdout.close();saver.wait(120)
-            if saver.returncode or not loaded.get("present"):raise ValueError("Compiler image transfer to the sidekick failed")
-            record["image_transferred"]=True
-        tree,digest_value=self.sidekick_tree(application)
-        synced=self.sidekick_json(settings,"sync-source",jid,stdin=tree,timeout=600)
-        if synced.get("sha256")!=digest_value:raise ValueError("Sidekick source differs from captured inputs")
+        image,digest_value,synced=self.sidekick_prepare(job,application,settings,record)
         key=(job.get("dependency_cache")or{}).get("key")
         if not isinstance(key,str)or not re.fullmatch(r"[a-f0-9]{64}",key):raise ValueError("Dependency cache key unavailable")
         if not self.sidekick_json(settings,"has-cargo",key).get("present"):
@@ -1984,12 +2023,29 @@ class Executor:
                     logs="Exact source, toolchain and fixture proof matched; complete workspace test evidence reused from "+old["job_id"]+".\n"+old["test_log"]
                 else:
                     logs+=self.focused_tests(job,application,output,retained=artifacts)
-                    replayed=0;results=0
-                    for binary in sorted((artifacts/"tests").iterdir()):
+                    binaries=sorted((artifacts/"tests").iterdir())
+                    for binary in binaries:
                         if not re.fullmatch(r"[a-z0-9_]+-[a-f0-9]{16}",binary.name):raise ValueError("Cached test executable name invalid")
-                        run=self.phase(job,"test","test",application,output,Executor.replay_argv("/output/artifacts/tests/"+binary.name,"--test-threads="+str(self.tuning("test_threads",TEST_THREADS))),"engine:rust1.90:test")
-                        logs+=run;replayed+=1;results+=len(re.findall(r"test result:",run))
-                    if replayed!=results:raise ValueError("Parallel replay skipped a retained test binary")
+                    replay="";done=[];sidekick=self.sidekick(job);state={}
+                    if sidekick:
+                        try:
+                            self.sidekick_claim(job,sidekick,state)
+                            replay=self.sidekick_replay(job,application,output,artifacts,manifest,sidekick,state);done=[b.name for b in binaries]
+                        except PermissionError:
+                            self.sidekick_release(sidekick,job,"cancelled");raise
+                        except Exception as error:
+                            job.setdefault("sidekick",{}).update(decision="declined"if isinstance(error,SidekickDeclined)else"fallback",reason=str(error)[:600],
+                                mode="replay",kept_steps=len(state.get("done")or[]))
+                            self.sidekick_outcome(sidekick,error);self.sidekick_release(sidekick,job,"fallback")
+                            replay=state.get("partial","");done=[name.removeprefix("tests/")for name in state.get("done")or[]]
+                            logs+="Broker sidekick did not finish the replay ("+job["sidekick"]["reason"][:200]+"); "+("kept %d, the rest replay here.\n"%len(done)if done else"it replays here.\n")
+                        else:
+                            self.sidekick_outcome(sidekick);self.sidekick_release(sidekick,job,"passed")
+                    for binary in binaries:
+                        if binary.name in done:continue
+                        replay+=self.phase(job,"test","test",application,output,Executor.replay_argv("/output/artifacts/tests/"+binary.name,"--test-threads="+str(self.tuning("test_threads",TEST_THREADS))),"engine:rust1.90:test")
+                    if len(re.findall(r"test result:",replay))!=len(binaries):raise ValueError("Parallel replay skipped a retained test binary")
+                    logs+=replay
                     counts=Executor.suite_totals(logs)
                     job["suite_counts"]={"passed":counts[0],"failed":counts[1],"ignored":counts[2]}
                 if self.runner.execution_source_digest(source)!=self.runner.execution_source_digest_blob(blob):

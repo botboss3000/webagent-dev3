@@ -15,14 +15,16 @@ from pathlib import Path
 
 STATE=Path(os.environ.get("BROKER_SIDEKICK_STATE","/var/lib/broker-sidekick"))
 SETTINGS=Path("/etc/broker-sidekick.json")
-WORK=STATE/"work";SOURCE=WORK/"source";OUTPUT=WORK/"output";CARGO=STATE/"cargo"
+WORK=STATE/"work";SOURCE=WORK/"source";OUTPUT=WORK/"output";REPLAY=WORK/"replay";CARGO=STATE/"cargo"
+# Test executables by sha256, so a replay of retained tests needs no transfer when the sidekick already ran them.
+BINARIES=STATE/"binaries"
 LOCK=STATE/"job.lock";STATUS=STATE/"status.json";PRUNE=STATE/"prune.json";ACCEPTING=STATE/"accepting.json"
-VERSION=3
+VERSION=4
 TAG="broker-sidekick-compiler";LABEL="broker-sidekick.job"
 JOB=re.compile(r"[a-f0-9-]{36}");IMAGE=re.compile(r"sha256:[a-f0-9]{64}");KEY=re.compile(r"[a-f0-9]{64}")
 PHASES={"compile_test","test"}
 DEFAULTS={"uid":1000,"gid":1000,"cargo_build_jobs":12,"memory_bytes":13*1024**3,"min_free_bytes":15*1024**3,
-    "target_max_bytes":100*1024**3,"cargo_keep":3,"stale_lock_seconds":7200}
+    "target_max_bytes":100*1024**3,"cargo_keep":3,"stale_lock_seconds":7200,"binaries_max_bytes":20*1024**3}
 RUSTFLAGS="-C debuginfo=0 -C link-arg=-fuse-ld=mold"
 
 
@@ -150,6 +152,7 @@ def cmd_begin(args):
         if path.is_dir():shutil.rmtree(path)
         elif path.exists():path.unlink()
     OUTPUT.mkdir(parents=True,exist_ok=True)
+    shutil.rmtree(REPLAY,ignore_errors=True)
     status(state="running",job_id=job,stage="preparing",started_at=time.time())
     print(json.dumps({"decision":"accepted","cpus":os.cpu_count()}))
 
@@ -221,22 +224,24 @@ def kill_containers():
 
 
 def cmd_run(args):
-    """One phase container. stdin: {"argv": [...], "image": ID, "cargo_key": KEY, "incremental": "0"|"1"}."""
+    """One phase container. stdin: {"argv": [...], "image": ID, "cargo_key": KEY or null, "incremental": "0"|"1",
+    "output": "compile" (the warm target) or "replay" (a per-job folder: retained tests never touch that target)}."""
     job,phase,timeout=args;require(job)
     if phase not in PHASES or not timeout.isdigit():fail("phase")
     request=json.loads(sys.stdin.buffer.read(1024*1024))
-    argv,image,key,incremental=request["argv"],request["image"],request["cargo_key"],request["incremental"]
-    if not(isinstance(argv,list)and argv and all(isinstance(a,str)for a in argv))or not IMAGE.fullmatch(image)or not KEY.fullmatch(key)or incremental not in {"0","1"}:fail("request")
+    argv,image,key,incremental=request["argv"],request["image"],request.get("cargo_key"),request["incremental"]
+    folder=REPLAY if request.get("output")=="replay"else OUTPUT
+    if not(isinstance(argv,list)and argv and all(isinstance(a,str)for a in argv))or not IMAGE.fullmatch(image)or(key is not None and not KEY.fullmatch(key))or incremental not in {"0","1"}:fail("request")
     if not image_present(image):fail("compiler image missing",3)
     keep_image(image)
-    if not (CARGO/key/"complete").is_file():fail("cargo registry missing",3)
+    if key is not None and not (CARGO/key/"complete").is_file():fail("cargo registry missing",3)
     cfg=settings();name="broker-sidekick-"+job.replace("-","")+"-"+phase+"-"+os.urandom(4).hex()
     status(state="running",job_id=job,stage=phase.replace("_"," "),started_at=json.loads(LOCK.read_text())["at"])
-    (OUTPUT/"target").mkdir(parents=True,exist_ok=True)
+    (folder/"target").mkdir(parents=True,exist_ok=True)
     create=["docker","create","--name",name,"--label",LABEL+"="+job,"--cap-drop","ALL","--security-opt","no-new-privileges",
         "--pids-limit","256","--user","%d:%d"%(cfg["uid"],cfg["gid"]),"--network","none","--memory",str(cfg["memory_bytes"]),"--memory-swap",str(cfg["memory_bytes"]),
         "--mount","type=bind,src=%s,dst=/build%s"%(SOURCE/"v3",""if phase=="test"else",readonly"),
-        "--mount","type=bind,src=%s,dst=/output"%OUTPUT,"--mount","type=bind,src=%s,dst=/output/cargo"%(CARGO/key),"-w","/build",
+        "--mount","type=bind,src=%s,dst=/output"%folder,*(["--mount","type=bind,src=%s,dst=/output/cargo"%(CARGO/key)]if key else[]),"-w","/build",
         "-e","CARGO_HOME=/output/cargo","-e","CARGO_TARGET_DIR=/output/target","-e","CARGO_BUILD_JOBS=%d"%cfg["cargo_build_jobs"],
         "-e","CARGO_INCREMENTAL="+incremental,"--env","RUSTFLAGS="+RUSTFLAGS,"-e","CARGO_PROFILE_DEV_DEBUG=0","-e","CARGO_PROFILE_TEST_DEBUG=0","-e","CARGO_PROFILE_RELEASE_DEBUG=0",
         *(["-e","RUST_MIN_STACK=33554432","--tmpfs","/tmp:rw,exec,nosuid,nodev,size=2g,mode=1777"]if phase=="test"else[]),
@@ -282,6 +287,48 @@ def cmd_stage(args):
         origin=output_path(source);target=OUTPUT/"artifacts"/destination
         target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(origin,target);target.chmod(0o555)
         with target.open("rb")as stream:hashes[destination]=hashlib.file_digest(stream,"sha256").hexdigest()
+        store(target,hashes[destination])
+    print(json.dumps(hashes))
+
+
+def store(path,sha):
+    BINARIES.mkdir(parents=True,exist_ok=True);kept=BINARIES/sha
+    if not kept.exists():
+        temporary=BINARIES/(sha+".new");shutil.copyfile(path,temporary);temporary.chmod(0o555);os.replace(temporary,kept)
+    os.utime(kept)
+
+
+def cmd_have(args):
+    """stdin: JSON list of sha256; stdout: the ones this sidekick does not hold."""
+    shas=json.loads(sys.stdin.buffer.read(1024*1024))
+    if not isinstance(shas,list)or not all(isinstance(x,str)and re.fullmatch(r"[a-f0-9]{64}",x)for x in shas):fail("shas")
+    print(json.dumps([x for x in shas if not (BINARIES/x).is_file()]))
+
+
+def cmd_put_binaries(args):
+    """stdin: tar of files named by their sha256; each is checked before it is kept."""
+    job,=args;require(job);BINARIES.mkdir(parents=True,exist_ok=True);kept=[]
+    with tarfile.open(fileobj=sys.stdin.buffer,mode="r|")as archive:
+        for member in archive:
+            if not member.isfile()or not re.fullmatch(r"[a-f0-9]{64}",member.name):fail("binary archive member")
+            body=archive.extractfile(member).read()
+            if hashlib.sha256(body).hexdigest()!=member.name:fail("binary content does not match its sha256")
+            temporary=BINARIES/(member.name+".new");temporary.write_bytes(body);temporary.chmod(0o555);os.replace(temporary,BINARIES/member.name);kept.append(member.name)
+    print(json.dumps({"stored":len(kept)}))
+
+
+def cmd_stage_replay(args):
+    """stdin: [[sha256, destination], ...]; places stored executables in the job's replay folder
+    (artifacts/tests/<name> or target/debug/<helper program>) and returns each one's sha256 as read back."""
+    job,=args;require(job)
+    pairs=json.loads(sys.stdin.buffer.read(4*1024*1024));hashes={}
+    for sha,destination in pairs:
+        if not re.fullmatch(r"[a-f0-9]{64}",sha)or not re.fullmatch(r"(artifacts/tests|target/debug)/[A-Za-z0-9_-]+",destination):fail("replay stage")
+        origin=BINARIES/sha
+        if not origin.is_file():fail("binary not held: "+sha[:12],3)
+        target=REPLAY/destination;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(origin,target);target.chmod(0o555)
+        with target.open("rb")as stream:hashes[destination]=hashlib.file_digest(stream,"sha256").hexdigest()
+        os.utime(origin)
     print(json.dumps(hashes))
 
 
@@ -305,6 +352,12 @@ def cmd_prune(args):
     before=free_bytes();removed=[]
     kill_containers()
     if size(OUTPUT/"target")>cfg["target_max_bytes"]:shutil.rmtree(OUTPUT/"target");removed.append("target")
+    if BINARIES.is_dir():
+        held=sorted((p for p in BINARIES.iterdir()if p.is_file()),key=lambda p:p.stat().st_mtime)
+        total=sum(p.stat().st_size for p in held)
+        while held and total>cfg["binaries_max_bytes"]:
+            oldest=held.pop(0);total-=oldest.stat().st_size;oldest.unlink()
+            removed.append("binary:"+oldest.name[:12])
     if CARGO.is_dir():
         stores=sorted((p for p in CARGO.iterdir()if p.is_dir()),key=lambda p:p.stat().st_mtime,reverse=True)
         for store in stores[cfg["cargo_keep"]:]:shutil.rmtree(store);removed.append("cargo:"+store.name[:12])
@@ -321,7 +374,7 @@ def cmd_prune(args):
 
 
 VERBS={"status":cmd_status,"begin":cmd_begin,"end":cmd_end,"sync-source":cmd_sync_source,"has-cargo":cmd_has_cargo,
-    "put-cargo":cmd_put_cargo,"load-image":cmd_load_image,"run":cmd_run,"fetch":cmd_fetch,"stage":cmd_stage,"cancel":cmd_cancel}
+    "put-cargo":cmd_put_cargo,"have":cmd_have,"put-binaries":cmd_put_binaries,"stage-replay":cmd_stage_replay,"load-image":cmd_load_image,"run":cmd_run,"fetch":cmd_fetch,"stage":cmd_stage,"cancel":cmd_cancel}
 
 
 def main():

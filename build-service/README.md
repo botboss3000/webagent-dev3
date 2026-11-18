@@ -671,6 +671,13 @@ kept, and the rest, including a failed step, run (and are confirmed) here. Contr
 are read raw (the log scrubber masks hash-like values); phase output is scrubbed as usual. Focused tests are skipped on the sidekick path (the release compile has
 already started; the full suite still gates). Stable releases always test here.
 
+**Replays.** A release that reuses a verified compile replays its retained test executables on the
+sidekick too (beside packaging, as before). The sidekick keeps executables it has staged or received
+by sha256 (`binaries/`, capped by `binaries_max_bytes`, oldest use first), so the server sends only
+missing ones; they run in a per-job replay folder, never the warm compile target. Staged hashes must
+equal the retained manifest's; executables it passed are kept after a disconnect and the rest, including
+a failed one, replay here.
+
 **Sync.** `sidekick.py` ships in the broker release (install list) and reaches the sidekick
 automatically at its next job or `sidekick on`, so a broker install covers both machines.
 The sidekick keeps the last three programs. Kept by hand, rarely changed:

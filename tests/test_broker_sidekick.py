@@ -174,6 +174,49 @@ class HalfTests(unittest.TestCase):
         self.assertEqual(state["done"],["doctests","tests/a-0123456789abcdef"]);self.assertNotIn("b half",state["partial"])
         rest=executor.Executor.suite_remainder(state["selection"],state["done"])[2]
         self.assertNotIn("--doc",rest);self.assertNotIn("tests/a-",rest);self.assertIn("tests/b-",rest);self.assertIn("export X=1",rest)
+class ReplayTests(unittest.TestCase):
+    """Retained tests replayed on the sidekick: only missing executables are sent; staged hashes must match."""
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();root=Path(self.temp.name)
+        self.app=root/"app";self.app.mkdir();(self.app/"main.rs").write_text("x")
+        self.output=root/"output";self.artifacts=self.output/"artifacts";(self.artifacts/"tests").mkdir(parents=True);(self.artifacts/"test-support/debug").mkdir(parents=True)
+        (self.artifacts/"tests/a-0123456789abcdef").write_bytes(b"A");(self.artifacts/"test-support/debug/webagent-context-service").write_bytes(b"S")
+        import hashlib as h
+        self.manifest={"tests":[{"file":"tests/a-0123456789abcdef","sha256":h.sha256(b"A").hexdigest()}],
+            "support":{"file":"test-support/debug/webagent-context-service","destination":"target/debug/webagent-context-service","sha256":h.sha256(b"S").hexdigest()}}
+        self.w=worker();self.calls=[];self.sent=None;self.held=set();self.error=None
+        self.job={"job_id":"2"*8+"-0000-0000-0000-"+"0"*12,"sidekick":{"started_at":time.time()}}
+        def phase(job,phase,*args,sidekick=None,**kw):
+            self.calls.append(("phase",phase,sidekick.get("output")))
+            if self.error:raise self.error
+            return "test result: ok. 3 passed; 0 failed\n"
+        self.w.phase=phase
+    def tearDown(self):self.temp.cleanup()
+    def call(self,settings,*words,stdin=None,timeout=0,output_file=None):
+        self.calls.append(words[0])
+        if words[0]=="status":return json.dumps({"images":["sha256:"+"7"*64]})
+        if words[0]=="sync-source":return json.dumps({"sha256":executor.Executor.sidekick_tree(self.app)[1]})
+        if words[0]=="have":return json.dumps([x for x in json.loads(stdin)if x not in self.held])
+        if words[0]=="put-binaries":self.sent=stdin.read();return "{}"
+        if words[0]=="stage-replay":return json.dumps({d:(sha if not self.bad else "0"*64)for sha,d in json.loads(stdin)})
+        raise AssertionError(words)
+    def run_replay(self,bad=False,state=None):
+        self.bad=bad;self.w.sidekick_call=self.call;state={}if state is None else state
+        return self.w.sidekick_replay(self.job,self.app,self.output,self.artifacts,self.manifest,SETTINGS,state),state
+    def test_replay_sends_only_missing_executables_and_runs_in_the_replay_folder(self):
+        logs,_=self.run_replay()
+        self.assertIn("replayed on the broker sidekick",logs);self.assertEqual(self.job["sidekick"]["binaries_sent"],2)
+        self.assertIn(("phase","test","replay"),self.calls)
+        self.held={r["sha256"]for r in self.manifest["tests"]}|{self.manifest["support"]["sha256"]};self.calls.clear()
+        self.run_replay();self.assertNotIn("put-binaries",self.calls);self.assertEqual(self.job["sidekick"]["binaries_sent"],0)
+    def test_changed_staged_executables_never_run(self):
+        with self.assertRaisesRegex(ValueError,"differ from the retained manifest"):self.run_replay(bad=True)
+        self.assertNotIn(("phase","test","replay"),self.calls)
+    def test_a_disconnect_keeps_replayed_steps(self):
+        error=RuntimeError("fixed command failed: test result: ok. 3 passed; 0 failed\n"+executor.SUITE_MARK+"tests/a-0123456789abcdef\n");error.exit_code=255
+        self.error=error;state={}
+        with self.assertRaises(RuntimeError):self.run_replay(state=state)
+        self.assertEqual(state["done"],["tests/a-0123456789abcdef"])
 class EarlySuiteTests(unittest.TestCase):
     def test_the_early_script_equals_the_selection_the_manifest_gives(self):
         with tempfile.TemporaryDirectory()as d:
