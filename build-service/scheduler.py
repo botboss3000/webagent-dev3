@@ -535,10 +535,11 @@ class Scheduler:
         """note: post args["reason"] from the caller's own task_id onto target_task_id (default: itself).
         notes: read the notes on task_id, any operator's, plus any wait cycle it is part of."""
         if args["action"]=="notes":
-            if set(args)-{"action","task_id"}:raise ValueError("notes takes task_id")
+            # request_id is accepted and ignored: the in-app build_work tool adds one to every call.
+            if set(args)-{"action","task_id","request_id"}:raise ValueError("notes takes task_id")
             item=self.find(args.get("task_id"))
             return {"task_id":item["task_id"],"notes":self.board.notes(item["key"]),"cycles":self.broker.wait_cycles(item["key"])}
-        if set(args)-{"action","task_id","target_task_id","reason"}:raise ValueError("note takes task_id, target_task_id and reason")
+        if set(args)-{"action","task_id","target_task_id","reason","request_id"}:raise ValueError("note takes task_id, target_task_id and reason")
         author=self.item(args,trusted,workspace)
         target=self.find(args.get("target_task_id")or author["task_id"])
         note=self.board.post(to_key=target["key"],to_label=target["task_id"],from_label=author["task_id"],

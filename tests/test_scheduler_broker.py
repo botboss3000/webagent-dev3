@@ -598,6 +598,9 @@ class SchedulerBrokerTests(unittest.TestCase):
         self.assertEqual([n["text"]for n in read["notes"]],["I need module:broker"]);self.assertEqual(read["cycles"],[])
         with self.assertRaises(ValueError):self.call("build_work",{"action":"note","task_id":"board-author","target_task_id":"no-such-task","reason":"x"})
         with self.assertRaises(ValueError):self.call("build_work",{"action":"note","task_id":"board-author","reason":"x","job_id":"j"})
+        # The in-app build_work tool adds a request_id to every call; the board accepts and ignores it.
+        self.call("build_work",{"action":"note","task_id":"board-author","target_task_id":"board-target","reason":"again","request_id":"inapp-request-1"})
+        self.assertEqual(len(self.call("build_work",{"action":"notes","task_id":"board-target","request_id":"inapp-request-2"})["notes"]),2)
         target["status"]="abandoned";self.broker.scheduler.housekeeping()
         self.assertEqual(self.broker.scheduler.board.notes(target["key"]),[])
 
