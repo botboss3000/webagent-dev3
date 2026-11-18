@@ -170,6 +170,19 @@ class HalfTests(unittest.TestCase):
         self.assertEqual(state["done"],["doctests","tests/a-0123456789abcdef"]);self.assertNotIn("b half",state["partial"])
         rest=executor.Executor.suite_remainder(state["selection"],state["done"])[2]
         self.assertNotIn("--doc",rest);self.assertNotIn("tests/a-",rest);self.assertIn("tests/b-",rest);self.assertIn("export X=1",rest)
+class StagePlaceTests(unittest.TestCase):
+    def test_sidekick_phases_get_their_stage_time_and_label(self):
+        import test_admin_build as fixtures
+        host=fixtures.host
+        job={"status":"completed","phase_timings":[
+            {"phase":"compile_test","seconds":11,"where":"sidekick","started_at":100},
+            {"phase":"test","seconds":130,"where":"sidekick","started_at":120}],
+            "execution_history":[{"phase":"compile_release","started_at":100,"elapsed_seconds":17}]}
+        spans=host.stage_spans(job)
+        self.assertEqual(spans["compile tests"],[100,111]);self.assertEqual(spans["run tests"],[120,250])
+        self.assertEqual(host.stage_places(job),{"compile tests":"sidekick","run tests":"sidekick"})
+        job["execution_history"].append({"phase":"test","started_at":260,"elapsed_seconds":20})
+        self.assertEqual(host.stage_places(job)["run tests"],"sidekick → server")
 class BootstrapTests(unittest.TestCase):
     def test_update_checks_the_hash_and_keeps_previous_programs(self):
         import sys,hashlib

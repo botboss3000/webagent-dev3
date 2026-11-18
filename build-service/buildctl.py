@@ -317,7 +317,8 @@ def stage_table(progress):
         rows.sort(key=lambda r: (int(r[0]["id"].rstrip("abcdefgh")), r[0]["id"]))
     mark = {"completed": " ✅", "queued": " ⏳", "running": " ⏳"}.get(progress.get("status"), " ❌")
     lines = ["| Stage | Time (normal) |", "|---|---|"]
-    lines += [f"| {s.get('id') or i}. {label(s['stage'])}{flag} | {took} {normal(s.get('normal'))} |" for i, (s, flag, took) in enumerate(rows, 1)]
+    lines += [f"| {s.get('id') or i}. {label(s['stage'])}{' (' + s['where'] + ')' if s.get('where') else ''}{flag} | {took} {normal(s.get('normal'))} |"
+              for i, (s, flag, took) in enumerate(rows, 1)]
     lines.append(f"| **Job**{mark} | **{minutes(progress.get('job_seconds'))}** {normal(progress.get('job_normal'))} |")
     if any(s.get("id", "")[-1:].isalpha() for s, _, _ in rows):
         lines += ["", LEGEND]

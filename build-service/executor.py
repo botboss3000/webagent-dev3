@@ -220,7 +220,7 @@ class Executor:
         """Expose bounded phase timing and current work without command text or private paths.
 
         sidekick (from sidekick_test_half) runs the container on the broker sidekick instead of here."""
-        started=time.monotonic();token=uuid.uuid4().hex;outcome="failed"
+        started=time.monotonic();wall=time.time();token=uuid.uuid4().hex;outcome="failed"
         job["active_verification"]={"id":token,"phase":phase,"recipe":profile,"started_at":time.time()}
         if getattr(self.runner,"job_context",None)is not None:self.runner.job_context.verification_id=token
         # Every running phase is listed: overlapping phases share one live observation.
@@ -232,7 +232,9 @@ class Executor:
             outcome="completed";return result
         finally:
             with self.job_lock():
-                job.setdefault("phase_timings",[]).append({"phase":phase,"recipe":profile,"seconds":round(time.monotonic()-started,3),"outcome":outcome})
+                # A sidekick phase has no local container record, so its timing carries its start and place for the stage table.
+                job.setdefault("phase_timings",[]).append({"phase":phase,"recipe":profile,"seconds":round(time.monotonic()-started,3),"outcome":outcome,
+                    **({"where":"sidekick","started_at":wall}if sidekick else{})})
                 job["phase_timings"]=job["phase_timings"][-128:]
                 job["active_phases"]=[a for a in job.get("active_phases",[])if a.get("id")!=token]
             if job.get("active_verification",{}).get("id")==token:job.pop("active_verification",None)

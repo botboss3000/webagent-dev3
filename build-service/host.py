@@ -2550,6 +2550,10 @@ def stage_spans(job, now=None):
     for e in job.get("execution_history") or []:
         if e.get("started_at"):
             add(stage(e.get("phase"), e["started_at"]), e["started_at"], e["started_at"] + (e.get("elapsed_seconds") or 0))
+    # Phases run on the broker sidekick leave timings only (no local execution step).
+    for t in job.get("phase_timings") or []:
+        if t.get("where") == "sidekick" and t.get("started_at") and t.get("seconds") is not None:
+            add(STAGE_OF.get(t.get("phase")), t["started_at"], t["started_at"] + t["seconds"])
     # Image packaging runs on the host (no execution step) inside building_api since broker eb579161.
     for t in job.get("phase_timings") or []:
         if HOST_STAGE.get(t.get("phase")) and t.get("started_at"):
@@ -2568,6 +2572,14 @@ def stage_spans(job, now=None):
         nxt = history[i + 1][0] if i + 1 < len(history) else (job.get("finished_at") if terminal else None)
         add(STAGE_OF.get(phase, None if phase in STAGE_SKIP else "deploy and health checks"), at, nxt)
     return spans
+
+
+def stage_places(job):
+    """{stage: "sidekick" | "sidekick → server"} for stages that ran on the broker sidekick; the second when
+    the server also ran that stage's work (a fallback). Stages run only here are left out."""
+    remote = {STAGE_OF.get(t.get("phase")) for t in job.get("phase_timings") or [] if t.get("where") == "sidekick"}
+    local = {STAGE_OF.get(e.get("phase")) for e in job.get("execution_history") or []}
+    return {stage: "sidekick → server" if stage in local else "sidekick" for stage in remote if stage}
 
 
 def job_class(job):
@@ -2695,9 +2707,11 @@ def job_progress(job, baselines, now):
     def normal(name):
         return stats.get(name) and [stats[name]["p50"], stats[name]["p90"]]
     ids = dict(zip(order, stage_ids(order, cls)))
+    places = stage_places(job)
     def row(name, **value):
         # late: the high end of the normal range (p95), where a monitor starts checking in.
-        return {"stage": name, "id": ids[name], **value, "normal": normal(name), "samples": stats.get(name, {}).get("n", 0),
+        return {"stage": name, "id": ids[name], **value, **({"where": places[name]} if name in places else {}),
+                "normal": normal(name), "samples": stats.get(name, {}).get("n", 0),
                 "late": stats.get(name, {}).get("p95") or (stats.get(name) and round(stats[name]["p90"] * 1.1))}
     def waited(start):
         # Time queued for a shared resource (a lease another job holds) is not this stage's
