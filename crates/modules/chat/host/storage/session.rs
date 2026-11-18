@@ -310,7 +310,7 @@ impl Store {
 
     /// Revoke all durable session work in the lifecycle writer transaction.
     /// Increment run/task fences so old executors cannot publish after unarchive.
-    async fn cancel_session_work(
+    pub(super) async fn cancel_session_work(
         &self,
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         sid: &str,

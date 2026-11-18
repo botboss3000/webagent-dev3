@@ -291,7 +291,7 @@ pub(crate) async fn configure_api(Extension(app): Extension<App>, Json(body): Js
         && !settings.enabled
         && body["confirm_deactivation"] != true
     {
-        return Err(bad("Confirm deactivation: this session becomes a normal chat; enabling again creates a new Main Chat"));
+        return Err(bad("Confirm deactivation: this Main Chat session is archived and never reused; enabling again creates a new Main Chat"));
     }
     let mut extra = vec![];
     let mut sid = previous["session_id"].as_str().map(str::to_owned);
@@ -824,7 +824,7 @@ mod api_tests {
             .unwrap();
         let session = app.store.get(&key("session", sid)).await.unwrap().unwrap();
         assert_eq!(session["main_chat"], false);
-        assert_eq!(session["pinned"], true);
+        assert_eq!(session["status"], "archived");
         let mut stale_checkpoint = session.clone();
         stale_checkpoint["main_chat"] = json!(true);
         app.store

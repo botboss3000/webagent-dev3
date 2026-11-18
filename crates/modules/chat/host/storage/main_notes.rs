@@ -109,7 +109,21 @@ impl Store {
                         ));
                     }
                     session["title"] = pending["state"]["settings"]["chat_name"].clone();
-                    session["main_chat"] = json!(pending["state"]["settings"]["enabled"] == true);
+                    let enabled = pending["state"]["settings"]["enabled"] == true;
+                    session["main_chat"] = json!(enabled);
+                    // A disabled Main Chat is archived, never promoted again; enabling creates
+                    // a new session and earlier context comes only through a handoff.
+                    let archived = !enabled && session["status"] != "archived";
+                    if archived {
+                        owner.cancel_session_work(&mut tx, sid).await?;
+                        session["status"] = json!("archived");
+                        session["archived_at"] = json!(crate::now());
+                        session["execution_epoch"] = json!(session["execution_epoch"]
+                            .as_u64()
+                            .unwrap_or(0)
+                            .checked_add(1)
+                            .ok_or_else(|| anyhow!("Session execution epoch exhausted"))?);
+                    }
                     session["metadata_revision"] = json!(session["metadata_revision"]
                         .as_u64()
                         .unwrap_or(0)
@@ -130,6 +144,15 @@ impl Store {
                     .bind(owner.encode_user_record(&summary)?)
                     .execute(&mut *tx)
                     .await?;
+                    if archived {
+                        sqlx::query(
+                            "INSERT INTO events(session_id,kind,payload) VALUES(?,'session_archived',?)",
+                        )
+                        .bind(sid)
+                        .bind(owner.encode_user_record(&summary)?)
+                        .execute(&mut *tx)
+                        .await?;
+                    }
                 }
                 sqlx::query("INSERT INTO docs(key,value) VALUES(?,?)")
                     .bind(&receipt)
