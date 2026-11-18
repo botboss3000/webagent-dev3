@@ -221,13 +221,16 @@ impl<
         // Another session's Main Notes changes join the history as tool-call rows, once each,
         // where they stay (and stay cached) until compaction rebuilds the notes.
         let mut rows = Vec::new();
-        let mut row = |name: &str, text: String| {
-            let id = format!("{name}-{}", uuid::Uuid::new_v4());
-            rows.push(json!({"type":"function_call","call_id":id,"name":name,"arguments":"{}"}));
+        // Each update reads as a main_notes_read of the changes since the version before it.
+        for (version, text) in updates {
+            let id = format!("main_notes_read-{}", uuid::Uuid::new_v4());
+            let arguments =
+                json!({"since_version":version.saturating_sub(1),"changed_by":"another session"});
+            rows.push(
+                json!({"type":"function_call","call_id":id,"name":"main_notes_read",
+                "arguments":arguments.to_string()}),
+            );
             rows.push(json!({"type":"function_call_output","call_id":id,"output":text}));
-        };
-        for text in updates {
-            row("main_notes_update", text);
         }
         // The history always shows the current execution mode: at the start, after the user
         // changes it, and after compaction the server adds a set_execution_mode result, unless

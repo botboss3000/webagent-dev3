@@ -40,7 +40,7 @@ fn fallback_store(store: &Store, name: &str) -> Option<String> {
 }
 fn skill_view(app: &App, state: &Value) -> Value {
     let mut skills = json!({});
-    for name in ["contribute", "review"] {
+    for (name, _) in webagent_chat::main_chat::TEXT_FIELDS {
         skills[name] =
             json!({"override":state["skill_overrides"][name],"fallback":fallback(app,name)});
     }
@@ -64,11 +64,9 @@ pub(crate) async fn guidance_store(
     } else {
         "contribute"
     };
-    Ok(state["skill_overrides"][name]
-        .as_str()
-        .filter(|s| !s.trim().is_empty())
-        .map(str::to_owned)
-        .or_else(|| fallback_store(&store, name)))
+    // The agent's override or the file's text, with its two names filled in.
+    let text = webagent_chat::main_chat::text(&state, name);
+    Ok((!text.trim().is_empty()).then_some(text))
 }
 /// Main Notes context for one model call of session `sid`: the section definitions (how to
 /// use the notes, then the whole notes, pinned until the history basis changes at
@@ -81,7 +79,7 @@ pub(crate) async fn notes_context_store(
     sid: &str,
     requester: &str,
     basis: &str,
-) -> Result<(Vec<(String, String)>, Vec<String>)> {
+) -> Result<(Vec<(String, String)>, Vec<(u64, String)>)> {
     // Same boundary as the tools: shared chat membership never receives the notes.
     if requester != store.current_user_id() {
         return Ok((Vec::new(), Vec::new()));
@@ -110,9 +108,6 @@ pub(crate) async fn notes_context_store(
     let updates = if version > seen {
         view["version"] = json!(version);
         render_updates(&state, seen, sid)
-            .into_iter()
-            .map(|(_, text)| text)
-            .collect()
     } else {
         Vec::new()
     };
@@ -266,16 +261,15 @@ pub(crate) async fn configure_api(Extension(app): Extension<App>, Json(body): Js
     let overrides = body["skill_overrides"]
         .as_object()
         .ok_or_else(|| bad("Skill overrides required"))?;
-    if overrides
-        .keys()
-        .any(|k| !["contribute", "review"].contains(&k.as_str()))
-    {
+    let keys = webagent_chat::main_chat::TEXT_FIELDS.map(|(name, _)| name);
+    if overrides.keys().any(|k| !keys.contains(&k.as_str())) {
         return Err(bad("Unknown Main Chat skill"));
     }
     let mut skills = json!({});
-    for name in ["contribute", "review"] {
+    for name in keys {
         skills[name] = match overrides.get(name) {
-            Some(Value::Null) => Value::Null,
+            // A field the caller leaves out has no override (an older form sends only two).
+            None | Some(Value::Null) => Value::Null,
             Some(Value::String(text)) if text.len() <= 65536 => {
                 if text.trim().is_empty() {
                     Value::Null
@@ -515,7 +509,7 @@ mod tests {
         let (sections, updates) = defs("s1", "b1").await;
         assert!(sections.is_empty());
         assert_eq!(updates.len(), 1);
-        assert!(updates[0].contains("Added: Review the blocker"));
+        assert!(updates[0].1.contains("Added: Review the blocker"));
         assert!(defs("s1", "b1").await.1.is_empty());
         // The session's own write adds nothing.
         let mut own = c.clone();
@@ -879,24 +873,13 @@ mod api_tests {
         assert!(
             app.store.main_chat_state().await.unwrap()["skill_overrides"]["contribute"].is_null()
         );
-        // Without an override, the Main Chat session receives the live review skill file.
-        let main = other.store.main_chat_state().await.unwrap()["session_id"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        let review = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join(webagent_configuration::prompts::PROMPTS)
-                .join("main_chat_skills/review.md"),
-        )
-        .unwrap();
-        assert_eq!(
-            guidance(&other, "agent-two", &main)
-                .await
-                .unwrap()
-                .as_deref(),
-            Some(review.strip_suffix('\n').unwrap_or(&review))
-        );
+        // Without an override, the Main Chat session receives main_chat.json's Main Chat
+        // prompt with the agent's names filled in.
+        let state = other.store.main_chat_state().await.unwrap();
+        let main = state["session_id"].as_str().unwrap().to_owned();
+        let prompt = guidance(&other, "agent-two", &main).await.unwrap().unwrap();
+        assert_eq!(prompt, webagent_chat::main_chat::text(&state, "review"));
+        assert!(!prompt.contains("{chat}") && !prompt.contains("{notes}"));
         assert!(tool(&other, &main, "none", "main_notes_read", &json!({}))
             .await
             .is_ok());

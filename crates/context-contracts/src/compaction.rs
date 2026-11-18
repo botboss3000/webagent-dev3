@@ -246,8 +246,8 @@ impl Config {
     }
 }
 
-/// Drop the skill text from `load_skill` results and the diffs from `main_notes_update`
-/// results so a summary never keeps them; after compaction the loaded selector places the
+/// Drop the skill text from `load_skill` results and the diffs from the Main Notes update
+/// entries the server adds (`main_notes_read-…` call IDs; the agent's own reads stay) so a summary never keeps them; after compaction the loaded selector places the
 /// current skill text among the skills and the rebuilt snapshot carries the notes.
 pub fn omit_skill_bodies(input: &mut [Value]) {
     let loads = input
@@ -262,10 +262,12 @@ pub fn omit_skill_bodies(input: &mut [Value]) {
         .iter()
         .filter(|item| {
             item["type"] == "function_call"
-                && matches!(
+                && (matches!(
                     item["name"].as_str(),
                     Some("main_notes_update" | "mode_guidance" | "set_execution_mode")
-                )
+                ) || item["call_id"]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with("main_notes_read-")))
         })
         .filter_map(call_id)
         .map(str::to_owned)

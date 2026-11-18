@@ -5,6 +5,50 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+/// The Main Chat and Main Notes texts and default names (`prompts/main_chat.json`, read live).
+const TEXTS_FILE: &str = "crates/modules/configuration/prompts/main_chat.json";
+/// The same file as built, used only when the live one is missing or invalid.
+const PACKAGED_TEXTS: &str = include_str!("../../configuration/prompts/main_chat.json");
+
+pub fn texts() -> Value {
+    webagent_configuration::live::parsed(TEXTS_FILE, 256 * 1024, |bytes| {
+        Ok(serde_json::from_slice::<Value>(bytes)?)
+    })
+    .or_else(|_| serde_json::from_str(PACKAGED_TEXTS).map_err(anyhow::Error::from))
+    .unwrap_or_default()
+}
+
+/// The per-agent override keys and the `main_chat.json` field each one replaces.
+pub const TEXT_FIELDS: [(&str, &str); 4] = [
+    ("contribute", "notes_guidance"),
+    ("review", "main_chat_prompt"),
+    ("notes_header", "notes_header"),
+    ("update_heading", "update_heading"),
+];
+
+/// Text `key` (an override key) for this agent: its own override when set, else the file's,
+/// with {chat} and {notes} replaced by the agent's two names.
+pub fn text(state: &Value, key: &str) -> String {
+    let field = TEXT_FIELDS
+        .iter()
+        .find(|(name, _)| *name == key)
+        .map_or(key, |(_, field)| *field);
+    let raw = state["skill_overrides"][key]
+        .as_str()
+        .filter(|text| !text.trim().is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| texts()[field].as_str().unwrap_or("").to_owned());
+    let name = |setting: &str, field: &str| {
+        state["settings"][setting]
+            .as_str()
+            .filter(|name| !name.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| texts()[field].as_str().unwrap_or("").to_owned())
+    };
+    raw.replace("{chat}", &name("chat_name", "main_chat_name"))
+        .replace("{notes}", &name("notes_name", "main_notes_name"))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
@@ -18,8 +62,14 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             enabled: false,
-            chat_name: "Main Chat".into(),
-            notes_name: "Main Notes".into(),
+            chat_name: texts()["main_chat_name"]
+                .as_str()
+                .unwrap_or("Main Chat")
+                .into(),
+            notes_name: texts()["main_notes_name"]
+                .as_str()
+                .unwrap_or("Main Notes")
+                .into(),
             write_mode: "automatic".into(),
         }
     }
@@ -45,7 +95,7 @@ pub fn empty() -> Value {
         "revision": 0,
         "notes_version": 0,
         "settings": Settings::default(),
-        "skill_overrides": {"contribute": null, "review": null},
+        "skill_overrides": {"contribute": null, "review": null, "notes_header": null, "update_heading": null},
         "session_id": null,
         "topics": {},
         "proposals": {},
@@ -433,13 +483,9 @@ fn topic_heading(id: &str, topic: &Value) -> String {
 /// Notes are quoted data: they never grant authority.
 pub fn render_notes(state: &Value) -> Option<String> {
     let topics = state["topics"].as_object().filter(|t| !t.is_empty())?;
-    let mut text = format!(
-        "Main Notes: this agent's notes across its sessions (facts, decisions, open work and \
-guidance for its other sessions), as of notes version {} (revision {}). Update an entry by \
-reusing its topic and entry IDs; reread with main_notes_read for the current revision before \
-writing.",
-        state["notes_version"], state["revision"]
-    );
+    let mut text = self::text(state, "notes_header")
+        .replace("{version}", &state["notes_version"].to_string())
+        .replace("{revision}", &state["revision"].to_string());
     let mut ordered: Vec<(&String, &Value)> = topics.iter().collect();
     ordered.sort_by_key(|(id, topic)| (topic["title"].as_str().unwrap_or("").to_lowercase(), *id));
     for (id, topic) in ordered {
@@ -473,7 +519,8 @@ pub fn render_updates(state: &Value, after: u64, sid: &str) -> Vec<(u64, String)
     versions
         .into_iter()
         .filter_map(|(version, change)| {
-            let mut text = format!("Main notes update from another session (v{version}):");
+            let mut text =
+                self::text(state, "update_heading").replace("{version}", &version.to_string());
             // A deleted topic: its title and every entry it held.
             if let Some(title) = change["deleted_topic"].as_str() {
                 text.push_str(&format!("\n## {title}"));

@@ -111,8 +111,8 @@ pub fn validate_chat_config(value: &Value) -> Result<()> {
     Ok(())
 }
 
-/// Main Chat guidance from the live prompt files (`prompts/main_chat_skills/*.md`),
-/// or from a pinned candidate `source`.
+/// Main Chat texts from the live prompt files (`prompts/main_chat.json`), or from a pinned
+/// candidate `source`; `contribute` and `review` name its two guidance texts.
 pub fn main_chat_prompts_at(
     root: &Path,
     source: Option<&Path>,
@@ -120,8 +120,10 @@ pub fn main_chat_prompts_at(
 ) -> Result<Value> {
     let prompts =
         webagent_configuration::prompts::resolved_prompts_at(root, source, fallback_directory)?;
-    Ok(prompts
-        .get("main_chat_skills")
-        .cloned()
-        .unwrap_or(Value::Null))
+    let mut texts = prompts.get("main_chat").cloned().unwrap_or(Value::Null);
+    if texts.is_object() {
+        texts["contribute"] = texts["notes_guidance"].clone();
+        texts["review"] = texts["main_chat_prompt"].clone();
+    }
+    Ok(texts)
 }

@@ -27,7 +27,7 @@ try{
   await page.evaluate(async light=>{
    document.body.classList.toggle('light-mode',light);
    const {renderMainChat}=await import('/ui/main-panel/agents/pages/identity/main-chat.js');window.mount=renderMainChat;
-   const make=id=>({agent_id:id,can_manage:true,revision:7,session_metadata_revision:2,session_id:null,review_status:'disabled',settings:{enabled:false,chat_name:'Main '+id,notes_name:'Notes '+id,write_mode:'new_topics'},skills:{contribute:{override:null,fallback:'Fallback contributor: retain source references.'},review:{override:null,fallback:'Fallback coordinator: read notes and verify conditions.'}}});
+   const make=id=>({agent_id:id,can_manage:true,revision:7,session_metadata_revision:2,session_id:null,review_status:'disabled',settings:{enabled:false,chat_name:'Main '+id,notes_name:'Notes '+id,write_mode:'new_topics'},skills:{contribute:{override:null,fallback:'Fallback contributor: retain source references.'},review:{override:null,fallback:'Fallback coordinator: read notes and verify conditions.'},notes_header:{override:null,fallback:'{notes} as of version {version}.'},update_heading:{override:null,fallback:'{notes} update (v{version}):'}}});
    const states={one:make('one'),two:make('two')};window.fixture={states,writes:[],fail:false,activations:{one:0,two:0},demoted:[]};
    fixture.request=async(url,method='GET',body)=>{
     const match=url.match(/^\/models\/agents\/(one|two)\/main-chat$/);if(!match)throw Error('Wrong or unscoped route');const state=states[match[1]];
@@ -48,7 +48,7 @@ try{
   assert.equal(await page.getByLabel('Main Chat name',{exact:true}).inputValue(),'Main one');
   assert.equal(await page.locator('[data-main-chat-field="context_kib"],[data-main-chat-field="reporting"]').count(),0);
   await page.locator('details[data-main-chat-skill="contribute"] summary').click();await page.locator('details[data-main-chat-skill="review"] summary').click();
-  const contribute=page.getByLabel('Contribute to Main Notes override',{exact:true}),review=page.getByLabel('Coordinate Main Notes override',{exact:true});
+  const contribute=page.getByLabel('Notes guidance override',{exact:true}),review=page.getByLabel('Main Chat prompt override',{exact:true});
   assert.equal(await contribute.inputValue(),'');assert.match(await contribute.getAttribute('placeholder'),/Fallback contributor/);
   await contribute.fill('  Agent One tailored contribution instructions.  ');await page.getByLabel('Main Chat name',{exact:true}).fill('Coordinator One');await page.getByLabel('Main Notes name',{exact:true}).fill('Notes for One');await page.getByLabel('Notes write approval').selectOption('every_write');await setMainEnabled(page,true);
   assert.equal(await page.evaluate(()=>fixture.writes.length),0); // Explicit Save, including toggle changes.

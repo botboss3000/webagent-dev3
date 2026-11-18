@@ -135,7 +135,7 @@ impl webagent_engine::runtime::ports::MainGuidance<Store> for NativePolicy {
         sid: &'a str,
         requester: &'a str,
         basis: &'a str,
-    ) -> impl std::future::Future<Output = Result<(Vec<(String, String)>, Vec<String>)>> + Send + 'a
+    ) -> impl std::future::Future<Output = Result<(Vec<(String, String)>, Vec<(u64, String)>)>> + Send + 'a
     {
         crate::main_chat::notes_context_store(store, agent, sid, requester, basis)
     }

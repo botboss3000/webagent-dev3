@@ -1,6 +1,6 @@
 import {requestTouchVibration} from '../../../../shared/vibrate.js';
 
-/** Agent-specific coordination settings and prompt overrides. Config: crates/modules/configuration/prompts -> main_chat_skills.contribute/review supplies placeholders only; the host resolves effective instructions. */
+/** Agent-specific coordination settings and text overrides. Config: crates/modules/configuration/prompts/main_chat.json supplies the defaults shown as placeholders; the host resolves effective texts. */
 export async function renderMainChat(host, request, {agentId,canManage=false}={}) {
   if(!agentId)throw Error('Agent identity is required');
   const path='/models/agents/'+encodeURIComponent(agentId)+'/main-chat';
@@ -32,13 +32,14 @@ export async function renderMainChat(host, request, {agentId,canManage=false}={}
   }
   field('chat_name','Main Chat name');field('notes_name','Main Notes name');
   field('write_mode','Notes write approval',[['automatic','Automatic writes and edits (default)'],['new_topics','Approve new topics and scope changes'],['every_write','Approve every write or edit']]);
-  for(const [key,title,description]of [['contribute','Contribute to Main Notes','Included automatically in this agent’s working sessions while enabled.'],['review','Coordinate Main Notes','Included automatically in this agent’s Main Chat while enabled.']]){
+  // Texts from prompts/main_chat.json; {chat} and {notes} become the two names above.
+  for(const [key,title,description]of [['contribute','Notes guidance','Sent ahead of the notes in this agent’s working sessions while enabled.'],['review','Main Chat prompt','Sent only in this agent’s Main Chat while enabled.'],['notes_header','Notes header','Opens the notes in every session; {version} and {revision} are the notes’ numbers.'],['update_heading','Update heading','Opens each change another session made; {version} is its version.']]){
     const card=document.createElement('details');card.className='ac-row main-chat-skill';card.dataset.mainChatSkill=key;
     const summary=document.createElement('summary');summary.className='ac-ability-row';summary.style.cssText='cursor:pointer;padding:8px 0;min-height:32px';summary.textContent=title;card.append(summary);
     const label=document.createElement('label');label.className='ac-label';label.textContent=title+' override';
     const input=document.createElement('textarea');input.className='ac-input';input.id='main-chat-skill-'+key+'-'+agentId;input.dataset.mainChatSkillInput=key;input.rows=9;input.style.cssText='box-sizing:border-box;width:100%;max-width:100%;resize:vertical;white-space:pre-wrap';label.htmlFor=input.id;
-    const note=document.createElement('p');note.className='ac-hint';note.textContent=description+' Leave empty and Save to use the prompts.json fallback shown as placeholder text.';
-    const warning=document.createElement('p');warning.className='main-chat-skill-warning';warning.style.color='var(--danger, #dc2626)';warning.setAttribute('role','alert');warning.textContent='Fallback skill is not available. Enter an agent-specific override or ask the app administrator to update prompts.json.';warning.hidden=true;
+    const note=document.createElement('p');note.className='ac-hint';note.textContent=description+' Leave empty and Save to use the default from main_chat.json, shown as placeholder text.';
+    const warning=document.createElement('p');warning.className='main-chat-skill-warning';warning.style.color='var(--danger, #dc2626)';warning.setAttribute('role','alert');warning.textContent='Fallback skill is not available. Enter an agent-specific override or ask the app administrator to update main_chat.json.';warning.hidden=true;
     card.append(note,label,input,warning);form.append(card);editors.set(key,{input,warning});
   }
   const policy=document.createElement('p');policy.className='ac-hint';policy.textContent='Notes read/write tools remain independently available through Base and their tool permissions. The toggle controls coordination guidance and follow-ups. Saving notes or editing skills never authorizes execution. Disabling retains this agent’s chat and notes.';form.append(policy);

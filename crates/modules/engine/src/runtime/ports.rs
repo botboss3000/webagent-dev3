@@ -175,7 +175,7 @@ pub trait MainGuidance<S>: Clone + Send + Sync + 'static {
         sid: &'a str,
         requester: &'a str,
         basis: &'a str,
-    ) -> impl Future<Output = Result<(Vec<(String, String)>, Vec<String>)>> + Send + 'a;
+    ) -> impl Future<Output = Result<(Vec<(String, String)>, Vec<(u64, String)>)>> + Send + 'a;
 }
 
 pub trait ModelDiagnostics<S>: Clone + Send + Sync + 'static {

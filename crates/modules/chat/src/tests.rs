@@ -179,12 +179,17 @@ mod configuration {
     #[test]
     fn main_chat_guidance_comes_from_the_prompt_files_of_the_source() {
         let source = tempfile::tempdir().unwrap();
-        let skills = source
-            .path()
-            .join(webagent_configuration::prompts::PROMPTS)
-            .join("main_chat_skills");
-        std::fs::create_dir_all(&skills).unwrap();
-        std::fs::write(skills.join("review.md"), "Packaged review\n").unwrap();
+        let prompts = source.path().join(webagent_configuration::prompts::PROMPTS);
+        std::fs::create_dir_all(&prompts).unwrap();
+        let file = prompts.join("main_chat.json");
+        let write = |prompt: &str| {
+            std::fs::write(
+                &file,
+                serde_json::json!({"main_chat_prompt":prompt,"notes_guidance":"Notes"}).to_string(),
+            )
+            .unwrap()
+        };
+        write("Packaged review");
         let read = || {
             main_chat_prompts_at(
                 std::path::Path::new("/unused"),
@@ -193,9 +198,9 @@ mod configuration {
             )
         };
         assert_eq!(read().unwrap()["review"], "Packaged review");
-        std::fs::write(skills.join("review.md"), "Edited live\n").unwrap();
+        write("Edited live");
         assert_eq!(read().unwrap()["review"], "Edited live");
-        std::fs::remove_dir_all(&skills).unwrap();
+        std::fs::remove_file(&file).unwrap();
         assert!(read().unwrap().is_null());
         // The shipped files carry both skills.
         let shipped = main_chat_prompts_at(
@@ -814,7 +819,7 @@ mod main_chat {
         );
         assert!(updates[0]
             .1
-            .starts_with("Main notes update from another session (v3):\n## "));
+            .starts_with("Main Notes update from another session (v3):\n## "));
         // Deleting a topic reaches other sessions as removed lines.
         state["topics"]["plans"]["entries"]["next"]["timing"] = serde_json::Value::Null;
         let topic = target(&state, &c);
