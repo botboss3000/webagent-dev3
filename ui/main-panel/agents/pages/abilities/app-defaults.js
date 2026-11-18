@@ -478,9 +478,14 @@ export function buildAbilityDefaultsPanels(app, ability) {
     form.append(field('Skill summary', summary.element, 'Shown when the skill is offered on request.'));
     return form;
   }));
-  const skills = [...(ability.general_skills || (ability.has_skill ? [{ skill_id: 'core', title: 'Skill' }] : [])),
-    ...(ability.selectable_skills || [])];
-  for (const skill of skills) panels.push(skillPanel(app, ability, skill.skill_id || 'core', skill.title || skill.skill_id));
+  // general_skills carries titles; selectable_skills may list the same skills by ID only.
+  const skills = new Map();
+  for (const entry of [...(ability.general_skills || (ability.has_skill ? [{ skill_id: 'core', title: 'Skill' }] : [])),
+    ...(ability.selectable_skills || [])]) {
+    const id = typeof entry === 'string' ? entry : entry.skill_id || 'core';
+    if (!skills.has(id)) skills.set(id, typeof entry === 'string' ? id : entry.title || id);
+  }
+  for (const [id, title] of skills) panels.push(skillPanel(app, ability, id, title));
   panels.push(addSkillPanel(app, ability));
   return panels;
 }
