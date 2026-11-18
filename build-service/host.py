@@ -7177,6 +7177,10 @@ class Broker:
             if hasattr(self.runner, "cancel"):
                 self.runner.cancel.set()
             for job in self.jobs.values():
+                # Startup keeps a queued isolated release that has not started; revoking it
+                # here would make it fail on its first lease check after the restart.
+                if job["status"] == "queued" and job.get("isolated") and not job.get("effects_started"):
+                    continue
                 if job["status"] in ("queued", "running"):
                     job["revoked"] = True
                     self._save(job)

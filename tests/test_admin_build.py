@@ -2377,6 +2377,15 @@ class BuildTests(unittest.TestCase):
         with self.assertRaisesRegex(PermissionError, "stopping"):
             self.build("after-shutdown")
 
+    def test_shutdown_keeps_queued_isolated_release_for_restart(self):
+        waiting = {"job_id": "q", "status": "queued", "isolated": True}
+        started = {"job_id": "s", "status": "queued", "isolated": True, "effects_started": True}
+        self.broker.jobs.update(q=waiting, s=started)
+        with patch.object(self.broker, "_save"):
+            self.broker.request_shutdown()
+        self.assertNotIn("revoked", waiting)
+        self.assertTrue(started["revoked"])
+
     def test_replacement_adopts_defaults_keeps_explicit_credentials(self):
         old = {"Env": ["MODE=old", "TOKEN=default"], "Cmd": ["old"], "Labels": {"image": "old"}}
         new = {"Env": ["MODE=new", "ADDED=yes"], "Cmd": ["new"], "Labels": {"image": "new"}}
