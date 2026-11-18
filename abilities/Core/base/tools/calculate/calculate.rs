@@ -18,9 +18,10 @@ fn finite(value: f64) -> Result<f64> {
     Ok(if value == 0.0 { 0.0 } else { value })
 }
 pub(super) fn arithmetic(args: Arithmetic) -> Result<Value> {
-    if !(1..=32).contains(&args.operands.len()) {
-        bail!("Expected 1..32 operands");
-    }
+    // The operand count limit lives in calculate.tool.json, which the engine enforces.
+    let Some(&first) = args.operands.first() else {
+        bail!("Expected at least one operand");
+    };
     for &operand in &args.operands {
         finite(operand)?;
     }
@@ -29,7 +30,6 @@ pub(super) fn arithmetic(args: Arithmetic) -> Result<Value> {
     if unary && args.operands.len() != 1 || binary && args.operands.len() != 2 {
         bail!("Wrong operand count for operation");
     }
-    let first = args.operands[0];
     let result = match args.operation.as_str() {
         "sqrt" => {
             if first < 0.0 {
@@ -102,7 +102,6 @@ mod tests {
         ] {
             assert!(calc(op, numbers).is_err());
         }
-        assert!(calc("add", json!(vec![1; 33])).is_err());
         assert!(serde_json::from_value::<Arithmetic>(
             json!({"operation":"add","operands":[1],"expression":"1+1"})
         )

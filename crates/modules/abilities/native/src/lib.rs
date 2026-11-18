@@ -472,3 +472,20 @@ pub fn schemas(names: &[&str]) -> Vec<Value> {
         .map(definitions::ToolDefinition::schema)
         .collect()
 }
+
+/// Every argument type this crate registers; a family adds its list when it converts.
+pub fn argument_types(
+) -> impl Iterator<Item = &'static webagent_abilities::tool_arguments::ArgumentType> {
+    [utilities::ARGUMENT_TYPES].into_iter().flatten()
+}
+
+#[cfg(test)]
+mod argument_type_tests {
+    #[test]
+    fn argument_types_accept_their_tool_json() {
+        assert_eq!(
+            webagent_abilities::tool_arguments::registry_problems(super::argument_types()),
+            Vec::<String>::new()
+        );
+    }
+}

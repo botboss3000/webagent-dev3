@@ -12,6 +12,13 @@ mod get_date;
 #[path = "../get_time/get_time.rs"]
 mod get_time;
 
+/// Argument types of this family's tools, checked against their tool.json by the crate test.
+pub const ARGUMENT_TYPES: &[webagent_abilities::tool_arguments::ArgumentType] =
+    &[webagent_abilities::argument_type!(
+        "calculate",
+        calculate::Arithmetic
+    )];
+
 pub fn owns(name: &str) -> bool {
     matches!(name, "get_time" | "get_date" | "calculate")
 }
@@ -133,8 +140,7 @@ pub async fn execute(name: &str, args: &Value, cancel: CancellationToken) -> Res
                 .and_then(|timestamp| clock(name, args, timestamp)),
             Err(_) => Err(anyhow::anyhow!("System clock before Unix epoch")),
         },
-        "calculate" => serde_json::from_value(args.clone())
-            .context("Invalid arithmetic arguments")
+        "calculate" => webagent_abilities::tool_arguments::read("calculate", args)
             .and_then(calculate::arithmetic),
         _ => bail!("Unknown Core utility tool"),
     };

@@ -9,6 +9,7 @@ pub mod package;
 mod ports;
 pub mod scripts;
 pub mod selection;
+pub mod tool_arguments;
 pub mod tool_definitions;
 pub mod tool_match;
 pub mod user_files;
