@@ -1,6 +1,6 @@
 {
   "name": "CRM & Marketing",
-  "icon": "contact",
+  "icon": "briefcase",
   "color": "#bb9af7",
   "desc": "Contacts, deals, and email campaigns. Mostly free OAuth; some products need a paid plan.",
   "risk_class": "write",

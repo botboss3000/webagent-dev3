@@ -81,6 +81,8 @@ struct Ability {
     group: String,
     group_name: String,
     group_order: i32,
+    group_icon: Option<String>,
+    group_color: Option<String>,
     name: String,
     description: String,
     skill_summary: Option<String>,
@@ -143,6 +145,24 @@ struct GroupManifest {
     name: Option<String>,
     #[serde(default)]
     order: i32,
+    icon: Option<String>,
+    color: Option<String>,
+}
+
+/// A Lucide icon name; the page inserts it into markup, so only kebab-case passes.
+fn valid_icon_name(icon: &str) -> bool {
+    !icon.is_empty()
+        && icon.len() <= 64
+        && icon
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+/// A `#rgb` or `#rrggbb` color.
+fn valid_hex_color(color: &str) -> bool {
+    color.strip_prefix('#').is_some_and(|hex| {
+        matches!(hex.len(), 3 | 6) && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+    })
 }
 
 /// One tool's gate for a model call: installed, offered by an executable ability
@@ -549,6 +569,20 @@ impl<H: Host> Catalog<H> {
             if group_name.is_empty() || group_name.len() > 100 {
                 bail!("Invalid ability group name");
             }
+            if group_meta
+                .icon
+                .as_deref()
+                .is_some_and(|icon| !valid_icon_name(icon))
+            {
+                bail!("Invalid ability group icon");
+            }
+            if group_meta
+                .color
+                .as_deref()
+                .is_some_and(|color| !valid_hex_color(color))
+            {
+                bail!("Invalid ability group color");
+            }
             for folder in fs::read_dir(&group_path)? {
                 let folder = folder?;
                 if folder.file_type()?.is_symlink() {
@@ -772,6 +806,8 @@ impl<H: Host> Catalog<H> {
                     group: group_id.clone(),
                     group_name: group_name.clone(),
                     group_order: group_meta.order,
+                    group_icon: group_meta.icon.clone(),
+                    group_color: group_meta.color.clone(),
                     name: manifest.display_name,
                     description: manifest.description,
                     skill_summary: manifest.skill_summary,
@@ -809,6 +845,8 @@ impl<H: Host> Catalog<H> {
                 group: "Administrator".into(),
                 group_name: "Administrator".into(),
                 group_order: 100,
+                group_icon: None,
+                group_color: None,
                 name: manifest.display_name,
                 description: manifest.description,
                 skill_summary: manifest.skill_summary,
@@ -828,11 +866,16 @@ impl<H: Host> Catalog<H> {
             });
         }
         // Base sorts with the Core group's other abilities when that group exists.
-        let (group_name, group_order) = abilities
+        let (group_name, group_order, group_icon, group_color) = abilities
             .iter()
             .find(|ability| ability.group == "Core")
-            .map_or(("Core".to_string(), 1), |core| {
-                (core.group_name.clone(), core.group_order)
+            .map_or(("Core".to_string(), 1, None, None), |core| {
+                (
+                    core.group_name.clone(),
+                    core.group_order,
+                    core.group_icon.clone(),
+                    core.group_color.clone(),
+                )
             });
         let base_path = root.join("Core").join(crate::base::ID);
         let base_skill = optional_skill(&primary_skill_path(&base_path, crate::base::ID))?;
@@ -860,6 +903,8 @@ impl<H: Host> Catalog<H> {
             group: "Core".into(),
             group_name,
             group_order,
+            group_icon,
+            group_color,
             name: crate::base::NAME.into(),
             description: crate::base::DESCRIPTION.into(),
             skill_summary: None,
@@ -1547,6 +1592,7 @@ impl<H: Host> Catalog<H> {
             }
         }
         let mut described = json!({"id":ability.id,"group":ability.group,"group_name":ability.group_name,
+            "group_icon":ability.group_icon,"group_color":ability.group_color,
             "name":ability.name,"description":ability.description,
             "kind":ability.kind,"readiness":ability.readiness,"config":ability.config,
             "skill_summary":ability.skill_summary,"migration_note":ability.migration_note,
@@ -3800,6 +3846,25 @@ pub mod registered_tests {
                 catalog.selected_state(&visibility, &state, &json!(["unknown"])),
                 state
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod group_display_tests {
+    use super::{valid_hex_color, valid_icon_name};
+
+    #[test]
+    fn group_icons_are_kebab_case_names_and_colors_are_hex() {
+        assert!(valid_icon_name("message-circle"));
+        assert!(valid_icon_name("share-2"));
+        for bad in ["", "Shield", "a\"b", "x y", "a".repeat(65).as_str()] {
+            assert!(!valid_icon_name(bad), "{bad}");
+        }
+        assert!(valid_hex_color("#7dcfff"));
+        assert!(valid_hex_color("#abc"));
+        for bad in ["7dcfff", "#7dcfffaa", "#ggg", "red"] {
+            assert!(!valid_hex_color(bad), "{bad}");
         }
     }
 }

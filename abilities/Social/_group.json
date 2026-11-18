@@ -1,6 +1,6 @@
 {
   "name": "Social Media",
-  "icon": "share-2",
+  "icon": "users",
   "color": "#bb9af7",
   "desc": "App-level credentials for social platform OAuth. Users connect their personal accounts from the agent's Abilities tab.",
   "risk_class": "write",

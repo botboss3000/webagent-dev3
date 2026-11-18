@@ -181,7 +181,8 @@ export function createSettingsRegister(host, {label = 'Settings', categories = [
       body.classList.add('sr-page-body');
       return [{id, section, body, toggleWrap, toggle,
         title: category.title || section.dataset.registerTitle || 'Settings',
-        hint: category.hint || '', icon: category.icon || ''}];
+        hint: category.hint || '', icon: category.icon || '',
+        lucide: category.lucide || '', color: category.color || ''}];
     });
     entries.sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity));
     stage.remove();
@@ -198,9 +199,12 @@ export function createSettingsRegister(host, {label = 'Settings', categories = [
       row.className = 'sr-row';
       row.dataset.registerFor = entry.id;
       row.style.setProperty('--i', String(index));
-      row.innerHTML = '<span class="sr-tile">' + iconMarkup(entry.icon) + '</span>'
+      // A category gives raw SVG paths (icon) or a Lucide name (lucide), plus an optional color.
+      row.innerHTML = '<span class="sr-tile">'
+        + (entry.lucide ? '<i data-lucide="' + entry.lucide + '"></i>' : iconMarkup(entry.icon)) + '</span>'
         + '<span class="sr-text"><span class="sr-title"></span><span class="sr-hint"></span></span>'
         + '<span class="sr-state"></span>';
+      if (entry.color) row.querySelector('.sr-tile').style.color = entry.color;
       row.querySelector('.sr-title').textContent = entry.title;
       const hintEl = row.querySelector('.sr-hint');
       hintEl.textContent = entry.hint;

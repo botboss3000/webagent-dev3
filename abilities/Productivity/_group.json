@@ -1,6 +1,6 @@
 {
   "name": "Productivity",
-  "icon": "briefcase",
+  "icon": "clipboard",
   "color": "#4285F4",
   "desc": "App-level credentials for mail, calendar, and file providers. Users connect their personal accounts from the agent's Abilities tab.",
   "risk_class": "write",

@@ -1,6 +1,6 @@
 {
   "name": "Devices",
-  "icon": "monitor-smartphone",
+  "icon": "smartphone",
   "color": "#7aa2f7",
   "desc": "Coordinate the user's WebAgent instances across multiple devices that share one database.",
   "risk_class": "admin",
