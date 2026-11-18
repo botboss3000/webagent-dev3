@@ -3831,7 +3831,7 @@ class Broker:
         # the public byte limit. Storage can retain a larger bounded log.
         while len(tail.encode("utf-8")) > PUBLIC_LOG:
             tail = tail[1:]
-        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "changed_paths", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "compiler_recipe", "compiler_runtime", "linker_proof", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight", "verification_cache", "focused_verification", "remote_tests", "test_reuse", "phase_timings", "active_verification", "publication_wait", "publication_wait_history", "last_resource_wait", "broker_install", "browser_sync", "ui_test_failure", "ui_test_override", "early_work", "finished_at", "rebuild_closeout") if key in job}
+        view = {key: job[key] for key in ("job_id", "operation", "status", "phase", "inputs_sha256", "created_at", "images", "rollback", "changed_paths", "tool_name", "access_fingerprint", "isolated", "batch_parent", "batch_members", "synchronization", "sync_ack_digest", "maintenance", "consumer_adoption", "consumer_before", "plugin_artifacts", "resource_waiting", "engine_execution_modes", "engine_artifacts", "compiler_memory_cap", "compiler_cap_outcomes", "compiler_recipe", "compiler_runtime", "linker_proof", "test_filter", "feature_profile", "linked_stable", "optimized_mode_equivalence", "package_memory_cap", "package_cap_outcomes", "package_failures", "publication_policy_version", "preparation", "dependency_bases", "dependency_refresh", "packaging_preflight", "packaging_resume", "compiler_checkpoint", "dependency_cache", "check_task", "runtime_preflight", "verification_cache", "focused_verification", "sidekick", "test_reuse", "phase_timings", "active_verification", "publication_wait", "publication_wait_history", "last_resource_wait", "broker_install", "browser_sync", "ui_test_failure", "ui_test_override", "early_work", "finished_at", "rebuild_closeout") if key in job}
         for key in ("publication_wait","resource_waiting"):
             if view.get(key,{}).get("state","waiting")=="waiting"and view.get(key,{}).get("since"):
                 view[key]={**view[key],"elapsed_seconds":round(max(0,time.time()-view[key]["since"]),3)}
@@ -3975,6 +3975,30 @@ class Broker:
         digest = context_digest(release.snapshot(root, TASK_CONTEXT, context_digest))[0]
         cache[str(root)] = (stamp.hexdigest(), digest)
         return digest
+
+    def sidekick_switch(self,trusted,args):
+        """Live on/off for the broker sidekick (status needs no rights). Outside the broker lock: status probes the
+        sidekick over SSH and on/off also sync its program, each bounded to seconds."""
+        if set(args)-{"action","reason"}or args.get("action")not in {"status","on","off"}:raise ValueError("sidekick action is status, on or off")
+        executor=self.runner.executor;settings=executor.sidekick_settings()or{}
+        if args["action"]!="status":
+            if not(trusted.get("local_caller")or self.administrator(trusted)):raise PermissionError("Operator or administrator sidekick switch required")
+            reason=str(args.get("reason")or"")[:200];on=args["action"]=="on"
+            def change(value):
+                value.update(enabled=on,changed_by=trusted.get("user_id","operator"),changed_at=time.time(),reason=reason or("switched on"if on else"switched off"))
+                if on:value.update(failures=0,paused_until=0)
+            executor.sidekick_update_state(change)
+        state=executor.sidekick_state();live=None
+        if settings.get("enabled")is True and all(isinstance(settings.get(k),str)for k in ("host","user","key","known_hosts")):
+            try:
+                record={};status=executor.sidekick_sync(settings,record)if args["action"]=="on"else json.loads(executor.sidekick_call(settings,"status",timeout=20))
+                live={"reachable":True,"accepting":status.get("accepting"),"busy":status.get("busy"),"version":status.get("version"),
+                    "program_current":status.get("code_sha256")==(hashlib.sha256(executor.sidekick_program()).hexdigest()if executor.sidekick_program()else None),
+                    "free_gb":round((status.get("free_bytes")or 0)/2**30),**record}
+            except Exception as error:live={"reachable":False,"error":str(error)[:200]}
+        return {"configured":settings.get("enabled")is True,"host":settings.get("host"),"enabled":state.get("enabled")is not False,
+            "paused_until":state.get("paused_until",0)if state.get("paused_until",0)>time.time()else 0,"failures":state.get("failures",0),
+            "reason":state.get("reason",""),"last_error":state.get("last_error",""),"changed_by":state.get("changed_by"),"changed_at":state.get("changed_at"),"sidekick":live}
 
     @staticmethod
     def administrator(trusted):
@@ -5560,6 +5584,8 @@ class Broker:
             result=dict(self.ui_publication.rollback_preview(request,args))
             result["patch"]=checked_git_modes(result["patch"])
             return result
+        if name=="build_service_sidekick":
+            return self.sidekick_switch(trusted,args)
         if name=="build_work"and args.get("action")=="check":
             if set(args)-{"action","task_id","check","expected_inputs_sha256","timeout_seconds","request_id","compiler_memory_cap","test_filter","feature_profile"}:raise ValueError("Unsupported check arguments")
             return self.cargo_request({"task_id":args.get("task_id"),"task":args.get("check","check"),"expected_inputs_sha256":args.get("expected_inputs_sha256"),"timeout_seconds":args.get("timeout_seconds",600),**({"request_id":args["request_id"]} if "request_id" in args else {}),**({"compiler_memory_cap":args["compiler_memory_cap"]}if "compiler_memory_cap"in args else{}),**({"test_filter":args["test_filter"]}if "test_filter"in args else{}),**({"feature_profile":args["feature_profile"]}if "feature_profile"in args else{})},trusted,workspace)
@@ -7227,7 +7253,7 @@ async def serve(broker, listener, bridge_listener=None):
                 operator = request.pop("operator", scheduler_module.LOCAL_OPERATOR)
                 if operator not in scheduler_module.LOCAL_OPERATORS:
                     raise ValueError("unknown operator identity")
-                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "build_service_maintenance", "workspace_seed", "source_review", "source_patch", "v3_workspace_status", "v3_workspace_action", "v3_build_adopt_release", "v3_build_mark_not_installed", "v3_build_rebuild_checkout", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance", "performance_work", "v3_build_progress"):
+                if set(request) - {"id", "name", "arguments"} or request.get("name") not in ("build_work", "file_list", "file_read", "file_search", "file_edit", "file_write", "v3_build_work", "v3_build_status", "v3_worker_job", "v3_source_prepare", "v3_source_apply", "v3_source_apply_prepared", "v3_source_receipt", "v3_source_read", "v3_source_list", "v3_source_read_batch", "v3_source_search", "v3_cargo_task", "build_service_maintenance", "workspace_seed", "source_review", "source_patch", "v3_workspace_status", "v3_workspace_action", "v3_build_adopt_release", "v3_build_mark_not_installed", "v3_build_rebuild_checkout", "v3_build_cancel", "v3_build_leftovers", "v3_build_leftover_review", "v3_build_retention_clearance", "performance_work", "v3_build_progress", "build_service_sidekick"):
                     raise ValueError("local caller operation denied")
                 request["workspace"] = LOCAL_WORKSPACE
                 request["trusted"] = {"user_id": operator, "session_id": LOCAL_WORKSPACE,

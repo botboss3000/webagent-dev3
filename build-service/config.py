@@ -45,7 +45,7 @@ def validate(value):
  # Retired Code Index keys (code_index_ledger_max_bytes, post_deployment_indexing,
  # documentation_review_order) stay accepted so existing installed configs still load.
  policy=v.get("scheduler",{})
- if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes","task_aware_cleanup","disk_min_free_bytes","disk_grace_seconds","disk_cleanup_batch","rollback_keep_releases","rollback_keep_archives","documentation_review_order","post_deployment_indexing","package_cache_enabled","package_cache_download_workers","package_cache_max_age_seconds","package_cache_retention_seconds","package_cache_max_bytes","package_cache_prepare_memory_bytes","failure_grace_seconds","failed_scratch_retention_seconds","cargo_download_retention_seconds","orphan_release_seconds","note_ttl_seconds","registry_retention_seconds","registry_keep_finished","registry_high_water","local_operator","operators","remote_tests"}-RESOURCE_KEYS-TUNING_KEYS:raise ValueError("Invalid scheduler policy")
+ if not isinstance(policy,dict)or set(policy)-{"mode","orphan_after_seconds","reserve_bytes","reserve_percent","max_phases","max_parked","memory_pressure_percent","ui_file_reservations","max_ui_preparations","component_indexing","concurrent_ui_preparation","ui_test_image","package_ram_bytes","package_tmpfs_bytes","task_aware_cleanup","disk_min_free_bytes","disk_grace_seconds","disk_cleanup_batch","rollback_keep_releases","rollback_keep_archives","documentation_review_order","post_deployment_indexing","package_cache_enabled","package_cache_download_workers","package_cache_max_age_seconds","package_cache_retention_seconds","package_cache_max_bytes","package_cache_prepare_memory_bytes","failure_grace_seconds","failed_scratch_retention_seconds","cargo_download_retention_seconds","orphan_release_seconds","note_ttl_seconds","registry_retention_seconds","registry_keep_finished","registry_high_water","local_operator","operators","remote_tests","sidekick"}-RESOURCE_KEYS-TUNING_KEYS:raise ValueError("Invalid scheduler policy")
  policy={**scheduler_defaults(),**policy}
  cpu=cpu_policy(policy)
  if type(cpu["cpu_budget_millis"])is not int or cpu["cpu_budget_millis"]!=0 and not 1000<=cpu["cpu_budget_millis"]<=max(1,(os.cpu_count()or 1)-1)*1000:raise ValueError("CPU budget must retain host headroom")
@@ -88,12 +88,16 @@ def validate(value):
  if type(policy.get("task_aware_cleanup",False))is not bool:raise ValueError("Invalid Docker retention policy")
  for key,low,high in [("disk_min_free_bytes",1024**3,64*1024**3),("disk_grace_seconds",7200,30*86400),("disk_cleanup_batch",1,32),("rollback_keep_releases",1,64),("rollback_keep_archives",1,64)]:
   if type(policy.get(key))is not int or not low<=policy[key]<=high:raise ValueError("Invalid disk policy: "+key)
- # Build helper for the Rust test half (executor.remote_test_half); off unless the installation names one.
- remote=policy.setdefault("remote_tests",{"enabled":False})
- if not isinstance(remote,dict)or set(remote)-{"enabled","host","user","key","known_hosts"}or type(remote.get("enabled"))is not bool:raise ValueError("Invalid build helper policy")
- if remote["enabled"]and(not re.fullmatch(r"[A-Za-z0-9.-]{1,253}",str(remote.get("host","")))or not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}",str(remote.get("user","")))
-     or not all(isinstance(remote.get(k),str)and re.fullmatch(r"/etc/webagent/[A-Za-z0-9_./-]+",remote[k])and".."not in remote[k]for k in ("key","known_hosts"))):
-  raise ValueError("Build helper policy requires a host, a user and protected key paths under /etc/webagent")
+ # Broker sidekick for the Rust test half (executor.sidekick_test_half); off unless the installation names one.
+ # "remote_tests" is its name before the rename, still accepted so existing installation files load.
+ for name in ("sidekick","remote_tests"):
+  remote=policy.get(name,{"enabled":False})
+  if not isinstance(remote,dict)or set(remote)-{"enabled","host","user","key","known_hosts","pause_seconds","max_failures"}or type(remote.get("enabled"))is not bool:raise ValueError("Invalid broker sidekick policy")
+  if remote["enabled"]and(not re.fullmatch(r"[A-Za-z0-9.-]{1,253}",str(remote.get("host","")))or not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}",str(remote.get("user","")))
+      or not all(isinstance(remote.get(k),str)and re.fullmatch(r"/etc/webagent/[A-Za-z0-9_./-]+",remote[k])and".."not in remote[k]for k in ("key","known_hosts"))):
+   raise ValueError("Broker sidekick policy requires a host, a user and protected key paths under /etc/webagent")
+  for key,low,high in (("pause_seconds",60,86400),("max_failures",1,20)):
+   if key in remote and(type(remote[key])is not int or not low<=remote[key]<=high):raise ValueError("Invalid broker sidekick policy: "+key)
  v["scheduler"]=policy
  # Legacy installations retain their prior budget until an explicit operator reconfiguration.
  v.setdefault("api_pids_limit",256)

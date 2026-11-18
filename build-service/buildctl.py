@@ -681,6 +681,9 @@ def main():
     wait.add_argument("task_id")
     wait.add_argument("--timeout", type=int, default=MAX_WAIT_SECONDS,
                       help="seconds to poll an assigned job, 0-1800 (default: 1800)")
+    sidekick=commands.add_parser("sidekick",help="broker sidekick: status, or switch it on/off live (no restart)")
+    sidekick.add_argument("action",choices=("status","on","off"))
+    sidekick.add_argument("--reason",default="")
     maintenance=commands.add_parser("maintenance")
     maintenance.add_argument("action",choices=("status","drain","resume"))
     maintenance.add_argument("--task-id")
@@ -733,6 +736,8 @@ def main():
     if args.command=="apply":
         patch=sys.stdin.read(4*1024*1024)if args.patch=="-"else Path(args.patch).read_text()
         print(json.dumps(call("v3_source_apply",{"task_id":args.task_id,"request_id":args.request_id,"expected_inputs_sha256":args.expected,"patch":patch}),sort_keys=True));return 0
+    if args.command=="sidekick":
+        print(json.dumps(call("build_service_sidekick",{"action":args.action,**({"reason":args.reason}if args.reason else{})}),sort_keys=True));return 0
     if args.command=="maintenance":
         print(json.dumps(call("build_service_maintenance",{"action":args.action,**({"task_id":args.task_id} if args.task_id else {})}),sort_keys=True));return 0
     if args.command == "_beat":

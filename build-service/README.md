@@ -111,9 +111,9 @@ save used or saved again). Background failures never fail a release; they only
 cost the time they would have saved.
 
 **Where checks run.** The server (12 threads) is the default gate: release
-builds, deployment and promotion always run here. When `scheduler.remote_tests` names a
-build helper, a dev Rust release's test half (test compile and full suite) runs there
-beside the release compile; see "Build helper" below. An
+builds, deployment and promotion always run here. When `scheduler.sidekick` names a
+broker sidekick, a dev Rust release's test half (test compile and full suite) runs there
+beside the release compile; see "Broker sidekick" below. An
 operator may also mirror a task's sources to another machine for a fast local
 edit-and-check loop (same Rust 1.90 toolchain, Mold 1.10.1 linker,
 `CARGO_INCREMENTAL=0`, `RUSTFLAGS="-C debuginfo=0 -C link-arg=-fuse-ld=mold"`),
@@ -629,39 +629,54 @@ stays the gate and reuses the early passes by exact input hash, rerunning any
 fixture a rebase changed. A failure in either early piece is recorded in
 `early_work` and only costs the time it would have saved.
 
-## Build helper
+## Broker sidekick
 
-A second machine can take a dev `build_deploy`'s Rust test half so it runs at the same
-time as the release compile, and the server keeps its CPU for the app. Settings, in the
-installation JSON (off by default):
+A second machine (the sidekick, today the NUC `ar-NUCi7`) can take a dev `build_deploy`'s
+Rust test half so it runs at the same time as the release compile, and the server keeps
+its CPU for the app. Installation JSON (validation in `config.py`; the old name
+`remote_tests` is still accepted):
 
-    "remote_tests": {"enabled": true, "host": "100.126.37.96", "user": "ar",
-                     "key": "/etc/webagent/broker-helper/id_ed25519",
-                     "known_hosts": "/etc/webagent/broker-helper/known_hosts"}
+    "sidekick": {"enabled": true, "host": "100.126.37.96", "user": "ar",
+                 "key": "/etc/webagent/broker-sidekick/id_ed25519",
+                 "known_hosts": "/etc/webagent/broker-sidekick/known_hosts",
+                 "pause_seconds": 1800, "max_failures": 3}
 
-The helper runs `remote_helper.py` as the SSH forced command of that key (no shell). Per
-job the server: takes the helper's job lock (`begin`), copies the compiler image by ID
-if missing, mirrors the captured application tree (only changed files are rewritten, so
-the helper's warm Cargo target rebuilds only what changed) and checks its digest, sends
-the locked crate store once per dependency key, runs `compile_test` there, fetches the
-test executables into this job's target, builds the manifest and runs the linked smoke
-here, stages the selected executables there (their hashes must equal the manifest's) and
-runs the suite there. Phase timings keep their usual names and recipes.
+**Live switch.** `buildctl sidekick status|on|off [--reason TEXT]` (on/off: local operator
+or administrator) writes `<state_root>/coordination/sidekick/state.json` (never a top-level `*.json`, which the broker reads as job receipts), read at every job start: no restart.
+`status` also probes the sidekick (reachable, accepting, busy, program current, free disk).
+The NUC's console dashboard has its own switch (`accepting.json` on the sidekick); while it
+is off the sidekick declines jobs and the server tests them, without counting a failure.
+A release already running keeps its choice; switching off cancels nothing.
 
-Integrity: same image ID, same source digest, hash-checked binaries; a passing suite is
-accepted, and anything the helper could not finish (busy, unreachable, image or crate
-transfer, a compile or suite failure) is run, and a failure confirmed, here.
-`remote_tests` in the job records the host, image, digest, decision and any fallback
-reason. Fail-fast focused tests are skipped on the helper path (the release compile has
+**Failures.** A connection, timeout, transfer, disk or integrity problem pauses the sidekick
+for `pause_seconds`; after `max_failures` in a row it switches itself off with the reason
+(`status` shows it; `on` clears it). Busy or switched-off declines and real compile or
+test failures change nothing. The job's `sidekick` record has the decision and reason.
+
+**Per job.** The server checks the sidekick's program hash and pushes this release's
+`sidekick.py` when it differs, takes the job lock (`begin`), copies the compiler image by
+ID if missing, mirrors the captured application tree (only changed files are rewritten, so
+the warm Cargo target rebuilds only what changed) and checks its digest, sends the locked
+crate store once per dependency key, runs `compile_test` there, fetches the test
+executables into this job's target, builds the manifest and runs the linked smoke here,
+stages the selected executables there (their hashes must equal the manifest's) and runs the
+suite there with a marker after each step. Phase timings keep their usual names and recipes.
+
+**Integrity.** Same image ID, same source digest, hash-checked binaries; passing steps are
+accepted. Anything the sidekick did not finish runs here: steps it passed before a
+disconnect or failure are kept, and the rest, including a failed step, run (and are
+confirmed) here. Focused tests are skipped on the sidekick path (the release compile has
 already started; the full suite still gates). Stable releases always test here.
 
-Install on the helper: `/usr/local/lib/broker-helper/remote_helper.py` (root-owned),
-`/etc/broker-helper.json` for its limits (`uid`, `gid`, `cargo_build_jobs`,
-`memory_bytes`, `min_free_bytes`, `target_max_bytes`, `cargo_keep`), the key's
-`authorized_keys` line `restrict,from="<server>",command="/usr/bin/python3 -I
-/usr/local/lib/broker-helper/remote_helper.py serve"`, and a timer running
-`remote_helper.py prune`. It refuses jobs below `min_free_bytes` free, so the server
-tests locally instead.
+**Sync.** `sidekick.py` ships in the broker release (install list) and reaches the sidekick
+automatically at its next job or `sidekick on`, so a broker install covers both machines.
+The sidekick keeps the last three programs. Kept by hand, rarely changed:
+`sidekick_bootstrap.py` (root-owned at `/usr/local/lib/broker-sidekick/`, the key's forced
+command: `restrict,from="<server>",command="/usr/bin/python3 -I
+/usr/local/lib/broker-sidekick/sidekick_bootstrap.py serve"`), `/etc/broker-sidekick.json`
+(`uid`, `gid`, `cargo_build_jobs`, `memory_bytes`, `min_free_bytes`, `target_max_bytes`,
+`cargo_keep`), the `broker-sidekick-prune` timer (`sidekick_bootstrap.py prune`: compile
+cache cap, old crate stores and images), and the NUC's console dashboard.
 
 ## Stale-tree install guard
 

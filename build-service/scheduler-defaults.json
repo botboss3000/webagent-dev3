@@ -47,7 +47,9 @@
     "default": 100
   },
   "cpu_phase_weights": {},
-  "remote_tests": {
-    "enabled": false
+  "sidekick": {
+    "enabled": false,
+    "pause_seconds": 1800,
+    "max_failures": 3
   }
 }

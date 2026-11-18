@@ -1,25 +1,24 @@
 #!/usr/bin/python3 -I
-"""Build helper: runs the broker's Rust test half on a second machine (the NUC).
+"""Broker sidekick: runs the broker's Rust test half on a second machine (the NUC).
 
-Installed on the helper at /usr/local/lib/broker-helper/remote_helper.py and reached only
-as the SSH forced command of the broker's own key, so the server never gets a shell:
-
-    command="/usr/bin/python3 -I /usr/local/lib/broker-helper/remote_helper.py serve",restrict ssh-ed25519 ...
-
-The server names one fixed verb per connection (SSH_ORIGINAL_COMMAND) and streams data on
-stdin. Containers use the broker's compiler image by exact ID and the same isolation flags
-as the server's phases. One job holds the helper at a time. `prune` runs from a timer.
-The server trusts passing results, rechecks binary hashes, and confirms any failure itself.
+The broker ships this file in its installed release and pushes it to the sidekick when the
+hashes differ (see sidekick_bootstrap.py, the fixed SSH forced command that runs it). The
+server never gets a shell: it names one fixed verb per connection (SSH_ORIGINAL_COMMAND)
+and streams data on stdin. Containers use the broker's compiler image by exact ID and the
+same isolation flags as the server's phases. One job holds the sidekick at a time; the
+local switch (`accepting`, set from the NUC's console dashboard) refuses new jobs while off.
+`prune` runs from a timer. The server trusts passing results, rechecks binary hashes, keeps
+each test binary's pass as it streams in, and confirms any failure itself.
 """
 import fcntl,hashlib,json,os,re,shutil,subprocess,sys,tarfile,time
 from pathlib import Path
 
-STATE=Path(os.environ.get("BROKER_HELPER_STATE","/var/lib/broker-helper"))
-SETTINGS=Path("/etc/broker-helper.json")
+STATE=Path(os.environ.get("BROKER_SIDEKICK_STATE","/var/lib/broker-sidekick"))
+SETTINGS=Path("/etc/broker-sidekick.json")
 WORK=STATE/"work";SOURCE=WORK/"source";OUTPUT=WORK/"output";CARGO=STATE/"cargo"
-LOCK=STATE/"job.lock";STATUS=STATE/"status.json";PRUNE=STATE/"prune.json"
-VERSION=2
-TAG="broker-helper-compiler"
+LOCK=STATE/"job.lock";STATUS=STATE/"status.json";PRUNE=STATE/"prune.json";ACCEPTING=STATE/"accepting.json"
+VERSION=3
+TAG="broker-sidekick-compiler";LABEL="broker-sidekick.job"
 JOB=re.compile(r"[a-f0-9-]{36}");IMAGE=re.compile(r"sha256:[a-f0-9]{64}");KEY=re.compile(r"[a-f0-9]{64}")
 PHASES={"compile_test","test"}
 DEFAULTS={"uid":1000,"gid":1000,"cargo_build_jobs":12,"memory_bytes":13*1024**3,"min_free_bytes":15*1024**3,
@@ -86,7 +85,7 @@ def sync_source(stream,root):
                 if target.stat().st_mode&0o777!=mode:target.chmod(mode)
                 continue
             if target.is_symlink()or target.is_dir():shutil.rmtree(target)if target.is_dir()and not target.is_symlink()else target.unlink()
-            temporary=target.with_name(target.name+".helper-new");temporary.write_bytes(body);temporary.chmod(mode);os.replace(temporary,target);changed+=1
+            temporary=target.with_name(target.name+".sidekick-new");temporary.write_bytes(body);temporary.chmod(mode);os.replace(temporary,target);changed+=1
     removed=0
     for path in sorted(root.rglob("*"),reverse=True):
         if path in seen:continue
@@ -107,12 +106,22 @@ def free_bytes():
     return shutil.disk_usage(STATE).free
 
 
+def accepting():
+    """The NUC-side switch; absent means on."""
+    try:return json.loads(ACCEPTING.read_text()).get("accepting",True)is not False
+    except (OSError,ValueError):return True
+
+
+def code_sha256():
+    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
 def cmd_status(args):
     lock=None
     try:lock=json.loads(LOCK.read_text())
     except (OSError,ValueError):pass
     images=run(["docker","image","ls","--no-trunc","--format","{{.ID}}"]).stdout.split()
-    print(json.dumps({"version":VERSION,"busy":lock,"free_bytes":free_bytes(),"cpus":os.cpu_count(),"images":images,
+    print(json.dumps({"version":VERSION,"code_sha256":code_sha256(),"accepting":accepting(),"busy":lock,"free_bytes":free_bytes(),"cpus":os.cpu_count(),"images":images,
         "cargo_keys":sorted(p.name for p in CARGO.iterdir())if CARGO.is_dir()else[]}))
 
 
@@ -124,6 +133,8 @@ def cmd_begin(args):
         fcntl.flock(guard,fcntl.LOCK_EX)
         try:current=json.loads(LOCK.read_text())
         except (OSError,ValueError):current=None
+        if not accepting():
+            print(json.dumps({"decision":"disabled","reason":"switched off on the sidekick"}));return
         if current and current.get("job_id")!=job and time.time()-current.get("at",0)<cfg["stale_lock_seconds"]:
             print(json.dumps({"decision":"busy","job_id":current.get("job_id")}));return
         if free_bytes()<cfg["min_free_bytes"]:
@@ -145,7 +156,7 @@ def cmd_begin(args):
 
 def cmd_end(args):
     job,result=args
-    # Only the job holding the helper may free it or report its result.
+    # Only the job holding the sidekick may free it or report its result.
     if held(job):
         LOCK.unlink()
         status(state="idle",last_job=job,last_result=result if result in {"passed","failed","fallback","cancelled"}else"ended")
@@ -153,7 +164,7 @@ def cmd_end(args):
 
 
 def require(job):
-    if not JOB.fullmatch(job)or not held(job):fail("job does not hold the helper")
+    if not JOB.fullmatch(job)or not held(job):fail("job does not hold the sidekick")
 
 
 def cmd_sync_source(args):
@@ -205,7 +216,7 @@ def image_present(image):
 
 
 def kill_containers():
-    names=run(["docker","ps","-aq","--filter","label=broker-helper.job"]).stdout.split()
+    names=run(["docker","ps","-aq","--filter","label="+LABEL]).stdout.split()
     if names:run(["docker","rm","-f",*names],timeout=120)
 
 
@@ -219,10 +230,10 @@ def cmd_run(args):
     if not image_present(image):fail("compiler image missing",3)
     keep_image(image)
     if not (CARGO/key/"complete").is_file():fail("cargo registry missing",3)
-    cfg=settings();name="broker-helper-"+job.replace("-","")+"-"+phase+"-"+os.urandom(4).hex()
+    cfg=settings();name="broker-sidekick-"+job.replace("-","")+"-"+phase+"-"+os.urandom(4).hex()
     status(state="running",job_id=job,stage=phase.replace("_"," "),started_at=json.loads(LOCK.read_text())["at"])
     (OUTPUT/"target").mkdir(parents=True,exist_ok=True)
-    create=["docker","create","--name",name,"--label","broker-helper.job="+job,"--cap-drop","ALL","--security-opt","no-new-privileges",
+    create=["docker","create","--name",name,"--label",LABEL+"="+job,"--cap-drop","ALL","--security-opt","no-new-privileges",
         "--pids-limit","256","--user","%d:%d"%(cfg["uid"],cfg["gid"]),"--network","none","--memory",str(cfg["memory_bytes"]),"--memory-swap",str(cfg["memory_bytes"]),
         "--mount","type=bind,src=%s,dst=/build%s"%(SOURCE/"v3",""if phase=="test"else",readonly"),
         "--mount","type=bind,src=%s,dst=/output"%OUTPUT,"--mount","type=bind,src=%s,dst=/output/cargo"%(CARGO/key),"-w","/build",
@@ -285,8 +296,8 @@ def size(path):
 
 
 def cmd_prune(args):
-    """Timer cleanup: never while a job holds the helper. Removes the compile cache when over its cap,
-    old crate stores, stopped helper containers and unused images; records what it freed."""
+    """Timer cleanup: never while a job holds the sidekick. Removes the compile cache when over its cap,
+    old crate stores, stopped sidekick containers and unused images; records what it freed."""
     cfg=settings()
     try:current=json.loads(LOCK.read_text())
     except (OSError,ValueError):current=None
@@ -315,7 +326,7 @@ VERBS={"status":cmd_status,"begin":cmd_begin,"end":cmd_end,"sync-source":cmd_syn
 
 def main():
     if sys.argv[1:]==["prune"]:cmd_prune(["timer"]);return
-    if sys.argv[1:]!=["serve"]:fail("usage: remote_helper.py serve|prune")
+    if sys.argv[1:]!=["serve"]:fail("usage: sidekick.py serve|prune")
     words=os.environ.get("SSH_ORIGINAL_COMMAND","").split()
     if not words or words[0]not in VERBS or len(words)>4:fail("unknown verb")
     VERBS[words[0]](words[1:])
