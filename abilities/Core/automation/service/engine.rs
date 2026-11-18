@@ -360,7 +360,12 @@ fn queue(
     if state
         .occurrences
         .values()
-        .filter(|o| o.automation_id == d.id && o.scheduled_ms.div_euclid(86_400_000) == today)
+        // A cancelled run did no work, so it gives its slot in the daily cap back.
+        .filter(|o| {
+            o.automation_id == d.id
+                && o.status != "cancelled"
+                && o.scheduled_ms.div_euclid(86_400_000) == today
+        })
         .count() as u64
         >= d.daily_cap
     {
@@ -1467,6 +1472,20 @@ mod policy_tests {
         );
         assert!(tick["admissions"].as_array().unwrap().is_empty());
         assert_eq!(tick["result"]["errors"][0]["error"], "daily_cap");
+    }
+    #[test]
+    fn a_cancelled_run_frees_its_daily_cap_slot() {
+        let created = definition(json!({}));
+        let mut state: State = serde_json::from_value(created["state"].clone()).unwrap();
+        let mut job = state.definitions["job"].clone();
+        job.daily_cap = 1;
+        queue(&mut state, &job, 100000, "first".into(), json!({}), vec![]).unwrap();
+        assert_eq!(
+            queue(&mut state, &job, 100000, "second".into(), json!({}), vec![]),
+            Err("daily_cap".into())
+        );
+        state.occurrences.get_mut("first").unwrap().status = "cancelled".into();
+        assert!(queue(&mut state, &job, 100000, "second".into(), json!({}), vec![]).is_ok());
     }
     #[test]
     fn safe_retry_waits_and_preserves_occurrence_identity() {
