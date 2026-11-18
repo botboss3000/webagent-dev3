@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
@@ -369,6 +369,81 @@ pub fn load_all(abilities: &Path) -> (BTreeMap<String, ToolDefinition>, Vec<Stri
     (definitions, problems)
 }
 
+/// Tools served by isolated plugin packages whose code differs between two abilities roots:
+/// anything outside a package's `tools/` and `skills/` folders changed, or the package is on
+/// one side only. Such a release ships the code with its schemas, so they may change together.
+pub fn package_tools_with_code_changes(baseline: &Path, candidate: &Path) -> BTreeSet<String> {
+    let (old, new) = (packages(baseline), packages(candidate));
+    let mut tools = BTreeSet::new();
+    for folder in old.keys().chain(new.keys()) {
+        let (before, after) = (old.get(folder), new.get(folder));
+        if before.map(|package| &package.1) != after.map(|package| &package.1) {
+            for package in [before, after].into_iter().flatten() {
+                tools.extend(package.0.iter().cloned());
+            }
+        }
+    }
+    tools
+}
+
+/// Isolated packages by `<group>/<ability>`: their declared tools and a digest of their code.
+fn packages(abilities: &Path) -> BTreeMap<String, (Vec<String>, String)> {
+    let mut packages = BTreeMap::new();
+    let groups = fs::read_dir(abilities).into_iter().flatten().flatten();
+    for ability in
+        groups.flat_map(|group| fs::read_dir(group.path()).into_iter().flatten().flatten())
+    {
+        let path = ability.path();
+        let Ok(manifest) = fs::read(path.join("plugin.json")) else {
+            continue;
+        };
+        let manifest: Value = serde_json::from_slice(&manifest).unwrap_or(Value::Null);
+        if manifest["dispatch"] != "isolated" {
+            continue;
+        }
+        let tools = manifest["tools"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect();
+        let mut digest = Sha256::new();
+        code_digest(&path, &path, &mut digest);
+        let folder = path.strip_prefix(abilities).unwrap_or(&path);
+        packages.insert(
+            folder.to_string_lossy().into_owned(),
+            (tools, hex::encode(digest.finalize())),
+        );
+    }
+    packages
+}
+
+/// Hashes every file under `dir` but the package's own `tools/` and `skills/` folders, in
+/// name order, with its relative path; symlinks are skipped.
+fn code_digest(package: &Path, dir: &Path, digest: &mut Sha256) {
+    let mut entries: Vec<_> = fs::read_dir(dir).into_iter().flatten().flatten().collect();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_dir() {
+            if dir == package && matches!(entry.file_name().to_str(), Some("tools" | "skills")) {
+                continue;
+            }
+            code_digest(package, &path, digest);
+        } else if kind.is_file() {
+            let relative = path.strip_prefix(package).unwrap_or(&path);
+            digest.update(relative.to_string_lossy().as_bytes());
+            digest.update([0]);
+            digest.update(fs::read(&path).unwrap_or_default());
+            digest.update([0]);
+        }
+    }
+}
+
 static ROOT: OnceLock<PathBuf> = OnceLock::new();
 
 /// Read definitions from `abilities` (a candidate being validated); call before first use.
@@ -461,6 +536,37 @@ mod tests {
         json!({"name":name,"description":"Look something up","effect":"read",
             "parameters":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"],"additionalProperties":false},
             "default_policy":{"operator":"allow","member":"require_approval"}})
+    }
+
+    #[test]
+    fn package_code_changes_exempt_only_that_packages_tools() {
+        let write = |root: &Path, file: &str, text: &str| {
+            let path = root.join("G/pkg").join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+        let (baseline, candidate) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        for root in [baseline.path(), candidate.path()] {
+            write(
+                root,
+                "plugin.json",
+                r#"{"dispatch":"isolated","tools":["x"]}"#,
+            );
+            write(root, "src/main.rs", "fn main() {}");
+            write(root, "tools/x/x.tool.json", "{}");
+        }
+        write(
+            candidate.path(),
+            "tools/x/x.tool.json",
+            r#"{"edited":true}"#,
+        );
+        write(candidate.path(), "skills/pkg.skill.md", "new");
+        assert!(package_tools_with_code_changes(baseline.path(), candidate.path()).is_empty());
+        write(candidate.path(), "src/main.rs", "fn main() { run() }");
+        assert_eq!(
+            package_tools_with_code_changes(baseline.path(), candidate.path()),
+            BTreeSet::from(["x".to_owned()])
+        );
     }
 
     #[test]

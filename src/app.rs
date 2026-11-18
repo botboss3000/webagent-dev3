@@ -730,6 +730,47 @@ impl App {
     }
 }
 // Exit fixed offline smoke before state initialization; otherwise initialize the selected role at the shared v3 root.
+/// Every candidate tool schema keeps to the rules the shared argument check enforces. With
+/// `--validate-baseline=<live root>` (an asset-only release ships no Rust code) it also may
+/// not change what a tool's code receives, unless the tool's plugin package ships new code.
+fn validate_tool_schemas(path: &std::path::Path) -> Result<()> {
+    use webagent_abilities::tool_definitions;
+    use webagent_engine::tools::arguments;
+    let candidate = tool_definitions::definitions();
+    let mut problems: Vec<String> = candidate
+        .iter()
+        .flat_map(|(name, definition)| arguments::schema_problems(name, &definition.parameters))
+        .collect();
+    if let Some(baseline) = std::env::args()
+        .skip(1)
+        .find_map(|arg| arg.strip_prefix("--validate-baseline=").map(PathBuf::from))
+    {
+        let (live, _) = tool_definitions::load_all(&baseline.join("abilities"));
+        let shipping = tool_definitions::package_tools_with_code_changes(
+            &baseline.join("abilities"),
+            &path.join("abilities"),
+        );
+        for (name, definition) in live.iter().filter(|(name, _)| !shipping.contains(*name)) {
+            match candidate.get(name) {
+                Some(next) => problems.extend(arguments::contract_changes(
+                    name,
+                    &definition.parameters,
+                    &next.parameters,
+                )),
+                None => problems.push(format!(
+                    "{name}: definition removed or renamed, but the code serving it is unchanged"
+                )),
+            }
+        }
+    }
+    anyhow::ensure!(
+        problems.is_empty(),
+        "Tool schemas need code changes: {}",
+        problems.join("; ")
+    );
+    Ok(())
+}
+
 async fn run_process() -> Result<()> {
     if std::env::args().any(|argument| argument == "--boot-plan") {
         #[cfg(feature = "linked-context")]
@@ -810,6 +851,7 @@ async fn run_process() -> Result<()> {
                 administrator.problems.join("; ")
             );
         }
+        validate_tool_schemas(&path)?;
         let engine = crate::engine_components::load(&path, "candidate")?;
         let prompts: Value =
             serde_json::from_slice(&crate::live_assets::prompt_defaults_at(Some(&path))?)?;

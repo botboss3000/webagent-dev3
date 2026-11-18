@@ -16,6 +16,17 @@ it, naming exactly its tool folders. `<tool>.tool.json` holds:
   Keep `description` to one sentence of at most 160 characters (what the tool does and
   when to use it): it rides every call. Field formats, limits and examples go in the
   tool's `<tool>.skill.md`.
+  Every call is checked against `parameters` before the tool runs
+  (`crates/modules/engine/src/tools/arguments.rs`), so a schema may use only the keywords
+  that check enforces: `type`, `properties`, `required`, `additionalProperties` (a boolean
+  or a schema), `items`, `enum`, `minimum`/`maximum`, `minLength`/`maxLength`,
+  `minItems`/`maxItems`, `pattern`, `format: "uuid"` and `anyOf`, plus `description`,
+  `title` and `default`. Asset validation refuses any other keyword. When the broker
+  passes the live release (`--validate-baseline`), an asset-only release, which ships no
+  Rust code, may change descriptions, limits and patterns and remove allowed values, but
+  may not add, remove or rename an argument, change a type, add an allowed value, make a
+  required argument optional or remove a tool definition. Tools of a plugin package whose
+  code changes in the same release are exempt.
 - `effect`: `read` or `write`. It says whether the tool changes anything and drives
   recovery (an interrupted write is uncertain and never rerun), batches, background work
   and the repeat guard. It never decides access.

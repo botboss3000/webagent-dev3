@@ -2700,6 +2700,7 @@ dependencies = [
  "fs2",
  "futures-util",
  "hex",
+ "regex",
  "serde",
  "serde_json",
  "sha2",
